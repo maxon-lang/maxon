@@ -320,12 +320,45 @@ and the install-script check, at the tag — so the download links go live only 
 ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no `release: published`,
 and on v0.1.1 none of them ran.
 
-⛔ **Last, it deletes `release/X.Y.Z`.** The tag is the record of what was built and published, and the
-**Release tags** ruleset (Settings → Rules → Rulesets) makes every `v*` tag immutable — it cannot be
-moved or deleted, only created. A branch left behind is a place to push a commit describing a release
-that never existed, which `release.yml` would build and test at the real version; one that does not
-exist cannot take one. It is deleted only when its tip IS the tagged commit — a commit past the tag
+⛔ **Last, it deletes `release/X.Y.Z`.** The tag is the record of what was built and published. A branch
+left behind is a place to push a commit describing a release that never existed, which `release.yml`
+would build and test at the real version; one that does not exist cannot take one. It is deleted only
+when its tip IS the tagged commit, so the tag still reaches everything on it — a commit past the tag
 fails the step and leaves the branch for a person, since deleting it would strand work nothing shipped.
+
+⚠ **The Release tags ruleset** (Settings → Rules → Rulesets) refuses any update, deletion or
+non-fast-forward of a `v*` tag, so no tag moves or disappears by accident. The one deliberate deletion
+is a failed release's retry, below, which lifts it for a single push.
+
+### 4b. If the release fails — delete the tag, fix the branch, tag again
+
+A release has failed when `release.yml` is red, any of the five workflows it starts is red, or
+`scripts/release-postflight.sh` is not clean. It is retried **at the same version** (user ruling): the
+release and its tag are deleted, the fix goes on `release/X.Y.Z`, and the branch is tagged again. The
+release skill's §5b carries the commands; this is why each is shaped as it is.
+
+- **Every run at the tag finishes or is cancelled first.** Deleting a tag under a running `publish`, or
+  under `homebrew.yml` committing a formula, races it.
+- ⛔ **The branch is back on origin before the tag is deleted.** `publish` deletes the branch on success,
+  so after a failed postflight the tag is the only remote ref reaching those commits — delete it first and
+  nothing on the remote does. A local `release/X.Y.Z` outlives the remote deletion, which is why the branch
+  is recreated with `checkout -B` from the remote branch or the tag: `checkout -b` fails on it, and what
+  runs next runs on `main`.
+- **The release goes before the tag**, and while no release exists `releases/latest` resolves to the
+  previous one — which both installers and `maxon upgrade` follow. The window stays short.
+- ⛔ **The ruleset is lifted for the one deletion and restored at once**, then read back: `active`, with
+  `update`, `deletion` and `non_fast_forward`.
+- ⛔ **An extension version the failed attempt published is spent.** `vsce` and `ovsx` refuse to republish
+  it, but `extension-release-gate.sh` compares only against the previous release tag and still answers
+  `publish` — so `guard` passes and the retry fails at its last step, after the compiler is out. Its PATCH
+  is bumped on the branch.
+- **What the failed attempt published is overwritten, not recalled.** `homebrew.yml` commits a new formula
+  and `docker.yml` re-pushes `X.Y.Z`, `X.Y` and `latest`, but an archive someone already downloaded no
+  longer matches the new `SHA256SUMS`.
+- **The changelog entry and the website material follow the fix**: the entry gains what changed and takes
+  the retry's date, and `announce.sh`, which refuses to overwrite a post, runs once the old one is removed.
+- **Then the rebuild, the preflight and the tag, exactly as the first time.** The merge back has not run —
+  it waits for a clean postflight — so `main` holds nothing of the failed attempt.
 
 ### 5. Merge the tag back
 
@@ -334,6 +367,10 @@ git fetch origin --tags --prune
 git checkout main && git merge --no-ff v0.1.1 && git push origin main
 git branch -d release/0.1.1
 ```
+
+⛔ **Only once `scripts/release-postflight.sh` is clean.** This commits the release's changelog entry,
+website material and extension version to `main`; merged ahead of a retry, `main` keeps a spent
+extension version and a superseded entry, and the next release trips on them.
 
 The changelog entry, the website material and any fixes made while preparing all belong on `main` —
 without this they exist only at a tag nobody builds from again. The branch is gone by now (`publish`

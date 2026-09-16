@@ -17,8 +17,8 @@ targets have built and natively suite-tested — so a failed target publishes no
 ## 0 · No rehearsal unless the user asks for one
 
 Go straight to the tag (user ruling): every commit on `main` was already tested by CI, and the tagged
-run builds and suite-tests the same four targets before `publish` starts. A failed target costs a
-re-tag at the next patch version, not a broken release.
+run builds and suite-tests the same four targets before `publish` starts. A failed target publishes
+nothing and costs a retry at the same version (§5b), not a broken release.
 
 When the user does ask, a `release/X.Y.Z` branch runs the whole pipeline at the real version with no
 tag: `guard` recognises the ref and sets `publish=no`. ⚠ **Pushing the branch does not start it** —
@@ -103,9 +103,9 @@ install the new release.
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
 a missing credential SKIPS with a notice and still reports success.
 
-Last, `publish` deletes `release/X.Y.Z` — the tag is the record, and the **Release tags** ruleset makes
-every `v*` tag immutable. ⚠ If the branch has a commit past the tag, that step FAILS and leaves the
-branch: tell the user, since it is work nothing shipped.
+Last, `publish` deletes `release/X.Y.Z` — the tag names the same commit, and §5b puts the branch back
+from it if the release has to be cut again. ⚠ If the branch has a commit past the tag, that step FAILS
+and leaves the branch: tell the user, since it is work nothing shipped.
 
 **Then verify what actually shipped**, which is not the same question as whether the jobs are green:
 
@@ -116,6 +116,56 @@ scripts/release-postflight.sh X.Y.Z
 ⛔⛔ **DO NOT MERGE BACK UNTIL THIS IS CLEAN.** §6 commits the release's changelog, website material
 and extension version to `main`; run it over a release that has to be cut again and `main` carries a
 published extension version and a superseded entry, which the NEXT release then trips over.
+
+## 5b · If the release fails — delete the tag, fix on the branch, tag again
+
+**The release has failed** when `release.yml` is red, any workflow it starts is red, or the postflight is
+not clean. It is retried **at the same version** (user ruling). `docs/RELEASING.md` has the why of each
+step below.
+
+**First, let every run at the tag finish or cancel it** — a deletion under a running `publish` or
+`homebrew` races it.
+
+```bash
+# 1. The branch is on origin before the tag goes, so the release commits stay reachable.
+git fetch origin --tags --prune
+if git ls-remote --exit-code --heads origin release/X.Y.Z >/dev/null; then
+	git checkout -B release/X.Y.Z origin/release/X.Y.Z
+else
+	git checkout -B release/X.Y.Z vX.Y.Z && git push origin release/X.Y.Z
+fi
+
+# 2. The release and its assets, if `publish` got that far.
+gh release delete vX.Y.Z --yes
+
+# 3. The tag, with the ruleset lifted for this ONE push.
+ruleset="$(gh api repos/maxon-lang/maxon/rulesets --jq '.[] | select(.name == "Release tags") | .id')"
+gh api -X PUT "repos/maxon-lang/maxon/rulesets/$ruleset" -f enforcement=disabled
+git push origin --delete vX.Y.Z
+gh api -X PUT "repos/maxon-lang/maxon/rulesets/$ruleset" -f enforcement=active
+gh api "repos/maxon-lang/maxon/rulesets/$ruleset" --jq '.enforcement + " " + ([.rules[].type] | join(","))'
+git tag -d vX.Y.Z
+```
+
+⛔ **READ THE LAST `gh api` LINE: it must print `active update,deletion,non_fast_forward`.** A protection
+left off is worse than the release that needed it lifted.
+
+⚠ **`-B`, never `-b`.** A local `release/X.Y.Z` survives `publish` deleting the remote one, so `-b` fails —
+and every command after it then runs on `main`.
+
+**4. Make the changes on the branch.** A fix already on `main` is cherry-picked. A change to compiler
+source still owes its case red then green before it goes on: the tagged run is a battery, not an
+acceptance. Then, where they apply:
+
+- ⛔ **The VS Code extension, if the failed attempt published it** — its `vscode-extension` run logs
+  `Published maxon-lang.maxon-lsp-client v<version>`. That version is spent: bump PATCH, with a line in
+  `vscode-extension/CHANGELOG.md`, or the retry publishes the compiler and then fails on the extension.
+- **The changelog entry** gains what the fix changed, and its heading takes the retry's date.
+- **The website material**: `announce.sh` refuses an existing post, so remove
+  `website/src/content/docs/blog/maxon-X-Y-Z.md` and run §3 again.
+
+**5. Then §1's rebuild, §3b's preflight, §4's tag and §5's watch**, exactly as the first time. §6 has not
+run — it waits for a clean postflight — so `main` holds nothing of the failed attempt.
 
 ## 6 · Merge the tag back
 
@@ -136,5 +186,7 @@ merge keeps the tag an ancestor of `main`; rebased copies would reappear in the 
 
 - **Never create credentials, accounts or tokens**, and never ask the user to paste a secret. Secrets
   are set with `gh secret set`, which prompts and hides the input.
-- **Never force-push a tag**, and never delete a published one. A wrong release is superseded by the
-  next patch version, which is what patch versions are.
+- **Never move a tag with a force-push**, and never delete one except by §5b: the release first, then the
+  tag with the `Release tags` ruleset lifted for that single push. ⛔ **Never leave the ruleset disabled.**
+- **Never delete a release that went out clean.** §5b is for a release that failed; one whose postflight
+  was clean and is later found wanting is superseded by the next patch version.

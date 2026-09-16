@@ -3,11 +3,11 @@
 # Every question a release must answer BEFORE the tag is pushed. It reads and reports; it writes,
 # commits and publishes nothing.
 #
-# ⭐⭐ **THESE QUESTIONS ARE ALL ASKED AGAIN AT THE TAG, WHERE THEY CAN NO LONGER BE ANSWERED.**
+# ⭐⭐ **THESE QUESTIONS ARE ALL ASKED AGAIN AT THE TAG, WHERE ANSWERING ONE COSTS A RETRY.**
 # `release.yml`'s guard refuses a tag with no changelog entry or a changed extension whose version did
 # not move, and `website.yml` fails its build on a page that has drifted from `docs/` — by which point
-# the tag exists, is immutable, and four runners are building. Every one of them is a one-line edit
-# while it is still asked here.
+# the tag is pushed and four runners are building, and the fix means deleting the tag and cutting the
+# release again. Every one of them is a one-line edit while it is still asked here.
 #
 # ⛔ **THE WHOLE LIST RUNS AND EVERY ANSWER IS PRINTED.** Stopping at the first failure turns one
 # release into one fix per attempt.
