@@ -44,6 +44,16 @@ function Install-Maxon {
     param([string]$RequestedVersion, [bool]$Reinstall, [bool]$UpdatePath)
 
     $ErrorActionPreference = 'Stop'
+    # A caller's PSModulePath may name another PowerShell edition's modules ahead of this host's:
+    # `maxon upgrade` starts Windows PowerShell with the environment of whatever shell started IT, and
+    # from pwsh 7 that path names pwsh 7's copies first. This host refuses to load them and then reports
+    # Get-FileHash and Expand-Archive as not found, so its own module directory goes first. Nothing here
+    # may use a cmdlet: the ones that would be are the ones at risk.
+    $hostModules = "$PSHOME\Modules"
+    if (-not "$env:PSModulePath;".StartsWith("$hostModules;", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $env:PSModulePath = "$hostModules;$env:PSModulePath".TrimEnd(';')
+    }
+
     # The progress bar slows Invoke-WebRequest by an order of magnitude on Windows PowerShell 5.1.
     $ProgressPreference = 'SilentlyContinue'
     $repo = 'maxon-lang/maxon'
