@@ -291,6 +291,10 @@ export let ListCloneManagedName = b"__list_clone_managed"
 export let ListSoleName = b"__list_sole"
 export let ListSoleManagedName = b"__list_sole_managed"
 
+// The chain's SHARE walks — the soleness pair's twins for a LEND, split on the same boundary.
+export let ListShareName = b"__list_share"
+export let ListShareManagedName = b"__list_share_managed"
+
 // `__list_node_alloc` is INTERNAL — called only by `append`/`prepend`/`insert`, the entry points that mint a
 // node. Kept out of the public name set so no parser path dispatches to it.
 let ListNodeAllocName = b"__list_node_alloc"
@@ -433,14 +437,17 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 	buildListClone(module, name: ListCloneName, clonesElements: false)
 	buildListClone(module, name: ListCloneManagedName, clonesElements: true)
 
-	// ⚠ **THE ONE PAIR THIS ALL-OR-NOTHING INSTALL GATES, AND THE GATE IS NOT TIDINESS.** Every other helper
-	// here calls only what this install builds; the soleness walks call `__mm_sole_box`, which
-	// `installMmRuntime` builds under `usesSoleWalk` alone — so installing them unconditionally would leave
-	// an unresolved call in every list program that hands nothing to a green thread.
+	// ⚠ **THE TWO PAIRS THIS ALL-OR-NOTHING INSTALL GATES.** A program that hands nothing to a green thread
+	// reaches no walk, so each pair rides the bit its producers turn on rather than `usesList`.
 	if usage.usesSoleWalk 'soleWalk'
-		buildListSole(module, name: ListSoleName, walksElements: false)
-		buildListSole(module, name: ListSoleManagedName, walksElements: true)
+		buildListWalk(module, name: ListSoleName, walksElements: false, action: CascadeAction.soleWalk)
+		buildListWalk(module, name: ListSoleManagedName, walksElements: true, action: CascadeAction.soleWalk)
 	end 'soleWalk'
+
+	if usage.usesShareWalk 'shareWalk'
+		buildListWalk(module, name: ListShareName, walksElements: false, action: CascadeAction.shareWalk)
+		buildListWalk(module, name: ListShareManagedName, walksElements: true, action: CascadeAction.shareWalk)
+	end 'shareWalk'
 
 	buildListDecref(module)
 
@@ -1818,12 +1825,15 @@ function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, 
 	movedOut.branchEdges.push(BranchEdge.create(append.id, argIds: argsOf(absent)))
 end 'emitListClonedElement'
 
-// ⭐⭐ **`__list_sole(list)` / `__list_sole_managed(list, soleFn)` — PROVE A CHAIN MOVEABLE.** The
-// record, then every node, then — for the managed entry — every live element, each through the one refcount
-// leaf `__mm_sole_box`. Both entries in one builder for `buildListClone`'s reason, and the node walk is
-// shared rather than conditional: a node is a co-ownable box in EITHER chain, because a `ListNode` handle
-// takes a reference to one whatever its element is.
-function buildListSole(module StdModule, name ByteArray, walksElements bool)
+// ⭐⭐ **`__list_sole(list)` / `__list_sole_managed(list, soleFn)` — PROVE A CHAIN MOVEABLE; `__list_share` /
+// `__list_share_managed` — MARK ONE LENT.** The record, then every node, then — for the managed entry — every
+// live element, each box through the one walk step (`MmRuntime.emitBoxWalkStep`). All four entries in one
+// builder for `buildListClone`'s reason, and the node walk is shared rather than conditional: a node is a
+// co-ownable box in EITHER chain, because a `ListNode` handle takes a reference to one whatever its element is.
+//
+// ⚠ **A NODE THE STEP STOPS AT STILL ADVANCES THE CHAIN.** Stopping means nothing below THAT NODE needs the
+// walk — its element — and says nothing about the nodes after it, which are boxes of their own.
+function buildListWalk(module StdModule, name ByteArray, walksElements bool, action CascadeAction)
 	var paramTypes = oneI64Param()
 
 	if walksElements 'perElementWalk'
@@ -1843,12 +1853,12 @@ function buildListSole(module StdModule, name ByteArray, walksElements bool)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let list = 0 as ValueId
-	let soleFn = 1 as ValueId
+	let elementWalk = 1 as ValueId
 
-	emitSoleBoxCall(module, block: entry, box: list, ids: ids)
-	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(head)))
+	var walked = emitBoxWalkStep(module, func: func, block: entry, box: list, action: action, stop: done, ids: ids)
+	let head = emitLoadField(module, block: walked, record: list, offset: ListHeadOffset, ids: ids)
+	module.setTerminator(walked, op: StdOp.branch(header.id))
+	walked.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(head)))
 
 	// walk(node): a 0 link is the chain's end — `buildListClone`'s own stopping test.
 	let node = ids.mint()
@@ -1857,8 +1867,8 @@ function buildListSole(module StdModule, name ByteArray, walksElements bool)
 	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
-	emitSoleBoxCall(module, block: body, box: node, ids: ids)
-	emitListElementSole(module, func: func, body: body, step: step, node: node, soleFn: soleFn, walksElements: walksElements, ids: ids)
+	let nodeWalked = emitBoxWalkStep(module, func: func, block: body, box: node, action: action, stop: step, ids: ids)
+	emitListElementWalk(module, func: func, body: nodeWalked, step: step, node: node, elementWalk: elementWalk, walksElements: walksElements, ids: ids)
 
 	let next = emitLoadField(module, block: step, record: node, offset: ListNextOffset, ids: ids)
 	module.setTerminator(step, op: StdOp.branch(header.id))
@@ -1867,19 +1877,19 @@ function buildListSole(module StdModule, name ByteArray, walksElements bool)
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildListSole'
+end 'buildListWalk'
 
-// One node's ELEMENT, proved sole or skipped. A TRIVIAL element owns nothing, so the trivial entry falls
-// straight to the advance. A MANAGED one is proved through the caller's `(box) -> void`, except where the
-// slot is the 0 `__list_remove_node` leaves behind — `emitListClonedElement`'s null rule, and
-// `callIndirect` on a null box is a fault either way.
-function emitListElementSole(module StdModule, func IrFunction, body IrBlock, step IrBlock, node ValueId, soleFn ValueId, walksElements bool, ids ValueMinter)
+// One node's ELEMENT, walked or skipped. A TRIVIAL element owns nothing, so the trivial entry falls straight
+// to the advance. A MANAGED one is walked through the caller's `(box) -> void`, except where the slot is the 0
+// `__list_remove_node` leaves behind — `emitListClonedElement`'s null rule, and `callIndirect` on a null box is
+// a fault either way.
+function emitListElementWalk(module StdModule, func IrFunction, body IrBlock, step IrBlock, node ValueId, elementWalk ValueId, walksElements bool, ids ValueMinter)
 	if not walksElements 'trivialElement'
 		module.setTerminator(body, op: StdOp.branch(step.id))
 		return
 	end 'trivialElement'
 
-	var visit = module.addBlock(func, label: b"solelem", heat: BlockHeat.normal)
+	var visit = module.addBlock(func, label: b"walkelem", heat: BlockHeat.normal)
 
 	let value = emitLoadField(module, block: body, record: node, offset: ListValueOffset, ids: ids)
 	let absent = emitConst(module, block: body, value: 0, ids: ids)
@@ -1889,9 +1899,9 @@ function emitListElementSole(module StdModule, func IrFunction, body IrBlock, st
 	// Both ABI masks are 0 for `emitListClonedElement`'s reason: a stamped element walk takes one
 	// whole-machine-word POINTER.
 	let visited = ids.mint()
-	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: soleFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(value)))
+	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: elementWalk, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(value)))
 	module.setTerminator(visit, op: StdOp.branch(step.id))
-end 'emitListElementSole'
+end 'emitListElementWalk'
 
 // `__list_decref(list)` — one fewer owner; at the last, let go of every node (each one destroying its own
 // element and freeing itself unless a handle still holds it), then free the record. The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner`.

@@ -484,7 +484,9 @@ export enum ErrorCode
 	// while an immutable binding is read after the call whose record it may be (`grow(pass(a))`, `pass(a).push(9)`),
 	// that borrows it out of the same mutable storage, or that may be the same record by another road. Make the
 	// binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation check and, of a value, by
-	// `StorageProvenance`.
+	// `StorageProvenance`. A `let` LENT to a message whose handler writes that parameter by any means, a field write
+	// included, is refused at the send the same way: the handler would write the sender's graph from another green
+	// thread.
 	semanticImmutableRefToMutatingParam = "E3019"
 
 	// An enum declares the same case name twice.
@@ -1539,10 +1541,9 @@ export enum ErrorCode
 	semanticServiceNotASpawnTarget = "E3134"
 
 	// A message of a service declares a parameter whose value cannot cross to another green thread.
-	// A send MOVES its arguments -- the receiving thread becomes their one owner -- and that is what keeps
-	// reference counting PLAIN rather than atomic: the language guarantees one green thread per box, so a
-	// send that left two threads holding one box would corrupt the heap rather than merely be slow.
-	// Four shapes fail it. A `Promise` is a green-thread handle its awaiter owns. A function value reaches
+	// A send moves an argument or lends it, and either way the receiving green thread must reach, count and
+	// release what it is handed through the request union's payload cascade. Four shapes cannot be reached that
+	// way. A `Promise` is a green-thread handle its awaiter owns. A function value reaches
 	// a captured environment block, which is a box with a second referent by construction. A value held at
 	// an interface type is a fat pointer whose witness half is read-only data and whose value half is
 	// released through `__drop_existential`, a pair the request union's payload cascade cannot carry. An
@@ -1588,30 +1589,30 @@ export enum ErrorCode
 
 	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
 	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
-	// A send MOVES: the service becomes the argument's one owner, and the sending frame gives up the
-	// reference it held. That is what keeps reference counting PLAIN rather than atomic -- the language
-	// guarantees one green thread per box -- so an argument this frame still shares with something else
-	// would put one box in two green threads' hands, which corrupts the heap rather than merely being slow.
+	// A MOVE -- a `spawn`'s state, a reply, and a message argument that is a `var`, a temporary or a literal --
+	// makes the service the value's one owner, and the sending frame gives up the reference it held. A box one
+	// green thread holds steps its count with a plain load/add/store, so a value this frame still shares with
+	// something else would put one box in two green threads' hands without saying so, which corrupts the heap.
+	// A `let` local that solely owns its graph is LENT instead: its graph is marked shared and counted
+	// atomically, and E3160 keeps it unwritten.
 	// Three shapes fail it, and E3135 is the neighbouring rule about the argument's TYPE rather than its
 	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value a
 	// closure captured, one pushed into a container, one handed to another consuming call. The second is a
-	// BORROWED aggregate this frame does not own at all -- a struct read out of a field, an element, or a
-	// parameter -- for which there is no owning copy the send could take instead. (A borrowed `String` is
-	// not in this class: a byte record has a cheap owning copy, so the send promotes it and the source stays
-	// readable.)
+	// BORROWED value this frame does not own at all -- a struct or a `String` read out of a field, an element, or
+	// a parameter. Only a string LITERAL this frame wrote is promoted to a fresh owned copy at the send.
 	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
 	// makes costs visible; or restructuring so the value is freshly built at the send.
 	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
 	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
 	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
-	// a reference where a move would give one up -- and a move hands the record over WHOLE, leaving that
-	// second owner behind on this green thread with a plain refcount racing the service's. No compile-time
-	// tier can settle it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
-	// `push(Cell.create())` build the same TYPE. So the graph is proved where the counts are -- at run time,
-	// immediately before the move, by a synthesized per-type walk. A reachable record with a second owner
-	// ABORTS the process (exit 96) on the sending green thread, before anything is enqueued; an immortal
-	// `.rdata` literal passes with no count to check; a shared copy-on-write BUFFER is detached, exactly as
-	// a write to it would detach it.
+	// a reference where a move would give one up -- and handing the record over leaves that second owner
+	// behind on this green thread, stepping a count the service steps too. No compile-time tier can settle
+	// it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
+	// `push(Cell.create())` build the same TYPE. So the graph is walked where the counts are -- at run time,
+	// immediately before the hand-off, by a synthesized per-type walk, which for a lend also marks every
+	// record it reaches shared. A reachable record with a second owner ABORTS the process (exit 96) on the
+	// sending green thread, before anything is enqueued; an immortal `.rdata` literal passes with no count to
+	// check; a shared copy-on-write BUFFER is detached, exactly as a write to it would detach it.
 	// What this arm still REFUSES is the shape no walk can be built for, never a shape that might be
 	// shared: a value held at an interface type (a witness table names a destructor and no walk), an opaque
 	// type parameter (the site cannot see its slots), a record no declaration in scope describes, and any
@@ -1879,6 +1880,22 @@ export enum ErrorCode
 	// first, or write an independent copy made with `clone()`. Decided by `StorageProvenance.checkWriteThroughSites`
 	// and `checkReceiverWrites`.
 	semanticWriteThroughImmutableRecord = "E3159"
+
+	// A value lent to another green thread would reach storage through which it could be written. A message
+	// argument that is a `let` local is LENT: the sender keeps reading it and the service reads the same graph,
+	// so from the send on that graph is frozen. Neither the lent binding nor any value read out of it -- a field,
+	// an element, a payload, a `let` alias, a `for` or `match` binding -- may be bound or assigned to a `var`,
+	// stored in a field, a union payload or a container, returned, captured by a closure, passed to a parameter
+	// its callee keeps, or handed to a method or a parameter that writes it. Reads, interpolation, `let`
+	// bindings, parameters that neither write nor keep, and a second send stay legal. A value whose type holds
+	// nothing a statement can write -- a service handle, or a struct whose fields are all `let` over such types --
+	// is exempt. "From the send on" is the control flow rather than the text: a door the send cannot reach -- one
+	// on the other arm of the `if` or `match` whose arm sent -- is not frozen, and a door the next trip of a loop
+	// reaches is. The receiving side answers to the same rule, whole-program: a handler whose parameter, or
+	// anything read out of it, escapes through one of those doors refuses every send that lends to it, reported
+	// at the send and naming the escape; a handler that writes its parameter is E3019. Send a `.clone()`, or bind
+	// the value with `var` so the send moves it.
+	semanticLentGraphEscapes = "E3160"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

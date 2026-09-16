@@ -445,8 +445,9 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, c
 	// ⛔⛔⛔ **EVERY RELEASE THIS GREEN THREAD OWES HAPPENS BEFORE THE PUBLISH, AND THAT ORDER IS THE WHOLE
 	// REASON THE CALL AND THE COMPLETION ARE TWO FUNCTIONS.** `__gt_cell_complete` stores `completed`, which is
 	// the instant the AWAITER may resume — on another M. Anything this loop touches after that line it touches
-	// while a second green thread is running, and a reference count is a plain load/add/store
-	// (`MmRuntime.emitAdjustRefcount`) precisely because the language guarantees ONE green thread per box.
+	// while a second green thread is running, and a COUNTED box's reference count is a plain load/add/store
+	// (`MmRuntime.emitAdjustRefcount`) precisely because one green thread owns it; only a box a lend marked
+	// shared steps atomically.
 	//
 	// ⚠ **AND THE TWO REALLY CAN NAME ONE BOX.** A message may return a record with a managed FIELD, and a
 	// handler may build that record over a message PARAMETER — `Wrapper.of(s)` co-owns `s`, so the string is
@@ -632,9 +633,10 @@ function emitFusedHandlerFlag(fn SynthesizedFunction, signatures ProgramSignatur
 end 'emitFusedHandlerFlag'
 
 // ⭐⭐ **DROP EVERY MANAGED PAYLOAD THE HANDLER DID NOT TAKE OWNERSHIP OF.** The request box holds exactly
-// one reference to each of its managed payloads — the one `Parser.moveIntoGreenThread` moved in at the send
-// — and the handler either consumed it or borrowed it. A borrowed one is still this loop's to release, and
-// releasing it is what balances the move.
+// one reference to each of its managed payloads — the one the send moved in (`Parser.moveIntoGreenThread`) or
+// took for a lend (`Parser.lendIntoGreenThread`) — and the handler either consumed it or borrowed it. A
+// borrowed one is still this loop's to release, through the ordinary drop, and releasing it is what balances
+// the move or the lend.
 //
 // ⚠ **`paramIsConsumed` ANSWERS `false` FOR EVERY MESSAGE, AND THAT IS A CHECKED ANSWER, NOT A SKIP.**
 // The sweep reads every declaration's parameters, an instance method's included, but only three doors can

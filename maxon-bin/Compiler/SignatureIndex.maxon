@@ -5305,14 +5305,14 @@ function structBoxDropCallee(signatures ProgramSignatures, structName ByteArray)
 	return MmDecrefName
 end 'structBoxDropCallee'
 
-// ⭐⭐ **WHICH PER-TYPE CASCADE IS BEING ROUTED — the ONE parameter that turns this classification into
-// two.** The tree below answers *"what KIND of managed thing is this, and which entry serves it?"*; the kind
-// half is identical for both actions and the entry half is not, so an action is threaded through rather than
-// the tree being written twice. A second copy of it would be free to disagree about which types it can route
-// at all — and the `unsupported` arms are exactly what the front-end gate reads.
+// ⭐⭐ **WHICH PER-TYPE CASCADE IS BEING ROUTED — the ONE parameter that turns this classification into one
+// per action.** The tree below answers *"what KIND of managed thing is this, and which entry serves it?"*; the
+// kind half is identical for every action and the entry half is not, so an action is threaded through rather
+// than the tree being written once per action. A second copy of it would be free to disagree about which types
+// it can route at all — and the `unsupported` arms are exactly what the front-end gate reads.
 //
 // ⭐ **THE `unsupported` ARMS ARE ACTION-INDEPENDENT BY CONSTRUCTION**, which is what lets ONE gate
-// (`typeSupportsDeepClone`) admit both: every arm that declines does so without consulting the action, because
+// (`typeSupportsDeepClone`) admit every action: every arm that declines does so without consulting the action, because
 // what it declines on is the absence of a per-type entry of ANY kind — an OS handle, an existential, a
 // base-layout-less instance. Keep it that way: an arm that declined for one action only would need its own
 // gate, and a gate and a strategy that disagree is a symbol nobody builds (see `managedNameCascadeStrategy`).
@@ -5323,33 +5323,40 @@ export enum CascadeAction
 	// The `(box) -> void` soleness walk — prove every reachable record has one owner, so the graph may
 	// cross to another green thread.
 	soleWalk
+
+	// The `(box) -> void` share walk — mark every reachable record shared, so the graph may be LENT to
+	// another green thread and counted atomically from then on.
+	shareWalk
 end 'CascadeAction'
 
 // The BYTE-RECORD entry for `action`. A String and a Character are the same fused record, so both clone
-// through `__str_clone` and both prove sole through the container walk that owns that record format.
-function byteRecordCascadeCallee(action CascadeAction) returns ByteArray
+// through `__str_clone` and both walk through the container walks that own that record format.
+module function byteRecordCascadeCallee(action CascadeAction) returns ByteArray
 	return match action 'action'
 		clone gives StrCloneName
 		soleWalk gives ManagedSoleName
+		shareWalk gives ManagedShareName
 	end 'action'
 end 'byteRecordCascadeCallee'
 
-// The per-TYPE entry for `action` — `__clone_<T>` or `__sole_<T>`, the two symbols
-// `MmRuntime.clonerSymbol`/`soleWalkSymbol` mint and the two the installers synthesize.
+// The per-TYPE entry for `action` — `__clone_<T>`, `__sole_<T>` or `__share_<T>`, the symbols `MmRuntime`
+// mints and the installers synthesize.
 module function perTypeCascadeSymbol(action CascadeAction, typeName ByteArray) returns ByteArray
 	return match action 'action'
 		clone gives clonerSymbol(typeName)
 		soleWalk gives soleWalkSymbol(typeName)
+		shareWalk gives shareWalkSymbol(typeName)
 	end 'action'
 end 'perTypeCascadeSymbol'
 
-// The SERVICE HANDLE entry for `action`. A handle CLONES into a second handle to the same service; its
-// SOLENESS is nothing but its box's refcount, because the box holds one machine word and no managed field —
-// so it takes the shared leaf rather than a synthesized walk no installer would build for it.
+// The SERVICE HANDLE entry for `action`. A handle CLONES into a second handle to the same service; its walks
+// are nothing but its box's count, because the box holds one machine word and no managed field — so it takes
+// the shared leaf rather than a synthesized walk no installer would build for it.
 function serviceHandleCascadeCallee(action CascadeAction) returns ByteArray
 	return match action 'action'
 		clone gives MboxHandleCloneBoxName
 		soleWalk gives MmSoleBoxName
+		shareWalk gives MmShareBoxName
 	end 'action'
 end 'serviceHandleCascadeCallee'
 
@@ -5377,7 +5384,7 @@ export union ManagedCascadeStrategy
 	// one-argument thunk, whose entire body IS it (`managedElementRecordCopy`).
 	//
 	// ⚠ **THE CONTAINER'S ENTRY IS A PAYLOAD RATHER THAN A SECOND CASE**, and that is what keeps the chain from
-	// duplicating the record's arm: `emitCloneCall`, `emitSoleCall` and `noteFieldCascadeNeeds` each carry ONE arm for this shape,
+	// duplicating the record's arm: `emitCloneCall`, `emitWalkCall` and `noteFieldCascadeNeeds` each carry ONE arm for this shape,
 	// and a third element-bearing container would add a caller here rather than a case, three emitters and a
 	// usage-closure arm.
 	managedElements(containerEntry ByteArray, elementEntry ByteArray)
@@ -5618,6 +5625,7 @@ function managedRecordCascadeEntries(action CascadeAction) returns ElementRecord
 	return match action 'action'
 		clone gives ElementRecordCascadeEntries.create(ManagedCloneName, perElement: ManagedCloneManagedName)
 		soleWalk gives ElementRecordCascadeEntries.create(ManagedSoleName, perElement: ManagedSoleManagedName)
+		shareWalk gives ElementRecordCascadeEntries.create(ManagedShareName, perElement: ManagedShareManagedName)
 	end 'action'
 end 'managedRecordCascadeEntries'
 
@@ -5625,6 +5633,7 @@ function chainCascadeEntries(action CascadeAction) returns ElementRecordCascadeE
 	return match action 'action'
 		clone gives ElementRecordCascadeEntries.create(ListCloneName, perElement: ListCloneManagedName)
 		soleWalk gives ElementRecordCascadeEntries.create(ListSoleName, perElement: ListSoleManagedName)
+		shareWalk gives ElementRecordCascadeEntries.create(ListShareName, perElement: ListShareManagedName)
 	end 'action'
 end 'chainCascadeEntries'
 
@@ -31001,6 +31010,72 @@ export type ProgramSignatures
 		return true
 	end 'recordTypeIsImmutable'
 
+	// ⭐ **DOES A RECORD OF AGGREGATE `name` HOLD NOTHING A STATEMENT CAN WRITE, AT ANY DEPTH?** A service handle
+	// holds one mailbox word, and a declared struct holds nothing writable when every field is a `let` whose type
+	// holds nothing writable either — `recordTypeIsImmutable` asked all the way down. A lent graph of such a type
+	// is frozen by its type already (E3160). A byte record answers `false` (`append` writes in place), and so do a
+	// container, a union, an existential, a function value and an opaque `T`.
+	export function aggregateGraphIsWriteFree(name ByteArray) returns bool
+		return self.aggregateIsWriteFree(self.denotedAggregateName(name), visited: ClonerSet.create())
+	end 'aggregateGraphIsWriteFree'
+
+	// A name already on this walk is answered by the walk that entered it: a cycle adds no field of its own.
+	function aggregateIsWriteFree(name ByteArray, visited ClonerSet) returns bool
+		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyOnThisWalk'
+			return true
+		end 'alreadyOnThisWalk'
+
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			serviceHandle then return true
+
+			managedFile or
+				managedDirectory or
+				managedSocket then return false
+
+			userDeclared then break 'compilerOwned'
+		end 'compilerOwned'
+
+		if not self.containsStructInAnyFile(name) 'notAStruct'
+			return false
+		end 'notAStruct'
+
+		let layout = self.structLayoutOf(name)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if layout.fieldIsMutable(i) or not self.slotTypeIsWriteFree(try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.aggregateIsWriteFree: field {i} of `type {String.from(name)}` is past its {layout.fieldCount()} field types"), visited: visited) 'aWritableField'
+				return false
+			end 'aWritableField'
+		end 'eachField'
+
+		return true
+	end 'aggregateIsWriteFree'
+
+	function slotTypeIsWriteFree(type MaxonType, visited ClonerSet) returns bool
+		let tag = maxonTypeTag(type)
+
+		if tagIsByteRecord(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function 'writableOrOpaque'
+			return false
+		end 'writableOrOpaque'
+
+		if not tagMayNameAggregate(tag) 'aScalar'
+			return true
+		end 'aScalar'
+
+		let name = self.denotedSlotAggregateName(type)
+		let form = try self.declaredFormInAnyFile(name) otherwise return false
+
+		return match form 'form'
+			structType gives self.aggregateIsWriteFree(name, visited: visited)
+			enumType or
+				unionType gives not self.declaredEnumIsBoxed(name)
+			rangedAlias gives true
+			tupleAlias or
+				interfaceType or
+				functionAlias or
+				genericAlias gives false
+		end 'form'
+	end 'slotTypeIsWriteFree'
+
 	// ⭐ **CAN A MANAGED-ELEMENT `Array with T` BE DEEP-CLONED by this rung's mechanism (P1.7 slice 3b-vi-b)?**
 	// The FRONT-END gate for a managed `slice`/`clone`/`append`, and the exact envelope the cloner synthesis
 	// handles — the two agree so the synthesizer never meets an `unsupported` field on a program the front end
@@ -31085,32 +31160,33 @@ export type ProgramSignatures
 		return self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create())
 	end 'instanceSupportsDeepClone'
 
-	// ⭐⭐ **HOW A VALUE OF AGGREGATE `declaredName` IS PROVED SOLE BEFORE IT CROSSES, OR THAT IT CANNOT BE —
-	// the GATE and the STRATEGY answered TOGETHER.** This file's standing rule is that the two must
-	// agree; keeping them apart at a caller is what makes a symbol no installer builds representable, which
-	// `managedNameCascadeStrategy`'s header records as a measured backend panic. The gate is the FULL-GRAPH
-	// one, because a type that is `direct` at the top can own a field with no cascade at all.
+	// ⭐⭐ **HOW A VALUE OF AGGREGATE `declaredName` IS WALKED BEFORE IT CROSSES — proved sole for a move,
+	// marked shared for a lend — OR THAT IT CANNOT BE: the GATE and the STRATEGY answered TOGETHER.** This
+	// file's standing rule is that the two must agree; keeping them apart at a caller is what makes a symbol
+	// no installer builds representable, which `managedNameCascadeStrategy`'s header records as a measured
+	// backend panic. The gate is the FULL-GRAPH one, because a type that is `direct` at the top can own a
+	// field with no cascade at all.
 	//
 	// ⚠ **`asElement: true` IS WHAT MAKES THE ANSWER A ONE-ARGUMENT CALLEE.** A transfer door emits
 	// `callee(value)` and has nowhere to put a second argument, so a managed-element container must resolve
 	// to its per-instance thunk rather than to the 2-argument record entry — the same position an array
 	// element stands in (G18).
-	export function nameTransferWalkStrategy(declaredName ByteArray) returns ManagedCascadeStrategy
+	export function nameTransferWalkStrategy(declaredName ByteArray, action CascadeAction) returns ManagedCascadeStrategy
 		if not self.aggregateSupportsDeepClone(declaredName) 'someNestedTypeHasNoCascade'
 			return ManagedCascadeStrategy.unsupported
 		end 'someNestedTypeHasNoCascade'
 
-		return managedNameCascadeStrategy(self, declaredName: declaredName, asElement: true, action: CascadeAction.soleWalk)
+		return managedNameCascadeStrategy(self, declaredName: declaredName, asElement: true, action: action)
 	end 'nameTransferWalkStrategy'
 
 	// The container twin of `nameTransferWalkStrategy`, keyed by the instance a `genericInstance`-tagged
 	// value names.
-	export function instanceTransferWalkStrategy(id GenericInstanceId) returns ManagedCascadeStrategy
+	export function instanceTransferWalkStrategy(id GenericInstanceId, action CascadeAction) returns ManagedCascadeStrategy
 		if not self.instanceSupportsDeepClone(id) 'someNestedTypeHasNoCascade'
 			return ManagedCascadeStrategy.unsupported
 		end 'someNestedTypeHasNoCascade'
 
-		return instanceCascadeStrategy(self, id: id, asElement: true, action: CascadeAction.soleWalk)
+		return instanceCascadeStrategy(self, id: id, asElement: true, action: action)
 	end 'instanceTransferWalkStrategy'
 
 	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a

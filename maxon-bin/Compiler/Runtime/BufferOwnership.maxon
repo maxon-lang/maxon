@@ -256,7 +256,7 @@ end 'ImmortalRecordShape'
 //
 // ⛔⛔ **A CAPACITY-BEARING IMAGE RECORD CARRIES BOTH MARKS OR IT IS REFUSED HERE.** The runtime asks
 // "is this image data?" two ways, of two populations: `emitRecordIsImmortal` reads `capacity@16` and
-// `MmRuntime.emitBoxIsImmortal` reads the header. A record answering one and not the other is skipped by
+// `MmRuntime.emitRouteOnRefcountWord` reads the header. A record answering one and not the other is skipped by
 // the readers of the mark it has and COUNTED by the readers of the mark it lacks — which is a leak or a
 // double free, exactly as this file's header says of a skip added on one side only. The pairing is
 // therefore a panic at the minting door and not a comment: it is `buildStringRecordBytes`'s offset-assert
@@ -616,18 +616,18 @@ export function emitOwedAllocationBase(module StdModule, func IrFunction, cur Ir
 	return base
 end 'emitOwedAllocationBase'
 
-// `if base != NoOwedAllocation then <callee>(base)` — the null-guarded refcount step every share and
-// every release of an owed allocation makes, since "this record owes nothing" is an ordinary answer from
-// `emitOwedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, in
-// both directions: `__managed_slice` raises the count with `__mm_incref`, the detach and drop paths lower it
-// with `__mm_decref`.
+// `if base != NoOwedAllocation then <callee>(base)` — the null-guarded count step every view, lend and
+// release of an owed allocation makes, since "this record owes nothing" is an ordinary answer from
+// `emitOwedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, for
+// every step: `__managed_slice` raises the count with `__mm_incref`, a lend marks it with
+// `__mm_share_buffer`, the detach and drop paths lower it with `__mm_decref`.
 //
 // ⭐ **A BUFFER IS RELEASED WITH `__mm_decref`, NEVER `__mm_free`, AND THAT IS THE WHOLE OF THE DROP
 // RULE.** It may still be under a view, so only the LAST owner may reclaim it — which is exactly what
-// `__mm_decref` decides. It is also the safer failure mode: if some future path ever reached here with a
-// count it should not have, a decref merely keeps the buffer alive and the leak gate reports 101, where
-// a `__mm_free` would silently hand a live allocation back and become a use-after-free the day a free
-// list exists. A new non-owned-buffer kind must be taught to the drop path, not only to the write check.
+// `__mm_decref` decides. It is also the safer failure mode: a path reaching here with a count it should not
+// have merely keeps the buffer alive and the leak gate reports 101, where a `__mm_free` would hand a live
+// allocation back to the slab — a use-after-free. A new non-owned-buffer kind must be taught to the drop
+// path, not only to the write check.
 export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
 	var step = module.addBlock(func, label: b"rcstep", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rccont", heat: BlockHeat.normal)

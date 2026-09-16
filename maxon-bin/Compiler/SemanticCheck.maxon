@@ -92,9 +92,9 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
 
 	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
-	// receiver written through a `let`'s record, E3078 at a `var` — after `checkCalls`, so a program with a bad
-	// argument reports it first, in the order the reader meets them.
-	provenance.checkStorageDoors()
+	// receiver written through a `let`'s record, E3078 at a `var`, E3160 past the send that lent a graph — after
+	// `checkCalls`, so a program with a bad argument reports it first, in the order the reader meets them.
+	provenance.checkStorageDoors(mutationSummary)
 
 	// The RETURN half of the interface-widening rule (P1.7a slice 2). After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
@@ -1328,9 +1328,10 @@ end 'directlyEscapingParams'
 //
 // ⚠ **THE EXCEPTION IS AN `async` SPAWN, and the difference is REAL rather than an omission.** A green
 // thread outlives the frame that spawned it, so an argument crossing into one is not "handed down" — it is
-// gone. There is deliberately no call-graph EDGE for a spawn (`collectCallParamEdgesAt`'s `asyncCall` arm
-// states the exclusion), so for the PARAMETER subject a spawn argument must escape HERE or nothing will ever
-// say it does. The closure subject keeps its existing call-site delegation there, untouched.
+// gone, and no summary of what the callee DOES can give that back: the mutation edge
+// (`collectCallParamEdgesAt`'s `asyncCall` arm) says what the target writes, never how long the value lives.
+// So for the PARAMETER subject a spawn argument must escape HERE or nothing will ever say it does. The
+// closure subject keeps its existing call-site delegation there, untouched.
 //
 // ⭐⭐ **AND IT IS ALSO HOW MANY VALUES ONE PASS TRACKS, WHICH IS WHAT KEEPS THE CLOSURE RULE LINEAR.**
 // The parameter summary asks about ONE value at a time, and can: a function declares a handful of parameters.
@@ -1609,9 +1610,10 @@ function syncCallArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeS
 end 'syncCallArgEscapes'
 
 // ⭐ **AN `async` SPAWN'S ARGUMENT — THE ONE SLOT THE TWO SUBJECTS STILL ANSWER DIFFERENTLY.** A green thread
-// runs past its spawner's frame, so an argument crossing into one is not handed DOWN, it is handed AWAY:
-// there is deliberately no call-graph edge for a spawn (`collectCallParamEdgesAt`'s `asyncCall` arm), so a
-// function-typed PARAMETER must escape here or nothing downstream will ever say it does. A capturing-closure
+// runs past its spawner's frame, so an argument crossing into one is not handed DOWN, it is handed AWAY —
+// which the mutation edge a spawn now carries (`collectCallParamEdgesAt`'s `asyncCall` arm) says nothing
+// about, it being about what the target WRITES. So a function-typed PARAMETER must escape here or nothing
+// downstream will ever say it does. A capturing-closure
 // LITERAL keeps the call-site delegation it has always had, which is the arrangement `checkCapturingClosureEscape`
 // owns and this rung deliberately leaves alone.
 function spawnArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction, funcSignatures FuncSignatureMap) returns bool
@@ -2056,11 +2058,13 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 			functionRef or
 			indirectCall then break 'op'
 
-		// An `async` spawn runs CONCURRENTLY with its caller, so a write it makes is not ordered against the
-		// caller's own use of the value. The compiler refuses a managed `async` argument outright
-		// (`requireAsyncScalarParams`) and a scalar parameter cannot be written at all, so no spawn can carry
-		// a mutation today; the arm states the exclusion rather than leaving it to that coincidence.
-		asyncCall then break 'op'
+		// ⭐ **AN `async` SPAWN CARRIES THE SAME EDGE A DIRECT CALL DOES.** A MANAGED argument is legal
+		// (`requireAsyncScalarParams` refuses a non-integer channel and a CONSUMED parameter, not a managed one) and
+		// the spawn hands the coroutine a reference to it, so `async g(p)` where `g` writes its parameter WRITES the
+		// caller's own — whether the write lands before the await or after it. Without the edge that write is
+		// invisible one frame out: `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and
+		// both E3019 and the freeze on a lent graph would then admit a `let` handed to `relay`.
+		asyncCall(_, callee, args, argLabels, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		await or
 			tryAwait then break 'op'
 		sizeofType then break 'op'
@@ -2075,11 +2079,11 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		// The error-flag encode calls no user function, so it carries no mutation edge.
 		errorFlagEncode then break 'op'
 
-		// ⭐ **NO EDGE, AND THE REASON IS THE SAME ONE THE `asyncCall` ARM GIVES ONE LINE UP, SHARPENED.** This
-		// summary answers *"does a call to this function WRITE the caller's own parameter?"*, and a message's
-		// arguments are no longer the caller's: `Parser.moveIntoGreenThread` MOVED each of them into the
-		// request box, so a handler writing one writes a value this frame has given up. A `serviceSpawn`'s
-		// state is a factory's own fresh box and was never a parameter of anybody.
+		// ⭐ **NO EDGE: A SEND NEVER HANDS OVER THE CALLER'S OWN PARAMETER.** This summary answers *"does a call to
+		// this function WRITE the caller's own parameter?"*, and a parameter reaching a send is a borrow the send
+		// refuses (E3138): a message argument is MOVED — given up by this frame — or LENT, which only a `let` local
+		// is. A handler that writes a lent argument is refused at the send (`ProvenanceTracer.judgeLentHandler`,
+		// E3019). A `serviceSpawn`'s state is a factory's own fresh box and was never a parameter of anybody.
 		serviceSpawn or
 			serviceSend or
 			serviceReplyCell then break 'op'
@@ -5182,12 +5186,12 @@ function listMutatorCallee(callee ByteArray) returns bool
 end 'listMutatorCallee'
 
 // ⭐ **THE OWNERSHIP BOOKKEEPING THE SOURCE NEVER WROTE.** Allocation, retain, release, the copy-on-write
-// clone and the move's soleness walk are the compiler's own emissions — unobservable to the program, and
+// clone and the move's and the lend's walks are the compiler's own emissions — unobservable to the program, and
 // counting them would leave no function that builds or holds a value effect-free, `makePair` included.
 // `isRuntimeCallee` (the `__mm_` heap band) already draws exactly this line for exactly this reason; the
 // managed, String, List and type-parameter families are the same fact one prefix over.
 module function ownershipBookkeepingCallee(callee ByteArray) returns bool
-	return isRuntimeCallee(callee) or callee.equals(StrRetainName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName) or callee.equals(RetainTypeParamName) or callee.equals(DropTypeParamName) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName)
+	return isRuntimeCallee(callee) or callee.equals(StrRetainName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName) or callee.equals(RetainTypeParamName) or callee.equals(DropTypeParamName) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName)
 end 'ownershipBookkeepingCallee'
 
 // ⭐ **A READ OF A CONTAINER THE CALLER ALREADY OWNS**, plus the two CREATE entries that belong in the

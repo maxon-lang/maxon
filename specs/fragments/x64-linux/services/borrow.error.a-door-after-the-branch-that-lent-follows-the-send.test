@@ -1,0 +1,51 @@
+// Test: borrow.error.a-door-after-the-branch-that-lent-follows-the-send
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+enum Route
+	toService
+	toArray
+end 'Route'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function stash(xs Boxes, item Box)
+	xs.push(item)
+end 'stash'
+
+function route(h Svc.handle, xs Boxes, n Integer, way Route)
+	let b = Box.create(n)
+	match way 'send'
+		toService then h.take(b)
+		toArray then print("kept, not sent\n")
+	end 'send'
+	stash(xs, item: b)
+end 'route'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	route(h, xs: xs, n: 2, way: Route.toService)
+	return xs.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3160: <fragment>:39:18: `b` was lent to another green thread at <fragment>:36:25, so what it holds is frozen: passing it to `stash`, which keeps it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it

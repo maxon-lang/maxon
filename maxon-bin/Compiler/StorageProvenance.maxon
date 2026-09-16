@@ -91,6 +91,18 @@ let NoStoreSlotSet = i64.max as RootSetId
 typealias NamedTypeRecordMemo = Map with (TypeNameId, bool)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
 
+// Whether a record of a `named` type holds nothing a statement can write — asked of every door the freeze on a
+// lent graph considers, and answered by a walk over the whole field graph.
+typealias WriteFreeGraphMemo = Map with (TypeNameId, bool)
+
+// One op's place in its body's control flow as ONE key — the block in the high bits, the position within it in the
+// low ones. Packed rather than a `FlowPoint`, so indexing a body allocates nothing per op.
+typealias FlowPointKey = int(0 to u64.max)
+typealias FlowPointByOp = Map with (OpIndex, FlowPointKey)
+
+let FlowPointBlockShift = 32 as FlowPointKey
+let FlowPointPositionMask = 4294967295 as FlowPointKey
+
 // What may lie within a record of an aggregate or an instance — asked of every immutable root of every walk
 // (`ProgramSignatures.recordKindsWithinAggregate`).
 typealias AggregateRecordKindsMemo = Map with (ByteArray, HeldRecordKinds)
@@ -149,6 +161,67 @@ type PendingRefusal
 end 'PendingRefusal'
 
 typealias PendingRefusalArray = Array with PendingRefusal
+
+// One door a value passes in a body the freeze on a lent graph asks about (`ProvenanceTracer.freezeDoorsOf`):
+// the parser's, a receiver a container method writes, or an argument its callee keeps or writes. `callee` is the
+// callee's spelling in the sentence, empty for a door no callee owns; `point` is where the door stands in the
+// body's control flow and `token` orders two doors standing at one point.
+type FreezeDoorAt
+	export let value as ValueId
+	export let door as FreezeDoor
+	export let callee as String
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let token as TokenIndex
+	export let point as FlowPoint
+
+	export static function create(value ValueId, door FreezeDoor, callee String, line LineNumber, column ColumnNumber, token TokenIndex, point FlowPoint) returns FreezeDoorAt
+		return Self{value: value, door: door, callee: callee, line: line, column: column, token: token, point: point}
+	end 'create'
+end 'FreezeDoorAt'
+
+typealias FreezeDoorAtArray = Array with FreezeDoorAt
+
+// Where a lent binding is bound to a record again, from which point a door reaches a DIFFERENT record than the one
+// the send lent: a `let` bound inside a loop is a fresh graph on every trip.
+union Rebinding
+	never
+	at(point FlowPoint)
+end 'Rebinding'
+
+typealias RebindingArray = Array with Rebinding
+
+// Where a message's lent parameter first escapes, or that it stays in the handler.
+union HandlerEscape
+	stays
+	at(door FreezeDoorAt, filePath FilePath)
+end 'HandlerEscape'
+
+// A lent (handler, parameter) pair as one key: the handler's function index in the high bits, the parameter in the
+// low ones.
+typealias HandlerParamKey = int(0 to u64.max)
+typealias HandlerEscapeMemo = Map with (HandlerParamKey, HandlerEscape)
+
+let HandlerParamKeyShift = 16 as HandlerParamKey
+
+function handlerParamKey(index FuncIndex, param ParamCount) returns HandlerParamKey
+	return ((index as HandlerParamKey) shl HandlerParamKeyShift) or (param as HandlerParamKey)
+end 'handlerParamKey'
+
+// The handler a lend's message runs, and the position of its lent parameter.
+type LentHandler
+	export let name as ByteArray
+	export let index as FuncIndex
+	export let param as ParamCount
+
+	export static function create(name ByteArray, index FuncIndex, param ParamCount) returns LentHandler
+		return Self{name: name, index: index, param: param}
+	end 'create'
+end 'LentHandler'
+
+// No frozen lend a door breaks, and a position past every source position.
+let NoFrozenLend = i64.max as ElementIndex
+let NoPositionKey = i64.max as PositionKey
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
 
@@ -761,8 +834,32 @@ module type ProvenanceTracer
 	var indexedCalls as CallTokenColumns
 	var callTokenIndex as TokenByPosition
 
+	// The labelled arguments `argumentValueAt` last indexed, and that index.
+	var indexedLabelledArguments as LabelledArgumentValues
+	var labelledArgumentRows as LabelledValueRowByPosition
+
+	// The body `indexFlowPoints` last indexed, and where each of its ops stands in its control flow.
+	var indexedFlowPointsOf as ByteArray
+	var flowPoints as FlowPointByOp
+
+	// Whether a record of a named type holds nothing a statement can write, by type name
+	// (`valueHoldsNothingWritable`).
+	var writeFreeGraphs as WriteFreeGraphMemo
+
+	// The lends of the function being judged whose record the trace ranks, by rank and site (`checkLentGraphs`); the
+	// blocks each of them reaches and where its binding is bound again (`mapLendFlow`, one row of `frozenReach` per
+	// lend over the function's `frozenBlockCount` block ids); the `var` doors a freeze refused (`doorWasFrozen`);
+	// and where each lent handler parameter first escapes (`traceLentHandlers`).
+	var frozenRanks as RootRankArray
+	var frozenLends as LendSiteArray
+	var frozenReach as BoolArray
+	var frozenRebinds as RebindingArray
+	var frozenBlockCount as ElementIndex
+	var frozenDoorValues as BoolArray
+	var handlerEscapes as HandlerEscapeMemo
+
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount FuncIndex) returns ProvenanceTracer
-		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count() as RootSetId, setsPerColumn: 0, storeSlots: StoreSlotIndex.create(), deepSlots: StoreSlotIndex.create(), storeSlotWalk: 0, loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), notARootValue: BoolArray.create(), rootValues: ValueIdArray.create(), rootNames: ByteArrayArray.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: RootRankArray.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootIsImage: BoolArray.create(), rootIsImmutableRecord: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootBorrows: BoolArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: RootRankArray.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), askedBeforeToken: AskAboutEveryRoot, liveAfterToken: AskAboutEveryRoot, doorSkipsImages: false, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argPositions: ParamCountArray.create(), calleeParamCount: 0, changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), recording: false, recordingCaller: 0, dependencyCallees: CsrColumn.create(), dependencyCallers: CsrColumn.create(), enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWriteSeeds: emptySummaryColumn(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ByteArrayArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), refusedDoorRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: ProvenanceSites.create(), refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: EmptySourceText, definingOps: OpIndexArray.create(), mergingBlocks: BlockIdArray.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepArray.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), pathSteps: AccessStepArray.create(), otherPathSteps: AccessStepArray.create(), fieldStored: ValueIdArray.create(), otherFieldStored: ValueIdArray.create(), handedPositions: ParamCountArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: HygieneIndexArray.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create()}
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count() as RootSetId, setsPerColumn: 0, storeSlots: StoreSlotIndex.create(), deepSlots: StoreSlotIndex.create(), storeSlotWalk: 0, loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), notARootValue: BoolArray.create(), rootValues: ValueIdArray.create(), rootNames: ByteArrayArray.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: RootRankArray.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootIsImage: BoolArray.create(), rootIsImmutableRecord: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootBorrows: BoolArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: RootRankArray.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), askedBeforeToken: AskAboutEveryRoot, liveAfterToken: AskAboutEveryRoot, doorSkipsImages: false, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argPositions: ParamCountArray.create(), calleeParamCount: 0, changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), recording: false, recordingCaller: 0, dependencyCallees: CsrColumn.create(), dependencyCallers: CsrColumn.create(), enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWriteSeeds: emptySummaryColumn(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ByteArrayArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), refusedDoorRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: ProvenanceSites.create(), refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: EmptySourceText, definingOps: OpIndexArray.create(), mergingBlocks: BlockIdArray.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepArray.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), pathSteps: AccessStepArray.create(), otherPathSteps: AccessStepArray.create(), fieldStored: ValueIdArray.create(), otherFieldStored: ValueIdArray.create(), handedPositions: ParamCountArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: HygieneIndexArray.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), indexedLabelledArguments: LabelledArgumentValues.create(), labelledArgumentRows: LabelledValueRowByPosition.create(), indexedFlowPointsOf: EmptySourceText, flowPoints: FlowPointByOp.create(), writeFreeGraphs: WriteFreeGraphMemo.create(), frozenRanks: RootRankArray.create(), frozenLends: LendSiteArray.create(), frozenReach: BoolArray.create(), frozenRebinds: RebindingArray.create(), frozenBlockCount: 0, frozenDoorValues: BoolArray.create(), handlerEscapes: HandlerEscapeMemo.create()}
 	end 'create'
 
 	// The next trace records every callee it consults as a dependency of `caller`.
@@ -1427,6 +1524,13 @@ module type ProvenanceTracer
 			storeIndirect(addr, offset, value, _) then self.traceStore(addr, offset: offset, value: value)
 			call(result, callee, args, argLabels, _, _, _, _) then self.traceCall(func, op: op, result: result, callee: callee, args: args, argLabels: argLabels)
 			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.traceCall(func, op: op, result: result, callee: callee, args: args, argLabels: argLabels)
+
+			// ⭐ **A SPAWN IS TRACED AS THE CALL IT IS.** Its target takes a reference to a managed argument
+			// (`Parser.transferAsyncSpawnArgs`), so what that target KEEPS — stores into another parameter, binds
+			// to a mutable name, hands back inside its result — is kept out of this frame just as a direct call's
+			// is, and the summary must carry it one frame out or a caller that only spawns reads as keeping
+			// nothing.
+			asyncCall(result, callee, args, argLabels, _, _, _) then self.traceCall(func, op: op, result: result, callee: callee, args: args, argLabels: argLabels)
 			witnessDispatch(result, args, _, methodIndex, interfaceDeclIndex, _, _) then self.traceWitnessDispatch(func, op: op, result: result, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 			witnessTryDispatch(result, _, args, _, methodIndex, interfaceDeclIndex, _) then self.traceWitnessDispatch(func, op: op, result: result, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 
@@ -1435,16 +1539,14 @@ module type ProvenanceTracer
 
 			// Every other op that defines a value may define any record its operands reach. The result is bound
 			// per arm rather than through `maxonOpResultValue`, whose answer is a union — a heap box per op per
-			// walk on the hottest path this pass has. An async spawn's arguments are scalars
-			// (`SemanticCheck.requireAsyncScalarParams`), so it stores nothing; a raw intrinsic is the runtime
-			// tier's, which holds no managed value.
+			// walk on the hottest path this pass has. A raw intrinsic is the runtime tier's, which holds no
+			// managed value.
 			literal(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			binOp(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			unaryOp(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			compare(result, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			stringLiteral(result, _) then self.flowFromOperands(func, op: op, result: result)
 			functionRef(result, _) then self.flowFromOperands(func, op: op, result: result)
-			asyncCall(result, _, _, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			await(result, _) then self.flowFromOperands(func, op: op, result: result)
 			tryAwait(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			sizeofType(result, _) then self.flowFromOperands(func, op: op, result: result)
@@ -2328,8 +2430,14 @@ module type ProvenanceTracer
 			witnessDispatch(_, args, _, _, _, _, _) gives self.argsAliasAParameter(func, args: args)
 			witnessTryDispatch(_, _, args, _, _, _, _) gives self.argsAliasAParameter(func, args: args)
 
-			// An indirect call has no summary to carry an edge to, for `collectCallParamEdgesAt`'s reason, and
-			// a spawn or a message hands its arguments to another green thread.
+			// ⭐ **A SPAWN CARRIES THE ALIAS EDGE TOO, AND NEEDS IT MORE THAN A DIRECT CALL DOES**: the spawn takes
+			// its own reference to a managed argument (`Parser.transferAsyncSpawnArgs`), so the value standing at
+			// the op is that RETAIN and never the parameter's own — without this arm nothing relates the two and
+			// the target's writes stop at its own frame.
+			asyncCall(_, _, args, _, _, _, _) gives self.argsAliasAParameter(func, args: args)
+
+			// An indirect call has no summary to carry an edge to, for `collectCallParamEdgesAt`'s reason, and a
+			// message hands its arguments to another green thread.
 			literal or
 				ret or
 				retVoid or
@@ -2347,7 +2455,6 @@ module type ProvenanceTracer
 				panicAbort or
 				functionRef or
 				indirectCall or
-				asyncCall or
 				await or
 				tryAwait or
 				sizeofType or
@@ -2400,7 +2507,8 @@ module type ProvenanceTracer
 			tryCall(_, _, callee, args, argLabels, _, _, _, _) then self.addNamedCallAliasEdges(func, callee: callee, args: args, argLabels: argLabels, callerIndex: callerIndex, edges: edges)
 			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.addWitnessAliasEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex, edges: edges)
 			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.addWitnessAliasEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex, edges: edges)
-			default panic("ProvenanceTracer.addAliasEdgesAt: `passesAParameterAlias` admits only the four call shapes above")
+			asyncCall(_, callee, args, argLabels, _, _, _) then self.addNamedCallAliasEdges(func, callee: callee, args: args, argLabels: argLabels, callerIndex: callerIndex, edges: edges)
+			default panic("ProvenanceTracer.addAliasEdgesAt: `passesAParameterAlias` admits only the five call shapes above")
 		end 'op'
 	end 'addAliasEdgesAt'
 
@@ -2447,29 +2555,42 @@ module type ProvenanceTracer
 	// what the program writes through what they took is. A module-level `let` that is image data is copied by every
 	// store, so a write never reaches it; a `var` door can still alias it. A value that is an immutable record
 	// (`ProgramSignatures.recordTypeIsImmutable`) is written by nothing, and meets no door.
-	export function checkStorageDoors()
+	//
+	// A graph LENT to a service is frozen from its send on, liveness or not (`checkLentGraphs`), and asked first, so a
+	// door it refuses is not asked again as one of the doors above.
+	export function checkStorageDoors(mutationSummary ParamMutationSummary)
 		let ir = self.module
+		self.traceLentHandlers(mutationSummary)
 
 		for i in 0 upto ir.functions.count() 'eachFunc'
 			let func = try ir.functions.get(i) otherwise panic("ProvenanceTracer.checkStorageDoors: functions.get OOB at {i} below its own count")
 			let sites = func.provenanceSites()
+			let lends = sites.lendSites.count() > 0
 
-			if sites.immutableBindings.values.count() == 0 and not sites.hasVarCandidates 'nothingToAsk'
+			if sites.immutableBindings.values.count() == 0 and not sites.hasVarCandidates and not lends 'nothingToAsk'
 				continue
 			end 'nothingToAsk'
 
 			let bindingCount = self.bindingsTraceOf(func, index: i)
 			self.refusals.clear()
 			self.leaveDoor()
+			self.frozenDoorValues.refill(func.valueTags.count(), value: false)
 
-			if bindingCount > 0 'rootsToReach'
+			if bindingCount > 0 or lends 'rootsToReach'
 				self.gatherWrittenTargets(func, index: i)
+			end 'rootsToReach'
+
+			if lends 'lentGraphs'
+				self.checkLentGraphs(func, ir: ir, mutationSummary: mutationSummary)
+			end 'lentGraphs'
+
+			if bindingCount > 0 'bindingRootsToReach'
 				self.checkMoveSites(func)
 				self.checkMutableBindingSites(func, ir: ir)
 				self.checkReceiverWrites(func, ir: ir)
 				self.checkWriteThroughSites(func, ir: ir)
 				self.checkWrittenArguments(func, ir: ir)
-			end 'rootsToReach'
+			end 'bindingRootsToReach'
 
 			self.reportRefusals(func)
 
@@ -2480,6 +2601,552 @@ module type ProvenanceTracer
 
 		self.dropWithdrawnHygiene()
 	end 'checkStorageDoors'
+
+	// ⭐⭐⭐ **THE FREEZE ON A LENT GRAPH, WHOLE-PROGRAM (E3160).** A message argument that is a `let` local is LENT:
+	// the sender goes on reading it and the service reads the same graph, so from the send on nothing may reach it
+	// through storage that could write it. The parser refused the lent binding itself at a door after the send
+	// (`Parser.requireNotLentThrough`); what needs every body is asked here, of each send the function made:
+	//
+	//   • the HANDLER at the other end, whose parameter is frozen for its whole body — one it writes refuses the
+	//     send E3019, and one that escapes through a door refuses it E3160 naming the escape (`traceLentHandlers`);
+	//   • every door of this body a value reaches after the send that may be, lie within or hold the lent record —
+	//     a value read out of the binding, a door a loop's next trip reaches, and a callee that keeps or writes what
+	//     it is handed.
+	//
+	// A value whose type holds nothing a statement can write is frozen by its type (`valueHoldsNothingWritable`).
+	// A door FOLLOWS a send where the control flow reaches it from the send (`doorFollowsLend`), so a door on
+	// another arm of the `if` or `match` the send is on is not one, and a door the next trip of a loop reaches is.
+	function checkLentGraphs(func IrFunction, ir MaxonModule, mutationSummary ParamMutationSummary)
+		self.frozenRanks.clear()
+		self.frozenLends.clear()
+
+		for site in func.provenanceSites().lendSites 'eachLend'
+			if self.valueHoldsNothingWritable(func, value: site.value) 'frozenByItsType'
+				continue
+			end 'frozenByItsType'
+
+			self.judgeLentHandler(func, site: site, mutationSummary: mutationSummary)
+			let rank = self.lentRankOf(site.value)
+
+			// Only a `let` local owning a managed record lends (`Parser.ownerLendsValue`), and the trace ranks every
+			// one of those — as an immutable binding, or as the record a `var` gave it. A lend with no rank would be
+			// a graph frozen by nothing, which is the refusal going silently missing.
+			if rank == NoRootRank 'noRecordToFreeze'
+				panic("ProvenanceTracer.checkLentGraphs: `{String.from(site.root)}`, lent to `{String.from(qualifiedMethodName(site.serviceType, methodName: site.message))}` at {site.line}:{site.column} of '{String.from(func.name)}', has no traced record — every lending binding is a ranked root")
+			end 'noRecordToFreeze'
+
+			self.frozenRanks.push(rank)
+			self.frozenLends.push(site)
+		end 'eachLend'
+
+		if self.frozenRanks.count() == 0 'nothingFrozenHere'
+			return
+		end 'nothingFrozenHere'
+
+		self.mapLendFlow(func, ir: ir)
+
+		for door in self.freezeDoorsOf(func, ir: ir, mutationSummary: mutationSummary, includeWrites: true) 'eachDoor'
+			let k = self.lendFreezing(func, door: door)
+
+			if k != NoFrozenLend 'afterALend'
+				self.refuseFrozenDoor(func, door: door, lend: try self.frozenLends.get(k) otherwise panic("ProvenanceTracer.checkLentGraphs: frozenLends.get OOB at {k}"))
+			end 'afterALend'
+		end 'eachDoor'
+	end 'checkLentGraphs'
+
+	// ⭐⭐ **WHICH BLOCKS EACH SEND'S FREEZE REACHES, ONCE PER LEND** — every block the control flow can enter after
+	// the send, a loop's back edge included, stopping where the lent binding is bound again (`rebindingOf`): past
+	// that the name holds a record the send never lent. One row of `frozenReach` per lend, so each door is then a
+	// lookup.
+	function mapLendFlow(func IrFunction, ir MaxonModule)
+		ir.refillBlockIndexById(func, into: self.blockIndex)
+		self.frozenBlockCount = func.nextBlockId as ElementIndex
+		self.frozenReach.refill(self.frozenLends.count() * self.frozenBlockCount, value: false)
+		self.frozenRebinds.clear()
+
+		for k in 0 upto self.frozenLends.count() 'eachLend'
+			let sendBlock = (try self.frozenLends.get(k) otherwise panic("ProvenanceTracer.mapLendFlow: frozenLends.get OOB at {k}")).point.block
+			let rebinding = self.rebindingOf(func, ir: ir, rank: try self.frozenRanks.get(k) otherwise panic("ProvenanceTracer.mapLendFlow: frozenRanks.get OOB at {k} — pushed with the lends"))
+			self.frozenRebinds.push(rebinding)
+			self.markBlocksAfterLend(func, ir: ir, from: sendBlock, rebinding: rebinding, row: k * self.frozenBlockCount)
+		end 'eachLend'
+	end 'mapLendFlow'
+
+	// Every block reachable from the one the send stands in — its own included, when a back edge returns to it —
+	// marked into `row`. A block the binding is bound again in is marked and not expanded past: what follows it
+	// holds another record.
+	function markBlocksAfterLend(func IrFunction, ir MaxonModule, from BlockId, rebinding Rebinding, row ElementIndex)
+		var worklist = self.reachWorklist
+		worklist.clear()
+		collectMaxonBlockSuccessors(ir, block: self.blockById(func, ir: ir, blockId: from), into: worklist)
+		var head = 0 as ElementIndex
+
+		while head < worklist.count() 'eachBlock'
+			let blockId = try worklist.get(head) otherwise panic("ProvenanceTracer.markBlocksAfterLend: worklist.get OOB at {head}")
+			head = head + 1
+			let slot = row + (blockId as ElementIndex)
+			let marked = try self.frozenReach.get(slot) otherwise panic("ProvenanceTracer.markBlocksAfterLend: block {blockId} is past the function's {self.frozenBlockCount} block ids")
+
+			if marked 'seen'
+				continue
+			end 'seen'
+
+			try self.frozenReach.set(slot, value: true) otherwise panic("ProvenanceTracer.markBlocksAfterLend: frozenReach.set OOB at {slot}")
+
+			if blockIsReboundIn(rebinding, block: blockId) 'boundAgainHere'
+				continue
+			end 'boundAgainHere'
+
+			collectMaxonBlockSuccessors(ir, block: self.blockById(func, ir: ir, blockId: blockId), into: worklist)
+		end 'eachBlock'
+	end 'markBlocksAfterLend'
+
+	// ⭐ **WHERE THE LENT BINDING IS BOUND TO A RECORD AGAIN**, past which a door on a later trip reaches a graph the
+	// send never lent: the binding's own definition — a `let` that lends solely owns a fresh record, so running its
+	// definition again makes another one. A record a `var` holds is not the trace's to say, so every trip of it is
+	// taken to hold the lent one.
+	function rebindingOf(func IrFunction, ir MaxonModule, rank RootRank) returns Rebinding
+		if not self.isImmutableBindingRank(rank) 'aVarsRecord'
+			return Rebinding.never
+		end 'aVarsRecord'
+
+		let value = self.rootValueAt(rank)
+		self.indexDefinitions(func, ir: ir)
+		let merging = try self.mergingBlocks.get(value) otherwise NoMergingBlock
+
+		// A binding the arms of an `if` hand a record is bound at its merge block's head, so the whole block is past
+		// the binding.
+		if merging != NoMergingBlock 'boundAtABlocksHead'
+			return Rebinding.at(FlowPoint.create(merging, at: 0))
+		end 'boundAtABlocksHead'
+
+		let definingOp = try self.definingOps.get(value) otherwise NoDefiningOp
+
+		if definingOp == NoDefiningOp 'definedByNoOp'
+			return Rebinding.never
+		end 'definedByNoOp'
+
+		return self.rebindingAtOp(func, ir: ir, definingOp: definingOp)
+	end 'rebindingOf'
+
+	// The position after the op that binds the record: everything below it in that block still holds the lent one.
+	function rebindingAtOp(func IrFunction, ir MaxonModule, definingOp OpIndex) returns Rebinding
+		self.indexFlowPoints(func, ir: ir)
+		let at = try self.flowPoints.get(definingOp) otherwise return Rebinding.never
+		return Rebinding.at(FlowPoint.create((at shr FlowPointBlockShift) as BlockId, at: ((at and FlowPointPositionMask) + 1) as BlockOpPos))
+	end 'rebindingAtOp'
+
+	// Where each op of `func` stands in its control flow, indexed once per body: a scan for one op would walk the
+	// whole body again for every send it makes.
+	function indexFlowPoints(func IrFunction, ir MaxonModule)
+		if self.indexedFlowPointsOf.equals(func.name) 'indexed'
+			return
+		end 'indexed'
+
+		self.flowPoints = FlowPointByOp.create()
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.indexFlowPoints: blockRef from func.blockRefs not in module.blocks")
+
+			for pos in 0 upto block.opCountInRunOrder() 'eachOp'
+				self.flowPoints.upsert(block.opInRunOrderAt(pos), value: ((block.id as FlowPointKey) shl FlowPointBlockShift) or (pos as FlowPointKey))
+			end 'eachOp'
+		end 'eachBlock'
+
+		self.indexedFlowPointsOf = func.name
+	end 'indexFlowPoints'
+
+	// ⭐ **A HANDLER'S VERDICT, ASKED AT THE SEND THAT LENDS TO IT.** A parameter it writes by any means, a field write
+	// included, would write the sender's graph from another green thread (E3019, which a `let` handed to a writing
+	// parameter is refused under); one that escapes lets it be written later (E3160, naming the escape).
+	function judgeLentHandler(func IrFunction, site LendSite, mutationSummary ParamMutationSummary)
+		let handler = self.lentHandlerOf(site)
+		let written = mutationSummary.maskOf(handler.name) or mutationSummary.recordWriteMaskOf(handler.name)
+
+		if maskHasParam(written, param: handler.param) 'writesIt'
+			self.refuse(site.sendLine, column: site.sendColumn, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(String.from(site.root), paramName: displayParamName(site.param), functionName: String.from(func.name)))
+			return
+		end 'writesIt'
+
+		let escape = try self.handlerEscapes.get(handlerParamKey(handler.index, param: handler.param)) otherwise panic("ProvenanceTracer.judgeLentHandler: `{String.from(handler.name)}` was not traced — `traceLentHandlers` traces the handler of every send before any function is judged")
+
+		match escape 'escape'
+			stays then return
+			at(door, filePath) then self.refuseOnce(site.line, column: site.column, message: lentToEscapingHandlerMessage(String.from(site.root), message: String.from(qualifiedMethodName(site.serviceType, methodName: site.message)), param: String.from(site.param), escapeAt: sourcePositionText(filePath, line: door.line, column: door.column), door: freezeDoorPhrase(door.door, callee: door.callee)))
+		end 'escape'
+	end 'judgeLentHandler'
+
+	// ⭐⭐ **EVERY MESSAGE A SEND LENDS TO, TRACED BEFORE ANY FUNCTION IS JUDGED** — each lent parameter's first
+	// escape (`firstEscapeOf`), so the sends can be refused naming it. Every other walk traces the function being
+	// judged, which is why the handlers are traced ahead of all of them.
+	function traceLentHandlers(mutationSummary ParamMutationSummary)
+		let ir = self.module
+
+		for i in 0 upto ir.functions.count() 'eachFunc'
+			let func = try ir.functions.get(i) otherwise panic("ProvenanceTracer.traceLentHandlers: functions.get OOB at {i} below its own count")
+
+			for site in func.provenanceSites().lendSites 'eachLend'
+				let handler = self.lentHandlerOf(site)
+				let key = handlerParamKey(handler.index, param: handler.param)
+
+				if self.handlerEscapes.contains(key) 'traced'
+					continue
+				end 'traced'
+
+				let body = try ir.functions.get(handler.index) otherwise panic("ProvenanceTracer.traceLentHandlers: handler index {handler.index} is past the module's functions")
+				let bindingCount = self.bindingsTraceOf(body, index: handler.index)
+				self.handlerEscapes.upsert(key, value: self.firstEscapeOf(body, ir: ir, rank: bindingCount + (handler.param as RootRank), mutationSummary: mutationSummary))
+			end 'eachLend'
+		end 'eachFunc'
+	end 'traceLentHandlers'
+
+	// The first door of `body` — by position — a value reaching parameter root `rank` passes: a parser door, or an
+	// argument a callee keeps. Writes are the handler's E3019, asked separately.
+	function firstEscapeOf(body IrFunction, ir MaxonModule, rank RootRank, mutationSummary ParamMutationSummary) returns HandlerEscape
+		var first = HandlerEscape.stays
+		var firstAt = NoPositionKey
+
+		for door in self.freezeDoorsOf(body, ir: ir, mutationSummary: mutationSummary, includeWrites: false) 'eachDoor'
+			let at = positionKey(door.line, column: door.column)
+
+			if at < firstAt and self.valueReachesFrozenRank(body, value: door.value, rank: rank) and not self.valueHoldsNothingWritable(body, value: door.value) 'earlier'
+				first = HandlerEscape.at(door, filePath: body.sourceFilePath)
+				firstAt = at
+			end 'earlier'
+		end 'eachDoor'
+
+		return first
+	end 'firstEscapeOf'
+
+	// The handler a lend's message runs, and the position of its lent parameter.
+	function lentHandlerOf(site LendSite) returns LentHandler
+		let name = qualifiedMethodName(site.serviceType, methodName: site.message)
+		let index = try self.funcIndexByName.get(name) otherwise panic("ProvenanceTracer.lentHandlerOf: no body is registered for the message `{String.from(name)}` a send lent to — the loop calls every message of a spawned type")
+		let sig = try self.project.funcSignatures.get(name) otherwise panic("ProvenanceTracer.lentHandlerOf: no signature is registered for the message `{String.from(name)}`")
+
+		for p in 0 upto sig.paramNames.count() 'eachParam'
+			if (try sig.paramNames.get(p) otherwise panic("ProvenanceTracer.lentHandlerOf: paramNames.get OOB at {p}")).equals(site.param) 'theLentOne'
+				return LentHandler.create(name, index: index, param: p as ParamCount)
+			end 'theLentOne'
+		end 'eachParam'
+
+		panic("ProvenanceTracer.lentHandlerOf: `{String.from(name)}` declares no parameter `{String.from(site.param)}` — a message's payload fields are its parameters")
+	end 'lentHandlerOf'
+
+	// ⭐ **EVERY DOOR OF `func` A VALUE PASSES** — the parser's (`FreezeDoorSite`), a receiver a container method
+	// writes, and every argument a callee keeps; with `includeWrites`, every argument a callee writes too. A callee
+	// answers through its summary and its mutation mask, and a call through an interface or a function value through
+	// those of every body it may land on.
+	function freezeDoorsOf(func IrFunction, ir MaxonModule, mutationSummary ParamMutationSummary, includeWrites bool) returns FreezeDoorAtArray
+		var into = FreezeDoorAtArray.create()
+
+		for site in func.provenanceSites().freezeDoors 'eachParserDoor'
+			into.push(FreezeDoorAt.create(site.value, door: site.door, callee: "", line: site.line, column: site.column, token: site.token, point: site.point))
+		end 'eachParserDoor'
+
+		if includeWrites 'receiversWritten'
+			for site in func.provenanceSites().receiverWrites 'eachReceiverWrite'
+				into.push(FreezeDoorAt.create(site.receiver, door: FreezeDoor.writtenAsReceiver, callee: calleeSpelling(site.method), line: site.line, column: site.column, token: site.token, point: site.point))
+			end 'eachReceiverWrite'
+		end 'receiversWritten'
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.freezeDoorsOf: blockRef from func.blockRefs not in module.blocks")
+
+			for pos in 0 upto block.opCountInRunOrder() 'eachOp'
+				let opIdx = block.opInRunOrderAt(pos)
+				self.gatherCallDoorsOf(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.freezeDoorsOf: opIdx {opIdx} not in module.ops"), opIndex: opIdx, point: FlowPoint.create(block.id, at: pos), mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+			end 'eachOp'
+		end 'eachBlock'
+
+		return into
+	end 'freezeDoorsOf'
+
+	function gatherCallDoorsOf(func IrFunction, op MaxonOp, opIndex OpIndex, point FlowPoint, mutationSummary ParamMutationSummary, includeWrites bool, into FreezeDoorAtArray)
+		match op 'op'
+			call(_, callee, args, argLabels, argRanges, _, _, mint) then self.gatherNamedCallDoors(func, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, mint: mint, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+			tryCall(_, _, callee, args, argLabels, argRanges, _, _, mint) then self.gatherNamedCallDoors(func, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, mint: mint, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.gatherLandingCallDoors(func, args: args, argCount: args.count(), bodies: self.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), callee: calleeSpelling(self.witnessMethodName(methodIndex, interfaceDeclIndex: interfaceDeclIndex).toByteArray()), receiverFirst: true, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.gatherLandingCallDoors(func, args: args, argCount: args.count(), bodies: self.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), callee: calleeSpelling(self.witnessMethodName(methodIndex, interfaceDeclIndex: interfaceDeclIndex).toByteArray()), receiverFirst: true, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+
+			// ⭐ **AN `async` SPAWN IS THE SAME DOOR AS A DIRECT CALL.** The coroutine runs on this green thread and
+			// the caller hands it a reference (`Parser.transferAsyncSpawnArgs`), so a managed argument is legal — and
+			// what the target KEEPS outlives the await while what it WRITES lands in the caller's own graph. The op
+			// carries no `CalleeMint`, and none is needed: an `async` names a function the author wrote.
+			asyncCall(_, callee, args, argLabels, argRanges, _, _) then self.gatherNamedCallDoors(func, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, mint: CalleeMint.notMinted, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+
+			// Its `args` is the variant's TAIL field, so it is bound in a small match — see
+			// `LowerMaxonToStd.lowerIndirectCall`.
+			indirectCall then self.gatherFunctionValueCallDoors(func, op: op, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+			literal or
+				ret or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				globalAddr or
+				loadIndirect or
+				storeIndirect or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				functionRef or
+				await or
+				tryAwait or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell or
+				immortalStructRecord or
+				immortalStringTable or
+				covPoint or
+				rawIntrinsic then break 'op'
+		end 'op'
+	end 'gatherCallDoorsOf'
+
+	// A declared callee's doors, each argument at its own position. A runtime entry keeps nothing a parser door did
+	// not already file — its stores are a container's, which the parser's door is.
+	function gatherNamedCallDoors(func IrFunction, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, mint CalleeMint, opIndex OpIndex, point FlowPoint, mutationSummary ParamMutationSummary, includeWrites bool, into FreezeDoorAtArray)
+		if not self.calleeHasSummary(callee) 'aRuntimeEntry'
+			return
+		end 'aRuntimeEntry'
+
+		let index = try self.funcIndexByName.get(callee) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: '{String.from(callee)}' left the function index after `calleeHasSummary`")
+		let sig = try self.project.funcSignatures.get(callee) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: '{String.from(callee)}' left the signature registry after `calleeHasSummary`")
+		let written = (mutationSummary.maskOf(callee) or mutationSummary.recordWriteMaskOf(callee)) if includeWrites else NoParamPositions
+		let spelled = calleeSpelling(calleeDisplayName(overloadRegistrationBaseName(callDiagnosticNoun(callee, mint: mint))))
+		let call = self.project.opRanges.get(opIndex)
+		let token = self.callTokenAt(func, at: call)
+
+		for i in 0 upto args.count() 'eachArg'
+			let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
+
+			if pos >= sig.paramCount() 'fillsNoParameter'
+				continue
+			end 'fillsNoParameter'
+
+			let at = self.argumentValueAt(func, argRange: try argRanges.get(i) otherwise call)
+			let value = try args.get(i) otherwise panic("ProvenanceTracer.gatherNamedCallDoors: args.get OOB at {i}")
+
+			if maskHasParam(written, param: pos) 'writesIt'
+				let door = FreezeDoor.writtenAsReceiver if pos == 0 and sig.takesReceiver() else FreezeDoor.writtenByCallee
+				into.push(FreezeDoorAt.create(value, door: door, callee: spelled, line: at.line, column: at.column, token: token, point: point))
+			end 'writesIt' else if self.calleeKeeps(index, param: pos, paramCount: sig.paramCount()) 'keepsIt'
+				into.push(FreezeDoorAt.create(value, door: FreezeDoor.keptByCallee, callee: spelled, line: at.line, column: at.column, token: token, point: point))
+			end 'keepsIt'
+		end 'eachArg'
+	end 'gatherNamedCallDoors'
+
+	// Where an argument's value starts: a call's range for it is its label's where it has one, and the parser filed
+	// where each labelled value starts (`LabelledArgumentValues`). A defaulted argument has no value the author wrote.
+	// Indexed at the body's first question, because every argument of every call asks it.
+	function argumentValueAt(func IrFunction, argRange SourceRange) returns SourceRange
+		let values = func.provenanceSites().labelledArguments
+
+		if values is not self.indexedLabelledArguments 'anotherFunctionsArguments'
+			self.labelledArgumentRows = values.byPosition()
+			self.indexedLabelledArguments = values
+		end 'anotherFunctionsArguments'
+
+		let k = try self.labelledArgumentRows.get(positionKey(argRange.line, column: argRange.column)) otherwise return argRange
+		return SourceRange.create(argRange.startByte, endByte: argRange.endByte, line: try values.lines.get(k) otherwise panic("ProvenanceTracer.argumentValueAt: lines.get OOB at {k} — the columns are pushed together"), column: try values.columns.get(k) otherwise panic("ProvenanceTracer.argumentValueAt: columns.get OOB at {k} — the columns are pushed together"))
+	end 'argumentValueAt'
+
+	// A call through a function value: its declared arguments, each positional — the environment it passes last is
+	// the closure's, whose captures were each a door where the closure was made.
+	function gatherFunctionValueCallDoors(func IrFunction, op MaxonOp, opIndex OpIndex, point FlowPoint, mutationSummary ParamMutationSummary, includeWrites bool, into FreezeDoorAtArray)
+		match op 'indirect'
+			indirectCall(_, _, args) then self.gatherLandingCallDoors(func, args: args, argCount: args.count() - 1, bodies: self.functionValueBodiesFor(args.count()), callee: FunctionValueCalleeSpelling, receiverFirst: false, opIndex: opIndex, point: point, mutationSummary: mutationSummary, includeWrites: includeWrites, into: into)
+			default panic("ProvenanceTracer.gatherFunctionValueCallDoors: handed an op that is not an indirect call")
+		end 'indirect'
+	end 'gatherFunctionValueCallDoors'
+
+	// The doors of a call that lands on any of `bodies`: a position one of them writes or keeps, and every position
+	// where a body no summary describes may land.
+	function gatherLandingCallDoors(func IrFunction, args ValueIdArray, argCount ParamCount, bodies CallLandingBodies, callee String, receiverFirst bool, opIndex OpIndex, point FlowPoint, mutationSummary ParamMutationSummary, includeWrites bool, into FreezeDoorAtArray)
+		let written = mutationSummary.writtenMaskAtAnyOf(bodies.impls) if includeWrites else NoParamPositions
+		let call = self.project.opRanges.get(opIndex)
+		let token = self.callTokenAt(func, at: call)
+
+		for i in 0 upto argCount 'eachArg'
+			let value = try args.get(i) otherwise panic("ProvenanceTracer.gatherLandingCallDoors: args.get OOB at {i}")
+
+			if includeWrites and (bodies.unresolvedMayStore or maskHasParam(written, param: i)) 'writesIt'
+				let door = FreezeDoor.writtenAsReceiver if receiverFirst and i == 0 else FreezeDoor.writtenByCallee
+				into.push(FreezeDoorAt.create(value, door: door, callee: callee, line: call.line, column: call.column, token: token, point: point))
+			end 'writesIt' else if bodies.unresolvedMayStore or self.landingBodyKeeps(bodies, param: i) 'keepsIt'
+				into.push(FreezeDoorAt.create(value, door: FreezeDoor.keptByCallee, callee: callee, line: call.line, column: call.column, token: token, point: point))
+			end 'keepsIt'
+		end 'eachArg'
+	end 'gatherLandingCallDoors'
+
+	function landingBodyKeeps(bodies CallLandingBodies, param ParamCount) returns bool
+		for impl in bodies.impls 'eachImpl'
+			if self.implWasSkippedAsUnreached(impl) 'notInThisProgram'
+				continue
+			end 'notInThisProgram'
+
+			if not self.implHasSummary(impl) 'mayStoreAnything'
+				return true
+			end 'mayStoreAnything'
+
+			let paramCount = (try self.module.functions.get(impl) otherwise panic("ProvenanceTracer.landingBodyKeeps: function index {impl} is past the module's functions")).paramCount
+
+			if param < paramCount and self.calleeKeeps(impl, param: param, paramCount: paramCount) 'keepsIt'
+				return true
+			end 'keepsIt'
+		end 'eachImpl'
+
+		return false
+	end 'landingBodyKeeps'
+
+	// Does function `index` keep what parameter `param` is handed past the call — store it into module storage, bind
+	// it to a mutable name that outlives the call, store it into another parameter's record, or hand back a record
+	// holding it or a part of it (a factory building one around it)?
+	function calleeKeeps(index FuncIndex, param ParamCount, paramCount ParamCount) returns bool
+		if maskHasParam(self.summary.escapesAt(index), param: param) or maskHasParam(self.summary.bindsAt(index), param: param) or maskHasParam(self.summary.holdsAt(index), param: param) or maskHasParam(self.summary.holdsWithinAt(index), param: param) 'outlivesTheCall'
+			return true
+		end 'outlivesTheCall'
+
+		for into in 0 upto paramCount 'eachReceiver'
+			if into != param and (maskHasParam(self.summary.storesAt(index, into: into), param: param) or maskHasParam(self.summary.storesDeepAt(index, into: into), param: param)) 'intoAnotherParameter'
+				return true
+			end 'intoAnotherParameter'
+		end 'eachReceiver'
+
+		return false
+	end 'calleeKeeps'
+
+	// The frozen lend `door` breaks, or `NoFrozenLend`: one whose send the door may run after, and whose record the
+	// door's value may be, lie within or hold.
+	function lendFreezing(func IrFunction, door FreezeDoorAt) returns ElementIndex
+		if self.valueHoldsNothingWritable(func, value: door.value) 'frozenByItsType'
+			return NoFrozenLend
+		end 'frozenByItsType'
+
+		for k in 0 upto self.frozenRanks.count() 'eachLend'
+			let rank = try self.frozenRanks.get(k) otherwise panic("ProvenanceTracer.lendFreezing: frozenRanks.get OOB at {k}")
+
+			if self.doorFollowsLend(k, door: door) and self.valueReachesFrozenRank(func, value: door.value, rank: rank) 'breaksIt'
+				return k
+			end 'breaksIt'
+		end 'eachLend'
+
+		return NoFrozenLend
+	end 'lendFreezing'
+
+	// ⭐⭐ **MAY THE DOOR RUN AFTER THE SEND?** — asked of the CONTROL FLOW, so a legal program is never refused for
+	// standing later in the text: below the send in the send's own block, or in a block the flow reaches from it
+	// (`mapLendFlow`) at a position the binding has not been bound again by. Two doors at one point — nothing the
+	// body emits stands between them — are ordered by their tokens.
+	//
+	// ⚠ **THE SEND'S OWN BLOCK ASKS NO REBINDING QUESTION, AND MUST NOT.** A door below the send there runs on the
+	// SAME trip, over the record the send lent, and the binding's definition cannot stand between the two: the
+	// send READS the binding, so it stands below that definition, and a root bound at a block's head (one the arms
+	// of an `if` hand a record) is bound above both. Asking `reboundBefore` here would read that same-trip
+	// definition as a rebinding and refuse nothing at all — `borrow.error.a-lent-let-may-not-be-stored-in-a-container`
+	// and its siblings are one block each.
+	function doorFollowsLend(k ElementIndex, door FreezeDoorAt) returns bool
+		let lend = try self.frozenLends.get(k) otherwise panic("ProvenanceTracer.doorFollowsLend: frozenLends.get OOB at {k}")
+
+		if door.point.block == lend.point.block and (door.point.at > lend.point.at or (door.point.at == lend.point.at and door.token > lend.token)) 'belowTheSend'
+			return true
+		end 'belowTheSend'
+
+		let reached = try self.frozenReach.get((k * self.frozenBlockCount) + (door.point.block as ElementIndex)) otherwise panic("ProvenanceTracer.doorFollowsLend: block {door.point.block} is past the function's {self.frozenBlockCount} block ids")
+
+		if not reached 'theFlowNeverReachesIt'
+			return false
+		end 'theFlowNeverReachesIt'
+
+		return not self.reboundBefore(k, point: door.point)
+	end 'doorFollowsLend'
+
+	// Is the lent binding bound again above `point` in its own block, so what stands there is another record?
+	function reboundBefore(k ElementIndex, point FlowPoint) returns bool
+		return match try self.frozenRebinds.get(k) otherwise panic("ProvenanceTracer.reboundBefore: frozenRebinds.get OOB at {k} — pushed with the lends") 'rebinding'
+			never gives false
+			at(bound) gives bound.block == point.block and point.at >= bound.at
+		end 'rebinding'
+	end 'reboundBefore'
+
+	// ⭐ **MAY `value` BE ROOT `rank`'s RECORD, OR LIE WITHIN IT — as far as the types allow?** A value that only HOLDS
+	// the record is not asked: a record comes to be held only through a door — a store, a capture, a callee that keeps
+	// it — and that door is the one refused. One held before the send is a second owner, which the send's walk aborts
+	// on.
+	function valueReachesFrozenRank(func IrFunction, value ValueId, rank RootRank) returns bool
+		if self.sets.hasRank(self.setOf(ProvenanceColumn.identity, value: value), rank: rank) and self.valuesMayBeOneRecord(func, value: value, other: self.rootValueAt(rank)) 'mayBeIt'
+			return true
+		end 'mayBeIt'
+
+		return self.sets.hasRank(self.setOf(ProvenanceColumn.inside, value: value), rank: rank) and self.typeAdmits(func, value: value, rank: rank, asksIdentity: false)
+	end 'valueReachesFrozenRank'
+
+	// The rank a lent record has in the trace: the `let`'s own, or — for a `let` made from a `var` — the `var`'s
+	// record's; `NoRootRank` for a record the trace does not rank.
+	function lentRankOf(value ValueId) returns RootRank
+		let named = self.bindingRankOf(value)
+		return named if named != NoRootRank else self.writableRankOf(value)
+	end 'lentRankOf'
+
+	// A record whose type holds nothing a statement can write (`ProgramSignatures.aggregateGraphIsWriteFree`).
+	// Memoized by type name: every door of every lending body asks it, and the answer walks the whole field graph
+	// and allocates a visited set to reach it.
+	//
+	// ⚠ **`Parser.valueHoldsNothingWritable` IS ITS TWIN AND THE TWO MUST ANSWER ALIKE**: the parse-time tier of
+	// the freeze exempts a door this tier would otherwise refuse, and the reverse. They are two spellings of one
+	// question because the type NAME is read out of a different place in each — the parser's own interned columns
+	// there, the merged module's type names here — and the tag test is what guards that read, a struct reference
+	// being the only value whose name denotes an aggregate.
+	function valueHoldsNothingWritable(func IrFunction, value ValueId) returns bool
+		if not tagIsStructRef(valueTagOf(func, value: value)) 'notAStruct'
+			return false
+		end 'notAStruct'
+
+		let nameId = self.nameIdOf(func, value: value)
+
+		if self.writeFreeGraphs.contains(nameId) 'asked'
+			return try self.writeFreeGraphs.get(nameId) otherwise panic("ProvenanceTracer.valueHoldsNothingWritable: name {nameId} left the memo after `contains`")
+		end 'asked'
+
+		let writeFree = self.signatures.aggregateGraphIsWriteFree(try self.project.typeNames.nameOf(nameId) otherwise return false)
+		self.writeFreeGraphs.upsert(nameId, value: writeFree)
+		return writeFree
+	end 'valueHoldsNothingWritable'
+
+	// E3160 at a door after the send `lend`; a `var` door it refuses is not asked again as one (`doorWasFrozen`).
+	function refuseFrozenDoor(func IrFunction, door FreezeDoorAt, lend LendSite)
+		if door.door == FreezeDoor.bindToVar or door.door == FreezeDoor.assignToVar 'aVarDoor'
+			try self.frozenDoorValues.set(door.value, value: true) otherwise panic("ProvenanceTracer.refuseFrozenDoor: frozenDoorValues.set OOB at v{door.value}")
+		end 'aVarDoor'
+
+		self.refuseOnce(door.line, column: door.column, message: lentGraphEscapesMessage(String.from(lend.root), lentAt: sourcePositionText(func.sourceFilePath, line: lend.line, column: lend.column), door: freezeDoorPhrase(door.door, callee: door.callee)))
+	end 'refuseFrozenDoor'
+
+	// Was the `var` door that took `value` refused as a freeze (E3160)?
+	function doorWasFrozen(value ValueId) returns bool
+		return try self.frozenDoorValues.get(value) otherwise panic("ProvenanceTracer.doorWasFrozen: frozenDoorValues.get OOB at v{value}")
+	end 'doorWasFrozen'
+
+	// One E3160 at a position: two doors at one value are one finding.
+	function refuseOnce(line LineNumber, column ColumnNumber, message String)
+		let at = positionKey(line, column: column)
+
+		for refusal in self.refusals 'eachRefusal'
+			if refusal.at == at and refusal.code == ErrorCode.semanticLentGraphEscapes 'alreadyRefused'
+				return
+			end 'alreadyRefused'
+		end 'eachRefusal'
+
+		self.refuse(line, column: column, code: ErrorCode.semanticLentGraphEscapes, message: message)
+	end 'refuseOnce'
 
 	// ⭐⭐ **A NAME HANDED WHOLE TO A MUTABLE DOOR: MOVED IF IT IS ITS RECORD'S SOLE REFERENCE, REFUSED OTHERWISE.**
 	// A `let` bound to a fresh record and named by nothing else live moves: its next read is E3102, and a move out
@@ -2492,7 +3159,7 @@ module type ProvenanceTracer
 		for k in moveSitesInTokenOrder(sites) 'eachSite'
 			let site = try sites.get(k) otherwise panic("ProvenanceTracer.checkMoveSites: moveSites.get OOB at {k}")
 
-			if not site.sourceIsMutable 'aLetsDoor'
+			if not site.sourceIsMutable and not self.doorWasFrozen(site.value) 'aLetsDoor'
 				self.decideMoveSite(func, site: site)
 			end 'aLetsDoor'
 		end 'eachSite'
@@ -2710,6 +3377,10 @@ module type ProvenanceTracer
 	// written through it is (`checkWriteThroughSites`).
 	function checkMutableBindingSites(func IrFunction, ir MaxonModule)
 		for site in func.provenanceSites().mutableBindingSites 'eachSite'
+			if self.doorWasFrozen(site.value) 'refusedAsAFreeze'
+				continue
+			end 'refusedAsAFreeze'
+
 			self.askAtDoor(site.token, skipsImages: false)
 
 			let rank = self.bindingRankOf(site.value)
@@ -3722,9 +4393,7 @@ module type ProvenanceTracer
 			end 'seen'
 
 			try visited.set(blockId, value: true) otherwise panic("ProvenanceTracer.slotReachedUnstored: visited.set OOB at block {blockId}")
-			let position = try self.blockIndex.get(blockId) otherwise panic("ProvenanceTracer.slotReachedUnstored: successor {blockId} is not a block of '{String.from(func.name)}'")
-			let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.slotReachedUnstored: blockIndexById placed a block at {position}, past func.blockRefs")
-			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.slotReachedUnstored: blockRef {blockRef} not in module.blocks")
+			let block = self.blockById(func, ir: ir, blockId: blockId)
 
 			match self.scanForSlotRead(ir, block: block, start: 0, to: to, addr: addr, offset: offset, rank: rank) 'body'
 				reached then return true
@@ -3735,6 +4404,13 @@ module type ProvenanceTracer
 
 		return false
 	end 'slotReachedUnstored'
+
+	// The block of `func` with id `blockId`, through the id index the caller refilled (`refillBlockIndexById`).
+	function blockById(func IrFunction, ir MaxonModule, blockId BlockId) returns IrBlock
+		let position = try self.blockIndex.get(blockId) otherwise panic("ProvenanceTracer.blockById: block {blockId} is not a block of '{String.from(func.name)}'")
+		let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.blockById: blockIndexById placed a block at {position}, past func.blockRefs")
+		return try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.blockById: blockRef {blockRef} not in module.blocks")
+	end 'blockById'
 
 	// ⭐ **A READ OUT OF A PARAMETER'S SLOT IS A `let`'S RECORD ONLY WHERE SOMETHING PUT IT THERE FIRST.** What such
 	// a read may be is what any store into that slot stored (`traceLoad`), wherever the store is; the record of root
@@ -4550,9 +5226,15 @@ function addRankToWords(words ParamPositionMaskArray, rank RootRank)
 	try words.set(word, value: maskWithParam(before, param: (rank and RootBitIndexMask) as ParamCount)) otherwise panic("addRankToWords: words.set OOB at {word}")
 end 'addRankToWords'
 
-// ⭐ **A BINDING BOUND BEFORE A LOOP AND USED INSIDE IT IS LIVE TO THE LOOP'S END**, since the next trip reads it
-// again — the one place source order and run order part. Widened to a fixpoint, so a loop enclosing that loop
-// widens it again.
+// Is the lent binding bound again in `block`, so nothing the flow reaches past that block is the record the send
+// lent?
+function blockIsReboundIn(rebinding Rebinding, block BlockId) returns bool
+	return match rebinding 'rebinding'
+		never gives false
+		at(bound) gives bound.block == block
+	end 'rebinding'
+end 'blockIsReboundIn'
+
 // Is `door` on one arm of an `if` and `read` on its other arm (`DeferredProvenance.noteExclusiveArms`)?
 function onExclusiveArms(arms TokenSpans, door TokenIndex, read TokenIndex) returns bool
 	var k = 0 as ElementIndex
@@ -4591,6 +5273,9 @@ function readOnALaterTrip(loops TokenSpans, declared TokenIndex, door TokenIndex
 	return false
 end 'readOnALaterTrip'
 
+// ⭐ **A BINDING BOUND BEFORE A LOOP AND USED INSIDE IT IS LIVE TO THE LOOP'S END**, since the next trip reads it
+// again — the one place source order and run order part. Widened to a fixpoint, so a loop enclosing that loop
+// widens it again.
 function liveUntilAcrossLoops(declared TokenIndex, lastUse TokenIndex, loops TokenSpans) returns TokenIndex
 	var until = lastUse
 	var widened = true

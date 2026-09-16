@@ -142,6 +142,36 @@ end 'main'
 error E3019: specs/fragments/parameter-mutation/transitive-let-array-error.test:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
 ```
 
+<!-- test: async-transitive-let-array-error -->
+<!-- unsupported-targets: wasm32-wasi -->
+The same mutation, one `async` further away: a spawn hands the coroutine a reference to what its caller was
+handed, so `outer` writes `d` whether the write runs before the await or after it. Async is unsupported on
+wasm32-wasi.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function inner(d IntArray) returns Integer
+	Runtime.yield()
+	d.push(7)
+	return d.count() as Integer
+end 'inner'
+
+function outer(d IntArray) returns Integer
+	let pending = async inner(d)
+	return await pending
+end 'outer'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	return outer(a) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/parameter-mutation/async-transitive-let-array-error.test:18:9: cannot pass 'a' to function that mutates parameter 'd' (in main)
+```
+
 <!-- test: recursive-let-array-error -->
 A self-recursive callee: the summary must reach its fixpoint rather than chase the cycle.
 

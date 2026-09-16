@@ -336,6 +336,25 @@ export type IrBlock
 		end 'check'
 	end 'isTerminated'
 
+	// ⭐ **HOW MANY OPS THE BLOCK RUNS, AND WHICH ONE RUNS AT EACH POSITION** — its body ops, then the terminator,
+	// which lives in a slot of its own (`Terminator`) and so is NOT in `opRefs`. A caller ordering two program
+	// points within a block asks these rather than `opRefs`, whose last position is one op short of the block's end.
+	export function opCountInRunOrder() returns BlockOpPos
+		return self.opRefs.count() + 1 if terminatorNamesAnOp(self.terminator) else self.opRefs.count()
+	end 'opCountInRunOrder'
+
+	export function opInRunOrderAt(position BlockOpPos) returns OpIndex
+		if position < self.opRefs.count() 'aBodyOp'
+			return try self.opRefs.get(position) otherwise panic("opInRunOrderAt: opRefs.get OOB at {position}")
+		end 'aBodyOp'
+
+		if position >= self.opCountInRunOrder() 'pastTheBlock'
+			panic("opInRunOrderAt: position {position} is past block '{String.from(self.label)}', which runs {self.opCountInRunOrder()} ops")
+		end 'pastTheBlock'
+
+		return self.terminatorIndex()
+	end 'opInRunOrderAt'
+
 	// Returns the op index of the block's terminator. Panics if the
 	// terminator is not opIndex(_); callers must guard with hasTerminatorOp.
 	export function terminatorIndex() returns OpIndex

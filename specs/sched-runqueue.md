@@ -65,7 +65,7 @@ readied onto `main`'s strand, and the machine that fires a timer or reaps a chil
 strand's token itself rather than waking another. So a program whose only green thread is `main` keeps one
 M at every `MAXON_MAX_PROCS` (`SchedRuntime.maxon`'s header).
 
-⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"Sending MOVES"*). `__svc_spawn` calls
+⭐ **A `spawn` IS WHAT ADDS TOKENS** (`specs/services.md`, *"A send MOVES or LENDS"*). `__svc_spawn` calls
 `__gt_spawn_green` and publishes the new green thread's token to a P RING, which is exactly what a ring, a
 steal and a worker loop are for — so the five cases at the END of this file, which run services, are where
 the tiers carry more than `main`'s one token.
@@ -1066,7 +1066,7 @@ function main() returns ExitCode
 	var k = 0
 	while k < leafCount 'sendEach'
 		let leaf = try leaves.get(k) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		// A send MOVES its argument, so each leaf gets its own reference to the collector.
+		// A temporary argument moves, so each leaf gets its own reference to the collector.
 		leaf.go(tally.clone())
 		k = k + 1
 	end 'sendEach'
@@ -1189,7 +1189,7 @@ type Spawner
 
 	export function go(sink Tally.handle)
 		let child = spawn Spawnee.create()
-		// A send MOVES, and `sink` arrived BORROWED, so the child gets its own reference.
+		// A parameter can be neither moved nor lent by a send, so the child gets its own reference.
 		child.go(sink.clone())
 	end 'go'
 end 'Spawner'

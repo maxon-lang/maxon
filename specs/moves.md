@@ -724,6 +724,35 @@ typealias Integer = int(i64.min to i64.max)
 error E3102: <fragment>:17:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+### A Closure Capture After a Move Is Use-After-Move
+
+`var u = t` moves `t`'s box into `u`, so a closure that captures `t` afterwards reads a record another binding
+owns — and would read it after that owner released it. The capture is a use of `t`, refused at the capture.
+
+<!-- test: error.a-closure-may-not-capture-a-moved-value -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let t = Box.create(5)
+	var u = t
+	let peek = function() gives t.value
+	u.value = 9
+	return peek()
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:15:30: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
+```
+
 ### Full Reassignment Revives, Then a Field Store Is Legal
 
 `let q = p` moves `p`'s box into `q`; `p = Point.create(3)` is a FULL reassignment that REVIVES `p` —

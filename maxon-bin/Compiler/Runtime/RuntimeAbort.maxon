@@ -279,12 +279,13 @@ export enum RuntimeAbort
 	//
 	schedulerIdledAProcessorHoldingWork = 95
 
-	// ⭐⭐ **`__mm_sole_box`: a record about to CROSS to another green thread has a second owner.** A send,
-	// a `spawn`'s state and a service reply all MOVE their value whole, and the language guarantees one
-	// green thread per box — which is what lets a refcount step be a plain load/add/store. The static
-	// rules prove the ROOT sole; soleness is not transitive, so the graph below it is proved at run time
-	// by the synthesized `__sole_<T>` walk. A reachable record whose count says two owners is that
-	// guarantee about to be broken, and there is no diagnostic road left: the sender's frame is already
+	// ⭐⭐ **`MmRuntime.emitBoxWalkStep`: a COUNTED record about to CROSS to another green thread has a
+	// second owner.** A send, a `spawn`'s state and a service reply MOVE their value whole, and a message
+	// argument a `let` owns is LENT; a counted record belongs to one green thread, which is what lets its
+	// count step plain. The static rules prove the ROOT sole; soleness is not transitive, so the graph below
+	// it is walked at run time (`__sole_<T>`, `__share_<T>`). A reachable counted record whose count says
+	// two owners is an owner left behind on this thread — stepping a count the service now steps too, or
+	// free to write what a lend froze — and there is no diagnostic road left: the sender's frame is already
 	// past every compile-time gate. Aborting on the sender's own green thread, before anything is
 	// enqueued, is the only answer that cannot corrupt the heap.
 	//

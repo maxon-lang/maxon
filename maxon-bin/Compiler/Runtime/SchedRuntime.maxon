@@ -11,12 +11,12 @@
 // > **A COROUTINE — what this runtime calls a GT that `async` created — belongs to the STRAND of the green
 // > thread that created it. A run queue holds a strand's owner as a token, never a coroutine, and the one
 // > machine that holds the token runs every member of the strand (`GtRuntime.GtOffStrandHolder`); a strand
-// > moves between machines only through `__sched_lock`. Therefore every refcount read-modify-write on a box
-// > happens on the machine running that box's strand, one machine at a time, and refcounts are plain
-// > (`MmRuntime.emitAdjustRefcount`). The cross-thread writers that remain — machines publishing, popping
-// > and stealing tokens, and a machine draining the poller re-readying a parked GT — touch queues, status
-// > words, counters and claims, every one of which states its `MultiMSharing` class; none touches a
-// > refcount.**
+// > moves between machines only through `__sched_lock`. Therefore every refcount read-modify-write on a
+// > COUNTED box happens on the machine running that box's strand, one machine at a time, and steps plain
+// > (`MmRuntime.emitAdjustRefcount`); the one exception is a box a lend marked SHARED, whose count steps
+// > atomically. The cross-thread writers that remain — machines publishing, popping and stealing tokens, and
+// > a machine draining the poller re-readying a parked GT — touch queues, status words, counters and claims,
+// > every one of which states its `MultiMSharing` class; none touches a refcount.**
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
 // emitted program creates an OS thread at **two** `osThreadCreate` sites: `__sched_startm`'s worker M and
@@ -25,10 +25,12 @@
 // running — which is the invariant, not an exception to it. ⚠ **A rung that gives either thread more to do
 // owes this measurement again** — the refcount door's argument is exactly this graph.
 //
-// ⚖ **USER, 2026-08-27:** *"async is not supposed to create a new green thread. it allows a function to yield
-// the current green thread while waiting for a blocking operation"*, and *"the language is supposed to
-// guarantee that only 1 green thread can hold references to a box at a time"*. Crossing threads is actors.
-// `GtRuntime.GtOffOwner` is where the ownership is a FIELD rather than a convention.
+// ⚖ **USER:** *"async is not supposed to create a new green thread. it allows a function to yield the current
+// green thread while waiting for a blocking operation"*, and *"the language is supposed to guarantee that only
+// 1 green thread can hold references to a box at a time"*. Crossing threads is actors — and a message argument
+// a `let` owns is LENT (⚖ user ruling): the sender and the service then both hold the one graph, frozen, which
+// is why its counts are marked shared and step atomically. `GtRuntime.GtOffOwner` is where the ownership is a
+// FIELD rather than a convention.
 //
 // ⛔⛔ **THE PROCESS RUNS ON AS MANY Ms AS IT HAS STRANDS TO RUN.** `__sched_init_procs` builds one P per
 // processor the machine reports (`emitResolveMaxProcs`), and `MAXON_MAX_PROCS` sets that count exactly.
@@ -60,12 +62,13 @@
 //
 // ⚠⚠ **WHAT EVERY SHARED WORD IN THIS RUNTIME RESTS ON — THE SHORT FORM. The long form is at each slot.**
 //
-//   1. **THE REFCOUNT READ-MODIFY-WRITE IS PLAIN**, because the invariant at the top of this file removes the
-//      second party rather than serialising against it. What is load-bearing is the ORDER:
-//      `emitRefcountCheckToLastOwner` DECREMENTS FIRST and picks its arm from the value the decrement
-//      displaced. `MmRuntime.emitAdjustRefcount` carries the argument, and
-//      `scripts/multicore-stress/refcount-torture.maxon` under `multicore-stress/refcount-race.sh` is what
-//      measures it.
+//   1. **A COUNTED BOX'S REFCOUNT READ-MODIFY-WRITE IS PLAIN**, because the invariant at the top of this file
+//      removes the second party rather than serialising against it; a SHARED box's is an `atomicRmw`, because
+//      a lend gave it one. What is load-bearing on both is the ORDER: `emitRefcountCheckToLastOwner`
+//      DECREMENTS FIRST and picks its arm from the value the decrement displaced. `MmRuntime.emitAdjustRefcount`
+//      carries the argument; `scripts/multicore-stress/refcount-torture.maxon` under
+//      `multicore-stress/refcount-race.sh` measures the plain arm and `specs/services.md`'s count torture the
+//      atomic one.
 //   2. **EVERY `.data` COUNTER**, through the one `MmRuntime.emitGlobalAccumulate`, which every scheduler
 //      counter (`__gt_live_count`, `__gt_trace_counter`, `__gt_stack_bytes_sum`, `__gt_stack_bytes_count`,
 //      `__io_pipe_seq`, `__sched_nmspinning`, `__sched_active_workers`) calls instead of each spelling

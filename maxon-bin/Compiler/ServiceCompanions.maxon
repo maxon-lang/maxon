@@ -413,10 +413,10 @@ end 'serviceReturnedType'
 // spelling, because the sentence has to say why: `'p' is a Promise` is the reason, where `'p' is
 // 'Promise with (int, E)'` is a rendering the author can already read off their own declaration.
 //
-// ⚠ **THE RULE IS THE PLAIN REFCOUNT'S, NOT A STYLE.** Since EC10 a refcount step is a plain load/add/store
-// (`Runtime/MmRuntime.maxon`, `emitAdjustRefcount`) because the language guarantees one green thread per box.
-// A send MOVES its arguments, which keeps that guarantee — but only for a value that HAS one owner and one
-// meaning on the far side. Each shape below fails that for its own reason:
+// ⚠ **THE RULE IS THE RECEIVING THREAD'S, NOT A STYLE.** A send moves an argument or lends it, and either way
+// the service must reach, count and release what it is handed through the request union's payload cascade —
+// which needs a value with one meaning and a known layout on the far side. Each shape below fails that for its
+// own reason:
 //   • a **Promise** is a green-thread handle owned by the awaiting thread; sending one hands a second thread
 //     a wait token whose completer is scheduled on the first (`E3100` linear await keys on the binding);
 //   • a **function value** is a bare code pointer, and a CAPTURING one reaches its environment block —
@@ -444,8 +444,8 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 
 		// ⭐⭐ **THE ASYMMETRY A GENERIC SERVICE IS BUILT ON: a `T` RETURN IS LEGAL AND A `T` PARAMETER IS
 		// NOT.** The reply is produced inside the handler, where the instance's descriptor says what `T` is;
-		// the send is written where the handle stands and MOVES its argument, and an opaque `T` does not tell
-		// that site whether what it is moving owns heap at all.
+		// the send is written where the handle stands and hands its argument over, and an opaque `T` does not
+		// tell that site whether what it is handing over owns heap at all.
 		typeParameter then return TypeParameterParameterNoun
 
 		// ⭐⭐ **A BARE `named` MAY STILL BE AN INTERFACE, AND THIS IS WHERE THAT IS ASKED (MEASURED).**
@@ -458,8 +458,8 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 		// E2015 with no transferability finding at all.
 		named then return declaredInterfaceParameterNoun(signatures, resolved: resolved)
 
-		// Every remaining tag names a value with ONE owner and a layout the send site knows: a scalar, an
-		// exit code, a struct box, a String, a container instance, a character. Each MOVES.
+		// Every remaining tag names a value with a layout the send site knows: a scalar, an exit code, a struct
+		// box, a String, a container instance, a character. Each crosses.
 		boolean or
 			integer or
 			float then return ""
@@ -471,7 +471,7 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 
 		// An instance whose arguments still name a type parameter (`Array with T` inside `type Box uses T`)
 		// is the SAME opacity one arm up wearing a container: the send knows neither the element's layout
-		// nor whether the record owns one. A fully concrete instance is an ordinary owned box and MOVES.
+		// nor whether the record owns one. A fully concrete instance is an ordinary owned box and crosses.
 		genericInstance then return TypeParameterParameterNoun if typeIsFixedByAnInstantiation(signatures, t: resolved) else ""
 		character then return ""
 
@@ -502,7 +502,7 @@ let TypeParameterParameterNoun = "an opaque type parameter, whose layout is not 
 // `serviceRosterRefusalMessage`'s twin one tier down: that one names a parameter the author DECLARED, this
 // names an argument they WROTE, and both end with the same three cures.
 module function serviceUntransferableValueMessage(blame String, noun String) returns String
-	return "{blame} is {noun}, and a message MOVES its arguments to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message"
+	return "{blame} is {noun}, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message"
 end 'serviceUntransferableValueMessage'
 
 // Does this bare `named` name a declared INTERFACE? Asked of the same registry the field/return normalization
@@ -615,42 +615,26 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 	match verdict 'why'
 		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
 		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
-		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
+		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
 		messageReplyIsNotCarriable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry"
 	end 'why'
 end 'serviceRosterRefusalMessage'
 
-// ⭐⭐ **THE WORDS FOR A VALUE THAT MAY NOT CROSS TO A SERVICE'S GREEN THREAD (SV1 wave 3) — the OWNERSHIP
-// refusal, where the two above are about a DECLARATION.** `Parser.moveIntoGreenThread` decides; these say it,
-// and they live here because every other sentence a service refusal can end with lives here too.
+// ⭐⭐ **THE WORDS FOR A VALUE THAT MAY NOT CROSS TO A SERVICE'S GREEN THREAD — the OWNERSHIP refusal, where
+// the two above are about a DECLARATION.** `Parser.moveIntoGreenThread` decides; these say it, and they live
+// here because every other sentence a service refusal can end with lives here too.
 //
 // ⭐ **THE LESSON IS WRITTEN ONCE AND BOTH FINDINGS END WITH IT**, `borrowLaunderDoorClause`'s arrangement
 // and for its reason: the two differ in WHY this frame is not the value's only owner, and not at all in what a
 // send requires or in what the author does about it. Two copies would be free to drift into two rules.
 //
-// ⛔⛔ **IT NAMED `.clone()` AND THAT CURE DID NOT WORK — MEASURED, AT EVERY SEND AND FOR EVERY SHAPE.**
-// `h.keep(s.clone())` and `let c = s.clone()` + `h.keep(c)` were BOTH E3138, because a send requires a value
-// this frame provably solely owns and `ProgramSignatures.returnsFreshValue` answered `false` for
-// `String.clone`: the fresh-record claim was published only for `return <Name>{ … }` ending the line, and
-// `stdlib/String.maxon:267` writes `return sliceBytes(…)` — a call to a function that IS fresh by that
-// criterion, ONE HOP away. `ProgramSignatures.closeFreshReturnForwards` is that hop, so both spellings
-// compile now and the name is back in the sentence.
-//
 // ⚠ **BOTH CURES ARE NAMED AND BOTH ARE PINNED**, because they are not interchangeable: `.clone()` needs the
-// type to have one, and building at the send needs nothing. `specs/services.md`'s
-// `a-borrowed-parameter-may-be-sent-as-a-clone` and
-// `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation` are the two programs — a refusal that names a
-// spelling the next diagnostic also refuses leaves an author with nothing to write, which is what this
-// sentence was until the hop was built.
-let ServiceTransferLesson = "A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
+// type to have one, and building at the send needs nothing (`specs/services.md`'s
+// `a-borrowed-parameter-may-be-sent-as-a-clone` and `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation`).
+let ServiceTransferLesson = "A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
 
-// The BORROWED half: this frame does not own the value at all.
-// ⚠ **IT NAMES NO TYPE, AND IT USED TO.** The sentence ended *"and its type has no owning copy a send could
-// take instead"*, which was true of the only shape it then refused — a struct — because a borrowed BYTE
-// RECORD was promoted to a copy rather than refused. One send site answering one question two ways, decided
-// by whether the value's type happened to have a cheap clone, is what that clause recorded; the rule is
-// uniform now and the clause with it (`Parser.moveIntoGreenThread`, ⚖ ruling 2026-09-04). What is left is the
-// fact that decides: this frame does not own it.
+// The BORROWED half: this frame does not own the value at all. It names no type, because the rule is uniform
+// over borrows whatever their type (`Parser.moveIntoGreenThread`, ⚖ user ruling).
 module function serviceBorrowedTransferMessage(blame String, source String) returns String
 	return "{blame} is BORROWED{serviceTransferSourceClause(source)} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
 end 'serviceBorrowedTransferMessage'
@@ -663,22 +647,19 @@ module function serviceSharedTransferMessage(blame String, source String) return
 end 'serviceSharedTransferMessage'
 
 // ⭐⭐ **THE THIRD HALF, AND THE ONLY ONE THAT IS ABOUT WHAT THE RECORD *HOLDS*.** The two sentences above
-// ask whether THIS box has one owner. That question is answered, and it is not enough: **SOLENESS IS NOT
-// TRANSITIVE.** `Parser.OwnedHeapExclusivity`'s header retires exactly that inference one frame in — *"A box
-// this frame solely owns can hold a payload it only CO-owns, because `moveManagedValueInto`'s
-// `borrowedManaged` arm stores by `__mm_incref` rather than by move"* — and a cross to a green thread is
-// where it is fatal rather than merely wrong: the second owner stays behind on THIS thread, and its later
-// decref races the service's, both being a plain load/add/store since EC10.
+// ask whether THIS box has one owner, and that is not enough: **SOLENESS IS NOT TRANSITIVE.** A box this frame
+// solely owns can hold a payload it only co-owns (`Parser.OwnedHeapExclusivity`), and handing it to a green
+// thread leaves that second owner behind on THIS one, stepping a count the service now steps too.
 //
-// ⚠⚠ **A GRAPH THAT MIGHT BE SHARED IS NOT WHAT THIS SENTENCE IS FOR — that is proved at RUN TIME**
-// (`Parser.transferGraphProofOf`, the synthesized `__sole_<T>` walk, `RuntimeAbort.transferredRecordNotSole`).
-// This is the refusal for the shapes no walk can be BUILT for, so it names the shape and not a suspicion.
+// ⚠⚠ **A GRAPH THAT MIGHT BE SHARED IS NOT WHAT THIS SENTENCE IS FOR — that is walked at RUN TIME**
+// (`Parser.transferGraphProofOf`, the synthesized `__sole_<T>` and `__share_<T>` walks,
+// `RuntimeAbort.transferredRecordNotSole`). This is the refusal for the shapes no walk can be BUILT for, so it
+// names the shape and not a suspicion.
 //
 // ⚠ **IT NAMES NO `.clone()`, WHICH IS WHY IT DOES NOT QUOTE `ServiceTransferLesson`.** Every shape it
-// refuses is refused for a property of the TYPE, so a clone of the same type is refused identically —
-// quoting the shared lesson here would name a cure that does not work.
+// refuses is refused for a property of the TYPE, so a clone of the same type is refused identically.
 module function serviceUnclosedRecordTransferMessage(blame String, source String, noun String) returns String
-	return "{blame} is {noun}{serviceTransferSourceClause(source)}. A move hands the record over WHOLE, and this compiler proves the graph below it sole at run time, immediately before the move — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it"
+	return "{blame} is {noun}{serviceTransferSourceClause(source)}. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it"
 end 'serviceUnclosedRecordTransferMessage'
 
 // The source binding named in parentheses, or nothing at all when no binding holds the value (a temporary, an
@@ -734,17 +715,13 @@ module function serviceSendCannotBeTriedRefusal(callee ByteArray) returns String
 	return "`try` on the message `{String.from(callee)}` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing"
 end 'serviceSendCannotBeTriedRefusal'
 
-// ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SOMETHING THIS FRAME DOES NOT SOLELY OWN (SV2).** See
+// ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SOMETHING THIS FRAME DOES NOT SOLELY OWN.** See
 // `Parser.requireServiceReplyDoesNotAliasState` for the rule and for why `.clone()` is the right answer
-// rather than a workaround.
-//
-// ⛔ **IT SAID "reachable from `self`" AND THAT IS ONLY ONE OF THE TWO POPULATIONS IT REFUSES (SV2 review).**
-// The predicate is `valueIsSolelyOwnedHere`, and a message PARAMETER fails it too — MEASURED: `export
-// function echo(s String) returns String; return s` is refused, and `s` is reachable from nothing at all.
-// The old sentence told that author a falsehood about their own program while giving them a cure that works.
-// A refusal's NOUN is the authority a reader takes away, so it names both.
+// rather than a workaround. It names both populations the predicate refuses — the service's own state and a
+// message PARAMETER, which reaches nothing of the state at all — because a refusal's noun is what a reader takes
+// away.
 module function serviceReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray) returns String
-	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `{String.from(typeName)}` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs"
+	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `{String.from(typeName)}` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs"
 end 'serviceReplyAliasesStateRefusal'
 
 // ⭐ **WHAT THE NOTE ON A WHOLE-PROGRAM SERVICE DIAGNOSTIC SAYS, written once for every rule that carries
@@ -765,6 +742,49 @@ end 'serviceSendArgumentBlame'
 module function serviceReplyBlame(typeName ByteArray, methodName ByteArray) returns String
 	return "the reply of the message `{String.from(typeName)}.{String.from(methodName)}`"
 end 'serviceReplyBlame'
+
+// The door a lent graph may not pass (E3160), as its sentence says it; `callee` is the function or method a
+// callee's door belongs to, spelled for the sentence (`calleeSpelling`).
+module function freezeDoorPhrase(door FreezeDoor, callee String) returns String
+	return match door 'door'
+		bindToVar gives "binding it to a `var`"
+		assignToVar gives "assigning it to a `var`"
+		storeInFieldOrPayload gives "storing it in a field or payload"
+		storeInContainer gives "storing it in a container"
+		returned gives "returning it"
+		capturedByClosure gives "capturing it in a closure"
+		keptByCallee gives "passing it to {callee}, which keeps it"
+		writtenAsReceiver gives "calling {callee}, which writes it"
+		writtenByCallee gives "passing it to {callee}, which writes it"
+	end 'door'
+end 'freezeDoorPhrase'
+
+// A named callee as `freezeDoorPhrase` spells it. A call through a function value names none, and is spelled
+// `FunctionValueCalleeSpelling`.
+module function calleeSpelling(name ByteArray) returns String
+	return "`{String.from(name)}`"
+end 'calleeSpelling'
+
+module let FunctionValueCalleeSpelling = "a function value"
+
+// A second source position inside a diagnostic's sentence, spelled as the diagnostic's own is.
+module function sourcePositionText(filePath FilePath, line LineNumber, column ColumnNumber) returns String
+	return "{filePath}:{line}:{column}"
+end 'sourcePositionText'
+
+// E3160 at a door the lending frame reaches after the send at `lentAt`.
+module function lentGraphEscapesMessage(root String, lentAt String, door String) returns String
+	return "`{root}` was lent to another green thread at {lentAt}, so what it holds is frozen: {door} would let it be written. {lentGraphCure(root)}"
+end 'lentGraphEscapesMessage'
+
+// E3160 at a send whose handler lets the lent parameter escape at `escapeAt`.
+module function lentToEscapingHandlerMessage(root String, message String, param String, escapeAt String, door String) returns String
+	return "`{root}` is lent to `{message}` here, so what it holds is frozen, but the handler's parameter `{param}` escapes at {escapeAt}: {door} would let it be written. {lentGraphCure(root)}"
+end 'lentToEscapingHandlerMessage'
+
+function lentGraphCure(root String) returns String
+	return "Send a `.clone()` instead, or bind `{root}` with `var` so the send moves it"
+end 'lentGraphCure'
 
 // ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL — THIS IS OPEN #56's HAZARD (four times, and
 // counting).** A payload type built below is a `MaxonType`, which carries a `TypeNameId` that is only a

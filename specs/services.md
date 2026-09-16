@@ -72,21 +72,32 @@ Whether a type is a service is a **whole-program** property: a `spawn` anywhere 
 and subjects all its export methods to the service rules. That is why every service diagnostic fires **at
 the `spawn`** rather than at the method it names — the method may be in a different file entirely.
 
-### Sending MOVES, and that is load-bearing
+### A send MOVES or LENDS, and that is load-bearing
 
-A message's arguments, a `spawn`'s factory arguments and a reply are **moved** across: the far side becomes
-the value's one owner. This is not ergonomics: a refcount step in this compiler is a plain load/add/store,
-because the language guarantees one green thread per box, so a send that let two green threads hold one
-box would not be slow, it would corrupt the heap. Two refusals are static. A ROOT this frame does not
-solely own — a value a closure or a container also holds, or a borrowed parameter — is **E3138**, and a
-value that cannot have exactly one owner on the far side at all is **E3135**: a `Promise` (a handle its
-awaiter owns), a function value (whose captured environment is shared), a value held at an interface type
-(a fat pointer released through a witness), an opaque type parameter (no layout at the send). Every other
-aggregate — a container, a record with a managed field, a union with a managed payload — is admitted after
-a runtime WALK over its graph at the send: every reachable refcounted record must be sole (a count of
-exactly 1; an immortal literal has no count and passes), a shared copy-on-write buffer is detached, because
-a move is a write, and a shared RECORD aborts the process with exit **96** rather than
-hand one box to two green threads.
+A `spawn`'s factory arguments, a reply, and a message argument that is a `var`, a temporary or a literal are
+**moved** across: the far side becomes the value's one owner. A message argument that is a `let` LOCAL
+owning its graph is **lent**: the sender's binding stays readable, and the service reads the same graph,
+whose counts are stepped atomically while two green threads hold it. This is not ergonomics: a refcount
+step on a box one green thread holds is a plain load/add/store, so a send that put one box into two green
+threads' hands without saying so would not be slow, it would corrupt the heap. Two refusals are static. A
+ROOT this frame does not solely own — a value a closure or a container also holds, or a borrowed parameter
+— is **E3138**, and a value that cannot have exactly one owner on the far side at all is **E3135**: a
+`Promise` (a handle its awaiter owns), a function value (whose captured environment is shared), a value
+held at an interface type (a fat pointer released through a witness), an opaque type parameter (no layout
+at the send). Every other aggregate — a container, a record with a managed field, a union with a managed
+payload — is admitted, moved or lent, after a runtime WALK over its graph at the send: every reachable
+refcounted record must be sole (a count of exactly 1; an immortal literal has no count and passes), a
+shared copy-on-write buffer is detached, and a shared RECORD aborts the process with exit **96** rather
+than hand one box to two green threads.
+
+A lent graph is **frozen** from the send on (**E3160**): neither the binding nor any value read out of it
+may reach storage through which it could be written — a `var`, a field or union payload, a container, a
+`return`, a callee parameter that keeps it, a closure capture. Reads, `let` bindings, interpolation,
+parameters that neither write nor keep, and a second send are allowed. A value whose type graph holds
+nothing a statement can write — a service handle, a struct whose fields are all `let` over such types — is
+exempt. The receiving side answers to the same rule, whole-program: a handler whose parameter escapes
+through one of those doors refuses every send that lends to it (E3160 at the send, naming the escape), and
+a handler that writes its parameter refuses it with E3019.
 
 ### `ServiceError`
 
@@ -436,7 +447,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3135: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3135: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-param-function-value-not-transferable -->
@@ -464,7 +475,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3135: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, whose captured environment is a box a second thread would share, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3135: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, whose captured environment is a box a second thread would share, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-param-interface-value-not-transferable -->
@@ -504,7 +515,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3135: <fragment>:27:10: parameter `s` of the message `Calc.measure` is a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry, and this `spawn` makes `Calc` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3135: <fragment>:27:10: parameter `s` of the message `Calc.measure` is a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.overloaded-message-refused -->
@@ -560,7 +571,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:15:10: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages MOVE their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3135: <fragment>:15:10: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.a-constrained-generic-service-is-refused -->
@@ -894,9 +905,9 @@ Two spawns of one type are two services with two states.
 
 ⚠ **THE ORDER OF THE TWO PRINTS IS FORCED BY CAUSALITY AND NOT BY LUCK.** `b` prints its own count and then
 sends `report` to `a`, so `a`'s line cannot be written until `b`'s handler has already written its own — two
-services printing on two green threads with nothing between them would be ordered by the scheduler. Moving
-`a`'s handle INTO `b`'s mailbox is what buys that ordering, and it is the same transfer
-`a-handle-moved-into-another-service` pins on its own.
+services printing on two green threads with nothing between them would be ordered by the scheduler. Lending
+`a`'s handle to `b`'s handler is what buys that ordering; `borrow.a-lent-handle-may-be-kept-by-the-handler`
+pins a lent handle on its own.
 ```maxon
 type Counter
 	var id as Integer
@@ -1054,7 +1065,7 @@ is sent after the poison pill, so the loop never runs its handler — and which 
 race this case deliberately does not resolve: if the send wins, the envelope is queued behind the pill and
 the loop's exit drain abandons it; if the loop wins, the mailbox is already closed and `__mbox_send` abandons
 it inline. **Both roads must print exactly the same thing and leak exactly nothing**, which is the property
-worth pinning — the drop of a moved-in payload nobody will ever handle.
+worth pinning — the drop of a sent payload nobody will ever handle.
 ```maxon
 type Store
 	var n as Integer
@@ -1192,8 +1203,9 @@ n=2
 
 <!-- test: a-handle-moved-into-another-service -->
 A handle is a transferable message payload: `Worker` is handed the `Logger`'s handle, sends to it, and then
-DROPS it — the un-consumed payload drop the loop owes for every message it runs. That drop is the `Logger`'s
-last handle, so the logger shuts down without `main` ever naming it again.
+DROPS it — the un-consumed payload drop the loop owes for every message it runs. `logger` is a `var`, so the
+send MOVES it: that drop is the `Logger`'s last handle, and the logger shuts down without `main` ever naming
+it again.
 ```maxon
 type Logger
 	var n as Integer
@@ -1220,7 +1232,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	let logger = spawn Logger.create()
+	var logger = spawn Logger.create()
 	let worker = spawn Worker.create()
 	worker.run(logger)
 	return 0
@@ -1382,9 +1394,11 @@ bytes=15
 ```
 
 <!-- test: a-string-argument-moves-into-the-service -->
-A managed argument is MOVED: the sending frame hands over the reference it holds and the service becomes the
+A `var` argument is MOVED: the sending frame hands over the reference it holds and the service becomes the
 box's one owner. Nothing is increfed at the send and nothing is dropped by the sender, which is what keeps
-the plain refcount correct across a green thread.
+the plain refcount correct across a green thread. The bare literal is an immortal `.rdata` record, promoted
+to a fresh owned copy at the send; a `let` local would be LENT instead
+(`borrow.a-let-string-stays-readable-after-the-send`).
 ```maxon
 type Store
 	var n as Integer
@@ -1401,9 +1415,9 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let a = "one-{1}"
+	var a = "one-{1}"
 	h.keep(a)
-	let b = "two-{2}"
+	var b = "two-{2}"
 	h.keep(b)
 	h.keep("a literal")
 	return 0
@@ -1662,7 +1676,8 @@ end 'main'
 ```
 
 <!-- test: error.a-sent-value-is-moved-and-reading-it-back-is-refused -->
-A send consumes its argument; the source is poisoned and a read is E3102.
+A `var` argument MOVES: the send consumes it, the source is poisoned and a read is E3102. A `let` local is
+LENT instead and stays readable — see the `borrow.*` cases.
 
 ⚠ **THE VALUE IS AN INTERPOLATION AND NOT A BARE LITERAL, AND THAT IS THE SUBJECT RATHER THAN A DETAIL.** A
 `"hello"` binding is a BORROWED `.rdata` record, and a borrowed byte record is PROMOTED to a fresh owned copy
@@ -1684,7 +1699,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let buf = "hello {1}"
+	var buf = "hello {1}"
 	h.keep(buf)
 	print("{buf}")
 	return 0
@@ -1722,7 +1737,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:19:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.a-borrowed-parameter-may-not-be-sent -->
@@ -1769,7 +1784,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.a-service-is-rejected-on-wasm -->
@@ -2133,10 +2148,10 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: deepmove.a-cloned-array-detaches-its-shared-buffer-at-the-send -->
 A shared BUFFER is not a shared record. `a.clone()` yields a second array RECORD viewing `a`'s buffer until
-one of them writes — and a move is a write, so the walk detaches `b`'s buffer at the send, copying the
-elements out, exactly as `b.push(…)` would have. Only a shared RECORD is refused; a shared buffer is what
-copy-on-write is for. The reply sequences the two sides, so the service's lines land before `main` reads
-`a` back.
+one of them writes. `b` is a `let`, so the send LENDS it, and the send's walk still detaches a shared buffer
+as a write would — copying the elements out of `a`'s buffer into `b`'s own, exactly as `b.push(…)` would
+have. Only a shared RECORD is refused; a shared buffer is what copy-on-write is for. The reply sequences the
+two sides, so the service's lines land before `main` reads `a` back.
 ```maxon
 typealias IntegerArray = Array with Integer
 
@@ -3043,6 +3058,1513 @@ typealias Level = int(0 to 1024)
 released 63
 ```
 
+<!-- test: borrow.a-let-string-stays-readable-after-the-send -->
+A `let` local is LENT, not moved: the service reads the sender's own record and the sender's binding stays
+readable after the send. The awaited reply orders the service's read before `main`'s.
+```maxon
+type Meter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function measure(s String) returns Integer
+		return s.count() as Integer
+	end 'measure'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create()
+	let buf = "hello {1}"
+	let n = try await h.measure(buf) otherwise 0
+	print("service read {n} characters\n")
+	print("sender still reads {buf}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+service read 7 characters
+sender still reads hello 1
+```
+
+<!-- test: borrow.two-services-and-the-sender-read-one-graph -->
+One `let` graph — a record holding a `String`, an array of records and a union with a managed payload — is
+lent to two services at once, and all three green threads read it while both replies are outstanding.
+`digest` and `noteLength` neither write nor keep their parameters, so handing them the lent graph, or a
+value read out of it, is allowed on both sides of the send.
+```maxon
+type Tag
+	export var text as String
+
+	export static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Tag'
+
+typealias Tags = Array with Tag
+
+union Note
+	blank
+	written(body String)
+end 'Note'
+
+type Doc
+	export var title as String
+	export var tags as Tags
+	export var note as Note
+
+	export static function create(k Integer) returns Self
+		var tags = Tags.create()
+		tags.push(Tag.create("red {k}"))
+		tags.push(Tag.create("green {k}"))
+		tags.push(Tag.create("blue {k}"))
+		return Self{title: "doc {k}", tags: tags, note: Note.written("body {k}")}
+	end 'create'
+end 'Doc'
+
+function noteLength(n Note) returns Integer
+	return match n 'length'
+		blank gives 0
+		written(body) gives body.count() as Integer
+	end 'length'
+end 'noteLength'
+
+function digest(d Doc) returns Integer
+	var total = d.title.count() as Integer
+	for t in d.tags 'each'
+		total = total + (t.text.count() as Integer)
+	end 'each'
+	return total + noteLength(d.note)
+end 'digest'
+
+type Reader
+	var id as Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function read(d Doc) returns Integer
+		return self.id * 1000 + digest(d)
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let one = spawn Reader.create(1)
+	let two = spawn Reader.create(2)
+	let doc = Doc.create(7)
+	let first = one.read(doc)
+	let second = two.read(doc)
+	let mine = digest(doc)
+	let a = try await first otherwise 0
+	let b = try await second otherwise 0
+	print("first {a}\n")
+	print("second {b}\n")
+	print("sender {mine}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+first 1029
+second 2029
+sender 29
+```
+
+<!-- test: borrow.one-graph-sent-many-times-to-one-service -->
+The same `let` graph lent 200 times to one service: every queued message holds a share of it, and the
+mailbox's FIFO puts `report` behind the last of them. `main` reads the graph again once the tallies are in.
+```maxon
+type Leaf
+	export var text as String
+
+	export static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+
+type Tree
+	export var name as String
+	export var leaves as Leaves
+
+	export static function create(size Integer) returns Self
+		var leaves = Leaves.create()
+		for i in 1 to size 'grow'
+			leaves.push(Leaf.create("leaf {i}"))
+		end 'grow'
+		return Self{name: "tree {size}", leaves: leaves}
+	end 'create'
+end 'Tree'
+
+type Tally
+	var sends as Integer
+	var letters as Integer
+
+	static function create() returns Self
+		return Self{sends: 0, letters: 0}
+	end 'create'
+
+	export function take(t Tree)
+		var read = t.name.count() as Integer
+		for leaf in t.leaves 'each'
+			read = read + (leaf.text.count() as Integer)
+		end 'each'
+		self.sends = self.sends + 1
+		self.letters = self.letters + read
+	end 'take'
+
+	export function report() returns String
+		return "sends={self.sends} letters={self.letters}"
+	end 'report'
+end 'Tally'
+
+function main() returns ExitCode
+	let h = spawn Tally.create()
+	let tree = Tree.create(4)
+	for _ in 1 to 200 'lend'
+		h.take(tree)
+	end 'lend'
+	let report = try await h.report() otherwise "gone"
+	print("{report}\n")
+	print("sender still reads {tree.name} with {tree.leaves.count()} leaves\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+sends=200 letters=6000
+sender still reads tree 4 with 4 leaves
+```
+
+<!-- test: borrow.the-sender-releases-first-and-the-service-frees-the-graph -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`lendAndReturn` lends its graph and returns while the message is still queued, so the envelope's share is
+the graph's last owner and the service's release is the one that frees it — a release that never comes is
+exit 101. The two pins make *still queued* the premise rather than luck: on one processor that `main` is
+never preempted from, nothing runs on the service until `main` parks at its await.
+```maxon
+type Leaf
+	export var text as String
+
+	export static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+
+type Tree
+	export var name as String
+	export var leaves as Leaves
+
+	export static function create(size Integer) returns Self
+		var leaves = Leaves.create()
+		for i in 1 to size 'grow'
+			leaves.push(Leaf.create("leaf {i}"))
+		end 'grow'
+		return Self{name: "tree {size}", leaves: leaves}
+	end 'create'
+end 'Tree'
+
+type Keeper
+	var seen as String
+
+	static function create() returns Self
+		return Self{seen: "nothing"}
+	end 'create'
+
+	export function take(t Tree)
+		let first = try t.leaves.get(0) otherwise panic("a tree has leaves")
+		self.seen = "{t.name} starting with {first.text}"
+	end 'take'
+
+	export function report() returns String
+		return "service read {self.seen}"
+	end 'report'
+end 'Keeper'
+
+function lendAndReturn(h Keeper.handle)
+	let tree = Tree.create(3)
+	h.take(tree)
+	print("sender read {tree.name}\n")
+end 'lendAndReturn'
+
+function main() returns ExitCode
+	let h = spawn Keeper.create()
+	lendAndReturn(h)
+	let report = try await h.report() otherwise "gone"
+	print("{report}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+sender read tree 3
+service read tree 3 starting with leaf 1
+```
+
+<!-- test: borrow.a-graph-with-a-second-owner-aborts-at-the-send -->
+A lent graph is walked at the send exactly as a moved one is. `Shape.held(cell)` increfs into the payload
+slot, so the live case's payload has two owners — `cell` and `s` — and the walk aborts with exit **96**
+before anything is enqueued; the read of `s` after the send never runs.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+union Shape
+	empty
+	held(c Cell)
+end 'Shape'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s Shape)
+		match s 'k'
+			empty then print("empty\n")
+			held(c) then print("held {c.n}\n")
+		end 'k'
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var cell = Cell.create()
+	let s = Shape.held(cell)
+	let h = spawn Svc.create()
+	h.take(s)
+	match s 'mine'
+		empty then print("main empty\n")
+		held(c) then print("main held {c.n}\n")
+	end 'mine'
+	return cell.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: borrow.a-lent-handle-may-be-kept-by-the-handler -->
+A service handle holds nothing a statement can write, so a lent handle is exempt from the freeze: `Relay`
+keeps `counter` in its state and sends through it in a later message, while `main` goes on sending through
+its own binding. Each reply is awaited before the next line prints.
+```maxon
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump(by Integer) returns Integer
+		self.n = self.n + by
+		return self.n
+	end 'bump'
+end 'Counter'
+
+typealias CounterHandles = Array with Counter.handle
+
+type Relay
+	var peers as CounterHandles
+
+	static function create() returns Self
+		return Self{peers: CounterHandles.create()}
+	end 'create'
+
+	export function adopt(peer Counter.handle)
+		self.peers.push(peer)
+	end 'adopt'
+
+	export function forward(by Integer) returns Integer
+		var total = 0
+		for peer in self.peers 'each'
+			total = total + (try await peer.bump(by) otherwise 0)
+		end 'each'
+		return total
+	end 'forward'
+end 'Relay'
+
+function main() returns ExitCode
+	let counter = spawn Counter.create()
+	let relay = spawn Relay.create()
+	relay.adopt(counter)
+	let viaRelay = try await relay.forward(5) otherwise 0
+	print("relay {viaRelay}\n")
+	let direct = try await counter.bump(2) otherwise 0
+	print("direct {direct}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+relay 5
+direct 7
+```
+
+<!-- test: borrow.many-services-count-one-graph-on-sixteen-processors -->
+<!-- procs: 16 -->
+⭐ **THE COUNT TORTURE.** Sixteen services walk one lent graph on sixteen processors, and every `get` binding
+in `walk` retains and then releases a `Leaf` record the other fifteen walkers are stepping at the same time,
+while `main` steps the root's count with every lend and each loop steps it back down with every release. A
+lent graph's counts are stepped atomically; one lost update frees a record under a reader (a crash) or
+never frees it (exit 101).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let serviceCount = 16
+let rounds = 50
+let leafCount = 64
+
+type Leaf
+	export var text as String
+
+	export static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+
+type Tree
+	export var name as String
+	export var leaves as Leaves
+
+	export static function create() returns Self
+		var leaves = Leaves.create()
+		for i in 1 to leafCount 'grow'
+			leaves.push(Leaf.create("leaf {i}"))
+		end 'grow'
+		return Self{name: "tree {leafCount}", leaves: leaves}
+	end 'create'
+end 'Tree'
+
+type Checker
+	var sum as Integer
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function walk(t Tree)
+		for i in 0 upto t.leaves.count() 'each'
+			let leaf = try t.leaves.get(i) otherwise panic("walk: leaf {i} is missing")
+			self.sum = self.sum + (leaf.text.count() as Integer)
+		end 'each'
+	end 'walk'
+
+	export function report() returns Integer
+		return self.sum
+	end 'report'
+end 'Checker'
+
+typealias CheckerHandles = Array with Checker.handle
+
+function main() returns ExitCode
+	var checkers = CheckerHandles.create()
+	for _ in 1 to serviceCount 'spawnEach'
+		checkers.push(spawn Checker.create())
+	end 'spawnEach'
+
+	let tree = Tree.create()
+	for _ in 1 to rounds 'round'
+		for k in 0 upto serviceCount 'lend'
+			let c = try checkers.get(k) otherwise panic("checkers.get({k})")
+			c.walk(tree)
+		end 'lend'
+	end 'round'
+
+	var total = 0
+	for k in 0 upto serviceCount 'collect'
+		let c = try checkers.get(k) otherwise panic("checkers.get({k})")
+		total = total + (try await c.report() otherwise 0)
+	end 'collect'
+
+	print("total {total}\n")
+	print("sender still reads {tree.name} with {tree.leaves.count()} leaves\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total 351200
+sender still reads tree 64 with 64 leaves
+```
+
+<!-- test: borrow.a-door-on-a-sibling-arm-does-not-follow-the-send -->
+A door on the OTHER arm of the `match` whose arm lent the graph does not follow the send: no path runs both, so
+`route` may hand `b` to `stash`, which keeps it, on the arm that did not lend it. A door follows a send where the
+function's control flow reaches it from the send, not where the text places it later.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+enum Route
+	toService
+	toArray
+end 'Route'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+
+	export function total() returns Integer
+		return self.seen
+	end 'total'
+end 'Svc'
+
+function stash(xs Boxes, item Box)
+	xs.push(item)
+end 'stash'
+
+function route(h Svc.handle, xs Boxes, n Integer, way Route)
+	let b = Box.create(n)
+	match way 'send'
+		toService then h.take(b)
+		toArray then stash(xs, item: b)
+	end 'send'
+end 'route'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	route(h, xs: xs, n: 2, way: Route.toService)
+	route(h, xs: xs, n: 5, way: Route.toArray)
+	let seen = try await h.total() otherwise 0
+	let kept = try xs.get(0) otherwise panic("nothing was kept")
+	print("the service saw {seen}\n")
+	print("kept {xs.count()} holding {kept.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+the service saw 2
+kept 1 holding 5
+```
+
+<!-- test: borrow.error.a-door-after-the-branch-that-lent-follows-the-send -->
+<!-- unsupported-targets: wasm32-wasi -->
+A door after the `match` follows the send on the arm that lent: a path runs the send and then `stash`, which
+keeps `b`. Which parameters a function keeps is a whole-program fact, so on wasm32-wasi the send's E3104 is
+reported first, and the case is pinned on the native lanes (§ Targets).
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+enum Route
+	toService
+	toArray
+end 'Route'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function stash(xs Boxes, item Box)
+	xs.push(item)
+end 'stash'
+
+function route(h Svc.handle, xs Boxes, n Integer, way Route)
+	let b = Box.create(n)
+	match way 'send'
+		toService then h.take(b)
+		toArray then print("kept, not sent\n")
+	end 'send'
+	stash(xs, item: b)
+end 'route'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	route(h, xs: xs, n: 2, way: Route.toService)
+	return xs.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:39:18: `b` was lent to another green thread at <fragment>:36:25, so what it holds is frozen: passing it to `stash`, which keeps it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-door-on-a-sibling-arm-inside-a-loop-follows-the-send -->
+<!-- unsupported-targets: wasm32-wasi -->
+Inside a loop a door on the sibling arm of the send follows it, though the text places it first: the next trip
+takes the other arm while `b`, bound before the loop, is still the graph the service reads. The same
+whole-program door as above, pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+enum Route
+	toService
+	toArray
+end 'Route'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function stash(xs Boxes, item Box)
+	xs.push(item)
+end 'stash'
+
+function routeFor(trip Integer) returns Route
+	return Route.toService if trip == 0 else Route.toArray
+end 'routeFor'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	let b = Box.create(3)
+	var trip = 0
+	while trip < 2 'twice'
+		match routeFor(trip) 'send'
+			toArray then stash(xs, item: b)
+			toService then h.take(b)
+		end 'send'
+		trip = trip + 1
+	end 'twice'
+	return xs.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:44:33: `b` was lent to another green thread at <fragment>:45:26, so what it holds is frozen: passing it to `stash`, which keeps it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.a-let-rebound-each-trip-is-lent-afresh -->
+The loop case above with `b` bound INSIDE the loop: the next trip binds a fresh record, so the door the back edge
+reaches is not the graph the send lent and `stash` may keep it. What the freeze follows from a send stops where
+the binding is bound again.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+enum Route
+	toService
+	toArray
+end 'Route'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+
+	export function total() returns Integer
+		return self.seen
+	end 'total'
+end 'Svc'
+
+function stash(xs Boxes, item Box)
+	xs.push(item)
+end 'stash'
+
+function routeFor(trip Integer) returns Route
+	return Route.toService if trip mod 2 == 0 else Route.toArray
+end 'routeFor'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	var trip = 0
+	while trip < 4 'eachTrip'
+		let b = Box.create(trip + 1)
+		match routeFor(trip) 'send'
+			toArray then stash(xs, item: b)
+			toService then h.take(b)
+		end 'send'
+		trip = trip + 1
+	end 'eachTrip'
+
+	let seen = try await h.total() otherwise 0
+	var kept = 0
+	for box in xs 'sum'
+		kept = kept + box.n
+	end 'sum'
+
+	print("the service saw {seen}\n")
+	print("kept {xs.count()} totalling {kept}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+the service saw 4
+kept 2 totalling 6
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-bound-to-a-var -->
+From the send on, a lent `let` is frozen: binding it to a `var` would give the service's graph a name that
+can write it.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	var m = b
+	m.n = 2
+	return m.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:26:10: `b` was lent to another green thread at <fragment>:25:9, so what it holds is frozen: binding it to a `var` would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-assigned-to-a-var -->
+Assigning a lent `let` to an existing `var` is the same door as binding one.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var m = Box.create()
+	let b = Box.create()
+	h.take(b)
+	m = b
+	m.n = 2
+	return m.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:27:6: `b` was lent to another green thread at <fragment>:26:9, so what it holds is frozen: assigning it to a `var` would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-value-read-out-of-a-lent-let-may-not-be-bound-to-a-var -->
+The freeze covers what is READ OUT of a lent binding: `p.inner` is part of the graph the service reads, so it
+is frozen with `p`, and the diagnostic names the root.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let inner as Box
+
+	static function create(inner Box) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Pair'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(p Pair)
+		self.seen = self.seen + p.inner.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let p = Pair.create(Box.create())
+	h.take(p)
+	var y = p.inner
+	y.n = 2
+	return y.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:34:10: `p` was lent to another green thread at <fragment>:33:9, so what it holds is frozen: binding it to a `var` would let it be written. Send a `.clone()` instead, or bind `p` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-stored-in-a-field -->
+Storing a lent value in a field of a mutable record would let it be written through that record.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var item as Box
+
+	static function create() returns Self
+		return Self{item: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var holder = Holder.create()
+	let b = Box.create()
+	h.take(b)
+	holder.item = b
+	return holder.item.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:35:16: `b` was lent to another green thread at <fragment>:34:9, so what it holds is frozen: storing it in a field or payload would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-wrapped-in-a-new-record -->
+Constructing a record around a lent value stores it exactly as a field assignment does. The record here is a
+union payload, because a struct literal is legal only inside its own type.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+union Wrap
+	empty
+	held(b Box)
+end 'Wrap'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	let w = Wrap.held(b)
+	print("{w.name}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:31:20: `b` was lent to another green thread at <fragment>:30:9, so what it holds is frozen: storing it in a field or payload would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-stored-in-a-container -->
+Pushing a lent value into a container would let it be written through the container.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	let b = Box.create()
+	h.take(b)
+	xs.push(b)
+	return xs.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:29:10: `b` was lent to another green thread at <fragment>:28:9, so what it holds is frozen: storing it in a container would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-returned -->
+Returning a lent value hands it to a caller, which may bind it to a `var`.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function lend() returns Box
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	return b
+end 'lend'
+
+function main() returns ExitCode
+	let b = lend()
+	return b.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:26:9: `b` was lent to another green thread at <fragment>:25:9, so what it holds is frozen: returning it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-parameter-that-keeps-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+A callee parameter that KEEPS what it is handed is a door too: `stash` pushes `item` into an array it was
+passed, and which parameters a function keeps is a whole-program fact — so on wasm32-wasi the send's E3104
+is reported first, and the case is pinned on the native lanes (§ Targets).
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function stash(xs Boxes, item Box)
+	xs.push(item)
+end 'stash'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	let b = Box.create()
+	h.take(b)
+	stash(xs, item: b)
+	return xs.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:33:18: `b` was lent to another green thread at <fragment>:32:9, so what it holds is frozen: passing it to `stash`, which keeps it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-be-captured-by-a-closure -->
+A closure that captures a lent value keeps it for as long as the closure lives.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	let peek = function() gives b.n
+	return peek() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:26:30: `b` was lent to another green thread at <fragment>:25:9, so what it holds is frozen: capturing it in a closure would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-method-that-writes-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+A method that writes its own receiver is legal on a `let` (`parameter-mutation.md`), and after a lend it
+would write the graph the service is reading. Which methods write their receiver is a whole-program fact,
+so this is pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	b.bump()
+	return b.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:30:2: `b` was lent to another green thread at <fragment>:29:9, so what it holds is frozen: calling `bump`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-parameter-that-writes-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+A direct call accepts a `let` handed to a parameter whose FIELD it writes
+(`SemanticCheck.checkImmutableArgToMutatingParam`); after a lend that write lands in the graph the service
+is reading. Which parameters a function writes is a whole-program fact, so this is pinned on the native
+lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function poke(p Box)
+	p.n = 99
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	poke(b)
+	return b.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:30:7: `b` was lent to another green thread at <fragment>:29:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-an-async-callee-that-keeps-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+An `async` call is the same door as a direct one: the coroutine runs on this green thread, but what it KEEPS
+outlives the await, and the freeze asks about storage rather than about who runs. Whole-program, so pinned on
+the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function stash(xs Boxes, item Box) returns Integer
+	Runtime.yield()
+	xs.push(item)
+	return xs.count() as Integer
+end 'stash'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	let b = Box.create()
+	h.take(b)
+	let pending = async stash(xs, item: b)
+	let kept = await pending
+	return kept as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:35:38: `b` was lent to another green thread at <fragment>:34:9, so what it holds is frozen: passing it to `stash`, which keeps it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-an-async-callee-that-writes-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+The write half of the same door: `poke` writes its parameter's field, which a `let` may be handed and a LENT
+one may not. Whole-program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function poke(p Box) returns Integer
+	Runtime.yield()
+	p.n = 9
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.take(b)
+	let pending = async poke(b)
+	let poked = await pending
+	return poked as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:32:27: `b` was lent to another green thread at <fragment>:31:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-callee-that-writes-it-through-async -->
+<!-- unsupported-targets: wasm32-wasi -->
+A callee that writes what it was handed is a door however deep the write is: `relay` writes nothing itself and
+spawns `replace`, which does. The summary closes over the spawn, so `relay` writes its parameter and the send
+is frozen against it. Whole-program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function replace(p Box) returns Integer
+	Runtime.yield()
+	p.n = 9
+	return p.n
+end 'replace'
+
+function relay(q Box) returns Integer
+	let pending = async replace(q)
+	return await pending
+end 'relay'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create(1)
+	h.take(b)
+	return relay(b) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:37:15: `b` was lent to another green thread at <fragment>:36:9, so what it holds is frozen: passing it to `relay`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-an-async-keeper-one-frame-down -->
+<!-- unsupported-targets: wasm32-wasi -->
+The KEEPS twin of the write door one frame down: `relay` keeps nothing itself and spawns `stash`, which pushes
+what it is handed into a container that outlives the await. Whole-program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function stash(xs Boxes, item Box) returns Integer
+	Runtime.yield()
+	xs.push(item)
+	return xs.count() as Integer
+end 'stash'
+
+function relay(xs Boxes, q Box) returns Integer
+	let pending = async stash(xs, item: q)
+	return await pending
+end 'relay'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	let b = Box.create(1)
+	h.take(b)
+	return relay(xs, q: b) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:40:22: `b` was lent to another green thread at <fragment>:39:9, so what it holds is frozen: passing it to `relay`, which keeps it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-handler-may-not-keep-a-lent-parameter -->
+<!-- unsupported-targets: wasm32-wasi -->
+The receiving side is held to the same freeze, whole-program: `keep` pushes its parameter into the service's
+state, so every send that LENDS to it is refused at the send, naming the handler's escape. `main` never reads
+`b` again and the send still lends — every `let` local does. Whole-program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var kept as Boxes
+
+	static function create() returns Self
+		return Self{kept: Boxes.create()}
+	end 'create'
+
+	export function keep(given Box)
+		self.kept.push(given)
+	end 'keep'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.keep(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:27:9: `b` is lent to `Svc.keep` here, so what it holds is frozen, but the handler's parameter `given` escapes at <fragment>:20:18: storing it in a container would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-handler-may-not-keep-what-it-reads-out-of-a-lent-parameter -->
+<!-- unsupported-targets: wasm32-wasi -->
+What a handler reads OUT of a lent parameter is frozen with it: `p.inner` escapes into the state array, and
+the refusal names `main`'s lent binding and the handler's parameter. Whole-program, so pinned on the native
+lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let inner as Box
+
+	static function create(inner Box) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Pair'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var kept as Boxes
+
+	static function create() returns Self
+		return Self{kept: Boxes.create()}
+	end 'create'
+
+	export function keep(p Pair)
+		self.kept.push(p.inner)
+	end 'keep'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let pair = Pair.create(Box.create())
+	h.keep(pair)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:35:9: `pair` is lent to `Svc.keep` here, so what it holds is frozen, but the handler's parameter `p` escapes at <fragment>:28:18: storing it in a container would let it be written. Send a `.clone()` instead, or bind `pair` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-let-lent-to-a-handler-that-writes-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+A handler that WRITES its parameter would write the sender's graph from another green thread, so a lending
+send to it is E3019, as passing a `let` to a writing parameter is. The write is a FIELD write, which a
+direct call accepts for a `let` (`SemanticCheck.checkImmutableArgToMutatingParam`) and a lending send may
+not. E3019 is decided whole-program, so this is pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function bump(target Box)
+		target.n = target.n + 1
+	end 'bump'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.bump(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:25:2: cannot pass 'b' to function that mutates parameter 'target' (in main)
+```
+
 <!-- test: error.a-promise-may-not-be-sent -->
 A `Promise` is a green-thread handle its awaiter owns, and a message MOVES its arguments to another green
 thread — so sending one would leave a second thread holding a thread this one is still waiting on.
@@ -3311,7 +4833,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3137: <fragment>:10:3: `Store.itself` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+error E3137: <fragment>:10:3: `Store.itself` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
@@ -3346,7 +4868,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, whose one reference the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread, with a plain reference count between them. Return a `.clone()`, or return the scalars the caller needs
+error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
@@ -4985,7 +6507,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send MOVES: the service becomes the value's one owner and this frame gives up the reference it held. That is what keeps reference counting PLAIN rather than atomic — the language guarantees one green thread per box — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-clone -->

@@ -718,6 +718,18 @@ export type VarInfo
 	// parse worker would share.
 	export var awaitingMoveReads as MoveSiteListIndex = NoMoveSiteList
 
+	// ⭐ **THE ARGUMENT TOKEN OF THE SEND THAT FIRST LENT THIS `let`, ON ANY PATH — `NotLent` until one does**
+	// (`Parser.lendIntoGreenThread`). Not per-path, because what it answers is not: the lend's retain marks the
+	// record co-owned on every path, so a later send of the binding lends again rather than refusing it as shared
+	// (`Parser.ownerLendsValue`).
+	export var lentAt as TokenIndex = NotLent
+
+	// ⭐ **THE ARGUMENT TOKEN OF A SEND THAT LENT THIS `let` ON THE CURRENT PATH — `NotLent` where none did.** From
+	// that send on the graph is frozen (E3160, `Parser.requireNotLentThrough`). Path-sensitive like `movedFrom` and
+	// carried by `Parser.MoveMark` for its reason: a lend on one arm of an `if` is not before a door on the other,
+	// and past a join a lend on any reaching path is.
+	export var lentOnPath as TokenIndex = NotLent
+
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
 	// that starts cleared — comes from a default here.
@@ -841,6 +853,10 @@ export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 // A list of the doors a binding waits on, by its place in the parser's `moveSiteLists`; the first is the empty one.
 module typealias MoveSiteListIndex = int(0 to u64.max)
 module let NoMoveSiteList = 0 as MoveSiteListIndex
+
+// `VarInfo.lentAt` of a binding no send has lent. Token 0 opens its file, and no send argument can: a send
+// stands inside a function body.
+module let NotLent = 0 as TokenIndex
 
 // What E3073 needs about one `async <call>` spawn and cannot get anywhere else: the text to quote and the
 // place to point at. See `Project.asyncSpawnSites`.

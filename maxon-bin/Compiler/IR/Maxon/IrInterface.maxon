@@ -90,20 +90,18 @@ export let WitnessDestroyFuncOffset = 8 as ByteOffset
 // the same one answer (`ProgramSignatures.existentialOwnershipProtocol`) so the two can never disagree about
 // a conformer.
 //
-// ⚠⚠ **IT IS NOT ONE CALLEE, AND ASSUMING IT WAS WAS A MEASURED ACCESS VIOLATION.** A `String` LITERAL is a
-// wholly IMMORTAL `.rdata` record and the compiler deliberately has no `MmImmortalRefcount` sentinel — the invariant
-// (`Parser.emitManagedConstant`, `StringRuntime.stringBufferSlots`) is that such a record never reaches a
-// refcount write at all. On the CONCRETE doors it is upheld at RUN TIME (borrowed
-// Strings are retained, not copied): `__str_retain` reads the record's own `capacity@16` and CLONES an
-// immortal one where it increfs a heap one (`StringRuntime.buildStrRetain`). ⚠ **THAT TEST IS NOT AVAILABLE
-// HERE, AND THE REASON IS THE LAYOUT AND NOT THE POINTER.** `capacity@16` is a capacity only in a record the
-// reader already knows to be a byte record; in an aggregate conformer's box that word is an arbitrary field
-// — or past the end of a box too small to have one — so a `capacity@16 == ImmortalRecordCapacity` test on an
-// existential would be reading a struct's own data and calling it a provenance. The split therefore happens
-// one level up, per CONFORMER at compile time where the type IS known: a byte-record conformer's protocol is
-// `__str_clone`, never the incref, and the
-// fresh OWNED heap record it hands back is what launders the literal. MEASURED with one hardcoded
-// `__mm_incref`: `widen("abc")` printed `A` and died with 0xC0000005 writing into `.rdata`.
+// ⚠⚠ **IT IS NOT ONE CALLEE.** A `String` LITERAL is a wholly IMMORTAL `.rdata` record: it carries
+// `MmRuntime.MmImmortalRefcount` in its synthetic header, so every count step leaves it untouched — which is
+// exactly why an incref cannot be its co-own. The co-owner would hold a READ-ONLY record, and its first write
+// faults on x64 and silently rewrites the image on wasm. On the CONCRETE doors the split is made at RUN TIME:
+// `__str_retain` reads the record's own `capacity@16` and CLONES an immortal one where it increfs a heap one
+// (`StringRuntime.buildStrRetain`). ⚠ **THAT TEST IS NOT AVAILABLE HERE, AND THE REASON IS THE LAYOUT AND NOT
+// THE POINTER.** `capacity@16` is a capacity only in a record the reader already knows to be a byte record; in
+// an aggregate conformer's box that word is an arbitrary field — or past the end of a box too small to have
+// one — so a `capacity@16 == ImmortalRecordCapacity` test on an existential would be reading a struct's own
+// data and calling it a provenance. The split therefore happens one level up, per CONFORMER at compile time
+// where the type IS known: a byte-record conformer's protocol is `__str_clone`, never the incref, and the
+// fresh OWNED heap record it hands back is what launders the literal.
 export let WitnessRetainFuncOffset = 16 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS.**

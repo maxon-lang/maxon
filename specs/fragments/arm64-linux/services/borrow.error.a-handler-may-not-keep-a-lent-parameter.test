@@ -1,0 +1,33 @@
+// Test: borrow.error.a-handler-may-not-keep-a-lent-parameter
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var kept as Boxes
+
+	static function create() returns Self
+		return Self{kept: Boxes.create()}
+	end 'create'
+
+	export function keep(given Box)
+		self.kept.push(given)
+	end 'keep'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.keep(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3160: <fragment>:27:9: `b` is lent to `Svc.keep` here, so what it holds is frozen, but the handler's parameter `given` escapes at <fragment>:20:18: storing it in a container would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it

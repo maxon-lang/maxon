@@ -2503,14 +2503,12 @@ export union StdOp
 	// `__gt_cell_complete`'s two): fencing the trampoline alone would leave the Std-tier pair unordered
 	// while reading, to a later maintainer, as protection.
 	//
-	// ⛔ **THE REFCOUNT STEP IS DELIBERATELY NOT ONE OF THESE.** `MmRuntime.emitAdjustRefcount` is a PLAIN
-	// read-modify-write, not an `atomicRmw`, because there is no second party to serialise against: an
-	// `async` frame is a COROUTINE of the green thread that called it, so a box has one owning green
-	// thread, that green thread runs on one M, and its count has nobody to race.
-	// ⇒ **that is a property of the language rather than of `MAXON_MAX_PROCS`**,
-	// and it does not lapse the day the default moves: `spawn` will schedule real green threads across Ms
-	// without ever giving two of them a reference to one box. `SchedRuntime.maxon`'s header states the
-	// invariant; `MmRuntime.emitAdjustRefcount` carries the measurement and names the committed control.
+	// ⛔ **THE REFCOUNT STEP IS NOT ONE OF THESE.** `MmRuntime.emitAdjustRefcount` steps a COUNTED box's word
+	// PLAIN, because it has no second party to serialise against — an `async` frame is a COROUTINE of the
+	// green thread that called it, so a counted box has one owning green thread running on one M — and a
+	// SHARED box's word with an `atomicRmw`, because a lend gave a second green thread a reference to it. Which
+	// arm runs is read off the word itself, never off `MAXON_MAX_PROCS`. `SchedRuntime.maxon`'s header states
+	// the invariant; `MmRuntime.emitAdjustRefcount` names the committed control.
 	//
 	// ⚠ **A `.data` COUNTER IS THE OTHER STORY AND KEEPS ITS ATOMIC** where a second OS thread can exist
 	// (`MmRuntime.emitGlobalAccumulate`'s `multiM` arm — item 2 on `SchedRuntime.maxon`'s audit list). A word

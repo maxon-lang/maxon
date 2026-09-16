@@ -1879,6 +1879,10 @@ export union ParseError implements Error
 	// serves them all and no slot can spell one. It fires at the SEND and not at the `spawn`, because the
 	// `spawn` is exactly the site where the fact is still present.
 	serviceReplyInstanceUnknown(explanation String, line LineNumber, column ColumnNumber)
+
+	// A door a lent graph may not pass, reached by the lent binding itself after its send (E3160). A value read out
+	// of one, and a handler's lent parameter, answer the same rule once every body is parsed (`StorageProvenance`).
+	lentGraphEscapes(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -7576,6 +7580,39 @@ union TransferGraphProof
 	refused(noun String)
 end 'TransferGraphProof'
 
+// How a value crosses to another green thread. A MOVE hands over this frame's reference and poisons its
+// source; a LEND takes a second reference for the message and leaves the source readable, its graph shared.
+enum GreenThreadHandOff
+	move
+	lend
+end 'GreenThreadHandOff'
+
+// The walk a hand-off proves its graph with at run time.
+function handOffWalk(handOff GreenThreadHandOff) returns CascadeAction
+	return match handOff 'handOff'
+		move gives CascadeAction.soleWalk
+		lend gives CascadeAction.shareWalk
+	end 'handOff'
+end 'handOffWalk'
+
+// Where one message argument goes: the handler `<serviceType>.<message>` at its parameter `param`, handed over by
+// the send at `sendAt`.
+type MessageArgumentDestination
+	export let serviceType as ByteArray
+	export let message as ByteArray
+	export let param as ByteArray
+	export let sendAt as SourceRange
+
+	export static function create(serviceType ByteArray, message ByteArray, param ByteArray, sendAt SourceRange) returns MessageArgumentDestination
+		return Self{serviceType: serviceType, message: message, param: param, sendAt: sendAt}
+	end 'create'
+
+	// What a refusal of the argument calls it.
+	export function blame() returns String
+		return serviceSendArgumentBlame(self.serviceType, methodName: self.message, paramName: self.param)
+	end 'blame'
+end 'MessageArgumentDestination'
+
 // A one-element branch-edge argument list — the shape every short-circuit edge has (its
 // merge block carries exactly one phi: the expression's value).
 export function singletonArgs(value ValueId) returns ValueIdArray
@@ -10182,6 +10219,36 @@ function withAwaited(column MoveSiteListIndexArray, list MoveSiteListIndex, posi
 	return awaited
 end 'withAwaited'
 
+// The column of a mark none of whose owned bindings is lent on its path — the common case, which then costs a mark
+// no column. Never written: `withLent` replaces it first.
+var noLentOnPath = TokenIndexArray.create()
+
+// `column` with the lend of the owned binding at `position` appended, on `withAwaited`'s terms.
+function withLent(column TokenIndexArray, lentAt TokenIndex, position ElementIndex) returns TokenIndexArray
+	if column is not noLentOnPath 'materialized'
+		column.push(lentAt)
+		return column
+	end 'materialized'
+
+	if lentAt == NotLent 'stillNone'
+		return column
+	end 'stillNone'
+
+	var lent = TokenIndexArray.create()
+	lent.refill(position, value: NotLent)
+	lent.push(lentAt)
+	return lent
+end 'withLent'
+
+// The lend on either of two paths: the earlier send, where both lent.
+function eitherLend(a TokenIndex, b TokenIndex) returns TokenIndex
+	if a == NotLent or (b != NotLent and b < a) 'takeB'
+		return b
+	end 'takeB'
+
+	return a
+end 'eitherLend'
+
 // A snapshot of the PATH-SENSITIVE move state of every owned binding in scope — the twin of
 // `snapshotBindings` (which snapshots `boundValue` for the merge phis), for the one bit that must be
 // reconciled at a control-flow join rather than accumulated monotonically.
@@ -10217,8 +10284,12 @@ type MoveMark
 	// join a door on any reaching path is.
 	export let awaiting as MoveSiteListIndexArray
 
-	export static function create(moved BoolArray, values ValueIdArray, consumes PromiseConsumeRecordArray, awaiting MoveSiteListIndexArray) returns MoveMark
-		return Self{moved: moved, values: values, consumes: consumes, awaiting: awaiting}
+	// ⭐ **AND THE SEND THAT LENT EACH OWNED BINDING ON THIS PATH** (`VarInfo.lentOnPath`) — positional like `moved`,
+	// rewound and joined with it, for `awaiting`'s reason.
+	export let lent as TokenIndexArray
+
+	export static function create(moved BoolArray, values ValueIdArray, consumes PromiseConsumeRecordArray, awaiting MoveSiteListIndexArray, lent TokenIndexArray) returns MoveMark
+		return Self{moved: moved, values: values, consumes: consumes, awaiting: awaiting, lent: lent}
 	end 'create'
 
 	// The doors the owned binding at `position` waited on (`withAwaited`).
@@ -10229,6 +10300,15 @@ type MoveMark
 
 		return try self.awaiting.get(position) otherwise panic("MoveMark.awaitingAt: position {position} is past the {self.awaiting.count()} owned bindings the mark holds")
 	end 'awaitingAt'
+
+	// The send that lent the owned binding at `position` on this path (`withLent`).
+	export function lentAt(position ElementIndex) returns TokenIndex
+		if self.lent is noLentOnPath 'noneLent'
+			return NotLent
+		end 'noneLent'
+
+		return try self.lent.get(position) otherwise panic("MoveMark.lentAt: position {position} is past the {self.lent.count()} owned bindings the mark holds")
+	end 'lentAt'
 end 'MoveMark'
 
 typealias MoveSiteLists = Array with MoveSiteArray
@@ -10425,13 +10505,16 @@ function orMoveMarks(a MoveMark, b MoveMark, lists MoveSiteLists) returns MoveMa
 
 	var moved = BoolArray.create()
 	var awaiting = noAwaitedMoveReads
+	var lent = noLentOnPath
 
 	for i in 0 upto b.moved.count() 'each'
 		let bm = try b.moved.get(i) otherwise panic("orMoveMarks: b.moved.get OOB at {i}")
-		let am = (try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}, below its own count")) if i < a.moved.count() else false
+		let seenByA = i < a.moved.count()
+		let am = (try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}, below its own count")) if seenByA else false
 		moved.push(am or bm)
-		let aw = a.awaitingAt(i) if i < a.moved.count() else NoMoveSiteList
+		let aw = a.awaitingAt(i) if seenByA else NoMoveSiteList
 		awaiting = withAwaited(awaiting, list: unionMoveSiteLists(lists, a: aw, b: b.awaitingAt(i)), position: i)
+		lent = withLent(lent, lentAt: eitherLend(a.lentAt(i) if seenByA else NotLent, b: b.lentAt(i)), position: i)
 	end 'each'
 
 	// The consume half unions the same way, and PASSES `b`'s list THROUGH when the arm consumed nothing —
@@ -10444,7 +10527,7 @@ function orMoveMarks(a MoveMark, b MoveMark, lists MoveSiteLists) returns MoveMa
 		unionPromiseConsumes(consumes, from: a.consumes)
 	end 'theArmConsumedAThread'
 
-	return MoveMark.create(moved, values: b.values, consumes: consumes, awaiting: awaiting)
+	return MoveMark.create(moved, values: b.values, consumes: consumes, awaiting: awaiting, lent: lent)
 end 'orMoveMarks'
 
 // The sub-mark over the FIRST `height` owned bindings — the ones that OUTLIVE a construct whose own
@@ -10465,18 +10548,20 @@ function moveMarkPrefix(mark MoveMark, height BindingMark) returns MoveMark
 	var moved = BoolArray.create()
 	var values = ValueIdArray.create()
 	var awaiting = noAwaitedMoveReads
+	var lent = noLentOnPath
 
 	for i in 0 upto height 'each'
 		moved.push(try mark.moved.get(i) otherwise panic("moveMarkPrefix: moved.get OOB at {i} after the height check"))
 		values.push(try mark.values.get(i) otherwise panic("moveMarkPrefix: values.get OOB at {i} after the height check"))
 		awaiting = withAwaited(awaiting, list: mark.awaitingAt(i), position: i)
+		lent = withLent(lent, lentAt: mark.lentAt(i), position: i)
 	end 'each'
 
 	// The consumes ride WHOLE, and by REFERENCE. `height` trims the owned-binding stack, and a consume is
 	// keyed on a VALUE, which sits in no such stack — the thread an arm reclaimed is reclaimed whether or
 	// not the binding that named it has been popped. Sharing the list with the mark it was trimmed from is
 	// safe for `captureMoveMark`'s reason: a mark is read-only.
-	return MoveMark.create(moved, values: values, consumes: mark.consumes, awaiting: awaiting)
+	return MoveMark.create(moved, values: values, consumes: mark.consumes, awaiting: awaiting, lent: lent)
 end 'moveMarkPrefix'
 
 // Do two marks record the SAME set of moved-from bindings? Only the `movedFrom` bits are compared — the
@@ -11219,7 +11304,7 @@ type TryBlockContext
 	export var conflictingMoveEdge as bool
 
 	export static function create(func IrFunction, tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns TryBlockContext
-		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads), conflictingMoveEdge: false}
+		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads, lent: noLentOnPath), conflictingMoveEdge: false}
 	end 'create'
 end 'TryBlockContext'
 
@@ -13588,6 +13673,36 @@ let NegativeShiftCountPanicText = "negative shift count"
 let NegativeShiftPanicBlockLabel = b"shiftneg"
 let GuardedShiftBlockLabel = b"shiftok"
 
+// A slot of `Parser.bodyOpFlowBlocks` no op of the body stands at, and the mark of a body with no freeze site at
+// all — a position past every op the module has emitted.
+let NoBlockAtOp = i64.max as BlockId
+let NoFreezeMark = i64.max as OpIndex
+
+// The op-flow columns of a parser that has placed no freeze site — every parser in a program that spawns no
+// service, so the pair costs such a compile nothing.
+var sharedNoBodyOpFlowBlocks = BlockIdArray.create()
+var sharedNoBodyOpFlowPositions = BlockOpPosArray.create()
+
+// The lowest op mark among a body's freeze sites — where its op-flow table starts, since no site asks about a
+// position below it.
+function lowestFreezeMark(deferred DeferredProvenance, receiverWrites ReceiverWriteSiteArray) returns OpIndex
+	var lowest = NoFreezeMark
+
+	for site in deferred.freezeDoors 'eachDoor'
+		lowest = site.opMark if site.opMark < lowest else lowest
+	end 'eachDoor'
+
+	for site in deferred.lendSites 'eachLend'
+		lowest = site.opMark if site.opMark < lowest else lowest
+	end 'eachLend'
+
+	for site in receiverWrites 'eachReceiverWrite'
+		lowest = site.opMark if site.opMark < lowest else lowest
+	end 'eachReceiverWrite'
+
+	return lowest
+end 'lowestFreezeMark'
+
 export type Parser
 	var tokens as TokenArray
 	var pos as TokenIndex
@@ -14001,9 +14116,9 @@ export type Parser
 	// This claim rests on a TOKEN-LEVEL whole-program summary (`ProgramSignatures.returnsFreshValue`), so it
 	// earns its own column and its own reader rather than licensing a slot steal.
 	//
-	// ⚠ **THE ONE READER IS `moveIntoGreenThread`**, which needs sole ownership for a reason no other rule in
-	// the parser has: the value crosses to a SECOND GREEN THREAD, where a co-owner's later refcount step is a
-	// plain load/add/store racing this one's (`MmRuntime.emitAdjustRefcount`, EC10).
+	// ⚠ **ITS READERS ARE THE GREEN-THREAD DOORS** (`moveIntoGreenThread`, `ownerLendsValue`), which need sole
+	// ownership for a reason no other rule in the parser has: the value crosses to a SECOND GREEN THREAD, where
+	// a co-owner left behind on this thread steps a count the service now steps too.
 	//
 	// ⭐ **CLEARED BY `markValueCoOwnsHeap`, WHICH IS WHAT MAKES IT UNFORGETTABLE.** Every op that mints a
 	// second owner of a box already calls that one on its source — the five enumerated in its header — so a
@@ -14233,6 +14348,14 @@ export type Parser
 	// files. Reused from one top-level body to the next, and swapped across a closure body for
 	// `immutableGlobalReads`' reason; the shared empty one while no body is being parsed.
 	var deferredProvenance as DeferredProvenance
+
+	// ⭐ **WHERE EACH OP OF THE BODY BEING PLACED STANDS IN ITS CONTROL FLOW, BY OP INDEX FROM `bodyOpFlowBase`**
+	// (`indexBodyOpFlow`). Built once per body that lends or is a message, and FILLED FORWARD, so one site's mark
+	// is one lookup: scanning the body per site is Theta(S*N) in a body holding S doors and N ops, and both grow
+	// with the body. The shared empty pair until this parser places a body.
+	var bodyOpFlowBase as OpIndex
+	var bodyOpFlowBlocks as BlockIdArray
+	var bodyOpFlowPositions as BlockOpPosArray
 
 	// Every list of doors a binding of the function being parsed has waited on (`VarInfo.awaitingMoveReads`), the
 	// first the empty one. Per top-level function, and kept across a closure body, whose reads of the enclosing
@@ -14535,6 +14658,9 @@ export type Parser
 	var captureNames as ByteArrayArray
 	var captureValues as ValueIdArray
 	var captureTypes as MaxonTypeArray
+
+	// Where each capture was first read — the position the freeze on a lent graph refuses it at (E3160).
+	var captureAnchors as TokenArray
 
 	// ⭐ **WHICH OF THOSE SLOTS CARRY AN INHERITED WITNESS RATHER THAN A NAMED BINDING (W58)** — the subset
 	// whose `captureValues` entry is still `UnfilledInheritedWitness` and is closed by
@@ -15519,6 +15645,9 @@ export type Parser
 			singleByteGraphemeLiterals: noSingleByteGraphemeLiterals,
 			immutableGlobalReads: noValueMarks,
 			deferredProvenance: sharedNoDeferredProvenance,
+			bodyOpFlowBase: 0,
+			bodyOpFlowBlocks: sharedNoBodyOpFlowBlocks,
+			bodyOpFlowPositions: sharedNoBodyOpFlowPositions,
 			moveSiteLists: sharedNoMoveSiteLists,
 			enclosingFunctionMayReturnAGlobalAlias: false,
 			capturedImmutableGlobalReads: noValueMarks,
@@ -15538,6 +15667,7 @@ export type Parser
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
+			captureAnchors: TokenArray.create(),
 			inheritedWitnessCaptures: InheritedWitnessCaptureArray.create(),
 			closureEnvParamId: 0,
 			rangeCheckSites: RangeCheckSiteArray.create(),
@@ -15618,7 +15748,7 @@ export type Parser
 			arrayLiteralTargetTokenIndex: 0,
 			arrayLiteralTargetInstance: NoGenericInstance,
 			closureParamHint: ClosureParamTypeHint.none,
-			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads),
+			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads, lent: noLentOnPath),
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
 			isRuntimeSource: isRuntimeSource,
@@ -32737,7 +32867,7 @@ export type Parser
 		// program. Asked here, the sentence can only ever name something the author can go and change.
 		// The ordering the rule needs is unaffected: this still runs before the borrowed-managed promotion
 		// that door performs, which is the aliasing being refused (see `requireMutableBindingSource`).
-		try self.requireMutableBindingSource(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
+		try self.requireMutableBindingSource(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable, valueTok: self.tokenAt(rhsStart))
 
 		let borrowsIt = self.valueIsABorrow(value)
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
@@ -33073,10 +33203,13 @@ export type Parser
 	// storage for a second name to reach — so the refusal would name a hazard the compiler does not
 	// have, and `var-should-be-let` pins no enum case. A union with a payload IS boxed and IS refused,
 	// through `valueIsManagedHeap`.
-	function requireMutableBindingSource(func IrFunction, nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool) throws ParseError
+	function requireMutableBindingSource(func IrFunction, nameTok Token, value ValueId, sourceName ByteArray, sourceReadsAField bool, mutable bool, valueTok Token) throws ParseError
 		if not mutable 'notAMutableBinding'
 			return
 		end 'notAMutableBinding'
+
+		// Asked ahead of every exemption below: a record nothing writes may still hold one a `var` could.
+		try self.requireNotLentThrough(value, source: self.freezeSourceOf(value, sourceName: sourceName), door: FreezeDoor.bindToVar, valueTok: valueTok)
 
 		// ⭐ **ASKED FIRST, AND THE ORDER IS E3077'S RATHER THAN E3078's.** A value with no record — a scalar, or a
 		// function value, which names no storage a write can reach — is an independent copy: neither the shape
@@ -33299,7 +33432,7 @@ export type Parser
 		// answer and that program's sentence, blaming the name the author wrote. A managed element would
 		// otherwise be promoted (retained) into a writable name and `p.x = 9` would show through `t`,
 		// which the longhand spelling already refuses.
-		try self.requireMutableBindingSource(func, nameTok: nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable)
+		try self.requireMutableBindingSource(func, nameTok: nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable, valueTok: nameTok)
 
 		// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
 		// so there is nothing for the move poison to find.
@@ -33758,7 +33891,7 @@ export type Parser
 
 		try self.requireMutableBinding(binding, nameTok: nameTok)
 		self.noteLocalRebind(func, nameIndex: nameIndex, anchor: nameTok)
-		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: element, rhsBareLocalName: EmptySourceText)
+		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: element, rhsBareLocalName: EmptySourceText, valueTok: nameTok)
 	end 'rebindTupleAssignTarget'
 
 	// The tuple layout `value` must have for a destructuring pattern over `nameToks` to mean anything: a tuple
@@ -34166,7 +34299,7 @@ export type Parser
 		let declaredTag = maxonTypeTag(binding.varType)
 		let value = try self.integerizedOperand(parsedValue, expected: declaredTag, start: rhsStart, pastEnd: self.pos)
 
-		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: value, rhsBareLocalName: rhsBareLocalName)
+		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: value, rhsBareLocalName: rhsBareLocalName, valueTok: self.tokenAt(rhsStart))
 	end 'parseAssignment'
 
 	// ⭐⭐ **E3070's LOCAL REBIND DOOR — the guard and the subject derivation, in one place because TWO
@@ -34192,7 +34325,7 @@ export type Parser
 	// complaints about one statement (`let x = 0` / `x = nosuch()` reports E2013 today, the RHS's error
 	// afterwards). A tuple assignment cannot ask them there — its RHS is evaluated once, ahead of every
 	// target — so it asks them per target, in target order, which is the order its own pins read in.
-	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray) throws ParseError
+	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsBareLocalName ByteArray, valueTok Token) throws ParseError
 		let declaredTag = maxonTypeTag(binding.varType)
 		let valueTag = self.tagOf(value)
 
@@ -34236,7 +34369,7 @@ export type Parser
 		end 'aFreshValue'
 
 		let stored = self.shedAliasIntoUnnamedBinding(assigned, binding: binding, nameTok: nameTok)
-		self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: rhsBareLocalName, anchor: nameTok)
+		try self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: rhsBareLocalName, anchor: nameTok, valueTok: valueTok)
 
 		// ⭐⭐ **A CELL-RESIDENT BINDING IS REBOUND BY STORING, NOT BY `Scope.setValue` (PBR-2).** It never
 		// reaches `reassignBindingValue`: that routine's whole job is to move a binding from one SSA value to
@@ -34264,7 +34397,10 @@ export type Parser
 	// spells — or the record of a parameter or of the receiver — is asked of what it may be derived from. A byte
 	// record the assignment does not own is copied into the slot, and reaches nothing. A `var` handed over is filed
 	// too, for E3077: a `let` in its place would have moved.
-	function noteAssignmentDoor(func IrFunction, place ByteArray, value ValueId, sourceName ByteArray, anchor Token)
+	function noteAssignmentDoor(func IrFunction, place ByteArray, value ValueId, sourceName ByteArray, anchor Token, valueTok Token) throws ParseError
+		// Asked ahead of every exemption below: a record nothing writes may still hold one a `var` could.
+		try self.requireNotLentThrough(value, source: self.freezeSourceOf(value, sourceName: sourceName), door: FreezeDoor.assignToVar, valueTok: valueTok)
+
 		if self.recordNeverMeetsADoor(value) or (tagIsByteRecord(self.tagOf(value)) and not self.valueIsOwnedHeap(value)) 'noSharedRecord'
 			return
 		end 'noSharedRecord'
@@ -34958,7 +35094,7 @@ export type Parser
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range, reader: ModuleSlotReader.notASharedAccess), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
 		self.noteNameBindSite(func, boundName: nameTok.value, value: owned, anchor: nameTok)
-		self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: self.rhsBareLocalSourceName(valueStart), anchor: nameTok)
+		try self.noteAssignmentDoor(func, place: nameTok.value, value: stored, sourceName: self.rhsBareLocalSourceName(valueStart), anchor: nameTok, valueTok: self.tokenAt(valueStart))
 	end 'emitCheckedGlobalStore'
 
 	// **THE MUTABILITY RULE FOR A LOCAL BINDING — TWO DOORS, BECAUSE THE TWO STATEMENTS THAT WRITE A
@@ -35828,11 +35964,13 @@ export type Parser
 	end 'noteCallToken'
 
 	// ⭐ **FILE WHAT THE BODY DEFERRED WITH ITS FUNCTION, AT ITS `end`** (`DeferredProvenance`), once every immutable
-	// name and E3077 candidate of it is filed: all of it when it holds one of those, what its summary is traced from
-	// when a parameter of it may hold a record, and nothing otherwise — nothing asks.
+	// name and E3077 candidate of it is filed: all of it when it holds one of those or lent a graph, what its summary
+	// is traced from when a parameter of it may hold a record, the freeze's doors when it lent a graph or is a
+	// message a send may lend one to, and nothing otherwise — nothing asks.
 	function fileDeferredProvenance(func IrFunction)
 		var deferred = self.deferredProvenanceOf(func)
-		let guarded = func.holdsFiledProvenance()
+		let lends = deferred.lendSites.count() > 0
+		let guarded = func.holdsFiledProvenance() or lends
 		let tracedFrom = deferred.receiverWrites.receivers.count() > 0 or deferred.nameBindSites.count() > 0
 
 		let traced = guarded or self.parameterMayHoldARecord(func)
@@ -35845,6 +35983,11 @@ export type Parser
 			func.fileTracedProvenance(deferred, receiverWrites: self.spelledReceiverWrites(deferred.receiverWrites))
 		end 'aSummaryIsTracedFromIt'
 
+		if traced and (lends or self.bodyIsAMessage(func)) 'theFreezeAsksIt'
+			self.placeFreezeSites(func, deferred: deferred)
+			func.fileFreezeProvenance(deferred)
+		end 'theFreezeAsksIt'
+
 		if not guarded 'nothingAsksTheRest'
 			return
 		end 'nothingAsksTheRest'
@@ -35855,6 +35998,139 @@ export type Parser
 			func.fileWriteThroughSites(self.spelledWriteThroughs(deferred.writeThroughs))
 		end 'someWriteThrough'
 	end 'fileDeferredProvenance'
+
+	// ⭐ **EVERY DOOR AND SEND OF A BODY PLACED IN ITS BLOCKS, AT THE BODY'S `end`.** The freeze asks which doors a
+	// send reaches through the control flow (`FlowPoint`), and a site cannot record its block as it is noted: the
+	// arms of a ternary move ops between blocks while the body is parsed (`detachOpRefsAbove`), and an op keeps its
+	// index through the move.
+	function placeFreezeSites(func IrFunction, deferred DeferredProvenance)
+		// Filed already (`fileTracedProvenance`), and empty for a body no summary is traced from.
+		let receiverWrites = func.provenanceSites().receiverWrites
+		let base = lowestFreezeMark(deferred, receiverWrites: receiverWrites)
+
+		if base == NoFreezeMark 'nothingToPlace'
+			return
+		end 'nothingToPlace'
+
+		self.indexBodyOpFlow(func, base: base)
+
+		for site in deferred.freezeDoors 'eachDoor'
+			self.placeAtMark(site.point, mark: site.opMark, func: func)
+		end 'eachDoor'
+
+		for site in deferred.lendSites 'eachLend'
+			self.placeAtMark(site.point, mark: site.opMark, func: func)
+		end 'eachLend'
+
+		for site in receiverWrites 'eachReceiverWrite'
+			self.placeAtMark(site.point, mark: site.opMark, func: func)
+		end 'eachReceiverWrite'
+	end 'placeFreezeSites'
+
+	// ⭐ **WHERE EVERY OP OF THE BODY STANDS IN ITS CONTROL FLOW, BY OP INDEX — AND FILLED FORWARD**, so the slot of
+	// a mark already holds the first op AT OR AFTER it and `placeAtMark` is one lookup. The gaps it fills are the
+	// ops of a closure lifted out of this body, which are another function's. Built once per body, because a body
+	// holding S doors over N ops pays Theta(S*N) to scan for each of them and both grow with the body.
+	function indexBodyOpFlow(func IrFunction, base OpIndex)
+		if self.bodyOpFlowBlocks is sharedNoBodyOpFlowBlocks 'theFirstBodyPlaced'
+			self.bodyOpFlowBlocks = BlockIdArray.create()
+			self.bodyOpFlowPositions = BlockOpPosArray.create()
+		end 'theFirstBodyPlaced'
+
+		self.bodyOpFlowBase = base
+		self.bodyOpFlowBlocks.refill(self.bodyOpSpan(func, base: base), value: NoBlockAtOp)
+		self.bodyOpFlowPositions.refill(self.bodyOpFlowBlocks.count(), value: 0)
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("Parser.indexBodyOpFlow: blockRef from func.blockRefs not in module.blocks")
+
+			for position in 0 upto block.opCountInRunOrder() 'eachOp'
+				let opIdx = block.opInRunOrderAt(position)
+
+				if opIdx < base 'belowEveryMark'
+					continue
+				end 'belowEveryMark'
+
+				try self.bodyOpFlowBlocks.set(opIdx - base, value: block.id) otherwise panic("Parser.indexBodyOpFlow: op {opIdx} of '{String.from(func.name)}' is past the span `bodyOpSpan` measured")
+				try self.bodyOpFlowPositions.set(opIdx - base, value: position) otherwise panic("Parser.indexBodyOpFlow: the two columns are refilled together")
+			end 'eachOp'
+		end 'eachBlock'
+
+		self.fillBodyOpFlowForward()
+	end 'indexBodyOpFlow'
+
+	// How many op-index slots the table covers: `base` through the body's highest op index, and none at all where
+	// no op of the body stands at or after `base`.
+	function bodyOpSpan(func IrFunction, base OpIndex) returns ElementIndex
+		var highest = base
+		var any = false
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("Parser.bodyOpSpan: blockRef from func.blockRefs not in module.blocks")
+
+			for position in 0 upto block.opCountInRunOrder() 'eachOp'
+				let opIdx = block.opInRunOrderAt(position)
+
+				if opIdx >= base and (not any or opIdx > highest) 'aSlotOfTheTable'
+					highest = opIdx
+					any = true
+				end 'aSlotOfTheTable'
+			end 'eachOp'
+		end 'eachBlock'
+
+		return ((highest - base) + 1) as ElementIndex if any else 0
+	end 'bodyOpSpan'
+
+	// Every slot no op of the body stands at takes the one above it. The top slot is the body's highest op by
+	// construction, so the sweep never runs off the end.
+	function fillBodyOpFlowForward()
+		var slot = self.bodyOpFlowBlocks.count()
+
+		while slot > 1 'eachSlot'
+			slot = slot - 1
+
+			if (try self.bodyOpFlowBlocks.get(slot - 1) otherwise panic("Parser.fillBodyOpFlowForward: bodyOpFlowBlocks.get OOB at {slot - 1}")) != NoBlockAtOp 'anOpOfTheBody'
+				continue
+			end 'anOpOfTheBody'
+
+			let above = try self.bodyOpFlowBlocks.get(slot) otherwise panic("Parser.fillBodyOpFlowForward: bodyOpFlowBlocks.get OOB at {slot}")
+			let abovePosition = try self.bodyOpFlowPositions.get(slot) otherwise panic("Parser.fillBodyOpFlowForward: the two columns are refilled together")
+			try self.bodyOpFlowBlocks.set(slot - 1, value: above) otherwise panic("Parser.fillBodyOpFlowForward: bodyOpFlowBlocks.set OOB at {slot - 1}")
+			try self.bodyOpFlowPositions.set(slot - 1, value: abovePosition) otherwise panic("Parser.fillBodyOpFlowForward: the two columns are refilled together")
+		end 'eachSlot'
+	end 'fillBodyOpFlowForward'
+
+	// Where the mark of one site lands: the FIRST op of `func` at or after it, since a door and a send are both
+	// noted before the ops that carry them out are emitted.
+	function placeAtMark(point FlowPoint, mark OpIndex, func IrFunction)
+		let slot = (mark - self.bodyOpFlowBase) as ElementIndex
+		let blockId = try self.bodyOpFlowBlocks.get(slot) otherwise panic("placeAtMark: no op of '{String.from(func.name)}' stands at or after op {mark} — every body ends in a terminator emitted after its last door")
+		point.place(blockId, position: try self.bodyOpFlowPositions.get(slot) otherwise panic("placeAtMark: the two columns are refilled together"))
+	end 'placeAtMark'
+
+	// Where a labelled call argument's value starts, which a freeze refused at its callee's door points at (E3160).
+	// Only a program that spawns a service can lend.
+	function noteLabelledArgumentValue(labelTok Token, valueTok Token)
+		if not self.signatures.spawnsAnyService() or self.deferredProvenance is sharedNoDeferredProvenance 'nothingCanBeLent'
+			return
+		end 'nothingCanBeLent'
+
+		var deferred = self.deferredProvenance
+		deferred.noteLabelledArgument(positionKey(labelTok.line, column: labelTok.column), line: valueTok.line, column: valueTok.column)
+	end 'noteLabelledArgumentValue'
+
+	// Is `func` a message of some service — a body a send may lend its parameters to? Only a program that spawns one
+	// has any, and `serviceMessageOwnerOf` allocates to answer.
+	function bodyIsAMessage(func IrFunction) returns bool
+		if not self.signatures.spawnsAnyService() 'noServiceInThisProgram'
+			return false
+		end 'noServiceInThisProgram'
+
+		return match serviceMessageOwnerOf(self.signatures, callee: func.name) 'owner'
+			notAMessage gives false
+			ofService gives true
+		end 'owner'
+	end 'bodyIsAMessage'
 
 	// The body's sole-owner marks as a column of their own, sized to them, for the function that keeps them.
 	function mintedSoleColumn() returns BoolArray
@@ -35891,7 +36167,7 @@ export type Parser
 		for i in 0 upto writes.receivers.count() 'eachWrite'
 			let methodIndex = try writes.methodIndices.get(i) otherwise panic("spelledReceiverWrites: methodIndices.get OOB at {i} — the columns are pushed together")
 			let methodTok = self.tokenAt(methodIndex)
-			spelled.push(ReceiverWriteSite.create(try writes.receivers.get(i) otherwise panic("spelledReceiverWrites: receivers.get OOB at {i}"), place: self.receiverSpellingBefore(methodIndex), line: methodTok.line, column: methodTok.column, blameable: try writes.blameable.get(i) otherwise panic("spelledReceiverWrites: blameable.get OOB at {i} — the columns are pushed together"), token: self.callEndAfter(methodIndex)))
+			spelled.push(ReceiverWriteSite.create(try writes.receivers.get(i) otherwise panic("spelledReceiverWrites: receivers.get OOB at {i}"), place: self.receiverSpellingBefore(methodIndex), method: methodTok.value, line: methodTok.line, column: methodTok.column, blameable: try writes.blameable.get(i) otherwise panic("spelledReceiverWrites: blameable.get OOB at {i} — the columns are pushed together"), token: self.callEndAfter(methodIndex), opMark: try writes.opMarks.get(i) otherwise panic("spelledReceiverWrites: opMarks.get OOB at {i} — the columns are pushed together")))
 		end 'eachWrite'
 
 		return spelled
@@ -36700,6 +36976,7 @@ export type Parser
 		// nothing: the literal already IS one. See `integerizedOperand`.
 		let retStart = self.pos
 		let retVal = try self.integerizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
+		try self.requireNotLentThrough(retVal, source: retVal, door: FreezeDoor.returned, valueTok: self.tokenAt(retStart))
 
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be RETURNED** — the env it carries is dropped at
 		// this frame's scope exit, so handing it back would leave the caller a closure whose environment is
@@ -36869,12 +37146,12 @@ export type Parser
 		throw ParseError.returnTypeMismatch(self.valueDisplayTypeName(value), expected: self.brandedDisplayTypeName(declaredTag, nameId: declaredNameId, brand: self.functionReturnBrand), line: anchor.line, column: anchor.column)
 	end 'admitReturnedAggregate'
 
-	// ⭐⭐⭐ **AN `export` METHOD OF A SERVICE MAY NOT RETURN A VALUE ITS OWN STATE CAN STILL REACH (SV2,
-	// E3137).** A service is a green thread and the language guarantees one green thread per box — which is
-	// what makes a refcount step a plain load/add/store rather than an atomic one. A reply that aliased
-	// service state would put one box in two green threads' hands, which corrupts the heap rather than merely
-	// being slow. It is the MESSAGE ARGUMENT rule (`moveIntoGreenThread`) read from the other end, and it
-	// asks the SAME question that door's third arm asks: does this frame provably hold the only reference?
+	// ⭐⭐⭐ **AN `export` METHOD OF A SERVICE MAY NOT RETURN A VALUE ITS OWN STATE CAN STILL REACH (E3137).** A
+	// service's state is COUNTED — one green thread owns it, so its counts step plain — and a reply that aliased
+	// it would put a counted box in two green threads' hands, which corrupts the heap rather than merely being
+	// slow. A reply is always MOVED, never lent: it is the MESSAGE ARGUMENT move (`moveIntoGreenThread`) read
+	// from the other end, and it asks the SAME question that door does: does this frame provably hold the only
+	// reference?
 	//
 	// ⭐ **`valueIsSolelyOwnedHere` IS THE WHOLE PREDICATE, AND IT IS NOT `valueIsOwnedHeap`.** Owned is not
 	// enough: `var x = self.field` CO-OWNS (the bind increfs a borrowed aggregate), so `return x` is an owned
@@ -36892,8 +37169,8 @@ export type Parser
 	//
 	// ⚡ **WHICH IS WHY THE WHOLE-PROGRAM GATE IS SPELLED HERE.** `serviceMessageOwnerOf` costs three
 	// allocations to answer — the roster array, its return, and the boxed verdict — and it cannot dodge the
-	// last of those from the inside. MEASURED without this line: +48 allocations per scale-test rung-0 unit,
-	// doubling with the rung, in a corpus that spawns nothing at all.
+	// last of those from the inside; ungated, that is a cost per managed `return` in a program that spawns
+	// nothing at all.
 	function requireServiceReplyDoesNotAliasState(func IrFunction, value ValueId, anchor Token) throws ParseError
 		if not self.valueIsManagedHeap(value) 'aMachineWord'
 			return
@@ -36926,7 +37203,7 @@ export type Parser
 			throw self.serviceReplyAliasesStateError(typeName, methodName: methodName, anchor: anchor)
 		end 'mayAliasState'
 
-		try self.proveTransferGraphSole(value, blame: serviceReplyBlame(typeName, methodName: methodName), anchor: anchor)
+		try self.proveTransferGraph(value, handOff: GreenThreadHandOff.move, blame: serviceReplyBlame(typeName, methodName: methodName), anchor: anchor)
 	end 'proveReplyCrossable'
 
 	// The refusal, built where the `spawn` site is read so the arm above stays one statement. The note names
@@ -40734,14 +41011,16 @@ export type Parser
 		var moved = BoolArray.create()
 		var values = ValueIdArray.create()
 		var awaiting = noAwaitedMoveReads
+		var lent = noLentOnPath
 
 		for binding in self.ownedBindings 'each'
 			awaiting = withAwaited(awaiting, list: binding.awaitingMoveReads, position: moved.count())
+			lent = withLent(lent, lentAt: binding.lentOnPath, position: moved.count())
 			moved.push(binding.movedFrom)
 			values.push(binding.boundValue)
 		end 'each'
 
-		return MoveMark.create(moved, values: values, consumes: self.markedPromiseConsumes(), awaiting: awaiting)
+		return MoveMark.create(moved, values: values, consumes: self.markedPromiseConsumes(), awaiting: awaiting, lent: lent)
 	end 'captureMoveMark'
 
 	// ⭐ **THE CONSUME LIST A MARK CARRIES.** The SHARED empty one when nothing has been consumed on this
@@ -40777,6 +41056,7 @@ export type Parser
 			var binding = try self.ownedBindings.get(i) otherwise panic("restoreMoveMark: ownedBindings.get OOB at {i}")
 			binding.movedFrom = try mark.moved.get(i) otherwise panic("restoreMoveMark: mark.moved.get OOB at {i}")
 			binding.awaitingMoveReads = mark.awaitingAt(i)
+			binding.lentOnPath = mark.lentAt(i)
 			i = i + 1
 		end 'each'
 
@@ -40860,12 +41140,15 @@ export type Parser
 			var binding = try self.ownedBindings.get(i) otherwise panic("reconcileMovesAtMerge: ownedBindings.get OOB at {i}")
 			binding.movedFrom = anyMoved
 			var awaiting = NoMoveSiteList
+			var lentOnPath = NotLent
 
 			for edge in edges 'joinAwaiting'
 				awaiting = unionMoveSiteLists(self.moveSiteLists, a: awaiting, b: edge.mark.awaitingAt(i))
+				lentOnPath = eitherLend(lentOnPath, b: edge.mark.lentAt(i))
 			end 'joinAwaiting'
 
 			binding.awaitingMoveReads = awaiting
+			binding.lentOnPath = lentOnPath
 			i = i + 1
 		end 'eachBinding'
 
@@ -41494,12 +41777,11 @@ export type Parser
 	// The distinguishing property is not "does this touch ownership" but "does this write into a slot whose
 	// other readers this frame cannot enumerate".
 	//
-	// ⭐ **A THIRD READER ARRIVED WITH THAT ARGUMENT AND NOT AROUND IT (SV1): `valueIsSolelyOwnedHere`**, the
-	// send's transfer gate. A send does not write into a slot — it hands the record to ANOTHER GREEN THREAD,
-	// where the other readers this frame cannot enumerate would step the refcount with a plain load/add/store
-	// racing this one's (EC10). Same promise, one hazard over; it asks this predicate rather than the column, and
-	// admits ONE further shape of its own (a callee's proven-fresh return), which is why it is a door beside this
-	// one rather than an edit to it.
+	// ⭐ **A THIRD READER SHARES THAT ARGUMENT: `valueIsSolelyOwnedHere`**, the send's transfer gate. A send
+	// does not write into a slot — it hands the record to ANOTHER GREEN THREAD, where an owner this frame cannot
+	// enumerate would be left behind stepping a count the service steps too. Same promise, one hazard over; it
+	// asks this predicate rather than the column, and admits ONE further shape of its own (a callee's
+	// proven-fresh return), which is why it is a door beside this one rather than an edit to it.
 	function valueIsSoleHeapOwner(value ValueId) returns bool
 		return self.valueIsOwnedHeap(value) and try self.valueOwnsHeapAlone.get(value) otherwise panic("valueIsSoleHeapOwner: v{value}{SoleOwnershipSlotPanicTail}")
 	end 'valueIsSoleHeapOwner'
@@ -44170,7 +44452,7 @@ export type Parser
 		// reason this is not a second, shorter binding path. No source name: the success value is a call
 		// result held by no binding, so there is nothing to poison; it is a CONSUME, exactly as `let x = f()`
 		// is, and asked of its value exactly as `var x = f()` is.
-		try self.requireMutableBindingSource(func, nameTok: nameTok, value: result, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
+		try self.requireMutableBindingSource(func, nameTok: nameTok, value: result, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable, valueTok: nameTok)
 		let borrowsIt = self.valueIsABorrow(result)
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: result, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
 		self.noteImmutableBinding(func, nameTok: nameTok, mutable: mutable, borrowsIt: borrowsIt)
@@ -51535,6 +51817,13 @@ export type Parser
 				// (`text.append(" tail")`) writes through that window without ever assigning the binding — so a
 				// move-out hands the record to a binding that frees it at the arm's exit, leaving the box holding
 				// a null the author never emptied. The retain keeps the box's own reference where it is.
+				//
+				// ⛔⛔ **A LENT UNION NEVER TAKES THE MOVE-OUT, AND WHAT KEEPS IT OUT IS THE LEND'S OWN RETAIN.** The
+				// null store would empty a slot the SERVICE is reading on another green thread, which no freeze door
+				// could catch — the store is this frame writing its own box. A send that lends takes the message's
+				// reference through `emitRetainCall` (`lendIntoGreenThread`), so the scrutinee is co-owned from the
+				// send on and `scrutSolelyOwned` is false: every `match` over it past that point binds through
+				// `retainedCoOwn`, read-only.
 				if scrutSolelyOwned and not scrutMutable 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
 					movedManaged = true
@@ -57785,6 +58074,7 @@ export type Parser
 	function parseTupleLiteral(func IrFunction, first ValueId, firstStart TokenIndex, openTok Token) returns ValueId throws ParseError
 		var elementValues = ValueIdArray.create()
 		var elementBareLocal = BoolArray.create()
+		var elementAnchors = TokenIndexArray.create()
 		var elementTypes = MaxonTypeArray.create()
 
 		// ⭐ The values already stored into an owning slot of this literal — `parseStructLiteralFields`'
@@ -57794,32 +58084,33 @@ export type Parser
 		// (`repeatedOwningDestinationWouldDoubleFree`).
 		var movedOwningValues = ValueIdArray.create()
 
-		try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: first, valueStart: firstStart)
+		try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementAnchors: elementAnchors, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: first, valueStart: firstStart)
 
 		while self.at(TokenKind.comma) 'eachElement'
 			try self.consume(TokenKind.comma)
 			let valueStart = self.pos
 			let value = try self.parseValueExpression(func)
-			try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: value, valueStart: valueStart)
+			try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementAnchors: elementAnchors, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: value, valueStart: valueStart)
 		end 'eachElement'
 
 		let closeTok = try self.consume(TokenKind.rightParen)
 		let layout = try self.internTupleLayout(elementTypes, anchor: openTok)
 
-		return try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
+		return try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, fieldAnchors: elementAnchors, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
 	end 'parseTupleLiteral'
 
-	// Append one parsed element to the three lockstep columns a tuple literal builds, having first refused a
+	// Append one parsed element to the four lockstep columns a tuple literal builds, having first refused a
 	// repeated owning move. One writer, so a caller that pushed a value and forgot its type would be
 	// unrepresentable — `StructLayout.addField`'s discipline applied to the literal side — and one gate, so
 	// the first element (parsed by the caller before it knew this was a tuple) is checked exactly as the rest.
 	//
 	// The element's own type is what is passed as `fieldType`: a tuple ADOPTS its element types, so the slot
 	// a value moves into is owning iff the value itself owns heap.
-	function collectTupleElement(elementValues ValueIdArray, elementBareLocal BoolArray, elementTypes MaxonTypeArray, movedOwningValues ValueIdArray, value ValueId, valueStart TokenIndex) throws ParseError
+	function collectTupleElement(elementValues ValueIdArray, elementBareLocal BoolArray, elementAnchors TokenIndexArray, elementTypes MaxonTypeArray, movedOwningValues ValueIdArray, value ValueId, valueStart TokenIndex) throws ParseError
 		try self.rejectDoubleOwningStore(movedOwningValues, value: value, valueStart: valueStart)
 		elementValues.push(value)
 		elementBareLocal.push(self.rhsWasBareLocalReference(valueStart))
+		elementAnchors.push(valueStart)
 		elementTypes.push(self.typeOf(value))
 	end 'collectTupleElement'
 
@@ -59458,6 +59749,7 @@ export type Parser
 
 		// ⭐ **E3086 ANCHORS ON THE `{`, WHERE THE MISSING FIELD WOULD BE WRITTEN** — not on the type
 		// name, which is not the thing that is wrong.
+		let lbraceIndex = self.pos
 		let lbraceTok = self.current()
 		try self.consume(TokenKind.leftBrace)
 
@@ -59466,17 +59758,20 @@ export type Parser
 		// unwritten slot into E3086 rather than into a zero nobody chose. `fieldBareLocal[i]` records
 		// whether the literal's value for field `i` was a bare reference to a local binding — what a
 		// managed field's move-in poisons (`moveInPayload`), captured here because only the parse can see it.
+		// `fieldAnchors[i]` is where that value was written, the `{` for a slot no value was written into.
 		var fieldValues = ValueIdArray.create()
 		var filled = BoolArray.create()
 		var fieldBareLocal = BoolArray.create()
+		var fieldAnchors = TokenIndexArray.create()
 
 		for _ in 0 upto layout.fieldCount() 'initSlots'
 			fieldValues.push(0 as ValueId)
 			filled.push(false)
 			fieldBareLocal.push(false)
+			fieldAnchors.push(lbraceIndex)
 		end 'initSlots'
 
-		try self.parseStructLiteralFields(func, layout: layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal)
+		try self.parseStructLiteralFields(func, layout: layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal, fieldAnchors: fieldAnchors)
 		let rbraceTok = try self.consume(TokenKind.rightBrace)
 
 		// Defaults are applied BEFORE the check, which is what makes an omitted-but-defaulted field
@@ -59526,7 +59821,7 @@ export type Parser
 		self.fillFromNascentSelfSlots(layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal, anchor: lbraceTok)
 		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: lbraceTok)
 
-		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
+		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, fieldAnchors: fieldAnchors, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
 	end 'parseStructLiteral'
 
 	// ⭐⭐ **THE THIRD SOURCE OF A SLOT'S VALUE (`/specs/field-initialization.md`, rule 3): a `self.<field> = …`
@@ -59784,7 +60079,7 @@ export type Parser
 	// name to find its place, while a struct literal names slots outright. So this reads its own
 	// labels rather than reusing the call's, and `slotCallArgs` is not involved — there is nothing
 	// to reorder, because the label IS the destination.
-	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray) throws ParseError
+	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray, fieldAnchors TokenIndexArray) throws ParseError
 		// A struct literal may span lines — `Self{` then one `field: value` per line (the spec writes big
 		// constructors this way). Newlines are skipped at each field boundary: after the `{` (here), after a
 		// field's value (before the `,`/`}` test), and after the `,` (before the next field name). A single-line
@@ -59840,6 +60135,7 @@ export type Parser
 			try fieldValues.set(index, value: value) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
 			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
 			try fieldBareLocal.set(index, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parseStructLiteralFields: fieldBareLocal.set OOB at {index} — the columns are sized to the layout's field count")
+			try fieldAnchors.set(index, value: valueStart) otherwise panic("parseStructLiteralFields: fieldAnchors.set OOB at {index} — the columns are sized to the layout's field count")
 
 			// AFTER `rhsWasBareLocalReference` reads `[valueStart, self.pos)` — skipping here first would widen
 			// that window past the single-identifier value and silently mis-decide a managed field's move-in.
@@ -60506,7 +60802,7 @@ export type Parser
 	// 2026-08-12 ruling), and a borrowed struct is CO-OWNED as well (`moveInPayload` — the cross-call consume,
 	// the transitive-consume ruling of 2026-08-04). Whichever arm runs, the
 	// box holds exactly ONE reference per field and its `__destruct_<Struct>` cascade releases exactly that.
-	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, anchor Token, range SourceRange) returns ValueId throws ParseError
+	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, fieldAnchors TokenIndexArray, anchor Token, range SourceRange) returns ValueId throws ParseError
 		// ⭐⭐ **A FUSED WRAPPER'S LITERAL IS NOT A STRUCT LITERAL, AND THE LOOP BELOW WOULD CORRUPT IT.**
 		// `type String`'s `managed` is embedded whole at offset 0 (`StructLayout.isInlineManagedField`), so
 		// offset 0 is the RECORD'S OWN `buffer@0` — the ordinary field store would put a `__ManagedMemory`
@@ -60521,9 +60817,10 @@ export type Parser
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
 			let bareLocal = try fieldBareLocal.get(i) otherwise panic("emitStructLiteral: fieldBareLocal.get OOB at {i} — the column is sized to the layout's field count")
+			let valueTok = self.tokenAt(try fieldAnchors.get(i) otherwise panic("emitStructLiteral: fieldAnchors.get OOB at {i} — the column is sized to the layout's field count"))
 			let fieldType = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
-			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, owner: box, anchor: anchor, range: range)
+			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, owner: box, anchor: anchor, range: range, valueTok: valueTok)
 			self.emitFieldStore(box, layout: layout, index: i, value: stored, range: range)
 		end 'eachField'
 
@@ -62052,7 +62349,8 @@ export type Parser
 			let class = try classes.get(i) otherwise panic("parseEnumFromNameCase: classes.get OOB at {i} — filled in lockstep with the fields")
 			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} after the validation pass")
 			let bareLocal = try slotBareLocal.get(i) otherwise panic("parseEnumFromNameCase: slotBareLocal.get OOB at {i} — captured in lockstep with the values")
-			args.push(try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: result, anchor: memberTok, range: range))
+			let valueTok = self.tokenAt(try slotAnchors.get(i) otherwise panic("parseEnumFromNameCase: slotAnchors.get OOB at {i} — captured in lockstep with the values"))
+			args.push(try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: result, anchor: memberTok, range: range, valueTok: valueTok))
 		end 'moveIn'
 
 		return self.trackEnumFromNameResult(layout, result: self.emitRuntimeCallInto(result, callee: enumFromNameCaseSymbol(layout.name, caseName: caseName), args: args, range: range, argLabels: NoRuntimeCallLabels))
@@ -62148,25 +62446,28 @@ export type Parser
 		// to a local binding — what a managed payload's move-in poisons (`moveInPayload`); `slotAnchors[i]`
 		// is the token the slot's TYPE refusal is anchored at, which the type check (in `emitEnumBox`, after
 		// the whole list is read) can no longer see for itself — see `parsePayloadArgs`.
+		// `slotStarts[i]` is where slot `i`'s value was written, which a freeze on a lent graph is refused at (E3160).
 		var slotValues = ValueIdArray.create()
 		var filled = BoolArray.create()
 		var slotBareLocal = BoolArray.create()
 		var slotAnchors = TokenIndexArray.create()
+		var slotStarts = TokenIndexArray.create()
 
 		for _ in 0 upto arity 'initSlots'
 			slotValues.push(0 as ValueId)
 			filled.push(false)
 			slotBareLocal.push(false)
 			slotAnchors.push(self.pos)
+			slotStarts.push(self.pos)
 		end 'initSlots'
 
 		if self.at(TokenKind.leftParen) 'withArgs'
-			try self.parsePayloadArgs(func, layout: layout, payloads: payloads, slotValues: slotValues, filled: filled, slotBareLocal: slotBareLocal, slotAnchors: slotAnchors, caseTok: caseTok)
+			try self.parsePayloadArgs(func, layout: layout, payloads: payloads, slotValues: slotValues, filled: filled, slotBareLocal: slotBareLocal, slotAnchors: slotAnchors, slotStarts: slotStarts, caseTok: caseTok)
 		end 'withArgs'
 
 		try self.requireAllPayloadsProvided(layout, payloads: payloads, filled: filled, caseTok: caseTok)
 
-		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, caseTok: caseTok, range: range, fill: PayloadFill.unionConstruct)
+		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, valueStarts: slotStarts, caseTok: caseTok, range: range, fill: PayloadFill.unionConstruct)
 	end 'parseEnumBoxConstruct'
 
 	// Parse the `(pos, label: value, …)` payload argument list into the layout-parallel columns. The caller
@@ -62183,7 +62484,7 @@ export type Parser
 	// author wrote out of order, and an anchor paired with the wrong slot points at another argument.
 	// It is the anchor `rejectEscapingClosure` already uses one line further down, which is why the two
 	// refusals about one argument point at the same place.
-	function parsePayloadArgs(func IrFunction, layout EnumLayout, payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, slotBareLocal BoolArray, slotAnchors TokenIndexArray, caseTok Token) throws ParseError
+	function parsePayloadArgs(func IrFunction, layout EnumLayout, payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, slotBareLocal BoolArray, slotAnchors TokenIndexArray, slotStarts TokenIndexArray, caseTok Token) throws ParseError
 		try self.consume(TokenKind.leftParen)
 
 		// A case that declares NO payload takes no argument LIST — it is written `U.empty`, never
@@ -62234,6 +62535,7 @@ export type Parser
 			try filled.set(slot, value: true) otherwise panic("parsePayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotBareLocal.set(slot, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parsePayloadArgs: slotBareLocal.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotAnchors.set(slot, value: afterArg) otherwise panic("parsePayloadArgs: slotAnchors.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try slotStarts.set(slot, value: valueStart) otherwise panic("parsePayloadArgs: slotStarts.set OOB at slot {slot} — the columns are sized to the case's arity")
 
 			argIndex = argIndex + 1
 
@@ -62303,7 +62605,7 @@ export type Parser
 	// ⚠ **THE ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
 	// deterministic 0 in a narrow case's unused slots, and a NULL slot is exactly what the cascade's
 	// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer.
-	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange, fill PayloadFill) returns ValueId throws ParseError
+	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, valueStarts TokenIndexArray, caseTok Token, range SourceRange, fill PayloadFill) returns ValueId throws ParseError
 		let payloads = layout.payloadsAt(caseIndex)
 
 		// Validate + classify every field before emitting a single op — a refused payload emits no code.
@@ -62337,7 +62639,7 @@ export type Parser
 		// solely own is E3138 — and a refusal after the `__mm_alloc` would leave a box behind that nothing frees:
 		// the enrolment two lines down is what would have made it droppable. `transferConsumedArgs` runs before
 		// its own call op for the same reason.
-		try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
+		try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok, sendAt: range)
 
 		let size = self.emitLiteral(layout.boxSizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
@@ -62349,7 +62651,8 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
 			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
-			let stored = try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: box, caseTok: caseTok, range: range)
+			let valueTok = self.tokenAt(try valueStarts.get(i) otherwise panic("emitEnumBox: valueStarts.get OOB at {i} — captured in lockstep with the args"))
+			let stored = try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: box, caseTok: caseTok, range: range, valueTok: valueTok)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
@@ -62374,15 +62677,15 @@ export type Parser
 	// It REWRITES `args` in place, exactly as `transferConsumedArgs` rewrites a call's, and for the identical
 	// reason: a borrowed byte record is PROMOTED, so what crosses is a different record than what was parsed
 	// and the store below must carry the copy rather than the borrow.
-	function transferPayloadsIntoAGreenThread(fill PayloadFill, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws ParseError
+	function transferPayloadsIntoAGreenThread(fill PayloadFill, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token, sendAt SourceRange) throws ParseError
 		match fill 'fill'
 			unionConstruct then return
-			serviceMessage(serviceTypeName) then try self.moveMessagePayloads(serviceTypeName, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
+			serviceMessage(serviceTypeName) then try self.moveMessagePayloads(serviceTypeName, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok, sendAt: sendAt)
 		end 'fill'
 	end 'transferPayloadsIntoAGreenThread'
 
 	// The loop, split from the `match` above so the arm stays one statement. Every payload the AUTHOR wrote
-	// goes through the ONE transfer door.
+	// goes through the ONE message door, `transferMessageArgument`.
 	//
 	// ⛔⛔ **THE `__reply` SLOT IS SKIPPED, AND THAT IS LOAD-BEARING RATHER THAN A SAVING.** A send mints a
 	// real cell there, and `moveIntoGreenThread`'s FIRST question is `valueIsPromise`, asked deliberately
@@ -62390,11 +62693,11 @@ export type Parser
 	// author's own argument** on every reply-bearing send in the suite.
 	//
 	// ⭐ **AND THE REFUSAL WOULD BE WRONG ON ITS OWN TERMS, NOT MERELY MISPLACED.** That rule is about a
-	// REFERENCE-COUNTED box reaching two green threads with a plain refcount between them. A cell is not
+	// REFERENCE-COUNTED box reaching two green threads. A cell is not
 	// refcounted: it is the two-party TEARDOWN RENDEZVOUS itself (`GtRuntime.GtOffTeardown`), whose whole
 	// design is that the sender and the service each hold it and each arrive at it exactly once. Handing it
 	// over IS the mechanism the rule exists to protect.
-	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws ParseError
+	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token, sendAt SourceRange) throws ParseError
 		for i in 0 upto payloads.count() 'eachPayload'
 			let arg = try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count")
 			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
@@ -62404,17 +62707,17 @@ export type Parser
 			end 'theCompilersOwnCell'
 
 			let anchorIndex = try argAnchors.get(i) otherwise panic("moveMessagePayloads: argAnchors.get OOB at {i} — filled in lockstep with the args")
-			let blame = serviceSendArgumentBlame(serviceTypeName, methodName: caseTok.value, paramName: field.name)
-			try args.set(i, value: try self.moveIntoGreenThread(arg, blame: blame, anchor: self.tokenAt(anchorIndex))) otherwise panic("moveMessagePayloads: args.set OOB at {i}")
+			let destination = MessageArgumentDestination.create(serviceTypeName, message: caseTok.value, param: field.name, sendAt: sendAt)
+			try args.set(i, value: try self.transferMessageArgument(arg, destination: destination, anchorIndex: anchorIndex)) otherwise panic("moveMessagePayloads: args.set OOB at {i}")
 		end 'eachPayload'
 	end 'moveMessagePayloads'
 
 	// What actually lands in payload slot `i`, per fill. A CONSTRUCT moves in here, where the box exists; a
 	// MESSAGE was transferred before the box did, so this frame has already given up its reference and the
 	// store is the bare word.
-	function storedPayloadValue(fill PayloadFill, class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, caseTok Token, range SourceRange) returns ValueId throws ParseError
+	function storedPayloadValue(fill PayloadFill, class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, caseTok Token, range SourceRange, valueTok Token) returns ValueId throws ParseError
 		return match fill 'fill'
-			unionConstruct gives try self.moveInPayload(class, arg: arg, argBareLocal: argBareLocal, owner: owner, anchor: caseTok, range: range)
+			unionConstruct gives try self.moveInPayload(class, arg: arg, argBareLocal: argBareLocal, owner: owner, anchor: caseTok, range: range, valueTok: valueTok)
 			serviceMessage gives arg
 		end 'fill'
 	end 'storedPayloadValue'
@@ -62448,7 +62751,11 @@ export type Parser
 	// the box takes a SECOND one. Both leave the box holding exactly one reference it will release through
 	// `__destruct_<U>`, which is why they agree — but a caller reaching for the wrong one either strands a
 	// reference or frees the binding's value out from under it.
-	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
+	//
+	// `valueTok` is where the value was written, which the freeze on a lent graph is refused at (E3160).
+	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange, valueTok Token) returns ValueId throws ParseError
+		try self.requireNotLentThrough(arg, source: arg, door: FreezeDoor.storeInFieldOrPayload, valueTok: valueTok)
+
 		if payloadClassIsTypeParam(class) 'opaqueSlot'
 			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, owner: owner, anchor: anchor, range: range)
 		end 'opaqueSlot'
@@ -65056,7 +65363,7 @@ export type Parser
 		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
-		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
+		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, valueStarts: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
 	end 'emitServiceSend'
 
@@ -65195,7 +65502,7 @@ export type Parser
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
 		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
 
-		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
+		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, valueStarts: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
 	end 'emitServiceShutdown'
 
@@ -69833,6 +70140,8 @@ export type Parser
 	// destructor is chosen by (`columnDestroyValue`): a caller that passed the answer in would be a second
 	// place deciding which type argument is the key, and the move-in and the stamp could then disagree.
 	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId throws ParseError
+		try self.requireNotLentThrough(value, source: value, door: FreezeDoor.storeInContainer, valueTok: self.tokenAt(valueStart))
+
 		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
 			return value
 		end 'trivial'
@@ -71559,7 +71868,7 @@ export type Parser
 			end 'reuse'
 		end 'existing'
 
-		let slot = self.captureSlotFor(witnessCaptureName(constraintIndex), enclosingValue: UnfilledInheritedWitness, captureType: MaxonType.integer)
+		let slot = self.captureSlotFor(witnessCaptureName(constraintIndex), enclosingValue: UnfilledInheritedWitness, captureType: MaxonType.integer, anchor: self.current())
 		self.inheritedWitnessCaptures.push(InheritedWitnessCapture.create(constraintIndex, slot: slot))
 		return slot
 	end 'inheritedWitnessSlotFor'
@@ -73558,7 +73867,7 @@ export type Parser
 		end 'immutableReceiver'
 
 		var deferred = self.deferredProvenanceOf(func)
-		deferred.noteReceiverWrite(receiver, methodIndex: methodIndex, blameable: blameable)
+		deferred.noteReceiverWrite(receiver, methodIndex: methodIndex, blameable: blameable, opMark: self.artifact.module.ops.count())
 
 		func.writtenParamMask = func.writtenParamMask or receiverOwner
 
@@ -75496,6 +75805,8 @@ export type Parser
 	// push/set/insert. `valueStart` locates the value's first token — its bare-local source and the diagnostic
 	// anchor both.
 	function moveElementIntoContainer(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
+		try self.requireNotLentThrough(value, source: value, door: FreezeDoor.storeInContainer, valueTok: self.tokenAt(valueStart))
+
 		// ⭐ **AN OPAQUE-`T` ARRAY MOVE-IN IN THE SHARED BODY (P1.7 slice 3b-v, W10).** The shared generic body has
 		// no static type for the element (`containerElementIsManaged` is false — the element is a `typeParameter`
 		// word), so it can neither promote a borrow nor decide the element's managed-ness here. The array becomes
@@ -76333,7 +76644,7 @@ export type Parser
 		// (`name = n`) must MOVE the new value in and only THEN drop the value it displaces (a borrowed String
 		// is promoted, a borrowed struct is co-owned), not a raw store that leaks the old value and dangles
 		// behind a borrow. ⚠ The acquire-before-release order is load-bearing — `emitFieldWrite` says why.
-		try self.emitFieldWrite(func, box: receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
+		try self.emitFieldWrite(func, box: receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range, valueTok: self.tokenAt(valueStart))
 	end 'emitCheckedSelfFieldStore'
 
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
@@ -76708,7 +77019,7 @@ export type Parser
 		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.storedFieldType(step.box, layout: step.layout, index: index), value: parsed, anchor: step.lastFieldTok)
 
 		self.noteWriteThroughAField(func, target: step.box, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
-		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok), valueTok: self.tokenAt(valueStart))
 	end 'parseFieldAssignment'
 
 	// ⭐ **A FIELD WRITE WRITES THE RECORD BEFORE ITS LAST `.`** — `box.item.x = 9` writes the record `box.item`, and
@@ -76760,7 +77071,7 @@ export type Parser
 		return self.slotTypeThroughReceiver(box, declared: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
 	end 'storedFieldType'
 
-	function emitFieldWrite(func IrFunction, box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+	function emitFieldWrite(func IrFunction, box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange, valueTok Token) throws ParseError
 		// ⭐⭐ **E3064's SEED, SET AT THE ONE EMITTER BOTH FIELD-ASSIGNMENT DOORS FUNNEL INTO.** `self.n = 5`,
 		// `n = 5` and `p.x = 5` all arrive here, and every one of them writes an aggregate that already existed —
 		// which is an effect the function's RETURN type cannot express. Set HERE and not at the two doors, for
@@ -76811,7 +77122,7 @@ export type Parser
 				panic("emitFieldWrite: a `typeParameter` field write has a box of tag {tag.name} — only the enclosing self (a structRef) or a concrete generic instance (`b.f = …`) reaches an opaque field, and `storedFieldType` has already substituted the latter")
 			end 'unexpectedBox'
 
-			try self.emitOpaqueFieldReassign(box, layout: layout, index: index, value: value, fieldType: fieldType, argBareLocal: argBareLocal, anchor: anchor, range: range)
+			try self.emitOpaqueFieldReassign(box, layout: layout, index: index, value: value, fieldType: fieldType, argBareLocal: argBareLocal, anchor: anchor, range: range, valueTok: valueTok)
 			return
 		end 'opaqueTypeParamField'
 
@@ -76856,7 +77167,7 @@ export type Parser
 		// An opaque `T` field is settled above by `emitOpaqueFieldReassign`, so the class here is always a
 		// concrete managed one and the `owner` is never read — it is passed because the box IS the owner of
 		// whatever lands in the slot, which is the fact the parameter names.
-		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range)
+		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range, valueTok: valueTok)
 
 		self.emitDecref(old, range: range)
 		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
@@ -76921,7 +77232,9 @@ export type Parser
 	// this frame does not also drop it AND the enrolled-owned parameter is never left live to drop at a scope exit
 	// (which would need a descriptor a trivial method does not carry). A non-owned RHS (aliasing one opaque field
 	// into another, whose descriptor-gated copy is a later slice) is refused cleanly rather than storing a borrow.
-	function emitOpaqueFieldReassign(box ValueId, layout StructLayout, index FieldIndex, value ValueId, fieldType MaxonType, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+	function emitOpaqueFieldReassign(box ValueId, layout StructLayout, index FieldIndex, value ValueId, fieldType MaxonType, argBareLocal bool, anchor Token, range SourceRange, valueTok Token) throws ParseError
+		try self.requireNotLentThrough(value, source: value, door: FreezeDoor.storeInFieldOrPayload, valueTok: valueTok)
+
 		// ⛔⛔ **THE ARRAY MOVE-IN MADE THIS SAME DEMAND UNTIL W60, AND IT NO LONGER DOES — THE TWO DOORS HAVE
 		// DIVERGED, AND THIS RECORDS *WHY* SO NEITHER IS READ AS AN OVERSIGHT.** A borrowed opaque `T` stored
 		// into a CONTAINER now takes a reference through the descriptor's `retainFunc@64`
@@ -77295,10 +77608,15 @@ export type Parser
 		// read?" is the question this routine already exists to be the single home of; the unused check asks
 		// it of the whole function instead of of one moment. It is a SEPARATE bit from `lastUseToken` because
 		// that field is SEEDED ahead of any read by `attachPendingBorrows` — see `VarInfo.referenced`.
-		// Written before the early returns below for the reason the line above is: a self-field alias and a
-		// scalar binding are reads too, and the exclusions are about a MOVE.
+		// Written before the move guard for the reason the line above is: a self-field alias and a scalar
+		// binding are reads too, and the guard's exclusions are about a MOVE.
 		self.markBindingReferenced(binding)
+		try self.requireUnmovedAtUse(binding, nameTok: nameTok)
+	end 'requireBindingLive'
 
+	// ⭐ **THE MOVE GUARD OF ONE USE OF `binding`'s CURRENT RECORD** — every read `requireBindingLive` guards, and a
+	// closure's by-value capture (`emitCaptureRead`), which reads the record the binding holds at the literal.
+	function requireUnmovedAtUse(binding VarInfo, nameTok Token) throws ParseError
 		// ⭐ **THE READ A MOVE IS OBSERVED AT.** A door the binding was handed to whole may turn out to have moved it
 		// (`StorageProvenance.checkMoveSites`), and this is the first read after it on this path.
 		if binding.awaitingMoveReads != NoMoveSiteList 'readAfterADoor'
@@ -77385,7 +77703,7 @@ export type Parser
 		if binding.movedFrom or binding.partiallyMoved 'moved'
 			throw ParseError.useAfterMove(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'moved'
-	end 'requireBindingLive'
+	end 'requireUnmovedAtUse'
 
 	// The box `binding` denotes and the `StructLayout` describing it — the two-step every field
 	// access takes: the binding's declared type must BE a struct, and that struct must be one some
@@ -78585,11 +78903,11 @@ export type Parser
 		// immutable local (E2013), the same rule `declareInitializedBinding` binds its own `VarInfo` under.
 		var binding = enclosing.getInfo(name)
 
-		// ⭐ **A CAPTURE IS A READ OF THE ENCLOSING BINDING, and this is the ONE read door that does not
-		// run through `requireBindingLive`** (which owns the move guard a capture is deliberately not
-		// subject to). The enclosing function's E3012 drain happens after this closure has been parsed
-		// inline, so without this line `let x = 5` + `function(n Integer) gives n + x` would report `x`
-		// unused — a false rejection.
+		// ⭐ **A CAPTURE IS A READ OF THE ENCLOSING BINDING, and this is the ONE read door that does not run through
+		// `requireBindingLive`**, whose liveness bookkeeping is the enclosing frame's — the closure reads the binding
+		// wherever it is called. The enclosing function's E3012 drain happens after this closure has been parsed
+		// inline, so without this line `let x = 5` + `function(n Integer) gives n + x` would report `x` unused — a
+		// false rejection.
 		//
 		// ⚠ The NAME half of this mention lands in the CLOSURE's `referencedNames`, which the restore
 		// discards — so `parseClosureExpression` pushes the capture names back into the enclosing function's
@@ -78661,13 +78979,13 @@ export type Parser
 		// REFERENCE, so its content is if anything more certainly the same record; the two arms differ in how
 		// many loads deep the value sits, never in what it points at.
 		if binding.isCellBinding 'capturedByItsCell'
-			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: MaxonType.integer)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
+			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: MaxonType.integer, anchor: anchor)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
 			let occupant = self.emitIndirectLoad(captureType, box: cell, offset: CellContentOffset, storageType: self.wordSlotStorageType(captureType), range: range)
 			self.carryImmutableGlobalMark(self.capturedImmutableGlobalReads, from: binding.boundValue, to: occupant)
 			return occupant
 		end 'capturedByItsCell'
 
-		let slot = self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: captureType)
+		let slot = self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: captureType, anchor: anchor)
 		let captured = self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(captureType), range: range)
 		self.carryImmutableGlobalMark(self.capturedImmutableGlobalReads, from: binding.boundValue, to: captured)
 		return captured
@@ -78694,7 +79012,7 @@ export type Parser
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
 	// sight and reusing it thereafter. Dedup keeps `multiple-captures` (`x + a + b`) at one slot per distinct
 	// name and, more importantly, keeps a name read twice from storing — and later dropping — two slots.
-	function captureSlotFor(name ByteArray, enclosingValue ValueId, captureType MaxonType) returns EnvSlotIndex
+	function captureSlotFor(name ByteArray, enclosingValue ValueId, captureType MaxonType, anchor Token) returns EnvSlotIndex
 		for k in 0 upto self.captureNames.count() 'existing'
 			let seen = try self.captureNames.get(k) otherwise panic("captureSlotFor: captureNames.get OOB at {k}")
 
@@ -78706,6 +79024,7 @@ export type Parser
 		self.captureNames.push(name)
 		self.captureValues.push(enclosingValue)
 		self.captureTypes.push(captureType)
+		self.captureAnchors.push(anchor)
 		return self.captureNames.count() - 1
 	end 'captureSlotFor'
 
@@ -78769,9 +79088,10 @@ export type Parser
 	// nothing, and the READ is where the value comes from.
 	//
 	// ⭐⭐ **A `let` IS IMAGE DATA — BOTH KINDS, AND THE READ IS ONE ADDRESS** (⚖ user ruling). Nothing is
-	// created at run time, there is no refcount and there is nothing mutable, so a worker holding one shares
-	// nothing. It emits the very ops the literal itself emits and the compiler grows NO second immortality mechanism
-	// (the oracle's `MmImmortalRefcount` sentinel is deliberately not imported — see `ARCHITECTURE.md`):
+	// created at run time, no count is ever stepped and nothing is mutable, so a worker holding one shares
+	// nothing. It emits the very ops the literal itself emits, and the record carries the one immortality mark
+	// every count step routes away from — `MmRuntime.MmImmortalRefcount` in its synthetic header, beside
+	// `ImmortalRecordCapacity` in its own `capacity@16`:
 	//
 	//   • a **String** literal is a wholly IMMORTAL `.rdata` record (`lowerStringLiteral`), and
 	//     `registerRdataConstant` dedupes it by bytes — so every read of `let name = "Ada"` in the whole
@@ -79860,6 +80180,7 @@ export type Parser
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
+		let savedCaptureAnchors = self.captureAnchors
 		let savedInheritedWitnessCaptures = self.inheritedWitnessCaptures
 
 		// ⛔⛔ **THE LAYOUT-DESCRIPTOR TRIPLE WAS IN NONE OF THE THREE LISTS, AND THAT WAS A COMPILER PANIC
@@ -80060,6 +80381,7 @@ export type Parser
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
+		self.captureAnchors = TokenArray.create()
 		self.inheritedWitnessCaptures = InheritedWitnessCaptureArray.create()
 
 		// A lifted closure's ABI reserves no layout-descriptor parameter, so its body carries none however the
@@ -80165,6 +80487,8 @@ export type Parser
 		// claimed during the body parse and can only be valued after the restore.
 		var capturedValuesSnapshot = self.captureValues
 		let capturedTypesSnapshot = self.captureTypes
+		let captureNamesSnapshot = self.captureNames
+		let captureAnchorsSnapshot = self.captureAnchors
 		let inheritedWitnessSnapshot = self.inheritedWitnessCaptures
 
 		// ⭐ **PROMOTE THE RESERVED `__env` SLOT TO A REAL TRAILING PARAMETER — ALWAYS (P1.5-A2b-2).** Under the
@@ -80321,6 +80645,7 @@ export type Parser
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
+		self.captureAnchors = savedCaptureAnchors
 		self.inheritedWitnessCaptures = savedInheritedWitnessCaptures
 		self.functionCarriesLayoutParam = savedCarriesLayoutParam
 		self.functionDroppedOpaqueWithoutDescriptor = savedDroppedOpaqueWithoutDescriptor
@@ -80349,11 +80674,36 @@ export type Parser
 			// the load has to be there before the store that reads it. It sits inside this branch because a
 			// witness capture IS a capture — a closure with one has `captureCount > 0` by construction.
 			try self.fillInheritedWitnessCaptures(inheritedWitnessSnapshot, capturedValues: capturedValuesSnapshot, anchor: functionTok)
+
+			for i in 0 upto captureCount 'eachCapture'
+				let captured = try capturedValuesSnapshot.get(i) otherwise panic("parseClosureExpression: capturedValuesSnapshot.get OOB at {i} below the capture count")
+				let capturedAt = try captureAnchorsSnapshot.get(i) otherwise panic("parseClosureExpression: captureAnchorsSnapshot.get OOB at {i} — filled in lockstep with the capture names")
+				try self.requireCaptureUnmoved(try captureNamesSnapshot.get(i) otherwise panic("parseClosureExpression: captureNamesSnapshot.get OOB at {i} below the capture count"), anchor: capturedAt)
+				try self.requireNotLentThrough(captured, source: captured, door: FreezeDoor.capturedByClosure, valueTok: capturedAt)
+			end 'eachCapture'
+
 			self.buildClosureEnv(result, captureCount: captureCount, capturedValues: capturedValuesSnapshot, capturedTypes: capturedTypesSnapshot, anchor: functionTok)
 		end 'buildEnv'
 
 		return result
 	end 'parseClosureExpression'
+
+	// ⭐ **A BY-VALUE CAPTURE IS A USE OF THE BINDING'S RECORD AT THE LITERAL**, so a record moved away before it is
+	// read after its move (E3102). Asked in the enclosing frame, whose values the binding names. A cell capture reads
+	// the cell, which the enclosing frame may refill before any call, and an inherited witness names no binding.
+	function requireCaptureUnmoved(name ByteArray, anchor Token) throws ParseError
+		if not self.scope.contains(name) 'anInheritedWitness'
+			return
+		end 'anInheritedWitness'
+
+		let binding = self.scope.getInfo(name)
+
+		if binding.isCellBinding 'capturedByItsCell'
+			return
+		end 'capturedByItsCell'
+
+		try self.requireUnmovedAtUse(binding, nameTok: anchor)
+	end 'requireCaptureUnmoved'
 
 	// ⭐ **BUILD A CAPTURING CLOSURE'S ENVIRONMENT (P1.5-A2b), in the enclosing frame.** The env is a real
 	// `__mm_alloc(captureCount * EnvSlotBytes)` heap block carrying each captured value BY VALUE (one
@@ -85695,6 +86045,11 @@ export type Parser
 				self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
 
 				pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: passed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value), anchorIndex: valueStart)
+
+				if not label.isEmpty() 'labelled'
+					self.noteLabelledArgumentValue(argFirstTok, valueTok: valueTok)
+				end 'labelled'
+
 				argIndex = argIndex + 1
 
 				if not self.at(TokenKind.comma) 'endArgs'
@@ -87916,67 +88271,41 @@ export type Parser
 		return self.storeOwnedValueIntoDurableSink(argValue, isString: tagIsByteRecord(self.tagOf(argValue)), range: SourceRange.ofToken(anchor))
 	end 'transferConsumedArg'
 
-	// ⭐⭐⭐ **HAND ONE VALUE TO ANOTHER GREEN THREAD — THE ONE TRANSFER DOOR A SERVICE HAS (SV1).** Spent by
-	// the `spawn`'s STATE and by every managed argument of a SEND, and it is deliberately NOT
-	// `transferConsumedArg`, which the two would otherwise obviously share:
+	// ⭐⭐⭐ **HAND ONE VALUE TO ANOTHER GREEN THREAD BY MOVING IT — THE TRANSFER DOOR A SERVICE HAS.** Spent by
+	// the `spawn`'s STATE and by every managed argument of a SEND that `transferMessageArgument` does not lend,
+	// and deliberately NOT `transferConsumedArg`: `async`'s argument door CO-OWNS, which is right for a coroutine
+	// that never leaves its caller's green thread (⚖ user ruling: a consuming argument co-owns rather than
+	// moving) and wrong here — a service's loop runs on a green thread of its own, possibly on another OS thread,
+	// and a counted record's count steps PLAIN (`MmRuntime.emitAdjustRefcount`) because one green thread owns it.
 	//
-	// ⛔⛔ **`async`'s ARGUMENT DOOR CO-OWNS, AND CO-OWNERSHIP ACROSS A GREEN THREAD IS HEAP CORRUPTION.**
-	// ⚖ user ruling 2026-08-12, *"a consuming argument CO-OWNS rather than moving"* — correct for `async`,
-	// whose coroutine never leaves its caller's green thread, so two references on one thread are simply two
-	// references. A service's loop runs on a green thread of its own, possibly on another OS thread, and since
-	// EC10 a refcount step is a PLAIN load/add/store (`MmRuntime.emitAdjustRefcount`) precisely because the
-	// LANGUAGE guarantees one green thread per box. Reusing that door here would not be slow; it would race two
-	// unsynchronised increments on one word and free a live record.
+	// ⇒ **THREE ANSWERS, AND EVERYTHING ELSE IS REFUSED** as **`SemanticServiceArgumentNotUnique`**, naming the
+	// value and the `.clone()` cure:
 	//
-	// ⇒ **A TRANSFER IS ADMITTED ONLY WHERE THIS FRAME PROVABLY HOLDS THE ONLY REFERENCE.** Two answers:
+	//   • a SCALAR owns no record and crosses as a machine word;
+	//   • a STRING LITERAL this parse minted is PROMOTED to a fresh sole copy — its record is immortal `.rdata`,
+	//     nobody owns it, and the copy materializes the only owned record there will be. Only a literal: a
+	//     borrowed parameter, field or element is refused whatever its type, because the cure a refusal teaches
+	//     — `.clone()` — IS that allocation, spelled by the author at the site that pays for it (⚖ user ruling);
+	//   • an OWNED value this frame solely owns is MOVED — the source binding poisoned (E3102 on a later read) or
+	//     the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what makes
+	//     the service the record's one owner rather than its second.
 	//
-	//   • a SCALAR owns no record and crosses as a machine word — nothing to transfer;
-	//   • an OWNED value this frame solely owns is MOVED — the source binding poisoned (E3102 on a later read)
-	//     or the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what
-	//     makes the service the record's one owner rather than its second.
+	// ⚠ `transferConsumedArg` promotes every borrowed byte record, and must: `async` is not a send. Its coroutine
+	// never leaves the caller's green thread, so two references on one thread are two references and the copy
+	// buys nothing there — the whole reason these are two doors rather than one.
 	//
-	// Everything else is refused as **`SemanticServiceArgumentNotUnique`**, naming the value and the `.clone()`
-	// cure.
+	// ⚠⚠ **A PROMISE IS REFUSED FIRST, AHEAD OF THE SCALAR SHORT-CIRCUIT, BECAUSE IT IS A SCALAR TO
+	// `valueIsManagedHeap`.** A function value, an interface value and an opaque type parameter are refused at
+	// the `spawn` against the message's DECLARATION (`ServiceCompanions.untransferableParameterNoun`, E3135), and
+	// no accepted message has a parameter one of them could be an argument to. A promise handle is a bare
+	// INTEGER (`valueIsPromise` is a per-value MARK precisely because the tag cannot say it), so
+	// `keep(n Integer)` takes one with no complaint from anybody — and sending it hands a second green thread a
+	// wait token whose completer is scheduled on this one, the shape E3100's linear-await rule exists to prevent.
 	//
-	// ⭐⭐ **AND A THIRD ANSWER FOR A VALUE WITH NO OWNER AT ALL: A STRING LITERAL THIS PARSE MINTED IS
-	// PROMOTED to a fresh sole copy.** Its record is immortal `.rdata` — nobody owns it, so nothing can be a
-	// second owner, and the copy is not hiding a shared reference but materializing the only owned record
-	// there will be. There is nothing to move: an immortal record cannot be given up.
-	//
-	// ⛔⛔ **THAT ARM USED TO ADMIT EVERY BORROWED BYTE RECORD, AND THE RULE IS UNIFORM OVER BORROWS NOW.**
-	// The promotion was sound; what it was not was the same rule the shape beside it got. A borrowed STRUCT
-	// parameter is refused, so one send site answered the identical question two ways — deciding by whether
-	// the value's TYPE happened to have a cheap owning copy: `h.keep(p)` an E3138 and `h.keep(buf)` a silent
-	// allocation the author never wrote. The cure a refusal teaches — `.clone()` — IS that allocation, spelled
-	// by the author at the site that pays for it. ⚖ user ruling, 2026-09-04.
-	//
-	// ⚠ **THE NARROWING TO "a literal" IS THE CORPUS'S OWN ANSWER, MEASURED.** With the arm deleted outright,
-	// the six `specs/services.md` cases that went red were SIX BARE LITERALS (`h.say("a")`,
-	// `sink.say("from the worker")`) and not one field, element or parameter read — so the population the
-	// promotion actually served and the population the refusal is for are disjoint, and the test that
-	// separates them is provenance rather than type.
-	//
-	// ⚠ `transferConsumedArg` KEEPS the wider promotion and must: `async` is not a send. Its coroutine never
-	// leaves the caller's green thread, so two references on one thread are two references and the copy buys
-	// nothing there — the whole reason these are two doors rather than one.
-	//
-	// ⚠⚠ **THE TYPE QUESTION IS ASKED HERE FOR EXACTLY ONE SHAPE, AND THAT SHAPE IS THE ONLY ONE THAT CAN
-	// REACH A SEND.** A function value, an interface value and an opaque type parameter are refused at the
-	// `spawn` against the message's DECLARATION (`ServiceCompanions.untransferableParameterNoun`, E3135), and
-	// no accepted message has a parameter one of them could be an ARGUMENT to — the type checker would refuse
-	// the call first. **A PROMISE IS THE EXCEPTION, AND ITS VALUE IS WHY: a promise handle is a bare INTEGER**
-	// (`valueIsPromise` is a per-value MARK precisely because the tag cannot say it), so
-	// `keep(n Integer)` takes one with no complaint from anybody. Sending it hands a second green thread a wait
-	// token whose completer is scheduled on this one — the exact shape E3100's linear-await rule exists to
-	// prevent, one thread further out.
-	//
-	// ⚠ It is asked BEFORE the scalar short-circuit below, which is the whole point: a promise IS a scalar to
-	// `valueIsManagedHeap`, so a check placed after it would never run.
-	//
-	// ⚠ **IT REFUSES BEFORE IT EMITS.** A promotion and the soleness walk are the only things it emits, and
-	// each is emitted only on the accepting path — `transferGraphProofOf` decides refuse-versus-walk in one
-	// answer, so a refused transfer leaves nothing behind. That is `emitBinOp`'s ordering rule, which every
-	// door that can throw mid-expression keeps.
+	// ⚠ **IT REFUSES BEFORE IT EMITS.** A promotion and the soleness walk are the only things it emits, each only
+	// on the accepting path — `transferGraphProofOf` decides refuse-versus-walk in one answer — so a refused
+	// transfer leaves nothing behind. That is `emitBinOp`'s ordering rule, which every door that can throw
+	// mid-expression keeps.
 	function moveIntoGreenThread(value ValueId, blame String, anchor Token) returns ValueId throws ParseError
 		if self.valueIsPromise(value) 'aWaitToken'
 			throw ParseError.serviceValueNotTransferable(serviceUntransferableValueMessage(blame, noun: PromiseParameterNoun), line: anchor.line, column: anchor.column)
@@ -88002,11 +88331,10 @@ export type Parser
 			throw ParseError.serviceArgumentNotUnique(serviceSharedTransferMessage(blame, source: self.transferredValueName(value)), line: anchor.line, column: anchor.column)
 		end 'aSecondOwnerMayExist'
 
-		// ⭐⭐⭐ **AND THE SAME QUESTION ABOUT WHAT THE RECORD HOLDS — the gate the two above cannot be**
-		// (SV1 review). Sole ownership of the BOX licenses nothing about the box's contents; see
-		// `transferGraphProofOf` for the four measured programs that crossed a co-owned record here, and for
-		// which shapes are proved at run time rather than refused.
-		try self.proveTransferGraphSole(value, blame: blame, anchor: anchor)
+		// ⭐⭐⭐ **AND THE SAME QUESTION ABOUT WHAT THE RECORD HOLDS — the gate the two above cannot be.** Sole
+		// ownership of the BOX licenses nothing about the box's contents; see `transferGraphProofOf` for which
+		// shapes are proved at run time rather than refused.
+		try self.proveTransferGraph(value, handOff: GreenThreadHandOff.move, blame: blame, anchor: anchor)
 
 		// ⭐ **BOTH HALVES, UNCONDITIONALLY, AND EACH IS A NO-OP ON THE OTHER'S CASE.** A value is never in
 		// `ownedBindings` and `pendingTempDrops` at once (`markValueOwnsHeap`'s invariant), so this is the shape
@@ -88018,56 +88346,194 @@ export type Parser
 		return value
 	end 'moveIntoGreenThread'
 
-	// ⭐⭐⭐ **HOW WHAT THIS RECORD HOLDS IS PROVED SOLE — the transfer rule's THIRD question.** Three
-	// answers, and the routine that DECIDES is the one that SAYS: nothing to prove, a runtime WALK, or a NOUN
-	// naming the shape no walk can be built for (`untransferableParameterNoun`'s shape one tier down).
+	// ⭐⭐⭐ **A MESSAGE ARGUMENT: LENT WHEN A LIVE `let` LOCAL OWNS IT, MOVED OTHERWISE (⚖ user ruling).** The
+	// lend is asked first because a `let` already lent is co-owned by its message, and the move door would
+	// refuse it as shared; everything a lend declines — a scalar, a promise, a borrow, a `var`, a temporary —
+	// reaches `moveIntoGreenThread` exactly as before, refusals and all.
+	function transferMessageArgument(value ValueId, destination MessageArgumentDestination, anchorIndex TokenIndex) returns ValueId throws ParseError
+		let anchor = self.tokenAt(anchorIndex)
+		let owner = self.liveOwnerIndexOf(value)
+
+		if self.ownerLendsValue(value, owner: owner) 'aLetLocalOwnsIt'
+			return try self.lendIntoGreenThread(value, owner: owner, destination: destination, anchor: anchor, anchorIndex: anchorIndex)
+		end 'aLetLocalOwnsIt'
+
+		return try self.moveIntoGreenThread(value, blame: destination.blame(), anchor: anchor)
+	end 'transferMessageArgument'
+
+	// ⭐⭐ **DOES THE BINDING AT `owner` LEND `value` RATHER THAN MOVE IT?** A live `let` LOCAL owning a managed
+	// record does — not a `var` (a move out of one is a move), not a parameter (a borrow, refused), not a
+	// self-field alias — and only while the record is this frame's alone or has already been lent: a `let` some
+	// other owner shares (a closure, a container, an alias's retain) is refused exactly as a move of it is,
+	// because that owner is a path to a write the freeze cannot see.
+	function ownerLendsValue(value ValueId, owner BindingMark) returns bool
+		if self.noLiveOwner(owner) or not self.valueIsManagedHeap(value) or not self.valueIsOwnedHeap(value) 'noBindingOwnsARecord'
+			return false
+		end 'noBindingOwnsARecord'
+
+		let binding = try self.ownedBindings.get(owner) otherwise panic("ownerLendsValue: ownedBindings.get OOB at {owner} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+
+		if binding.mutable or binding.isParameter or binding.isSelfField 'notALetLocal'
+			return false
+		end 'notALetLocal'
+
+		return binding.lentAt != NotLent or self.valueIsSolelyOwnedHere(value)
+	end 'ownerLendsValue'
+
+	// ⭐⭐⭐ **LEND A `let` LOCAL'S GRAPH TO ANOTHER GREEN THREAD.** The binding is not poisoned and stays
+	// readable, the service reads the SAME records, and nothing is copied. Three steps, in this order:
 	//
-	// ⛔⛔ **SOLENESS IS NOT TRANSITIVE, AND THE TWO QUESTIONS ABOVE ONLY ASK ABOUT THE BOX.**
-	// `OwnedHeapExclusivity`'s header retires exactly this inference one frame in — *"A box this frame solely
-	// owns can hold a payload it only CO-owns, because `moveManagedValueInto`'s `borrowedManaged` arm stores by
-	// `__mm_incref` rather than by move"* — and a cross to a green thread is where it is FATAL rather than
-	// merely wrong: the second owner is left behind on this thread and its later decref races the service's,
-	// both being plain load/add/store since EC10.
+	//   1. the SHARE WALK (`__share_<T>`, `__managed_share`, `__list_share`, a handle's `__mm_share_box`) marks
+	//      every record the value reaches shared — after refusing, before it emits, a shape no walk can be built
+	//      for, exactly as a move refuses it;
+	//   2. the RETAIN takes the message's own reference, AFTER the mark so it is already the atomic step. The
+	//      value is co-owned from here on, which is the truth, and what keeps a destructive move-out off it;
+	//   3. the binding records the send (`VarInfo.lentAt`, `VarInfo.lentOnPath`), and the body files it
+	//      (`LendSite`): from here on the graph is frozen (`requireNotLentThrough`).
 	//
-	// ⛔ **MEASURED (SV1 review), four programs, EVERY ONE compiled clean and exited 0** — each with the
-	// `__mm_incref`/`__str_retain` that mints the second owner visible in `main`'s own emitted code, and the
-	// record then crossing whole through `__svc_spawn` / `__mbox_send` while `main` went on reading it:
-	//   • `spawn Calc.create(s)` onto a `var name as String` — main retains, the factory retains and releases
-	//     main's, and main prints `s` after the spawn;
-	//   • the same through a `var c as Cell` struct field, `spawn` and `h.take(…)` alike;
-	//   • the same where the FACTORY takes the reference itself — `let alias = src` before `return Self{c: alias}`
-	//     defeats the swept consume scan, so the caller passes a BORROW and never emits a retain at all;
-	//   • `cs.push(cell)` and then a send of `cs` — the container's element, retained in `main`.
+	// ⚠ **NO POISON AND NO DRAIN.** The binding keeps its reference and releases it at its scope end through the
+	// ordinary drop, and the handler's release of the message's reference (`ServiceLoop.dropUnconsumedPayloads`,
+	// or `<T>.__abandon` for a request never served) is the ordinary drop too — both find the mark and step
+	// atomically. So a lend inside a loop is not a move out of it, and E2015 has nothing to say about it.
+	function lendIntoGreenThread(value ValueId, owner BindingMark, destination MessageArgumentDestination, anchor Token, anchorIndex TokenIndex) returns ValueId throws ParseError
+		try self.proveTransferGraph(value, handOff: GreenThreadHandOff.lend, blame: destination.blame(), anchor: anchor)
+		let messageReference = self.emitRetainCall(value, range: SourceRange.ofToken(anchor))
+
+		// Written THROUGH the shared `VarInfo` reference, `poisonOwningBinding`'s idiom, so every holder of the
+		// binding observes it.
+		var binding = try self.ownedBindings.get(owner) otherwise panic("lendIntoGreenThread: ownedBindings.get OOB at {owner} — `ownerLendsValue` bounds-tested the same index")
+
+		if binding.lentAt == NotLent 'firstLend'
+			binding.lentAt = anchorIndex
+		end 'firstLend'
+
+		if binding.lentOnPath == NotLent 'firstLendOnThisPath'
+			binding.lentOnPath = anchorIndex
+		end 'firstLendOnThisPath'
+
+		// A binding lives in a body, so a lend always has one to be filed with.
+		if self.deferredProvenance is sharedNoDeferredProvenance 'noBody'
+			panic("lendIntoGreenThread: `{String.from(binding.name)}` was lent outside any body — only a local `let` lends, and a local lives in one")
+		end 'noBody'
+
+		var deferred = self.deferredProvenance
+		deferred.noteLendSite(LendSite.create(binding.boundValue, root: binding.name, serviceType: destination.serviceType, message: destination.message, param: destination.param, line: anchor.line, column: anchor.column, sendLine: destination.sendAt.line, sendColumn: destination.sendAt.column, token: anchorIndex, opMark: self.artifact.module.ops.count()))
+		return messageReference
+	end 'lendIntoGreenThread'
+
+	// ⭐⭐⭐ **A LENT GRAPH IS FROZEN FROM ITS SEND ON (E3160) — the one routine every door a value could come to be
+	// written through asks.** Each door files its value (`FreezeDoorSite`) for `StorageProvenance`, which asks the
+	// whole rule once every body is parsed: of every value read out of a lent binding, of a door a loop's next
+	// trip reaches after the send, and of a message handler's parameters, which a send may lend. What this frame
+	// can answer now it refuses now — the lent binding itself at a door after a send on this path — because a
+	// parse refusal is the one reported ahead of every whole-program finding. `source` is what `value` was read out
+	// of: the value itself, or the record of the local a field chain starts at (`freezeSourceOf`).
 	//
-	// ⚠⚠ **THE THIRD OF THOSE IS WHY NO STATIC ANSWER EXISTS.** The retain happens in a frame the send cannot
-	// see, so no caller-side mark — not `valueOwnsHeapAlone`, not `valueFromFreshReturn` — can be made to
-	// answer it, and neither can the TYPE: `cs.push(cell)` and `cs.push(Cell.create())` build the same type
-	// and differ in exactly the fact that matters. A whole-program summary could, and does not exist.
+	// ⚠ Only a program that spawns a service can lend, so every other program pays one bool here.
+	function requireNotLentThrough(value ValueId, source ValueId, door FreezeDoor, valueTok Token) throws ParseError
+		if not self.signatures.spawnsAnyService() or self.deferredProvenance is sharedNoDeferredProvenance or self.valueIsNoRecordAWriteReaches(value) 'nothingCanBeLentHere'
+			return
+		end 'nothingCanBeLentHere'
+
+		var deferred = self.deferredProvenance
+		deferred.noteFreezeDoor(FreezeDoorSite.create(value, door: door, line: valueTok.line, column: valueTok.column, token: self.pos, opMark: self.artifact.module.ops.count()))
+
+		let owner = self.lentOwnerIndexOf(source)
+
+		if self.noLiveOwner(owner) or self.valueHoldsNothingWritable(value) 'notFrozenHere'
+			return
+		end 'notFrozenHere'
+
+		let binding = try self.ownedBindings.get(owner) otherwise panic("requireNotLentThrough: ownedBindings.get OOB at {owner} — `lentOwnerIndexOf` answered a live owner")
+		let sendTok = self.tokenAt(binding.lentOnPath)
+		let lentAt = sourcePositionText(self.filePath, line: sendTok.line, column: sendTok.column)
+		throw ParseError.lentGraphEscapes(lentGraphEscapesMessage(String.from(binding.name), lentAt: lentAt, door: freezeDoorPhrase(door, callee: "")), line: valueTok.line, column: valueTok.column)
+	end 'requireNotLentThrough'
+
+	// What a door's value was read out of, for the freeze: the record of the readable local a field chain the author
+	// wrote starts at (`rhsRootLocalName`), or the value itself.
+	function freezeSourceOf(value ValueId, sourceName ByteArray) returns ValueId
+		if sourceName.isEmpty() or not self.scope.contains(sourceName) 'noNamedSource'
+			return value
+		end 'noNamedSource'
+
+		let source = self.scope.getInfo(sourceName)
+		return value if source.isSelfField else source.boundValue
+	end 'freezeSourceOf'
+
+	// The owned binding that lent `value` on this path, or `noLiveOwner`'s past-the-end answer. A body that has lent
+	// nothing answers without scanning the owned set.
+	function lentOwnerIndexOf(value ValueId) returns BindingMark
+		let none = self.ownedBindings.count()
+
+		if self.deferredProvenance.lendSites.count() == 0 'nothingLentHere'
+			return none
+		end 'nothingLentHere'
+
+		let owner = self.liveOwnerIndexOf(value)
+
+		if self.noLiveOwner(owner) 'ownedByNoBinding'
+			return none
+		end 'ownedByNoBinding'
+
+		let binding = try self.ownedBindings.get(owner) otherwise panic("lentOwnerIndexOf: ownedBindings.get OOB at {owner} — `liveOwnerIndexOf` answered a live owner")
+		return owner if binding.lentOnPath != NotLent else none
+	end 'lentOwnerIndexOf'
+
+	// ⭐ **DOES `value`'s TYPE HOLD NOTHING A STATEMENT CAN WRITE?** A lent graph of such a type is frozen by the type
+	// already, so no door need refuse it (`ProgramSignatures.aggregateGraphIsWriteFree`).
 	//
-	// ⇒ **SO THE GRAPH IS PROVED WHERE THE COUNTS ARE — AT RUN TIME, IMMEDIATELY BEFORE THE MOVE.** A
-	// synthesized `__sole_<T>` walks the value's reachable records and requires one owner of each; an
-	// immortal `.rdata` literal passes with nothing to check; a shared copy-on-write BUFFER is DETACHED,
-	// because a move is a write-like event and that buffer's count is a plain word too; a shared RECORD
-	// aborts the process on the sender's own green thread, before anything is enqueued.
+	// ⚠ **`ProvenanceTracer.valueHoldsNothingWritable` IS ITS TWIN AND THE TWO MUST ANSWER ALIKE**: this tier
+	// exempts a door the whole-program tier would otherwise refuse, and the reverse. They are two spellings of one
+	// question because the type NAME is read out of a different place in each — this parse's own interned columns
+	// here, the merged module's type names there — and the tag test is what guards that read, a struct reference
+	// being the only value whose name denotes an aggregate.
+	function valueHoldsNothingWritable(value ValueId) returns bool
+		return tagIsStructRef(self.tagOf(value)) and self.signatures.aggregateGraphIsWriteFree(self.internedName(self.valueNameId(value)))
+	end 'valueHoldsNothingWritable'
+
+	// ⭐⭐⭐ **HOW WHAT THIS RECORD HOLDS IS WALKED BEFORE IT CROSSES — the transfer rule's THIRD question.**
+	// Three answers, and the routine that DECIDES is the one that SAYS: nothing to walk, a runtime WALK, or a
+	// NOUN naming the shape no walk can be built for (`untransferableParameterNoun`'s shape one tier down).
 	//
-	// ⚠ **WHAT IS STILL REFUSED IS WHAT NO WALK CAN BE BUILT FOR, NOT WHAT MIGHT BE SHARED** — an
-	// existential (a witness table names a destructor and no walk), an opaque type parameter (the send site
-	// cannot see its slots), a record no declaration here describes, and any graph reaching a type with no
-	// per-type cascade. The gate and the strategy come from ONE call
-	// (`ProgramSignatures.nameTransferWalkStrategy`), because a gate that admitted a type the synthesis
-	// cannot route names a symbol no installer builds.
-	function transferGraphProofOf(value ValueId) returns TransferGraphProof
+	// ⛔⛔ **SOLENESS IS NOT TRANSITIVE, AND THE DOOR'S OWN QUESTIONS ONLY ASK ABOUT THE BOX.** A box this frame
+	// solely owns can hold a payload it only CO-owns — `moveManagedValueInto`'s `borrowedManaged` arm stores by
+	// `__mm_incref` rather than by move, a factory can take the reference in a frame the send cannot see
+	// (`let alias = src` before `return Self{c: alias}`), and `cs.push(cell)` retains an element in `main` —
+	// and no caller-side mark and no TYPE can tell `cs.push(cell)` from `cs.push(Cell.create())`. A cross to a
+	// green thread is where that is FATAL rather than merely wrong: the second owner is left behind on this
+	// thread stepping a count the service now steps too.
+	//
+	// ⇒ **SO THE GRAPH IS WALKED WHERE THE COUNTS ARE — AT RUN TIME, IMMEDIATELY BEFORE THE HAND-OFF.** A
+	// move's `__sole_<T>` requires one owner of every counted record it reaches and DETACHES a shared
+	// copy-on-write buffer, because a move is a write-like event; a lend's `__share_<T>` requires the same one
+	// owner and MARKS every record it reaches shared (`MmRuntime.emitBoxWalkStep`). Either aborts on the
+	// sender's own green thread, before anything is enqueued, at a counted record with a second owner.
+	//
+	// ⚠ **WHAT A MOVE NEEDS NO WALK FOR, A LEND STILL WALKS.** A record holding no reference to a second
+	// counted record MOVES unwalked — its root's one owner is the compile-time fact the move door already asked
+	// — but a lend must mark that root, and a byte record's buffer, before the second green thread holds them.
+	//
+	// ⚠ **WHAT IS REFUSED IS WHAT NO WALK CAN BE BUILT FOR, NOT WHAT MIGHT BE SHARED** — an existential (a
+	// witness table names a destructor and no walk), an opaque type parameter (the send site cannot see its
+	// slots), a record no declaration here describes, and any graph reaching a type with no per-type cascade.
+	// The gate and the strategy come from ONE call (`ProgramSignatures.nameTransferWalkStrategy`), because a
+	// gate that admitted a type the synthesis cannot route names a symbol no installer builds.
+	function transferGraphProofOf(value ValueId, handOff GreenThreadHandOff) returns TransferGraphProof
 		let tag = self.tagOf(value)
 
 		// A byte record's slots hold a `.rdata` or heap BYTE BUFFER and a length — never a reference to a
-		// second refcounted record — so it is closed however it was built. This is what keeps a `String`
-		// message argument crossing.
+		// second refcounted record — so a move needs no walk however it was built. This is what keeps a
+		// `String` message argument crossing for free.
 		if tagIsByteRecord(tag) 'aByteRecord'
-			return TransferGraphProof.closed
+			return match handOff 'handOff'
+				move gives TransferGraphProof.closed
+				lend gives TransferGraphProof.provenBy(byteRecordCascadeCallee(CascadeAction.shareWalk))
+			end 'handOff'
 		end 'aByteRecord'
 
 		if tag == ValueTypeTag.genericInstance 'aContainer'
-			return self.transferWalkProof(self.signatures.instanceTransferWalkStrategy(self.valueInstanceId(value)), subject: self.valueDisplayTypeName(value))
+			return self.transferWalkProof(self.signatures.instanceTransferWalkStrategy(self.valueInstanceId(value), action: handOffWalk(handOff)), subject: self.valueDisplayTypeName(value))
 		end 'aContainer'
 
 		if tag == ValueTypeTag.interfaceRef 'anExistential'
@@ -88091,14 +88557,14 @@ export type Parser
 		// A boxed union: `emitEnumBox` tags its box `named`, so this arm and the struct arm below split on
 		// which registry declares the name rather than on the tag.
 		if self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'aUnionBox'
-			return TransferGraphProof.closed if not self.signatures.unionHasManagedPayload(name) else self.aggregateTransferProof(name)
+			return self.aggregateTransferProof(name, handOff: handOff, holdsReferences: self.signatures.unionHasManagedPayload(name))
 		end 'aUnionBox'
 
 		if not self.signatures.containsStructFor(name, readerFilePath: self.filePath) 'noSuchRecord'
 			return TransferGraphProof.refused("a managed value of `{String.from(name)}`, which no declaration this rule can read describes")
 		end 'noSuchRecord'
 
-		// ⚠ **`structHasManagedField` IS BLIND TO A SLOT STANDING AT A BARE TYPE PARAMETER (W183)**, and
+		// ⚠ **`structHasManagedField` IS BLIND TO A SLOT STANDING AT A BARE TYPE PARAMETER**, and
 		// `valueIsCopyableTuple` records the freed-record measurement that blindness cost one door over. The
 		// same pairing is required here and for a strictly worse reason: there the miss is a bad copy, here it
 		// is a reference handed to a second green thread.
@@ -88106,13 +88572,18 @@ export type Parser
 			return TransferGraphProof.refused("a `type {String.from(name)}` with a slot standing at a bare type parameter, whose managed-ness the send cannot see")
 		end 'anOpaqueSlot'
 
-		return TransferGraphProof.closed if not self.signatures.structHasManagedField(name) else self.aggregateTransferProof(name)
+		return self.aggregateTransferProof(name, handOff: handOff, holdsReferences: self.signatures.structHasManagedField(name))
 	end 'transferGraphProofOf'
 
-	// The walk for the aggregate a `structRef`/`named` value denotes. Split out because the union arm and the
-	// struct arm both reach it and neither may resolve the strategy a second way.
-	function aggregateTransferProof(name ByteArray) returns TransferGraphProof
-		return self.transferWalkProof(self.signatures.nameTransferWalkStrategy(name), subject: String.from(name))
+	// The walk for the aggregate a `structRef`/`named` value denotes, or none for a MOVE of a record holding no
+	// reference to another counted record. Split out because the union arm and the struct arm both reach it and
+	// neither may resolve the strategy a second way.
+	function aggregateTransferProof(name ByteArray, handOff GreenThreadHandOff, holdsReferences bool) returns TransferGraphProof
+		if handOff == GreenThreadHandOff.move and not holdsReferences 'movesUnwalked'
+			return TransferGraphProof.closed
+		end 'movesUnwalked'
+
+		return self.transferWalkProof(self.signatures.nameTransferWalkStrategy(name, action: handOffWalk(handOff)), subject: String.from(name))
 	end 'aggregateTransferProof'
 
 	// The index's paired gate-and-strategy read as this door's answer. `asElement: true` upstream means a
@@ -88126,18 +88597,18 @@ export type Parser
 		end 'strategy'
 	end 'transferWalkProof'
 
-	// ⭐⭐ **PROVE THE GRAPH, OR REFUSE IT** — the transfer rule's third question spent, shared by the SEND
-	// door and the REPLY door so the two cannot come to prove different things about one graph. It emits at
-	// most one call and it emits it only where nothing is thrown.
-	// ⚠ The walk returns nothing and takes no reference: what it proves is a property of the graph, so this
-	// frame's own `+1` still rides into the mailbox behind it.
-	function proveTransferGraphSole(value ValueId, blame String, anchor Token) throws ParseError
-		match self.transferGraphProofOf(value) 'graph'
+	// ⭐⭐ **WALK THE GRAPH, OR REFUSE IT** — the transfer rule's third question spent, shared by the SEND door,
+	// the LEND door and the REPLY door so no two of them can come to walk different things about one graph. It
+	// emits at most one call and it emits it only where nothing is thrown.
+	// ⚠ The walk returns nothing and takes no reference: what it establishes is a property of the graph, so the
+	// reference that crosses — this frame's own for a move, a fresh retain for a lend — is the caller's.
+	function proveTransferGraph(value ValueId, handOff GreenThreadHandOff, blame String, anchor Token) throws ParseError
+		match self.transferGraphProofOf(value, handOff: handOff) 'graph'
 			closed then break 'graph'
 			provenBy(callee) then _ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
 			refused(noun) then throw ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, source: self.transferredValueName(value), noun: noun), line: anchor.line, column: anchor.column)
 		end 'graph'
-	end 'proveTransferGraphSole'
+	end 'proveTransferGraph'
 
 	// The source NAME a refused transfer should point the author at — the live owning binding's, or the empty
 	// name for a value no binding holds (a temporary, an element read, a field read). Split out because both

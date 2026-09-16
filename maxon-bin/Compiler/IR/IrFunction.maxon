@@ -249,23 +249,155 @@ end 'StorageSite'
 
 export typealias StorageSiteArray = Array with StorageSite
 
-// A container method that writes its receiver, at the method's own token; `place` is the receiver as written.
-// `blameable` is false on the buffer surface, whose members are declared on a plain `self` and so write a
-// `let`-bound buffer legally.
+// ⭐ **WHERE A DOOR OR A SEND STANDS IN ITS BODY'S CONTROL FLOW** — the block, and the position in it the value
+// passes: every op of the block below `at` runs first. Which doors a send's freeze reaches is asked of the blocks
+// (`ProvenanceTracer.doorFollowsLend`), so a door on another arm of the same `if` or `match` is not one.
+//
+// ⚠ **A SITE IS NOTED WITH AN OP STREAM MARK AND PLACED AT THE BODY'S `end`** (`Parser.placeFreezeSites`), because
+// a ternary's arms move ops between blocks while a body is parsed and an op keeps its index through the move — so
+// a block recorded as the ops were emitted can be the wrong one, and the op cannot be.
+export type FlowPoint
+	export var block as BlockId
+	export var at as BlockOpPos
+
+	export static function create(block BlockId, at BlockOpPos) returns FlowPoint
+		return Self{block: block, at: at}
+	end 'create'
+
+	// A point of a body that is still being parsed; every site is placed before anything reads one.
+	export static function unplaced() returns FlowPoint
+		return Self{block: 0, at: 0}
+	end 'unplaced'
+
+	export function place(blockId BlockId, position BlockOpPos)
+		self.block = blockId
+		self.at = position
+	end 'place'
+end 'FlowPoint'
+
+// A container method that writes its receiver, at the method's own token; `place` is the receiver as written and
+// `method` the method. `blameable` is false on the buffer surface, whose members are declared on a plain `self` and
+// so write a `let`-bound buffer legally. `opMark` and `point` are the write's place in the body's control flow,
+// which the freeze on a lent graph asks about (`FlowPoint`).
 export type ReceiverWriteSite
 	export let receiver as ValueId
 	export let place as ByteArray
+	export let method as ByteArray
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let blameable as bool
 	export let token as TokenIndex
+	export let opMark as OpIndex
+	export var point as FlowPoint
 
-	export static function create(receiver ValueId, place ByteArray, line LineNumber, column ColumnNumber, blameable bool, token TokenIndex) returns ReceiverWriteSite
-		return Self{receiver: receiver, place: place, line: line, column: column, blameable: blameable, token: token}
+	export static function create(receiver ValueId, place ByteArray, method ByteArray, line LineNumber, column ColumnNumber, blameable bool, token TokenIndex, opMark OpIndex) returns ReceiverWriteSite
+		return Self{receiver: receiver, place: place, method: method, line: line, column: column, blameable: blameable, token: token, opMark: opMark, point: FlowPoint.unplaced()}
 	end 'create'
 end 'ReceiverWriteSite'
 
 export typealias ReceiverWriteSiteArray = Array with ReceiverWriteSite
+
+// ⭐ **THE WAYS A VALUE COMES TO BE WRITTEN THROUGH, WHICH A LENT GRAPH MAY NOT TAKE (E3160).** The parser files the
+// first six where the value is written (`FreezeDoorSite`); the last three are a callee's, read off each call once
+// every body is summarised.
+export enum FreezeDoor
+	bindToVar
+	assignToVar
+	storeInFieldOrPayload
+	storeInContainer
+	returned
+	capturedByClosure
+	keptByCallee
+	writtenAsReceiver
+	writtenByCallee
+end 'FreezeDoor'
+
+// One door a value passed, at the value's own position; `point` is where the door stands in the body's control
+// flow, which a send's is compared against, and `token` orders two that stand at one point.
+export type FreezeDoorSite
+	export let value as ValueId
+	export let door as FreezeDoor
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let token as TokenIndex
+	export let opMark as OpIndex
+	export var point as FlowPoint
+
+	export static function create(value ValueId, door FreezeDoor, line LineNumber, column ColumnNumber, token TokenIndex, opMark OpIndex) returns FreezeDoorSite
+		return Self{value: value, door: door, line: line, column: column, token: token, opMark: opMark, point: FlowPoint.unplaced()}
+	end 'create'
+end 'FreezeDoorSite'
+
+export typealias FreezeDoorSiteArray = Array with FreezeDoorSite
+
+// ⭐ **ONE `let` LENT TO A MESSAGE.** `value` is the lent record and `root` the name of the binding that owns it; the
+// handler is `<serviceType>.<message>` at its parameter `param`. `line`/`column` is the argument and `token` its
+// token, where the freeze starts; `sendLine`/`sendColumn` is the send, where a handler that writes the parameter
+// is refused (E3019). `point` is where the send stands in the body's control flow, from which the doors it freezes
+// are the ones reachable (`FlowPoint`).
+export type LendSite
+	export let value as ValueId
+	export let root as ByteArray
+	export let serviceType as ByteArray
+	export let message as ByteArray
+	export let param as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let sendLine as LineNumber
+	export let sendColumn as ColumnNumber
+	export let token as TokenIndex
+	export let opMark as OpIndex
+	export var point as FlowPoint
+
+	export static function create(value ValueId, root ByteArray, serviceType ByteArray, message ByteArray, param ByteArray, line LineNumber, column ColumnNumber, sendLine LineNumber, sendColumn ColumnNumber, token TokenIndex, opMark OpIndex) returns LendSite
+		return Self{value: value, root: root, serviceType: serviceType, message: message, param: param, line: line, column: column, sendLine: sendLine, sendColumn: sendColumn, token: token, opMark: opMark, point: FlowPoint.unplaced()}
+	end 'create'
+end 'LendSite'
+
+export typealias LendSiteArray = Array with LendSite
+
+// Where each LABELLED call argument's value starts, by its label's position: a call's `argRanges` point at the label,
+// and a refusal about the value points at the value.
+export type LabelledArgumentValues
+	export var labels as PositionKeyArray
+	export var lines as LineNumberArray
+	export var columns as ColumnNumberArray
+
+	export static function create() returns LabelledArgumentValues
+		return Self{labels: PositionKeyArray.create(), lines: LineNumberArray.create(), columns: ColumnNumberArray.create()}
+	end 'create'
+
+	export function record(label PositionKey, line LineNumber, column ColumnNumber)
+		self.labels.push(label)
+		self.lines.push(line)
+		self.columns.push(column)
+	end 'record'
+
+	export function clear()
+		self.labels.clear()
+		self.lines.clear()
+		self.columns.clear()
+	end 'clear'
+
+	// The row each label's value was recorded at. The FIRST row wins, as a scan looking for the label would find.
+	export function byPosition() returns LabelledValueRowByPosition
+		var byPosition = LabelledValueRowByPosition.create()
+
+		for i in 0 upto self.labels.count() 'eachArgument'
+			let label = try self.labels.get(i) otherwise panic("LabelledArgumentValues.byPosition: labels.get OOB at {i}")
+
+			if not byPosition.contains(label) 'theFirstThere'
+				byPosition.upsert(label, value: i)
+			end 'theFirstThere'
+		end 'eachArgument'
+
+		return byPosition
+	end 'byPosition'
+end 'LabelledArgumentValues'
+
+// The row a labelled call argument's value was recorded at, by its label's position.
+typealias LabelledValueRow = int(0 to u64.max)
+export typealias LabelledValueRowByPosition = Map with (PositionKey, LabelledValueRow)
 
 // ⭐ **A NAME BOUND OR ASSIGNED WHOLE TO A MUTABLE NAME, AND THE FIRST READ OF IT AFTER.** Filed where a `let` — or
 // a `var`, whose E3077 verdict needs the same fact — is bound or assigned to a mutable name (`destination`). Whether
@@ -458,26 +590,30 @@ export type DeferredWriteThroughs
 end 'DeferredWriteThroughs'
 
 // Container methods that write their receiver (`Parser.noteReceiverWrite`), each by its method's token, from which
-// the place, the position and the token the call ends at are all read when it is filed.
+// the place, the position and the token the call ends at are all read when it is filed. `opMarks` is where each
+// write stands in the op stream, which the freeze on a lent graph turns into a `FlowPoint`.
 export type DeferredReceiverWrites
 	export var receivers as ValueIdArray
 	export var methodIndices as TokenIndexArray
 	export var blameable as BoolArray
+	export var opMarks as OpIndexArray
 
 	export static function create() returns DeferredReceiverWrites
-		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), blameable: BoolArray.create()}
+		return Self{receivers: ValueIdArray.create(), methodIndices: TokenIndexArray.create(), blameable: BoolArray.create(), opMarks: OpIndexArray.create()}
 	end 'create'
 
-	export function record(receiver ValueId, methodIndex TokenIndex, blames bool)
+	export function record(receiver ValueId, methodIndex TokenIndex, blames bool, opMark OpIndex)
 		self.receivers.push(receiver)
 		self.methodIndices.push(methodIndex)
 		self.blameable.push(blames)
+		self.opMarks.push(opMark)
 	end 'record'
 
 	export function clear()
 		self.receivers.clear()
 		self.methodIndices.clear()
 		self.blameable.clear()
+		self.opMarks.clear()
 	end 'clear'
 end 'DeferredReceiverWrites'
 
@@ -508,8 +644,14 @@ export type DeferredProvenance
 	// The two arms of each `if` with an `else`, as consecutive spans: the `then` arm, then the `else` arm.
 	export var exclusiveArms as TokenSpans
 
+	// The doors a lent graph may not pass (E3160), the sends that lent one, and where the value of each labelled call
+	// argument starts, which a callee's door is refused at.
+	export var freezeDoors as FreezeDoorSiteArray
+	export var lendSites as LendSiteArray
+	export var labelledArguments as LabelledArgumentValues
+
 	export static function create() returns DeferredProvenance
-		return Self{letReads: sharedNoLetReads, letCaptures: sharedNoLetReads, exclusiveArms: sharedNoTokenSpans, calls: sharedNoCallTokenColumns, moduleLets: sharedNoModuleLetReads, loops: sharedNoTokenSpans, fieldWrites: sharedNoProvenanceValues, writableValues: sharedNoProvenanceValues, moveSites: sharedNoMoveSites, mutableBindingSites: sharedNoStorageSites, nameBindSites: sharedNoStorageSites, writeThroughs: sharedNoDeferredWriteThroughs, receiverWrites: sharedNoDeferredReceiverWrites}
+		return Self{letReads: sharedNoLetReads, letCaptures: sharedNoLetReads, exclusiveArms: sharedNoTokenSpans, calls: sharedNoCallTokenColumns, moduleLets: sharedNoModuleLetReads, loops: sharedNoTokenSpans, fieldWrites: sharedNoProvenanceValues, writableValues: sharedNoProvenanceValues, moveSites: sharedNoMoveSites, mutableBindingSites: sharedNoStorageSites, nameBindSites: sharedNoStorageSites, writeThroughs: sharedNoDeferredWriteThroughs, receiverWrites: sharedNoDeferredReceiverWrites, freezeDoors: sharedNoFreezeDoors, lendSites: sharedNoLendSites, labelledArguments: sharedNoLabelledArguments}
 	end 'create'
 
 	// Empty for the next body, keeping what each column this parser owns has grown to. A shared empty one is left
@@ -566,7 +708,61 @@ export type DeferredProvenance
 		if self.exclusiveArms is not sharedNoTokenSpans 'ownsArms'
 			self.exclusiveArms.clear()
 		end 'ownsArms'
+
+		if self.freezeDoors is not sharedNoFreezeDoors 'ownsFreezeDoors'
+			self.freezeDoors.clear()
+		end 'ownsFreezeDoors'
+
+		if self.lendSites is not sharedNoLendSites 'ownsLendSites'
+			self.lendSites.clear()
+		end 'ownsLendSites'
+
+		if self.labelledArguments is not sharedNoLabelledArguments 'ownsLabelledArguments'
+			self.labelledArguments.clear()
+		end 'ownsLabelledArguments'
 	end 'clear'
+
+	export function noteLabelledArgument(label PositionKey, line LineNumber, column ColumnNumber)
+		if self.labelledArguments is sharedNoLabelledArguments 'firstArgument'
+			self.labelledArguments = LabelledArgumentValues.create()
+		end 'firstArgument'
+
+		self.labelledArguments.record(label, line: line, column: column)
+	end 'noteLabelledArgument'
+
+	export function noteFreezeDoor(site FreezeDoorSite)
+		if self.freezeDoors is sharedNoFreezeDoors 'firstDoor'
+			self.freezeDoors = FreezeDoorSiteArray.create()
+		end 'firstDoor'
+
+		self.freezeDoors.push(site)
+	end 'noteFreezeDoor'
+
+	export function noteLendSite(site LendSite)
+		if self.lendSites is sharedNoLendSites 'firstLend'
+			self.lendSites = LendSiteArray.create()
+		end 'firstLend'
+
+		self.lendSites.push(site)
+	end 'noteLendSite'
+
+	// The freeze's doors and lends, into the `sites` of a body that lent a graph or may be lent one.
+	export function fileFreezeInto(sites ProvenanceSites)
+		if self.freezeDoors.count() > 0 'someDoor'
+			sites.freezeDoors = self.freezeDoors
+			self.freezeDoors = sharedNoFreezeDoors
+		end 'someDoor'
+
+		if self.lendSites.count() > 0 'someLend'
+			sites.lendSites = self.lendSites
+			self.lendSites = sharedNoLendSites
+		end 'someLend'
+
+		if self.labelledArguments.labels.count() > 0 'someLabelledArgument'
+			sites.labelledArguments = self.labelledArguments
+			self.labelledArguments = sharedNoLabelledArguments
+		end 'someLabelledArgument'
+	end 'fileFreezeInto'
 
 	export function noteLetRead(value ValueId, token TokenIndex)
 		if self.letReads is sharedNoLetReads 'firstRead'
@@ -666,12 +862,12 @@ export type DeferredProvenance
 		self.writeThroughs.record(target, placeStart: placeStart, placeEnd: placeEnd, line: line, column: column, token: token)
 	end 'noteWriteThrough'
 
-	export function noteReceiverWrite(receiver ValueId, methodIndex TokenIndex, blameable bool)
+	export function noteReceiverWrite(receiver ValueId, methodIndex TokenIndex, blameable bool, opMark OpIndex)
 		if self.receiverWrites is sharedNoDeferredReceiverWrites 'firstWrite'
 			self.receiverWrites = DeferredReceiverWrites.create()
 		end 'firstWrite'
 
-		self.receiverWrites.record(receiver, methodIndex: methodIndex, blames: blameable)
+		self.receiverWrites.record(receiver, methodIndex: methodIndex, blames: blameable, opMark: opMark)
 	end 'noteReceiverWrite'
 
 	// What a summary is traced from, into `sites`: the receiver writes as the parser spelled them, and the name binds.
@@ -756,9 +952,12 @@ export type ProvenanceSites
 	export var exclusiveArms as TokenSpans
 	export var varCandidates as VarShouldBeLetCandidates
 	export var hasVarCandidates as bool
+	export var freezeDoors as FreezeDoorSiteArray
+	export var lendSites as LendSiteArray
+	export var labelledArguments as LabelledArgumentValues
 
 	export static function create() returns ProvenanceSites
-		return Self{letReads: sharedNoLetReads, letCaptures: sharedNoLetReads, exclusiveArms: sharedNoTokenSpans, immutableBindings: sharedNoImmutableBindings, mutableBindingSites: sharedNoStorageSites, nameBindSites: sharedNoStorageSites, writeThroughSites: sharedNoStorageSites, receiverWrites: sharedNoReceiverWrites, fieldWrites: sharedNoProvenanceValues, moveSites: sharedNoMoveSites, writableValues: sharedNoProvenanceValues, loops: sharedNoTokenSpans, calls: sharedNoCallTokenColumns, varCandidates: sharedNoVarCandidates, hasVarCandidates: false}
+		return Self{letReads: sharedNoLetReads, letCaptures: sharedNoLetReads, exclusiveArms: sharedNoTokenSpans, immutableBindings: sharedNoImmutableBindings, mutableBindingSites: sharedNoStorageSites, nameBindSites: sharedNoStorageSites, writeThroughSites: sharedNoStorageSites, receiverWrites: sharedNoReceiverWrites, fieldWrites: sharedNoProvenanceValues, moveSites: sharedNoMoveSites, writableValues: sharedNoProvenanceValues, loops: sharedNoTokenSpans, calls: sharedNoCallTokenColumns, varCandidates: sharedNoVarCandidates, hasVarCandidates: false, freezeDoors: sharedNoFreezeDoors, lendSites: sharedNoLendSites, labelledArguments: sharedNoLabelledArguments}
 	end 'create'
 
 	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken TokenIndex, info VarInfo)
@@ -792,6 +991,9 @@ var sharedNoCallTokenColumns = CallTokenColumns.create()
 var sharedNoModuleLetReads = ModuleLetReads.create()
 var sharedNoDeferredWriteThroughs = DeferredWriteThroughs.create()
 var sharedNoDeferredReceiverWrites = DeferredReceiverWrites.create()
+var sharedNoFreezeDoors = FreezeDoorSiteArray.create()
+var sharedNoLendSites = LendSiteArray.create()
+var sharedNoLabelledArguments = LabelledArgumentValues.create()
 var sharedEmptyProvenanceSites = ProvenanceSites.create()
 var sharedNoFiledProvenance = FiledProvenance.none
 
@@ -1477,11 +1679,10 @@ export type IrFunction
 	// ⛔⛔ **ITS SEVEN MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
 	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the POOL WORKER path: `extractUnitModule`
 	// builds one function per message, and a worker runs on whichever green thread the scheduler picked.
-	// Storing a module-level record into a fresh one RETAINS it, and this language's reference counting is a
-	// plain load/add/store precisely because the language guarantees one green thread per box — so sixteen
-	// workers retaining and releasing ONE singleton is the lost update that guarantee exists to make
-	// impossible. Seven small empties per call, on a door the parser never takes (`create` is the parser's,
-	// and it keeps the singletons for its thousands of functions).
+	// Storing a module-level record into a fresh one RETAINS it, and a counted record's reference count is a
+	// plain load/add/store precisely because one green thread owns it — so sixteen workers retaining and
+	// releasing ONE singleton is a lost update. Seven small empties per call, on a door the parser never takes
+	// (`create` is the parser's, and it keeps the singletons for its thousands of functions).
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
 		return Self{
@@ -1691,6 +1892,12 @@ export type IrFunction
 		var sites = self.provenanceSitesForWrite()
 		deferred.fileGuardedInto(sites)
 	end 'fileGuardedProvenance'
+
+	// The freeze's doors and lends (`DeferredProvenance.fileFreezeInto`).
+	export function fileFreezeProvenance(deferred DeferredProvenance)
+		var sites = self.provenanceSitesForWrite()
+		deferred.fileFreezeInto(sites)
+	end 'fileFreezeProvenance'
 
 	export function fileWriteThroughSites(writeThroughSites StorageSiteArray)
 		var sites = self.provenanceSitesForWrite()

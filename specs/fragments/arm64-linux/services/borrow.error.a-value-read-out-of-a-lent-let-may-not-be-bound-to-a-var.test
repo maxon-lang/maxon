@@ -1,0 +1,41 @@
+// Test: borrow.error.a-value-read-out-of-a-lent-let-may-not-be-bound-to-a-var
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Pair
+	export let inner as Box
+
+	static function create(inner Box) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Pair'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(p Pair)
+		self.seen = self.seen + p.inner.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let p = Pair.create(Box.create())
+	h.take(p)
+	var y = p.inner
+	y.n = 2
+	return y.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3160: <fragment>:34:10: `p` was lent to another green thread at <fragment>:33:9, so what it holds is frozen: binding it to a `var` would let it be written. Send a `.clone()` instead, or bind `p` with `var` so the send moves it

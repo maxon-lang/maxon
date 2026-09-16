@@ -484,13 +484,24 @@ export let ManagedAppendManagedName = b"__managed_append_managed"
 // pair passes an element cloner.
 //
 // ⭐ **A SHARED BUFFER IS DETACHED RATHER THAN REFUSED, AND THAT IS THE WHOLE DIFFERENCE BETWEEN THE TWO
-// THINGS A COUNT CAN MEAN HERE.** A shared RECORD is two owners of one box, which is what the language
-// forbids across green threads. A shared BUFFER is copy-on-write — `.clone()`/`.slice()` share bytes until a
-// write — and its allocation carries a plain refcount too, so leaving the two records on two green threads
-// would race that word. **A MOVE IS A WRITE-LIKE EVENT**, so the answer is the one a write already gives:
-// `__managed_cow_detach`, called rather than restated.
+// THINGS A COUNT CAN MEAN HERE.** A counted RECORD with two owners is what a move may not leave behind. A
+// shared BUFFER is copy-on-write — `.clone()`/`.slice()` share bytes until a write — and a counted buffer's
+// count steps plain, so leaving the two records on two green threads would race that word. **A MOVE IS A
+// WRITE-LIKE EVENT**, so the answer is the one a write already gives: `__managed_cow_detach`, called rather
+// than restated.
 export let ManagedSoleName = b"__managed_sole"
 export let ManagedSoleManagedName = b"__managed_sole_managed"
+
+// ⭐⭐ **THE SHARE WALK OVER A CONTAINER RECORD** — the soleness pair's twin for a LEND. It marks the record
+// shared, marks the separate allocation its bytes live in (`__mm_share_buffer`) — views step that count from
+// any green thread once the record is lent — and — the `_managed` entry — walks each live element through the
+// stamped `funcAddr(__share_<E>)`.
+//
+// ⭐ **IT DETACHES NOTHING.** A lend is not a write: the record stays where it is, frozen, and every holder of
+// its bytes — a view copies before it writes, the owner writes only after a detach — finds the marked buffer's
+// count non-zero and copies out rather than writing in place.
+export let ManagedShareName = b"__managed_share"
+export let ManagedShareManagedName = b"__managed_share_managed"
 
 // ⭐⭐ **THE TWO CO-OWN ENTRIES A BUFFER RECORD TAKES INSTEAD OF THE PLAIN BOX'S, BECAUSE ONE SUCH RECORD
 // IS IMAGE DATA.** A module-level managed constant materializes as an immortal `.rdata` record
@@ -1321,14 +1332,20 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 		buildManagedAppendOpaque(module)
 	end 'opaqueCopy'
 
-	// The two SOLENESS walks — under their OWN bit, so a program that hands nothing to a green thread
-	// does not carry them. Both entries are installed together for the reason `buildManagedSole` states: they
-	// are one operation split only by whether the elements are managed, and a `String` field reaches the
-	// first while an `Array with <struct>` field reaches the second in the same program.
+	// The two SOLENESS walks and the two SHARE walks — each pair under its OWN bit, so a program that hands
+	// nothing to a green thread does not carry them. Both entries of a pair are installed together for the
+	// reason `buildManagedWalk` states: they are one operation split only by whether the elements are
+	// managed, and a `String` field reaches the first while an `Array with <struct>` field reaches the second
+	// in the same program.
 	if usage.usesSoleWalk 'soleWalk'
-		buildManagedSole(module, name: ManagedSoleName, walksElements: false)
-		buildManagedSole(module, name: ManagedSoleManagedName, walksElements: true)
+		buildManagedWalk(module, name: ManagedSoleName, walksElements: false, action: CascadeAction.soleWalk)
+		buildManagedWalk(module, name: ManagedSoleManagedName, walksElements: true, action: CascadeAction.soleWalk)
 	end 'soleWalk'
+
+	if usage.usesShareWalk 'shareWalk'
+		buildManagedWalk(module, name: ManagedShareName, walksElements: false, action: CascadeAction.shareWalk)
+		buildManagedWalk(module, name: ManagedShareManagedName, walksElements: true, action: CascadeAction.shareWalk)
+	end 'shareWalk'
 
 	verifyThrowingAccessorsMatchPredicate(module)
 end 'installManagedMemoryRuntime'
@@ -5674,6 +5691,7 @@ function elementRangeLabels(action CascadeAction) returns ElementRangeLabels
 	return match action 'action'
 		clone gives ElementRangeLabels.create(b"clnh", body: b"clnb", step: b"clnstep", done: b"clndone")
 		soleWalk gives ElementRangeLabels.create(b"solh", body: b"solb", step: b"solstep", done: b"soldone")
+		shareWalk gives ElementRangeLabels.create(b"shrh", body: b"shrb", step: b"shrstep", done: b"shrdone")
 	end 'action'
 end 'elementRangeLabels'
 
@@ -5709,20 +5727,21 @@ function buildManagedCloneManaged(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCloneManaged'
 
-// ⭐⭐ **`__managed_sole(arr)` / `__managed_sole_managed(arr, soleFn)` — PROVE A CONTAINER RECORD
-// MOVEABLE.** Both entries in one builder for `buildListClone`'s reason: the immortal test, the refcount
-// proof and the buffer detach are ONE answer, and the element walk is the only thing the two differ by.
+// ⭐⭐ **`__managed_sole(arr)` / `__managed_sole_managed(arr, soleFn)` — PROVE A CONTAINER RECORD MOVEABLE;
+// `__managed_share(arr)` / `__managed_share_managed(arr, shareFn)` — MARK ONE LENT.** One builder for every
+// entry, for `buildListClone`'s reason: the box step and what follows it are ONE answer per action, and the
+// element walk is the only thing an entry's two forms differ by.
 //
-// ⚠ **THE IMMORTAL TEST COMES FIRST, EXACTLY AS `__managed_decref`'s DOES.** An `ImmortalRecordCapacity`
-// record's header is image data with no count anyone maintains, and its buffer is `.rdata` a detach would
-// pointlessly copy out. Nothing can co-own it either — `__managed_retain` answers with a private clone — so
-// it is already moveable.
+// ⚠ **THE BOX STEP COMES FIRST** (`MmRuntime.emitBoxWalkStep`), and it is what sends an image record and an
+// already-shared record home untouched: an `ImmortalRecordCapacity` record carries the immortal header too
+// (`BufferOwnership.immortalRecordPayload`), and a shared record's `buffer@0` may be read by another green
+// thread at this moment, so neither may be detached or marked again.
 //
 // ⚠ **A MANAGED-ELEMENT ARRAY'S OWN BUFFER IS NEVER SHARED TODAY** — `.clone()`/`.slice()` on one deep-copy
-// through the `_managed` entries rather than viewing — so the detach is a no-op there. It is called anyway
-// because "a move is a write" is a rule about the RECORD FORMAT, not about which elements it happens to
+// through the `_managed` entries rather than viewing — so the move's detach is a no-op there. It is called
+// anyway because "a move is a write" is a rule about the RECORD FORMAT, not about which elements it happens to
 // hold, and a second element-bearing view shape would otherwise need this same line added back.
-function buildManagedSole(module StdModule, name ByteArray, walksElements bool)
+function buildManagedWalk(module StdModule, name ByteArray, walksElements bool, action CascadeAction)
 	var paramTypes = oneI64Param()
 
 	if walksElements 'perElementWalk'
@@ -5731,54 +5750,64 @@ function buildManagedSole(module StdModule, name ByteArray, walksElements bool)
 
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
 
-	// ⚠ BOTH entries reserve two parameter id slots, so `soleFn` is either parameter 1 or nothing at all —
-	// `buildListClone`'s rule, and it is what keeps the name from denoting a temporary in the other entry.
+	// ⚠ BOTH entries reserve two parameter id slots, so `elementWalk` is either parameter 1 or nothing at
+	// all — `buildListClone`'s rule, and it is what keeps the name from denoting a temporary in the other entry.
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let arr = 0 as ValueId
-	let soleFn = 1 as ValueId
+	let elementWalk = 1 as ValueId
 
-	let isImmortal = emitRecordIsImmortal(module, block: entry, record: arr, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: done.id, elseBlockId: countable.id))
+	var walked = emitBoxWalkStep(module, func: func, block: entry, box: arr, action: action, stop: done, ids: ids)
 
-	emitSoleBoxCall(module, block: countable, box: arr, ids: ids)
-	emitCowDetach(module, block: countable, arr: arr, ids: ids)
+	match action 'action'
+		clone then panic("buildManagedWalk: a clone is `__managed_clone`/`__managed_clone_managed`, not a walk")
+		soleWalk then emitCowDetach(module, block: walked, arr: arr, ids: ids)
+		shareWalk then walked = emitShareOwedBuffer(module, func: func, cur: walked, record: arr, ids: ids)
+	end 'action'
 
 	if walksElements 'eachElement'
 		// Read AFTER the detach: it replaces `buffer@0`, so a pointer taken above it would walk the
 		// abandoned allocation.
-		let buffer = emitLoadField(module, block: countable, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-		let length = emitLoadField(module, block: countable, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-		let es = emitLoadField(module, block: countable, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-		let afterWalk = emitElementSoleRange(module, func: func, cur: countable, base: buffer, count: length, elementSize: es, soleFn: soleFn, ids: ids)
+		let buffer = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+		let length = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+		let es = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+		let afterWalk = emitElementWalkRange(module, func: func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: elementWalk, action: action, ids: ids)
 		module.setTerminator(afterWalk, op: StdOp.branch(done.id))
 	end 'eachElement' else 'noElementWalk'
-		module.setTerminator(countable, op: StdOp.branch(done.id))
+		module.setTerminator(walked, op: StdOp.branch(done.id))
 	end 'noElementWalk'
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildManagedSole'
+end 'buildManagedWalk'
 
-// Prove each live element sole through the caller's `(box) -> void` `soleFn`, over the same per-element
+// Mark the separate allocation `record`'s bytes live in shared, when there is one — an owner's `buffer@0` or a
+// view's parent base; an `.rdata` blob and an inline String's bytes owe nothing (`emitOwedAllocationBase`) and
+// nothing can step a count on them. Threads `cur` and returns the continuation block.
+function emitShareOwedBuffer(module StdModule, func IrFunction, cur IrBlock, record ValueId, ids ValueMinter) returns IrBlock
+	var join = module.addBlock(func, label: b"sharebase", heat: BlockHeat.normal)
+	let base = emitOwedAllocationBase(module, func: func, cur: cur, join: join, record: record, ids: ids)
+	return emitReleaseOwedBase(module, func: func, cur: join, base: base, callee: MmShareBufferName, ids: ids)
+end 'emitShareOwedBuffer'
+
+// Walk each live element through the caller's `(box) -> void` `elementWalk`, over the same per-element
 // skeleton `emitElementCloneRange` copies through. Threads `cur` and returns the continuation block.
-function emitElementSoleRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, soleFn ValueId, ids ValueMinter) returns IrBlock
-	var visit = module.addBlock(func, label: b"soldo", heat: BlockHeat.normal)
-	let loop = emitElementRange(module, func: func, cur: cur, base: base, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(CascadeAction.soleWalk), ids: ids)
+function emitElementWalkRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns IrBlock
+	var visit = module.addBlock(func, label: b"walkdo", heat: BlockHeat.normal)
+	let loop = emitElementRange(module, func: func, cur: cur, base: base, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(action), ids: ids)
 
 	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk is a
 	// `(box) -> void` whose one argument is a whole-machine-word POINTER.
 	let visited = ids.mint()
-	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: soleFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(loop.element)))
+	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: elementWalk, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(loop.element)))
 
 	return loop.done
-end 'emitElementSoleRange'
+end 'emitElementWalkRange'
 
 // `__managed_slice_managed(arr, start, end, cloneFn) -> (newArr, flag)` — the throwing managed slice: the SAME
 // bounds check as `__managed_slice` (out of bounds / inverted range / negative index → `ArrayError`), then a fresh

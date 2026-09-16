@@ -62,11 +62,11 @@
 //       which is a DOUBLE FREE of every managed argument the spawn owned, not a lost count. Whoever wins the
 //       swap to 0 is the one that calls. `GtRuntime.emitGtReleaserCall` carries the argument and the
 //       no-retry-loop proof.
-//   (2) **The refcounts the emitted drop callees touch are PLAIN** — a releaser runs on the M of the green
-//       thread that owns the spawn, which is the only party that ever holds those boxes
-//       (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the invariant). The half that does the
-//       work is the order: the decref decides "am I the last owner?" from the value its own decrement
-//       displaced rather than from a prior read.
+//   (2) **The drop callees step each count the way its box keeps it** — plain for a counted box, which only
+//       the green thread that owns the spawn holds and whose M the releaser runs on, atomic for one a lend
+//       marked shared (`MmRuntime.emitAdjustRefcount`; `SchedRuntime.maxon` states the invariant). The half
+//       that does the work is the order: the decref decides "am I the last owner?" from the value its own
+//       decrement displaced rather than from a prior read.
 //   (3) **The drop path never reads `threw`/`result`, and the TEARDOWN RENDEZVOUS is what keeps that safe.**
 //       `buildGtPromiseDrop` loads `status`, `parkKind` and `owner`, and nothing else; the only reader of
 //       `threw`/`result` on this road is the releaser, and the releaser runs only inside `__gt_reclaim` —
