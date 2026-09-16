@@ -103,10 +103,6 @@ install the new release.
 **Report what actually happened**, per job, and read the deploy step's log rather than its exit code:
 a missing credential SKIPS with a notice and still reports success.
 
-Last, `publish` deletes `release/X.Y.Z` — the tag names the same commit, and §5b puts the branch back
-from it if the release has to be cut again. ⚠ If the branch has a commit past the tag, that step FAILS
-and leaves the branch: tell the user, since it is work nothing shipped.
-
 **Then verify what actually shipped**, which is not the same question as whether the jobs are green:
 
 ```bash
@@ -127,13 +123,9 @@ step below.
 `homebrew` races it.
 
 ```bash
-# 1. The branch is on origin before the tag goes, so the release commits stay reachable.
+# 1. The branch the release was cut from. Nothing deletes it before the release succeeds (§6).
 git fetch origin --tags --prune
-if git ls-remote --exit-code --heads origin release/X.Y.Z >/dev/null; then
-	git checkout -B release/X.Y.Z origin/release/X.Y.Z
-else
-	git checkout -B release/X.Y.Z vX.Y.Z && git push origin release/X.Y.Z
-fi
+git checkout -B release/X.Y.Z origin/release/X.Y.Z
 
 # 2. The release and its assets, if `publish` got that far.
 gh release delete vX.Y.Z --yes
@@ -150,8 +142,10 @@ git tag -d vX.Y.Z
 ⛔ **READ THE LAST `gh api` LINE: it must print `active update,deletion,non_fast_forward`.** A protection
 left off is worse than the release that needed it lifted.
 
-⚠ **`-B`, never `-b`.** A local `release/X.Y.Z` survives `publish` deleting the remote one, so `-b` fails —
-and every command after it then runs on `main`.
+⚠ **`-B`, never `-b`.** A local `release/X.Y.Z` is already there from the first attempt, so `-b` fails —
+and every command after it then runs on `main`. ⛔ If `origin/release/X.Y.Z` is missing, someone deleted
+it by hand: push it back from the tag BEFORE step 3, or nothing on origin reaches the release commits
+once the tag is gone — `git push origin 'vX.Y.Z^{commit}:refs/heads/release/X.Y.Z'`.
 
 **4. Make the changes on the branch.** A fix already on `main` is cherry-picked. A change to compiler
 source still owes its case red then green before it goes on: the tagged run is a battery, not an
@@ -167,16 +161,28 @@ acceptance. Then, where they apply:
 **5. Then §1's rebuild, §3b's preflight, §4's tag and §5's watch**, exactly as the first time. §6 has not
 run — it waits for a clean postflight — so `main` holds nothing of the failed attempt.
 
-## 6 · Merge the tag back
+## 6 · Merge the tag back, then retire the branch
 
 ```bash
 git fetch origin --tags --prune
 git checkout main && git merge --no-ff vX.Y.Z && git push origin main
-git branch -d release/X.Y.Z
+tip="$(git rev-parse --verify --quiet origin/release/X.Y.Z)"
+if [ -z "$tip" ]; then
+	echo "origin has no release/X.Y.Z to retire"
+elif [ "$tip" = "$(git rev-parse 'vX.Y.Z^{commit}')" ]; then
+	git push origin --delete release/X.Y.Z && git branch -d release/X.Y.Z
+else
+	echo "release/X.Y.Z has commits past vX.Y.Z: work nothing shipped"
+fi
 ```
 
+⛔ **THE BRANCH IS DELETED HERE AND NOWHERE EARLIER (user ruling).** A clean postflight is the first
+point at which the release has succeeded; until then a failure is retried on the branch (§5b). If the
+last arm prints, the branch holds work nothing shipped — leave it and tell the user.
+
 ⚠ The merge back is not optional — the changelog entry and the website material exist only at the
-tag until it happens. The branch is already gone, so the TAG is what is merged.
+tag until it happens. The TAG is what is merged rather than the branch, because the tag is exactly what
+shipped.
 
 ⚠ **Merge, never rebase**, and if `main` moved, build and suite-test the merge before pushing it. A
 merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next release's
@@ -188,5 +194,6 @@ merge keeps the tag an ancestor of `main`; rebased copies would reappear in the 
   are set with `gh secret set`, which prompts and hides the input.
 - **Never move a tag with a force-push**, and never delete one except by §5b: the release first, then the
   tag with the `Release tags` ruleset lifted for that single push. ⛔ **Never leave the ruleset disabled.**
+- **Never delete `release/X.Y.Z` before the release has succeeded** — a clean postflight, §6.
 - **Never delete a release that went out clean.** §5b is for a release that failed; one whose postflight
   was clean and is later found wanting is superseded by the next patch version.

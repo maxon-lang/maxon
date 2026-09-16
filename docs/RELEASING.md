@@ -320,11 +320,9 @@ and the install-script check, at the tag — so the download links go live only 
 ⚠ It has to start them itself: a release created with `GITHUB_TOKEN` fires no `release: published`,
 and on v0.1.1 none of them ran.
 
-⛔ **Last, it deletes `release/X.Y.Z`.** The tag is the record of what was built and published. A branch
-left behind is a place to push a commit describing a release that never existed, which `release.yml`
-would build and test at the real version; one that does not exist cannot take one. It is deleted only
-when its tip IS the tagged commit, so the tag still reaches everything on it — a commit past the tag
-fails the step and leaves the branch for a person, since deleting it would strand work nothing shipped.
+⚠ **It does not delete `release/X.Y.Z`.** Nothing has succeeded yet: the five workflows are only just
+starting and nothing has verified what shipped, and a release that fails is retried on that branch
+(4b). It is retired in step 5.
 
 ⚠ **The Release tags ruleset** (Settings → Rules → Rulesets) refuses any update, deletion or
 non-fast-forward of a `v*` tag, so no tag moves or disappears by accident. The one deliberate deletion
@@ -339,11 +337,11 @@ release skill's §5b carries the commands; this is why each is shaped as it is.
 
 - **Every run at the tag finishes or is cancelled first.** Deleting a tag under a running `publish`, or
   under `homebrew.yml` committing a formula, races it.
-- ⛔ **The branch is back on origin before the tag is deleted.** `publish` deletes the branch on success,
-  so after a failed postflight the tag is the only remote ref reaching those commits — delete it first and
-  nothing on the remote does. A local `release/X.Y.Z` outlives the remote deletion, which is why the branch
-  is recreated with `checkout -B` from the remote branch or the tag: `checkout -b` fails on it, and what
-  runs next runs on `main`.
+- ⛔ **The fix goes on the branch the release was cut from, and it is still there**: nothing deletes
+  `release/X.Y.Z` before the release has succeeded (step 5). If it was deleted by hand, it is pushed back
+  from the tag BEFORE the tag is deleted — after that, nothing on the remote reaches those commits. A
+  local `release/X.Y.Z` is already there from the first attempt, which is why the branch is reset to the
+  remote one with `checkout -B`: `checkout -b` fails on it, and what runs next runs on `main`.
 - **The release goes before the tag**, and while no release exists `releases/latest` resolves to the
   previous one — which both installers and `maxon upgrade` follow. The window stays short.
 - ⛔ **The ruleset is lifted for the one deletion and restored at once**, then read back: `active`, with
@@ -360,21 +358,35 @@ release skill's §5b carries the commands; this is why each is shaped as it is.
 - **Then the rebuild, the preflight and the tag, exactly as the first time.** The merge back has not run —
   it waits for a clean postflight — so `main` holds nothing of the failed attempt.
 
-### 5. Merge the tag back
+### 5. Merge the tag back, then retire the branch
 
 ```bash
 git fetch origin --tags --prune
 git checkout main && git merge --no-ff v0.1.1 && git push origin main
-git branch -d release/0.1.1
+tip="$(git rev-parse --verify --quiet origin/release/0.1.1)"
+if [ -z "$tip" ]; then
+	echo "origin has no release/0.1.1 to retire"
+elif [ "$tip" = "$(git rev-parse 'v0.1.1^{commit}')" ]; then
+	git push origin --delete release/0.1.1 && git branch -d release/0.1.1
+else
+	echo "release/0.1.1 has commits past v0.1.1: work nothing shipped"
+fi
 ```
 
 ⛔ **Only once `scripts/release-postflight.sh` is clean.** This commits the release's changelog entry,
 website material and extension version to `main`; merged ahead of a retry, `main` keeps a spent
 extension version and a superseded entry, and the next release trips on them.
 
+⛔ **The branch is retired here and nowhere earlier (user ruling).** A clean postflight is the first
+point at which the release has succeeded; until then a failure is retried on the branch (4b). Once it
+has, a commit on `release/X.Y.Z` would describe a release that never existed, and `release.yml` would
+build and test it at the real version — a branch that does not exist cannot take one. It is deleted
+only when its tip IS the tagged commit: a commit past the tag is work nothing shipped, and is left for a
+person.
+
 The changelog entry, the website material and any fixes made while preparing all belong on `main` —
-without this they exist only at a tag nobody builds from again. The branch is gone by now (`publish`
-deleted it), so the TAG is what is merged; it names the same commit.
+without this they exist only at a tag nobody builds from again. The TAG is what is merged rather than
+the branch, because the tag is exactly what shipped.
 
 ⚠ **Merge, never rebase.** A merge keeps the tag an ancestor of `main`, so `changelog.sh
 --commits-since` starts after it. Rebased copies carry other ids, and the next release's listing would
