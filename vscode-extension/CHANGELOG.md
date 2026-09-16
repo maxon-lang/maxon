@@ -2,6 +2,13 @@
 
 Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
 
+## 2026.9.1
+
+### Changed
+
+- The requirements section links to the installation page in Maxon's documentation. Nothing else
+  in the extension changed.
+
 ## 2026.9.0
 
 ### Added
