@@ -8,14 +8,14 @@ sidebar:
 Maxon is created and directed by **Eric Stern**.
 
 The split of labor is the same one the language is built around. The design is human: the
-philosophy that code should be optimized for the reader, the syntax, the type system, the
+philosophy that code should be optimized for review, the syntax, the type system, the
 decision to push constraints into types and to have no null — those are deliberate choices.
 The implementation is the AI's: the compiler, the standard library, the language server, and
 the documentation are written by AI coding agents working under that direction.
 
 Maxon exists to test an idea — that if AI is going to write most of the code, a language should
-be designed for that, optimizing for the reader rather than the typist — and to find out what
-that actually feels like by building a complete, working toolchain on the premise.
+be designed for that, optimizing for review rather than keystrokes — and to find out what that
+actually feels like by building a complete, working toolchain on the premise.
 
 ## How it came together
 

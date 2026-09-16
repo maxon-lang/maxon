@@ -145,13 +145,20 @@ and fails until the two agree; nothing compares the pinned-release form with `in
 
 These are deliberate and easy to undo by accident — preserve them:
 
-- **Motto:** **"You Aren't Going To Write It."** (single line). The longer
-  "...You Are Going To Read It." was removed as a *fixed tagline*, though the read-it *concept*
-  still appears in prose (the blog post and docs intro blockquotes). Hero, page `<title>`, and
-  OG image use the single line.
-- **Core thesis:** written by AI, for AI — the AI writes the code, you read it, so the language
-  optimizes for the *reader, not the typist*. Verbosity/explicitness is the product, not a
-  cost. This is the answer to "but it's less concise."
+- **Motto:** **"*You* Aren't Going To Write It."** (single line), everywhere — hero, page
+  `<title>`, OG image, blog post and docs intro blockquotes. **The "You" carries a light
+  emphasis** — italic and `text-brand` in the hero and the OG image, italic inside the bold in
+  Markdown (`***You* aren't going to write it.**`). It is the contrast the line turns on; a
+  plain-weight "You" loses the joke. Plain text where markup is impossible (`<title>`, the blog
+  frontmatter `title`). ⛔ **The site does not claim the
+  reader will read the code.** No "...You Are Going To Read It.", no "optimized for the
+  *reader*", no "designed to be read": the promise is that the code *is reviewable when you
+  check it*, not that you will be reading it.
+- **Core thesis:** written by AI, for AI — the AI writes the code, so the code has to answer
+  for itself, and the language optimizes for *review, not keystrokes*. Whatever a reviewer
+  goes looking for is on the page rather than reconstructed.
+  Verbosity/explicitness is the product, not a cost. This is the answer to "but it's less
+  concise."
 - **Maturity:** the project is **early** (pre-1.0, self-hosting in progress). The site must
   **not** imply production-readiness:
   - Version is **v0.1**; the header badge reads **"v0.1 · early preview"**.

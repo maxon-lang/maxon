@@ -5,10 +5,10 @@ Maxon is free and open source, dual-licensed under
 the open — and contributions are welcome, whether that's a fix to the compiler, a documentation
 fix, a real program written in the language, or a bug report.
 
-The project's guiding philosophy is **"You aren't going to write it. You are going to read
-it."** The AI writes the code; humans read it. So Maxon favors explicit, readable code over
-clever or terse code — and that applies to contributions, in the compiler and standard library
-as much as in the language itself.
+The project's guiding philosophy is **"*You* aren't going to write it."** The AI writes the code,
+so the code has to answer for itself when anyone checks it. Maxon favors explicit, reviewable
+code over clever or terse code — and that applies to contributions, in the compiler and standard
+library as much as in the language itself.
 
 ## Ways to contribute
 

@@ -1,17 +1,18 @@
 # Maxon
 
 > ### *You* Aren't Going To Write It.
-> Maxon makes a bet: the AI writes the code, and you read it.
+> Maxon makes a bet: the AI writes the code, so the code has to answer for itself.
 
 Maxon is a statically-typed, compiled programming language with a from-scratch
 **native backend** — **written by AI, for AI**. The compiler, standard library, and
 documentation were all authored by AI coding agents.
 
-Because the AI writes the code and a human reads it, Maxon optimizes for the **reader, not
-the typist**. Where another language is terse, Maxon is explicit: every constraint is
-stated, every block is named, nothing is implicit to puzzle out later. The same
-explicitness that makes it easy to read makes it hard to get wrong — exactly the property
-you want when a model is generating the code.
+Because the AI writes the code, Maxon optimizes for **review, not keystrokes**. Where
+another language is terse, Maxon is explicit: every constraint is stated, every block is
+named, nothing is implicit to puzzle out later. Whatever you go looking for — a bound, a
+failure path, where a block ends — is on the page rather than reconstructed. The same
+explicitness that makes it checkable makes it hard to get wrong — exactly the property you
+want when a model is generating the code.
 
 **[maxon.dev](https://maxon.dev)**&nbsp;&nbsp;·&nbsp;&nbsp;[Documentation](https://maxon.dev/docs)&nbsp;&nbsp;·&nbsp;&nbsp;[Examples](https://maxon.dev/examples)&nbsp;&nbsp;·&nbsp;&nbsp;[Discussions](https://github.com/maxon-lang/maxon/discussions)
 
