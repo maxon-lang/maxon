@@ -108,11 +108,29 @@ let DeeperThanALabel = "   "
 // The two left-margin lines of a listing that are not command sections: the usage line, and a heading
 // over a run of sections. ⚠ **A HEADING ENDS IN A COLON AND A COMMAND LABEL NEVER DOES** — that is the
 // whole of how the two are told apart, and the driver's `CompilerWorkHeading` says so from its side.
-let UsageLinePrefix = "Usage:"
+export let UsageLinePrefix = "Usage:"
 let HeadingSuffix = ":"
 
 // What an option's spelling always begins with, and a command word never does.
 let OptionPrefix = "-"
+
+// How a label lays out its spellings: alternatives are comma-separated, a flag taking a value names it
+// after `=`, and the description column starts after a gap of two spaces or more.
+let LabelAlternativeSeparator = ", "
+export let OptionValueSeparator = "="
+let DescriptionColumnGap = "  "
+
+// What a run of an option spelling is made of beside letters and digits; `OptionValueSeparator` may end one.
+let SpellingHyphen = "-"
+let SpellingUnderscore = "_"
+
+// The document every command and option must be documented in, from the checkout root.
+export let CliReferenceDocument = "docs/CLI_REFERENCE.md"
+
+// How that document spells an invocation, and the mark around inline code.
+export let DriverInvocation = "maxon "
+export let CodeSpanMark = "`"
+let CarriageReturn = "\r"
 
 // The last byte that means the same thing under every code page a console might be set to.
 let LastAsciiByte = 127
@@ -285,6 +303,18 @@ end 'clearStagedFiles'
 export function labelledWordsIn(listing String) returns ListedWordArray
 	var words = ListedWordArray.create()
 
+	for label in labelsIn(listing) 'eachLabel'
+		words.push(firstWordOf(label))
+	end 'eachLabel'
+
+	return words
+end 'labelledWordsIn'
+
+// Each label whole — every spelling an option line gives, such as `-t P, -t=P, --filter=P` — which ends
+// where the gap before the description column starts.
+function labelsIn(listing String) returns ListedWordArray
+	var labels = ListedWordArray.create()
+
 	for line in listing.split("\n") 'eachLine'
 		if not line.startsWith(LabelIndent) 'notALabel'
 			continue
@@ -294,11 +324,99 @@ export function labelledWordsIn(listing String) returns ListedWordArray
 			continue
 		end 'wrappedProse'
 
-		words.push(firstWordOf(line))
+		let columns = line.trim().split(DescriptionColumnGap)
+		labels.push(try columns.get(0) otherwise panic("CliHarness: a split always yields a first part"))
 	end 'eachLine'
 
-	return words
-end 'labelledWordsIn'
+	return labels
+end 'labelsIn'
+
+// ⭐ **EVERY OPTION SPELLING A LISTING SHOWS, ONCE EACH**, cut the way a reader types them: a label's
+// comma-separated alternatives each give their flag, and a flag taking a value keeps its `=` and drops the
+// placeholder — `-o, --output=<path>` gives `-o` and `--output=`, `--bail, --bail=N` gives both.
+export function optionSpellingsIn(listing String) returns ListedWordArray
+	var spellings = ListedWordArray.create()
+
+	for label in labelsIn(listing) 'eachLabel'
+		if not label.startsWith(OptionPrefix) 'aCommand'
+			continue
+		end 'aCommand'
+
+		for alternative in label.split(LabelAlternativeSeparator) 'eachAlternative'
+			let spelling = optionSpellingOf(alternative)
+
+			if not spellings.contains(spelling) 'unseen'
+				spellings.push(spelling)
+			end 'unseen'
+		end 'eachAlternative'
+	end 'eachLabel'
+
+	return spellings
+end 'optionSpellingsIn'
+
+export function optionSpellingOf(alternative String) returns String
+	if alternative.contains(OptionValueSeparator) 'takesAValue'
+		let name = try alternative.split(OptionValueSeparator).get(0) otherwise panic("CliHarness: a split of a string containing its separator has a first part")
+		return "{name}{OptionValueSeparator}"
+	end 'takesAValue'
+
+	return firstWordOf(alternative)
+end 'optionSpellingOf'
+
+// ⭐ **THE UNITS AN OPTION IS SPELLED IN, READ OUT OF FREE TEXT**: maximal runs of letters, digits, `-` and
+// `_`, each carrying an `=` that directly follows it. Membership in this list is what "the text names
+// `--output=`" means, so `--output-dir` and `x--output=` never count as naming it.
+export function spellingsIn(text String) returns ListedWordArray
+	var spellings = ListedWordArray.create()
+	var current = ""
+
+	for c in text 'eachCharacter'
+		let spelled = c.toString()
+
+		if Ascii.isAlphanumeric(c) or spelled == SpellingHyphen or spelled == SpellingUnderscore 'insideARun'
+			current.append(spelled)
+			continue
+		end 'insideARun'
+
+		if current.isEmpty() 'noRun'
+			continue
+		end 'noRun'
+
+		if spelled == OptionValueSeparator 'carriesAValue'
+			current.append(spelled)
+		end 'carriesAValue'
+
+		spellings.push(current)
+		current = ""
+	end 'eachCharacter'
+
+	if not current.isEmpty() 'runAtTheEnd'
+		spellings.push(current)
+	end 'runAtTheEnd'
+
+	return spellings
+end 'spellingsIn'
+
+// Every `Usage:` line a refusal printed, trimmed: a subcommand's own usage is its roster of options.
+export function usageLinesIn(text String) returns ListedWordArray
+	var lines = ListedWordArray.create()
+
+	for line in text.split("\n") 'eachLine'
+		if line.startsWith(UsageLinePrefix) 'aUsageLine'
+			lines.push(line.trim())
+		end 'aUsageLine'
+	end 'eachLine'
+
+	return lines
+end 'usageLinesIn'
+
+// The CLI reference document, with Windows line endings folded so a line is the same line on every host.
+export function cliReferenceText() returns String
+	let path = try FilePath.from(CliReferenceDocument) otherwise panic("CliHarness: the gate could not run - '{CliReferenceDocument}' is not a spellable path")
+	let text = try File.readText(path) otherwise panic("CliHarness: the gate could not run - could not read '{CliReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+
+	return text.replace(CarriageReturn, with: "")
+end 'cliReferenceText'
 
 // ⭐ **THE COMMANDS THE FULL REFERENCE HAS A SECTION FOR**, read off ITS layout: a section label is the
 // only thing at the left margin apart from the `Usage:` line.

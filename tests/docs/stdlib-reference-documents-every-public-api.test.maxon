@@ -1,0 +1,211 @@
+// stdlib-reference-documents-every-public-api.test.maxon — every name the standard library declares `public`
+// appears in the stdlib reference.
+//
+// ⭐ THE ROSTER IS READ OFF THE LIBRARY'S SOURCES, so a declaration made public is demanded of the document
+// without this file naming it. Every top-level `stdlib/*.maxon` is read except the files
+// `excludedSources` names; `stdlib/helpers/` is not descended into, because nothing there is the
+// library's surface — it holds the implementations the top-level files call.
+//
+// A name is documented when it appears in the document as a whole word — a run of letters, digits and
+// `_` — anywhere, prose or code.
+//
+// ⛔ A `public` LINE WHOSE NAME CANNOT BE READ PANICS, naming its file and line: a declaration shape the
+// scanner does not know would otherwise drop out of the roster and read as documented.
+
+let StdlibDir = "stdlib"
+let StdlibReferenceDocument = "docs/STDLIB_REFERENCE.md"
+let MaxonSourceSuffix = ".maxon"
+
+let PublicKeyword = "public "
+let StaticKeyword = "static "
+let ReservedNamePrefix = "__"
+let BlockEndKeyword = "end "
+let WordUnderscore = "_"
+let WordSeparator = " "
+let CarriageReturn = "\r"
+let LineFeed = "\n"
+
+// Top-level sources that are not the library's surface, one reason each.
+function excludedSources() returns StringArray
+	return [
+		// The compiler's bridge to its intrinsics: literal marker interfaces and `__`-reserved helpers it calls itself.
+		"Builtins.maxon",
+		// Runtime helpers only the compiler invokes; its `__Internals` intrinsics are refused anywhere else.
+		"Internals.maxon"
+	]
+end 'excludedSources'
+
+// The keywords a `public` declaration's name follows. A line naming none of them is a shape this scanner
+// does not know, and panics. The first list opens a block closed by `end '<name>'`; the second does not.
+function blockDeclarationKeywords() returns StringArray
+	return ["function", "type", "enum", "union", "interface", "extension"]
+end 'blockDeclarationKeywords'
+
+function lineDeclarationKeywords() returns StringArray
+	return ["typealias", "var", "let"]
+end 'lineDeclarationKeywords'
+
+// One `public` line, read.
+type PublicDeclaration
+	export let name as String
+	export let opensABlock as bool
+
+	static function create(name String, opensABlock bool) returns PublicDeclaration
+		return Self{name: name, opensABlock: opensABlock}
+	end 'create'
+end 'PublicDeclaration'
+
+test 'the stdlib reference names every public declaration'
+	let documentPath = try FilePath.from(StdlibReferenceDocument) otherwise panic("stdlib-reference: '{StdlibReferenceDocument}' is not a spellable path")
+	let document = try File.readText(documentPath) otherwise panic("stdlib-reference: could not read '{StdlibReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let documented = wordsIn(document)
+
+	let stdlib = try FilePath.from(StdlibDir) otherwise panic("stdlib-reference: '{StdlibDir}' is not a spellable path")
+	let entries = try Directory.list(stdlib) otherwise panic("stdlib-reference: could not list '{StdlibDir}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+
+	var declared = 0
+	var missing = StringArray.create()
+	var missingByFile = StringArray.create()
+
+	for entry in entries 'eachEntry'
+		let fileName = entry.filename()
+
+		if Directory.isDirectory(entry) or not fileName.endsWith(MaxonSourceSuffix) or excludedSources().contains(fileName) 'notASurfaceSource'
+			continue
+		end 'notASurfaceSource'
+
+		let source = try File.readText(entry) otherwise panic("stdlib-reference: could not read '{entry.toString()}'")
+
+		var missingHere = StringArray.create()
+
+		for name in publicNamesIn(source.replace(CarriageReturn, with: ""), fileName: fileName) 'eachName'
+			declared = declared + 1
+
+			if not documented.contains(name) and not missing.contains(name) 'undocumented'
+				missing.push(name)
+				missingHere.push(name)
+			end 'undocumented'
+		end 'eachName'
+
+		if missingHere.count() > 0 'fileOwesNames'
+			missingByFile.push("{fileName}: {spaced(missingHere)};")
+		end 'fileOwesNames'
+	end 'eachEntry'
+
+	try Expect.isTrue(declared > 0, message: "no public declaration was read out of '{StdlibDir}', so the comparison below would be vacuous.")
+	try Expect.isEmpty(spaced(missing), message: "{StdlibReferenceDocument} does not name these public stdlib declarations, by the file declaring each: {spaced(missingByFile)}")
+end 'the stdlib reference names every public declaration'
+
+// The name each `public` declaration line in `source` declares. A name in the reserved band, and everything
+// declared inside one, is left out: the band is compiler machinery author code cannot call or name.
+function publicNamesIn(source String, fileName String) returns StringArray
+	var names = StringArray.create()
+	var reservedScopeEnd = ""
+
+	for (iter, line) in source.split(LineFeed).withIterator() 'eachLine'
+		let declaration = line.trim()
+
+		if not reservedScopeEnd.isEmpty() 'insideReservedScope'
+			if declaration == reservedScopeEnd 'scopeCloses'
+				reservedScopeEnd = ""
+			end 'scopeCloses'
+
+			continue
+		end 'insideReservedScope'
+
+		if not declaration.startsWith(PublicKeyword) 'notAPublicDeclaration'
+			continue
+		end 'notAPublicDeclaration'
+
+		let read = readDeclaration(declaration, at: "{StdlibDir}/{fileName}:{iter.index() + 1}")
+
+		if not read.name.startsWith(ReservedNamePrefix) 'surface'
+			names.push(read.name)
+		end 'surface' else if read.opensABlock 'reservedBlock'
+			reservedScopeEnd = "{BlockEndKeyword}'{read.name}'"
+		end 'reservedBlock'
+	end 'eachLine'
+
+	if not reservedScopeEnd.isEmpty() 'neverClosed'
+		panic("stdlib-reference: {StdlibDir}/{fileName} never reaches `{reservedScopeEnd}`, so every declaration after its opening was skipped as reserved.")
+	end 'neverClosed'
+
+	return names
+end 'publicNamesIn'
+
+// `public [static] <keyword> <name>...` gives `<name>`: the word run that follows the keyword.
+function readDeclaration(declaration String, at String) returns PublicDeclaration
+	let afterPublic = declaration.replaceFirst(PublicKeyword, with: "")
+	let afterStatic = afterPublic.replaceFirst(StaticKeyword, with: "") if afterPublic.startsWith(StaticKeyword) else afterPublic
+	let words = afterStatic.split(WordSeparator)
+	let keyword = try words.get(0) otherwise panic("stdlib-reference: a split always yields a first part")
+
+	let opensABlock = blockDeclarationKeywords().contains(keyword)
+
+	if not opensABlock and not lineDeclarationKeywords().contains(keyword) 'unknownShape'
+		panic("stdlib-reference: {at}: `{declaration}` is a public declaration whose keyword `{keyword}` this scanner does not know, so its name cannot be read.")
+	end 'unknownShape'
+
+	let rest = afterStatic.replaceFirst("{keyword}{WordSeparator}", with: "")
+	let name = leadingWord(rest)
+
+	if name.isEmpty() 'noName'
+		panic("stdlib-reference: {at}: `{declaration}` is a public declaration with no name after `{keyword}`.")
+	end 'noName'
+
+	return PublicDeclaration.create(name, opensABlock: opensABlock)
+end 'readDeclaration'
+
+function leadingWord(text String) returns String
+	var word = ""
+
+	for c in text 'eachCharacter'
+		let spelled = c.toString()
+
+		if not Ascii.isAlphanumeric(c) and spelled != WordUnderscore 'wordEnds'
+			break
+		end 'wordEnds'
+
+		word.append(spelled)
+	end 'eachCharacter'
+
+	return word
+end 'leadingWord'
+
+// Every whole word in `text`, once each.
+function wordsIn(text String) returns StringSet
+	var words = StringSet.create()
+	var current = ""
+
+	for c in text 'eachCharacter'
+		let spelled = c.toString()
+
+		if Ascii.isAlphanumeric(c) or spelled == WordUnderscore 'insideAWord'
+			current.append(spelled)
+			continue
+		end 'insideAWord'
+
+		if not current.isEmpty() 'wordEnds'
+			words.insert(current)
+			current = ""
+		end 'wordEnds'
+	end 'eachCharacter'
+
+	if not current.isEmpty() 'wordAtTheEnd'
+		words.insert(current)
+	end 'wordAtTheEnd'
+
+	return words
+end 'wordsIn'
+
+typealias StringSet = Set with String
+
+function spaced(names StringArray) returns String
+	var rendered = ""
+
+	for name in names 'eachName'
+		rendered.append("{name} ")
+	end 'eachName'
+
+	return rendered.trim()
+end 'spaced'

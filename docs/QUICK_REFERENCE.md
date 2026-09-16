@@ -98,7 +98,7 @@ b"\xFF\x00"         // \xNN for raw bytes; chars above U+00FF are rejected (E100
 
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
 Bool `and`/`or` short-circuit: `false and _` skips the right side; `true or _` skips the right side. Integer `and`/`or` always evaluate both.
-`==` on struct types requires the type to implement `Equatable` (error E3069 if not).
+`==` on struct types requires the type to implement `Equatable` (error E3005 if not).
 `==`/`!=` on Equatable types — including generic collections like `Array`/`ByteArray` — compare by content (dispatch to `equals()`); two distinct arrays with equal elements are `==`.
 `is`, `is not` compare reference identity (same heap object) for struct types.
 `/` and `mod` are fallible: a divisor not provably non-zero throws `DivisionByZero` — handle with `try (a / b) otherwise ...`, or give the divisor a ranged type that excludes 0. A constant-0 divisor is a compile error (E3103). Float `/` throws too (`1.0 / 0.0` is not `inf`); there is no float `mod`.
@@ -1110,12 +1110,15 @@ info.isReadOnly        // bool
 
 ### Commands
 ```bash
-maxon build [file|dir]       # Compile file, directory, or project → .exe
+maxon build <file|dir>       # Compile a file or a directory to an executable
+maxon build                  # Run the build.maxon in the current directory
 maxon run <file|dir> [args]  # Compile (or reuse a cached build) and run; args are the PROGRAM's
 maxon <file>.maxon [args]    # The same, with no word — what a `#!/usr/bin/env maxon` script arrives as
 maxon test [dir]             # Run a PROJECT's unit tests (its *.test.maxon files)
+maxon fmt [file|dir]         # Re-print sources in canonical layout, in place
 maxon spec-test              # Run spec fragment tests (the COMPILER's own suite)
 maxon lsp-server             # Start LSP server for IDE integration
+maxon mcp-server             # Start the MCP server for AI coding agents
 ```
 
 ### Unit tests
@@ -1138,7 +1141,9 @@ Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 ### Options (compile/build)
 | Option | Description |
 |--------|-------------|
-| `--emit-ir` | Output IR to `<source>.ir` |
+| `-o PATH` | Output executable path |
+| `--target=ARCH-OS` | Compile for another target (default: the host) |
+| `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir` |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or `stdlib/` functions (implies `--emit-ir`) |
 | `--log=LEVEL` | Set log level (none, error, info, debug, trace) |
 | `--log=CAT:LEVEL` | Set log level per category |

@@ -1,440 +1,502 @@
 ---
 title: CLI Reference
-description: "The maxon command-line interface: building, running, formatting, testing, and project layout."
+description: The maxon commands and their options, logging, exit codes, and environment variables.
 sidebar:
   order: 1
 ---
 
-This document covers the Maxon command-line interface and project system.
+Everything the `maxon` compiler driver accepts: the commands, their options, the project layout they
+read, and the tools around them.
 
----
+`maxon help` prints the same command and option list from the driver itself, and `maxon help <command>`
+prints one command's part of it. Where this document and that listing disagree, the listing is the
+compiler.
 
-## Quick Reference
+`maxon` is one binary. It compiles, runs, formats and tests Maxon programs, serves editors and AI
+agents, and reads back what a program did.
 
 | Command | Description |
 |---------|-------------|
-| `maxon build [file\|directory]` | Compile a file, directory, or project (default: current directory) |
-| `maxon build` | With no path, runs the `build.maxon` manifest in the current directory |
+| `maxon <file>.maxon [args...]` | Run a Maxon file as a script: [`maxon run`](#maxon-run) without the command word |
+| `maxon build <file\|directory>...` | Compile a Maxon program to an executable |
+| `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](/docs/cli/debugging/)) |
+| `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary ([Debugging and Profiling](/docs/cli/debugging/)) |
+| `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
+| `maxon fmt [file\|directory]` | Re-print `.maxon` sources in canonical layout, in place |
+| `maxon help [<command>]` | Print the command and option reference, whole or for one command |
+| `maxon lsp-server` | Speak the Language Server Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
+| `maxon mcp-server [--dev]` | Speak the Model Context Protocol over stdio ([MCP Server](/docs/cli/mcp-server/)) |
+| `maxon monitor [--filter=…] <exe> [args...]` | Run a `--debugstream` binary and print its trace events ([Debugging and Profiling](/docs/cli/debugging/)) |
+| `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon run <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
-| `maxon fmt [file\|directory]` | Format `.maxon` source files in-place (default: current directory) |
 | `maxon test [directory]` | Run a project's own `test` declarations |
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
-| `maxon help [command]` | Print every command's options, or one command's |
-| `maxon spec-test [options]` | Run spec tests |
-| `maxon monitor <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
-| `maxon lsp-server` | Start the language server (LSP) |
-| `maxon mcp-server [--dev]` | Start the Model Context Protocol (MCP) server for AI coding agents |
 
----
+Four more commands are for working on the compiler itself: `spec-test`, `scale-test`, `verify-recheck`
+and `verify-warm-rebuild`. `maxon` with no arguments does not list them; `maxon help` does. See
+[Working on the Compiler](/docs/cli/compiler-development/).
 
-## Commands
+Only the **first** command word on a line is the command. A later one is an ordinary positional
+argument, so `maxon fmt fmt` formats the directory `fmt/`.
 
-### `maxon build`
+An option the driver does not implement is refused before any command runs (`error: unknown option:
+<option>`, exit 1, or 2 for `maxon test`), rather than ignored.
 
-Compiles a single Maxon source file, a directory of source files, or a project with `build.maxon`.
+## `maxon run`
 
-**Usage:**
+Compiles a program, or reuses a cached build of it, and runs it.
+
 ```bash
-maxon build [file|directory] [options]
+maxon run <file|directory> [args...]
+maxon <file>.maxon [args...]
 ```
 
-**Arguments:**
-- `[file|directory]` - Path to a source file or directory (default: current directory). When given a directory, discovers all `.maxon` files recursively and compiles them together.
+The second form is the same command: a **first** argument ending in `.maxon` selects `run` with no
+command word. That is what a kernel hands the interpreter for a script whose first line is
+`#!/usr/bin/env maxon`.
 
-**Options:**
+**Everything after the path is the program's command line** and reaches it untouched, including tokens
+that look like driver options: in `maxon run app.maxon --filter=x -o out`, both `--filter=x` and
+`-o out` are the program's. So `run` takes no options of its own.
 
-| Option | Description |
-|--------|-------------|
-| `--target=ARCH-OS` | Set compilation target (default: `x64-windows`). Examples: `x64-windows`, `arm64-macos`, `x64-linux` |
-| `--emit-ir` | Write `.ir` file |
-| `--dump-stages` | Write IR at each pipeline stage (`.1-maxon.ir`, etc.) |
-| `--mm-trace` | Enable runtime memory manager trace output (stderr) |
-| `--mm-debug` | Enable runtime memory debug checks (magic, canary, poison) |
-| `--async-trace` | Enable async/await runtime trace output (stderr) |
-| `--debugstream` | Enable shared-memory debug stream (use with `maxon monitor`) |
-| `--timing` | Print per-stage compile timings to stderr |
-| `--timing-functions=N` | Print top-N hottest functions per heavy pass (implies `--timing`) |
+The program inherits stdin, stdout, stderr and the working directory, and **its exit code becomes this
+command's**. The build itself prints nothing, so the program's output is not mixed with compiler
+output. The program's `argv[0]` is the cached executable, not the path you typed.
 
-**Behavior:**
-- **Single file:** Compiles the file directly. Output name comes from the source filename (`foo.maxon` → `foo.exe`).
-- **Directory with `build.maxon`:** Runs the `build()` function from `build.maxon` to get the build config (output path, name, etc.), then compiles all `.maxon` files in the directory.
-- **Directory without `build.maxon`:** Compiles all `.maxon` files and names the output after the file containing `main()`.
+`run` always compiles for the host. To build for another target, use
+[`maxon build --target=`](#maxon-build).
 
-**Examples:**
-```bash
-# Compile a single file
-maxon build hello.maxon
+### The run cache
 
-# Compile with IR output
-maxon build app.maxon --emit-ir
+Each program gets a directory of its own in a cache, and its build is reused until something it was
+built from changes:
 
-# Compile for a different target
-maxon build app.maxon --target=arm64-macos
-
-# Build a project directory (uses build.maxon if present)
-maxon build myproject/
-
-# Build current directory
-maxon build
+```text
+<root>/maxon/run/v<cache format>/<hash of the program's path and entry point>/
+├── hello-<key>.exe         # the build, named after the key it was built under
+└── hello-<key>.exe.mxdbg   # its debug-info sidecar
 ```
 
----
+- **The key is a content hash**, never a modification time. It covers every source file of the program
+  and every standard-library source the build compiles, each hashed by its bytes, plus the compiler's
+  identity (its path, size, modification time and target). Editing any of them rebuilds; nothing else
+  does.
+- **The key is the file name.** A cache hit is that file existing, so two runs of one program cannot
+  serve each other a stale build. A fresh build is written under a temporary name and renamed into
+  place, so simultaneous cold runs never share an output path. Superseded builds, and builds an older
+  cache format left, are removed on a best-effort basis.
+- **The path is resolved against the working directory but not canonicalized.** `x.maxon`, `./x.maxon`
+  and `a/../x.maxon` get three cache slots. That costs an extra compile, never a wrong binary.
 
-### The build manifest
+`<root>` is `MAXON_RUN_CACHE_ROOT` when it is set, then `LOCALAPPDATA` and then `TEMP` on Windows, and
+`TMPDIR` and then `/tmp` elsewhere. On Windows, a host that sets none of them is refused by name.
 
-`maxon build` with no path looks for **`build.maxon`** in the current directory, compiles it, runs it,
-and performs the build it describes.
+### Scripts and the shebang line
 
-⭐ **A manifest is a program, not a configuration file.** It is ordinary Maxon with the whole standard
-library available, so a build can *compute* what it compiles — read a directory, choose by host, stamp
-a version — rather than only spell it out. The compiler does not parse it; it runs it and reads what
-it prints.
-
-**Its entry point is `build`, not `main`.** A manifest holds tasks, and `build` is the one this
-command asks for by name. It returns `ExitCode`; a non-zero return, or a crash, fails the build.
+A source file whose **first two bytes** are `#!` has that first line ignored, which lets a Maxon
+program be an executable script:
 
 ```maxon
-export function build() returns ExitCode
-	Build.buildOne("src", output: "out/myprogram")
+#!/usr/bin/env maxon
+
+function main() returns ExitCode
+	print("Hello, world!\n")
 	return 0
-end 'build'
+end 'main'
 ```
 
-`Build.buildWithConfig(config)` takes several sources, compiled as one program in the order given. The
-output path omits the extension — the compiler appends `.exe` on Windows and nothing elsewhere.
-
-An empty `sources` is **refused**, not read as "this directory": accepting it would compile every file
-beneath the manifest, including every test, under a command that named nothing.
-
-`-o` and `--target` on the command line outrank the manifest. See
-[Build System](/docs/language/build-system/) for the whole of it.
-
-
-### `maxon fmt`
-
-Formats `.maxon` source files in-place.
-
-**Usage:**
 ```bash
-maxon fmt [file|directory]
+chmod +x hello.maxon
+./hello.maxon
 ```
 
-**Arguments:**
-- `[file|directory]` - Path to a source file or directory to format (default: current directory). When given a directory, formats all `.maxon` files recursively, skipping directories with `.maxonignore`.
+The `#!` must be at byte 0. Anywhere else, `#` opens a compiler directive (`#if` / `#else` / `#endif`),
+so a later `#!` is **E1009: Unknown compiler directive**. The line's newline is kept, so line numbers in
+diagnostics still match the file, and `maxon fmt` keeps the line as written.
 
-**Examples:**
+Windows has no shebang mechanism. Git Bash and WSL honour the line; `maxon hello.maxon` works everywhere.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| the program's | Forwarded as-is, including the raw status of a child that terminated abnormally (for example `3221225725` on Windows for a stack overflow) |
+| `1` | `run` could not start the program: no program named, no such file, a compile error (the diagnostics are printed and nothing runs), no writable cache root, or a build that could not be stored in the cache |
+
+A missing file is reported as `error: file not found: <path as typed>`, the same sentence `maxon build`
+prints.
+
 ```bash
-# Format all files in current directory
-maxon fmt
-
-# Format a single file
-maxon fmt main.maxon
-
-# Format a specific directory
-maxon fmt src/
+maxon run hello.maxon                 # compile if needed, then run
+maxon run myproject --verbose         # a directory as one program; --verbose is the program's
+maxon hello.maxon a b c               # no command word, three arguments
+MAXON_RUN_CACHE_ROOT=/build/cache maxon run hello.maxon
 ```
 
----
+## `maxon build`
 
-### `maxon spec-test`
+Compiles Maxon source to a standalone executable.
 
-Runs the spec tests.
-
-**Usage:**
 ```bash
-maxon spec-test [options]
+maxon build <file|directory>... [options]
+maxon build [<target name>] [options]
 ```
+
+**Arguments.** One or more paths. **Several paths are compiled as one program, in the order given.** A
+directory contributes every `.maxon` file beneath it, except `build.maxon`, `*.test.maxon` files and
+subtrees marked with a `.maxonignore`. A file you name explicitly is compiled whatever a
+`.maxonignore` above it says.
+
+**No path** runs the `build.maxon` manifest in the current directory, and a bare word that names one of
+its targets builds that target. See [Project Structure](/docs/cli/project-structure/). A directory
+with no `build.maxon` prints a usage line and exits 1.
 
 **Options:**
 
 | Option | Description |
 |--------|-------------|
-| `--filter=PATTERN` | Run only tests matching the pattern. Comma-separated terms run a union (any-of) — e.g. `--filter=basics,arrays,map`. Whitespace around each term is trimmed. |
-| `--workers=N` | Use N worker threads (default: `ProcessorCount - 2`) |
-| `--update-required` | Force regeneration and update `RequiredIR` + `MmTrace` stderr blocks |
-| `--verbose` | Show per-test PASS/FAIL timing logs |
-| `--no-batch` | Disable per-spec compile batching (each test compiled individually) |
+| `-o <path>`, `--output=<path>` | Output executable path. Without it the name is derived: a single-file build writes beside the source (`foo.maxon` → `foo.exe` on Windows); other builds take the first source file's base name. The target's executable extension is added unless the path already carries it. |
+| `--target=<cpu>-<os>` | Compile for this target instead of the host: `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` or `wasm32-wasi`. See [Targets](/docs/cli/targets/). |
+| `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
+| `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function is refused. |
+| `--no-debug-info` | Do not write the `<output>.mxdbg` debug-info sidecar. It is written by default, and the executable is byte-identical either way. See [Debugging and Profiling](/docs/cli/debugging/). |
+| `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes the counts to `<output>.mxcov` as it exits. This changes the emitted code, so it is a separate build from the one you ship. Read the counts with `maxon coverage`. Needs the debug-info sidecar, so `--no-debug-info` beside it is refused. |
+| `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
+| `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](/docs/cli/debugging/). |
+| `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
+| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. `--log=compiler:debug` prints the same numbers as a table. |
 
-**Examples:**
+`--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**. Without the flag, none of
+that machinery is emitted.
+
+A build prints the compiler's version and an early-preview warning to stdout, then
+`Compiled -> <path>` on success, and exits 0. Progress lines (`[CMP] INFO: Wrote … bytes of code to …`)
+go to stderr; `--log=error` silences them. A compile error prints its diagnostics to stderr and exits 1.
+
 ```bash
-# Run all tests
-maxon spec-test
-
-# Run tests matching a pattern
-maxon spec-test --filter=array
-
-# Run tests matching any of several patterns
-maxon spec-test --filter=basics,arrays,map
-
-# Run with verbose output
-maxon spec-test --verbose
-
-# Regenerate RequiredIR blocks
-maxon spec-test --update-required
-
-# Combine options
-maxon spec-test --filter=string --verbose
+maxon build hello.maxon                       # → hello.exe on Windows, hello elsewhere
+maxon build src/ -o build/app                 # a whole directory, named output
+maxon build a.maxon b.maxon                   # one program from two files, in that order
+maxon build                                   # run build.maxon
+maxon build app                               # build.maxon's target named "app"
+maxon build app.maxon --target=wasm32-wasi
+maxon build app.maxon --define=Version=1.4.2
 ```
 
----
+### Defines
 
-### `maxon monitor`
+`--define=<name>=<value>` replaces the value of a top-level `String` constant whose initializer is a
+string literal. Use it for facts known to whoever runs the build rather than to the source: a version,
+a commit, a release channel.
 
-Launches an executable with the shared-memory debug stream monitor. Reads debug output written via `--debugstream` and prints it to the terminal.
-
-**Usage:**
-```bash
-maxon monitor <exe> [args...]
+```maxon
+let Version = "dev"        // what a plain `maxon build` reports
 ```
 
-**Examples:**
 ```bash
-# Build with debugstream enabled, then monitor
-maxon build app.maxon --debugstream
-maxon monitor app.exe
+maxon build myapp --define=Version=1.4.2
+maxon build myapp --define=Build.Channel=nightly
 ```
 
----
+The declaration keeps a real default, so a fresh checkout builds with no flags. The name may be bare or
+namespace-qualified (`Build.Channel` is `Channel` in the `Build/` directory). The split is at the
+first `=`, so the value may contain `=` and the name may not: `--define=Url=https://x/?a=b` sets the
+whole URL.
 
-### `maxon lsp-server`
+A define that would do nothing is refused, and every problem on the command line is reported before
+the build stops:
 
-Starts the language server for IDE integration. Communicates over stdin/stdout using the Language Server Protocol. Normally launched automatically by the VS Code extension.
+| Code | Refused because |
+|------|-----------------|
+| **E3149** | the name matches no declaration |
+| **E3150** | the name matches more than one declaration (both are named, with their files) |
+| **E3151** | the initializer is not a plain string literal |
 
----
+A `build.maxon` manifest can supply defines too; a `--define` on the command line wins over the
+manifest's.
 
-### `maxon mcp-server`
+## `maxon fmt`
 
-Starts the native Model Context Protocol (MCP) server for AI coding agent integration (Claude Desktop, Cursor, Antigravity, VS Code). Communicates over stdin/stdout using JSON-RPC 2.0.
+Re-prints `.maxon` sources in canonical layout, **in place**.
 
 ```bash
-maxon mcp-server        # standard mode: 8 tools (build, run, test, fmt, check, dump_ir, lookup_error_code, info)
-maxon mcp-server --dev  # developer mode: adds spec-test, scale-test, and repoRoot options
+maxon fmt [<file|directory>]
 ```
 
-See the [MCP Server Guide](/docs/cli/mcp-server/) for client configuration examples, full tool documentation, and parameter schemas.
+With **no path it formats the whole working directory**. A named **file** is formatted whatever it is
+called. A **directory** is walked for `.maxon` files, skipping `build.maxon`, anything under a
+`.maxonignore`, and any subdirectory that holds a `.git` (a nested clone or worktree), so a run never
+rewrites another repository's files.
 
----
+**It takes no options.** Any `-`-leading argument is refused with exit 1 and nothing written, and so
+is a second path.
 
-### `maxon upgrade`
+A file that is already canonical is not rewritten, so its modification time is untouched. A file that
+cannot be lexed is left as it is and counted as unchanged. The run prints one `formatted: <path>` line
+per rewritten file and a `fmt: N file(s) changed, M unchanged.` summary.
+
+The formatter decides **blank lines** as well as indentation. Exactly one blank line separates adjacent
+groups in a scope, and none appears inside a group:
+
+| Inside | These pack together | These stand alone |
+|---|---|---|
+| a file, a `type` or `extension` body | `let`/`var` lines; `typealias` lines | every declaration that opens a body |
+| an `enum` or `union` body | the cases | a nested declaration |
+| an `interface` body | the bodyless signatures | anything else |
+| a function or labeled block body | the statements, `let`/`var` included | every nested block |
+| a `match` body | the arms | — |
+| a multi-line `[`/`{` literal | *(never grouped: your blank lines are kept, at most one in a row)* | — |
+
+A `///` doc comment stays attached to the declaration below it. A whole-line `//` comment does too when
+there is no blank line between them; with a blank line it reads as a section heading. A blank line you
+put inside a group survives, at most one in a row.
 
 ```bash
-maxon upgrade              # install the newest release over the install this compiler runs from
+maxon fmt              # the working directory
+maxon fmt main.maxon   # one file
+maxon fmt src/         # one directory
+```
+
+## `maxon test`
+
+Runs a project's unit tests: every `test` declaration in its `*.test.maxon` files. How to write tests
+is covered in [Testing](/docs/language/testing/).
+
+```bash
+maxon test [directory] [options]
+```
+
+`[directory]` is the project to test (default: the working directory). A second positional is refused.
+
+All discovered tests are compiled into **one binary** with a generated entry point, and which of them
+run is a runtime argument. Changing `--filter` between runs therefore recompiles nothing. The project's
+own `main` needs no change: the test binary does not use it, and the same directory still builds
+normally with `maxon build`.
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-t P`, `-t=P`, `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Comma-separated patterns are a union. A bare `-t` with nothing after it is refused. |
+| `--list` | Print the tests that would run, and compile nothing. |
+| `--json` | Emit the report as JSON instead of text. |
+| `--isolate` | Run every test in its own process, instead of one process per test file. |
+| `--bail`, `--bail=N` | Stop starting new work after `N` failures (`--bail` alone means 1). Work already running finishes, so the count may exceed `N`. Without it, every test runs. |
+| `--timeout=<ms>` | Kill a test process after this many milliseconds (default 5000). One process runs one file's tests, so the deadline covers the whole file unless `--isolate` is given. |
+| `--no-timing` | Omit durations, making stdout byte-for-byte reproducible. |
+| `--color=auto\|always\|never` | Colour the report. `auto` colours only when stdout is a terminal, `NO_COLOR` is unset and `TERM` is not `dumb`. On `wasm32-wasi` a program cannot detect a terminal, so `auto` means `never` there; use `always` to force colour. |
+| `--target=<cpu>-<os>` | Build the test binary for this target and then run it. On a host that cannot execute that target, every test is reported as not run. |
+
+The run is serial; there is no `--workers` option.
+
+**Where it runs.** The test binary runs in the directory `maxon test` was invoked from, so a relative
+path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, which
+carries its own `.maxonignore` so generated sources never leak into an ordinary build.
+
+**Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
+harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
+leak found at exit is attributed by re-running tests alone. `--isolate` gives every test its own
+process from the start.
+
+**Outcomes.** A test that does not pass is reported as one of five states:
+
+| State | `--json` `state` | Meaning |
+|-------|------------------|---------|
+| `✓` | `passed` | The test passed |
+| `FAIL` | `failed` | The body threw: a failed assertion, or an error nothing caught |
+| `CRASHED` | `crashed` | The test started and never finished: it took the process down (a `panic` cannot be caught) |
+| `TIMED OUT` | `timedOut` | Still running when its process hit `--timeout`, and was killed |
+| `DID NOT RUN` | `didNotRun` | Selected for a process that died before reaching it, and re-running made no progress. Never counted as a pass. |
+| `LEAKED` | `leaked` | Held an allocation at exit (exit code 101), attributed by re-running the test alone |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every test passed |
+| `1` | A test failed, crashed, timed out, leaked or did not run, **or no tests were found** |
+| `2` | The run could not happen: a bad option, a compile error, no source files, no such project |
+
+A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
+not read as green.
+
+**Example.** A failing expectation, then the fix:
+
+```maxon
+// pricing/pricing.maxon
+typealias Cents = int(0 to i64.max)
+
+/// What `quantity` items cost at `unitPrice`, with a tenth off from 10 items up.
+export function totalCost(unitPrice Cents, quantity Cents) returns Cents
+	let gross = unitPrice * quantity
+	if quantity < 10 'noDiscount'
+		return gross
+	end 'noDiscount'
+
+	return gross - gross / 10
+end 'totalCost'
+```
+
+```maxon
+// pricing/pricing.test.maxon
+test 'a small order pays full price'
+	try Expect.equal(totalCost(250, quantity: 4) as AssertedInt, expected: 1000)
+end 'a small order pays full price'
+
+test 'ten items take the bulk discount'
+	try Expect.equal(totalCost(250, quantity: 10) as AssertedInt, expected: 2500)
+end 'ten items take the bulk discount'
+```
+
+```text
+$ maxon test pricing
+pricing/pricing.test.maxon:
+  ✓ a small order pays full price                    0.00ms
+  ✗ ten items take the bulk discount                 0.00ms
+
+FAIL  pricing/pricing.test.maxon > ten items take the bulk discount
+  FAIL pricing.test.maxon:6: Expect.equal
+    expected: 2500
+    received: 2250
+
+ 1 pass
+ 1 fail
+
+ 2 tests across 1 file.   compile 947ms, run 38ms
+```
+
+The `file:line` on the `FAIL` line is the assertion's own. Correct the expectation to `2250` and the same
+command reports `2 pass`, `0 fail` and exits 0.
+
+```bash
+maxon test                        # every test under the working directory
+maxon test src/parser             # one project's tests
+maxon test -t json                # only tests whose name or file mentions "json"
+maxon test --filter=parser,lexer  # two patterns, as a union
+maxon test --list                 # what would run, without compiling
+maxon test --json --no-timing     # machine-readable and reproducible
+maxon test --bail=3 --timeout=20000
+```
+
+## `maxon upgrade`
+
+Updates the install this compiler runs from to the newest release.
+
+```bash
+maxon upgrade              # install the newest release over this compiler's install
 maxon upgrade --dry-run    # print the install root and the command that would run, and run nothing
 ```
 
-It runs the published install script again, against the install the running compiler sits in —
-`<root>/bin/maxon` beside `<root>/stdlib`, the layout the script makes — whatever `MAXON_INSTALL` says.
-Its exit status is the script's. A compiler the script did not install is refused, naming what does
-update it: `docker pull` for the container image, `brew upgrade maxon-lang/tap/maxon` for Homebrew,
-`git pull` and a rebuild for a source checkout. `--dry-run` never bypasses a refusal.
+It runs the published install script again, against the install the running compiler sits in
+(`<root>/bin/maxon` beside `<root>/stdlib`, the layout the script creates). The root comes from where
+the binary is, never from your `MAXON_INSTALL`: the script is handed this root in that variable, so an
+upgrade cannot update a different install. Its exit status is the script's.
 
----
+- **macOS and Linux:** `curl` downloads `https://maxon.dev/install.sh`, then `/bin/sh` runs it with
+  `--no-modify-path`.
+- **Windows:** Windows PowerShell (found under `%SystemRoot%`) runs `https://maxon.dev/install.ps1` with
+  `-NoPathUpdate`.
+
+A compiler the script did not install is refused with exit 1, naming what does update it:
+
+| Where the compiler is | What `upgrade` tells you to run |
+|-----------------------|---------------------------------|
+| The container image (`MAXON_IMAGE` is set) | `docker pull <image>` |
+| A Homebrew keg | `brew upgrade maxon-lang/tap/maxon` |
+| A source checkout | `git -C <root> pull`, then `maxon-bin/.maxon/maxon build maxon-bin` |
+| Anywhere else | The install one-liner |
+
+`--dry-run` never bypasses a refusal, and a refusal writes nothing to stdout. The command takes no other
+argument. To install a specific release, use the install script's own version option; `maxon upgrade`
+refuses `--version`, naming that option.
+
+## `maxon version`
+
+Prints one line to stdout and exits 0:
+
+```bash
+maxon version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
+```
+
+The line holds the release number, the commit and date the compiler was built from, and the host
+target. It takes no arguments. The old `--version` and `-V` spellings are refused, naming this command.
+
+## `maxon help`
+
+```bash
+maxon                  # the version, the early-preview warning, and one line per command
+maxon help             # every command, with the options each one reads
+maxon help build       # one command's entry and its options
+```
+
+`maxon` with no arguments prints the version, the warning and the commands for using the compiler, and
+exits 0. `maxon help` prints the whole reference, including the commands for working on the compiler,
+with every option each command reads listed under it. An option several commands accept (such as
+`--target=`) is listed under each. Commands are listed alphabetically.
+
+`maxon help <command>` prints one entry. A word that names no command is refused with exit 1 and the
+command list. `help` takes no options, and the old `--help` and `-h` spellings are refused, naming this
+command.
 
 ## Logging
 
-All commands accept logging options to control diagnostic output:
+Every command except [`maxon run`](#maxon-run) accepts a logging option. With `run`, a `--log=` after the
+path belongs to the program; written before the command word (`maxon --log=compiler:debug run app.maxon`)
+it is the driver's, and it also brings back the build output `run` otherwise keeps quiet.
 
 | Option | Description |
 |--------|-------------|
-| `--log=LEVEL` | Set all log categories to the given level |
-| `--log=CATEGORY:LEVEL` | Set a specific category to the given level |
+| `--log=LEVEL` | Set every category to `LEVEL` |
+| `--log=CATEGORY:LEVEL` | Set one category to `LEVEL` |
 
-**Log levels:** `none`, `error`, `info`, `debug`, `trace`
+**Levels:** `none`, `error`, `info` (the default), `debug`, `trace`
 
-**Log categories:** `compiler`, `lexer`, `parser`, `semantic`, `hir`, `lir`, `optimizer`, `codegen`, `pe`, `testing`
+**Categories:** `compiler`, `lexer`, `parser`, `semantic`, `ir`, `codegen`, `binary`, `testing`
 
-**Testing log levels:**
-- `info` — Show failures and summary only
-- `debug` — Also show each passing test
+Log lines go to stderr, prefixed with the category and level (`[CMP] INFO: …`). An unrecognized spec is
+reported on stderr and otherwise ignored. `maxon test` lowers the level to `error` unless you pass
+`--log=`, so its stdout is only the report.
 
-**Examples:**
 ```bash
-maxon spec-test --log=ir:debug
 maxon build app.maxon --log=codegen:trace
+maxon build app.maxon --log=compiler:debug   # per-phase time and memory as a table
+maxon build app.maxon --log=error            # only errors
 ```
-
----
-
-## Project Structure
-
-A Maxon project is a directory containing `.maxon` files. A `build.maxon` describes how it builds: a program the compiler runs, not a configuration file.
-
-### Basic Project
-
-```text
-myproject/
-├── build.maxon      # Script file with exported build/run functions
-├── main.maxon       # Entry point (contains main function)
-├── utils.maxon      # Utility functions
-└── types.maxon      # Type definitions
-```
-
-### Project with Subdirectories
-
-```text
-myproject/
-├── build.maxon
-├── main.maxon
-├── lib/
-│   ├── math.maxon
-│   └── io.maxon
-└── utils/
-    └── helpers.maxon
-```
-
-All `.maxon` files in subdirectories are automatically included when compiling a directory with `maxon build`.
-
-### Ignoring Directories
-
-Place a `.maxonignore` file in any directory to exclude it and all its subdirectories from compilation, formatting, and LSP processing. The file is a flag — its contents are ignored.
-
-```text
-myproject/
-├── main.maxon
-├── tests/
-│   ├── .maxonignore     # This directory is skipped
-│   └── test_data.maxon
-└── src/
-    └── app.maxon
-```
-
-### Rules
-
-1. **`build.maxon` is the manifest** - a program describing the build, run by `maxon build`
-2. **Automatic discovery** - All `.maxon` files are found recursively when compiling a directory
-3. **Standard library** - The stdlib is automatically included
-4. **Export visibility** - Only `export function` declarations in `build.maxon` are listed and runnable
-
----
-
-## Standard Library
-
-The standard library is automatically loaded for all compilations. It includes:
-
-- **Core functions**: `print`, `abs`, `sqrt`, `pow`, math functions
-- **String operations**: `format_int`, `format_float`, string methods
-- **Collections**: `Array`, `Map`, `Set`
-- **Iteration**: `range`, iterator protocol
-
-The stdlib is located in the `stdlib/` directory relative to the compiler.
-
----
-
-## Namespace Resolution
-
-When building multi-file projects, namespaces are derived from file paths:
-
-| File Path | Namespace |
-|-----------|-----------|
-| `main.maxon` | (global) |
-| `utils/helpers.maxon` | `utils` |
-| `lib/math/vectors.maxon` | `lib.math` |
-
-### Calling Functions Across Files
-
-**Full qualification:**
-```maxon
-var result = utils.format(value)
-```
-
-**Suffix matching (if unambiguous):**
-```maxon
-var result = format(value)  // Finds utils.format if unique
-```
-
-### Export Visibility
-
-Functions must be exported to be visible from other files:
-
-```maxon
-// utils.maxon
-export function helper(x int) returns int
-		return x * 2
-end 'helper'
-
-function internal(x int) returns int  // Not visible from other files
-		return x + 1
-end 'internal'
-```
-
----
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
-| 1 | Error (compilation failed, invalid arguments, etc.) |
+| `0` | Success |
+| `1` | The command ran and failed: a compile error, a failing check, a command line it cannot act on |
+| `2` | Nothing ran: the tree is not in a state to work on (another command holds its [tree lock](/docs/cli/project-structure/), or a compiler binary is older than its sources), or a `maxon test` run could not happen |
+| `101` | A program's leak check found an allocation still held at exit. The program reports it, not the driver; `maxon test` reports it as `LEAKED`. |
 
-`maxon run` forwards the program's exit code, and `maxon upgrade` the install script's.
+Some commands forward another process's exit code instead: [`maxon run`](#maxon-run) returns the
+program's, and [`maxon upgrade`](#maxon-upgrade) the install script's. For those, only `1` is ever the
+driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their own tables on
+[Debugging and Profiling](/docs/cli/debugging/).
 
----
+## Environment Variables
 
-## Environment
+**Read by the compiler:**
 
-### Standard Library Location
+| Variable | Read by | Effect |
+|----------|---------|--------|
+| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (manifest) | Root directory of the run cache |
+| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (manifest) on Windows | Run cache root when `MAXON_RUN_CACHE_ROOT` is unset |
+| `TMPDIR` (then `/tmp`) | `run`, `build` (manifest) elsewhere | Run cache root when `MAXON_RUN_CACHE_ROOT` is unset |
+| `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
+| `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
+| `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |
 
-The compiler looks for the standard library in these locations (in order):
-1. `stdlib/` relative to the compiler executable
-2. `../stdlib/` relative to the compiler executable
+**Read by a compiled program at run time:**
 
-### Working Directory
+| Variable | Effect |
+|----------|--------|
+| `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. |
+| `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
-- `maxon build` - Output is relative to the source file/directory location
-- `maxon build` with no path - reads the `build.maxon` in the current working directory
-- `maxon spec-test` - Runs from the current directory
-
----
-
-## Common Workflows
-
-### Developing a Single File
-
-```bash
-# Edit and build
-maxon build program.maxon
-
-# Run the result
-./program.exe
-```
-
-### Developing a Project
-
-```bash
-# Navigate to project
-cd myproject
-
-# List the builds build.maxon declares
-maxon build
-
-# Build one of them
-maxon build app
-
-# Compile the directory as one program and run it; the tail is the PROGRAM's argv
-maxon run . --verbose
-```
-
-### Running Tests During Development
-
-```bash
-# Run all tests
-maxon spec-test
-
-# Run specific tests
-maxon spec-test --filter=optional
-
-# Verbose output for debugging
-maxon spec-test --filter=map --verbose
-```
-
-### Debugging Compilation Issues
-
-```bash
-# Emit IR for inspection
-maxon build problem.maxon --emit-ir
-
-# Emit IR at each pipeline stage
-maxon build problem.maxon --dump-stages
-
-```
+`MAXON_DEBUGSTREAM` is set by `maxon monitor` to attach a `--debugstream` program to its ring. You do not
+set it yourself.

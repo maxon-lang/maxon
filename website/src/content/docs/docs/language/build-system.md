@@ -5,92 +5,102 @@ sidebar:
   order: 14
 ---
 
-`maxon build` with no path looks for **`build.maxon`** in the current directory, compiles it, runs it,
-and performs the build it describes.
-
-```bash
-maxon build
-```
-
-## A manifest is a program
-
-`build.maxon` is ordinary Maxon with the whole standard library available. The compiler does not parse
-it — it *runs* it, and reads the build off what it prints.
-
-That is the point: a build can **compute** what it compiles. Read a directory, choose sources by host,
-stamp a version out of a file — anything you can write, rather than only what a configuration format
-anticipated.
-
-## Its entry point is `build`, not `main`
-
-A manifest holds tasks a project can be asked to perform. `build` is the one this command asks for,
-and the name it asks by. It returns `ExitCode`; a non-zero return, or a crash, fails the build and
-nothing is compiled.
-
-```maxon
-export function build() returns ExitCode
-	Build.buildOne("src", output: "out/myprogram")
-	return 0
-end 'build'
-```
-
-## Project structure
-
-A project is a directory the compiler walks. Every `.maxon` file beneath it is part of the program,
-in the order given, except:
+A Maxon project is a directory of `.maxon` files — there is nothing to declare. `maxon build <directory>`
+compiles every source file beneath it. A directory that wants to say *how* it is built puts a
+**`build.maxon`** beside its sources, and `maxon build` with no path runs it.
 
 ```text
 myproject/
-├── build.maxon          # the manifest — describes the build, never part of it
+├── build.maxon          # the build manifest, if the project needs one
 ├── main.maxon           # entry point
 ├── lib.maxon
+├── lib.test.maxon       # tests: compiled only by maxon test
 └── utils/
     └── math.maxon       # subdirectories are included
 ```
 
-- **`build.maxon`** is skipped by the walk. It describes the build; it is not in it. Naming it
-  explicitly still compiles it, like any other file.
-- **`*.test.maxon`** is skipped too — a test file is a source *category*, and `maxon test` names those
-  explicitly.
-- **Anything under a `.maxonignore`** is skipped, along with every directory beneath it.
+A directory walk skips three things:
 
-## Describing the build
+- **`build.maxon`** — it describes the build and is never part of the program being built.
+- **`*.test.maxon`** — test files; [`maxon test`](/docs/language/testing/) compiles them.
+- **any directory containing a `.maxonignore` file**, with everything beneath it.
 
-`Build` writes the description and the compiler reads it back, so both ends share one definition of
-what a build is.
+Naming a file explicitly on the command line compiles it regardless. See
+[Project Structure](/docs/cli/project-structure/) for the full layout rules.
 
-| Call | What it says |
-|---|---|
-| `Build.buildOne(source, output:)` | Compile one file or directory to one output. The common shape. |
-| `Build.buildWithConfig(config)` | Several sources, compiled as **one program**, in the order given. |
+## A Manifest Is a Program
 
-The output path omits the extension — the compiler appends `.exe` on Windows and nothing elsewhere.
+`build.maxon` is ordinary Maxon with the whole standard library available. The compiler does not parse it
+as configuration: it compiles it for the host, runs it, and performs the build it describes. A build can
+therefore **compute** what it compiles — list a directory, choose sources by host, derive a version from
+git — instead of only spelling it out.
 
-For several sources:
+Its entry point is a function named **`build`**, not `main`. It returns `ExitCode`; a non-zero return or a
+crash fails the build before anything is compiled.
 
 ```maxon
-export function build() returns ExitCode
-	var sources = SourceList.create()
+function build() returns ExitCode
+	Build.build("src", output: "out/hello")
+	return 0
+end 'build'
+```
+
+The output path omits the extension: the compiler adds the target's (`.exe` on Windows, `.wasm` for
+`wasm32-wasi`, none on Linux and macOS). Relative paths resolve against the manifest's directory.
+
+## Describing the Build
+
+`Build` (in the standard library) writes the build description the compiler reads back:
+
+| Call | Meaning |
+|------|---------|
+| `Build.build(source, output:, debugInfo: true, version: "", defines:)` | compile one file or directory to one output |
+| `Build.target(name, source:, output:, debugInfo: true, version: "", defines:)` | describe one named target, returning a `BuildConfig` |
+| `Build.buildTargets(targets)` | declare several named targets (a `BuildConfigArray`) |
+| `Build.buildWithConfig(config)` | build one `BuildConfig`, whose `sources` may list several files and directories compiled as one program, in order |
+
+- `debugInfo` controls the debug-information sidecar written beside the executable.
+- `version` stamps a dotted version into the executable's metadata.
+- `defines` is a `StringArray` of `"name=value"` entries, each replacing the written default of a top-level
+  `String` constant — the same as `maxon build --define`. This is how a manifest passes a value it computed,
+  such as a version derived from git, into the program.
+
+**Several targets** are listed rather than guessed at:
+
+```maxon
+function build() returns ExitCode
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("app", source: "app", output: "out/app", version: "1.2.3"))
+	targets.push(Build.target("tool", source: "tool", output: "out/tool", debugInfo: false))
+	Build.buildTargets(targets)
+	return 0
+end 'build'
+```
+
+`maxon build` with no argument then prints the target names and compiles nothing; `maxon build app`
+builds one.
+
+**Several sources in one program** use a `BuildConfig`:
+
+```maxon
+function build() returns ExitCode
+	var sources = StringArray.create()
 	sources.push("src")
 	sources.push("vendor/thirdparty")
 
-	let config = BuildConfig.create("myprogram", output: "out/myprogram", sources: sources, optimize: false, debug_info: true)
+	let config = BuildConfig.create("myprogram", output: "out/myprogram", sources: sources, debug_info: true)
 	Build.buildWithConfig(config)
 	return 0
 end 'build'
 ```
 
-Order is load-bearing: sources are registered in exactly the order named.
+Sources are compiled in exactly the order listed. An empty `sources` list is refused (`build.maxon named
+no sources to compile`) rather than read as "everything here".
 
-:::caution[Name what to compile]
-An empty `sources` is **refused**, not read as "this directory". Accepting it would compile every file
-beneath the manifest — including every test — under a command that named nothing at all.
-:::
+## The Command Line Wins
 
-## The command line wins
+Flags typed on the command line outrank the manifest: `-o` replaces the output path, `--target` chooses
+the target (the manifest itself always runs on the host), a `--define` is applied after the manifest's
+defines, and debug information is written only if both the manifest and the command line allow it.
 
-`-o` and `--target` typed on the command line outrank the manifest, for the reason every flag outranks
-a file: the person typing the command is answering a narrower question than the file was.
-
-The manifest itself is always built for the host, whatever `--target` says — it is a program your
-machine has to run in a moment.
+The [CLI reference](/docs/cli/) documents `maxon build` and its flags.

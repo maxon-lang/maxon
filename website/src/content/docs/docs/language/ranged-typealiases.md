@@ -5,185 +5,257 @@ sidebar:
   order: 3
 ---
 
-Every use of `int`, `float`, and `byte` in type positions must go through a `typealias` with mandatory range constraints. This creates a stronger type system where every numeric value has a documented domain. `bool` and `cstring` are exempt from this requirement — `bool` is unranged by nature, and `cstring` is a pointer type (a NUL-terminated UTF-8 byte pointer used to interoperate with `__Builtins.*` runtime intrinsics).
+A `typealias` gives a type a name. Over `int` and `float` it also gives the type a **range**, which moves a
+domain rule — a port is 0 to 65535, a percentage is 0 to 100 — into the type system, where the compiler
+checks it.
 
-**Restriction in `with` clauses:** Bare primitive types (`int`, `float`, `byte`) cannot be used as type arguments in `with` clauses on `typealias` or `type` declarations. You must create a ranged typealias first. `bool`, `String`, and other struct types are not affected.
-
-```maxon
-// INVALID — bare primitives in with clauses
-typealias IntArray = Array with int          // ERROR
-type IntBox implements Container with int    // ERROR
-
-// VALID — use a ranged typealias
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer      // OK
-type IntBox implements Container with Integer // OK
-```
-
-**Declaration:**
+## Declaration
 
 ```maxon
 typealias Port = int(0 to 65535)
 typealias Percentage = float(0.0 to 100.0)
-typealias Pixel = int(0 to u8.max)
 typealias Temperature = int(-273 to 1000)
+typealias Score = int(0 upto 100)        // 0 to 99
 ```
 
-The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it exclusive:
+`to` makes the upper bound inclusive and `upto` makes it exclusive.
 
-```maxon
-typealias Score = int(0 upto 100)   // 0 to 99
-```
-
-**Type-qualified bounds:**
-
-Use `type.min` and `type.max` to reference bounds of specific numeric types:
+**Type-qualified bounds.** `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32` and `f64` each
+have `.min` and `.max`:
 
 ```maxon
 typealias FileHandle = int(0 to u32.max)
 typealias SmallSigned = int(i8.min to i8.max)
+typealias Offset = int(0 to i64.max)
 ```
 
-Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
+- When both bounds are type-qualified they name the same type: `i8.min to i32.max` is **E3005**
+  (`Mismatched type bounds`). A qualified bound may pair with a literal (`0 to u32.max`).
+- A range cannot reach both below zero and above `i64.max`: `int(-1 to u64.max)` is refused. Use
+  `i64.min to i64.max` or `0 to u64.max`.
+- `typealias X = i64` is **E2003**; the sized names exist only as bounds.
+- A typealias nothing uses is **E3062**.
 
-When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`). A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead). A negative-literal lower paired with `u64.max` upper (e.g., `int(-1 to u64.max)`) is also rejected — no single 64-bit type can represent both ends; use `i64.min to i64.max` or `0 to u64.max`. Byte ranges must have bounds within 0 to u8.max.
+`.min` and `.max` are also integer expressions anywhere a literal is valid: `let limit = u16.max`.
 
-**Range identifiers as expressions:**
-
-`type.min` and `type.max` can also be used as expressions anywhere an integer literal is valid — in variable assignments, comparisons, arithmetic, function arguments, etc.:
+**Primitives in `with` clauses.** A generic type argument must be an alias, never a bare `int` or
+`float` (**E2061**):
 
 ```maxon
-var x = u16.max            // 65535
-if value == i32.max 'check'
-	// ...
-end 'check'
-var y = u8.max + 1         // 256
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally      // not Array with int
 ```
 
-**Construction:**
+## Aliases Are Distinct Types
 
-Cast a value into a ranged type with `as`:
+**Every typealias is its own type**, even when two aliases spell the same range. A value of one alias
+never flows into a place declared with another — a parameter, an assignment, an `otherwise` fallback, a
+`match` arm, a struct field, a union payload, a generic argument — unless you write the cast:
+
+```maxon
+typealias Age = int(0 to 150)
+typealias Year = int(0 to 3000)
+
+function takesYear(y Year) returns Year
+	return y
+end 'takesYear'
+
+function main() returns ExitCode
+	let a = 30 as Age
+	// takesYear(a)                   // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
+	print("{takesYear(a as Year)}\n") // the cast converts
+	return 0
+end 'main'
+```
+
+- `as` converts in both directions. A widening cast (the source range fits the target) emits no check;
+  a narrowing cast keeps a run-time check.
+- Casting a value to its own alias is **E3010** (`unneeded cast: 'Age' already fits in 'Age'`).
+- A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
+  initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
+  unnamed slot. Only two *different* names conflict.
+- The same alias name declared over the same range in two files is one type.
+
+**`return` converts.** `return x` in a function declared `returns T` behaves as `return x as T` — the one
+implicit conversion between aliases. A widening return emits no check, a narrowing one keeps its check,
+and `main` may return any integer alias without spelling `ExitCode`. A different struct, a union where a
+scalar is declared, or a lossy float where an integer is declared is still refused.
+
+## Construction
+
+A literal needs no cast when it flows into a place already declared with an alias — the literal is
+checked against that alias directly:
 
 ```maxon
 typealias Port = int(0 to 65535)
-var p = 8080 as Port
-```
 
-In most cases the cast is unnecessary — when a literal flows into a slot whose type is already a ranged alias (a parameter, a struct field, a function return), the literal is checked against that target type directly. Use `as` when the target type needs to be visible at the use site, or when narrowing a wider value to a smaller range.
-
-**Compile-time range checks:**
-
-Literal values are checked at compile time. This is a compile error:
-
-```maxon
-typealias SmallInt = int(0 to 10)
-var x = 15 as SmallInt   // error: Value 15 is outside the range of 'SmallInt'
-```
-
-**Runtime range checks:**
-
-When the value is a computed expression, a runtime range check is emitted that panics on violation:
-
-```maxon
-typealias Port = int(0 to 65535)
-typealias RawValue = int(i64.min to i64.max)
-function makePort(n RawValue) returns RawValue
-	var p = n as Port   // runtime check: panics if n < 0 or n > 65535
+function open(p Port) returns Port
 	return p
-end 'makePort'
+end 'open'
+
+function main() returns ExitCode
+	print("{open(8080)}\n")
+	// open(70000)          // E3005: Value 70000 is outside the range of 'Port' (int(0 to 65535))
+	return 0
+end 'main'
 ```
 
-**Return value range checks:**
+Write `value as Alias` when the alias should be visible at the use site, or to convert a value of another
+alias.
 
-Functions with a ranged return type have their return values checked:
-- Returning a literal outside the range is a compile error
-- Returning a computed expression emits a runtime range check
-- Types whose range covers the full representation (e.g., `ExitCode`) are exempt
+## Arithmetic
+
+Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
+(a literal, a loop counter) adopts the named one; two different aliases are **E3005** until one side is
+cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+Negating a signed alias keeps the alias; negating an unsigned one gives an unnamed value.
+
+```maxon
+typealias Score = int(0 to 100)
+typealias Meters = int(0 to 1000)
+
+function main() returns ExitCode
+	let a = 30 as Score
+	let b = 12 as Score
+	let m = 5 as Meters
+	let sum = a + b              // Score
+	let bumped = a + 1           // Score: the literal adopts the alias
+	let mixed = a + (m as Score) // cast one side
+	// let bad = a + m           // E3005: 'Score' and 'Meters' are different typealiases
+	print("{sum} {bumped} {mixed}\n")
+	return 0
+end 'main'
+```
+
+The alias is a name, not a proof: `a + b` over `Score` is a `Score` that may hold 130. Range checks apply
+where the value lands (next section). All integer arithmetic is 64-bit and wraps on overflow.
+
+## Range Checks
+
+A value is checked where it reaches a place **declared** with the alias: a call argument, a `return`, a
+struct-literal field, a field store, a field's declared default, an array element, or an explicit `as`.
+
+- A value the compiler can compute — a literal, a constant expression — that is out of range is a
+  compile error, **E3005** (`Value 101 is outside the range of 'Percent' (int(0 to 100))`).
+- Any other value gets a run-time check where needed. A check is omitted when the value's own range
+  provably fits.
+- A failed run-time check is a **panic**, not a recoverable error: the program prints
+  `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
+  with code 1. No `try` is involved.
+
+**Reassigning a local is not a checked place**, so a local may hold an out-of-range value until it escapes:
 
 ```maxon
 typealias Score = int(0 to 100)
 
-function half(s Score) returns Score
-	return s / 2    // runtime range check on return value
-end 'half'
+function bump(start Score) returns Score
+	var s = start
+	s = s + 200       // no check: a local rebind
+	print("{s}\n")    // prints 210 for bump(10)
+	return s          // panics: Range check failed: value outside typealias 'Score'
+end 'bump'
 ```
 
-**Arithmetic:**
+**`ExitCode`** is the stdlib alias `main` returns. Its range follows the target: `int(0 to u32.max)` on
+Windows and `int(0 to 255)` on Linux, macOS and WASI. A literal outside it is a compile error, and a
+computed value outside it panics at the `return`.
 
-Ranged types support standard arithmetic. The result of arithmetic between ranged values is the underlying primitive type:
-
-```maxon
-typealias Score = int(0 to 100)
-var a = 30 as Score
-var b = 12 as Score
-var sum = a + b    // result is int
-```
-
-All arithmetic on ranged integer types uses 64-bit operations regardless of storage type.
-
-**Storage:**
-
-The compiler automatically selects the smallest natural integer width that can represent the declared range for storage in arrays and global variables. All arithmetic still uses 64-bit operations.
-
-| Range fits in | Storage used |
-|---------------|-------------|
-| 0 to u8.max | u8 (1 byte) |
-| -128 to 127 | i8 (1 byte) |
-| 0 to 65535 | u16 (2 bytes) |
-| -32768 to 32767 | i16 (2 bytes) |
-| 0 to 4294967295 | u32 (4 bytes) |
-| -2147483648 to 2147483647 | i32 (4 bytes) |
-| anything wider | i64 (8 bytes) |
-
-```maxon
-typealias Pixel = int(0 to 65535)        // stored as u16 in arrays and globals
-typealias Delta = int(-32768 to 32767)   // stored as i16 in arrays and globals
-typealias Percent = int(0 to 100)        // stored as u8 in arrays and globals
-```
-
-Local variables always use 64-bit registers regardless of the ranged type's storage class.
-
-**Standard library aliases:**
-
-The standard library exports a small set of cross-cutting aliases that don't belong to any one domain:
-
-| Alias | Definition | Purpose |
-|-------|-----------|---------|
-| `ExitCode` | platform-dependent | Process exit codes |
-| `HashValue` | `u32` | Hash function results |
-| `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
-
-Domain-specific quantities (counts, indices, byte offsets, math values) are declared as typealiases inside the module they belong to — for example `String` exports `ByteCount` and `GraphemeCount`, `Math` exports `Real`, and `Array` keeps `ElementCount`/`ElementIndex` private. Application code should follow the same pattern: declare a typealias that names the *purpose* (e.g. `Tally`, `BytePos`, `Coord`) rather than reaching for a generic `Count`/`Index`.
-
-**Assignment and rebinding:**
-
-Assigning one ranged integer variable to another initially creates an alias — both variables refer to the same underlying value. However, reassigning with arithmetic produces a **new value** and rebinds the variable without affecting the original:
+Integers are plain values: `var pos = start` copies, and advancing `pos` never changes `start`, so a ranged
+alias makes a safe loop cursor:
 
 ```maxon
 typealias Pos = int(0 to i64.max)
-var startPos = 10 as Pos
-var pos = startPos      // pos and startPos initially share the same value
 
-pos = pos + 1           // rebinds pos to a new value (11) -- startPos is unaffected
-print("{startPos}")     // 10 -- startPos is unchanged
-print("{pos}")          // 11
-```
-
-This behavior means that using a ranged integer as a loop cursor is safe — advancing `pos` never mutates `startPos`:
-
-```maxon
 function skipSpaces(src ByteArray, startPos Pos) returns Pos
-		var pos = startPos          // pos starts at the same value as startPos
-		while pos < src.length 'loop'
-				if src[pos] != b' ' 'notSpace'
-						break 'loop'
-				end 'notSpace'
-				pos = pos + 1           // advances pos; startPos is unaffected
-		end 'loop'
-		return pos
+	var pos = startPos
+	while pos < src.count() 'scan'
+		let b = try src.get(pos) otherwise panic("in range")
+		if b != 32 'notSpace'
+			break
+		end 'notSpace'
+
+		pos = pos + 1
+	end 'scan'
+
+	return pos
 end 'skipSpaces'
 ```
 
-This is in contrast to struct assignment, where field mutations through an alias affect the original. See [Reference-by-Default Assignment](/docs/language/memory-model/#reference-by-default-assignment).
+## Naming Aliases
 
----
+Name an alias for its **purpose** — `Tally`, `BytePos`, `Coord`, `Milliseconds` — rather than reaching for
+a generic `Count` or `Index`, and declare it in the module it belongs to. The standard library follows the
+same pattern and exports a small set of cross-cutting aliases:
+
+| Alias | Definition | Purpose |
+|-------|-----------|---------|
+| `ExitCode` | target-dependent (see above) | process exit codes |
+| `Byte` | `int(0 to u8.max)` | one byte; `ByteArray` is `Array with Byte` |
+| `HashValue` | `int(0 to u32.max)` | `Hashable.hash()` results |
+| `Codepoint` | `int(0 to 1114111)` | Unicode scalar values |
+| `SourceLineNumber` | `int(1 to i32.max)` | caller line numbers (`__line__`) |
+| `Real` | `float(f64.min to f64.max)` | general floating-point values |
+
+Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
+the crossing.
+
+## Generic-Instance and Function-Type Aliases Are Brands
+
+An alias over a generic instance or a function type follows the same rule. `typealias Xs = Array with
+Integer` and `typealias Ys = Array with Integer` are one instance (one layout, one method set) under two
+**brands**: an `Xs` does not flow into a `Ys` slot unless you write `xs as Ys`, which re-brands the value at
+no cost, and `return` re-brands implicitly.
+
+- A `[...]` literal carries no brand and fits either.
+- A closure literal or a declared function carries no brand and fits any function alias of its shape.
+- Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
+  elements have different layouts, so build a new container instead.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Handler = function(n Integer) returns Integer
+typealias Callback = function(n Integer) returns Integer
+
+function runHandler(f Handler) returns Integer
+	return f(10)
+end 'runHandler'
+
+function runCallback(f Callback) returns Integer
+	return f(20)
+end 'runCallback'
+
+function main() returns ExitCode
+	let addThree = function(n Integer) gives n + 3
+	print("{runHandler(addThree)} {runCallback(addThree)}\n")   // 13 23
+	return 0
+end 'main'
+```
+
+## Per-Instance Typealiases
+
+A ranged alias declared inside a generic type is a distinct type for each instantiation — even for two
+aliases of the same instance:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pool uses T
+	export typealias Idx = int(0 to u64.max)
+	var items as T
+
+	static function create(item T) returns Self
+		return Self{items: item}
+	end 'create'
+
+	export function checked(at Idx) returns Idx
+		return at
+	end 'checked'
+end 'Pool'
+
+typealias PoolA = Pool with Integer
+typealias PoolB = Pool with Integer
+```
+
+`PoolA.Idx` and `PoolB.Idx` are different types; passing one where the other is expected is **E3005**
+(`expected 'PoolB.Idx', got 'PoolA.Idx'`). Convert with `a as PoolB.Idx`. Literals that fit the range are
+accepted by both.

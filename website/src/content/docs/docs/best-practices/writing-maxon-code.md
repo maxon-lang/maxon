@@ -8,8 +8,6 @@ sidebar:
 ALWAYS read this document before writing or modifying Maxon code.
 For full specification see [LANGUAGE_REFERENCE.md](/docs/language/overview/), [BNF_SYNTAX.md](/docs/spec/bnf-syntax/), [QUICK_REFERENCE.md](/docs/language/overview/).
 
----
-
 ## Syntax that DOES NOT EXIST in Maxon
 
 These are the most common mistakes. NEVER use any of these:
@@ -43,8 +41,6 @@ cond ? a : b                   a if cond else b
 (x) gives x + 1                function(x) gives x + 1
 param (T) returns U            typealias F = function(T) returns U; param F
 ```
-
----
 
 ## Mandatory Rules
 
@@ -335,8 +331,6 @@ end 'Thing'
 
 Single-branch or loop-only `self.field` writes are NOT definite assignment and also trigger E3086.
 
----
-
 ## Declaration Reference
 
 ### Functions
@@ -386,7 +380,7 @@ typealias IntArray = Array with Integer
 var items = IntArray.create()   // var because we call push
 items.push(1)
 ```
-`Array with Integer{}` at a use site is E3003 — a generic container needs a typealias before use.
+`Array with Integer{}` at a use site is E2004 — a generic container needs a typealias before use.
 
 ### Struct types
 
@@ -523,8 +517,6 @@ var p = 8080 as Port        // cast a value into the ranged type
 var bad = 70000 as Port     // compile error: out of range
 ```
 
----
-
 ## Control Flow
 
 ### if / else if / else
@@ -632,8 +624,6 @@ match result 'handle'
 end 'handle'
 ```
 
----
-
 ## Error Handling
 
 ```maxon
@@ -702,8 +692,6 @@ end 'h'
 // Panic (unrecoverable)
 panic("invariant violated: {details}")
 ```
-
----
 
 ## Collections
 
@@ -775,8 +763,6 @@ for b in s.bytes() 'bytes' ... end 'bytes'  // bytes
 for cp in s.codepoints() 'cp' ... end 'cp'  // codepoints
 ```
 
----
-
 ## Builtin Functions
 
 ### Compiler Intrinsics
@@ -826,8 +812,6 @@ Math.log10(x)                // base-10 logarithm
 Math.pow(base, exponent: e)  // base raised to exponent
 ```
 
----
-
 ## Operators (precedence high to low)
 
 | Precedence | Operators | Notes |
@@ -870,8 +854,6 @@ auto-widens, so the cast contributes nothing. Drop redundant casts like
 context (binary op, return, function argument) already widens `Byte` to
 `Integer`. Bare-literal sources (`42 as Byte`) are exempt because the
 literal has no source alias to compare against.
-
----
 
 ## Other Features
 
@@ -1023,5 +1005,3 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 - Reference counting: automatic scope cleanup
 - Borrow checking: CANNOT mutate a collection while a `.get()` borrow is live (E3070)
 - `@heap var p = Point.create(0.0, y: 0.0)` forces heap allocation
-
----

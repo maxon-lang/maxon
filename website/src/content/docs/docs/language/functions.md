@@ -5,427 +5,292 @@ sidebar:
   order: 7
 ---
 
-### Declaration Syntax
-```maxon
-// Function with return value
-function name(param type [= default], ...) returns returnType
-		// statements
-		return value
-end 'name'
+## Declaration
 
-// Function with no return value (implicit void)
-function name(param type [= default], ...)
-		// statements
+```text
+function name(param Type, other Type = default) returns ReturnType throws ErrorType
+	statements
 end 'name'
 ```
 
-**Block Identifier**: The string after `end` must match the function name.
-
-**Return Type**: Functions that return a value must specify `returns` followed by the type. Functions that don't return a value should omit the `returns` clause entirely.
-
-**Discarding Parameters**: Use `_` as the parameter name to discard an unused parameter and suppress the unused-variable error:
-
 ```maxon
-function onClick(_ MouseEvent)
-	// the MouseEvent argument is intentionally unused
-end 'onClick'
-```
+typealias Amount = int(i64.min to i64.max)
 
-### Named Arguments
-
-Maxon uses a **first-positional, rest-named** rule for function and method calls:
-- **First argument**: Always positional. Labelling the first argument is rejected as **E2052 "first arg cannot be named"**.
-- **Subsequent arguments**: Must use `name: value` syntax (omitting the label triggers **E3005**)
-- Named arguments (after the first) can appear in any order
-- Parameters with default values can be omitted
-
-**Examples:**
-
-```maxon
-function add(a int, b int) returns int
-		return a + b
+function add(a Amount, b Amount) returns Amount
+	return a + b
 end 'add'
 
-add(3, b: 4)      // First positional, second named
-
-function connect(host String, port int) returns bool
-		// ...
-end 'connect'
-
-connect("localhost", port: 8080)  // First positional, second named
-
-// Single parameter functions
 function greet(name String)
-		print("Hello, " + name)
+	print("Hello, {name}\n")
 end 'greet'
-
-greet("Alice")    // Single param is positional
 ```
 
-### Default Values
+- The label after `end` repeats the function's name.
+- A function that returns a value declares `returns Type`; one that returns nothing omits the clause.
+- A parameter is written `name Type`. Parameter types follow the
+  [typealias rule](/docs/language/types/#primitives-go-through-a-typealias).
+- A function that can fail declares `throws ErrorType` (see
+  [Error Handling](/docs/language/error-handling/)).
+- Name a parameter `_` to accept and ignore an argument: `function onClick(_ MouseEvent)`.
+- A function is private to its file unless marked `export`, `module` or `public` (see
+  [Namespaces](/docs/language/namespaces/)).
 
-Parameters can have default values. Parameters with defaults can be omitted at the call site. Any literal expression is supported as a default value, including integers, floats, booleans, strings, arrays, enum cases, struct construction, character literals, and byte string literals.
+## Named Arguments
+
+Maxon calls use a **first-positional, rest-named** rule:
+
+- The first argument is positional. Labelling it is **E2052** (`the first argument cannot be named`).
+- Every later argument is written `name: value`; omitting a label is **E2053**.
+- Named arguments may appear in any order, and parameters with defaults may be omitted.
 
 ```maxon
+typealias Amount = int(i64.min to i64.max)
+
+function connect(host String, port Amount, secure bool = false) returns String
+	return "{host}:{port} secure={secure}"
+end 'connect'
+
+function main() returns ExitCode
+	print("{connect("localhost", port: 8080)}\n")                    // localhost:8080 secure=false
+	print("{connect("example.com", secure: true, port: 443)}\n")     // example.com:443 secure=true
+	return 0
+end 'main'
+```
+
+## Default Values
+
+A parameter may declare a default, used when the call omits that argument. The default is any expression —
+a literal, an enum case, a factory call, a byte string — and is evaluated at each call that needs it.
+
+```maxon
+typealias Retries = int(0 to 10)
+
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
+
 function greet(name String, title String = "Mr.")
-		print("Hello, {title} {name}")
+	print("Hello, {title} {name}\n")
 end 'greet'
 
-greet("Smith")                    // Uses default title
-greet("Smith", title: "Dr.")      // Override default
+function schedule(job String, retries Retries = 3, level Priority = Priority.medium, separator Character = '/')
+	print("{job}{separator}{retries}{separator}{level.name}\n")
+end 'schedule'
 
-// String default
-function connect(host String = "localhost") returns ExitCode
-		// ...
-end 'connect'
-
-// Array default
-function process(items IntArray = [10, 20, 12]) returns Integer
-		// ...
-end 'process'
-
-// Integer default
-function retry(attempts AttemptCount = 3) returns ExitCode
-		// ...
-end 'retry'
-
-// Float default
-function scale(factor ScaleFactor = 1.0) returns ScaleFactor
-		// ...
-end 'scale'
-
-// Bool default
-function run(verbose bool = false) returns ExitCode
-		// ...
-end 'run'
-
-// Enum default
-function setLevel(level Priority = Priority.medium) returns ExitCode
-		// ...
-end 'setLevel'
-
-// Struct default
-function draw(origin Point = Point{x: 0, y: 0}) returns ExitCode
-		// ...
-end 'draw'
-
-// Character default
-function setSeparator(sep Character = '/') returns ExitCode
-		// ...
-end 'setSeparator'
-
-// Byte string default
-function send(header ByteArray = b"HTTP/1.1") returns ExitCode
-		// ...
-end 'send'
+function main() returns ExitCode
+	greet("Smith")                          // Hello, Mr. Smith
+	greet("Smith", title: "Dr.")            // Hello, Dr. Smith
+	schedule("backup")                      // backup/3/medium
+	schedule("sync", level: Priority.high)  // sync/3/high
+	return 0
+end 'main'
 ```
 
-**Rules:**
-- Parameters with defaults must come after required parameters
-- Default values are evaluated at call site
-- Arguments may be omitted if they have defaults
-- Any literal expression is supported as a default value
+Parameters with defaults come after the parameters without them.
 
-### Function Overloads
+## Caller-Location Defaults (`__line__`, `__file__`)
 
-Maxon supports function overloading — multiple functions with the same name but different signatures.
+`__line__` and `__file__` are legal **only** as a parameter's default value. They expand at each **call
+site**, so a helper — an assertion, a logger — can report where it was called from:
 
-#### Disambiguation by Parameter Types
-
-When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
+| Default | Value at the call site | Declare the parameter as |
+|---------|------------------------|--------------------------|
+| `__line__` | the line of the callee's name | `SourceLineNumber` |
+| `__file__` | the calling file's path, relative to the compile root, with `/` separators | `String` |
 
 ```maxon
-function process(value int) returns int
-		return value * 2
-end 'process'
+function check(ok bool, message String, from String = __file__, at SourceLineNumber = __line__)
+	if not ok 'failed'
+		print("{from}:{at}: {message}\n")
+	end 'failed'
+end 'check'
 
-function process(value String) returns int
-		return value.count()
-end 'process'
-
-process(42)        // calls process(value int)
-process("hello")   // calls process(value String)
+function main() returns ExitCode
+	check(1 + 1 == 2, message: "arithmetic")
+	check(2 + 2 == 5, message: "expected 5")                          // main.maxon:9: expected 5
+	check(false, message: "forwarded", from: "other.maxon", at: 42)   // other.maxon:42: forwarded
+	return 0
+end 'main'
 ```
 
-#### Disambiguation by Parameter Names
+- Declare both or neither: a line number without its file names a line in no particular file.
+- An explicit argument replaces the default, which is how a helper forwards the location it was given:
+  `check(ok, message: m, from: from, at: at)`.
+- `__file__` is always relative, so the same source builds the same binary on any machine.
+- Anywhere else — an ordinary expression, a struct field default — is **E2060**.
 
-When overloads have different parameter names, the caller uses named arguments to select the correct overload:
+## Function Overloads
+
+Several functions may share a name when their parameters differ.
+
+**By parameter type** — the argument types choose the overload:
 
 ```maxon
-function create(name String) returns String
-		return name
-end 'create'
+typealias Tally = int(0 to u64.max)
 
-function create(label String) returns String
-		return label
-end 'create'
+function measure(value Tally) returns Tally
+	return value * 2
+end 'measure'
 
-create(name: "foo")    // calls first overload
-create(label: "bar")   // calls second overload
+function measure(value String) returns Tally
+	return value.count()
+end 'measure'
+
+function main() returns ExitCode
+	print("{measure(21)} {measure("hello")}\n")    // 42 5
+	return 0
+end 'main'
 ```
 
-#### Ambiguous Calls
+**By parameter name** — overloads whose later parameters have different names are chosen by the labels
+at the call:
 
-If the compiler cannot determine which overload to call based on argument types alone, it requires named arguments. Calling an ambiguous overload without named arguments produces error **E3007**.
-
-### Examples
-
-**No Parameters**
-```maxon
-function getAnswer() returns int
-		return 42
-end 'getAnswer'
-```
-
-**Void Return Type**
-```maxon
-function greet(name String)
-		print("Hello, " + name)
-end 'greet'
-```
-
-**Multiple Parameters**
-```maxon
-function add(a int, b int) returns int
-		return a + b
-end 'add'
-
-var result = add(3, b: 4)
-```
-
-**Named Arguments for Clarity**
-```maxon
-function divide(dividend int, divisor int) returns int
-		return dividend / divisor
-end 'divide'
-
-var result = divide(dividend: 10, divisor: 2)
-```
-
-**Array Parameters**
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
 
-function sum(numbers IntArray) returns int
-		var total = 0
-		for num in numbers 'loop'
-				total = total + num
-		end 'loop'
-		return total
-end 'sum'
+function slice(start Integer, endIndex Integer) returns Integer
+	return endIndex - start
+end 'slice'
+
+function slice(start Integer, length Integer) returns Integer
+	return start + length
+end 'slice'
+
+function main() returns ExitCode
+	print("{slice(10, endIndex: 32)} {slice(10, length: 32)}\n")    // 22 42
+	return 0
+end 'main'
 ```
 
-### Calling Functions
+- A call that more than one overload matches is **E3007** (`Ambiguous overload`). Because the first argument
+  is never labelled, two single-parameter overloads of the same type cannot be told apart.
+- Declaring the same overload twice, with the same parameter names and types, is a duplicate
+  definition (**E3006**). Overloads with the same parameter types but different parameter names are
+  separate declarations; a call whose labels cannot tell them apart is **E3007**.
+- A type may declare a `static` method and an instance method with the same name and parameters:
+  `Type.name()` calls the static one and `value.name()` the instance one.
 
-**First Positional, Rest Named:**
-```maxon
-var result = add(3, b: 4)         // First positional, second named
-var answer = getAnswer()          // No parameters
-greet("Alice")                    // Single param is positional
-divide(100, divisor: 5)           // First positional, second named
-```
+## Parameter Passing
 
-### Parameter Passing
-
-Maxon uses **automatic pass-by-reference** for parameters that are assigned to inside the function body.
-
-**By-value (read-only parameters):** If a function only reads a parameter, the value is passed directly — no indirection overhead.
-
-**By-reference (mutated parameters):** If a function assigns to a parameter (directly or through a field or element), the compiler passes a pointer to the caller's storage. This allows the called function to mutate the caller's variable.
+A parameter the function only reads is passed by value. A parameter the function **assigns to** — directly,
+or through one of its fields or elements — is passed by reference, so the write reaches the caller's
+variable:
 
 ```maxon
-function increment(n int)
-		n = n + 1       // assigns to n — passed by reference
+typealias Tally = int(0 to u64.max)
+
+function increment(n Tally)
+	n = n + 1
 end 'increment'
 
 function main() returns ExitCode
-		var x = 10
-		increment(x)    // x is now 11
-		return x
+	var x = 10
+	increment(x)
+	print("{x}\n")     // 11
+	return 0
 end 'main'
 ```
 
-**Mutability rules:**
+- Passing a `var` lets the callee's writes propagate.
+- Passing a `let` to a parameter the callee writes is **E3019** (`cannot pass 'y' to function that mutates
+  parameter 'n'`). A method writing a field of its **own** receiver is not a parameter write, so
+  `let acc = Accumulator.create()` followed by `acc.add(10)` is legal.
+- Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
 
-- If the caller passes a `var` variable, the parameter is mutable and assignments propagate back to the caller.
-- If the caller passes a `let` variable to a function that mutates its parameter, the compiler raises error **E3019**.
-- If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
+## Function Types and Function Values
 
-```maxon
-function double(n int)
-		n = n * 2
-end 'double'
-
-function main() returns ExitCode
-		var x = 5
-		double(x)       // OK — x is var; x becomes 10
-
-		let y = 5
-		double(y)       // ERROR E3019: cannot pass let variable to mutating parameter
-
-		double(5)       // OK — literal creates a temporary; mutation has no visible effect
-		return x
-end 'main'
-```
-
-### Function Types and Function-Typed Values
-
-Functions in Maxon are first-class values: they can be stored in variables, passed as arguments, and returned from other functions. A *function type* is written with the `function` keyword and must be named via `typealias` — the literal `function(...) returns T` form is legal only as the right-hand side of a `typealias` declaration. Anywhere else (parameters, return types, struct fields, variable annotations, generic arguments), reference the alias by name.
+Functions are values: a bare function name (no parentheses) is a reference to it, and it can be stored,
+passed and returned. A function type is written with `function` and is always named by a typealias; the
+alias is what appears in parameters, returns, fields and generic arguments.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
+typealias UnaryOp = function(Score) returns Score
 
-typealias UnaryOp = function(Score) returns Score    // takes one Score, returns Score
-typealias Compare = function(Score, Score) returns bool  // two Scores, returns bool
-typealias Callback = function()                       // takes nothing, returns void
-```
+function double(x Score) returns Score
+	return x * 2
+end 'double'
 
-The `returns` clause is omitted for a void-returning function type. Once defined, the alias can be used at every use site — function parameter, return type, struct field, or generic argument:
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
-typealias HandlerMap = Map with (String, UnaryOp)
-
-function apply(f UnaryOp, x Integer) returns Integer
-		return f(x)
+function apply(f UnaryOp, x Score) returns Score
+	return f(x)
 end 'apply'
 
 function pickDouble() returns UnaryOp
-		return double                  // function reference, no parens
+	return double
 end 'pickDouble'
 
 function main() returns ExitCode
-		let f = pickDouble()           // f has type UnaryOp
-		return f(21)                   // 42
+	let f = pickDouble()
+	print("{f(21)} {apply(double, x: 4)}\n")    // 42 8
+	return 0
 end 'main'
 ```
 
-A bare function name (no parens) evaluates to a function reference. Closures (see below) and function references are both valid where a function-typed value is expected.
+Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
+throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
+Function-type aliases are [brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 
-### Closures
+## Closures
 
-Closures are anonymous functions expressed inline using `gives` syntax:
-
-```maxon
-(param) gives expression
-(param1, param2) gives expression
-() gives expression
-```
-
-**Capture by reference:** Closures capture variables from the enclosing scope by reference, not by value. This means changes to a captured variable after the closure is created are visible inside the closure when it executes.
+A closure is an anonymous function written `function(parameters) gives expression`:
 
 ```maxon
+typealias Score = int(i64.min to i64.max)
+typealias UnaryOp = function(Score) returns Score
+
+function apply(f UnaryOp, x Score) returns Score
+	return f(x)
+end 'apply'
+
 function main() returns ExitCode
-		var x = 10
-		let addX = (n int) gives n + x   // captures x by reference
-		x = 20
-		var result = addX(5)             // evaluates with x == 20, result is 25
-		return result
+	var offset = 10
+	let addOffset = function(n Score) gives n + offset
+	offset = 20
+	print("{apply(addOffset, x: 5)}\n")     // 25: the closure sees the current offset
+	return 0
 end 'main'
 ```
 
-**Notes:**
-- Closure parameters may optionally omit the type annotation when the type can be inferred from context.
-- Closures can only appear where a function-type value is expected.
-- Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
-- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `(_ int) gives 42`
-- A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
+- **Captures are by reference.** A closure reads a captured variable's current value when it runs.
+- **A closure that captures cannot outlive its frame.** Returning one, or storing it in a field, a
+  global, a container or a union payload, is **E3099**. Passing it down to a function that calls it is fine.
+  A closure that captures nothing is a plain function reference and can go anywhere.
+- A parameter's type may be omitted when the expected function type supplies it.
+- Closure parameters must be used (**E3012**); write `_` for an unused one.
+- Inside an instance method a closure may use `self`; elsewhere `self` is **E2001**.
+- Assigning to a captured `let` is an error, as it is outside the closure.
 
-### Function Purity and Discarded Results
+## Function Purity and Discarded Results
 
-Maxon requires function return values to be used. The compiler infers whether each function is **pure** or **impure** and enforces different rules for discarding results.
+A function's result must be used. The compiler infers whether a function is **pure** (no output, no writes
+to globals or parameters, only pure callees) or **impure**, and the rules for ignoring a result differ:
 
-#### Pure vs Impure Functions
-
-A function is **pure** if it has no side effects: it does not write to stdout/stderr, does not modify global state, does not mutate parameters, and only calls other pure functions. Purity is inferred automatically by the compiler -- there is no annotation.
-
-A function is **impure** if it performs any side effect, either directly or by calling another impure function. Examples of impure operations include:
-- Writing to stdout or stderr (e.g., `print`)
-- Modifying global or static variables
-- Mutating parameters
-- Calling runtime functions
-- Calling other impure functions (transitively)
-
-Functions with no return type are always considered impure (their result cannot be discarded because there is no result).
-
-#### Discarding Pure Function Results
-
-Pure function results **must** be used -- they cannot be discarded, even with `_ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
+| Callee | Bare call statement | `_ = call()` |
+|--------|---------------------|--------------|
+| pure function | **E3064** — the call does nothing | **E3064** |
+| impure function | **E3065** — result not used | allowed |
+| chainable method (returns its own receiver type) | allowed | allowed |
 
 ```maxon
-function double(x int) returns int
-		return x * 2
-end 'double'
+typealias Tally = int(0 to u64.max)
 
-double(5)               // Error E3064: result of pure function 'double' must be used
-_ = double(5)       // Error E3064: result of pure function 'double' must be used
-let result = double(5)  // OK: result is used
-```
-
-#### Discarding Impure Function Results
-
-Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `_ =`:
-
-```maxon
 var counter = 0
-function incrementAndGet() returns int
-		counter = counter + 1
-		return counter
+
+function incrementAndGet() returns Tally
+	counter = counter + 1
+	return counter
 end 'incrementAndGet'
 
-incrementAndGet()               // Error E3065: result of 'incrementAndGet' is not used
-_ = incrementAndGet()       // OK: explicitly discarded
-let count = incrementAndGet()   // OK: result is used
+function main() returns ExitCode
+	_ = incrementAndGet()              // explicitly discarded
+	let now = incrementAndGet()        // used
+	// incrementAndGet()               // E3065: result of 'incrementAndGet' is not used
+	print("{now}\n")                   // 2
+	return 0
+end 'main'
 ```
 
-#### Chainable Methods
-
-Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `_ =`, since the common pattern is to call them for their side effect on the receiver:
-
-```maxon
-type Counter
-		var value as int
-
-		function increment() returns Counter
-				value = value + 1
-				return self
-		end 'increment'
-end 'Counter'
-
-var c = Counter{value: 0}
-c.increment()  // OK: chainable method, result can be discarded
-```
-
-#### Discarding Tuple Elements
-
-When destructuring a tuple, individual elements can be discarded with `_`. If the function is pure, at least one element must be used:
-
-```maxon
-var (result, _) = pureFunc()   // OK: one element used
-(_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
-```
-
-#### Error Codes
-
-| Code | Meaning |
-|------|---------|
-| E3064 | Result of a pure function must be used (cannot be discarded) |
-| E3065 | Result of an impure function is not used (use `_ = expr` to discard) |
-
-### Extern Functions
-
-Declare external functions (Windows API, C libraries):
-```maxon
-extern function GetStdHandle(nStdHandle int) returns int
-extern function ExitProcess(uExitCode int) returns int
-```
-
-**Notes:**
-- No function body or `end` statement
-- No name mangling
-- Assumes C calling convention
-- Must exist at link time
-
----
+A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
+keep at least one element (`(_, _) = pure()` is **E3064**).

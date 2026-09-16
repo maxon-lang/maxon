@@ -1,853 +1,1280 @@
 # Maxon Standard Library Reference
 
-## Table of Contents
+## Overview
 
-1. [Core Functions](#core-functions)
-2. [FilePath](#filepath)
-3. [File](#file)
-4. [URL](#url)
-5. [CharacterSet](#characterset)
-6. [Unicode](#unicode)
-7. [String Trimming](#string-trimming)
-8. [List](#list)
-9. [Networking (TcpClient)](#networking-tcpclient)
-10. [HttpClient](#httpclient)
-11. [Crypto](#crypto)
-12. [Process](#process)
-13. [Subprocess](#subprocess)
-14. [Clock](#clock)
-15. [Range / OpenRange](#range--openrange)
-16. [ArrayIterator](#arrayiterator)
-17. [Builtin Managed Types](#builtin-managed-types)
-18. [Testing (Expect)](#testing-expect)
-19. [Build](#build)
+The standard library is a directory of ordinary Maxon source files, `stdlib/`, that ships beside the
+compiler. Every program is compiled together with it, so there is nothing to import: `print`, `String`,
+`Array`, `File`, `Json` and everything else on these pages are in scope in every file.
 
----
+Most modules are a type used as a namespace (`File.readText`, `Clock.nowNanos`, `Json.parse`) or a type
+with instance methods (`String`, `Array`, `FilePath`). A handful of names are free functions (`print`,
+`printError`, `sleep`, `sha256`, `spreadHash`) and a handful are type aliases used across the library
+(`ByteArray`, `StringArray`, `ExitCode`).
 
-## Crypto
-
-### `sha256`
-
-Compute the SHA-256 cryptographic hash of a byte array (FIPS 180-4).
+Generic types are used through a type alias that names the element type:
 
 ```maxon
-export function sha256(data ByteArray) returns ByteArray
+typealias Score = int(0 to 100)
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+	var scores = ScoreArray.create()
+	scores.push(90)
+	print("{scores.count()}\n")
+	return 0
+end 'main'
 ```
 
-**Parameters:**
-- `data` — The input bytes to hash
+### Pages
 
-**Returns:** A 32-byte `ByteArray` containing the SHA-256 digest
+| Page | Sections |
+|------|----------|
+| [Core](#overview) | [Core Functions](#core-functions) |
+| [Text](#string) | String, Character, Ascii, Unicode, CharacterSet |
+| [Collections](#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
+| [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, Process, Subprocess, SharedMemory |
+| [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, URL |
+| [Data](#json) | Json, Sha256, Hasher |
+| [Runtime](#clock) | Clock, Runtime, Math, Primitive Extensions |
+| [Testing](#testing) | Testing |
+| [Build](#build) | Build |
 
-**Example:**
+### Names available in every file
 
-```maxon
-var data = ByteArray.create()
-data.push(0x61)
-data.push(0x62)
-data.push(0x63)
-let hash = sha256(data)
-// hash contains the SHA-256 of "abc" (32 bytes)
-```
+| Name | Definition | Declared by |
+|------|------------|-------------|
+| `ExitCode` | `int(0 to u32.max)` on Windows, `int(0 to 255)` elsewhere | Process |
+| `Byte` | `int(0 to u8.max)` | File |
+| `ByteArray` | `Array with Byte` | File |
+| `StringArray` | `Array with String` | Json |
+| `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
+| `Codepoint` | `int(0 to 1114111)` | Character |
+| `AsciiValue` | `int(0 to 127)` | Character |
+| `HashValue` | `int(0 to u32.max)` | Interfaces |
+| `IterStep` | `int(i64.min to i64.max)` | Interfaces |
+| `RangeBound` | `int(i64.min to i64.max)` | Range |
+| `Real` | `float(f64.min to f64.max)` | Math |
+| `HashDigest` | `bits(64)` | Hasher |
+| `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
+| `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
+| `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
+| `NetworkPort` | `int(0 to 65535)` | TcpClient |
+| `EnvMap` | `Map with String, String` | Subprocess |
+| `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
+| `BuildConfigArray` | `Array with BuildConfig` | Build |
+| `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](#sharedmemory) | SharedMemory |
 
----
+### Target support
+
+Everything that is pure computation (strings, collections, `Json`, `Sha256`, `Hasher`, `Math`, `URL`
+parsing) works on every target. Operating-system facilities are available on `x64-windows`,
+`arm64-macos`, `arm64-linux` and `x64-linux`.
+
+On `wasm32-wasi` a call that needs a facility the target does not provide is refused **at compile time**,
+at the call site, rather than failing at run time:
+
+| Refused on `wasm32-wasi` | Error |
+|--------------------------|-------|
+| `File`, `Directory`, `Console`, `CommandLine` | E3104 |
+| `Clock`, `WallClock`, `sleep`, `Runtime.yield` | E3104 |
+| `TcpClient`, `TcpListener`, `HttpClient` | E3104 |
+| `Process.executablePath`, `SharedSegment` | E3104 |
+| `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
+
+E3104 means this compiler has not implemented the facility for the target; E3074 means the platform has
+no process-spawn primitive at all. Guard such calls with `#if not os(Wasi)`.
+
+### Compiler-managed resources
+
+Files, directory searches and sockets are held by compiler-managed handle types (`__ManagedFile`,
+`__ManagedDirectory`, `__ManagedSocket`) that release the operating-system resource when their last
+reference goes out of scope. Programs use them only through the library types (`File`, `Directory`,
+`TcpClient`, `TcpListener`); names beginning with `__` are reserved for the compiler and the library.
+
+### The runtime tier
+
+A `runtime/` directory ships beside `stdlib/`, and the compiler loads both on every compile; a compiler
+with only one of them beside it cannot compile anything. The runtime that every program links against is
+written there in Maxon, with privileges no other source has: it may declare `__`-prefixed names and call the
+raw `__Raw.*` intrinsics. A program cannot reach into it:
+
+| Rule | Error |
+|------|-------|
+| A `__Raw.*` call outside `runtime/` | E3152 |
+| Calling a runtime entry from outside the tier | E3004 |
+| Naming a runtime entry as a function value | E3155 |
+
+The rules for the runtime files themselves are in [The Runtime Tier](LANGUAGE_REFERENCE.md).
 
 ## Core Functions
 
-**I/O Functions**
-```maxon
-print(value String)                     // Print string to stdout
-```
+These are free functions and compiler builtins available everywhere.
 
-**Math Functions**
-```maxon
-abs(x float) float              // Absolute value (int auto-promoted to float)
-sqrt(x float) float             // Square root
-floor(x float) float            // Round toward negative infinity
-ceil(x float) float             // Round toward positive infinity
-round(x float) float            // Round to nearest (banker's rounding)
-trunc(x float) int              // Truncate toward zero
-min(a float, b float) float     // Minimum of two values
-max(a float, b float) float     // Maximum of two values
+### Output and waiting
 
-// Math library (stdlib) — called as Math.sin(x), Math.cos(x), etc.
-Math.sin(x float) float         // Sine (radians)
-Math.cos(x float) float         // Cosine (radians)
-Math.tan(x float) float         // Tangent (radians)
-Math.atan(z float) float        // Arc tangent
-Math.atan2(y float, x float) float // Two-argument arc tangent
-Math.exp(x float) float         // e^x
-Math.log(x float) float         // Natural logarithm
-Math.log2(x float) float        // Base-2 logarithm
-Math.log10(x float) float       // Base-10 logarithm
-Math.pow(base float, exponent float) float // Power
-Math.hasNegativeSignBit(z float) bool // Sign bit of any double: true for -0.0 and -inf, false for +0.0
-floor(x float) int              // Round down
-ceil(x float) int               // Round up
-round(x float) int              // Round to nearest
-trunc(x float) int              // Truncate toward zero
-```
+| Function | Description |
+|----------|-------------|
+| `print(value String)` | Write `value` to standard output. No newline is added. |
+| `printError(value String)` | Write `value` to standard error. |
+| `sleep(milliseconds int(0 to u64.max))` | Suspend the current green thread; other green threads run meanwhile. |
+| `panic(message String)` | Stop the program: prints `panic at <file>:<line>: <message>` and a stack trace to stderr, exits with code 1. |
 
-**Compile-Time Functions**
-```maxon
-sizeof(TypeName) int            // Size of a type in bytes (compile-time constant)
-```
+To print something that is not a `String`, interpolate it: `print("{count}\n")`.
 
-`sizeof` accepts a type name and returns its storage size in bytes as a compile-time integer constant. No runtime cost. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
+### Numeric builtins
 
-**Caller-Location Defaults**
-```maxon
-export typealias SourceLineNumber = int(1 to i32.max)   // type for a __line__ parameter
-```
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `abs(x float)` | `float` | Absolute value. An integer argument is promoted to `float`. |
+| `sqrt(x float)` | `float` | Square root. |
+| `floor(x float)` | `float` | Round toward negative infinity. |
+| `ceil(x float)` | `float` | Round toward positive infinity. |
+| `round(x float)` | `float` | Round to nearest; halfway cases round to even (`round(2.5)` is `2.0`). |
+| `trunc(x float)` | `int` | Truncate toward zero; the way to turn a `float` into an `int`. |
+| `min(a float, b float)` | `float` | The smaller value. Integer arguments are promoted. |
+| `max(a float, b float)` | `float` | The larger value. Integer arguments are promoted. |
 
-`__line__` and `__file__` are legal only as a function parameter's default value, and each
-expands at the **call site**, so a helper reports its caller's location rather than its own:
+Trigonometry, logarithms and powers are in [Math](#math).
+
+### Compile-time builtins
+
+| Builtin | Description |
+|---------|-------------|
+| `sizeof(TypeName)` | Storage size of a type in bytes, as a constant: `int` and `float` are 8, `bool` and `byte` are 1. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
+
+`__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the
+calling file's path relative to the compile root, `/`-separated on every host. Using either anywhere other
+than a parameter default is error E2060.
 
 ```maxon
-function expectTrue(ok bool, from String = __file__, at SourceLineNumber = __line__) returns bool
+function check(ok bool, from String = __file__, at SourceLineNumber = __line__) returns bool
 	if not ok 'bad'
-		printError("{from}:{at}: expected true\n")
+		printError("{from}:{at}: check failed\n")
 	end 'bad'
+
 	return ok
-end 'expectTrue'
+end 'check'
+
+function main() returns ExitCode
+	_ = check(1 + 1 == 2)
+	return 0
+end 'main'
 ```
 
-`SourceLineNumber` is the type to declare a `__line__` parameter as — lines are 1-based and
-the compiler counts them in a 32-bit counter. A `__file__` parameter is declared `String`
-(Maxon has no typealias over a struct type); its value is the calling file's path relative to
-the compile root, `/`-separated on every host, never absolute. Use both or neither: a line
-number whose file is unknown names a line in no particular file. Anywhere other than a
-parameter default — including a struct field default — is error E2060. See
-`specs/source-location-defaults.md`.
+### Parsing text into numbers
 
-**Concurrency Functions**
-```maxon
-sleep(milliseconds int)         // Suspend current green thread for given duration
-```
-
-**Formatting Functions**
-```maxon
-format_int(value int) String    // Format int as string
-format_float(value float) String // Format float as string
-```
-
----
-
-## FilePath
-
-`FilePath` is a type-safe wrapper around `String` for filesystem paths. It normalizes path separators to the platform-native format on construction and provides methods for path manipulation.
-
-**Construction:**
-```maxon
-var p = FilePath from "C:\\Users\\test.txt"              // From string literal (panics on invalid chars)
-var q = try FilePath.from("hello.maxon") otherwise ...   // From string (throws FilePathError)
-var r = FilePath from "file:///C:/Users/test.txt"        // file:// URLs are converted to paths
-var s = try FilePath.from("file:///home/user/f.txt") otherwise ...  // Also works with from()
-```
-
-Both `init()` and `from()` transparently accept `file://` URLs, parsing them with `URL.parse()` and extracting the filesystem path. On Windows, the leading `/` before drive letters is stripped (e.g. `/C:/path` becomes `C:\path`). Non-file URL schemes (e.g. `https://`) cause a panic in `init()` or throw `FilePathError.notFileURL` in `from()`.
-
-**Component Extraction:**
-```maxon
-p.filename()         // "test.txt"
-p.fileExtension()    // ".txt"
-p.stem()             // "test"
-try p.parent()       // FilePath("C:\\Users") — throws FilePathError.noParent if no parent
-```
-
-**Path Manipulation:**
-```maxon
-p.join("docs")                  // Append component with platform separator
-p.join(otherFilePath)           // Join with another FilePath
-p.changeExtension(".exe")       // Replace file extension
-p.normalize()                   // Returns self (normalized on construction)
-```
-
-**Query Methods:**
-```maxon
-p.isEmpty()          // true if path is empty string
-p.isAbsolute()       // true for drive paths (C:\) or UNC paths (\\server)
-p.isRelative()       // opposite of isAbsolute
-p.isInside(dir)      // true if p == dir or dir is a proper ancestor (component-aware,
-                     // case-insensitive on Windows, exact on POSIX — matches equals())
-```
-
-**Resolution:**
-```maxon
-p.resolve(base)      // resolve relative path against base; absolute paths returned unchanged
-```
-
-**Static Methods:**
-```maxon
-FilePath.separator()   // Platform-native separator ("\" on Windows, "/" on Linux)
-```
-
-`FilePath` implements `Equatable`, `Hashable`, `Stringable`, and `InitableFromStringLiteral`. Equality and hashing follow host filesystem semantics: case-insensitive on Windows (NTFS treats `C:\Foo` and `c:\foo` as the same path), exact byte match on POSIX.
-
-All `File` and `Directory` methods accept `FilePath` parameters:
-```maxon
-let fp = FilePath from "data.txt"
-let content = try File.readText(fp) otherwise ...
-try File.writeText(fp, content: "hello")
-let files = try Directory.list(FilePath from "./") otherwise ...
-```
-
----
-
-## File
-
-`File` provides static methods for reading, writing, deleting, and querying files. It is defined in `stdlib/File.maxon`. All methods accept `FilePath` parameters.
-
-### Type Aliases
+`int`, `float`, `bool` and `byte` each have a static `fromString` that throws `ParseError.invalidFormat`
+on malformed input. A type of your own can offer the same shape by implementing `Parsable`
+(`static function fromString(input String) returns Self throws <error>`).
 
 ```maxon
-export typealias FileSize = int(0 to u64.max)     // File size in bytes
-export typealias Timestamp = int(0 to u64.max)    // Unix epoch seconds
+function main() returns ExitCode
+	let n = try int.fromString("42") otherwise 0
+	let f = try float.fromString("3.25") otherwise 0.0
+	let b = try bool.fromString("true") otherwise false
+	let y = try byte.fromString("255") otherwise 0
+	let bad = try int.fromString("x1") otherwise -1
+
+	print("{n} {f} {b} {y} {bad}\n")
+	print("{abs(-5.5)} {floor(-3.2)} {round(2.5)} {trunc(-3.7)} {min(3.0, 5.0)}\n")
+	sleep(1)
+	printError("done\n")
+	return 0
+end 'main'
 ```
 
-### `FileInfo`
+Output: `42 3.25 true 255 -1` and `5.5 -4.0 2.0 -3 3.0` on stdout, `done` on stderr.
 
-Metadata about a file, returned by `File.info()`. All fields are obtained from a single OS call.
+Interpolation also takes format specifiers — `"{255:x}"` is `ff`, `"{7:04}"` is `0007`, `"{3.14159:.2}"`
+is `3.14`. See string interpolation in [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
+
+## String
+
+`String` is an immutable-by-default UTF-8 string. Its unit of iteration and counting is the **grapheme
+cluster**, a user-perceived character: `"é👍🏽".count()` is 2, although it is 10 bytes and 3 codepoints.
+Positions are `StringIndex` values, which carry both a grapheme index and a byte position so stepping
+never rescans the string.
+
+`String` implements `Hashable`, `Equatable`, `Iterable` (over `Character`) and `Cloneable`.
 
 ```maxon
-export type FileInfo
-	export let size as FileSize
-	export let modifiedTime as Timestamp
-	export let createdTime as Timestamp
-	export let accessedTime as Timestamp
-	export let isDirectory as bool
-	export let isReadOnly as bool
-end 'FileInfo'
+function main() returns ExitCode
+	let s = "Hello, World"
+	let parts = "a,b,,c".split(",")
+	print("{parts.count()}\n")
+	print("{"x-y-z".replace("-", with: "+")} {"x-y-z".replaceFirst("-", with: "+")}\n")
+
+	let comma = try s.findFirst(",") otherwise s.endIndex()
+	let head = s.slice(s.startIndex(), endIndex: comma)
+	let five = s.slice(s.startIndex(), length: 5)
+	print("{comma.charIndex()} {head} {five}\n")
+
+	for c in "héllo" 'each'
+		print("[{c}]")
+	end 'each'
+
+	print("\n{"  padded  ".trim()}|{"Hello".toUpper()}\n")
+	return 0
+end 'main'
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `size` | `FileSize` | File size in bytes |
-| `modifiedTime` | `Timestamp` | Last modification time (Unix epoch seconds) |
-| `createdTime` | `Timestamp` | Creation time (Unix epoch seconds) |
-| `accessedTime` | `Timestamp` | Last access time (Unix epoch seconds) |
-| `isDirectory` | `bool` | `true` if the path is a directory |
-| `isReadOnly` | `bool` | `true` if the file is read-only |
+Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 
-### `FilePermission` (enum)
+### Construction and conversion
 
-| Case | Description |
-|------|-------------|
-| `normal` | Standard file permissions (0666) |
-| `executable` | Executable permissions (0755, Unix) |
-
-### Error Types
-
-```maxon
-export enum FileReadError implements Error
-	notFound              // file not found when reading
-end 'FileReadError'
-
-export enum FileWriteError implements Error
-	failed                // write operation failed
-end 'FileWriteError'
-
-export enum FileDeleteError implements Error
-	notFound              // file not found when deleting
-end 'FileDeleteError'
-
-export enum FileInfoError implements Error
-	notFound              // file not found when querying metadata
-end 'FileInfoError'
-```
-
-### API Summary
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `File.readText(path FilePath)` | `String` | `FileReadError` | Read file as UTF-8 string |
-| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | Read file as raw bytes |
-| `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | -- | `FileWriteError` | Write string to file |
-| `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | -- | `FileWriteError` | Write bytes to file |
-| `File.exists(path FilePath)` | `bool` | -- | Check if file exists |
-| `File.delete(path FilePath)` | -- | `FileDeleteError` | Delete a file |
-| `File.info(path FilePath)` | `FileInfo` | `FileInfoError` | Get file metadata |
-
-### `File.info`
-
-```maxon
-export static function info(path FilePath) returns FileInfo throws FileInfoError
-```
-
-**Parameters:**
-- `path` -- The path to query
-
-**Returns:** A `FileInfo` struct containing the file's size, timestamps, and attributes
-
-**Throws:** `FileInfoError.notFound` when the file does not exist
-
-**Example:**
-
-```maxon
-let fp = FilePath from "data.txt"
-let info = try File.info(fp) otherwise 'err'
-		print("file not found")
-		return 1
-end 'err'
-print("size: {info.size}")
-print("modified: {info.modifiedTime}")
-print("is directory: {info.isDirectory}")
-```
-
----
-
-## URL
-
-`URL` provides RFC 3986 compliant URI parsing, serialization, and reference resolution. It is defined in `stdlib/URL.maxon`.
-
-**Parsing:**
-```maxon
-var url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
-	// handle error
-end 'err'
-```
-
-**Always-available accessors:**
-```maxon
-url.scheme()     // "https" (empty string for relative references)
-url.path()       // "/path" (always present, may be empty)
-```
-
-**Throwing accessors** (throw `URLError.fieldNotPresent` if not set):
-```maxon
-var host = try url.host() otherwise "default"       // "example.com"
-var port = try url.port() otherwise 443             // 8080
-var ui = try url.userinfo() otherwise ""            // userinfo before @
-var query = try url.query() otherwise ""            // "q=1"
-var frag = try url.fragment() otherwise ""          // "top"
-```
-
-**Serialization:**
-```maxon
-url.toString()   // "https://example.com:8080/path?q=1#top"
-```
-
-**Reference Resolution** (RFC 3986 Section 5):
-```maxon
-var base = try URL.parse("http://a/b/c/d?q") otherwise ...
-var resolved = try URL.resolve(base, reference: "../g") otherwise ...
-resolved.toString()  // "http://a/b/g"
-```
-
-**Error Types:**
-
-| Error | Description |
-|-------|-------------|
-| `URLError.emptyInput` | Input is empty or whitespace-only |
-| `URLError.invalidScheme` | Scheme starts with non-alpha or contains invalid characters |
-| `URLError.invalidHost` | Malformed host (e.g., unclosed IPv6 bracket) |
-| `URLError.invalidPort` | Port is non-numeric or exceeds 65535 |
-| `URLError.invalidEncoding` | Malformed percent-encoding (e.g., `%GG`, `%2`) |
-| `URLError.relativeWithoutBase` | `resolve()` called with a base URL that has no scheme |
-| `URLError.fieldNotPresent` | Accessor called for a component not present in the URL |
-
-`URL` implements `Equatable` and `Stringable`.
-
----
-
-## CharacterSet
-
-`CharacterSet` represents a set of characters for use with string trimming and character classification. It is defined in `stdlib/CharacterSet.maxon`.
-
-**Static Factory Methods**
-
-Create a `CharacterSet` using one of the built-in factory methods:
-
-```maxon
-var ws = CharacterSet.whitespacesAndNewlines()  // All Unicode whitespace including newlines
-var spaces = CharacterSet.whitespaces()         // Spaces and tabs only (no newlines)
-var nl = CharacterSet.newlines()               // Newline characters only (LF, CR, CRLF, etc.)
-var digits = CharacterSet.decimalDigits()       // Unicode decimal digits (Nd category)
-var letters = CharacterSet.letters()            // Unicode letters and marks (L*, M* categories)
-var alnum = CharacterSet.alphanumerics()        // Unicode letters, marks, and numbers
-var punct = CharacterSet.punctuation()          // Unicode punctuation (P* categories)
-var custom = CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // Custom set
-```
-
-**Instance Methods**
-
-```maxon
-ws.contains('A')    // false
-ws.contains(' ')    // true
-```
-
-| Method | Returns | Description |
+| Member | Returns | Description |
 |--------|---------|-------------|
-| `contains(c Character)` | `bool` | Check if the character is in the set |
+| `String.from(bytes ByteArray)` | `String` | A string over the bytes. The bytes are not validated as UTF-8. |
+| `String.fromCString(cs cstring)` | `String` | Copy the NUL-terminated bytes at `cs`; the string owns its copy. Stops at the first zero byte. |
+| `String.init(managed)` | `String` | The compiler's literal initializer; programs write a literal instead. |
+| `toByteArray()` | `ByteArray` | The UTF-8 bytes as a new, independent array. |
+| `cstr()` | `cstring` | A NUL-terminated view of the bytes, for an intrinsic that takes `cstring`. Valid while the string is alive and unmodified. |
+| `clone()` | `String` | An independent copy; writes to either never show through the other. |
 
----
+### Properties
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `count()` | `GraphemeIndex` | Number of grapheme clusters. O(n) for non-ASCII text; cache it if you need it repeatedly. |
+| `byteLength()` | `BytePos` | Number of UTF-8 bytes. |
+| `isEmpty()` | `bool` | True when the string has no bytes. |
+| `isAscii()` | `bool` | True when every byte is below 128. |
+| `hash()` | `HashValue` | Through `Hashable`. |
+| `equals(other String)` | `bool` | Byte-wise equality; `==` calls it. |
+
+### Search
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `contains(needle String)` | `bool` | Substring test. |
+| `contains(character Character)` | `bool` | Character test. |
+| `startsWith(prefix String)` | `bool` | Prefix test. |
+| `endsWith(suffix String)` | `bool` | Suffix test. |
+| `findFirst(needle String)` | `StringIndex` | First occurrence. Throws `StringError.notFound`. |
+| `findLast(needle String)` | `StringIndex` | Last occurrence. Throws `StringError.notFound`. |
+
+### Indexing and Slicing
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `startIndex()` | `StringIndex` | Index of the first grapheme. |
+| `endIndex()` | `StringIndex` | One past the last grapheme. |
+| `indexAfter(idx StringIndex)` | `StringIndex` | Next grapheme boundary. Throws `StringError` at `endIndex()`. |
+| `indexBefore(idx StringIndex)` | `StringIndex` | Previous grapheme boundary. Throws `StringError` at `startIndex()`. |
+| `charAt(idx StringIndex)` | `Character` | The grapheme at `idx`. |
+| `slice(start StringIndex, endIndex StringIndex)` | `String` | The graphemes in `[start, endIndex)`. |
+| `slice(start StringIndex, length GraphemeIndex)` | `String` | `length` graphemes starting at `start`. |
+
+`StringIndex` implements `Equatable` and `Comparable`:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `StringIndex.create(charIndex GraphemeIndex, bytePos BytePos)` | `StringIndex` | Build an index from both coordinates. |
+| `charIndex()` | `GraphemeIndex` | Grapheme position. |
+| `bytePos()` | `BytePos` | UTF-8 byte offset. |
+
+```maxon
+function main() returns ExitCode
+	let s = "héllo"
+	var i = s.endIndex()
+
+	while i != s.startIndex() 'backwards'
+		i = try s.indexBefore(i) otherwise break
+		print("{s.charAt(i)}")
+	end 'backwards'
+
+	print("\n")
+	return 0
+end 'main'
+```
+
+Output: `olléh`.
+
+### Transforming
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `split(delimiter String)` | `StringArray` | The pieces between delimiters, empty pieces included. An empty delimiter, or an empty string, gives a one-element array. |
+| `replace(old String, with String)` | `String` | Every occurrence replaced. An empty `old` returns a copy. |
+| `replaceFirst(old String, with String)` | `String` | The first occurrence replaced. |
+| `toLower()` | `String` | ASCII `A`–`Z` lowered; other characters are unchanged. |
+| `toUpper()` | `String` | ASCII `a`–`z` raised; other characters are unchanged (`"Héllo".toUpper()` is `"HéLLO"`). |
+| `append(other String)` | — | Append in place. |
+
+### Trimming
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `trim()` | `String` | Remove Unicode whitespace and newlines from both ends. |
+| `trimStart()` | `String` | From the start only. |
+| `trimEnd()` | `String` | From the end only. |
+| `trim(chars CharacterSet)` | `String` | Remove characters in `chars` from both ends. |
+| `trimStart(chars CharacterSet)` | `String` | From the start only. |
+| `trimEnd(chars CharacterSet)` | `String` | From the end only. |
+
+The no-argument forms use `CharacterSet.whitespacesAndNewlines()`. Trimming walks grapheme clusters, so
+`"\r\n"` is one unit: a set holding `'\r'` but not `"\r\n"` trims neither.
+
+### Views
+
+| Member | Returns | Iterates |
+|--------|---------|----------|
+| `bytes()` | `ByteView` | Each UTF-8 `Byte` |
+| `codepoints()` | `CodepointView` | Each `Codepoint` |
+| `utf16()` | `UTF16View` | Each UTF-16 code unit |
+| `createIterator()` | `StringIterator` | Each `Character` (what `for c in s` uses) |
+
+Each view has `count()` and `createIterator()`, and works in `for`-`in`. Constructing a view does not copy.
+`StringIterator` implements `Iterator with Character`: `StringIterator.create(s)`, `current()`,
+`advance()`.
+
+### StringBuilder
+
+A `String` owns exactly the bytes it holds, so appending to one in a loop copies what is already there on
+each append. `StringBuilder` grows geometrically instead; build with it and take the finished `String` at
+the end.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `StringBuilder.create()` | `StringBuilder` | An empty builder. |
+| `reserve(byteCount BytePos)` | — | Allocate room up front when the final size is known. |
+| `append(other String)` | — | Append a piece. |
+| `byteLength()` | `BytePos` | Bytes accumulated so far. |
+| `isEmpty()` | `bool` | True when nothing has been appended. |
+| `clear()` | — | Discard the contents, keeping the capacity. |
+| `build()` | `String` | Hand the bytes over as a `String`. The builder is empty afterwards. |
+
+```maxon
+function main() returns ExitCode
+	var out = StringBuilder.create()
+
+	for i in 1 to 3 'each'
+		out.append("item {i};")
+	end 'each'
+
+	let text = out.build()
+	print("{text} {out.isEmpty()}\n")
+	return 0
+end 'main'
+```
+
+Output: `item 1;item 2;item 3; true`.
+
+### Errors and aliases
+
+```maxon
+enum StringError implements Error
+	notFound
+	invalidIndex
+end 'StringError'
+```
+
+`BytePos` and `GraphemeIndex` are both `int(0 to u64.max)`.
+
+## Character
+
+`Character` is one grapheme cluster: a character literal such as `'é'` or `'👍🏽'`, or what iterating a
+`String` yields. It implements `Hashable`, `Equatable`, `Comparable` (byte-wise), `Stringable` and
+`Cloneable`, and it works as the bound of a range: `for c in 'a' to 'e'`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `byteLength()` | `int(0 to u64.max)` | UTF-8 bytes in the cluster. |
+| `codepoint()` | `Codepoint` | The first codepoint of the cluster. |
+| `codepoints()` | `CodepointView` | Every codepoint of the cluster. |
+| `bytes()` | `ByteView` | The UTF-8 bytes. |
+| `asciiValue()` | `AsciiValue` | The value 0–127 of a single-byte ASCII character. Throws `CharacterError.notAscii` otherwise. |
+| `advanceBy(n IterStep)` | `Character` | The character `n` codepoints later; used by character ranges. |
+| `toString()` | `String` | The cluster as a string. |
+| `clone()` | `Character` | An independent copy. |
+| `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. |
+
+```maxon
+enum CharacterError implements Error
+	notAscii
+end 'CharacterError'
+```
+
+`AsciiValue` is `int(0 to 127)`; `Codepoint` is `int(0 to 1114111)`.
+
+```maxon
+function main() returns ExitCode
+	let e = 'é'
+	let a = try 'A'.asciiValue() otherwise 0
+	let refused = try e.asciiValue() otherwise 0
+	print("{e.codepoint()} {e.byteLength()} {a} {refused}\n")
+	return 0
+end 'main'
+```
+
+Output: `233 2 65 0`.
+
+## Ascii
+
+`Ascii` classifies a `Character` by ASCII rules only; any character outside ASCII answers `false`. For
+Unicode classification use [CharacterSet](#characterset).
+
+| Function | True when the character is |
+|----------|----------------------------|
+| `Ascii.isDigit(c Character)` | `0`–`9` |
+| `Ascii.isAlpha(c Character)` | `a`–`z` or `A`–`Z` |
+| `Ascii.isAlphanumeric(c Character)` | a letter or a digit |
+| `Ascii.isUpper(c Character)` | `A`–`Z` |
+| `Ascii.isLower(c Character)` | `a`–`z` |
+| `Ascii.isWhitespace(c Character)` | space, tab, `\n` or `\r` |
+
+```maxon
+function main() returns ExitCode
+	print("{Ascii.isDigit('7')} {Ascii.isAlpha('é')} {Ascii.isUpper('Q')} {Ascii.isWhitespace('\t')}\n")
+	return 0
+end 'main'
+```
+
+Output: `true false true true`.
 
 ## Unicode
 
-`Unicode` provides Unicode character classification utilities. It is defined in `stdlib/Unicode.maxon`.
-
-**Static Methods**
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `Unicode.isWhitespace(cp Codepoint)` | `bool` | True for every codepoint with the Unicode `White_Space` property: tab through carriage return, space, NEL, no-break space, the U+2000 space block, line and paragraph separators, and the other spaces. |
 
 ```maxon
-Unicode.isWhitespace(32)    // true (space)
-Unicode.isWhitespace(65)    // false ('A')
+function main() returns ExitCode
+	print("{Unicode.isWhitespace(32)} {Unicode.isWhitespace(160)} {Unicode.isWhitespace(65)}\n")
+	return 0
+end 'main'
 ```
 
-| Method | Returns | Description |
+Output: `true true false`.
+
+## CharacterSet
+
+A `CharacterSet` is a set of characters defined by Unicode general categories, explicit members, or both.
+It is what the `String` trimming methods take.
+
+| Factory | Contents |
+|---------|----------|
+| `CharacterSet.whitespaces()` | Space separators (Zs) and tab — no newlines |
+| `CharacterSet.newlines()` | LF, CR, CRLF, VT, FF, NEL, line and paragraph separators |
+| `CharacterSet.whitespacesAndNewlines()` | Both of the above |
+| `CharacterSet.decimalDigits()` | Decimal digits (Nd) |
+| `CharacterSet.letters()` | Letters and marks (L\*, M\*) |
+| `CharacterSet.lowercaseLetters()` | Lowercase letters (Ll) |
+| `CharacterSet.uppercaseLetters()` | Uppercase and titlecase letters (Lu, Lt) |
+| `CharacterSet.alphanumerics()` | Letters, marks and numbers (L\*, M\*, N\*) |
+| `CharacterSet.punctuation()` | Punctuation (P\*) |
+| `CharacterSet.symbols()` | Symbols (S\*) |
+| `CharacterSet.controlCharacters()` | Control and format characters (Cc, Cf) |
+| `CharacterSet.from(chars Set with Character)` | Exactly the characters given |
+
+| Member | Returns | Description |
 |--------|---------|-------------|
-| `isWhitespace(cp Codepoint)` | `bool` | Check if a codepoint is Unicode whitespace |
-
----
-
-## String Trimming
-
-The `String` type provides methods for removing characters from the start and end of a string. Each method has two forms: one that accepts a `CharacterSet` parameter, and a convenience overload that trims whitespace by default.
-
-**Trimming with CharacterSet**
+| `contains(c Character)` | `bool` | True when `c` is a member or falls in one of the set's categories. |
 
 ```maxon
-"123hello456".trim(CharacterSet.decimalDigits())     // "hello"
-"...hello!!!".trim(CharacterSet.punctuation())       // "hello"
-"xxxhelloxxx".trimStart(CharacterSet.from(CharSet from ['x']))     // "helloxxx"
-"xxxhelloxxx".trimEnd(CharacterSet.from(CharSet from ['x']))       // "xxxhello"
+typealias Letters = Set with Character
+
+function main() returns ExitCode
+	var members = Letters.create()
+	members.insert('x')
+	members.insert('y')
+	let xy = CharacterSet.from(members)
+
+	print("[{"xyhixy".trim(xy)}] [{"123abc456".trim(CharacterSet.decimalDigits())}]\n")
+	print("{CharacterSet.symbols().contains('$')} {CharacterSet.lowercaseLetters().contains('ß')}\n")
+	return 0
+end 'main'
 ```
 
-**Trimming Whitespace (convenience)**
+Output: `[hi] [abc]` and `true true`.
+
+## Array
+
+`Array` is a growable, contiguous, generic sequence. Declare a concrete type with `typealias`, or write a
+literal: `[1, 2, 3]`. `Array` implements `Iterable` and `Cloneable`; it is also `Hashable` and `Equatable`
+when its element is.
 
 ```maxon
-"  hello  ".trim()          // "hello"
-"  hello  ".trimStart()     // "hello  "
-"  hello  ".trimEnd()       // "  hello"
+typealias Score = int(i64.min to i64.max)
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+	var a = ScoreArray.create()
+	a.push(5)
+	a.push(1)
+	a.push(4)
+
+	let last = try a.pop() otherwise 0
+	a.insert(0, value: 9)
+	a.sort()
+
+	for x in a 'each'
+		print("{x} ")
+	end 'each'
+
+	a.sort(function(x Score, y Score) gives y.compare(x))
+	let first = try a.first() otherwise 0
+	let missing = try a.get(50) otherwise -1
+	print("\n{last} {first} {missing} {a.contains(9)}\n")
+	return 0
+end 'main'
 ```
 
-| Method | Returns | Description |
+Output: `1 5 9` and `4 9 -1 true`.
+
+### Creating
+
+| Member | Returns | Description |
 |--------|---------|-------------|
-| `trim(in CharacterSet)` | `String` | Remove matching characters from both ends |
-| `trimStart(in CharacterSet)` | `String` | Remove matching characters from the start |
-| `trimEnd(in CharacterSet)` | `String` | Remove matching characters from the end |
-| `trim()` | `String` | Remove whitespace from both ends |
-| `trimStart()` | `String` | Remove whitespace from the start |
-| `trimEnd()` | `String` | Remove whitespace from the end |
+| `Array.create()` | `Array` | An empty array. |
+| `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
+| `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. |
+| `Array.from(source Iterable)` | `Array` | Collect every element of an iterable. Called through an alias (`ScoreArray.from(range)`), this is currently rejected by the parser (E2010) because `from` is a keyword. |
+| `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
+| `managed` | field | The array's raw storage, for `appendMemory` and library code. |
 
-The no-argument convenience methods are equivalent to calling the `CharacterSet` variants with `CharacterSet.whitespacesAndNewlines()`.
+### Reading
 
----
-
-## String Search
-
-Search for substrings within a string. Returns a `StringIndex` with both the character position and byte offset.
-
-```maxon
-var s = "hello world hello"
-var first = try s.findFirst("hello") otherwise s.endIndex()
-print("{first.charIndex()}\n")  // 0
-
-var last = try s.findLast("hello") otherwise s.endIndex()
-print("{last.charIndex()}\n")   // 12
-```
-
-| Method | Returns | Description |
+| Member | Returns | Description |
 |--------|---------|-------------|
-| `findFirst(needle String)` | `StringIndex throws StringError` | Find first occurrence of needle |
-| `findLast(needle String)` | `StringIndex throws StringError` | Find last occurrence of needle |
-| `contains(needle String)` | `bool` | Check if string contains substring |
-| `contains(character Character)` | `bool` | Check if string contains character |
-| `startsWith(prefix String)` | `bool` | Check if string starts with prefix |
-| `endsWith(suffix String)` | `bool` | Check if string ends with suffix |
+| `count()` | `int(0 to u64.max)` | Number of elements. |
+| `isEmpty()` | `bool` | True when `count()` is 0. |
+| `capacity()` | `int(i64.min to i64.max)` | Slots allocated. Negative when the storage is not this array's own yet: `-1` for a slice view that has not been written, other negative values for a literal's or a module-level constant's read-only storage. Treat any negative value as "not owned yet". |
+| `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past `count()`, `ArrayError.emptySlot` for a slot that was never written. |
+| `first()` | `Element` | Throws like `get(0)`. |
+| `last()` | `Element` | Throws `indexOutOfBounds` when empty. |
+| `slice(start, endIndex)` | `Array` | Elements `[start, endIndex)`. Throws `indexOutOfBounds` for a reversed or out-of-range pair; nothing is clamped. |
+| `contains(element Element)` | `bool` | Element test. Requires `Element is Equatable`. |
+| `contains(sequence Array)` | `bool` | True when `sequence` occurs contiguously. An empty sequence is always contained. Requires `Element is Equatable`. |
 
----
+### Writing
 
-## String Indexing and Slicing
-
-`StringIndex` carries both a grapheme-cluster index and a byte position, so stepping is O(1) without re-scanning UTF-8. Use `startIndex()` / `endIndex()` to obtain the endpoints, `indexAfter` / `indexBefore` to step, and `charAt` / `slice` to read.
-
-```maxon
-var s = "héllo"
-var idx = s.startIndex()
-let first = s.charAt(idx)                              // 'h'
-idx = try s.indexAfter(idx) otherwise s.endIndex()
-let second = s.charAt(idx)                             // 'é'
-
-// Walk backward from the end:
-var i = s.endIndex()
-while i != s.startIndex() 'rev'
-	i = try s.indexBefore(i) otherwise break
-	print("{s.charAt(i)}\n")
-end 'rev'
-
-// Slice between two indices:
-let head = s.slice(s.startIndex(), endIndex: idx)      // "hé"
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `startIndex()` | `StringIndex` | Index of the first grapheme cluster |
-| `endIndex()` | `StringIndex` | One-past-the-end index |
-| `charAt(idx StringIndex)` | `Character` | Grapheme cluster at `idx` |
-| `indexAfter(idx StringIndex)` | `StringIndex throws StringError` | Next grapheme boundary. Throws at `endIndex()`. |
-| `indexBefore(idx StringIndex)` | `StringIndex throws StringError` | Previous grapheme boundary. Throws at `startIndex()`. |
-| `slice(start StringIndex, endIndex StringIndex)` | `String` | Substring `[start, endIndex)` |
-| `slice(start StringIndex, length GraphemeCount)` | `String` | Substring starting at `start`, `length` graphemes long |
-
-`StringIndex.charIndex()` returns the grapheme-cluster index; `StringIndex.bytePos()` returns the UTF-8 byte offset. Both are O(1) accessors.
-
----
-
-## String Properties
-
-```maxon
-var s = "hello"
-print("{s.count()}\n")        // 5 (grapheme cluster count)
-print("{s.byteLength()}\n")   // 5 (UTF-8 byte count)
-print("{s.isEmpty()}\n")      // false
-print("{s.isAscii()}\n")      // true
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `count()` | `GraphemeCount` | Number of user-perceived characters (grapheme clusters). Recomputed each call — O(n) in byte length; callers that need the count repeatedly should cache it. |
-| `byteLength()` | `ByteCount` | Number of UTF-8 bytes |
-| `isEmpty()` | `bool` | True if the string has no content |
-| `isAscii()` | `bool` | True if all bytes are in the ASCII range (< 128). Enables optimized code paths. |
-| `cstr()` | `cstring` | NUL-terminated UTF-8 pointer view of the string. Use when passing the string to a `__Builtins.*` runtime intrinsic whose parameter is declared `cstring`. Copies the buffer only when `buffer[length] != 0` (i.e. when the underlying allocation is packed tight against capacity), so the returned pointer is always safely NUL-terminated. |
-
----
-
-## String Append
-
-`String.append` grows a string's buffer in place, avoiding the allocation of a new string.
-
-```maxon
-var s = "Hello"
-s.append(" World")       // s is now "Hello World"
-```
-
-| Method | Description |
+| Member | Description |
 |--------|-------------|
-| `append(other String)` | Append another string's content in place |
+| `set(index, value Element)` | Replace an element. Throws `indexOutOfBounds` at or past `count()`, even when capacity exists there. |
+| `push(value Element)` | Append one element. |
+| `append(other Array)` | Append every element of another array. |
+| `appendMemory(source)` | Append every element of raw storage (another array's `managed`) without wrapping it in an `Array`. |
+| `pop()` | Remove and return the last element. Throws `indexOutOfBounds` when empty. |
+| `insert(at, value Element)` | Insert, shifting later elements right. An `at` past the end appends. |
+| `remove(at)` | Remove and return the element at `at`. Throws `indexOutOfBounds`. |
+| `clear()` | Remove every element, keeping the capacity. |
 
----
+### Capacity and length
+
+| Member | Description |
+|--------|-------------|
+| `reserve(minCapacity)` | Ensure at least `minCapacity` slots. |
+| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container. Use `growFilled` or `truncate` for those. |
+| `truncate(newLength)` | Shorten to `newLength`, releasing the removed elements. A longer `newLength` does nothing. |
+| `growFilled(newLength, value Element)` | Lengthen to `newLength`, setting only the added elements to `value`. Grows capacity geometrically, so repeated small extensions stay amortized linear. A shorter `newLength` does nothing. |
+| `refill(newLength, value Element)` | Set the length to `newLength` and write `value` into every element, growing or shrinking. |
+
+An array grows by doubling while small and eases toward 1.25x once it is large.
+
+### Sorting
+
+| Member | Description |
+|--------|-------------|
+| `sort()` | Stable sort by `Comparable.compare`. Requires `Element is Comparable`. |
+| `sortUnstable()` | Unstable sort (pattern-defeating quicksort). Requires `Element is Comparable`. |
+| `sort(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
+| `sortUnstable(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
+
+### Iterating
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `createIterator()` | `ArrayIterator` | Positioned at the first element. Throws `IterationError.exhausted` when empty. |
+| `cursor()` | `ArrayIterator` | The same as `createIterator()`. |
+
+`map`, `filter`, `contains(predicate)` and `withIterator` come from [Iterable](#interfaces).
+
+### ArrayError
+
+```maxon
+enum ArrayError implements Error
+	indexOutOfBounds
+	emptySlot
+end 'ArrayError'
+```
+
+`indexOutOfBounds`: the index was outside `[0, count())`. `emptySlot`: the index was inside and the slot
+there was never filled.
 
 ## List
 
-`List` is a generic doubly linked list backed by `__ManagedList` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
+`List` is a doubly linked list: O(1) insertion and removal at both ends, O(n) access by index. It implements
+`Iterable`, `Cloneable` and array-literal construction (`List from [1, 2, 3]`).
 
-**Creating a List**
+| Member | Returns | Complexity | Description |
+|--------|---------|-----------|-------------|
+| `List.create()` | `List` | O(1) | An empty list. |
+| `count()` | `int(0 to u64.max)` | O(1) | Number of elements. |
+| `isEmpty()` | `bool` | O(1) | True when empty. |
+| `first()` | `Element` | O(1) | Throws `ArrayError` when empty. |
+| `last()` | `Element` | O(1) | Throws `ArrayError` when empty. |
+| `get(index)` | `Element` | O(n) | Throws `ArrayError.indexOutOfBounds`. |
+| `prepend(value Element)` | — | O(1) | Add to the front. |
+| `append(value Element)` | — | O(1) | Add to the back. |
+| `insert(at, value Element)` | — | O(n) | `at` may be `0` through `count()`. Past `count()` throws `ArrayError.indexOutOfBounds`. |
+| `removeFirst()` | `Element` | O(1) | Throws `ArrayError` when empty. |
+| `removeLast()` | `Element` | O(1) | Throws `ArrayError` when empty. |
+| `remove(at)` | `Element` | O(n) | Throws `ArrayError.indexOutOfBounds`. |
+| `clear()` | — | O(n) | Remove every element. |
+| `clone()` | `List` | O(n) | A deep copy. |
+| `createIterator()` | `ListIterator` | O(1) | Throws `IterationError.exhausted` when empty. |
 
-Create a concrete List type with `typealias`, then instantiate it with `create()`:
+`ListIterator` implements `Iterator with Element`: `current()` and `advance()`.
+
+`ListError` (`empty`) is declared alongside `List`; the list's own methods throw `ArrayError`.
+
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntList = List with Integer
+typealias Score = int(i64.min to i64.max)
+typealias ScoreList = List with Score
 
-var list = IntList.create()             // Empty list
-```
-
-**Adding Elements**
-```maxon
-list.prepend(1)                              // Add to front — O(1)
-list.append(2)                               // Add to back — O(1)
-try list.insert(1, value: 99) otherwise ignore  // Insert at index [0, count] — O(n), throws ArrayError if at > count
-```
-
-**Accessing Elements**
-```maxon
-var first = try list.first() otherwise 0   // First element (throws ArrayError)
-var last = try list.last() otherwise 0     // Last element (throws ArrayError)
-var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayError)
-```
-
-**Removing Elements**
-```maxon
-var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
-var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
-var at2 = try list.remove(2) otherwise 0          // Remove at index — O(n)
-list.clear()                                       // Remove all elements
-```
-
-**Query**
-```maxon
-list.count()                     // Number of elements
-list.isEmpty()                   // true if empty
-```
-
-**Iteration**
-
-`List` implements `Iterable`, so it supports `for`-`in` loops:
-```maxon
-for item in list 'loop'
-		print("{item}")
-end 'loop'
-```
-
-**Complexity Summary**
-
-| Operation | Time |
-|-----------|------|
-| `prepend` | O(1) |
-| `removeFirst` | O(1) |
-| `append` | O(1) |
-| `removeLast` | O(1) |
-| `get`, `insert`, `remove` | O(n) |
-| `first`, `last`, `count`, `isEmpty` | O(1) |
-| iteration (for-in) | O(n) total |
-
----
-
-## Networking (TcpClient)
-
-`TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
-
-**Supported on `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux`**, over IPv4 only — `TcpClient` builds a `sockaddr_in`, so an IPv6-only host cannot be reached on any target. Windows reaches `ws2_32` and macOS reaches libSystem, so both resolve host names through the platform's own `getaddrinfo` (`/etc/hosts`, the search list, everything the C library does). The two Linux lanes link no libc and therefore have no `getaddrinfo` to call: they run a resolver built into the compiler's runtime instead, which parses a numeric address, consults `/etc/hosts`, and otherwise sends an `A` query over TCP to the first `nameserver` in `/etc/resolv.conf`. That resolver does not apply the `search`/`domain` suffixes, does not follow a `CNAME` the server did not answer alongside, does not fall over to a second nameserver, and applies no timeout of its own — so on those two lanes an unqualified name resolves only if `/etc/hosts` carries it, and an unresponsive nameserver makes a connect slow rather than wrong.
-
-**Not supported on `wasm32-wasi`.** Every `TcpClient` call is refused at compile time with `E3104` there. WASI Preview2 does define `wasi:sockets`, and this compiler is not wired to it.
-
-**NetworkPort Alias**
-
-The `NetworkPort` type alias constrains port numbers to the valid TCP range:
-```maxon
-public typealias NetworkPort = int(0 to 65535)
-```
-`0` is in range because it is what `TcpListener.bind` asks for when it wants whichever free port the kernel has. It is never the port of a live connection or of a bound listener, and `TcpClient.connect` is refused by the OS if it is given one.
-
-**NetworkError**
-
-All networking operations throw `NetworkError`, an enum conforming to `Error`:
-```maxon
-enum NetworkError implements Error
-		resolveFailed       // DNS lookup failed
-		connectFailed       // TCP connection refused or timed out
-		sendFailed          // OS-level send error
-		recvFailed          // OS-level recv error
-		connectionClosed    // peer closed the connection
-		timedOut            // a read or write deadline ended the wait
-		bindFailed          // the address or port could not be bound and listened on
-		acceptFailed        // no connection could be taken from the listener
-end 'NetworkError'
-```
-
-**Connecting**
-
-`TcpClient.connect` resolves the hostname, creates a TCP socket, and connects:
-```maxon
-let client = try TcpClient.connect("example.com", port: 4242)
-```
-
-**Sending Data**
-
-`send` transmits all bytes of a string, looping internally to handle partial sends. It returns the total number of bytes sent:
-```maxon
-let bytesSent = try client.send("Hello\n")
-```
-
-**Receiving Data**
-
-`recv` reads up to `bufferSize` bytes from the connection and returns them as a `String`:
-```maxon
-let response = try client.recv(1024)
-```
-
-**Closing**
-
-`close` is idempotent and safe to call multiple times. The socket also closes automatically when the `TcpClient` goes out of scope:
-```maxon
-client.close()
-```
-
-**API Summary**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
-| `TcpClient.adopt(socket __ManagedSocket)` | `TcpClient` | — | Wrap a socket `TcpListener.accept()` answered |
-| `send(data String)` | `ByteCount` | `NetworkError` | Send all bytes of a string |
-| `recv(bufferSize ByteCount)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
-| `close()` | — | — | Close the connection (idempotent) |
-| `TcpListener.bind(host String, port NetworkPort)` | `TcpListener` | `NetworkError` | Bind a port and begin listening |
-| `port()` | `NetworkPort` | — | The port the kernel bound, for a `bind` of `0` |
-| `accept()` | `TcpClient` | `NetworkError` | Take the next connection, parking until one arrives |
-| `close()` | — | — | Stop listening and release the port (idempotent) |
-
-**Listening (TcpListener)**
-
-`TcpListener`, in `stdlib/TcpListener.maxon`, is the server side. It has no `send` and no `recv` — `accept()` is the only way to get something that does — and it closes automatically when the last reference goes out of scope. `accept()` suspends its green thread on the network poller until a connection arrives, so a waiting server holds no machine.
-
-Binding port `0` asks the kernel for whichever port is free and `port()` reports the one it gave, which is how two programs on one machine avoid choosing the same address:
-```maxon
-let listener = try TcpListener.bind("127.0.0.1", port: 0)
-print("listening on {listener.port()}\n")
-
-let conn = try listener.accept()
-let request = try conn.recv(1024)
-_ = try conn.send(request)
-```
-`SO_REUSEADDR` is not set, so a second `bind` onto a port a live listener already holds is refused with `bindFailed` rather than quietly splitting one backlog between two listeners.
-
-**Example: Simple TCP Client**
-```maxon
 function main() returns ExitCode
-		let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
-				print("connection failed")
-				return 1
-		end 'err'
-		_ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
-				print("send failed")
-				return 1
-		end 'err'
-		let response = try client.recv(4096) otherwise 'err'
-				print("recv failed")
-				return 1
-		end 'err'
-		print(response)
-		client.close()
-		return 0
+	var list = ScoreList.create()
+	list.append(2)
+	list.prepend(1)
+	try list.insert(2, value: 3) otherwise panic("index is within [0, count]")
+
+	let front = try list.removeFirst() otherwise 0
+
+	for value in list 'each'
+		print("{value} ")
+	end 'each'
+
+	print("\n{front} {list.count()}\n")
+	return 0
 end 'main'
 ```
 
----
+Output: `2 3` and `1 2`.
 
-## HttpClient
+## Map
 
-HTTP/1.1 client for making HTTP requests over TCP connections. HTTP only (no HTTPS/TLS). Uses `Connection: close` for simple response reading.
+`Map` is a hash table from keys to values. The key type must be `Hashable` and `Equatable`. Maps are built
+with `create()` or a dictionary literal `["a": 1, "b": 2]`, and iterate as `(key, value)` tuples in table
+order, which is unspecified. The table resizes when it is three-quarters full.
 
-### `HttpError` (enum, implements Error)
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Map.create()` | `Map` | An empty map. |
+| `insert(key Key, value Value)` | — | Add a new entry. Throws `MapError.keyAlreadyExists` when the key is present. |
+| `upsert(key Key, value Value)` | — | Add the entry, or replace the value of an existing key. |
+| `get(key Key)` | `Value` | Throws `MapError.keyNotFound`. |
+| `contains(key Key)` | `bool` | Key test. |
+| `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
+| `count()` | `int(0 to 4611686018427387904)` | Number of entries. |
+| `getCapacity()` | table capacity | Total slots in the table: `0` for a map from `create()` until its first insert, `16` after that for a small map. |
+| `createIterator()` | `MapIterator` | Throws `IterationError.exhausted` when empty. |
 
-| Variant | Description |
-|---------|-------------|
-| `invalidUrl` | URL could not be parsed |
-| `connectFailed` | TCP connection failed |
-| `sendFailed` | Sending the request failed |
-| `recvFailed` | Receiving the response failed |
-| `invalidResponse` | Response could not be parsed |
+`MapIterator` implements `Iterator with (Key, Value)`: `current()` and `advance()`.
 
-### `HttpMethod` (enum)
-
-| Variant |
-|---------|
-| `get` |
-| `post` |
-| `put` |
-| `delete` |
-| `head` |
-| `patch` |
-
-### `StatusCode` (enum)
-
-| Variant | Value |
-|---------|-------|
-| `ok` | 200 |
-| `created` | 201 |
-| `noContent` | 204 |
-| `movedPermanently` | 301 |
-| `found` | 302 |
-| `notModified` | 304 |
-| `badRequest` | 400 |
-| `unauthorized` | 401 |
-| `forbidden` | 403 |
-| `notFound` | 404 |
-| `methodNotAllowed` | 405 |
-| `conflict` | 409 |
-| `gone` | 410 |
-| `internalServerError` | 500 |
-| `notImplemented` | 501 |
-| `badGateway` | 502 |
-| `serviceUnavailable` | 503 |
-
-### `HttpHeaders`
-
-Case-insensitive HTTP header map. Header names are lowercased on storage.
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `create` | `static function create() returns HttpHeaders` | Create an empty header map |
-| `set` | `function set(name String, value String)` | Set a header |
-| `get` | `function get(name String) returns String throws HttpError` | Get a header value |
-| `has` | `function has(name String) returns bool` | Check if a header exists |
-
-### `HttpRequest`
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `create` | `static function create(method HttpMethod, url String) returns HttpRequest throws HttpError` | Create a request |
-| `setHeader` | `function setHeader(name String, value String)` | Set a request header |
-| `setBody` | `function setBody(body String)` | Set the request body |
-| `url` | `function url() returns URL` | Get the request URL |
-| `method` | `function method() returns HttpMethod` | Get the request method |
-| `headers` | `function headers() returns HttpHeaders` | Get the request headers |
-| `body` | `function body() returns String` | Get the request body |
-
-### `HttpResponse`
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `statusCode` | `function statusCode() returns StatusCode` | Get the status code |
-| `reason` | `function reason() returns String` | Get the reason phrase |
-| `headers` | `function headers() returns HttpHeaders` | Get the response headers |
-| `body` | `function body() returns String` | Get the response body |
-| `header` | `function header(name String) returns String throws HttpError` | Get a response header by name |
-
-### `HttpClient`
-
-Stateless HTTP/1.1 client. All methods are static.
-
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `send` | `static function send(request HttpRequest) returns HttpResponse throws HttpError` | Send an HTTP request |
-| `get` | `static function get(url String) returns HttpResponse throws HttpError` | Perform a GET request |
-| `post` | `static function post(url String, body String) returns HttpResponse throws HttpError` | Perform a POST request |
-| `put` | `static function put(url String, body String) returns HttpResponse throws HttpError` | Perform a PUT request |
-| `delete` | `static function delete(url String) returns HttpResponse throws HttpError` | Perform a DELETE request |
-
-**Example: Simple GET**
 ```maxon
-function fetchData() returns ExitCode throws HttpError
-	let response = try HttpClient.get("http://httpbin.org/get")
-	print(response.body())
-	return 0
-end 'fetchData'
+enum MapError implements Error
+	keyNotFound
+	keyAlreadyExists
+end 'MapError'
 ```
 
-**Example: POST with body**
 ```maxon
-function postData() returns ExitCode throws HttpError
-	var request = try HttpRequest.create(HttpMethod.post, url: "http://httpbin.org/post")
-	request.setHeader("content-type", value: "application/json")
-	request.setBody("{\"key\": \"value\"}")
-	let response = try HttpClient.send(request)
-	print(response.statusCode())
+typealias Age = int(0 to 150)
+typealias Ages = Map with String, Age
+
+function main() returns ExitCode
+	var ages = Ages.create()
+	try ages.insert("ann", value: 30) otherwise panic("new key")
+
+	try ages.insert("ann", value: 31) otherwise 'duplicate'
+		print("ann is already present\n")
+	end 'duplicate'
+
+	ages.upsert("bob", value: 25)
+	ages.upsert("ann", value: 32)
+	let ann = try ages.get("ann") otherwise 0
+	print("{ann} {ages.contains("bob")} {ages.remove("bob")} {ages.count()}\n")
+
+	for (name, age) in ages 'each'
+		print("{name}: {age}\n")
+	end 'each'
+
 	return 0
-end 'postData'
+end 'main'
 ```
 
-**Limitations:**
-- HTTP only (no HTTPS/TLS)
-- No chunked transfer encoding — uses `Connection: close`
-- No redirect following (returns 3xx as-is)
-- No streaming — entire response buffered in memory
+Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 
----
+## Set
+
+`Set` is a hash set. The element type must be `Hashable` and `Equatable`. Build one with `create()` or
+`Set from [1, 2, 3]`. Iteration order is unspecified.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Set.create()` | `Set` | An empty set. |
+| `insert(element Element)` | — | Add an element; inserting a present element does nothing. |
+| `contains(element Element)` | `bool` | Membership test. |
+| `remove(element Element)` | `bool` | Remove; true when the element was present. |
+| `count()` | `int(0 to 4611686018427387904)` | Number of elements. |
+| `getCapacity()` | table capacity | Total slots in the table. |
+| `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
+
+`SetIterator` implements `Iterator with Element`: `current()` and `advance()`.
+
+```maxon
+typealias Tags = Set with String
+
+function main() returns ExitCode
+	var tags = Tags.create()
+	tags.insert("red")
+	tags.insert("red")
+	tags.insert("blue")
+	print("{tags.count()} {tags.contains("red")} {tags.remove("red")} {tags.count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `2 true true 1`.
+
+## Vector
+
+`Vector` is a fixed-size array whose element count is part of its type: `Vector with 3 Coord` holds exactly
+three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Vector.create()` | `Vector` | Every element zero. |
+| `Vector from [a, b, c]` | `Vector` | A literal; the count is the literal's length. |
+| `count()` | `int(0 to u64.max)` | The fixed size, answered from the type. |
+| `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds`. |
+| `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size. |
+| `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the vector is empty. |
+
+A vector never changes length: it has no `push`, `insert` or `remove`.
+
+```maxon
+typealias Coord = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Coord
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	try v.set(1, value: 7) otherwise panic("inside the fixed size")
+
+	try v.set(3, value: 1) otherwise 'outside'
+		print("index 3 refused\n")
+	end 'outside'
+
+	let literal = Vector from [1, 2, 3]
+	var sum = 0
+
+	for x in literal 'each'
+		sum = sum + x
+	end 'each'
+
+	print("{v.count()} {countof(Vec3)} {try v.get(1) otherwise 0} {sum}\n")
+	return 0
+end 'main'
+```
+
+Output: `index 3 refused` and `3 3 7 6`.
+
+## Range
+
+In a `for` header, `start to end` and `start upto end` compile to a counted loop with no allocation.
+Anywhere else they are values:
+
+| Expression | Type | Visits |
+|------------|------|--------|
+| `start to end` | `Range` | `start` through `end`, both included |
+| `start upto end` | `OpenRange` | `start` up to but excluding `end` |
+
+Both implement `Iterable with (RangeBound, RangeIterator)`; `RangeBound` is `int(i64.min to i64.max)`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Range.create(start RangeBound, finish RangeBound)` | `Range` | The same as `start to finish`. |
+| `OpenRange.create(start RangeBound, endExclusive RangeBound)` | `OpenRange` | The same as `start upto endExclusive`. |
+| `createIterator()` | `RangeIterator` | Throws `IterationError.exhausted` for an empty range (`finish < start`, or `endExclusive <= start`). |
+
+`RangeIterator` implements `Iterator with RangeBound` and `BidirectionalIterator`:
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `RangeIterator.create(first RangeBound, last RangeBound)` | `RangeIterator` | Both inclusive. Throws `exhausted` when `last < first`. |
+| `current()` | `RangeBound` | The current value. |
+| `index()` | `int(0 to u64.max)` | Steps taken from `first`. |
+| `advance()` | — | Throws `exhausted` at `last`. |
+| `retreat()` | — | Throws `atStart` at `first`. |
+
+```maxon
+function main() returns ExitCode
+	let inclusive = 1 to 4
+	var total = 0
+
+	for x in inclusive 'sum'
+		total = total + x
+	end 'sum'
+
+	for (iter, x) in (10 upto 13).withIterator() 'each'
+		print("{iter.index()}:{x} ")
+	end 'each'
+
+	print("total={total}\n")
+	return 0
+end 'main'
+```
+
+Output: `0:10 1:11 2:12 total=10`.
+
+## Iterators
+
+A live iterator always points at a valid element, so `current()` cannot fail; navigation throws
+`IterationError`. `createIterator()` on an empty collection throws `IterationError.exhausted` instead of
+returning an iterator with nothing under it.
+
+```maxon
+enum IterationError implements Error
+	exhausted
+	atStart
+end 'IterationError'
+```
+
+`exhausted`: an `advance` past the last element. `atStart`: a `retreat` before the first. A failed move
+leaves the position unchanged.
+
+### ArrayIterator
+
+`ArrayIterator` (what `Array.createIterator()`, `Array.cursor()` and `Vector.createIterator()` return)
+implements `BidirectionalIterator with Element` and adds random access:
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `ArrayIterator.create(source)` | `ArrayIterator` | `IterationError` | Over raw array storage; `exhausted` when it is empty. |
+| `current()` | `Element` | — | The element at the position. |
+| `index()` | `int(0 to u64.max)` | — | The position. |
+| `advance()` | — | `IterationError` | Forward one; `exhausted` at the end. |
+| `retreat()` | — | `IterationError` | Back one; `atStart` at position 0. |
+| `seek(index)` | — | `IterationError` | Jump to an absolute position; `exhausted` when out of bounds. |
+| `peek(ahead)` | `Element` | `IterationError` | The element `ahead` positions on, without moving. |
+| `advanceBy(n IterStep)` | — | `IterationError` | Forward `n` (from `Iterator`). |
+| `retreatBy(n IterStep)` | — | `IterationError` | Back `n` (from `BidirectionalIterator`). |
+
+`advanceBy` and `retreatBy` step one at a time, so a move that fails part-way leaves the iterator where the
+throw happened.
+
+```maxon
+typealias Score = int(i64.min to i64.max)
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+	var values = ScoreArray.create()
+
+	for i in 1 to 5 'fill'
+		values.push(i * 10)
+	end 'fill'
+
+	var c = try values.cursor() otherwise panic("not empty")
+	try c.advance() otherwise panic("has a second element")
+	let ahead = try c.peek(2) otherwise 0
+	print("{c.index()} {c.current()} {ahead}\n")
+
+	try c.advanceBy(3) otherwise panic("in range")
+	let beyond = try c.peek(1) otherwise -1
+	print("{c.current()} {beyond}\n")
+	return 0
+end 'main'
+```
+
+Output: `1 20 40` and `50 -1`.
+
+### The other iterators
+
+| Iterator | Produced by | Element |
+|----------|-------------|---------|
+| `ListIterator` | `List.createIterator()` | the list's element |
+| `MapIterator` | `Map.createIterator()` | `(Key, Value)` |
+| `SetIterator` | `Set.createIterator()` | the set's element |
+| `StringIterator` | `String.createIterator()` | `Character` |
+| `RangeIterator` | `Range`/`OpenRange.createIterator()` | `RangeBound` |
+
+Each has a static `create`, `current()` and `advance()`.
+
+## Interfaces
+
+The protocols the library and the language are built on.
+
+| Interface | Requirement | Used by |
+|-----------|-------------|---------|
+| `Error` | none | Every throwable type: `enum E implements Error` |
+| `Equatable` | `function equals(other Self) returns bool` | `==`, `!=`, `contains` |
+| `Comparable` | `function compare(other Self) returns Ordering` | `sort()` |
+| `Hashable` | `function hash() returns HashValue` | `Map` keys, `Set` elements |
+| `Cloneable` | `function clone() returns Self` | `clone()` |
+| `Stringable` | `function toString() returns String` | `"{value}"` |
+| `FormattedStringable` | `function toString(format String) returns String` | `"{value:format}"` — the text after the colon is passed as `format` |
+| `Iterator with Element` | `current() returns Element`, `advance() throws IterationError` | iterators |
+| `BidirectionalIterator` | extends `Iterator`; `retreat() throws IterationError` | reversible iterators |
+| `Iterable with (Element, Iter)` | `createIterator() returns Iter throws IterationError` | `for`-`in` |
+| `Parsable` | `static fromString(input String) returns Self throws Error` | `int.fromString` and friends |
+
+The literal-initialization interfaces (`InitableFromStringLiteral`, `InitableFromCharLiteral`,
+`InitableFromArrayLiteral`, `InitableFromDictionaryLiteral`) let a type be written as `MyType from <literal>`;
+see Initializing From Literals in [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
+
+### Supporting types
+
+```maxon
+enum Ordering
+	lessThan
+	equalTo
+	greaterThan
+end 'Ordering'
+```
+
+`HashValue` is `int(0 to u32.max)`; `IterStep` is `int(i64.min to i64.max)`.
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `spreadHash(hash HashValue)` | `HashValue` | Mix a hash's bits (the MurmurHash3 32-bit finalizer). `Map` and `Set` apply it before choosing a slot, so keys with regular structure do not cluster. A `hash()` implementation does not need to call it. |
+
+### Default methods
+
+| On | Method | Returns | Description |
+|----|--------|---------|-------------|
+| `Iterator` | `advanceBy(n IterStep)` | — | Call `advance()` `n` times. |
+| `BidirectionalIterator` | `retreatBy(n IterStep)` | — | Call `retreat()` `n` times. |
+| `Iterable` | `map(transform function(Element) returns Element)` | `Array with Element` | Each element transformed. |
+| `Iterable` | `filter(keep function(Element) returns bool)` | `Array with Element` | The elements `keep` accepts. |
+| `Iterable` | `contains(predicate function(Element) returns bool)` | `bool` | True when any element matches. |
+| `Iterable` | `withIterator()` | iterator pairs | Iterate as `for (iter, element) in collection.withIterator()`, with the iterator in hand. |
+
+```maxon
+typealias Cents = int(0 to u32.max)
+
+type Money implements Stringable, FormattedStringable, Equatable, Comparable, Hashable, Cloneable
+	let cents as Cents
+
+	static function create(cents Cents) returns Money
+		return Money{cents: cents}
+	end 'create'
+
+	function toString() returns String
+		return "{cents} cents"
+	end 'toString'
+
+	function toString(format String) returns String
+		return "{format} {cents}"
+	end 'toString'
+
+	function equals(other Money) returns bool
+		return cents == other.cents
+	end 'equals'
+
+	function compare(other Money) returns Ordering
+		return cents.compare(other.cents)
+	end 'compare'
+
+	function hash() returns HashValue
+		return cents.hash()
+	end 'hash'
+
+	function clone() returns Money
+		return Money{cents: cents}
+	end 'clone'
+end 'Money'
+
+typealias Prices = Set with Money
+
+function main() returns ExitCode
+	let price = Money.create(250)
+	var prices = Prices.create()
+	prices.insert(price)
+	prices.insert(price.clone())
+	print("{price} | {price:EUR} | {price == Money.create(250)} {price.compare(Money.create(1))} {prices.count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `250 cents | EUR 250 | true greaterThan 1`.
+
+## File
+
+`File` reads, writes, renames, deletes and inspects files. Every method is static and takes a
+[FilePath](#filepath).
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `File.readText(path FilePath)` | `String` | `FileReadError` | The whole file as text. |
+| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | The whole file as bytes. |
+| `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
+| `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | — | `FileWriteError` | Create or truncate, then write. |
+| `File.exists(path FilePath)` | `bool` | — | True when a file exists at `path`. |
+| `File.delete(path FilePath)` | — | `FileDeleteError` | Delete a file. |
+| `File.rename(from FilePath, to FilePath)` | — | `FileRenameError` | Move a file, replacing any existing destination in one step, so a reader of `to` never sees a partly written file. |
+| `File.info(path FilePath)` | `FileInfo` | `FileInfoError` | Size, timestamps and attributes, from one OS call. |
+
+### Types
+
+| Type | Definition |
+|------|------------|
+| `FileSize` | `int(0 to u64.max)` — bytes |
+| `Timestamp` | `int(0 to u64.max)` — whole seconds since the Unix epoch |
+| `Byte` | `int(0 to u8.max)` |
+| `ByteArray` | `Array with Byte` |
+
+`FileInfo` has read-only fields and a factory, `FileInfo.create(size, modifiedTime:, createdTime:,
+accessedTime:, isDirectory:, isReadOnly:)`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `size` | `FileSize` | Size in bytes |
+| `modifiedTime` | `Timestamp` | Last modification |
+| `createdTime` | `Timestamp` | Creation |
+| `accessedTime` | `Timestamp` | Last access |
+| `isDirectory` | `bool` | The path is a directory |
+| `isReadOnly` | `bool` | The file is read-only |
+
+`FilePermission` is `normal` (0666) or `executable` (0755 on Unix).
+
+| Error enum | Case | Thrown when |
+|------------|------|-------------|
+| `FileReadError` | `notFound` | The file cannot be opened or read |
+| `FileWriteError` | `failed` | The file cannot be created or written |
+| `FileDeleteError` | `notFound` | The file cannot be deleted |
+| `FileRenameError` | `failed` | The rename fails |
+| `FileInfoError` | `notFound` | The path does not exist |
+
+```maxon
+function main() returns ExitCode
+	let dir = FilePath from "scratch"
+	_ = Directory.create(dir)
+
+	let notes = dir.join("notes.txt")
+	try File.writeText(notes, content: "hello") otherwise panic("cannot write {notes}")
+
+	let text = try File.readText(notes) otherwise ""
+	let info = try File.info(notes) otherwise panic("just written")
+	print("{text} {info.size} {info.isDirectory}\n")
+
+	let moved = dir.join("moved.txt")
+	try File.rename(notes, to: moved) otherwise panic("rename failed")
+	print("{File.exists(notes)} {File.exists(moved)}\n")
+
+	try File.delete(moved) otherwise panic("delete failed")
+	let gone = try File.readText(moved) otherwise "no such file"
+	print("{gone}\n")
+	return 0
+end 'main'
+```
+
+Output: `hello 5 false`, `false true`, `no such file`.
+
+## FilePath
+
+`FilePath` is a filesystem path. Construction normalizes separators to the host's (`\` on Windows, `/`
+elsewhere) and accepts `file://` URLs, which are converted to paths. It implements `Equatable`, `Hashable`,
+`Stringable` and `InitableFromStringLiteral`. Equality and hashing follow the host filesystem:
+case-insensitive on Windows, byte-exact elsewhere.
+
+### Construction
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `FilePath from "a/b.txt"` | `FilePath` | From a literal; an invalid path panics. |
+| `FilePath.from(path String)` | `FilePath` | Throws `FilePathError.invalidCharacter` on Windows for a control character or one of `< > " \| ? *`, or `notFileURL` for a URL whose scheme is not `file`. |
+| `FilePath.empty()` | `FilePath` | The empty path. |
+| `FilePath.separator()` | `String` | The host separator. |
+| `path` | field, `String` | The normalized text. |
+
+### Components
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `filename()` | `String` | The last component (the whole path when there is no separator). |
+| `fileExtension()` | `String` | The extension with its dot, or `""`. A leading dot is not an extension (`.gitignore` has none). |
+| `stem()` | `String` | The filename without its extension. |
+| `parent()` | `FilePath` | Throws `FilePathError.noParent`. |
+
+### Building paths
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `join(component String)` | `FilePath` | Append a component with the host separator. |
+| `join(component FilePath)` | `FilePath` | Append another path. |
+| `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
+| `resolve(base FilePath)` | `FilePath` | A relative path joined onto `base`; an absolute path unchanged. |
+| `relativeTo(base FilePath)` | `FilePath` | The part after `base`. Throws `FilePathError.noParent` when the path is not inside `base`. |
+| `normalize()` | `FilePath` | Returns the path; it was normalized on construction. |
+| `toString()` | `String` | The path text. |
+
+### Queries
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `isEmpty()` | `bool` | The path is `""`. |
+| `isAbsolute()` | `bool` | On Windows a drive path (`C:\`), a UNC path (`\\server`) or a rooted path (`\dir`); a leading `/` elsewhere. |
+| `isRelative()` | `bool` | Not absolute. |
+| `isInside(dir FilePath)` | `bool` | The path equals `dir` or lies beneath it, compared by whole components (`/foo/bar` is not inside `/foo/ba`). |
+| `startsWith(prefix FilePath)` | `bool` | Component-wise prefix test. |
+| `equals(other FilePath)`, `hash()` | | Host filesystem semantics. |
+
+```maxon
+enum FilePathError implements Error
+	invalidCharacter
+	notFileURL
+	noParent
+end 'FilePathError'
+```
+
+```maxon
+function main() returns ExitCode
+	let base = FilePath from "project"
+	let source = base.join("src").join("main.maxon")
+
+	let relative = try source.relativeTo(base) otherwise FilePath.empty()
+	let parent = try source.parent() otherwise FilePath.empty()
+	let web = try FilePath.from("https://example.com/x") otherwise FilePath.empty()
+
+	print("{source.filename()} {source.stem()} {source.fileExtension()} {parent.filename()}\n")
+	print("{source.isInside(base)} {source.isRelative()} {relative.join("x").isEmpty()} {web.isEmpty()}\n")
+	print("{source.changeExtension(".txt").filename()}\n")
+	return 0
+end 'main'
+```
+
+Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
+
+## Directory
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Directory.list(path FilePath)` | `Array with FilePath` | `DirectoryListError` | The entries of a directory, each joined onto `path`. |
+| `Directory.exists(path FilePath)` | `bool` | — | True when `path` is an existing directory. |
+| `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
+| `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
+| `Directory.currentPath()` | `FilePath` | — | The working directory. |
+
+```maxon
+enum DirectoryListError implements Error
+	notFound
+	accessDenied
+	listFailed
+end 'DirectoryListError'
+```
+
+```maxon
+function main() returns ExitCode
+	let dir = FilePath from "listing-demo"
+	print("{Directory.create(dir.join("nested"))} {Directory.exists(dir)}\n")
+	try File.writeText(dir.join("a.txt"), content: "a") otherwise panic("write")
+
+	for entry in try Directory.list(dir) otherwise panic("list") 'each'
+		print("{entry.filename()} {Directory.isDirectory(entry)}\n")
+	end 'each'
+
+	print("{Directory.currentPath().isAbsolute()}\n")
+	return 0
+end 'main'
+```
+
+It prints `true true`, then `a.txt false` and `nested true` in the order the OS lists them, then `true`.
+`Directory.list` does not report `.` or `..`.
+
+## Console
+
+`Console.stdin()` returns a buffered reader over standard input. Keep one reader for the life of the
+program: a new reader does not see input an earlier one already buffered.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `Console.stdin()` | `Stdin` | — | The standard-input reader. |
+| `readLine()` | `String` | `ConsoleError.endOfFile` | The next line without its `\n`; a `\r` before it is removed too. A last line with no terminator is returned, and the call after it throws. |
+
+```maxon
+function main() returns ExitCode
+	let stdin = Console.stdin()
+	var lines = 0
+
+	while true 'read'
+		let line = try stdin.readLine() otherwise break
+		lines = lines + 1
+		print("[{line}]\n")
+	end 'read'
+
+	print("{lines} lines\n")
+	return 0
+end 'main'
+```
+
+Given `one\r\ntwo\nthree` on stdin, it prints `[one]`, `[two]`, `[three]`, `3 lines`.
+
+## CommandLine
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `CommandLine.args()` | `StringArray` | — | Every argument, the program path first. A fresh array each call. |
+| `CommandLine.optionValue(arg String)` | `String` | `StringError.notFound` | Everything after the first `=` of `--key=value`, later `=` included. |
+| `CommandLine.getOptionValue(name String)` | `String` | `StringError.notFound` | The value of the first `--name=value` argument. |
+
+```maxon
+function main() returns ExitCode
+	let args = CommandLine.args()
+	let mode = try CommandLine.getOptionValue("mode") otherwise "default"
+	let note = try CommandLine.optionValue("--note=a=b") otherwise ""
+	print("{args.count()} {mode} {note}\n")
+	return 0
+end 'main'
+```
+
+Run as `program --mode=fast`, it prints `2 fast a=b`.
+
+## Log
+
+`Log` records trace keys so a test can check which internal path ran. It is not a general logger: there are
+no levels or outputs. While capture is off, `trace` does nothing.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Log.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |
+| `Log.startCapture()` | — | Start recording, discarding earlier keys. |
+| `Log.stopCapture()` | `StringArray` | Stop, and return the keys in the order they were emitted. |
+| `Log.fired(capturedKeys StringArray, key String)` | `bool` | True when `key` was recorded at least once. |
+
+```maxon
+function main() returns ExitCode
+	Log.startCapture()
+	Log.trace("cache.miss")
+	let keys = Log.stopCapture()
+	print("{Log.fired(keys, key: "cache.miss")} {Log.fired(keys, key: "cache.hit")}\n")
+	return 0
+end 'main'
+```
+
+Output: `true false`.
 
 ## Process
 
-`Process` exposes introspection of the currently-running process. For launching child processes, see [Subprocess](#subprocess); for monotonic time, see [Clock](#clock).
+`Process` describes the running program. To start other programs see [Subprocess](#subprocess).
 
-**Exit codes:** `Process.ExitCode` is a platform-narrowed alias that ranges over `0 .. u32.max` on Windows and `0 .. 255` on every non-Windows target (Linux, macOS, WASI), matching the POSIX byte-sized exit-code convention that portable programs target. Use it as the return type of `main`.
+### ExitCode
 
-```maxon
-function main() returns ExitCode
-	return 0
-end 'main'
-```
+`ExitCode` is the return type of `main`: `int(0 to u32.max)` on Windows and `int(0 to 255)` on Linux, macOS
+and WASI, matching what each platform can report.
 
-**Static Methods:**
+### Members
 
-| Method | Returns | Throws | Description |
+| Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `executablePath()` | `FilePath` | `ProcessIntrospectionError` | Absolute path to the running executable. Uses `GetModuleFileNameA` (Windows), `_NSGetExecutablePath` (macOS), `/proc/self/exe` (Linux). Throws `pathUnavailable` when the OS lookup fails. |
-| `environmentVariable(name)` | `String` | `ProcessIntrospectionError` | The value `name` carries in **this** process's environment. Throws `variableUnset` when no entry carries it. |
-
-**Name matching follows the platform, because that is what the two platforms mean by a variable name.** The name is folded on Windows — the environment block spells the search path `Path` and answers to `PATH` — and matched byte-exactly under POSIX, where two names differing in case are two variables. A byte-exact match everywhere would report `variableUnset` for variables that are plainly set.
-
-**Errors:**
+| `Process.executablePath()` | `FilePath` | `ProcessIntrospectionError.pathUnavailable` | Absolute path of the running executable. |
+| `Process.environmentVariable(name String)` | `String` | `ProcessIntrospectionError.variableUnset` | The variable's value. Names are case-insensitive on Windows (`Path` answers to `PATH`) and exact elsewhere. An unset variable throws; a variable set to `""` returns `""`. |
+| `Process.currentEnvironmentEntries()` | `StringArray` | — | Every `NAME=VALUE` entry, in the order the OS reports them. |
+| `Process.envEntryName(entry String)` | `String` | — | The text before the first `=` (searching from the second byte, so Windows' `=C:=C:\dir` entries keep their name). |
+| `Process.envEntryValue(entry String)` | `String` | — | The text after that `=`, or `""`. |
+| `EnvNameValueSeparator` | `Byte` | — | The separator byte, `=` (61). |
 
 ```maxon
 enum ProcessIntrospectionError implements Error
@@ -856,157 +1283,174 @@ enum ProcessIntrospectionError implements Error
 end 'ProcessIntrospectionError'
 ```
 
-`variableUnset` is thrown rather than an empty `String` returned: **absent** and **set to the empty string** are different facts, and the second is a value a caller may legitimately have set.
-
-**Example:**
-
 ```maxon
-let exe = try Process.executablePath() otherwise return 2
-print("Running as: {exe.path}\n")
+function main() returns ExitCode
+	let exe = try Process.executablePath() otherwise FilePath.empty()
+	let unset = try Process.environmentVariable("SURELY_NOT_SET_ANYWHERE") otherwise "unset"
+	print("{exe.isAbsolute()} {unset}\n")
+	print("{Process.envEntryName("A=b=c")} {Process.envEntryValue("A=b=c")}\n")
+	return 0
+end 'main'
 ```
 
----
+Output: `true unset` and `A b=c`.
 
 ## Subprocess
 
-Launch and manage child processes. Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path is `Subprocess.run(.name("git"), arguments: argv)`, which captures stdout/stderr into a `CollectedOutput` value. For full control, build a `Configuration` and call `.run()` on it.
+`Subprocess` starts child processes. `Subprocess.run` waits for the child and collects its output;
+`Configuration` gives full control; `StreamingSubprocess` keeps the child's pipes open for line-by-line
+conversation. A spawn from a green thread parks that green thread, so others keep running.
 
-**Not available on `wasm32-wasi`** — WASI has no process-spawn primitives. Any call into the `Subprocess` API on that target is a compile error (**E3074**), not a runtime failure, so the problem surfaces at build time. Wrap callers in `#if not os(Wasi)` (compile the call only on non-WASI targets) for portable stdlib code.
-
-### Hot path
+Not available on `wasm32-wasi`, which has no process spawning: every call is refused at compile time with
+E3074.
 
 ```maxon
-var argv = StringArray.create()
-argv.push("status")
-let result = try Subprocess.run(Executable.name("git"), arguments: argv) otherwise return 1
-if result.succeeded() 'ok'
-	print(result.stdout)
-end 'ok'
+function main() returns ExitCode
+	var args = StringArray.create()
+	args.push("--version")
+
+	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise (e) 'failed'
+		print("could not run git: {e.displayReason()}\n")
+		return 1
+	end 'failed'
+
+	print("{result.succeeded()} {result.exitCode()} {result.stdout.startsWith("git version")}\n")
+	return 0
+end 'main'
 ```
 
-### `Executable`
+With `git` on `PATH`, it prints `true 0 true`.
+
+### Subprocess
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Subprocess.run(executable Executable, arguments StringArray)` | `CollectedOutput` | Inherit the working directory and environment, no stdin, collect stdout and stderr up to 16 MiB each, no timeout. |
+| `Subprocess.run(executable, arguments:, workingDirectory FilePath)` | `CollectedOutput` | With a working directory. |
+| `Subprocess.run(executable, arguments:, workingDirectory:, timeoutMs DurationMs)` | `CollectedOutput` | With a deadline after which the child is killed; `0` waits forever. |
+| `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
+| `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
+
+All of them throw `SubprocessError`.
+
+### Executable
 
 ```maxon
 union Executable
-	name(value String)       // Bare name; resolved via PATH (and PATHEXT on Windows)
-	path(value FilePath)     // Explicit path; used verbatim
+	name(value String)
+	path(value FilePath)
 end 'Executable'
 ```
 
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `resolve()` | `FilePath` | `ExecutableError` | Concrete launchable path. `.path(p)` returns `p`; `.name(n)` performs a PATH lookup. |
-| `displayName()` | `String` | -- | Human-readable form for diagnostics. |
+`name` is looked up on `PATH` (with `PATHEXT` on Windows) when the child is spawned; `path` is used as
+given.
 
-**Errors:** `ExecutableError.notFound`.
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `resolve()` | `FilePath` | The arm as a path, without searching `PATH`. Throws `ExecutableError.notFound` only for a name that is not a valid path; it is not an "is this installed" check. |
+| `displayName()` | `String` | A readable form for messages. |
 
-### `Subprocess` — top-level entry
+`ExecutableError` has one case, `notFound`.
 
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `run(executable, arguments)` | `CollectedOutput` | `SubprocessError` | Run with default options (inherit cwd, inherit env, no stdin, collect stdout/stderr up to 16 MiB, no timeout). |
-| `run(executable, arguments, workingDirectory)` | `CollectedOutput` | `SubprocessError` | Same as above with explicit cwd. |
-| `run(executable, arguments, workingDirectory, timeoutMs)` | `CollectedOutput` | `SubprocessError` | Same as above with a kill-after deadline. `timeoutMs = 0` means "wait forever". |
+### Configuration
 
-All overloads route through `Configuration.run()`. From an async context (`async Subprocess.run(...)`) the spawn yields the parent green thread to the scheduler so siblings make progress while the child runs.
+Create one with `Configuration.create(executable)`, assign the fields you need, then run it.
 
-### `Configuration` — full control
+| Field | Type | Default |
+|-------|------|---------|
+| `executable` | `Executable` | as given |
+| `arguments` | `StringArray` | empty |
+| `workingDirectory` | `FilePath` | empty, meaning the parent's |
+| `environment` | `Environment` | `inherit` |
+| `standardInput` | `InputSource` | `none` |
+| `standardOutput` | `OutputDestination` | `collect` up to 16 MiB |
+| `standardError` | `OutputDestination` | `collect` up to 16 MiB |
+| `timeoutMs` | `DurationMs` | `0`, no deadline |
+| `platformOptions` | `PlatformOptions` | `PlatformOptions.defaults()` |
 
-```maxon
-type Configuration
-	export var executable as Executable
-	export var arguments as StringArray
-	export var workingDirectory as FilePath      // Empty path means "inherit"
-	export var environment as Environment
-	export var standardInput as InputSource
-	export var standardOutput as OutputDestination
-	export var standardError as OutputDestination
-	export var timeoutMs as DurationMs           // 0 means "wait forever"
-	export var platformOptions as PlatformOptions
-end 'Configuration'
-```
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `run()` | `CollectedOutput` | Run and collect. Throws `SubprocessError`. |
+| `runDetached()` | `Pid` | Start without waiting and return the process id. Standard streams are discarded. Throws `SubprocessError`. |
 
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `Configuration.create(executable)` | `Configuration` | -- | Build a Configuration with sensible defaults (see comments above). |
-| `run()` | `CollectedOutput` | `SubprocessError` | Run the configured subprocess and collect its output. |
-| `runDetached()` | `Pid` | `SubprocessError` | Spawn detached from the parent and return the pid. stdin/stdout/stderr are forced to `discard`. |
+`PlatformOptions` has two `bool` fields, `windowsHideWindow` and `windowsCreateNewProcessGroup`;
+`PlatformOptions.defaults()` sets both false.
 
-### `Environment`
+### Environment, input and output
 
 ```maxon
-typealias EnvMap = Map with String, String  // The variables an Environment arm names, keyed by name
-
 union Environment
-	inherit                                  // Child sees the parent's env unchanged
-	inheritUpdating(overrides EnvMap)        // Inherit + overwrite specific keys
-	custom(vars EnvMap)                      // Child sees exactly these vars
+	inherit
+	inheritUpdating(overrides EnvMap)
+	custom(vars EnvMap)
 end 'Environment'
-```
 
-### `InputSource` / `OutputDestination`
-
-```maxon
 union InputSource
-	none                                     // stdin closed immediately
-	inherit                                  // Pass through parent's stdin
-	bytes(data String)                       // Write `data` to stdin, then close
-	file(path FilePath)                      // Read stdin from a file
+	none
+	inherit
+	bytes(data String)
+	file(path FilePath)
+	hold
+	delayed(data String)
 end 'InputSource'
 
 union OutputDestination
-	discard                                  // Output dropped
-	inherit                                  // Pass through to parent's stream
-	collect(limitBytes ByteLimit)            // Read into CollectedOutput, truncated at limitBytes
-	file(path FilePath)                      // Redirect to a file
+	discard
+	inherit
+	collect(limitBytes int(0 to u64.max))
+	file(path FilePath)
 end 'OutputDestination'
 ```
 
-### `CollectedOutput`
+| Environment | The child sees |
+|-------------|----------------|
+| `inherit` | This process's environment |
+| `inheritUpdating(overrides)` | This process's environment with `overrides` applied |
+| `custom(vars)` | Exactly `vars` |
 
-```maxon
-type CollectedOutput
-	export var status as TerminationStatus
-	export var stdout as String
-	export var stderr as String
-	export var pid as Pid
-	export var durationMs as DurationMs
-end 'CollectedOutput'
-```
+`EnvMap` is `Map with String, String`.
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `succeeded()` | `bool` | `true` iff `status.isSuccess()` (exited cleanly with code 0). |
-| `exitCode()` | `ExitInt` | Raw integer status code. |
+| InputSource | The child's stdin |
+|-------------|-------------------|
+| `none` | Closed; reads see end of input immediately |
+| `inherit` | This process's stdin |
+| `bytes(data)` | `data`, then end of input |
+| `file(path)` | The file's contents |
+| `hold` | A pipe that stays open and silent until the child exits, so a read blocks |
+| `delayed(data)` | Like `hold` until about one second after the child's first stdout byte, then `data` and end of input. Requires `standardOutput` to be `collect`; any other pairing throws `spawnFailed` before spawning. |
 
-### `TerminationStatus`
+| OutputDestination | The stream |
+|-------------------|------------|
+| `discard` | Dropped |
+| `inherit` | Passed through to this process's stream |
+| `collect(limitBytes)` | Captured into `CollectedOutput`, truncated at the `limitBytes` limit |
+| `file(path)` | Written to a file |
+
+### Results
+
+`CollectedOutput` has public fields and a factory, `CollectedOutput.create(status, stdout:, stderr:, pid:,
+durationMs:)`:
+
+| Field / method | Type | Description |
+|----------------|------|-------------|
+| `status` | `TerminationStatus` | How the child ended |
+| `stdout`, `stderr` | `String` | Collected output (empty unless collected) |
+| `pid` | `int(0 to u64.max)` | The child's process id |
+| `durationMs` | `DurationMs` | Wall time the run took |
+| `succeeded()` | `bool` | Exited with code 0 |
+| `exitCode()` | `int(i64.min to i64.max)` | The raw code |
 
 ```maxon
 union TerminationStatus
-	exited(code ExitInt)        // Child called exit(code)
-	signalled(code ExitInt)     // Unix: killed by signal. Windows: NTSTATUS abnormal exit.
+	exited(code int(i64.min to i64.max))
+	signalled(code int(i64.min to i64.max))
 end 'TerminationStatus'
 ```
 
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `isSuccess()` | `bool` | `true` iff `exited(0)`. |
-| `code()` | `ExitInt` | The raw integer code, regardless of termination kind. |
+`exited` is a normal exit. `signalled` is a Unix signal, or on Windows an abnormal NTSTATUS exit such as an
+access violation. `isSuccess()` is true for `exited(0)`; `code()` returns the number either way.
 
-### `PlatformOptions`
-
-```maxon
-type PlatformOptions
-	export var windowsHideWindow as bool
-	export var windowsCreateNewProcessGroup as bool
-end 'PlatformOptions'
-```
-
-| Static method | Returns | Description |
-|---------------|---------|-------------|
-| `defaults()` | `PlatformOptions` | All flags false. |
-
-### Errors
+### SubprocessError
 
 ```maxon
 union SubprocessError implements Error
@@ -1018,425 +1462,753 @@ union SubprocessError implements Error
 end 'SubprocessError'
 ```
 
+`displayReason()` renders any case as one line, such as `timed out after 5000ms`.
+
+### StreamingSubprocess
+
+A child whose standard streams stay open as pipes the caller drives, for a long-lived worker that answers
+request after request. A read parks the calling green thread until data arrives.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `StreamingSubprocess.spawn(executable, arguments:)` | `StreamingSubprocess` | `SubprocessError` | Spawn in the parent's working directory. |
+| `StreamingSubprocess.spawnWithCwd(executable, arguments:, workingDirectory:)` | `StreamingSubprocess` | `SubprocessError` | With a working directory. |
+| `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory:, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory (empty for the parent's) and an environment. |
+| `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline. Throws on a broken pipe. |
+| `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF). `""` means end of stream. Lines over 1 MiB arrive in pieces. |
+| `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
+| `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
+| `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
+| `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | With a cap. |
+| `tryReadStdoutLine()` | `LinePoll` | — | A line if one is already buffered; never blocks. |
+| `tryReadStderrLine()` | `LinePoll` | — | As above, for stderr. |
+| `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. |
+| `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
+| `wait()` | exit code | `SubprocessError` | Block until the child exits. |
+| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Throws `timeout` and kills the child when the deadline passes; `0` waits forever. |
+| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. |
+| `handle`, `released` | fields | — | The raw handle and whether it has been released. |
+
+```maxon
+union LinePoll
+	line(text String)
+	none
+end 'LinePoll'
+
+union ExitPoll
+	running
+	exited(code int(i64.min to i64.max))
+end 'ExitPoll'
+```
+
+`LinePoll` exists because a blank line from the child and "nothing buffered" are both `""` once the
+terminator is removed. `none` says nothing about whether the stream has ended; ask `pollExit()`.
+
+```maxon
+function main() returns ExitCode
+	var args = StringArray.create()
+	args.push("--version")
+
+	var child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'
+		print("{e.displayReason()}\n")
+		return 1
+	end 'spawn'
+
+	let line = try child.readStdoutLine() otherwise ""
+	let code = try child.wait() otherwise -1
+
+	let state = match child.pollExit() 'poll'
+		running gives "running"
+		exited(c) gives "exited {c}"
+	end 'poll'
+
+	child.release()
+	print("{line.startsWith("git version")} {code} {state}\n")
+	return 0
+end 'main'
+```
+
+With `git` on `PATH`, it prints `true 0 exited 0`.
+
+## SharedMemory
+
+A `SharedSegment` is a named block of memory that several processes map at once: one creates it under a
+name, another maps the same name and sees the same bytes. Available on `x64-windows` (Win32 section
+objects), `arm64-macos` (`shm_open` and `mmap`) and both Linux targets (a `/dev/shm` file and `mmap`);
+refused at compile time elsewhere.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `SharedSegment.create(name String, bytes SegmentByteCount)` | `SharedSegment` | `SharedMemoryError` | Create a new section of exactly `bytes` bytes under `name` and map it. |
+| `segmentName()` | `String` | — | The name another process maps it by. |
+| `readWord(offset SegmentOffset)` | `SegmentWord` | — | The 64-bit word `offset` bytes in. |
+| `writeWord(offset SegmentOffset, value SegmentWord)` | — | — | Write a 64-bit word `offset` bytes in. |
+| `copyOut(offset SegmentOffset, byteCount SegmentByteCount)` | `ByteArray` | — | An independent copy of a byte range. |
+| `close()` | — | — | Unmap, release the section and withdraw its name. Idempotent. |
+
+Offsets are in bytes, not words. Offsets and lengths are not checked against the section's size; keep them
+inside it.
+
+| Type | Definition |
+|------|------------|
+| `SegmentByteCount` | `int(1 to u32.max)` — never zero |
+| `SegmentOffset` | `int(0 to u32.max)` |
+| `SegmentWord` | `int(i64.min to i64.max)` |
+
+```maxon
+union SharedMemoryError implements Error
+	createFailed
+	mapFailed
+end 'SharedMemoryError'
+```
+
+`createFailed`: the name collides with an incompatible section, or the size cannot be backed.
+`mapFailed`: no address space for the view.
+
+Always `close()` a segment. A section stays alive while any view of it is mapped, and on Linux and macOS the
+name outlives the process until it is withdrawn or the machine restarts.
+
+```maxon
+function main() returns ExitCode
+	var segment = try SharedSegment.create("docs-demo-segment", bytes: 4096) otherwise (e) 'failed'
+		print("no segment: {e}\n")
+		return 1
+	end 'failed'
+
+	segment.writeWord(8, value: 42)
+	let word = segment.readWord(8)
+	let copied = segment.copyOut(8, byteCount: 8)
+	print("{segment.segmentName()} {word} {copied.count()}\n")
+	segment.close()
+	return 0
+end 'main'
+```
+
+Output: `docs-demo-segment 42 8`.
+
+## TcpClient
+
+`TcpClient` is a TCP connection over IPv4. It closes its socket when the last reference to it goes away, so
+`close()` is optional.
+
+Available on `x64-windows`, `arm64-macos`, `arm64-linux` and `x64-linux`; refused at compile time (E3104) on
+`wasm32-wasi`. Windows and macOS resolve host names through the platform resolver. The two Linux targets
+link no C library and use a built-in resolver instead: it accepts a numeric address, reads `/etc/hosts`,
+and otherwise sends an `A` query over TCP to the first `nameserver` in `/etc/resolv.conf`. It does not apply
+`search`/`domain` suffixes, does not fall over to a second nameserver and has no timeout of its own.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Resolve `host` and connect. `resolveFailed` or `connectFailed`. |
+| `TcpClient.adopt(socket)` | `TcpClient` | — | Wrap an already-connected socket; how `TcpListener.accept()` returns its connections. |
+| `send(data String)` | `int(0 to u64.max)` | `NetworkError` | Send every byte, looping over partial sends; returns the byte count. |
+| `recv(bufferSize int(0 to u64.max))` | `String` | `NetworkError` | Up to `bufferSize` bytes. Throws `connectionClosed` when the peer has closed. |
+| `setReadDeadline(milliseconds int(0 to 4294967295))` | — | `NetworkError` | Make a read that waits longer than this throw `timedOut`. Measured from this call; `0` clears it. |
+| `setWriteDeadline(milliseconds int(0 to 4294967295))` | — | `NetworkError` | The same for sends. |
+| `close()` | — | — | Close the connection. Idempotent. |
+
+A deadline setter throws `connectionClosed` when the socket is already closed.
+
+`NetworkPort` is `int(0 to 65535)`. Port `0` asks `TcpListener.bind` for any free port; it is never the port
+of a live connection.
+
+```maxon
+enum NetworkError implements Error
+	resolveFailed
+	connectFailed
+	sendFailed
+	recvFailed
+	connectionClosed
+	timedOut
+	bindFailed
+	acceptFailed
+end 'NetworkError'
+```
+
+| Case | Meaning |
+|------|---------|
+| `resolveFailed` | The host name did not resolve |
+| `connectFailed` | The connection was refused or could not be made |
+| `sendFailed`, `recvFailed` | The OS reported an error |
+| `connectionClosed` | The peer closed the connection |
+| `timedOut` | A read or write deadline expired |
+| `bindFailed` | The address or port could not be bound |
+| `acceptFailed` | No connection could be accepted |
+
+## TcpListener
+
+`TcpListener` is a listening socket. It has no `send` or `recv`; `accept()` returns a `TcpClient` for each
+connection. `accept()` parks its green thread until a connection arrives, so a waiting server blocks no OS
+thread. It closes when the last reference goes away. Same targets as `TcpClient`.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TcpListener.bind(host String, port NetworkPort)` | `TcpListener` | `NetworkError` | Bind and listen. Port `0` takes any free port. |
+| `port()` | `NetworkPort` | — | The bound port, as the OS reports it. |
+| `accept()` | `TcpClient` | `NetworkError` | The next connection. |
+| `close()` | — | — | Stop listening and release the port. Idempotent. |
+
+`SO_REUSEADDR` is not set, so binding a port a live listener holds throws `bindFailed`.
+
+```maxon
+function echoOnce(listener TcpListener) returns ExitCode throws NetworkError
+	let conn = try listener.accept()
+	let data = try conn.recv(1024)
+	_ = try conn.send(data)
+	return 0
+end 'echoOnce'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let server = async echoOnce(listener)
+
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	try client.setReadDeadline(5000) otherwise return 3
+	_ = try client.send("ping") otherwise return 4
+	let reply = try client.recv(1024) otherwise return 5
+	client.close()
+
+	_ = try await server otherwise 9
+	print("{reply}\n")
+	return 0
+end 'main'
+```
+
+Output: `ping`.
+
+## HttpClient
+
+An HTTP/1.1 client over `TcpClient`. Every request is sent with `Connection: close` and the response is read
+until the server closes the connection.
+
+Limitations: plain HTTP only (no TLS), no chunked transfer decoding, no redirect following (a 3xx is
+returned as is), and the whole response is held in memory. The URL's port defaults to 80.
+
+### HttpClient
+
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `displayReason()` | `String` | Single-line description for diagnostics. |
+| `HttpClient.send(request HttpRequest)` | `HttpResponse` | Send a request. |
+| `HttpClient.get(url String)` | `HttpResponse` | `GET`. |
+| `HttpClient.post(url String, body String)` | `HttpResponse` | `POST` with a body. |
+| `HttpClient.put(url String, body String)` | `HttpResponse` | `PUT` with a body. |
+| `HttpClient.delete(url String)` | `HttpResponse` | `DELETE`. |
 
-### Async use
+All throw `HttpError`.
+
+### HttpRequest
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `HttpRequest.create(method HttpMethod, url String)` | `HttpRequest` | Throws `HttpError.invalidUrl`. |
+| `setHeader(name String, value String)` | — | Set a header. |
+| `setBody(body String)` | — | Set the body. |
+| `method()` | `HttpMethod` | |
+| `url()` | `URL` | |
+| `headers()` | `HttpHeaders` | |
+| `body()` | `String` | |
+
+### HttpResponse
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `HttpResponse.create(code StatusCode, reasonPhrase String, responseHeaders HttpHeaders, responseBody String)` | `HttpResponse` | Build a response. |
+| `statusCode()` | `StatusCode` | |
+| `reason()` | `String` | The reason phrase, such as `OK`. |
+| `headers()` | `HttpHeaders` | |
+| `body()` | `String` | |
+| `header(name String)` | `String` | Throws `HttpError` when absent. |
+
+### HttpHeaders
+
+A case-insensitive header map; names are stored lowercased. The underlying map is the public `headers`
+field.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `HttpHeaders.create()` | `HttpHeaders` | An empty map. |
+| `set(name String, value String)` | — | Set a header. |
+| `get(name String)` | `String` | Throws `HttpError` when absent. |
+| `has(name String)` | `bool` | Presence test. |
+
+### Enums
+
+| Enum | Cases |
+|------|-------|
+| `HttpMethod` | `get`, `post`, `put`, `delete`, `head`, `patch` |
+| `HttpError` | `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse` |
+| `StatusCode` | `ok` 200, `created` 201, `noContent` 204, `movedPermanently` 301, `found` 302, `notModified` 304, `badRequest` 400, `unauthorized` 401, `forbidden` 403, `notFound` 404, `methodNotAllowed` 405, `conflict` 409, `gone` 410, `internalServerError` 500, `notImplemented` 501, `badGateway` 502, `serviceUnavailable` 503 |
 
 ```maxon
-let p = async Subprocess.run(exe, arguments: argv)
-let r = try await p otherwise return 1
+function serveOnce(listener TcpListener) returns ExitCode throws NetworkError
+	let conn = try listener.accept()
+	_ = try conn.recv(4096)
+	_ = try conn.send("HTTP/1.1 200 OK\r\nX-Demo: yes\r\nContent-Length: 2\r\n\r\nhi")
+	conn.close()
+	return 0
+end 'serveOnce'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let server = async serveOnce(listener)
+
+	let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/hello") otherwise (e) 'failed'
+		print("request failed: {e}\n")
+		return 1
+	end 'failed'
+
+	_ = try await server otherwise 9
+	let demo = try response.header("x-demo") otherwise "absent"
+	print("{response.statusCode()} {response.reason()} {response.body()} {demo}\n")
+	return 0
+end 'main'
 ```
 
-The same `Subprocess.run` is callable from sync and async contexts. From a green thread, the wait yields to the scheduler; from a plain call, it blocks the OS thread.
+Output: `200 OK hi yes`.
 
-### `StreamingSubprocess` — long-lived child with caller-driven stdio
+## URL
 
-Use when the parent needs interactive request/response with a long-lived child — e.g. a worker pool that handles many jobs over its lifetime. Unlike `Subprocess.run(...)` (which fires the process, drains both output streams from the calling green thread — parking rather than holding an OS thread — and returns a `CollectedOutput` when the child exits), `StreamingSubprocess` keeps the pipes open and exposes per-line operations.
+`URL` parses, prints and resolves URI references following RFC 3986. It implements `Equatable` and
+`Stringable`.
 
-⚠ **The read parks the green thread on every lane, and only the mechanism differs.** Windows hands the
-child's inbound pipes to the scheduler's poller and parks the reader on the READ itself; the POSIX lane
-makes the read end non-blocking and parks it on the DESCRIPTOR. Either way the poller resumes it and other
-green threads run meanwhile. `specs/streaming-subprocess.md`'s *Targets* section is the one statement of
-which lanes run these builtins at all.
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `URL.parse(input String)` | `URL` | `URLError` | Parse an absolute URL or a relative reference. |
+| `URL.resolve(base URL, reference String)` | `URL` | `URLError` | Resolve `reference` against `base` (RFC 3986 section 5). |
+| `scheme()` | `String` | — | `""` for a relative reference. |
+| `path()` | `String` | — | Always present, possibly empty. |
+| `host()` | `String` | `URLError.fieldNotPresent` | |
+| `port()` | `int(0 to 65535)` | `URLError.fieldNotPresent` | |
+| `userinfo()` | `String` | `URLError.fieldNotPresent` | The part before `@`. |
+| `query()` | `String` | `URLError.fieldNotPresent` | Without the `?`. |
+| `fragment()` | `String` | `URLError.fieldNotPresent` | Without the `#`. |
+| `toString()` | `String` | — | The serialized URL. |
+| `equals(other URL)` | `bool` | — | Component-wise equality. |
+
+| URLError | Meaning |
+|----------|---------|
+| `emptyInput` | The input is empty or only whitespace |
+| `invalidScheme` | The scheme does not start with a letter or has invalid characters |
+| `invalidHost` | A malformed host, such as an unclosed IPv6 bracket |
+| `invalidPort` | A port that is not a number or exceeds 65535 |
+| `invalidEncoding` | Malformed percent-encoding, such as `%GG` |
+| `invalidPath` | Declared; no current operation raises it |
+| `relativeWithoutBase` | `resolve` was given a base with no scheme |
+| `fieldNotPresent` | An accessor was called for a component the URL does not have |
 
 ```maxon
-let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
-try child.writeStdinLine("JOB:1")
-let line = try child.readStdoutLine()
-child.closeStdin()
-let code = try child.wait()
-child.release()
+function main() returns ExitCode
+	let url = try URL.parse("https://user@example.com:8080/a/b?q=1#top") otherwise return 1
+	let host = try url.host() otherwise ""
+	let port = try url.port() otherwise 0
+	let query = try url.query() otherwise ""
+	print("{url.scheme()} {host} {port} {url.path()} {query} {url}\n")
+
+	let base = try URL.parse("http://a/b/c/d?q") otherwise return 1
+	let resolved = try URL.resolve(base, reference: "../g") otherwise return 1
+	let mail = try URL.parse("mailto:someone@example.com") otherwise return 1
+	let mailHost = try mail.host() otherwise "no host"
+	print("{resolved} {mailHost}\n")
+	return 0
+end 'main'
 ```
+
+Output: `https example.com 8080 /a/b q=1 https://user@example.com:8080/a/b?q=1#top` and `http://a/b/g no host`.
+
+## Json
+
+An RFC 8259 JSON parser and serializer. A `JsonDoc` owns a flat arena of `JsonNode`s; an array or object
+refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` accessors.
+
+### Json
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `spawn(executable, arguments)` | `StreamingSubprocess` | `SubprocessError` | Spawn with stdin/stdout/stderr as pipes the caller drives. Inherits parent's cwd. |
-| `spawnWithCwd(executable, arguments, workingDirectory)` | `StreamingSubprocess` | `SubprocessError` | Same as `spawn` with an explicit working directory. |
-| `writeStdinLine(line)` | -- | `SubprocessError` | Write `line + "\n"` to the child's stdin. Throws on broken pipe. |
-| `readStdoutLine()` | `String` | `SubprocessError` | Read one line; returns "" on EOF. Strips trailing CRLF / LF. |
-| `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | Same with an explicit per-line truncation cap. |
-| `readStderrLine()` | `String` | `SubprocessError` | Stderr-side companion to `readStdoutLine`. |
-| `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | Same with an explicit cap. |
-| `closeStdin()` | -- | -- | Close the parent's write end so the child sees EOF on stdin. Idempotent. |
-| `wait()` | `ExitInt` | `SubprocessError` | Block until the child exits, return its exit code. |
-| `waitWithTimeout(timeoutMs)` | `ExitInt` | `SubprocessError` | Same with a deadline; throws `timeout` if it elapses (child is terminated). |
-| `release()` | -- | -- | Free the OS handle. Idempotent. Treat like `close()` on a file. |
+| `Json.parse(text String)` | `JsonDoc` | `JsonError` | Parse a document; `doc.root` is the top-level value. |
+| `Json.stringify(doc JsonDoc)` | `String` | — | Compact output of the tree at `doc.root`. NaN and infinities are written as `null`. |
+| `Json.stringifyPrettyNode(doc JsonDoc, root JsonNodeId)` | `String` | — | Indented output (two spaces per level) of the subtree at `root`. |
 
-Forgetting `release()` leaks the handle and an OS process slot. Lines longer than the per-call cap are truncated; the remainder is delivered on the next call. Default cap is 1 MiB.
+### JsonDoc
 
----
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `JsonDoc.create()` | `JsonDoc` | — | An empty document. |
+| `nodes` | field, `Array with JsonNode` | — | The arena. |
+| `root` | field, `JsonNodeId` | — | The top-level node's id, set by a parse. For an array or object it is the last node added, because children are added before their parent. Assign it when building. |
+| `add(node JsonNode)` | `JsonNodeId` | — | Append a node and return its id. |
+| `get(id JsonNodeId)` | `JsonNode` | — | The node; an id outside the arena panics. |
+| `rootKind()` | `JsonKind` | — | The kind of the root node. |
+| `getChild(parent JsonNodeId, key String)` | `JsonNodeId` | `JsonAccessError` | An object member's id: `notObject` or `missingKey`. |
+| `getString(parent, key:)` | `String` | `JsonAccessError` | A string member; `wrongType` for another kind. |
+| `getInt(parent, key:)` | `int(i64.min to i64.max)` | `JsonAccessError` | A number member, truncated toward zero. |
+| `getBool(parent, key:)` | `bool` | `JsonAccessError` | A boolean member. |
+| `arrayLength(id JsonNodeId)` | `int(0 to u64.max)` | `JsonAccessError` | `notArray` for another kind. |
+| `arrayAt(id JsonNodeId, index)` | `JsonNodeId` | `JsonAccessError` | `outOfBounds` past the end. |
+
+### JsonNode
+
+| Member | Description |
+|--------|-------------|
+| `kind` | `JsonKind` |
+| `boolValue` | Set for `jsonBool` |
+| `numberValue` | Set for `jsonNumber` (a `float`) |
+| `stringValue` | Set for `jsonString` |
+| `children` | `JsonNodeIdArray`, for `jsonArray` and `jsonObject` |
+| `keys` | `StringArray`, parallel to `children`, for `jsonObject` |
+| `JsonNode.nullNode()` | A `null` |
+| `JsonNode.boolNode(value bool)` | A boolean |
+| `JsonNode.numberNode(value float)` | A number |
+| `JsonNode.stringNode(value String)` | A string |
+| `JsonNode.arrayNode(children JsonNodeIdArray)` | An array of already-added nodes |
+| `JsonNode.objectNode(keys StringArray, children JsonNodeIdArray)` | An object; `keys[i]` names `children[i]` |
+
+### Kinds and errors
+
+| Enum | Cases |
+|------|-------|
+| `JsonKind` | `jsonNull`, `jsonBool`, `jsonNumber`, `jsonString`, `jsonArray`, `jsonObject` |
+| `JsonError` (from `parse`) | `unexpectedChar`, `unexpectedEof`, `invalidEscape`, `invalidNumber`, `invalidSurrogate`, `trailingContent` |
+| `JsonAccessError` (from accessors) | `notObject`, `notArray`, `missingKey`, `wrongType`, `outOfBounds` |
+
+`JsonNodeId` is `int(0 to u64.max)` and `JsonNodeIdArray` is `Array with JsonNodeId`.
+
+```maxon
+function main() returns ExitCode
+	let doc = try Json.parse("\{\"name\": \"maxon\", \"stars\": 42, \"tags\": [\"a\", \"b\"]\}") otherwise (e) 'bad'
+		print("invalid JSON: {e}\n")
+		return 1
+	end 'bad'
+
+	let name = try doc.getString(doc.root, key: "name") otherwise "?"
+	let stars = try doc.getInt(doc.root, key: "stars") otherwise 0
+	let tags = try doc.getChild(doc.root, key: "tags") otherwise 0
+	let second = try doc.arrayAt(tags, index: 1) otherwise 0
+	print("{doc.rootKind()} {name} {stars} {doc.get(second).stringValue}\n")
+
+	var built = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("ok")
+	children.push(built.add(JsonNode.boolNode(true)))
+	keys.push("score")
+	children.push(built.add(JsonNode.numberNode(1.5)))
+	built.root = built.add(JsonNode.objectNode(keys, children: children))
+	print("{Json.stringify(built)}\n")
+	return 0
+end 'main'
+```
+
+Output: `jsonObject maxon 42 b` and `{"ok":true,"score":1.5}`.
+
+## Sha256
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `sha256(data ByteArray)` | `ByteArray` | The 32-byte SHA-256 digest (FIPS 180-4). |
+
+```maxon
+function main() returns ExitCode
+	let digest = sha256("abc".toByteArray())
+	var hex = ""
+
+	for b in digest 'each'
+		hex.append("{b:02x}")
+	end 'each'
+
+	print("{digest.count()} {hex}\n")
+	return 0
+end 'main'
+```
+
+Output: `32 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`.
+
+## Hasher
+
+`Hasher` is an incremental FNV-1a 64-bit hash, for content keys and cache digests. It is not cryptographic.
+Its result is a `HashDigest`, `bits(64)`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Hasher.create()` | `Hasher` | A hasher at the FNV-1a offset basis. |
+| `Hasher.resume(state HashDigest)` | `Hasher` | Continue from a value `finalize()` returned. |
+| `combine(value HashDigest)` | — | Fold in one value. |
+| `combine(bytes ByteArray)` | — | Fold in each byte. |
+| `finalize()` | `HashDigest` | The running state, not post-processed, so `resume(finalize())` continues exactly. |
+| `Hasher.empty()` | `HashDigest` | The state of an empty fold. |
+| `Hasher.combined(state HashDigest, value HashDigest)` | `HashDigest` | One step, as an expression. |
+| `Hasher.combined(state HashDigest, bytes ByteArray)` | `HashDigest` | Each byte, as an expression. |
+
+FNV-1a folds a flat byte sequence and records no lengths, so `"ab"` then `"c"` hashes the same as `"a"`
+then `"bc"`. When hashing a sequence of parts, combine each part's length too.
+
+```maxon
+function main() returns ExitCode
+	var hasher = Hasher.create()
+	hasher.combine("ab".toByteArray())
+	hasher.combine(7)
+
+	let direct = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: "ab".toByteArray()), value: 7)
+	print("{hasher.finalize() == direct}\n")
+	return 0
+end 'main'
+```
+
+Output: `true`.
 
 ## Clock
 
-Monotonic time helpers. Use for measuring elapsed durations — absolute values are platform-defined (e.g. milliseconds since boot) and only meaningful when subtracted.
-
-Two clocks are exposed. They read genuinely different hardware sources, so they differ in resolution: **use `nowNanos()` for anything you intend to measure**, and `nowMs()` only for coarse timeouts and deadlines.
-
-**Type aliases:**
-
-- `Clock.InstantMs` = `int(0 to u64.max)` — an absolute reading from the coarse monotonic clock.
-- `Clock.DurationMs` = `int(0 to u64.max)` — a duration in milliseconds.
-- `Clock.InstantNanos` = `int(0 to u64.max)` — an absolute reading from the high-resolution monotonic clock.
-- `Clock.DurationNanos` = `int(0 to u64.max)` — a duration in nanoseconds.
-
-**Static Methods:**
+`Clock` is a monotonic stopwatch: only the difference between two readings means anything. For the date
+and time of day use `WallClock`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `nowMs()` | `InstantMs` | Coarse monotonic time in milliseconds. Differences between two readings are meaningful; the absolute value is not. |
-| `elapsedMs(since: instant)` | `DurationMs` | Milliseconds elapsed since a prior `nowMs()` reading. Clamps to `0` if the clock moves backwards. |
-| `nowNanos()` | `InstantNanos` | High-resolution monotonic time in nanoseconds. Same "differences only" contract as `nowMs()`. |
-| `elapsedNanos(since: instant)` | `DurationNanos` | Nanoseconds elapsed since a prior `nowNanos()` reading. Clamps to `0` if the clock moves backwards. |
+| `Clock.nowNanos()` | `InstantNanos` | A high-resolution reading in nanoseconds. |
+| `Clock.elapsedNanos(since InstantNanos)` | `DurationNanos` | Nanoseconds since a `nowNanos()` reading; `0` if the clock appears to go backwards. |
+| `Clock.nowMs()` | `InstantMs` | The same clock in milliseconds. |
+| `Clock.elapsedMs(since InstantMs)` | `DurationMs` | Milliseconds since a `nowMs()` reading. |
 
-**Example:**
+`since` is the first argument, so it is written without a label: `Clock.elapsedNanos(start)`.
 
-```maxon
-let start = Clock.nowNanos()
-doWork()
-let elapsed = Clock.elapsedNanos(since: start)
-print("Took {elapsed}ns\n")
-```
+| Target | Source | Period |
+|--------|--------|--------|
+| `x64-windows` | `QueryPerformanceCounter` | 100 ns |
+| `arm64-macos`, `arm64-linux`, `x64-linux` | the kernel's monotonic clock | 1 ns |
+| `wasm32-wasi` | refused at compile time (E3104) | |
 
-**Sources and resolution.**
+Readings are always in nanoseconds, but two back-to-back readings can be equal when the period is coarser.
 
-| Target | `nowMs()` source | `nowNanos()` source | `nowNanos()` period |
-|--------|------------------|---------------------|---------------------|
-| x64-windows | `GetTickCount64` | `QueryPerformanceCounter` scaled by `QueryPerformanceFrequency` | 100 ns (QPF = 10 MHz) |
-| arm64-macos | `gettimeofday` | `clock_gettime(CLOCK_MONOTONIC)` | 1 ns |
-| Linux (x64 / arm64) | *not implemented* | `clock_gettime(CLOCK_MONOTONIC)` syscall | 1 ns |
-| wasm32-wasi | `wasi:clocks/monotonic-clock.now` ÷ 1e6 | `wasi:clocks/monotonic-clock.now` | 1 ns |
+`InstantMs`, `DurationMs`, `InstantNanos` and `DurationNanos` are all `int(0 to u64.max)`.
 
-`nowMs()` is backed by the platform's coarse tick counter, whose period on Windows is ~15.6 ms — it cannot resolve a duration shorter than a scheduler tick, so a sub-tick operation measures as either 0 ms or 16 ms. `nowNanos()` always reports NANOSECONDS, but its PERIOD is platform-defined (see the table), so two back-to-back readings can legitimately compare equal.
+### WallClock
 
----
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `WallClock.nowUnixSeconds()` | `UnixSeconds` | Whole seconds since 1970-01-01 00:00:00 UTC. No time zone is applied. |
 
-## Range / OpenRange
-
-Outside a `for-in` header, an integer range expression evaluates to a value:
-
-| Expression | Type | Iteration |
-|------------|------|-----------|
-| `start to end` | `Range` | Inclusive — visits both endpoints |
-| `start upto end` | `OpenRange` | Half-open — excludes `end` |
-
-Both implement `Iterable with (RangeBound, RangeIterator)`. `RangeBound` is an alias for the full `int` range (`int(i64.min to i64.max)`).
+`UnixSeconds` is `int(0 to u64.max)`. The wall clock can step backwards (an NTP correction, a resumed
+virtual machine), so never measure a duration with it.
 
 ```maxon
-let r = 1 upto 5                           // OpenRange value
-for x in r 'loop' ... end 'loop'           // 1, 2, 3, 4
-
-let it = try (1 to 4).createIterator() otherwise return 0
-for v in it 'loop' ... end 'loop'          // 1, 2, 3, 4
-
-for (iter, v) in (10 upto 13).withIterator() 'loop'
-		print("{iter.index()}:{v}\n")          // 0:10  1:11  2:12
-end 'loop'
+function main() returns ExitCode
+	let start = Clock.nowNanos()
+	sleep(20)
+	let took = Clock.elapsedNanos(start)
+	print("{took >= 20000000} {WallClock.nowUnixSeconds() > 1700000000}\n")
+	return 0
+end 'main'
 ```
 
-`createIterator()` throws `IterationError.exhausted` for an empty range (`finish < start` for `Range`, `endExclusive <= start` for `OpenRange`).
+Output: `true true`.
 
-The `for i in start to end` form inside a loop header still desugars to a counted while-loop with no allocation — using `to`/`upto` in expression position is what triggers the constructor calls.
+## Runtime
 
-`RangeIterator` implements `Iterator with RangeBound, BidirectionalIterator`, providing `current()`, `index()`, `advance()`, and `retreat()`.
+`Runtime` holds controls over the green-thread scheduler. It is a namespace with no fields.
 
----
+| Method | Description |
+|--------|-------------|
+| `Runtime.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
 
-## ArrayIterator
-
-`ArrayIterator` implements `BidirectionalIterator with Element` and provides cursor-style random access into an `Array`. The iterator always points at a valid element; navigation methods throw `IterationError` if they would move out of bounds, while `current()` is unchecked because the position is always valid.
-
-### Declaration
+Refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
+[LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
 
 ```maxon
-typealias MyIter = ArrayIterator with MyElement
+function worker() returns ExitCode
+	Runtime.yield()
+	print("worker\n")
+	return 0
+end 'worker'
+
+function main() returns ExitCode
+	let p = async worker()
+	Runtime.yield()
+	_ = await p
+	print("main\n")
+	return 0
+end 'main'
 ```
 
-### Creating an Iterator / Cursor
+Output: `worker` then `main`.
+
+## Math
+
+`Math` provides the elementary functions over `Real`, which is `float(f64.min to f64.max)`. The rounding and
+`sqrt`/`abs`/`min`/`max` builtins are in [Core Functions](#core-functions).
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Math.sin(x Real)` | `Real` | Sine of radians. |
+| `Math.cos(x Real)` | `Real` | Cosine of radians. |
+| `Math.tan(x Real)` | `Real` | Tangent of radians. |
+| `Math.atan(z Real)` | `Real` | Arc tangent. |
+| `Math.atan2(y Real, x Real)` | `Real` | The angle of `(x, y)`, in `[-π, π]`. |
+| `Math.exp(x Real)` | `Real` | e raised to `x`. |
+| `Math.log(x Real)` | `Real` | Natural logarithm. |
+| `Math.log2(x Real)` | `Real` | Base-2 logarithm. |
+| `Math.log10(x Real)` | `Real` | Base-10 logarithm, computed as `log(x) / ln 10`, so exact powers of ten may be off in the last digit. |
+| `Math.pow(base Real, exponent Real)` | `Real` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
+| `Math.hasNegativeSignBit(z Real)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
+
+These are implemented in Maxon from series expansions, so results can differ from a C library in the last
+bit.
 
 ```maxon
-var arr = [10, 20, 30]
-var c = try arr.cursor() otherwise panic("empty array")
+function main() returns ExitCode
+	print("{Math.sin(0.0)} {Math.exp(0.0)} {Math.log2(8.0)} {Math.pow(2.0, exponent: 10.0)}\n")
+	print("{Math.atan2(1.0, x: 1.0)} {Math.hasNegativeSignBit(-0.0)}\n")
+	return 0
+end 'main'
 ```
 
-`cursor()` (alias of `createIterator()`) throws `IterationError.exhausted` if the array is empty.
+Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 
-### Methods
+## Primitive Extensions
 
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `current()` | `Element` | -- | Element at the current position (no bounds check) |
-| `index()` | iterator-defined index alias | -- | Current position index (e.g. `ArrayIterator` returns `ElementIndex`) |
-| `advance()` | -- | `IterationError` | Move forward by 1. Throws `.exhausted` at end. |
-| `advanceBy(n IterStep)` | -- | `IterationError` | Move forward by `n` (from `Iterator` extension). Throws `.exhausted` if out of bounds. |
-| `retreat()` | -- | `IterationError` | Move backward by 1. Throws `.atStart` at position 0. |
-| `retreatBy(n IterStep)` | -- | `IterationError` | Move backward by `n` (from `BidirectionalIterator` extension). Throws `.atStart` if out of bounds. |
-| `peek(ahead ElementCount)` | `Element` | `IterationError` | Read element at `position + ahead`. Throws `.exhausted` if out of bounds. |
+`int`, `float` and `bool` conform to the core interfaces, so they work as `Map` keys, `Set` elements, in
+`sort()` and in generic code.
 
-`advanceBy` and `retreatBy` are supplied as default extension methods on `Iterator` / `BidirectionalIterator`; they repeatedly call `advance` / `retreat`, so a partial move leaves the iterator at the point where the throw occurred.
+| Type | Conforms to | Notes |
+|------|-------------|-------|
+| `int` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `hash()` is the low 32 bits of the value. |
+| `float` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `compare` is a total order: NaN equals NaN and sorts below every other value. `-0.0` and `0.0` hash alike. |
+| `bool` | `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
 
-### `IterationError` (enum, implements Error)
-
-| Case | Description |
-|------|-------------|
-| `exhausted` | Iterator would move past the last element |
-| `atStart` | Iterator would move before position 0 |
-
-### Example
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `hash()` | `HashValue` | Through `Hashable`. |
+| `equals(other Self)` | `bool` | Through `Equatable`. |
+| `compare(other Self)` | `Ordering` | Through `Comparable`. |
+| `toString()` | `String` | The same text as interpolation. |
+| `clone()` | `Self` | The value itself. |
+| `int.fromString(input String)` | `int` | Throws `ParseError.invalidFormat`; likewise `float.fromString`, `bool.fromString`, `byte.fromString`. |
 
 ```maxon
-var arr = [1, 2, 3, 4, 5]
-var c = try arr.cursor() otherwise panic("empty")
-print("{c.current()}\n")        // 1
-try c.advance()
-print("{c.current()}\n")        // 2
-let ahead = try c.peek(2) otherwise 0
-print("{ahead}\n")              // 4
+function main() returns ExitCode
+	let five = 5
+	let half = 2.5
+	let yes = true
+	print("{five.compare(3)} {five.hash()} {half.compare(2.5)} {yes.compare(false)} {five.toString()}\n")
+	return 0
+end 'main'
 ```
 
-## Builtin Managed Types
+Output: `greaterThan 5 equalTo greaterThan 5`.
 
-The compiler provides several builtin managed types that wrap OS-level resources (file handles, sockets, directory search handles). These types use RAII via destructors: when the last reference to a managed object goes out of scope, the compiler automatically calls the destructor to release the underlying OS resource.
+## Testing
 
-Managed types are not used directly by application code. Instead, stdlib wrapper types (`File`, `Directory`, `TcpClient`) provide the public API. The managed types are documented here for completeness and for stdlib authors.
-
-### `__ManagedSocket`
-
-Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Networking (TcpClient)](#networking-tcpclient) for details.
-
-**Static Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `tcpConnect(managed, port)` | `__ManagedSocket` | `__ManagedSocketError` | Resolve hostname and connect a TCP socket. Throws `resolveFailed` when DNS fails, `connectFailed` when the connection is refused. |
-
-**Instance Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `sendFrom(managed, offset, length)` | `int` | `__ManagedSocketError` | Send `length` bytes from the managed buffer at `offset`. Throws `bufferOutOfBounds` if `offset + length > capacity`, `sendFailed` on OS error. |
-| `recv(managed)` | `int` | `__ManagedSocketError` | Receive up to `managed.capacity` bytes. Returns `0` when the peer closed gracefully. Throws `recvFailed` on OS error. |
-| `close()` | -- | -- | Close the socket handle. Idempotent; also called automatically by the destructor. |
-
-### `__ManagedFile`
-
-Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.
-
-All `__ManagedFile` methods that can fail at the OS layer throw `__ManagedFileError` instead of returning sentinel values; callers must wrap them in `try`. `exists` and `close` stay non-throwing (a missing file is a valid answer; close is idempotent). The handle is refcounted: it closes its descriptor automatically when the last reference goes out of scope.
-
-**Static Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `openRead(managed)` | `__ManagedFile` | `__ManagedFileError` | Open a file for reading. |
-| `openWrite(managed)` | `__ManagedFile` | `__ManagedFileError` | Open a file for writing (creates or truncates). |
-| `openWriteExecutable(managed)` | `__ManagedFile` | `__ManagedFileError` | As `openWrite`, with executable permission bits on Unix. |
-| `exists(managed)` | `int` | -- | Check if a file exists. Returns 1 if it does, 0 otherwise. |
-| `delete(managed)` | -- | `__ManagedFileError` | Delete a file. |
-| `stat(managed)` | `int` | `__ManagedFileError` | Return a raw stat-buffer pointer; release with `statFree`. |
-| `statField(buffer, index)` | `int` | -- | Read field `index` (0..5) from a stat buffer. Stdlib invariant — panics on null buffer or OOB index. |
-| `statFree(buffer)` | -- | -- | Free a stat buffer. Stdlib invariant — panics on null buffer. |
-
-**Instance Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `size()` | `int` | `__ManagedFileError` | Get the file size in bytes. |
-| `read(managed, size)` | `int` | `__ManagedFileError` | Read up to `size` bytes into the managed buffer. Throws `readFailed` if `size > managed.capacity` or on I/O error. |
-| `write(managed)` | `int` | `__ManagedFileError` | Write the managed buffer. Returns bytes written. |
-| `close()` | -- | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
-
-The `managed` parameters refer to `__ManagedMemory` buffers (the internal backing store of `String` and `ByteArray`).
-
-### `__ManagedDirectory`
-
-Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or Linux `opendir`/`readdir`). Used internally by `Directory`.
-
-**Static Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `openSearch(managed)` | `__ManagedDirectory` | `__ManagedDirectoryError` | Open a directory search with a glob pattern. Throws `openSearchFailed` if the path does not exist or access is denied. |
-| `exists(managed)` | `bool` | -- | Check if a path exists and is a directory. |
-| `create(managed)` | -- | `__ManagedDirectoryError` | Create a directory. Throws `createFailed` on failure. |
-| `currentPath()` | `__ManagedMemory` | `__ManagedDirectoryError` | Get the current working directory as a managed string. Throws `currentPathFailed` on OS failure. |
-
-**Instance Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `filename()` | `__ManagedMemory` | -- | Get the filename of the current search result. Panics on a closed iterator. |
-| `next()` | `int` | `__ManagedDirectoryError` | Advance to the next search result. Returns non-zero if found, `0` when no more entries. Throws `nextFailed` on OS error. |
-| `close()` | -- | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
-
-### `__ManagedMemoryCursor`
-
-Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creation; decrefs on destruction. Used internally by `ArrayIterator`.
-
-**Instance Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `current()` | `Element` | -- | Load element at current position (no bounds check). |
-| `index()` | `int` | -- | Read the current position index. |
-| `advance()` | -- | `CursorError` | Move forward by 1 position. |
-| `retreat()` | -- | `CursorError` | Move backward by 1 position. |
-| `seek(index)` | -- | `CursorError` | Jump to `index`. Throws when out of bounds. |
-| `peek(ahead)` | `Element` | `CursorError` | Read element at `position + ahead`. |
-
----
-
-## Testing (Expect)
-
-`stdlib/Testing.maxon`. The assertion library a `test` body calls.
-
-Every matcher is a `static` function that **throws `TestFailure.assertion`** when it does not
-hold, so a test stops at its first bad assertion and a forgotten `try` is E3057 at compile time.
-The human-readable report is **printed to stderr at the assertion site** just before the throw —
-a caught error in Maxon is an enum you `match`, with no message field to carry two values of
-arbitrary type, and the assertion site is the one place both values are still fully typed.
+`Expect` is the assertion library a `test` declaration uses. Every matcher throws `TestFailure.assertion`
+when it does not hold, so a test stops at its first failed assertion; a missing `try` is a compile error.
+`maxon test` runs a project's tests — see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 
 ```maxon
 test 'splits on commas'
-	try Expect.equal("a,b,c".split(",").count(), expected: 3)
+	let parts = "a,b,c".split(",")
+	try Expect.equal(parts.count(), expected: 3)
+	try Expect.equal("a,b".replace(",", with: ";"), expected: "a;b")
+	try Expect.close(0.1 + 0.2, expected: 0.3, within: 0.000001)
+	try Expect.isTrue(parts.count() == 3, message: "three parts")
+	try Expect.contains("haystack", needle: "st")
 end 'splits on commas'
 ```
 
-A failure prints:
+A failure prints a report to stderr at the assertion, naming the caller's file and line:
 
 ```text
-FAIL main.maxon:12: Expect.equal
-  expected: 4
-  received: 5
+FAIL split.test.maxon:20: Expect.equal
+  expected: 5
+  received: 4
   message: two plus two
 ```
 
-The `message:` line appears only when a message was given. The file and line are the
-**caller's**, from the `__file__` / `__line__` parameter defaults, so a report never names a line
-inside `Testing.maxon`.
+The `message:` line appears only when a message was given.
 
-**Every matcher** takes an optional `message String` plus `file String = __file__` and
+### Matchers
+
+Every matcher also takes `message String = ""`, `file String = __file__` and
 `line SourceLineNumber = __line__`; only `fail` requires its message.
 
 | Matcher | Argument types | Holds when |
 |---------|----------------|------------|
-| `equal(actual, expected:)` | integer, `String`, `bool` | `actual == expected` |
-| `notEqual(actual, expected:)` | integer, `String`, `bool` | `actual != expected` |
-| `greaterThan(actual, than:)` | integer, float | `actual > than` |
-| `lessThan(actual, than:)` | integer, float | `actual < than` |
-| `atLeast(actual, than:)` | integer, float | `actual >= than` |
-| `atMost(actual, than:)` | integer, float | `actual <= than` |
-| `close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+| `Expect.equal(actual, expected:)` | integer, `String`, `bool` | `actual == expected` |
+| `Expect.notEqual(actual, expected:)` | integer, `String`, `bool` | `actual != expected` |
+| `Expect.greaterThan(actual, than:)` | integer, float | `actual > than` |
+| `Expect.lessThan(actual, than:)` | integer, float | `actual < than` |
+| `Expect.atLeast(actual, than:)` | integer, float | `actual >= than` |
+| `Expect.atMost(actual, than:)` | integer, float | `actual <= than` |
+| `Expect.close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+| `Expect.isTrue(actual)` | `bool` | `actual` is `true` |
+| `Expect.isFalse(actual)` | `bool` | `actual` is `false` |
+| `Expect.contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
+| `Expect.startsWith(haystack, needle:)` | `String` | prefix match |
+| `Expect.endsWith(haystack, needle:)` | `String` | suffix match |
+| `Expect.isEmpty(haystack)` | `String` | no characters |
+| `Expect.fail(message)` | — | never; fails unconditionally |
 
-NaN satisfies no comparison, so it FAILS every float matcher: each float arm tests whether the
-assertion holds rather than whether its negation does, which are the same question for every value
-except NaN.
-| `isTrue(actual)` / `isFalse(actual)` | `bool` | the value is `true` / `false` |
-| `contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
-| `startsWith(haystack, needle:)` | `String` | prefix match |
-| `endsWith(haystack, needle:)` | `String` | suffix match |
-| `isEmpty(haystack)` | `String` | no characters |
-| `fail(message)` | -- | never — the escape hatch |
+Each name is one overload set chosen by argument type, including through a method call
+(`Expect.equal(parts.count(), expected: 3)`) and through an enum's `name`, `ordinal` and `rawValue`.
+`String` values are quoted in the report, so empty or space-padded values stay visible.
 
-`equal` is **one overloaded name**, selected by argument type, and resolution sees through a
-method call, so `Expect.equal(parts.count(), expected: 3)` works. It sees through an enum's
-`name`, `ordinal` and `rawValue` too, so `Expect.equal(status.name, expected: "ready")` picks the
-`String` arm and `Expect.equal(status.ordinal, expected: 0)` picks the integer one. `String`
-values are rendered quoted in the report so an empty or space-padded value stays visible.
+Floats have no `equal`: exact float equality can pass on one target and fail on another, so
+`Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. NaN satisfies no comparison,
+so it fails every float matcher.
 
-**Floats deliberately have no `equal`** — a float `==` matcher passes on one target and fails on
-another, so `Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. The
-ordering matchers *do* have float arms: comparing against a threshold is stable, and it is exact
-bit-equality that is not.
-
-For a type the table does not name, `isTrue` is the escape hatch — `==` supplies the predicate
-and interpolation supplies the rendering, so one line reports both values:
+For any other `Equatable` and `Stringable` type, `isTrue` is the general form:
+`try Expect.isTrue(a == b, message: "expected {b}, got {a}")`.
 
 ```maxon
-try Expect.isTrue(a == b, message: "expected {b}, got {a}")
+enum TestFailure implements Error
+	assertion
+end 'TestFailure'
 ```
 
-That works for any `Equatable` + `Stringable` type. See `specs/testing-assertions.md`.
-
----
+A `test` declaration is implicitly `throws TestFailure`. An error of any other type that reaches the end of
+a test body is reported as a failure naming the error and the `try` that threw it.
 
 ## Build
 
-`Build` describes what `maxon build` should compile. It is read by the **build manifest** — the
-`build.maxon` a project may carry — and by nothing else: `maxon build` with no path compiles that
-manifest, runs its `build` function, and reads the description off stdout.
-
-⭐ **A manifest is a program, not a configuration file.** These calls are how it says what it decided,
-so the description can be *computed* — a source list read from a directory, an output chosen by host
-— rather than only written down. See `maxon build` in [CLI_REFERENCE.md](CLI_REFERENCE.md) for the
-manifest's own contract.
+`Build` is how a build manifest, `build.maxon`, describes what `maxon build` compiles. A manifest is a
+program whose entry point is `build`; these calls print the description as JSON, and the compiler reads it
+back. The manifest's contract with the command line is documented under `maxon build` in
+[CLI_REFERENCE.md](CLI_REFERENCE.md).
 
 ```maxon
 export function build() returns ExitCode
 	var targets = BuildConfigArray.create()
-	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon"))
-	targets.push(Build.target("dev-mcp", source: "maxon-dev-mcp/mcp", output: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp"))
+	targets.push(Build.target("app", source: "src", output: ".maxon/app"))
+	targets.push(Build.target("tool", source: "tools/gen.maxon", output: ".maxon/gen", debugInfo: false))
 	Build.buildTargets(targets)
 	return 0
 end 'build'
 ```
 
-**One target needs no name; several are listed rather than guessed at.** `maxon build` with no
-argument builds a manifest's only target, and with several it prints their names and compiles
-nothing — picking the first would build something the caller did not ask for and report success.
-`maxon build <name>` selects one.
+### Build
 
-⛔ **A target name outranks a path of the same spelling.** A target names an OUTPUT as well as a
-source, so `maxon build maxon-bin` resolved as a path would compile the same directory to a different
-file and leave the real one stale. A spelling no target declares falls through to the path meaning, so
-a manifest never breaks an ordinary `maxon build some/file.maxon`.
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `Build.build(source String, output String, debugInfo bool = true, version String = "", defines StringArray = empty)` | — | Describe one source file or directory compiled to one output. The target's name is the source path. |
+| `Build.target(name String, source String, output String, debugInfo bool = true, version String = "", defines StringArray = empty)` | `BuildConfig` | One named target, for a manifest with several. Prints nothing. |
+| `Build.buildTargets(targets BuildConfigArray)` | — | Describe several named targets. |
+| `Build.buildWithConfig(config BuildConfig)` | — | Describe one full `BuildConfig`, which may list several sources. |
+| `Build.emitBuildConfig(config BuildConfig)` | — | Print one configuration as a JSON object; `build`, `buildWithConfig` and `buildTargets` use it. |
 
-| Function | Returns | Throws | Description |
-|---|---|---|---|
-| `Build.build(source, output:, version:, defines:)` | -- | -- | Compile one file or directory to one output. The common shape, and the one that keeps a manifest to a single call. |
-| `Build.target(name, source:, output:, version:, defines:)` | `BuildConfig` | -- | One NAMED target, for a manifest that describes more than one thing to build. |
-| `Build.buildTargets(targets)` | -- | -- | Writes several named targets as a JSON array. One target may be a bare object; the compiler accepts either shape. |
-| `Build.buildWithConfig(config)` | -- | -- | Full control: several sources, compiled as ONE program in the order given. |
-| `Build.emitBuildConfig(config)` | -- | -- | Writes the description as JSON on stdout. The three calls above end here; a manifest rarely calls it directly. |
+`output` omits the extension; the compiler adds `.exe` on Windows and `.wasm` for `wasm32-wasi`.
+`debugInfo` controls the `<output>.mxdbg` sidecar that `maxon debug` and `maxon profile` read, and
+`maxon build --no-debug-info` turns it off regardless.
 
-**`BuildConfig`** carries the whole description:
+### BuildConfig
 
 | Field | Type | Description |
-|---|---|---|
-| `name` | `String` | What this build is called. Reported, not used to locate anything. |
-| `output` | `String` | Where the executable goes, **extension omitted** — the compiler appends `.exe` on Windows and nothing elsewhere. |
-| `sources` | `Array with String` | The files and directories to compile, as ONE program, in this order. |
-| `optimize` | `bool` | Reserved; the compiler's optimization is not currently switchable here. |
-| `debug_info` | `bool` | Write the `<output>.mxdbg` sidecar that `maxon debug` and `maxon profile` read. The executable is byte-identical either way. |
-| `version` | `String` | The product's own version, as a dotted number. Goes into the binary's metadata; empty means unversioned. |
-| `defines` | `Array with String` | `<name>=<value>` pairs, each replacing a top-level `String` constant's written-out default — the same thing `maxon build --define` does. |
+|-------|------|-------------|
+| `name` | `String` | What `maxon build <name>` selects. It is not the binary's product name, which is its file name. |
+| `output` | `String` | Where the executable goes, without an extension. |
+| `sources` | `StringArray` | Files and directories compiled as one program, in order. An empty list is refused. |
+| `debug_info` | `bool` | Write the `.mxdbg` sidecar. |
+| `version` | `String` | A dotted product version stamped into the binary (a `VS_VERSIONINFO` resource on Windows, `LC_SOURCE_VERSION` on macOS); empty means unversioned. |
+| `defines` | `StringArray` | `name=value` pairs, each replacing a top-level `String` constant's default, as `maxon build --define` does. |
 
-`BuildConfig.create(name, output:, sources:, optimize:, debug_info:, version:, defines:)` builds one.
+`BuildConfig.create(name String, output String, sources StringArray, debug_info bool, version String = "",
+defines StringArray = empty)` builds one. `BuildConfigArray` is `Array with BuildConfig`.
 
-⭐⭐ **`defines` IS HOW A MANIFEST GETS SOMETHING IT COMPUTED INTO THE BINARY**, and it is the whole
-reason a manifest is a PROGRAM rather than a config file. This repository's own `build.maxon` derives
-the compiler's version from git and passes it as three defines; the alternative — writing them into a
-generated source file — cannot work, because generating that file needs a compiler and the compiler
-cannot be built without it.
-
-⚠ A name is matched bare or namespace-qualified, and a name matching no declaration or more than one is
-REFUSED (E3149 / E3150), as is a constant whose initializer is not a plain string literal (E3151). A
-`--define` typed on the command line wins over one the manifest wrote. See `docs/CLI_REFERENCE.md`.
-
-⭐ **`version` IS THE PRODUCT'S VERSION, AND IT REACHES THE BINARY ITSELF** — a Windows
-`VS_VERSIONINFO` resource that Explorer's Details tab and every installer reads, and a Mach-O
-`LC_SOURCE_VERSION`. Four fields are parsed off the dotted string, missing ones read 0, and a
-component that is not a number reads 0 as well: a version string a person wrote is metadata, and
-refusing to build over untidy metadata would be a compiler declining correct code.
-
-⚠ **THE BINARY'S PRODUCT NAME IS ITS OWN FILE NAME, NEVER `name`.** `name` is what SELECTS a build —
-a target's name, or for `Build.build` the source path, which is `.` for a project built from its own
-directory. What the thing is called is what it is called on disk.
-
-⛔ **An empty `sources` is refused rather than read as "this directory".** Accepting it would compile
-every file beneath the manifest — every spec, every test — under a command that named nothing at all.
-A manifest that means the current directory says so: `Build.build(".", output: ...)`.
-
-⚠ **`-o` and `--target` on the command line outrank the manifest.** The person typing the command is
-answering a narrower question than the file was.
+`defines` is how a manifest puts something it computed into the binary, such as a version derived from git.
+A define whose name matches no constant, or more than one, is refused (E3149, E3150), as is a constant whose
+initializer is not a plain string literal (E3151). A `--define` on the command line wins over the
+manifest's.

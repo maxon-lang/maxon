@@ -9,11 +9,6 @@
 
 #if os(Windows) and arch(x64)
 	let ProfileCommandWord = "profile"
-	let UsageLinePrefix = "Usage:"
-
-	// An option taking a value is spelled `--name=<placeholder>`, with a different placeholder in each
-	// half. What both halves share is the name up to and including the `=`.
-	let OptionValueSeparator = "="
 
 	test 'profile usage line names every option its body documents'
 		// No verb: the refusal that prints the usage.
@@ -31,8 +26,9 @@
 
 		var missing = ListedWordArray.create()
 
+		// The two halves give a value-taking option different placeholders, so they are compared by spelling.
 		for option in documented 'eachOption'
-			let name = optionName(option)
+			let name = optionSpellingOf(option)
 
 			if not usageLine.contains(name) 'absent'
 				missing.push(name)
@@ -41,25 +37,4 @@
 
 		try Expect.isEmpty(listed(missing), message: "`maxon {ProfileCommandWord}` documents these options on lines of their own and leaves them out of its usage line: {listed(missing)}. The usage line is: {usageLine}")
 	end 'profile usage line names every option its body documents'
-
-	function usageLinesIn(text String) returns ListedWordArray
-		var lines = ListedWordArray.create()
-
-		for line in text.split("\n") 'eachLine'
-			if line.startsWith(UsageLinePrefix) 'aUsageLine'
-				lines.push(line.trim())
-			end 'aUsageLine'
-		end 'eachLine'
-
-		return lines
-	end 'usageLinesIn'
-
-	function optionName(option String) returns String
-		if not option.contains(OptionValueSeparator) 'aSwitch'
-			return option
-		end 'aSwitch'
-
-		let name = try option.split(OptionValueSeparator).get(0) otherwise panic("profile-usage: a split of a string containing its separator has a first part")
-		return "{name}{OptionValueSeparator}"
-	end 'optionName'
 #endif

@@ -121,7 +121,7 @@ instead:
 
 ```bash
 maxon-bin/.maxon/maxon build examples/basic.maxon
-./examples/basic.exe
+./examples/basic.exe      # ./examples/basic on macOS and Linux
 ```
 
 See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for every command and flag, and

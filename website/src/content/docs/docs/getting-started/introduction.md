@@ -32,7 +32,8 @@ The features that make Maxon legible to a model also make it quick to check by h
 - **No null.** Fallible reads use `try … otherwise`, so there is no value you can forget to
   check.
 - **Ranged type aliases.** `typealias Port = int(0 to 65535)` pushes a real bound into the
-  type. Constructing an out-of-range value is a compile error.
+  type. A constant out of range is a compile error; a value computed at run time is checked, and
+  an out-of-range one stops the program with a panic instead of wrapping around.
 - **Explicit block labels.** `while … 'iterate' … end 'iterate'` makes structure unambiguous —
   no counting braces to find where a block ends.
 - **No silent failures and no implicit coercions.** Code says what it does.
@@ -56,6 +57,6 @@ Every program has a `main()` that returns an `ExitCode`. String interpolation us
 
 ## Where to go next
 
-- [Installation](/docs/getting-started/installation/) — build the compiler and run a program.
+- [Installation](/docs/getting-started/installation/) — install Maxon with one command.
 - [Your first program](/docs/getting-started/first-program/) — a guided walk-through.
 - [Language Reference](/docs/language/overview/) — the complete language.

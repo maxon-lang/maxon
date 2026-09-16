@@ -34,7 +34,7 @@ project layout; this doc covers running and evolving the site.
   with a broken one breaks installing and upgrading for everyone. `install-script.yml` tests every
   change to them; deploy only a commit where it is green. `public/_headers` serves both as
   `text/plain`, so "Read the script" shows them in the browser rather than downloading them.
-- **Build output:** static, 34 pages as of this writing, plus a Pagefind search index and
+- **Build output:** static HTML pages plus a Pagefind search index and
   `sitemap-index.xml`. `site: 'https://maxon.dev'` is set in `astro.config.mjs` — keep it
   accurate or canonical URLs / sitemap / OG links break.
 
@@ -88,36 +88,91 @@ project layout; this doc covers running and evolving the site.
   copied from the compiler repo's VS Code extension and registered with Shiki / Expressive
   Code. ` ```maxon ` fenced blocks highlight at build time, matching the editor exactly.
 
-## Content sync (IMPORTANT — manual, not automatic)
+## Content sync — the reference pages are generated
 
-The docs, the grammar, and the example programs are **copied** from the compiler repo
-(`../docs/`) and curated for a public audience. **Nothing is auto-synced.** When the language
-or its docs change, refresh these deliberately:
+⛔ **The reference pages are GENERATED. Never edit a generated page's body** — edit its source and
+re-run the sync. `node website/scripts/sync-docs.mjs` builds every page under `cli/`, `language/`,
+`stdlib/`, `spec/` and `best-practices/` from `docs/*.md` and from the error-code registry:
 
-| This directory | Source in the repository root |
+- `docs/CLI_REFERENCE.md`, `docs/LANGUAGE_REFERENCE.md` and `docs/STDLIB_REFERENCE.md` are **split at
+  their `## ` headings** by the section map (`SOURCES`) at the top of the script, several pages each.
+- `docs/BNF_SYNTAX.md`, `docs/WRITING_MAXON_CODE.md` and `docs/BEST_PRACTICES.md` are one page each.
+- `cli/error-codes.md` is built from the `//` doc comment above each case in
+  `maxon-bin/Compiler/ErrorCodeRegistry.maxon`, grouped under the stage names `lookup_error_code` reports
+  (`stageForCode` in `maxon-bin/Compiler/Mcp/McpErrorCodes.maxon`).
+
+A page's front matter (`title`, `description`, `sidebar.order`) is the one part written by hand, and the
+sync never touches it. **Quote any `description` containing a colon** — an unquoted `key: value` colon is
+a YAML parse error that fails the whole build.
+
+**CI fails on drift.** The `website` workflow runs `sync-docs.mjs --check` on every push and pull request
+that touches `docs/`, the registry or the site, so a source that moved on without its pages is a red
+build. Run `node website/scripts/sync-docs.mjs` and commit the regenerated pages with the source change.
+
+**The sync fails closed** and writes nothing while any problem stands, naming each one:
+
+- a `## ` heading in a split source that no page claims and `notPublished` does not list, a heading two
+  pages claim, or a listed heading the source does not have — **renaming, adding or removing a `## `
+  section means updating `SOURCES`**, and a new page needs its file created with front matter first;
+- a link to an anchor no heading produces, into a section that is not published, to a relative path
+  with no route, to an error code the registry does not declare, or to a `/docs/…` route of a generated
+  page;
+- a registry case with no doc comment, a comment separated from its case by a blank line, a duplicate
+  number, or a line that is not a comment, a blank or a case;
+- a file under a generated directory that no source produces.
+
+**Links in a source are written for a reader of the repository**, and the sync turns each into the route
+of the page that holds its target:
+
+| Link to | Write |
 | --- | --- |
-| `src/grammars/maxon.tmLanguage.json` | `vscode-extension/syntaxes/maxon.tmLanguage.json` |
-| `src/examples/*.maxon` | `examples/*.maxon` |
-| `src/content/docs/docs/language/*` | `docs/LANGUAGE_REFERENCE.md` (split by section) |
-| `src/content/docs/docs/stdlib/` | `docs/STDLIB_REFERENCE.md` |
-| `src/content/docs/docs/cli/` | `docs/CLI_REFERENCE.md` |
-| `src/content/docs/docs/best-practices/*` | `docs/WRITING_MAXON_CODE.md`, `docs/BEST_PRACTICES.md` |
-| `src/content/docs/docs/spec/` | `docs/BNF_SYNTAX.md` |
+| A heading in the same file | `[text](#anchor)` |
+| A heading in another synced file | `[text](CLI_REFERENCE.md#anchor)` |
+| An error code on the Error Codes page | `[E3014](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3014)` (the code in lower case; no anchor links the page) |
+| A page written for the site alone (`/docs/getting-started/…`, `/docs/contributing/`, `/docs/about/`, `/docs/changelog/`, `/examples/`, `/blog/`) | its route, e.g. `[Contributing](/docs/contributing/)` |
 
-The `getting-started/`, `contributing`, and `about` pages are written for this site and have
-no single upstream source. **Best practice:** re-sync from a *tagged* compiler release so the
-published docs match shipped behavior, not in-progress work.
+⛔ A route to a generated page (`/docs/cli/…`, `/docs/language/…`, `/docs/stdlib/…`, `/docs/spec/…`,
+`/docs/best-practices/…`) is refused in a source: it is a dead link in the repository, and the heading it
+names is not checked until the site builds.
 
-When importing curated Markdown:
+### What changed → which source to edit
 
-- Add Starlight front matter (`title`, `description`, `sidebar.order`). **Quote any
-  `description` containing a colon** — an unquoted `key: value` colon is a YAML parse error
-  that fails the whole build. (This bit us during the initial import.)
+This is the one map of where the site's documentation comes from.
+
+| What changed | Edit |
+| --- | --- |
+| A CLI command, option or `maxon help` text | `docs/CLI_REFERENCE.md` (Commands) |
+| A diagnostic | its doc comment in `maxon-bin/Compiler/ErrorCodeRegistry.maxon` — the Error Codes page regenerates |
+| Syntax or semantics | `docs/LANGUAGE_REFERENCE.md`, and `docs/BNF_SYNTAX.md` for the grammar |
+| A `public` standard-library API | `docs/STDLIB_REFERENCE.md` |
+| A runtime environment variable | `docs/CLI_REFERENCE.md`, Commands › Environment Variables |
+| Target support | `docs/CLI_REFERENCE.md`, Targets |
+| Language server or VS Code behaviour | `docs/CLI_REFERENCE.md`, Editor Support, and `vscode-extension/README.md` |
+| An MCP tool or its arguments | `docs/CLI_REFERENCE.md`, MCP Server |
+| The install scripts | `public/install.sh` / `public/install.ps1`, and the pages listed under [Install and build instructions](#install-and-build-instructions-follow-the-scripts-and-the-repository) |
+| The syntax grammar | `vscode-extension/syntaxes/maxon.tmLanguage.json`, then copy it to `src/grammars/maxon.tmLanguage.json` **by hand** |
+| An example program | `examples/*.maxon`, then copy it to `src/examples/` **by hand** |
+
+The grammar and the example programs are still manual copies: nothing checks them against their
+sources. The `getting-started/`, `contributing`, `about` and `changelog` pages are written for this site
+and have no upstream source.
+
+**The doc-coverage gates catch what a source is missing**, and run with `maxon test`, not with the site:
+
+- `tests/cli/reference-documents-every-command.test.maxon` — every command and option `maxon help` lists
+  is in `docs/CLI_REFERENCE.md`;
+- `tests/cli/reference-documents-only-real-options.test.maxon` — every option that document shows is one
+  the driver has;
+- `tests/mcp/reference-documents-every-tool.test.maxon` — its MCP Server section names every tool the
+  server advertises and every argument each declares;
+- `tests/docs/stdlib-reference-documents-every-public-api.test.maxon` — `docs/STDLIB_REFERENCE.md` names
+  every `public` declaration in `stdlib/`.
+
+When writing a source:
+
 - Tag Maxon code fences ` ```maxon ` so they highlight; leave shell fences ` ```bash `.
-- Trim compiler-repo-internal notes, but **keep** the agent-facing "how to write Maxon"
-  framing — it's intentional and on-brand.
-- Files copied from the Windows compiler repo may have **CRLF** line endings; be careful with
-  scripted edits to YAML front matter (a `\r` can swallow the line break).
+- Keep the agent-facing "how to write Maxon" framing — it's intentional and on-brand. Sections that
+  describe this repository rather than the language belong in `notPublished`.
 
 ## Install and build instructions follow the scripts and the repository
 
@@ -193,5 +248,6 @@ These are deliberate and easy to undo by accident — preserve them:
   can't reach host `localhost`. To screenshot a local preview, run
   `npx astro preview --host 0.0.0.0` and navigate via the host's LAN IP, not `localhost`.
   Simpler: just open `localhost:4321` in your own browser.
-- **Always `npm run build` before pushing** — a push auto-deploys, so a broken build is a
-  broken deploy. `npx astro check` should report 0 errors too.
+- **Always `npm run build` before pushing.** A push only builds, but a red build on `main` is a
+  release that cannot deploy: the site ships from the release tag (or a manual `workflow_dispatch`), and
+  it ships whatever builds there. `npx astro check` should report 0 errors too.

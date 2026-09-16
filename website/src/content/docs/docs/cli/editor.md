@@ -1,0 +1,121 @@
+---
+title: Editor Support
+description: The VS Code extension, the maxon lsp-server language server, and using it from other editors.
+sidebar:
+  order: 4
+---
+
+Maxon's editor support is the compiler itself: `maxon lsp-server` is a Language Server Protocol server,
+and the VS Code extension runs it.
+
+## VS Code
+
+Install **Maxon** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
+or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
+`maxon-lang.maxon-lsp-client`). It activates in a workspace containing `.maxon` files and provides syntax
+highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting and the Compiler
+Explorer.
+
+**Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
+
+1. the `maxon.serverPath` setting, when it points at an executable;
+2. `maxon` on `PATH`;
+3. `$MAXON_INSTALL/bin/maxon` when `MAXON_INSTALL` is set, otherwise `~/.maxon/bin/maxon` (the install
+   script's default location);
+4. `maxon-bin/.maxon/maxon` in the first workspace folder, which is where a Maxon source checkout builds
+   its compiler.
+
+If none is found, the extension offers to **Install** Maxon with the install script or to **Locate…** a
+compiler, which it saves to `maxon.serverPath`. When the compiler binary changes on disk (for example
+after an upgrade or a rebuild), the extension restarts the language server.
+
+**Settings:**
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `maxon.serverPath` | `""` | Absolute path to the `maxon` compiler. Empty means search as above. |
+| `maxon.formatting.insertSpaces` | `false` | Indent formatted code with spaces instead of tabs |
+| `maxon.formatting.tabSize` | `2` | Spaces per indent level, when `insertSpaces` is `true` |
+
+The formatting settings replace the editor's own tab settings for Maxon files. The extension also turns
+on format-on-save and semantic highlighting for Maxon files by default.
+
+**Commands:**
+
+| Command | What it does |
+|---------|--------------|
+| **Maxon: Restart Language Server** | Restart `maxon lsp-server` |
+| **Maxon: Open Compiler Explorer** | Focus the Compiler Explorer view |
+
+**Compiler Explorer.** A view in the Maxon activity-bar container with a **Source** pane and a
+**Target IR** pane. Half a second after you stop typing, it compiles the source for the host and shows
+the lowered Target IR, the same text `maxon build --emit-ir` writes, or the compile errors as
+`Line <line>:<column>: <message>`. Nothing is written to disk. The source is treated as a whole program,
+so it needs a `main`.
+
+**Test Explorer.** In a Maxon source checkout, the extension lists the compiler's spec tests (from
+`specs/*.md`) in VS Code's Testing view and runs them with the checkout's own compiler
+(`maxon-bin/.maxon/maxon spec-test --filter=…`). It does not run a project's `maxon test` tests.
+
+## `maxon lsp-server`
+
+```bash
+maxon lsp-server
+```
+
+Speaks the Language Server Protocol over stdin and stdout: JSON-RPC messages with `Content-Length`
+headers. It takes no arguments and is normally started by an editor, not by hand.
+
+**Lifecycle.** `initialize` returns the server's capabilities; `initialized` is accepted. `shutdown`
+answers `null`, and `exit` ends the process with code **0** after a `shutdown` and **1** otherwise (as
+it does when stdin closes or a message cannot be framed).
+
+**Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole
+document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed **on its own**
+together with the standard library, from its in-memory text, for the host target; other files of the
+project are not read, so a call into another file of the project is not resolved in the editor.
+
+**Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
+`didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
+`source: "maxon"` and severity Error. "No `main` function" (E3001) is not reported, because a single
+buffer is not a whole program.
+
+**Requests served:**
+
+| Method | Result |
+|--------|--------|
+| `textDocument/hover` | Markdown: the declaration as written in a `maxon` code block, its `///` doc comment, and for a variable or parameter what it is and its type. Keywords and math intrinsics are described too. |
+| `textDocument/definition` | The declaration of the name under the cursor, **in the same document** |
+| `textDocument/completion` | Members after `.` (the trigger character): fields, methods, static functions and enum cases, for a type name or a local whose type is evident. There is no completion of bare identifiers. |
+| `textDocument/formatting` | One edit replacing the whole document with `maxon fmt`'s layout, or `null` when it is already formatted. `insertSpaces: false` indents with tabs; `true` indents with `tabSize` spaces. |
+| `textDocument/documentSymbol` | The top-level declarations: functions, types, enums, unions, interfaces and extensions |
+| `textDocument/foldingRange` | Every block spanning more than one line |
+| `textDocument/linkedEditingRange` | A block's opening name and its `end '…'` label, edited together |
+| `textDocument/rename` | Renames a declaration's name and its matching `end '…'` label. References elsewhere are not renamed. |
+| `textDocument/codeAction` | A quick fix, "Remove unused variable", for a local `let`/`var` whose name appears nowhere else |
+| `textDocument/semanticTokens/full` | Semantic tokens with the legend `keyword`, `type`, `struct`, `enum`, `interface`, `function`, `method`, `variable`, `parameter`, `modifier`, `enumMember`, `property`, `string`, `number`, `comment`, `operator` and no modifiers |
+
+Any other request is answered with JSON-RPC error `-32601` (method not found).
+
+**`maxon/generateIR`** is a Maxon-specific request, not advertised in the capabilities, that compiles a
+source text in memory for the host and returns its Target IR. It is what the Compiler Explorer uses.
+
+```json
+{ "source": "function main() returns ExitCode\n\treturn 0\nend 'main'\n", "filename": "explorer.maxon" }
+```
+
+Both params are required (otherwise `-32602`). The result:
+
+```json
+{ "ir": "…", "errors": [ { "message": "…", "line": 1, "column": 1 } ] }
+```
+
+`ir` is the text `maxon build --emit-ir` writes, and is empty when the compile fails. `errors` lists
+every diagnostic with a **1-based** `line` and `column`.
+
+## Other editors
+
+Any editor with an LSP client can use the server. Configure it to start the command `maxon` with the
+argument `lsp-server` over stdio for files with the `.maxon` extension (language id `maxon`), and to
+send full-document synchronization.

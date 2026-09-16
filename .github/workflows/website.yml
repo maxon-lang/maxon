@@ -25,15 +25,20 @@
 name: website
 
 on:
-  # ⭐ THE BUILD RUNS ON EVERY WEBSITE CHANGE, WHICH THE DEPLOY DOES NOT. `starlightLinksValidator`
-  # fails the build on a dead internal link, and until now nothing ran it before the site went live —
-  # `MAINTAINING.md` simply asked a human to remember. A red pull request is a better place to find out
-  # than a broken deploy.
+  # ⭐ THE BUILD RUNS ON EVERY CHANGE TO THE SITE OR TO WHAT ITS REFERENCE PAGES ARE GENERATED FROM, WHICH
+  # THE DEPLOY DOES NOT. A dead internal link or a page that no longer matches its source is a red pull
+  # request rather than a broken deploy. The error-code page is generated from the registry, with its
+  # stage names read from the `lookup_error_code` tool's source.
   push:
     branches: [main]
-    paths: ['website/**', '.github/workflows/website.yml']
+    paths: &site-inputs
+      - 'website/**'
+      - 'docs/**'
+      - 'maxon-bin/Compiler/ErrorCodeRegistry.maxon'
+      - 'maxon-bin/Compiler/Mcp/McpErrorCodes.maxon'
+      - '.github/workflows/website.yml'
   pull_request:
-    paths: ['website/**', '.github/workflows/website.yml']
+    paths: *site-inputs
   release:
     types: [published]
   workflow_dispatch:
@@ -60,11 +65,12 @@ jobs:
 
       - run: npm ci
 
-      # ⛔ **FOUR PAGES ARE COPIES OF `docs/`, AND THEY ROT SILENTLY.** The site taught a syntax the
-      # compiler had stopped accepting because keeping them in step was something a person had to
-      # remember. This fails the build when a source file has moved on, naming the pages to refresh
-      # with `node website/scripts/sync-docs.mjs`.
-      - name: The copied docs still match ../docs/
+      # ⛔ **EVERY REFERENCE PAGE IS GENERATED, AND NONE IS EDITED BY HAND.** The cli, language, stdlib,
+      # spec and best-practices pages are built from `docs/*.md` and the error-code registry. This fails
+      # when a source has moved on without its pages being regenerated, or when the sources cannot be
+      # mapped onto the pages at all, and names what to fix; `node website/scripts/sync-docs.mjs`
+      # regenerates them.
+      - name: The reference pages match what they are generated from
         run: node scripts/sync-docs.mjs --check
 
       # `astro check` types the components; `astro build` runs the link validator and Pagefind.

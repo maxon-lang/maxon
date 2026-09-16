@@ -74,22 +74,35 @@ report what felt awkward, what was missing, and what worked.
 
 ## The development loop
 
-Maxon builds from source. See [Installation](/docs/getting-started/installation/) for the full
-prerequisites; the short version, once you have them:
+Maxon is written in Maxon, so building it needs a Maxon compiler — [install](/docs/getting-started/installation/)
+a release first. The build scripts are bash: on Windows, run them in Git Bash. Then:
 
 ```bash
 git clone https://github.com/maxon-lang/maxon.git
 cd maxon
 
-mkdir -p .bootstrap && cp "$(which maxon)" .bootstrap/maxon   # seed with a released compiler
-maxon build                                                    # build the compiler with it
-maxon-bin/.maxon/maxon spec-test                               # run the full spec-test suite
+mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/   # seed with a released compiler
+scripts/build-from-seed.sh                                    # build the compiler, then rebuild it with itself
+maxon-bin/.maxon/maxon spec-test                              # run the full spec-test suite
 ```
 
-Maxon is written in Maxon, so building it needs a Maxon compiler — install a release first. Copy the
-**binary** into `.bootstrap/`, not the unpacked archive: the compiler finds `stdlib/` by walking up
-from its own executable, so a released standard library left beside the seed would be compiled in
-place of the checkout's own.
+Copy the **binary** into `.bootstrap/`, not the unpacked archive: the compiler finds `stdlib/` by
+walking up from its own executable, so a released standard library left beside the seed would be
+compiled in place of the checkout's own. For the same reason, build and test with the compiler inside
+the checkout, never the `maxon` on your PATH.
+
+After a change, rebuild and re-run the suite:
+
+```bash
+maxon-bin/.maxon/maxon build maxon-bin     # the compiler rebuilds itself
+maxon-bin/.maxon/maxon spec-test           # or --filter=<spec> for one area
+scripts/fixpoint.sh                        # does the compiler still reproduce itself?
+```
+
+`scripts/fixpoint.sh` builds the compiler with itself, builds it again with the result, and checks the
+two binaries are byte-identical. A difference is a miscompile the suite cannot see, because every stage
+shares the same logic. A fixpoint shows the compiler is stable, not that it is right — that is the
+suite's job.
 
 ### Tests
 
@@ -104,7 +117,9 @@ test cases together. When you change behavior, update or add the relevant spec, 
   [Ideas](https://github.com/maxon-lang/maxon/discussions/categories/ideas), so the design can
   be agreed on.
 - Keep changes focused — one logical change per pull request.
-- Make sure the compiler builds cleanly and `./maxon-bin/.maxon/maxon spec-test` passes.
+- Make sure the compiler builds cleanly, `./maxon-bin/.maxon/maxon spec-test` passes, and
+  `scripts/fixpoint.sh` holds.
+- Format Maxon source with `maxon-bin/.maxon/maxon fmt`.
 - Match the style of the surrounding code; Maxon favors explicit, readable code over clever or
   terse code, in the compiler as much as in the language.
 

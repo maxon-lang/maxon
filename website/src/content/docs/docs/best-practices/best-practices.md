@@ -7,8 +7,6 @@ sidebar:
 
 A practical guide to writing robust, idiomatic, and maintainable Maxon code. This complements the [Style Guide](/docs/best-practices/writing-maxon-code/) (which covers formatting) by focusing on design patterns, safety, and effective use of language features.
 
----
-
 ## Table of Contents
 
 1. [Type Safety](#type-safety)
@@ -20,8 +18,6 @@ A practical guide to writing robust, idiomatic, and maintainable Maxon code. Thi
 7. [Collections](#collections)
 8. [Types and Interfaces](#types-and-interfaces)
 9. [Program Structure](#program-structure)
-
----
 
 ## Type Safety
 
@@ -76,8 +72,6 @@ var truncated = trunc(3.7)  // 3
 // The compiler also rejects bare primitive cast targets — cast through a
 // named ranged typealias instead (e.g. `var x = 3.7 as Tally`).
 ```
-
----
 
 ## Error Handling
 
@@ -248,8 +242,6 @@ match tokenKind 'classify'
 end 'classify'
 ```
 
----
-
 ## Variables and Mutability
 
 ### Default to `let` for Immutability
@@ -305,8 +297,6 @@ match result 'check'
 end 'check'
 ```
 
----
-
 ## Memory and Ownership
 
 ### Understand Reference Semantics for Structs
@@ -350,8 +340,6 @@ var first = try list.get(0) otherwise ""
 list.push("new item")     // ERROR E3070: list borrowed by first
 print("{first}\n")
 ```
-
----
 
 ## Functions
 
@@ -402,8 +390,6 @@ _ = incrementAndLog()
 // Chainable methods: result can be discarded freely
 builder.addField("name")
 ```
-
----
 
 ## Pattern Matching
 
@@ -542,8 +528,6 @@ match result 'handle'
 end 'handle'
 ```
 
----
-
 ## Collections
 
 ### Use `reserve` for Known Sizes
@@ -604,8 +588,6 @@ for (iter, name) in names.withIterator() 'list'
 	print("{iter.index() + 1}. {name}\n")
 end 'list'
 ```
-
----
 
 ## Types and Interfaces
 
@@ -702,8 +684,6 @@ type SortedList uses T where T is Comparable and Equatable
 	end 'insert'
 end 'SortedList'
 ```
-
----
 
 ## Program Structure
 

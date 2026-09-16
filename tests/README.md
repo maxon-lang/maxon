@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Eighteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Nineteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -35,6 +35,7 @@ SERVER its tests spawn.
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
+| `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.test.maxon` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
@@ -44,7 +45,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other seventeen: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other eighteen: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -125,6 +126,8 @@ tests/
     upgrade-takes-no-arguments.test.maxon                   a positional argument and a foreign option are both refused
     upgrade-version-points-at-the-install-script.test.maxon `upgrade --version X` points at the install script's `--version`
     dry-run-is-upgrade-only.test.maxon                      every other command refuses `--dry-run`
+    reference-documents-every-command.test.maxon            docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
+    reference-documents-only-real-options.test.maxon        every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.test.maxon         the busier function ranks first in every section
@@ -174,6 +177,9 @@ tests/
     rebuild.test.maxon                      a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.test.maxon   a self-rebuild succeeds while a server runs its `.previous`
     rebuild-with-a-compile-error.test.maxon      a self-rebuild that fails to compile leaves the slot untouched
+    reference-documents-every-tool.test.maxon    docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
+  docs/
+    stdlib-reference-documents-every-public-api.test.maxon   docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
 ```
 
 ## The six rules, and the hazard each one answers
@@ -581,8 +587,26 @@ JSON-RPC messages, and inspecting structured responses.
 - `rebuild-with-a-compile-error.test.maxon` gates the failure half: a self-rebuild whose program does
   not compile leaves the running image in the slot, byte for byte, and moves nothing to `.previous` —
   and that image then builds a good program over itself.
+- `reference-documents-every-tool.test.maxon` reads the `--dev` `tools/list` roster and holds
+  `docs/CLI_REFERENCE.md`'s `## MCP Server` section (its heading line up to the next `## ` line) to naming
+  every tool and every argument as a whole word. A document with no such section fails naming the whole
+  roster, tool by tool.
 
 ⛔ **EVERY REBUILD CASE STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
 `build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus. Testing
 on a copy costs a file write rather than 25 s, and the whole corpus therefore runs at the default deadline: `maxon test tests/mcp`.
 
+
+## `docs/` — the stdlib reference names every public declaration
+
+One case, and it spawns nothing: it reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
+fails listing, file by file, each `public` declaration name the document does not contain as a whole word.
+`stdlib/Builtins.maxon` and `stdlib/Internals.maxon` are excluded with their reasons in the case, and
+`stdlib/helpers/` is not descended into; a name in the `__` band, and everything declared inside one, is
+compiler machinery and is left out.
+
+⛔ **A `public` LINE WHOSE NAME THE SCANNER CANNOT READ PANICS**, naming its file and line. A shape it
+skipped would drop out of the roster and read exactly like a documented name.
+
+It is the one corpus whose case reads the checkout rather than a fixture or a spawned driver, so it has no
+shared half and no staging. Run it as `maxon test tests/docs`.

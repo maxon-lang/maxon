@@ -5,105 +5,112 @@ sidebar:
   order: 5
 ---
 
-Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct). Enums auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values -- use `union` for that.
+## Enums
+
+An `enum` declares a fixed set of named cases. Enum cases carry no associated data — a type whose cases
+carry data is a [union](#unions). A case may have a **raw value** (see
+[Raw-Value Enums](#raw-value-enums)).
 
 ### Simple Enums
 
-The simplest form of enum defines named cases with no additional data:
-
 ```maxon
 enum Direction
-		north
-		south
-		east
-		west
+	north
+	south
+	east
+	west
 end 'Direction'
+
+function main() returns ExitCode
+	let dir = Direction.north
+	if dir == Direction.north 'up'
+		print("{dir.name}\n")      // north
+	end 'up'
+
+	return 0
+end 'main'
 ```
 
-Create enum values using dot notation:
-
-```maxon
-var dir = Direction.north
-```
+A case is written `Type.case`. Enum values compare with `==` and `!=`, and every payload-free enum is
+automatically `Equatable` and `Hashable`, so it can be a `Map` key or `Set` element. Inside `match` arms,
+cases are written bare (see [Match Statement](/docs/language/statements/#match-statement)).
 
 ### Enum Methods
 
-Enums can have methods, similar to structs:
+An enum can declare instance methods after its cases. Inside one, `self` is the case value; inspect it with
+`match self`. `Self.case` names a case of the enclosing enum.
 
 ```maxon
 enum Direction
-		north
-		south
+	north
+	south
 
-		function opposite() returns Direction
-				return match self 'check'
-						north gives Direction.south
-						south gives Direction.north
-				end 'check'
-		end 'opposite'
-end 'Direction'
-```
-
-Call methods using type-qualified syntax:
-
-```maxon
-var dir = Direction.north
-var opp = Direction.opposite(self: dir)  // Direction.south
-```
-
-### Enum as Function Parameter
-
-Enums can be used as function parameters and return types:
-
-```maxon
-enum Status
-		on
-		off
-end 'Status'
-
-function isOn(s Status) returns bool
-		return match s 'check'
-				on gives true
-				off gives false
-		end 'check'
-end 'isOn'
-
-function toggle(s Status) returns Status
-		return match s 'check'
-				on gives Status.off
-				off gives Status.on
-		end 'check'
-end 'toggle'
-```
-
-### Creating Enums from Names (`fromName`)
-
-The `fromName` static method creates an enum value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
-
-```maxon
-enum Direction
-		north
-		south
-		east
-		west
+	export function opposite() returns Direction
+		return match self 'flip'
+			north gives Self.south
+			south gives Self.north
+		end 'flip'
+	end 'opposite'
 end 'Direction'
 
-// Compile-time known name
-var dir = try Direction.fromName("north") otherwise Direction.south
-
-// Runtime string
-function getDirection(name String) returns Direction
-		return try Direction.fromName(name) otherwise Direction.north
-end 'getDirection'
+function main() returns ExitCode
+	print("{Direction.north.opposite().name}\n")    // south
+	return 0
+end 'main'
 ```
 
-**Notes:**
-- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
-- Compile-time literal names are validated at compile time
+- A method carries its own visibility — `export`, `module` or `public` — and is file-private without one,
+  whatever the enum's own visibility. Calling a private method from another file is **E3008**.
+- An enum declares no fields, so `self.something` inside a method is **E2015**; use `match self`.
+- `static function` is not supported on an enum (**E2015**).
+
+### Enum Properties
+
+Every enum case has:
+
+| Property | Result |
+|----------|--------|
+| `.name` | the case name as a `String` |
+| `.ordinal` | the zero-based declaration position |
+| `.rawValue` | the case's raw value (the ordinal when none is declared) |
+
+and every enum type has:
+
+| Member | Result |
+|--------|--------|
+| `Type.allCases` | an `Array` of every case, in declaration order |
+| `Type.allCaseNames` | an `Array with String` of every case name |
+| `Type.fromName(name)` | the case with that name; throws `noSuchCaseName` when none matches |
+| `Type.fromRawValue(raw)` | the case with that raw value; throws `noSuchRawValue` when none matches |
+
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function lookup(name String) returns Color
+	return try Color.fromName(name) otherwise Color.red
+end 'lookup'
+
+function main() returns ExitCode
+	for color in Color.allCases 'each'
+		print("{color.name}={color.ordinal} ")      // red=0 green=1 blue=2
+	end 'each'
+
+	print("\n{lookup("blue").name} {lookup("purple").name}\n")   // blue red
+	return 0
+end 'main'
+```
+
+A literal name or raw value that matches no case is caught at compile time (**E3034**). Both lookups throw,
+so they need `try`.
 
 ### Struct-Backed Enums
 
-Enums can be backed by a struct type, associating compile-time constant metadata with each case. Access the backing struct via `.rawValue`:
+A case's raw value can be a record of compile-time constants, which attaches metadata to each case. Read
+it through `.rawValue`:
 
 ```maxon
 typealias Latency = int(0 to 50)
@@ -119,627 +126,431 @@ enum Instruction
 	store = OpMeta{latency: 3, isMemory: true}
 end 'Instruction'
 
-let op = Instruction.load
-let lat = op.rawValue.latency     // 4
-let mem = op.rawValue.isMemory    // true
+function main() returns ExitCode
+	let op = Instruction.load
+	print("{op.rawValue.latency} {op.rawValue.isMemory}\n")    // 4 true
+	return 0
+end 'main'
 ```
 
-**Notes:**
-- All cases must use the same struct type
-- Every case must provide a backing value (no bare cases)
-- Struct field values must be compile-time constants (integers, floats, booleans, enum member references like `Priority.high`, or top-level constants)
-- At runtime, the enum is stored as an ordinal; `.rawValue` constructs the backing struct
+- Every case uses the same struct type and provides a value.
+- Field values are compile-time constants: numbers, booleans, enum cases, top-level constants.
+- The enum is stored as its ordinal; `.rawValue` builds the record on demand. `fromRawValue` is not
+  available for a struct-backed enum.
 
 ### Enum Interface Conformance
 
-Enums can conform to interfaces using the `implements` keyword, similar to types:
+An enum can declare conformances after its name:
 
 ```maxon
 enum FileError implements Error
-		notFound
-		permissionDenied
-		alreadyExists
+	notFound
+	permissionDenied
 end 'FileError'
 
-enum HttpError int implements Error
-		badRequest = 400
-		notFound = 404
-		serverError = 500
+enum HttpError implements Error
+	badRequest = 400
+	notFound = 404
 end 'HttpError'
 ```
 
-**Notes:**
-- The `implements Interface` clause comes after the optional backing type
-- Multiple interfaces can be specified: `enum Foo implements A, B`
-- The `Error` interface can only be implemented by enums or unions (not types/structs)
+The header is only `enum Name` and an optional `implements` clause; the backing type is inferred from the
+raw values, never written.
 
----
+## Raw-Value Enums
+
+A raw value gives each case a constant: an integer, a float, a string, a character, a record, or a
+function.
+
+### Declaration
+
+```maxon
+enum HttpStatus
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'HttpStatus'
+```
+
+Cases without a value count up from 0, or from the previous explicit integer value plus one. Negative values
+are allowed:
+
+```maxon
+enum Priority
+	low          // 0
+	medium       // 1
+	high = 10
+	critical     // 11
+end 'Priority'
+
+enum Temperature
+	cold = -10
+	freezing = 0
+	warm = 25
+end 'Temperature'
+```
+
+Counting up applies only to integer raw values; a case without a value beside non-integer values is an
+error.
+
+### Backing Types
+
+The raw values decide the backing type:
+
+```maxon
+enum Threshold
+	low = 0.1
+	high = 0.9
+end 'Threshold'
+
+enum ContentType
+	json = "application/json"
+	html = "text/html"
+end 'ContentType'
+
+enum Escape
+	newline = '\n'
+	tab = '\t'
+end 'Escape'
+```
+
+`.rawValue` has the backing type — `ContentType.json.rawValue` is the `String` `"application/json"`.
+[Struct-backed enums](#struct-backed-enums) attach a record per case.
+
+**Function backing** attaches a function to each case; all cases share one signature, and `.rawValue` is
+the function value:
+
+```maxon
+typealias Operand = int(i64.min to i64.max)
+
+function doubleFn(x Operand) returns Operand
+	return x * 2
+end 'doubleFn'
+
+function tripleFn(x Operand) returns Operand
+	return x * 3
+end 'tripleFn'
+
+enum Op
+	doubleOp = doubleFn
+	tripleOp = tripleFn
+end 'Op'
+
+function main() returns ExitCode
+	let f = Op.tripleOp.rawValue
+	print("{f(14)}\n")     // 42
+	return 0
+end 'main'
+```
+
+`fromRawValue` is available for integer, float, string and character backings, not for struct or function
+backings.
+
+### Comparison
+
+Cases compare with `==` and `!=`. A string-backed case also compares directly with a `String`, and a
+character-backed case with a `Character`, by its raw value:
+
+```maxon
+enum ContentType
+	json = "application/json"
+	html = "text/html"
+end 'ContentType'
+
+function isJson(c ContentType) returns bool
+	return c == "application/json"
+end 'isJson'
+```
+
+Comparing `.rawValue` itself with `==` is **E3097** — compare the case (`value == Type.case`) instead.
+
+### Match
+
+A match on an enum names every case, bare (**E2026** lists any that are missing). `Type.case` in an arm is
+**E3075**, a plain `default` arm is **E2046**, and covering a case twice is **E2027**. An arm covering
+several cases lists them with `or`, one per line:
+
+```maxon
+enum Priority
+	low
+	medium
+	high = 10
+	critical
+end 'Priority'
+
+function urgency(p Priority) returns String
+	return match p 'check'
+		low or
+			medium gives "not urgent"
+		high or
+			critical gives "urgent"
+	end 'check'
+end 'urgency'
+```
+
+### Implicit Coercion to the Backing Primitive
+
+A case of a simple, integer-backed or float-backed enum is used as its raw value wherever a number is
+expected — a function argument, a collection element, a comparison, a `return`, a struct field — with no
+`.rawValue`:
+
+```maxon
+enum JsonByte
+	lBracket = 0x5B
+	space = 0x20
+end 'JsonByte'
+
+function main() returns ExitCode
+	var out = ByteArray.create()
+	out.push(JsonByte.lBracket)                     // pushes 0x5B
+	out.push(JsonByte.space)
+	let first = try out.get(0) otherwise 0
+	print("{first == JsonByte.lBracket}\n")         // true
+	return 0
+end 'main'
+```
+
+String-, character-, struct- and function-backed enums do not coerce; use `.rawValue`.
+
+### Keywords as Case Names
+
+A keyword can be a case name, since cases are always written qualified (`TokenKind.end`) or bare inside a
+match arm:
+
+```maxon
+enum TokenKind
+	function
+	return
+	end
+	if
+end 'TokenKind'
+```
+
+### Error Conditions
+
+| Code | Cause |
+|------|-------|
+| E3030 | duplicate case name |
+| E3031 | duplicate raw value |
+| E3032 | raw values of different backing types in one enum |
+| E3034 | an unknown case (`Color.purple`), or a literal `fromName`/`fromRawValue` argument that matches no case |
+| E3097 | comparing `.rawValue` with `==` |
 
 ## Unions
 
-Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values.
-
-Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). Unions also have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order. `.allCases` is not available on unions because cases may carry associated values; use `.unionCases` to access the discriminant as a first-class enum (see [Union Cases](#union-cases-discriminant-as-an-enum) below).
-
-Unions can additionally have a per-variant struct backing — see [Struct-Backed Unions](#struct-backed-unions) below.
-
-### Simple Unions
-
-The simplest form of union defines named cases with no additional data:
+A `union` declares a fixed set of cases, each of which may carry **associated values**. A value of a union
+is exactly one case with its payload, and `match` is how you read it.
 
 ```maxon
-union Option
-		some(value int)
-		none
-end 'Option'
+typealias Amount = int(i64.min to i64.max)
+
+union Outcome
+	success(value Amount)
+	failure(code Amount, message String)
+	pending
+end 'Outcome'
+
+function describe(r Outcome) returns String
+	return match r 'show'
+		success(v) gives "ok {v}"
+		failure(code, message) gives "failed {code}: {message}"
+		pending gives "waiting"
+	end 'show'
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Outcome.success(42))}\n")
+	print("{describe(Outcome.failure(404, message: "not found"))}\n")
+	print("{describe(Outcome.pending)}\n")
+	return 0
+end 'main'
 ```
 
-### Associated Values
+### Constructing Cases
 
-Cases can carry additional data called associated values:
+A case with a payload is constructed like a call — first argument positional, the rest named after the
+payload fields: `Outcome.failure(404, message: "not found")`. A case without a payload is written like an
+enum case: `Outcome.pending`.
 
-```maxon
-union Result
-		success(value int)
-		failure(code int, message String)
-		pending
-end 'Result'
-```
+Payloads may be integers, booleans, strings, records, other unions and collections. A `float` payload is
+not supported yet (**E2015**).
 
-Construct cases with associated values:
+### Pattern Matching
 
-```maxon
-var r1 = Result.success(42)                    // Single param is positional
-var r2 = Result.failure(404, message: "Not found")  // First positional, second named
-var r3 = Result.pending
-```
+In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are local to the arm.
 
-### Pattern Matching with Value Extraction
-
-Use `match` statements to extract associated values from union cases. Each binding name becomes a local variable within the case body:
-
-```maxon
-match result 'handle'
-		success(value) then return value
-		failure(code, msg) then print(msg)
-		pending then print("waiting...")
-end 'handle'
-```
-
-Match expressions also support value extraction using `gives`:
-
-```maxon
-var extracted = match container 'get'
-		none gives 0
-		some(n) gives n * 2
-end 'get'
-```
-
-You can mix cases with and without bindings:
-
-```maxon
-match result 'check'
-		success(v) then return v    // Extracts value
-		pending then return 0       // No extraction needed
-end 'check'
-```
-
-**Discarding associated values:** When you don't need the associated value, omit the parentheses entirely:
-
-```maxon
-match container 'check'
-		some then return 1        // omit parentheses to ignore associated value
-		none then return 0
-end 'check'
-```
-
-**Notes:**
-- Binding names must match the number of associated values in the case definition
-- Bindings are only in scope within the case body
-- Cases without associated values don't need parentheses
+- The number of bindings matches the case's payload fields.
+- Discard one binding with `_`: `failure(_, message)`.
+- To ignore the whole payload, omit the parentheses: `success then …`. Writing `success(_)` with every
+  binding discarded is **E3081**.
+- An `or`-chain can list payload cases bare; their payloads are not accessible in that arm.
+- A match on a union must cover every case (**E2026**); use `default throws` or `default panic(…)` for a
+  deliberate catch-all (see [Statements](/docs/language/statements/#default-throws-and-default-panic)).
 
 ### Mutable Match Bindings
 
-When a union variable is declared with `var`, match bindings on its associated values are mutable. Assigning to a binding writes the new value back to the union in-place:
+When the matched value is a `var` (or a union parameter the function may write), assigning to a binding
+writes back into the union:
 
 ```maxon
-var box = Box.full(10)
-match box 'update'
-		full(value) then value = 42    // Writes 42 back into box
-		empty then return
-end 'update'
-// box is now Box.full(42)
+typealias Amount = int(i64.min to i64.max)
+
+union Box
+	empty
+	full(value Amount)
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.full(10)
+	match b 'update'
+		full(value) then value = 42
+		empty then return 1
+	end 'update'
+
+	match b 'read'
+		full(value) then print("{value}\n")    // 42
+		empty then print("empty\n")
+	end 'read'
+
+	return 0
+end 'main'
 ```
 
-When the union variable is declared with `let`, bindings are immutable (read-only copies).
+When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**.
 
 ### Comparing Union Values
 
-Union values cannot be compared using `==` or `!=` (error E3066). The only way to inspect a union value is through `match`. This restriction exists to prevent a class of bugs that happen when a new case is added that is unaccounted for and code that handles the union either falls through or uses a default value that is wrong.
+Unions have no `==` or `!=` (**E3066** `cannot compare union values using '==', use 'match' instead`).
+Inspecting a union through `match` means that adding a case later flags every place that must decide what
+to do with it. For the same reason unions are not automatically `Equatable` or `Hashable`; a union may
+still declare `implements Equatable` with its own `equals` method and call it explicitly.
+
+### Union Properties
+
+A union value has `.name`, `.ordinal` and `.rawValue`, and a union type has `Type.allCaseNames` and
+`Type.fromName(name)`. `fromName` takes the payload as extra arguments when the name is a literal
+(`Container.fromName("value", 42)`); with a run-time string it only produces cases without a payload.
+There is no `.allCases`, because a payload case has no single value — use `.unionCases` below.
+
+A case can declare an explicit integer tag, which becomes its `.rawValue` (the `.ordinal` is still the
+declaration position):
 
 ```maxon
-// ERROR E3066: Cannot compare union values with ==
-// if r1 == r2 'check' ... end 'check'
+typealias Id = int(0 to 255)
 
-// Use match instead
-match result 'check'
-		success(v) then handleSuccess(v)
-		failure(c, msg) then handleFailure(c, msg: msg)
-		pending then handlePending()
-end 'check'
+union Instr
+	add(dest Id, src Id) = 5
+	neg(dest Id) = 9
+end 'Instr'
 ```
-
-### Creating Unions from Names (`fromName`)
-
-The `fromName` static method creates a union value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
-
-For unions with associated values, pass the values as additional arguments when the name is a compile-time literal:
-
-```maxon
-union Container
-		empty
-		value(n int)
-end 'Container'
-
-// With associated values (name must be compile-time literal)
-var c = try Container.fromName("value", 42) otherwise Container.empty
-
-// Cases without associated values work with runtime strings
-function getContainer(name String) returns Container
-		return try Container.fromName(name) otherwise Container.empty
-end 'getContainer'
-```
-
-**Notes:**
-- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
-- Compile-time literal names are validated at compile time
-- Associated value types are validated at compile time
-- Runtime strings only support cases without associated values
 
 ### Union Methods
 
-Unions can have methods, similar to structs:
+A union can declare instance methods; inspect `self` with `match`:
 
 ```maxon
-union Direction
-		north
-		south
+typealias Amount = int(i64.min to i64.max)
 
-		function opposite() returns Direction
-				return match self 'check'
-						north gives Direction.south
-						south gives Direction.north
-				end 'check'
-		end 'opposite'
-end 'Direction'
+union Shape
+	circle(radius Amount)
+	square(side Amount)
+	point
+
+	export function area() returns Amount
+		return match self 'calc'
+			circle(r) gives 3 * r * r
+			square(s) gives s * s
+			point gives 0
+		end 'calc'
+	end 'area'
+end 'Shape'
+
+function main() returns ExitCode
+	print("{Shape.square(4).area()}\n")    // 16
+	return 0
+end 'main'
 ```
+
+As with enums, a method carries its own visibility, and `static function` is not supported.
 
 ### Union Interface Conformance
 
-Unions can conform to interfaces using the `implements` keyword:
-
 ```maxon
-union FileError implements Error
-		notFound
-		permissionDenied(path String)
-end 'FileError'
+typealias HttpCode = int(100 to 599)
+
+union FetchError implements Error
+	notFound
+	status(code HttpCode)
+end 'FetchError'
 ```
 
-**Notes:**
-- The `Error` interface can be implemented by enums or unions (not types/structs)
+Unions and enums are the types that can be thrown (see
+[Error Handling](/docs/language/error-handling/#defining-error-types)).
 
 ### Struct-Backed Unions
 
-Each union variant can be tagged with a compile-time struct value, the same shape as struct-backed enums. Use `.rawValue` on a union value to read the variant's backing struct. The variant's associated values are independent of the backing struct — they coexist, with the payload accessed by `match` and the metadata accessed by `.rawValue`.
+Each case can also carry a compile-time record, exactly like a
+[struct-backed enum](#struct-backed-enums). The payload and the record are
+independent: `match` reads the payload and `.rawValue` reads the record.
 
 ```maxon
 typealias Latency = int(0 to 50)
+typealias Slot = int(0 to 255)
 
 type OpMeta
 	export let latency as Latency
 	export let isMemory as bool
 end 'OpMeta'
 
-union MirOp
-	movImm(dest VarSlot, value MachineWord) = OpMeta{latency: 1, isMemory: false}
-	load(dest VarSlot, addr VarSlot)        = OpMeta{latency: 4, isMemory: true}
-	store(addr VarSlot, src VarSlot)        = OpMeta{latency: 3, isMemory: true}
-end 'MirOp'
+union MachineOp
+	movImm(dest Slot, value Slot) = OpMeta{latency: 1, isMemory: false}
+	load(dest Slot, addr Slot) = OpMeta{latency: 4, isMemory: true}
+	store(addr Slot, src Slot) = OpMeta{latency: 3, isMemory: true}
+end 'MachineOp'
 
-let op = MirOp.load(dest: d, addr: a)
-let lat = op.rawValue.latency     // 4
-let mem = op.rawValue.isMemory    // true
+function main() returns ExitCode
+	let op = MachineOp.load(1, addr: 2)
+	print("{op.rawValue.latency} {op.rawValue.isMemory}\n")    // 4 true
+	return 0
+end 'main'
 ```
 
-This is the union analogue of [Struct-Backed Enums](#struct-backed-enums). Use it to carry per-variant compile-time metadata (memory/store/call flags, instruction latency, scheduling hints, inliner policy bits) without writing exhaustive match expressions in every consumer — readers query the backing struct directly via `.rawValue.field`.
-
-**Notes:**
-- All variants must use the same backing struct type
-- Every variant must provide a backing value (no bare-tagged variants in a backed union)
-- Backing struct field values must be compile-time constants (integers, floats, booleans, enum member references like `OpPattern.passThrough`, or top-level constants)
-- At runtime, the union discriminant is stored as an ordinal; `.rawValue` constructs the backing struct on demand
+Every case uses the same record type and provides a value of compile-time constants.
 
 ### Union Cases (Discriminant as an Enum)
 
-Every `union` has a compiler-synthesized companion type `U.unionCases` — a simple integer-backed enum with one bare case per variant of `U`, in declaration order. It is the union's discriminant exposed as a first-class enum value.
+Every union `U` has a companion enum `U.unionCases` with one bare case per union case, in declaration
+order. It is an ordinary enum — `.allCases`, `.allCaseNames`, `.fromRawValue`, `.fromName`, `.name`,
+`.ordinal`, `.rawValue` — and a `match` over it is exhaustiveness-checked.
+
+That makes serialization safe to extend: write a case's `rawValue` next to its payload, and on reading, lift
+the stored tag back with `fromRawValue` and `match` on it. Adding a case to `U` adds it to `U.unionCases`,
+so both the writer's and the reader's `match` stop compiling until they handle it.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias Amount = int(i64.min to i64.max)
 
 union Shape
-	circle(radius Integer)
-	square(side Integer)
+	circle(radius Amount)
+	square(side Amount)
 	point
 end 'Shape'
 
-// Shape.unionCases is conceptually:
-//   enum Shape.unionCases
-//     circle    // rawValue 0
-//     square    // rawValue 1
-//     point     // rawValue 2
-//   end
+function kindOf(tag Amount) returns String
+	let kind = try Shape.unionCases.fromRawValue(tag) otherwise panic("unknown Shape tag {tag}")
+	return match kind 'kind'
+		circle gives "circle"
+		square gives "square"
+		point gives "point"
+	end 'kind'
+end 'kindOf'
+
+function main() returns ExitCode
+	let s = Shape.square(3)
+	print("{kindOf(s.rawValue)}\n")    // square
+	return 0
+end 'main'
 ```
 
-Because `U.unionCases` is a regular enum it inherits all of the standard enum machinery: `.allCases`, `.allCaseNames`, `.rawValue`, `.fromRawValue`, `.fromName`, `.name`, and `.ordinal`. Match arms over a `U.unionCases` value are exhaustiveness-checked, just like match arms over the union itself.
-
-The intended use is symmetric (de)serialization: write the variant's `rawValue` to a buffer alongside its payload; on read, lift the raw integer back to a `U.unionCases` via `fromRawValue` and match on it to dispatch the payload reader. Match arms are single-statement, so multi-step writers and readers extract per-variant helpers:
-
-```maxon
-function writeShapeCircle(buf ByteArray, radius Integer)
-	writeDword(buf, value: Shape.unionCases.circle.rawValue)
-	writeQword(buf, value: radius)
-end 'writeShapeCircle'
-
-function writeShapeSquare(buf ByteArray, side Integer)
-	writeDword(buf, value: Shape.unionCases.square.rawValue)
-	writeQword(buf, value: side)
-end 'writeShapeSquare'
-
-function writeShape(buf ByteArray, value Shape)
-	match value 'tag'
-		circle(r) then writeShapeCircle(buf, radius: r)
-		square(s) then writeShapeSquare(buf, side: s)
-		point then writeDword(buf, value: Shape.unionCases.point.rawValue)
-	end 'tag'
-end 'writeShape'
-
-function readShapeCircle(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
-	let radius = readQword(buf, offset: offset)
-	return (Shape.circle(radius), offset + 8)
-end 'readShapeCircle'
-
-function readShapeSquare(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
-	let side = readQword(buf, offset: offset)
-	return (Shape.square(side), offset + 8)
-end 'readShapeSquare'
-
-function readShape(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
-	let raw = readDword(buf, offset: offset)
-	let pos = offset + 4
-	let kase = try Shape.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown Shape tag {raw}")
-	match kase 'tag'
-		circle then return readShapeCircle(buf, offset: pos)
-		square then return readShapeSquare(buf, offset: pos)
-		point then return (Shape.point, pos)
-	end 'tag'
-end 'readShape'
-```
-
-Both `match` statements are exhaustiveness-checked: the writer matches over a `Shape` value, the reader matches over a `Shape.unionCases` value. Adding a new variant to `Shape` automatically extends `Shape.unionCases`, which produces non-exhaustive-match errors in *both* the writer and reader. There is no path to a compiling-but-broken codec.
-
-**Notes:**
-- `.unionCases` raw values are declaration ordinals (0, 1, 2, ...). Reordering variants of `U` changes the on-disk format if `rawValue` is being persisted; treat serialized unions as append-only.
-- Plain `enum` types do not need `.unionCases` — they already are their own discriminant and expose `.allCases` / `.fromRawValue` directly.
-
----
-
-## Enums (Raw-Value Enums)
-
-Enums without associated values define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`, `fromRawValue()`, and `fromName()`.
-
-### Declaration
-
-```maxon
-enum HttpStatus
-		ok = 200
-		notFound = 404
-		serverError = 500
-end 'HttpStatus'
-```
-
-Cases without explicit values auto-increment from 0 (or from the previous explicit value + 1):
-
-```maxon
-enum Color
-		red       // 0
-		green     // 1
-		blue      // 2
-end 'Color'
-
-enum Priority
-		low         // 0
-		medium      // 1
-		high = 10
-		critical    // 11
-end 'Priority'
-```
-
-### Backing Types
-
-Enums support integer, float, String, Character, struct, and function backing types.
-
-```maxon
-enum Threshold
-		low = 0.1
-		medium = 0.5
-		high = 0.9
-end 'Threshold'
-
-enum ContentType
-		json = "application/json"
-		html = "text/html"
-end 'ContentType'
-
-enum Escape
-		newline = '\n'
-		tab = '\t'
-end 'Escape'
-```
-
-Struct backing attaches compile-time constant metadata to each case. Field values must be compile-time constants (integers, floats, booleans) or nested struct literals:
-
-```maxon
-type OpInfo
-		export let latency as int(0 to 100)
-		export let throughput as int(0 to 10)
-end 'OpInfo'
-
-enum Instruction
-		add = OpInfo{latency: 1, throughput: 2}
-		mul = OpInfo{latency: 3, throughput: 1}
-		div = OpInfo{latency: 40, throughput: 1}
-end 'Instruction'
-
-let lat = Instruction.div.rawValue.latency  // 40
-```
-
-At runtime, struct-backed enums are stored as ordinals. The struct is reconstructed on `.rawValue` access. `fromRawValue()` is not available for struct-backed enums.
-
-Function backing attaches a top-level function reference to each case. All cases must share the same function signature, which becomes the enum's backing type. The function may be declared later in the same file or in a different file; the binding is resolved after every file's top-level declarations have been pre-scanned.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-function doubleFn(x Integer) returns Integer
-		return x * 2
-end 'doubleFn'
-
-function tripleFn(x Integer) returns Integer
-		return x * 3
-end 'tripleFn'
-
-enum Op
-		doubleOp = doubleFn
-		tripleOp = tripleFn
-end 'Op'
-
-let f = Op.doubleOp.rawValue
-let r = f(21)   // 42
-```
-
-At runtime, function-backed enums are stored as ordinals; `.rawValue` lowers to a select chain that recovers the function pointer for the live case. `fromRawValue()` is not available for function-backed enums.
-
-Auto-increment (bare case names with no explicit value) is only valid for integer-backed enums. Mixing bare names with non-integer explicit values is a compile error.
-
-Negative integer values are supported:
-
-```maxon
-enum Temperature
-		freezing = 0
-		cold = -10
-		warm = 25
-end 'Temperature'
-```
-
-### Comparison
-
-Enums without associated values allow direct `==` and `!=` comparison:
-
-```maxon
-var s = HttpStatus.notFound
-if s == HttpStatus.notFound 'check'
-		// ...
-end 'check'
-if s != HttpStatus.ok 'check2'
-		// ...
-end 'check2'
-```
-
-### Match
-
-Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Match arms use bare case names (unqualified); using qualified `Type.case` syntax in a match arm is a compile error (E3075). Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
-
-```maxon
-// Exhaustive: all cases listed
-var result = match s 'handle'
-		ok gives 1
-		notFound gives 2
-		serverError gives 3
-end 'handle'
-```
-
-Range patterns use bare case names as bounds, based on ordinal values. `to` is inclusive, `upto` excludes the upper bound. Qualified `Type.case` syntax in match arms is a compile error (E3075):
-
-```maxon
-match p 'check'
-    low to medium then print("not urgent")
-    high to critical then print("urgent")
-end 'check'
-```
-
-Overlapping patterns (ranges that cover the same case, or an explicit case within a range) are reported as errors.
-
-### Raw Value Access
-
-All enums support `.rawValue`. Simple enums return the case ordinal (0, 1, 2…); backed enums return the explicit value, typed by the backing kind — `int` for int-backed, `float` for float-backed, `String` for string-backed, and `Character` for char-backed:
-
-```maxon
-var c = Color.green
-var ordinal = c.rawValue   // 1
-
-var s = HttpStatus.notFound
-var code = s.rawValue      // 404 (int)
-```
-
-For string- and char-backed enums, `.rawValue` returns the declared backing literal as a `String` / `Character` (the value is reconstructed from the ordinal at runtime):
-
-```maxon
-enum Status
-	active = "ACTIVE"
-	closed = "CLOSED"
-end 'Status'
-
-var st = Status.active
-var raw = st.rawValue          // "ACTIVE" (String)
-if st.rawValue == "ACTIVE" 'check'   // String/char-backed enums compare against their scalar peer
-	// ...
-end 'check'
-```
-
-A string-backed enum value compares with `==` / `!=` against a `String` (and a char-backed value against a `Character`) by comparing the declared backing literal; both sides may also be the same enum type.
-
-### Name Access
-
-All enums have a `.name` property returning the case name as a `String`. For backed enums, `.name` always returns the case name, not the raw value:
-
-```maxon
-var s = HttpStatus.notFound
-var code = s.rawValue   // 404
-var n = s.name          // "notFound"
-```
-
-### Ordinal Access
-
-All enums have an `.ordinal` property returning the zero-based declaration position as an `int`. For simple enums, `.ordinal` is identical to `.rawValue`. For backed enums, `.ordinal` is the position in declaration order, not the backing value:
-
-```maxon
-var c = Color.green
-var pos = c.ordinal    // 1 (same as .rawValue for simple enums)
-
-var s = HttpStatus.notFound
-s.ordinal              // 1 (second case in declaration order)
-s.rawValue             // 404 (backing value)
-s.name                 // "notFound"
-```
-
-`.ordinal` is available on all enum backing types (int, float, string, char).
-
-### All Cases (`allCases`)
-
-All enums have a static `.allCases` property that returns an `Array` containing all cases in declaration order:
-
-```maxon
-for color in Color.allCases 'loop'
-	print("{color.name}\n")
-end 'loop'
-// Prints: red, green, blue
-
-var count = Color.allCases.count()  // 3
-```
-
-`.allCases` works with all backing types (simple, int, float, string, char).
-
-### All Case Names (`allCaseNames`)
-
-All enums and unions have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order:
-
-```maxon
-for name in Color.allCaseNames 'loop'
-	print("{name}\n")
-end 'loop'
-// Prints: red, green, blue
-
-var count = Color.allCaseNames.count()  // 3
-```
-
-Unlike `.allCases`, `.allCaseNames` is available on unions too — even unions whose cases carry associated values — because only the case name strings are returned.
-
-### Converting from Raw Value (`fromRawValue`)
-
-The `fromRawValue` static method converts a raw value to an enum case. It throws `EnumError.invalidRawValue` if no case matches:
-
-```maxon
-var s = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok  // HttpStatus.notFound
-```
-
-For string- and char-backed enums, `fromRawValue` takes the backing literal type (`String` / `Character`) and matches against each case's declared backing literal:
-
-```maxon
-var st = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.closed
-```
-
-`fromRawValue` is not available for struct-backed or function-backed enums (their raw value can't be reconstructed from a literal lookup).
-
-### Converting from Name (`fromName`)
-
-The `fromName` static method converts a string name to an enum case. It throws `EnumError.invalidName` if no case matches:
-
-```maxon
-var s = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok  // HttpStatus.notFound
-
-// Runtime string
-function getStatus(name String) returns HttpStatus
-		return try HttpStatus.fromName(name) otherwise HttpStatus.ok
-end 'getStatus'
-```
-
-**Notes:**
-- Both `fromRawValue` and `fromName` throw; use `try...otherwise` or `try...catch`
-- Compile-time literal arguments are validated at compile time
-
-### As Function Parameters and Return Types
-
-```maxon
-function isSuccess(s HttpStatus) returns bool
-		if s == HttpStatus.ok 'check'
-				return true
-		end 'check'
-		return false
-end 'isSuccess'
-
-function getDefault() returns HttpStatus
-		return HttpStatus.ok
-end 'getDefault'
-```
-
-### Keywords as Case Names
-
-Keywords can be used as enum case names:
-
-```maxon
-enum TokenKind
-		function
-		return
-		end
-		if
-end 'TokenKind'
-```
-
-### Export
-
-```maxon
-export enum Permission
-		none = 0
-		read = 1
-		write = 2
-end 'Permission'
-```
-
-### Error Conditions
-
-- **E3030**: Duplicate case name within the same enum block
-- **E3031**: Duplicate explicit value within the same enum block
-- **E3032**: Mixing backing types (e.g., int and String values in the same block)
-- **E3034**: Accessing an unknown case (`Color.purple` when `purple` is not defined)
-
----
+The tags are declaration positions unless a case declares its own, so reordering cases changes stored
+tags; treat a persisted union as append-only.

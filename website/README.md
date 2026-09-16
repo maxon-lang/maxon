@@ -37,8 +37,8 @@ src/
   route-data.ts          Starlight route middleware — points each page at its OG card
   content/docs/docs/     Starlight docs collection (served under /docs/*)
     getting-started/     Hand-authored intro / install / first-program
-    language/            Language Reference, split by topic
-    stdlib/  cli/  best-practices/  spec/
+    language/  stdlib/   Generated from ../docs/ by scripts/sync-docs.mjs — never hand-edited
+    cli/  best-practices/  spec/   Generated likewise (cli/error-codes.md from the error-code registry)
     blog/                Blog posts (starlight-blog plugin) — served at /blog/
   grammars/
     maxon.tmLanguage.json  Maxon TextMate grammar (copied from the compiler repo)
@@ -55,31 +55,20 @@ astro.config.mjs         Site config, sidebar, plugins, Shiki/Expressive-Code gr
 The docs live at `src/content/docs/docs/` (nested one level) so Starlight serves them under
 `/docs/…` rather than the site root.
 
-## Content sourcing & re-sync
+## Content sourcing
 
-Documentation, the syntax grammar, and the example programs are **copied** from the Maxon
-compiler's own `../docs/` and curated for a public audience. They are
-not auto-synced — refresh them deliberately when the language docs change.
+The reference pages — `cli/`, `language/`, `stdlib/`, `spec/` and `best-practices/` under
+`src/content/docs/docs/`, including the Error Codes page — are **generated** from the repository's
+`docs/*.md` and `maxon-bin/Compiler/ErrorCodeRegistry.maxon` by `node scripts/sync-docs.mjs`, and CI fails
+when they drift. Never edit a generated page's body: edit its source and re-run the sync. Only each
+page's front matter is written here.
 
-| Website file | Source in the repository root |
-| --- | --- |
-| `src/grammars/maxon.tmLanguage.json` | `vscode-extension/syntaxes/maxon.tmLanguage.json` |
-| `src/examples/*.maxon` | `examples/*.maxon` |
-| `src/content/docs/docs/language/*` | `docs/LANGUAGE_REFERENCE.md` (split by section) |
-| `src/content/docs/docs/stdlib/` | `docs/STDLIB_REFERENCE.md` |
-| `src/content/docs/docs/cli/` | `docs/CLI_REFERENCE.md` |
-| `src/content/docs/docs/best-practices/*` | `docs/WRITING_MAXON_CODE.md`, `docs/BEST_PRACTICES.md` |
-| `src/content/docs/docs/spec/` | `docs/BNF_SYNTAX.md` |
+The syntax grammar (`src/grammars/maxon.tmLanguage.json`) and the example programs (`src/examples/`) are
+still copied by hand, and the `getting-started/`, `contributing`, `about` and `changelog` pages are
+written for this site.
 
-The `getting-started/` pages are written for this site and have no single source file.
-
-When re-importing curated Markdown:
-
-- Add Starlight front matter (`title`, `description`, `sidebar.order`). **Quote any
-  `description` that contains a colon** — unquoted `key: value` colons break the YAML.
-- Tag Maxon code fences ` ```maxon ` so they highlight; leave shell fences as ` ```bash `.
-- Trim compiler-repo-internal notes, but keep the agent-facing "how to write Maxon" framing —
-  it's intentional and on-brand.
+[MAINTAINING.md](MAINTAINING.md#content-sync--the-reference-pages-are-generated) has the source map (what
+changed → which file to edit), the sync's rules, and the link forms a source uses.
 
 ## Blog
 

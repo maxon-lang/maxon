@@ -381,7 +381,7 @@ typealias IntArray = Array with Integer
 var items = IntArray.create()   // var because we call push
 items.push(1)
 ```
-`Array with Integer{}` at a use site is E3003 — a generic container needs a typealias before use.
+`Array with Integer{}` at a use site is E2004 — a generic container needs a typealias before use.
 
 ### Struct types
 
@@ -1024,20 +1024,21 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 ## Building and Testing
 
 One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, binary
-`maxon-bin/.maxon/maxon.exe` (`maxon` on macOS and Linux). `build` with no path, run from the root by
-a compiler inside this checkout, builds it;
-Put a released `maxon` binary at `.bootstrap/maxon` to build it with.
+`maxon-bin/.maxon/maxon.exe` (`maxon` on macOS and Linux). A released `maxon` binary at
+`.bootstrap/maxon` seeds the first build; afterwards `build` with no path, run from the root by the
+compiler inside this checkout, runs the root `build.maxon` and rebuilds it.
 
 ### Compiling
 
 ```bash
 ./maxon-bin/.maxon/maxon.exe build hello.maxon                    # single file
-./maxon-bin/.maxon/maxon.exe build                                # multi-file project (from project dir)
+./maxon-bin/.maxon/maxon.exe build src/                           # multi-file project: every .maxon under the directory
+./maxon-bin/.maxon/maxon.exe build                                # run the build.maxon in the current directory
 ./maxon-bin/.maxon/maxon.exe build hello.maxon --emit-ir          # also write the lowered Target IR
 ```
 
-`--target=<cpu>-<os>` cross-compiles: `x64-windows`, `x64-linux`, `arm64-macos` or `wasm32-wasi`.
-Anything else is refused (E5004).
+The default target is the host. `--target=<cpu>-<os>` cross-compiles: `x64-windows`, `x64-linux`,
+`arm64-macos`, `arm64-linux` or `wasm32-wasi`. Anything else is refused.
 
 ### Spec tests
 
@@ -1048,7 +1049,7 @@ Anything else is refused (E5004).
 ./maxon-bin/.maxon/maxon.exe spec-test --target=x64-linux         # cross-compile
 ```
 
-Exit code **101** means a memory leak was detected.
+Exit code **101** means a leak-gated program still held an allocation at exit.
 
 ### Debugging
 

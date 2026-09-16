@@ -1,166 +1,137 @@
 # Maxon Language Reference
 
-**Version**: 1.0  
-**Target Audience**: AI Coding Agents and Developers
-
-This reference provides complete syntax and semantics for the Maxon programming language.
-
----
-
-## Table of Contents
-
-1. [Program Structure](#program-structure)
-   - [Conditional Compilation](#conditional-compilation)
-2. [Lexical Elements](#lexical-elements)
-3. [Types](#types)
-   - [Type Conversions](#type-conversions)
-   - [Ranged Type Aliases](#ranged-type-aliases)
-4. [Types (Composite)](#types-composite)
-   - [Interface Extensions](#interface-extensions)
-   - [Conditional Extensions](#conditional-extensions)
-   - [Conditional Interface Conformance](#conditional-interface-conformance)
-5. [Tuples](#tuples)
-6. [Enums](#enums)
-7. [Unions](#unions)
-8. [Variables](#variables)
-9. [Functions](#functions)
-   - [Parameter Passing](#parameter-passing)
-   - [Function Types and Function-Typed Values](#function-types-and-function-typed-values)
-   - [Closures](#closures)
-   - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
-   - [Test Declarations](#test-declarations)
-10. [Expressions](#expressions)
-    - [Conditional (Ternary) Expression](#conditional-ternary-expression)
-11. [Statements](#statements)
-12. [Error Handling](#error-handling)
-13. [Namespaces](#namespaces)
-14. [Async/Await (Concurrency)](#asyncawait-concurrency)
-    - [Starting a Coroutine](#starting-a-coroutine)
-    - [Awaiting Results](#awaiting-results)
-    - [Overlapping Waits](#overlapping-waits)
-    - [Void Functions](#void-functions)
-    - [Services — `spawn`](#services--spawn)
-    - [Yielding](#yielding)
-    - [Throwing Async Functions](#throwing-async-functions)
-    - [Cancellation](#cancellation)
-    - [Typed promises in collections](#typed-promises-in-collections)
-    - [Restrictions](#restrictions)
-    - [Key Properties](#key-properties)
-15. [Standard Library](#standard-library)
-    - [FilePath](#filepath)
-    - [URL](#url)
-    - [CharacterSet](#characterset)
-    - [Unicode](#unicode)
-    - [String Trimming](#string-trimming)
-    - [List](#list)
-    - [Networking (TcpClient)](#networking-tcpclient)
-    - [The Runtime Tier](#the-runtime-tier)
-    - [Builtin Managed Types](#builtin-managed-types)
-16. [Build System](#build-system)
-17. [Memory Model](#memory-model)
-    - [Reference-by-Default Assignment](#reference-by-default-assignment)
-    - [Immutable XOR Mutable](#immutable-xor-mutable)
-    - [Explicit Cloning](#explicit-cloning)
-    - [Cloneable Interface](#cloneable-interface)
-    - [Auto-Equatable](#auto-equatable)
-    - [Scope Cleanup](#scope-cleanup)
-
----
+This reference describes the syntax and semantics of the Maxon language. The grammar is in
+[BNF_SYNTAX.md](BNF_SYNTAX.md), the standard library in the [standard library reference](STDLIB_REFERENCE.md), and
+the `maxon` command in the [CLI reference](CLI_REFERENCE.md).
 
 ## Program Structure
 
 ### Entry Point
-Every Maxon program must have a `main()` function that returns `ExitCode`:
+
+A program starts at a function named `main` that returns `ExitCode`:
 
 ```maxon
 function main() returns ExitCode
-		return 0
+	print("Hello, world!\n")
+	return 0
 end 'main'
 ```
 
-The return value becomes the program's exit code. The `ExitCode` range is platform-dependent: `0` to `u32.max` on Windows, `0` to `255` on Linux, macOS, and WASI.
+The value `main` returns is the process exit code. `ExitCode`'s range depends on the target: `0` to
+`u32.max` on Windows, `0` to `255` on Linux, macOS and WASI. A literal outside that range is a compile error,
+and a computed one panics at the `return`. A project run with [`maxon test`](#testing)
+needs no `main`; a program compiled with `maxon build` or `maxon run` without one is **E3001**.
 
-### File Structure
-- One or more function, type, enum, or typealias declarations
-- Namespace derived from file path
-- Use `export` keyword for cross-file visibility (applies to functions, types, enums, and typealiases)
-- Use `module` keyword for directory-scoped visibility (visible to files in the same directory and subdirectories)
-- Use `public` for API surface: the same visibility as `export`, but exempt from the unused-export diagnostics (E3092/E3093) because "no caller in this compilation" is not the same fact as "dead"
+### Files and Projects
+
+- A program is one `.maxon` file or a directory of them, compiled together. There are no `import`
+  statements.
+- A file contains top-level declarations: functions, types, enums, unions, interfaces, extensions,
+  typealiases, variables and — in `*.test.maxon` files — tests. There are no top-level statements.
+- A file's namespace comes from its directory (see [Namespaces](#namespaces)).
+- Declarations are private to their file unless marked `export`, `public` or `module`.
+- Declaration order does not matter: a function may call one declared later or in another file.
+- The standard library is available to every file.
+
+### Blocks and Labels
+
+Every block opens with a keyword and a quoted **label**, and closes with `end` and the same label:
+
+```maxon
+typealias Count = int(0 to 100)
+
+function countDown(from Count)
+	var n = from
+	while n > 0 'tick'
+		print("{n}\n")
+		n = n - 1
+	end 'tick'
+end 'countDown'
+```
+
+A function's label is its name; a type's, enum's, union's, interface's or extension's label is the type's
+name; a test's label is its quoted name. Labels on `if`, `while`, `for`, `match` and `try` blocks are chosen by
+you and name the block for `break` and `continue`. Statements end at the end of the line; there are no
+semicolons and no braces around blocks.
 
 ### Conditional Compilation
 
-Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional code. These are evaluated at parse time based on the compilation target.
+`#if`, `#else` and `#endif` include or exclude code by compilation target. They are evaluated while parsing:
 
-**Target OS:**
 ```maxon
 #if os(Windows)
-	let separator = "\\"
+let separator = "\\"
 #else
-	let separator = "/"
+let separator = "/"
 #endif
+
+function main() returns ExitCode
+	#if (os(Linux) or os(Macos)) and arch(x64)
+		print("x64 Unix\n")
+	#else
+		print("separator {separator}\n")
+	#endif
+
+	return 0
+end 'main'
 ```
 
-**Target Architecture:**
-```maxon
-#if arch(x64)
-	let pointerSize = 8
-#else
-	let pointerSize = 8
-#endif
-```
+**Conditions:**
 
-Supported conditions:
-- `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)` — match the target operating system
-- `arch(x64)`, `arch(arm64)`, `arch(wasm32)` — match the target CPU architecture
-- `testing(true)`, `testing(false)` — match whether the code is compiled in test mode
-- `rcSanitize(true)`, `rcSanitize(false)` — match whether the build has the refcount sanitizer enabled (`--rc-sanitize`); used by `stdlib/Internals.maxon` to include the poison/quarantine diagnostics only in sanitized builds
-- `leakReport(true)`, `leakReport(false)` — match whether the build emits the end-of-run leak report
+- `os(Windows)`, `os(Linux)`, `os(Macos)`, `os(Wasi)` — the target operating system
+- `arch(x64)`, `arch(arm64)`, `arch(wasm32)` — the target architecture
+- `testing(...)`, `rcSanitize(...)` and `leakReport(...)` name build flags the compiler does not have, so
+  each flag is off: `testing(false)` holds and `testing(true)` never does, including under `maxon test`
+- `debugstream(true)` holds in a `--debugstream` build and `debugstream(false)` otherwise
 
-**Boolean operators** (precedence: `or` < `and` < `not`), plus parentheses for grouping:
-```maxon
-#if not os(Windows)
-		// runs on non-Windows targets
-#endif
+An `os` or `arch` argument the compiler does not recognize is false rather than an error, so portable code
+can name a platform the compiler does not target.
 
-#if os(Linux) or os(Macos)
-		// runs on Linux and macOS
-#endif
+Conditions combine with `not`, `and` and `or` (in increasing looseness) and parentheses. An unknown condition
+is **E2064**.
 
-#if os(Linux) and arch(arm64)
-		// runs on ARM Linux only
-#endif
-
-#if (os(Linux) or os(Macos)) and arch(x64)
-		// runs on Linux or macOS, but only on x64
-#endif
-```
-
-Conditional compilation directives can appear at:
-- Top level (around functions, types, variables)
-- Inside function bodies (around statements)
-- Inside `type`, `enum`, `union`, `interface`, or `extension` bodies (around members)
-
-Nested `#if` blocks are supported.
+Directives may surround top-level declarations, statements inside a function body, and members inside a
+`type`, `enum`, `union`, `interface` or `extension` body. `#if` blocks nest.
 
 ---
 
 ## Lexical Elements
 
+Maxon source is UTF-8 text.
+
 ### Comments
+
 ```maxon
-// Line comment
+// A line comment runs to the end of the line.
 
-/* Block comment */
-
-/*
-  Multi-line
-  block comment
-*/
+/* A block comment
+   may span lines. */
 ```
+
+Block comments do not nest: the first `*/` ends the comment. An unterminated block comment is **E1007**.
+
+### Doc Comments
+
+A line starting with `///` is a **doc comment**. Consecutive `///` lines directly above a declaration
+document it; editors show them when hovering over the declaration or its uses, and `maxon fmt` preserves
+them.
+
+```maxon
+typealias Size = int(0 to 100)
+
+/// Doubles a size.
+/// Shown when hovering over `twice` in an editor.
+function twice(n Size) returns Size
+	return n * 2
+end 'twice'
+```
+
+A doc comment is not a statement, so a block containing only a doc comment is still empty (**E3082**).
 
 ### Shebang Line
 
-A file whose **first two bytes** are `#!` has that first line ignored by the lexer, so a Maxon program can be an executable script:
+When a file's first two bytes are `#!`, the first line is ignored, so a Maxon file can be run directly as a
+script:
 
 ```maxon
 #!/usr/bin/env maxon
@@ -171,1185 +142,1289 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Byte 0 and nowhere else: `#` opens a compiler directive (`#if` / `#else` / `#endif`) everywhere else in a file, so a `#!` anywhere but the very start of one is `E1009: Unknown compiler directive`. The line's newline is **not** consumed, so every line beneath it keeps the number it has in the file and a diagnostic on line 4 says line 4. `maxon fmt` preserves the line verbatim.
-
-A kernel execs such a file by handing the interpreter the script's path, which is the wordless door onto [`maxon run`](CLI_REFERENCE.md#maxon-run).
+The line must start at the very first byte of the file; `#!` anywhere else is **E1009** (`Unknown compiler
+directive`). Line numbers in diagnostics still count the shebang line. `maxon fmt` keeps it as written.
+Running such a file is [`maxon run`](CLI_REFERENCE.md).
 
 ### Identifiers
 
-Identifiers name variables, functions, types, and other declarations.
-
-- **Starts with a letter or underscore**: Cannot start with a digit, since the compiler uses the first character to distinguish names from number literals.
-- **Alphanumeric content**: After the first character, letters (`a-z`, `A-Z`), digits (`0-9`), and underscores (`_`) are allowed.
-- **Case-sensitive**: `myVar` and `MyVar` are different identifiers.
-- **Cannot be keywords**: Reserved words like `if`, `for`, `return` cannot be used as identifiers.
-- **Cannot begin with `__`**: that space belongs to the compiler and to the
-  [runtime tier](#the-runtime-tier). A declaration elsewhere that takes a name from it is **E2051**.
-
-```
+```text
 identifier = [a-zA-Z_][a-zA-Z0-9_]*
 ```
 
+- An identifier starts with a letter or underscore, continues with letters, digits and underscores, and is
+  case-sensitive.
+- A keyword cannot name a variable (`let type = 3` is **E2010**). A keyword *can* name a function, a
+  parameter, or an enum or union case, since those are always written in a position where the keyword
+  reading is impossible.
+- Names beginning with `__` are reserved for the compiler and runtime (**E2051**).
+- `self` is the method receiver and cannot be bound by any declaration.
+- `_` alone is the discard name, not a variable.
+
 ### Keywords
-```
-and, as, async, await, bool, break, byte, continue, cstring, default, else, end,
-enum, export, extends, extension, fallthrough, false, float, for, from, function,
-gives, if, ignore, implements, in, int, interface, is, let, match, mod, not, of,
-or, otherwise, panic, return, returns, self, Self, shl, shr, static, then, throw,
-throws, to, true, try, type, typealias, union, upto, uses, var, where, while,
-with, xor, __file__, __line__
-```
 
-This list is `Lexer.KeywordMap` transcribed; nothing checks the transcription, so read the map
-when it matters. It had drifted: `async`, `await`, `mod`, `panic` and `union` were missing, and so
-were `__file__` / `__line__` — while [Source-Location Defaults](#source-location-defaults) in this
-same document asserted that both are reserved words.
-
-
-
-#### Contextual keywords
-
-Two words are **contextual keywords**: they are syntax only in one specific position and are
-ordinary identifiers everywhere else. Neither is reserved, so user code may still name a
-parameter, local or field after either.
-
-`module` is recognised as a visibility modifier only when it appears immediately before a
-declaration token (`function`, `type`, `enum`, `var`, `let`, etc.).
-
-`test` is recognised as a declaration opener only at declaration position when the next token is
-the test's quoted name (see [Test Declarations](#test-declarations)). Both halves of that rule
-are needed: `test` is a common variable name, and `match test 'check'` is also an identifier
-followed by a character literal — only the declaration position tells the two apart.
-
-### Literals
-
-**Integer Literals**
-
-Integer literals are 64-bit signed values (range: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807).
-
-Decimal:
-```maxon
-42
--17
-0
-9223372036854775807    // INT64_MAX
+```text
+and        as         async      await      bool       break      continue   countof
+cstring    default    else       end        enum       export     extends    extension
+fallthrough false     float      for        from       function   gives      if
+ignore     implements in         int        interface  is         let        match
+mod        not        or         otherwise  panic      public     return     returns
+self       Self       shl        shr        sizeof     static     then       throw
+throws     to         true       try        type       typealias  union      upto
+uses       var        where      while      with       xor
 ```
 
-Hexadecimal (prefix `0x`):
-```maxon
-0xff
-0x1a2b
-0x0000000140000000     // Values above 32-bit range
-```
+**Contextual keywords** have a special meaning only in one position and are ordinary identifiers everywhere
+else:
 
-Binary (prefix `0b`):
-```maxon
-0b1010
-0b11111111
-```
+| Word | Special when |
+|------|--------------|
+| `module` | directly before a declaration, as a visibility modifier |
+| `test` | at the top level, followed by a quoted name (see [Testing](#testing)) |
+| `spawn` | followed by a type's static factory call (see [Services](#services--spawn)) |
+| `bits` | followed by `(` on the right-hand side of a typealias |
 
-Octal (prefix `0o`):
-```maxon
-0o777
-0o52
-```
+`__line__` and `__file__` are valid only as parameter defaults (see
+[Caller-Location Defaults](#caller-location-defaults-__line__-__file__)).
 
-Underscore separators for readability:
-```maxon
-1_000_000
-0xff_ff
-0b1111_0000
-0x0000_0001_4000_0000  // Large hex with separators
-```
-
-**Byte Values** (cast through a ranged `byte` typealias)
-```maxon
-typealias Octet = byte(0 to u8.max)
-42 as Octet
-0xff as Octet
-```
-
-**Float Literals** (must contain decimal point)
-```maxon
-3.14
--2.5
-0.0
-1.0
-```
-
-**Character Literals** (grapheme clusters in single quotes)
-```maxon
-'A'           // ASCII character (1 byte)
-'é'           // Latin with accent (2 bytes)
-'中'          // CJK character (3 bytes)
-'🎉'          // Emoji (4 bytes)
-'\n'          // Escape sequence (newline)
-'\t'          // Escape sequence (tab)
-'\\'          // Escape sequence (backslash)
-'\''          // Escape sequence (single quote)
-'\x41'        // Hex escape (character 'A')
-'\u00A0'      // Unicode escape (NBSP)
-'\u03A3'      // Unicode escape (Greek sigma Σ)
-```
-
-Character literals create a `character` type value, which represents an Extended Grapheme Cluster (EGC).
-The `character` type may contain multiple UTF-8 bytes.
-
-When a single-codepoint character literal appears in a binary operation with an integer operand, the compiler automatically converts it to its Unicode codepoint value:
-```maxon
-var cp = 45
-if cp == '-' 'check'    // '-' is coerced to 45
-	var digit = cp - '0'  // '0' is coerced to 48
-end 'check'
-```
-
-**String Literals** (double-quoted, null-terminated)
-```maxon
-"Hello, World!"
-"Line1\nLine2"
-"Tab\there"
-"Quote: \"text\""
-"\x48\x69"          // Hex escape ("Hi")
-"hello\u0021"       // Unicode escape ("hello!")
-```
-
-Escape sequences: `\n` `\t` `\r` `\0` `\\` `\"` `\{` `\}` `\xNN` `\uXXXX`
-
-**String Interpolation** (embed expressions in strings)
-```maxon
-var name = "World"
-print("Hello, {name}!")        // "Hello, World!"
-
-var x = 5
-print("{x} * 2 = {x * 2}")     // "5 * 2 = 10"
-
-print("Pi: {3.14159}")         // "Pi: 3.14159"
-print("Active: {true}")        // "Active: true"
-
-// Escape braces with backslash
-print("Use \{expr\} syntax")   // "Use {expr} syntax"
-```
-
-Any expression can be embedded. Built-in types (`int`, `float`, `bool`) are automatically converted to strings. Custom types must implement the `Stringable` interface.
-
-**Format Specifiers** (control output formatting)
-
-Append a format specifier after a colon inside the interpolation braces: `{expr:spec}`
-
-*Integer format specifiers:* `[0][width][type]`
-- `0` — pad with zeros instead of spaces
-- `width` — minimum output width (right-aligned)
-- `type` — `d` decimal (default), `x` lowercase hex, `X` uppercase hex, `b` binary, `o` octal
+### Integer Literals
 
 ```maxon
-var n = 42
-print("{n:04}")      // "0042"  — zero-pad to width 4
-print("{n:6}")       // "    42" — space-pad to width 6
-print("{n:x}")       // "2a"    — lowercase hex
-print("{n:04X}")     // "002A"  — zero-padded uppercase hex
-
-var neg = -42
-print("{neg:06}")    // "-00042" — sign comes before padding
+let decimal = 42
+let negative = -17
+let hex = 0xff           // 255
+let binary = 0b1010      // 10
+let octal = 0o17         // 15
+let million = 1_000_000  // underscores separate digits
 ```
 
-*Float format specifiers:* `[0][width][.precision]`
-- `0` — pad with zeros instead of spaces, after the sign, exactly as for an integer
-- `width` — minimum total output width (right-aligned); never truncates
-- `.precision` — number of decimal places, rounded half-to-even. Omit it and the float keeps its
-  default spelling: the shortest decimal that reads back as the same value.
+An integer literal is a signed 64-bit value, `-9223372036854775808` to `9223372036854775807`; one outside that
+range is **E2011**. A literal has no typealias of its own, so it fits any integer alias it is in range for.
+
+### Float Literals
 
 ```maxon
-var f = 3.14159
-print("{f:.2}")      // "3.14"     — 2 decimal places
-print("{f:.4}")      // "3.1416"   — 4 decimal places (rounded)
-print("{f:8.2}")     // "    3.14" — width 8, 2 decimal places
-print("{f:8}")       // " 3.14159" — a width alone never changes the digits
-
-var negf = -3.14
-print("{negf:08}")   // "-0003.14" — sign comes before padding, as for an integer
-print("{2.5:.0}")    // "2"        — an exact half rounds to the EVEN digit
+let pi = 3.14159
+let small = -2.5
+let big = 1.5e3          // 1500.0
 ```
 
-Custom types can implement `FormattedStringable` to support format specifiers:
+A float literal contains a decimal point, optionally followed by an exponent (`e` or `E`, with an optional
+sign). `1e10` without a decimal point is not a float literal. A value beyond the float range is **E2011**.
+
+### Boolean Literals
+
+`true` and `false`.
+
+### Character Literals
+
+A character literal holds exactly one user-perceived character — which may be several codepoints and
+several UTF-8 bytes — in single quotes:
 
 ```maxon
-interface FormattedStringable
-		function toString(format String) returns String
-end 'FormattedStringable'
+function main() returns ExitCode
+	let letter = 'A'
+	let accented = 'é'
+	let cjk = '中'
+	let emoji = '🎉'
+	let quote = '\''
+	let sigma = 'Σ'
+	print("{letter}{accented}{cjk}{emoji}{quote}{sigma}\n")     // Aé中🎉'Σ
+	return 0
+end 'main'
 ```
 
-**Byte String Literals** (create a ByteArray from a string)
+An empty literal `''`, or one holding two characters, is **E2016**. A character literal beside an integer
+operand is its codepoint (`cp - '0'`).
+
+### String Literals
+
 ```maxon
-let bytes = b"hello"           // ByteArray containing [104, 101, 108, 108, 111]
-let empty = b""                // Empty ByteArray
-let escaped = b"line\n"        // Supports escape sequences
-let raw = b"\xFF\x00"          // Hex escape: raw bytes [255, 0]
-let latin = b"À"               // Non-ASCII char up to U+00FF: one Latin-1 byte [192]
+let greeting = "Hello, World!"
+let lines = "Line1\nLine2"
+let quoted = "Quote: \"text\""
+let hi = "\x48\x69"          // "Hi"
+let bang = "hello!"     // "hello!"
 ```
 
-Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF) and `\uXXXX` Unicode escapes. Every source character encodes to exactly one byte: codepoints `U+0000`–`U+00FF` — written literally or as `\uNNNN` — emit their Latin-1 byte value, and a character or `\uNNNN` escape above `U+00FF` has no single-byte encoding, so it is rejected at compile time (E1004) with a hint to use a `\xNN` hex escape for the exact raw byte intended. This is useful when working with raw bytes or APIs that expect byte arrays.
+A string literal cannot contain a raw newline; use `\n`.
 
-**Boolean Literals**
+**Escape sequences:**
+
+| Escape | Meaning |
+|--------|---------|
+| `\n` `\t` `\r` `\0` | newline, tab, carriage return, NUL |
+| `\\` `\"` `\'` | backslash, double quote, single quote |
+| `\{` `\}` | literal braces (string literals only) |
+| `\xNN` | the codepoint `U+00NN` (exactly two hex digits) |
+| `\uXXXX` | the codepoint `U+XXXX` (exactly four hex digits) |
+
+In a `String`, `\xNN` is a codepoint, not a raw byte: `"\xFF"` is the character `ÿ`, two bytes in UTF-8. Use a
+byte string for raw bytes. A malformed escape is **E1004**.
+
+### String Interpolation
+
+`{expression}` inside a string literal inserts the expression's value:
+
 ```maxon
-true
-false
+function main() returns ExitCode
+	let name = "World"
+	let x = 5
+	print("Hello, {name}!\n")          // Hello, World!
+	print("{x} * 2 = {x * 2}\n")       // 5 * 2 = 10
+	print("Use \{braces\}\n")          // Use {braces}
+	return 0
+end 'main'
 ```
+
+Numbers, `bool`, `Character` and `String` interpolate directly. A type interpolates if it has a
+`toString()` method (`Stringable`). A `{` that does not open an interpolation must be escaped as `\{`
+(**E1006**).
+
+**Format specifiers.** `{expression:spec}` formats a number:
+
+- Integers: `[0][width][base]` — `0` pads with zeros, `width` is the minimum width (right-aligned), and
+  `base` is `x`, `X`, `o` or `b` (decimal otherwise). Hexadecimal, octal and binary print the bit pattern,
+  never a sign.
+- Floats: `[0][width][.precision]` — `precision` is the number of decimal places, rounded half to even;
+  without it the float keeps its shortest round-trip spelling. A width never changes the digits.
+
+```maxon
+function main() returns ExitCode
+	let n = 42
+	print("{n:04} {n:6} {n:x} {n:04X} {-42:06} {255:08b}\n")   // 0042     42 2a 002A -00042 11111111
+
+	let f = 3.14159
+	print("{f:.2} {f:.4} {f:8.2} {-3.14:08} {2.5:.0}\n")       // 3.14 3.1416     3.14 -0003.14 2
+	return 0
+end 'main'
+```
+
+A specifier has no effect on a `String` or `bool`. A type that implements `FormattedStringable` receives the
+specifier text in `toString(format String)`, so `{value:verbose}` calls `value.toString("verbose")`.
+
+### Byte String Literals
+
+`b"..."` creates a `ByteArray` (`Array with Byte`) directly:
+
+```maxon
+let bytes = b"hello"        // [104, 101, 108, 108, 111]
+let empty = b""
+let raw = b"\xFF\x00"       // [255, 0]
+let latin = b"À"            // [192]
+```
+
+Every character becomes exactly one byte: `\xNN` is the byte `NN`, and a character or `\uXXXX` escape from
+`U+0000` to `U+00FF` is its Latin-1 byte. A character above `U+00FF` has no single-byte encoding and is
+**E1004**. `\{` and `\}` are not valid in a byte string.
+
+### Array and Dictionary Literals
+
+```maxon
+let primes = [2, 3, 5, 7]              // an Array
+let ages = ["ada": 36, "alan": 41]     // a Map
+```
+
+The element type comes from the first element (or pair). See
+[Initializing From Literals](#initializing-from-literals) for literals of
+other collection types.
 
 ---
 
 ## Types
 
-### Type Conversions
+Maxon has a small set of built-in types. Numbers are always used through a **named, ranged
+typealias** — the name documents what the number means and the range documents which values are legal.
 
-**Implicit Conversions**
-- `int` → `float` (in mixed arithmetic)
-- `character` literal → `int` (in binary operations with an integer operand, coerced to Unicode codepoint value)
+| Type | What it is | Written in a declaration as |
+|------|------------|-----------------------------|
+| `int(lo to hi)` | 64-bit integer quantity restricted to a range | a typealias: `typealias Age = int(0 to 150)` |
+| `float(lo to hi)` | IEEE-754 double (64-bit) restricted to a range | a typealias: `typealias Ratio = float(0.0 to 1.0)` |
+| `bits(n)` | raw bit pattern of width 1, 2, 4, 8, 16, 32 or 64 | a typealias: `typealias Hash = bits(64)` |
+| `bool` | `true` or `false` | `bool` |
+| `Character` | one user-perceived character (an extended grapheme cluster) | `Character` |
+| `String` | UTF-8 text | `String` |
+| `cstring` | NUL-terminated byte pointer, for runtime interop only | `cstring` |
 
-**Explicit Conversions** (using `as` operator)
+There is no separate `byte` or `short` type: a byte is an `int` alias whose range fits in 8 bits, and the
+compiler stores it in one byte where that matters (see [Storage](#storage)).
 
-Only safe (widening) casts are allowed. The compiler rejects casts that could lose data.
+### Primitives Go Through a Typealias
 
-Cast targets MUST be either a named ranged typealias (for `int`, `float`, or
-`byte`) or the bare keyword `bool`. Bare `int`/`float`/`byte` as cast targets
-are rejected — every primitive cast must travel through a typealias so the
-range-narrowing intent is explicit.
+The keywords `int` and `float` may appear only on the right-hand side of a `typealias`. Everywhere else — a
+parameter, a return type, a field, a cast target, a generic type argument — name an alias instead:
 
 ```maxon
-typealias Octet = byte(0 to u8.max)
-typealias Tally = int(0 to i64.max)
+typealias Port = int(0 to 65535)
+typealias Celsius = float(-273.15 to 1000.0)
+
+function connect(port Port) returns bool
+	return port != 0
+end 'connect'
+```
+
+A bare `int` in a declaration is **E3005** (`Cannot use bare 'int' as a type. Define a typealias with
+range constraints, e.g., typealias MyInt = int(0 to 100)`); a bare `int` type argument (`Array with int`)
+is **E2061**. `bool` and `cstring` are used bare. Local variables never need an annotation — the type is
+inferred from the initializer:
+
+```maxon
+let count = 0          // an integer
+let ratio = 0.5        // a float
+let done = false       // bool
+```
+
+The standard library declares a few aliases every file can use, among them `ExitCode`, `Byte`
+(`int(0 to u8.max)`), `ByteArray` (`Array with Byte`), `Codepoint` (`int(0 to 1114111)`), `HashValue`
+(`int(0 to u32.max)`), `SourceLineNumber` and `Real` (`float(f64.min to f64.max)`).
+[Ranged Type Aliases](#ranged-type-aliases) covers declaring your own.
+
+### Integers
+
+An integer alias declares a **quantity**: `int(lo to hi)` includes `hi`, `int(lo upto hi)` excludes it.
+Bounds are literals or the limits of a sized type: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`
+(`.min` / `.max`).
+
+```maxon
+typealias Score = int(0 to 100)
+typealias Offset = int(i64.min to i64.max)
+typealias Tally = int(0 to u64.max)
+```
+
+- **Literals** are decimal, hexadecimal (`0xff`), binary (`0b1010`) or octal (`0o777`), with optional `_`
+  separators. An unannotated literal is a signed 64-bit value; one outside that range is **E2011**. A
+  literal carries no alias, so it fits any integer alias it is in range for.
+- **Arithmetic** is `+ - * / mod`, always computed at 64 bits. `/` truncates toward zero (`-7 / 2` is
+  `-3`). A divisor that might be zero makes the division throw — see
+  [Division by Zero](#division-by-zero).
+- **Overflow wraps.** Integer arithmetic is two's-complement: `i64.max + 1` is `i64.min`. A range is not
+  enforced on every intermediate result; it is checked where a value reaches a place declared with the
+  alias (see [Range Checks](#range-checks)).
+- **Bitwise** operations use the word operators `and`, `or`, `xor`, `not`, `shl` and `shr` (see
+  [Expressions](#logical-and-bitwise-operators)).
+- An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it rather than extending the sign,
+  and its range check refuses a negative value instead of letting an underflow become a huge number.
+  Because a check sees only the 64 bits, a quantity cannot carry a value above `i64.max` through a
+  checked door — `int(0 to u64.max)` panics on one. A value that genuinely needs all 64 bits is a bit
+  pattern: use [`bits(64)`](#bit-patterns--bitsn).
+
+### Floats
+
+`float` is a 64-bit IEEE-754 double. A float literal needs a decimal point (`3.14`, `1.0`, `1.5e3`).
+
+```maxon
 typealias Real = float(f64.min to f64.max)
 
-var b = 42 as Octet        // int literal 0-255 to byte (OK)
-var i = b as Tally         // byte to int (OK)
-var f = b as Real          // byte to float (OK)
-var g = 100 as Real        // int to float (OK)
+function area(radius Real) returns Real
+	return 3.14159 * radius * radius
+end 'area'
+
+function main() returns ExitCode
+	print("{area(2)}\n")        // 12.56636
+	print("{1.0 / 3.0}\n")      // 0.3333333333333333
+	print("{100.0} {1.5e3}\n")  // 100.0 1500.0
+	return 0
+end 'main'
 ```
 
-Supported casts:
-- `byte` → `int` (widening)
-- `byte` → `float` (widening)
-- `int` → `float` (widening)
-- `int` literal 0-255 → `byte` (compile-time range-checked)
+- A float prints as the shortest decimal that reads back as the same value, and always shows a fractional
+  part (`100.0`).
+- `-x` flips the sign bit, so `-0.0` is distinct from `0.0` when printed.
+- `inf` and `NaN` produced by arithmetic are ordinary IEEE values; only division *by zero* is intercepted.
+  There is no float `mod`.
+- A float alias bounded by `f32.min to f32.max` is still stored as a double; the bound is a range check.
 
-Casts to or from `bool` are not allowed. Narrowing casts (`int` variable → `byte`, `float` → `int`, `float` → `byte`) are not allowed. Attempting an unsupported cast produces error **E3009**.
+### Booleans
 
-A cast whose target alias already covers the source alias's full range — for
-example `let x Integer = ...; let y = x as Integer` — is rejected with **E3010
-"unneeded cast"**. The compiler auto-widens at use sites, so any explicit cast
-must actually narrow or refine. Bare-literal sources (`42 as Byte`) are exempt
-because the literal has no source alias to compare against.
+`bool` has the literals `true` and `false`. Conditions must be `bool` — there is no truthiness, so
+`if count 'x'` is **E3005** (`'if' requires a bool condition, got 'int'`). `bool` and `int` do not mix:
+`flag + 1` is **E2004** and comparing a `bool` with an `int` is **E3005**. On `bool` operands, `and` and
+`or` are logical and short-circuit.
 
-**Converting floats to integers:**
-The `float → int` cast is not supported because it silently truncates. Use explicit functions instead to make your intent clear:
-- `trunc(x)` - Truncate toward zero (removes fractional part)
-- `round(x)` - Round to nearest integer
-- `floor(x)` - Round down to nearest integer
-- `ceil(x)` - Round up to nearest integer
+### Bit Patterns — `bits(n)`
 
-Example:
-```maxon
-var f = 3.7
-var i1 = trunc(f)  // 3 (toward zero)
-var i2 = round(f)  // 4 (nearest)
-var i3 = floor(f)  // 3 (down)
-var i4 = ceil(f)   // 4 (up)
-```
-
-### Ranged Type Aliases
-
-Every use of `int`, `float`, and `byte` in type positions must go through a `typealias` with mandatory range constraints. This creates a stronger type system where every numeric value has a documented domain. `bool` and `cstring` are exempt from this requirement — `bool` is unranged by nature, and `cstring` is a pointer type (a NUL-terminated UTF-8 byte pointer used to interoperate with `__Builtins.*` runtime intrinsics).
-
-**Restriction in `with` clauses:** Bare primitive types (`int`, `float`, `byte`) cannot be used as type arguments in `with` clauses on `typealias` or `type` declarations. You must create a ranged typealias first. `bool`, `String`, and other struct types are not affected.
+An `int(...)` alias is a quantity whose every door is range-checked. A **raw bit pattern** — a hash, a
+mask, an address — can legitimately set bit 63, so it has its own spelling:
 
 ```maxon
-// INVALID — bare primitives in with clauses
-typealias IntArray = Array with int          // ERROR
-type IntBox implements Container with int    // ERROR
+typealias Word = bits(64)
+typealias Integer = int(i64.min to i64.max)
 
-// VALID — use a ranged typealias
-typealias Tally = int(0 to u64.max)
-typealias IntArray = Array with Tally        // OK
-type IntBox implements Container with Tally  // OK
+function main() returns ExitCode
+	let a = 0xF0 as Word
+	let b = 0x0F as Word
+	print("{a or b} {a and b} {a shl 4}\n")     // 255 0 3840
+
+	let all = u64.max as Word
+	print("{all} {all as Integer}\n")           // 18446744073709551615 -1
+	return 0
+end 'main'
 ```
 
-**Declaration:**
+- Legal widths are 1, 2, 4, 8, 16, 32 and 64; any other width is **E3148**.
+- `bits(64)` accepts every 64-bit pattern, so a cast into it never fails. A narrower width asks one
+  question — does the value fit in `n` bits — and panics if not. Truncation is explicit:
+  `x and 0xFFFFFFFF`.
+- Casting between a pattern and a signed alias reinterprets the bits without a check: `bits(64)` all-ones
+  as `Integer` is `-1`.
+- `bits` is not a keyword; it is recognized only as `bits(` on the right of a typealias.
+
+### Characters and Strings
+
+`Character` is one user-perceived character — an extended grapheme cluster, which may be several
+Unicode codepoints and several UTF-8 bytes. `String` is UTF-8 text; iterating a `String` yields
+`Character`s and `count()` counts characters, not bytes.
+
+```maxon
+function main() returns ExitCode
+	let c = 'é'
+	let s = "héllo"
+	print("{c} is {c.bytes().count()} bytes\n")                              // é is 2 bytes
+	print("{s} has {s.count()} characters and {s.bytes().count()} bytes\n") // 5 characters, 6 bytes
+
+	for ch in s 'each'
+		print("[{ch}]")
+	end 'each'
+	print("\n")
+
+	var joined = "{c}"
+	joined.append(s)
+	print("{joined}\n")                                                      // éhéllo
+	return 0
+end 'main'
+```
+
+- `Character` supports `==` and ordering (`<`, `>`); `String` supports only `==` and `!=`
+  (ordering a `String` is **E3005**).
+- `+` is not defined on `String`; build text with interpolation (`"{a}{b}"`) or `append`.
+- A `Character` and a `String` never compare: `'a' == "a"` is **E3005**.
+- A character literal next to an integer operand becomes its codepoint (see
+  [Implicit Conversions](#implicit-conversions)); otherwise `c - 1` on a `Character` is **E2004**.
+- The [standard library](STDLIB_REFERENCE.md) documents the `String` and `Character` methods.
+
+### Storage
+
+Integer arithmetic is always 64-bit, but an alias with a **non-negative** range is stored in the smallest
+unsigned width that holds it wherever values are packed: array elements and module-level variables.
+
+| Range of the alias | Array element storage |
+|--------------------|-----------------------|
+| `0 to 1` | 1 bit |
+| `0 to 3` | 2 bits |
+| `0 to 15` | 4 bits |
+| `0 to u8.max` | 1 byte |
+| `0 to u16.max` | 2 bytes |
+| `0 to u32.max` | 4 bytes |
+| anything wider, or a negative lower bound | 8 bytes |
+
+`bool` array elements take one bit, and `bits(n)` packs like the unsigned range of the same width. Struct
+fields and local variables use 8 bytes. `sizeof(T)` reports a type's size in bytes (see
+[Expressions](#sizeof-and-countof)).
+
+### Primitive Conformances
+
+The primitives implement the standard interfaces directly: `int` and `float` are `Hashable`, `Equatable`,
+`Comparable`, `Stringable` and `Cloneable`; `bool` is `Comparable`, `Stringable` and `Cloneable`;
+`Character` is `Hashable`, `Equatable`, `Comparable`, `Stringable` and `Cloneable`; `String` is
+`Hashable`, `Equatable`, `Cloneable` and `Iterable`. Every integer alias therefore works as a `Map` key or `Set` element. You can add methods to
+a primitive with an [extension](#extensions-over-primitives).
+
+### Type Conversions
+
+#### Explicit Conversions (`as`)
+
+`value as Alias` converts to a named alias. The target is always an alias (or `bool`); a bare `int` or
+`float` target is **E3005**.
+
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let b = 200 as Byte
+	let wide = b as Integer      // widening: no run-time check
+	let r = wide as Real         // integer to float
+	let back = wide as Byte      // narrowing: checked at run time
+	print("{wide} {r} {back}\n") // 200 200.0 200
+	return 0
+end 'main'
+```
+
+| Cast | Result |
+|------|--------|
+| integer alias → integer alias | legal; widening emits no check, narrowing panics if the value is out of range |
+| integer alias or literal → float alias | legal |
+| integer alias ↔ `bits(n)` | legal (see [Bit Patterns](#bit-patterns--bitsn)) |
+| literal → alias | checked at compile time: `256 as Byte` is **E3005** (`Value 256 is outside the range of 'Byte'`) |
+| float → integer | **E3009** `Cannot cast from float to int` — use a rounding function |
+| `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
+| a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
+| one container instance to a different one | **E3131** |
+
+#### Floats to Integers
+
+A float never converts to an integer implicitly (**E3009** `cannot implicitly convert 'float' to 'int'`).
+Choose the rounding explicitly:
+
+| Function | Result | Example |
+|----------|--------|---------|
+| `trunc(x)` | integer, toward zero | `trunc(-2.7)` is `-2` |
+| `round(x)` | float, nearest, ties to even | `round(2.5)` is `2.0` |
+| `floor(x)` | float, toward negative infinity | `floor(-2.5)` is `-3.0` |
+| `ceil(x)` | float, toward positive infinity | `ceil(2.1)` is `3.0` |
+
+`trunc` is the one that produces an integer; apply it to the result of `round`, `floor` or `ceil` to get
+an integer from those.
+
+#### Implicit Conversions
+
+Maxon converts implicitly in only these places:
+
+- **Integer to float in mixed arithmetic and float slots.** `let x = 5` then `x + 2.0` is `7.0`, and an
+  unaliased integer (a literal, or a local initialized from one) is accepted where a float is expected. A
+  value of a *named* integer alias still needs `as` to reach a float-alias parameter.
+- **A character literal beside an integer** is that character's codepoint:
+
+  ```maxon
+  let cp = 45
+  if cp == '-' 'dash'           // '-' is 45
+  	print("{cp - '0'}\n")     // '0' is 48
+  end 'dash'
+  ```
+
+- **A payload-free enum case where a number is expected** is its raw value — see
+  [Implicit Coercion to the Backing Primitive](#implicit-coercion-to-the-backing-primitive).
+- **`return`** converts to the declared return alias, exactly as the written cast would (see
+  [Ranged Type Aliases](#aliases-are-distinct-types)).
+
+Every other change of type is written with `as`.
+
+---
+
+## Ranged Type Aliases
+
+A `typealias` gives a type a name. Over `int` and `float` it also gives the type a **range**, which moves a
+domain rule — a port is 0 to 65535, a percentage is 0 to 100 — into the type system, where the compiler
+checks it.
+
+### Declaration
 
 ```maxon
 typealias Port = int(0 to 65535)
 typealias Percentage = float(0.0 to 100.0)
-typealias Pixel = int(0 to u8.max)
 typealias Temperature = int(-273 to 1000)
+typealias Score = int(0 upto 100)        // 0 to 99
 ```
 
-The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it exclusive:
+`to` makes the upper bound inclusive and `upto` makes it exclusive.
 
-```maxon
-typealias Score = int(0 upto 100)   // 0 to 99
-```
-
-**Type-qualified bounds:**
-
-Use `type.min` and `type.max` to reference bounds of specific numeric types:
+**Type-qualified bounds.** `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32` and `f64` each
+have `.min` and `.max`:
 
 ```maxon
 typealias FileHandle = int(0 to u32.max)
 typealias SmallSigned = int(i8.min to i8.max)
+typealias Offset = int(0 to i64.max)
 ```
 
-Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
+- When both bounds are type-qualified they name the same type: `i8.min to i32.max` is **E3005**
+  (`Mismatched type bounds`). A qualified bound may pair with a literal (`0 to u32.max`).
+- A range cannot reach both below zero and above `i64.max`: `int(-1 to u64.max)` is refused. Use
+  `i64.min to i64.max` or `0 to u64.max`.
+- `typealias X = i64` is **E2003**; the sized names exist only as bounds.
+- A typealias nothing uses is **E3062**.
 
-When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`). A type-qualified bound may be paired with a literal: `0 to u32.max` and `0 to i64.max` are both valid. A negative-literal lower paired with `u64.max` upper (e.g., `int(-1 to u64.max)`) is rejected — no single 64-bit type can represent both ends; use `i64.min to i64.max` or `0 to u64.max`. Byte ranges must have bounds within 0 to u8.max.
+`.min` and `.max` are also integer expressions anywhere a literal is valid: `let limit = u16.max`.
 
-**Range identifiers as expressions:**
-
-`type.min` and `type.max` can also be used as expressions anywhere an integer literal is valid — in variable assignments, comparisons, arithmetic, function arguments, etc.:
+**Primitives in `with` clauses.** A generic type argument must be an alias, never a bare `int` or
+`float` (**E2061**):
 
 ```maxon
-var x = u16.max            // 65535
-if value == i32.max 'check'
-	// ...
-end 'check'
-var y = u8.max + 1         // 256
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally      // not Array with int
 ```
 
-**Construction:**
+### Aliases Are Distinct Types
 
-Cast a value into a ranged type with `as`:
-
-```maxon
-typealias Port = int(0 to 65535)
-var p = 8080 as Port
-```
-
-A literal needs no cast — when it flows into a slot whose type is already a ranged alias (a parameter, a struct field, a function return), the literal is checked against that target type directly.
-
-**Every typealias is a nominally distinct type.** Two aliases are two types even when they spell the same range, and a value of one never flows into a slot of the other — a parameter, a rebind, an `otherwise`, a `match` arm, a struct field, a union payload, a generic type argument — unless the author writes the cast. `as` is the one door between two aliases, and it works in both directions:
+**Every typealias is its own type**, even when two aliases spell the same range. A value of one alias
+never flows into a place declared with another — a parameter, an assignment, an `otherwise` fallback, a
+`match` arm, a struct field, a union payload, a generic argument — unless you write the cast:
 
 ```maxon
 typealias Age = int(0 to 150)
 typealias Year = int(0 to 3000)
 
-let a = 30 as Age
-takesYear(a)             // error: expected 'Year', got 'Age'
-takesYear(a as Year)     // the cast is the door
+function takesYear(y Year) returns Year
+	return y
+end 'takesYear'
+
+function main() returns ExitCode
+	let a = 30 as Age
+	// takesYear(a)                   // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
+	print("{takesYear(a as Year)}\n") // the cast converts
+	return 0
+end 'main'
 ```
 
-A widening cast (the source range provably fits the target's) emits no runtime check; a narrowing cast keeps one. A cast to the value's OWN alias is rejected as unneeded (E3010).
+- `as` converts in both directions. A widening cast (the source range fits the target) emits no check;
+  a narrowing cast keeps a run-time check.
+- Casting a value to its own alias is **E3010** (`unneeded cast: 'Age' already fits in 'Age'`).
+- A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
+  initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
+  unnamed slot. Only two *different* names conflict.
+- The same alias name declared over the same range in two files is one type.
 
-A value with no alias fits any alias slot of its structural type: a literal, a counted-loop counter, a `var` initialised from a literal, the raw value of a payload-free `enum` case. A named value fits an unnamed slot. Only two DIFFERENT names conflict.
+**`return` converts.** `return x` in a function declared `returns T` behaves as `return x as T` — the one
+implicit conversion between aliases. A widening return emits no check, a narrowing one keeps its check,
+and `main` may return any integer alias without spelling `ExitCode`. A different struct, a union where a
+scalar is declared, or a lossy float where an integer is declared is still refused.
 
-The same alias name declared over the same range in two files is one type.
+### Construction
 
-**A `return` carries the cast.** `return x` from a function declared `returns T` is `return x as T` — the one implicit conversion in the language, and it performs exactly what the written cast would: a widening return emits no check, a narrowing return keeps its runtime check, a generic-instance or function-type alias re-brands at no cost, and `main` may return an alias-typed value without spelling `ExitCode`. Nothing else converts implicitly. Only a nominal difference converts: a different struct, a boxed union where a scalar is declared, a different generic instance, a function value of a different shape, or a lossy float where an int is declared is refused at the `return`.
-
-**Compile-time range checks:**
-
-Literal values are checked at compile time. This is a compile error:
-
-```maxon
-typealias SmallInt = int(0 to 10)
-var x = 15 as SmallInt   // error: Value 15 is outside the range of 'SmallInt'
-```
-
-**Runtime range checks:**
-
-When the value is a computed expression, a runtime range check is emitted that panics on violation:
+A literal needs no cast when it flows into a place already declared with an alias — the literal is
+checked against that alias directly:
 
 ```maxon
 typealias Port = int(0 to 65535)
-typealias RawValue = int(i64.min to i64.max)
-function makePort(n RawValue) returns RawValue
-	var p = n as Port   // runtime check: panics if n < 0 or n > 65535
+
+function open(p Port) returns Port
 	return p
-end 'makePort'
+end 'open'
+
+function main() returns ExitCode
+	print("{open(8080)}\n")
+	// open(70000)          // E3005: Value 70000 is outside the range of 'Port' (int(0 to 65535))
+	return 0
+end 'main'
 ```
 
-**Return value range checks:**
+Write `value as Alias` when the alias should be visible at the use site, or to convert a value of another
+alias.
 
-Functions with a ranged return type have their return values checked:
-- Returning a literal outside the range is a compile error
-- Returning a computed expression emits a runtime range check
-- A check is elided only where the value's declared range provably fits the destination's — which a type whose range covers its full representation satisfies against everything. `ExitCode` is **not** such a type in general: its range is the compile target's (see Entry Point), so it is exempt on Windows and checked like any other narrow alias on Linux, macOS and WASI
+### Arithmetic
 
-```maxon
-typealias Score = int(0 to 100)
-
-function half(s Score) returns Score
-	return s / 2    // runtime range check on return value
-end 'half'
-```
-
-**Arithmetic:**
-
-Ranged types support standard arithmetic, and the result carries the operands' alias. Two operands of ONE alias yield that alias; an unnamed operand (a literal, a loop counter) adopts the named one; two operands of DIFFERENT aliases are a compile error, and one side must be cast. The same rule governs comparisons, `min`/`max` and unary minus. A shift adopts its LEFT operand only.
+Arithmetic keeps the alias of its operands. Two operands of one alias give that alias; an unnamed operand
+(a literal, a loop counter) adopts the named one; two different aliases are **E3005** until one side is
+cast. The same rule governs comparisons. A shift takes the alias of its left operand.
+Negating a signed alias keeps the alias; negating an unsigned one gives an unnamed value.
 
 ```maxon
 typealias Score = int(0 to 100)
 typealias Meters = int(0 to 1000)
-var a = 30 as Score
-var b = 12 as Score
-var m = 5 as Meters
-var sum = a + b          // Score
-var bumped = a + 1       // Score — the literal adopts the alias
-var bad = a + m          // error: 'Score' and 'Meters' are different typealiases
-var ok = a + (m as Score)
+
+function main() returns ExitCode
+	let a = 30 as Score
+	let b = 12 as Score
+	let m = 5 as Meters
+	let sum = a + b              // Score
+	let bumped = a + 1           // Score: the literal adopts the alias
+	let mixed = a + (m as Score) // cast one side
+	// let bad = a + m           // E3005: 'Score' and 'Meters' are different typealiases
+	print("{sum} {bumped} {mixed}\n")
+	return 0
+end 'main'
 ```
 
-The alias an arithmetic result carries is a name, not a proof that the value is in range: `a + b` over `Score` is `Score`-typed but may exceed 100, so every range check that applies to a computed value still applies.
+The alias is a name, not a proof: `a + b` over `Score` is a `Score` that may hold 130. Range checks apply
+where the value lands (next section). All integer arithmetic is 64-bit and wraps on overflow.
 
-Those checks are made where a value reaches a place DECLARED with the alias — a call argument, a
-`return`, a struct-literal field, a field store, a field's declared default, an array element, an
-explicit `as`. A violation there is a **panic**, in the same class as an out-of-bounds array access:
-it is a bug, never a recoverable error, so no `try` is required for one anywhere.
+### Range Checks
 
-**Reassigning a local is not one of those places**, so a narrow local may hold a value outside its own
-range for as long as it stays local. The check fires where the value escapes:
+A value is checked where it reaches a place **declared** with the alias: a call argument, a `return`, a
+struct-literal field, a field store, a field's declared default, an array element, or an explicit `as`.
+
+- A value the compiler can compute — a literal, a constant expression — that is out of range is a
+  compile error, **E3005** (`Value 101 is outside the range of 'Percent' (int(0 to 100))`).
+- Any other value gets a run-time check where needed. A check is omitted when the value's own range
+  provably fits.
+- A failed run-time check is a **panic**, not a recoverable error: the program prints
+  `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
+  with code 1. No `try` is involved.
+
+**Reassigning a local is not a checked place**, so a local may hold an out-of-range value until it escapes:
 
 ```maxon
 typealias Score = int(0 to 100)
 
 function bump(start Score) returns Score
 	var s = start
-	s = s + 200      // no check here — a rebind is not a door
-	print("{s}")     // prints 200
-	return s         // panics here: value outside typealias 'Score'
+	s = s + 200       // no check: a local rebind
+	print("{s}\n")    // prints 210 for bump(10)
+	return s          // panics: Range check failed: value outside typealias 'Score'
 end 'bump'
 ```
 
-All arithmetic on ranged integer types uses 64-bit operations regardless of storage type.
+**`ExitCode`** is the stdlib alias `main` returns. Its range follows the target: `int(0 to u32.max)` on
+Windows and `int(0 to 255)` on Linux, macOS and WASI. A literal outside it is a compile error, and a
+computed value outside it panics at the `return`.
 
-**Quantities and patterns — `int(...)` versus `bits(n)`:**
-
-An `int(...)` alias declares a **quantity**. Its doors are checked, and that includes the domain the
-value came from: a value that arrived from a signed range and is negative is refused, because a
-negative is not a quantity. `int(0 to u64.max)` is therefore an unsigned quantity — it orders,
-divides and prints unsigned, and it still catches an underflow instead of turning it into
-1.8 × 10¹⁹.
-
-A **raw bit pattern** is the other thing a 64-bit word can be — an address, a hash, a mask, a
-wrapped relocation displacement — and it legitimately sets bit 63. It has its own spelling:
-
-```maxon
-typealias Hash    = bits(64)          // raw pattern: every pattern is a value, no door check
-typealias Flags   = bits(32)          // narrower: a value that does not fit 32 bits panics
-typealias Nibble  = bits(4)           // sub-byte, packed
-typealias Tally   = int(0 to u64.max) // unsigned QUANTITY: doors checked
-```
-
-The legal widths are **1, 2, 4, 8, 16, 32 and 64** — exactly the widths a slot or a sub-byte packed
-field can hold; any other width is a compile error (E3146). A `bits(n)` door asks one question,
-"does this value fit in n bits", which is why `bits(64)` is unguarded and every narrower width is
-guarded like any other narrow range. Truncation stays explicit: write `x and 0xFFFFFFFF`.
-
-`bits` is an ordinary identifier, not a keyword — what makes a declaration a raw pattern is the name
-followed by `(`, so `bits` remains usable as a variable name.
-
-⚠ **A quantity cannot carry a bit-63 value through a door.** `u64.max as Tally` is accepted — a
-written `u64.max` carries no sign — but a door sees only 64 bits, and the patterns a quantity must
-refuse are the same bits as the values above `i64.max` it would like to admit. A type that genuinely
-needs the whole word is a pattern, and `bits(64)` is how it says so.
-
-⚠ **Casting a pattern to a signed alias is a deliberate reinterpretation.** `bits(64) as Integer`
-turns a bit-63 pattern into a negative number with no check and no diagnostic, and so does
-`int(0 to u64.max) as Integer`. The bits do not move, every 64-bit pattern is a legal signed number,
-and a guard would have nothing to reject. It is the one silent numeric change the design keeps.
-
-**Storage:**
-
-The compiler automatically selects the smallest natural integer width that can represent the declared range for storage in arrays and global variables. All arithmetic still uses 64-bit operations.
-
-| Range fits in | Storage used |
-|---------------|-------------|
-| 0 to u8.max | u8 (1 byte) |
-| -128 to 127 | i8 (1 byte) |
-| 0 to 65535 | u16 (2 bytes) |
-| -32768 to 32767 | i16 (2 bytes) |
-| 0 to 4294967295 | u32 (4 bytes) |
-| -2147483648 to 2147483647 | i32 (4 bytes) |
-| anything wider | i64 (8 bytes) |
-
-```maxon
-typealias Pixel = int(0 to 65535)        // stored as u16 in arrays and globals
-typealias Delta = int(-32768 to 32767)   // stored as i16 in arrays and globals
-typealias Percent = int(0 to 100)        // stored as u8 in arrays and globals
-```
-
-Local variables always use 64-bit registers regardless of the ranged type's storage class.
-
-**Standard library aliases:**
-
-The standard library exports a small set of cross-cutting aliases that don't belong to any one domain:
-
-| Alias | Definition | Purpose |
-|-------|-----------|---------|
-| `ExitCode` | platform-dependent | Process exit codes |
-| `HashValue` | `u32` | Hash function results |
-| `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
-
-Domain-specific quantities (counts, indices, byte offsets, math values) are declared as typealiases inside the module they belong to — for example `String` exports `BytePos` and `GraphemeIndex`, `Math` exports `Real`, and `Array` keeps `ElementIndex` private. Application code should follow the same pattern: declare a typealias that names the *purpose* (e.g. `Tally`, `BytePos`, `Coord`) rather than reaching for a generic `Count`/`Index`. Because every alias is its own type, a quantity that crosses from one module's alias into another's is cast at the crossing.
-
-**Assignment and rebinding:**
-
-Assigning one ranged integer variable to another initially creates an alias — both variables refer to the same underlying value. However, reassigning with arithmetic produces a **new value** and rebinds the variable without affecting the original:
+Integers are plain values: `var pos = start` copies, and advancing `pos` never changes `start`, so a ranged
+alias makes a safe loop cursor:
 
 ```maxon
 typealias Pos = int(0 to i64.max)
-var startPos = 10 as Pos
-var pos = startPos      // pos and startPos initially share the same value
 
-pos = pos + 1           // rebinds pos to a new value (11) -- startPos is unaffected
-print("{startPos}")     // 10 -- startPos is unchanged
-print("{pos}")          // 11
-```
-
-This behavior means that using a ranged integer as a loop cursor is safe — advancing `pos` never mutates `startPos`:
-
-```maxon
 function skipSpaces(src ByteArray, startPos Pos) returns Pos
-		var pos = startPos          // pos starts at the same value as startPos
-		while pos < src.length 'loop'
-				if src[pos] != b' ' 'notSpace'
-						break 'loop'
-				end 'notSpace'
-				pos = pos + 1           // advances pos; startPos is unaffected
-		end 'loop'
-		return pos
+	var pos = startPos
+	while pos < src.count() 'scan'
+		let b = try src.get(pos) otherwise panic("in range")
+		if b != 32 'notSpace'
+			break
+		end 'notSpace'
+
+		pos = pos + 1
+	end 'scan'
+
+	return pos
 end 'skipSpaces'
 ```
 
-This is in contrast to struct assignment, where field mutations through an alias affect the original. See [Reference-by-Default Assignment](#reference-by-default-assignment).
+### Naming Aliases
+
+Name an alias for its **purpose** — `Tally`, `BytePos`, `Coord`, `Milliseconds` — rather than reaching for
+a generic `Count` or `Index`, and declare it in the module it belongs to. The standard library follows the
+same pattern and exports a small set of cross-cutting aliases:
+
+| Alias | Definition | Purpose |
+|-------|-----------|---------|
+| `ExitCode` | target-dependent (see above) | process exit codes |
+| `Byte` | `int(0 to u8.max)` | one byte; `ByteArray` is `Array with Byte` |
+| `HashValue` | `int(0 to u32.max)` | `Hashable.hash()` results |
+| `Codepoint` | `int(0 to 1114111)` | Unicode scalar values |
+| `SourceLineNumber` | `int(1 to i32.max)` | caller line numbers (`__line__`) |
+| `Real` | `float(f64.min to f64.max)` | general floating-point values |
+
+Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
+the crossing.
+
+### Generic-Instance and Function-Type Aliases Are Brands
+
+An alias over a generic instance or a function type follows the same rule. `typealias Xs = Array with
+Integer` and `typealias Ys = Array with Integer` are one instance (one layout, one method set) under two
+**brands**: an `Xs` does not flow into a `Ys` slot unless you write `xs as Ys`, which re-brands the value at
+no cost, and `return` re-brands implicitly.
+
+- A `[...]` literal carries no brand and fits either.
+- A closure literal or a declared function carries no brand and fits any function alias of its shape.
+- Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
+  elements have different layouts, so build a new container instead.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Handler = function(n Integer) returns Integer
+typealias Callback = function(n Integer) returns Integer
+
+function runHandler(f Handler) returns Integer
+	return f(10)
+end 'runHandler'
+
+function runCallback(f Callback) returns Integer
+	return f(20)
+end 'runCallback'
+
+function main() returns ExitCode
+	let addThree = function(n Integer) gives n + 3
+	print("{runHandler(addThree)} {runCallback(addThree)}\n")   // 13 23
+	return 0
+end 'main'
+```
+
+### Per-Instance Typealiases
+
+A ranged alias declared inside a generic type is a distinct type for each instantiation — even for two
+aliases of the same instance:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pool uses T
+	export typealias Idx = int(0 to u64.max)
+	var items as T
+
+	static function create(item T) returns Self
+		return Self{items: item}
+	end 'create'
+
+	export function checked(at Idx) returns Idx
+		return at
+	end 'checked'
+end 'Pool'
+
+typealias PoolA = Pool with Integer
+typealias PoolB = Pool with Integer
+```
+
+`PoolA.Idx` and `PoolB.Idx` are different types; passing one where the other is expected is **E3005**
+(`expected 'PoolB.Idx', got 'PoolA.Idx'`). Convert with `a as PoolB.Idx`. Literals that fit the range are
+accepted by both.
 
 ---
 
-## Types (Composite)
+## Composite Types
+
+A `type` declares a record with named fields and methods. Every value of a type is a reference to a
+heap record (see [Memory Model](#memory-model)).
 
 ### Declaration
-Types are user-defined composite types containing named fields. Use `var` for mutable fields and `let` for immutable fields:
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
 
 type Point
-		var x as Coord
-		var y as Coord
-end 'Point'
-```
+	export var x as Coord
+	export var y as Coord
 
-### Type Literals
-Create type instances using field initializers. A type literal is legal only inside the type's own methods, so code elsewhere constructs through a `static` factory that holds the literal:
-
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Point
-		var x as Coord
-		var y as Coord
-
-		export static function create(x Coord, y Coord) returns Point
-				return Point{x: x, y: y}
-		end 'create'
+	export static function create(x Coord, y Coord) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 end 'Point'
 
-var p = Point.create(10, y: 20)
-var origin = Point.create(0, y: 0)
+function main() returns ExitCode
+	let p = Point.create(10, y: 20)
+	print("{p.x}, {p.y}\n")
+	return 0
+end 'main'
 ```
+
+- `var` fields can be written after construction; `let` fields cannot.
+- A field's type is written after `as` and is an alias, `bool`, a type, or another named type — never a bare
+  `int` or `float`.
+- **Fields are private to the type** unless marked `export`, `module` or `public`. The boundary is the type,
+  not the file: another type in the same file reading a private field is **E3014** (`cannot access
+  unexported field`). A type's own methods may read the private fields of any instance of that type.
+- A type cannot contain itself, directly or through other types: `var next as Node` inside `Node` is
+  **E4014** (`recursive type references are not allowed`). Use a container such as `Array with Node` or an
+  index.
+
+### Construction
+
+A type literal `Point{x: 1, y: 2}` — or `Self{...}` — is legal only inside the type's own body. Code elsewhere
+constructs through a `static` factory, which is where invariants are established. A literal outside the
+type is **E3076** (`type 'Point' can only be constructed from within its own methods; use a static factory
+method instead`).
 
 ### Required Field Initialization
 
-Every field of a type must be initialized when the type is constructed. A field counts as initialized if any of the following is true:
+Every field must have a value when a record is constructed. A field is initialized when:
 
-1. **The declaration supplies a default value**: `var count = 0`. Two forms are accepted:
-   - **Shorthand** — `var name = literal`. The type is inferred from the literal, which must be an integer, float, `true`/`false`, or an enum case (`Priority.low`).
-   - **Full form** — `var name Type = expression`. The type annotation is required whenever the default is something other than a literal. The expression can be any valid expression and is re-evaluated at every struct literal that omits the field: `var items IntArray = IntArray.create()`, `var origin Point = Point.create(0, y: 0)`.
-2. **The literal provides the field**: `Counter{count: 5}`. A value provided here always wins over a declared default (the default expression is not evaluated when the field is provided).
-3. **The literal is the direct return expression of a `static` factory** whose return type is the enclosing type, and the field is assigned via `self.field = expr` on every control-flow path that reaches the literal. In that case the field can be omitted from the literal. Prefer rule 1 (field default) when the value doesn't depend on factory parameters; reach for rule 3 when the default needs access to `create`'s arguments.
+1. **The declaration supplies a default.** `var count = 0` infers the type from an integer, float or
+   `true`/`false` literal. `var items as IntArray = IntArray.create()` gives the type explicitly and may use
+   any expression — an enum case, a factory call — evaluated each time a literal omits the field.
+2. **The literal supplies it**: `Counter{value: 5}`. A supplied value always wins over the default.
+3. **A static factory assigns it** with `self.field = expr` on every path before `return Self{}` (or the
+   type's own literal).
 
-A `Self{}` literal is only legal when every field has a default or is supplied via rule 3. Otherwise the compiler emits **E3086 `SemanticFieldNotInitialized`** listing the uninitialized fields.
+A literal that leaves a field uninitialized is **E3086**, listing the fields.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
 type Counter
 	export var value as Tally
-	export var version = 0           // default
+	export var version = 0
 
 	export static function create(initial Tally) returns Self
-		self.value = initial          // proof of initialization (rule 3)
-		return Self{}                 // OK: value proven by self-assign; version defaulted
+		self.value = initial     // rule 3
+		return Self{}            // version comes from its default
 	end 'create'
 end 'Counter'
 ```
 
-The self-assignment form requires **definite assignment**: the write must reach the return on every control-flow path. A write in only one branch of an `if/else`, or only inside a loop body (which may execute zero times), is not sufficient and triggers E3086.
-
-### Field Access
-Access fields using dot notation:
-
-```maxon
-var p = Point.create(10, y: 20)
-var xVal = p.x           // Read field
-p.x = 15                 // Write field (if var, not let)
-```
+Rule 3 requires **definite assignment**: a write on only one branch of an `if`, or only inside a loop body,
+does not count.
 
 ### Methods
 
-Methods are defined **inside the type body** and can access fields directly (implicit `self`):
+Methods are declared inside the type body. Inside a method, fields and sibling methods are reachable by
+bare name; `self` names the receiver explicitly.
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
 
 type Point
-		var x as Coord
-		var y as Coord
+	export var x as Coord
+	export var y as Coord
 
-		function add(other Point) returns Point
-				return Point{x: x + other.x, y: y + other.y}
-		end 'add'
+	export static function create(x Coord, y Coord) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 
-		export function magnitude() returns Real
-				return sqrt((x * x + y * y) as Real)
-		end 'magnitude'
+	export function add(other Point) returns Point
+		return Point.create(x + other.x, y: y + other.y)
+	end 'add'
+
+	export function manhattan() returns Coord
+		return magnitudeOf(x) + magnitudeOf(y)    // sibling call: self.magnitudeOf(x)
+	end 'manhattan'
+
+	function magnitudeOf(v Coord) returns Coord
+		return v if v >= 0 else -v
+	end 'magnitudeOf'
 end 'Point'
+
+function main() returns ExitCode
+	let p = Point.create(3, y: -4).add(Point.create(1, y: 1))
+	print("{p.manhattan()}\n")     // 7
+	return 0
+end 'main'
 ```
 
-**Method Syntax Rules:**
-- Methods must be declared inside the type body
-- Methods access type fields directly without explicit `self`
-- Use `export` keyword before `function` to export individual methods
-- Methods are called using dot notation: `instance.method(args)`
-- A local declaration inside an instance method (`let`/`var`, parameter, match-pattern binding, tuple destructure, for-in loop variable, try/otherwise error binding) MUST NOT collide with a self-field name. Such a shadow is rejected at parse time with **E3006** because reads and writes of the local would silently route through `self.field` and produce type confusion when the local's type differs from the field's type.
-- `self` is a reserved identifier and cannot be bound by user code in any declaration (parameter, `let`/`var`, `for`-in variable, function name, type name, etc.). Lexer-strict positions reject it with **E2010**; positions that accept keyword-shaped names reject it with **E2051**. This prevents accidental shadowing of the implicit receiver.
-
-### Calling Methods
-
-Methods are called using dot notation on instances. The receiver (`self`) is implicit:
-
-```maxon
-var p1 = Point.create(10, y: 20)
-var p2 = Point.create(5, y: 10)
-var p3 = p1.add(p2)
-var mag = p1.magnitude()
-```
-
-#### Sibling Method Calls
-
-Inside a type body, instance methods can call other instance methods on `self` using a bare name (no explicit receiver):
-
-```maxon
-typealias Operand = int(i64.min to i64.max)
-
-type Calculator
-	var base as Operand
-
-	function double() returns Operand
-		return base * 2
-	end 'double'
-
-	function quadruple() returns Operand
-		return double() * 2    // bare call — implicitly calls self.double()
-	end 'quadruple'
-end 'Calculator'
-```
-
-The compiler detects that `double` is an instance method of the current type and automatically prepends `self` as the receiver.
+- A method is private to its file unless marked `export`, `module` or `public`; its visibility does not
+  inherit from the type's. Calling a non-exported method from another file is **E3008**.
+- A local declaration inside a method (a `let`/`var`, parameter, pattern binding or loop variable) may not
+  reuse a field's name (**E3006**).
+- `self` cannot be bound by any declaration (**E2051** / **E2010**).
 
 ### Static Methods
 
-Static methods belong to a type but don't have access to instance data. They are declared with the `static` keyword and called using `TypeName.method()` syntax:
+A `static function` belongs to the type rather than an instance. It has no `self` and is called as
+`Type.method()`. Factories are static methods.
 
-```maxon
-typealias Coord = int(i64.min to i64.max)
-
-type Point
-		var x as Coord
-		var y as Coord
-
-		static function origin() returns Point
-				return Point{x: 0, y: 0}
-		end 'origin'
-
-		static function create(x Coord, y Coord) returns Point
-				return Point{x: x, y: y}
-		end 'create'
-
-		function magnitude() returns Real
-				return sqrt((x * x + y * y) as Real)
-		end 'magnitude'
-end 'Point'
-```
-
-**Calling Static Methods:**
-```maxon
-var p1 = Point.origin()           // Static method call
-var p2 = Point.create(10, y: 20)  // First positional, second named
-var mag = p2.magnitude()          // Instance method call
-```
-
-**Static Method Rules:**
-- Declared with `static function` inside a type body
-- No implicit `self` parameter - cannot access instance fields
-- Called on the type name, not on instances: `TypeName.method()`
-- Can be exported with `export static function`
-- Commonly used for factory methods and utility functions
-
-**Differences from Instance Methods:**
-
-| Feature | Instance Method | Static Method |
-|---------|----------------|---------------|
-| Has `self` | Yes (implicit) | No |
-| Can access fields | Yes | No |
-| Call syntax | `instance.method()` | `Type.method()` |
+| | Instance method | Static method |
+|---|---|---|
 | Declaration | `function name()` | `static function name()` |
+| Receiver | `self` (implicit) | none |
+| Call | `value.name()` | `Type.name()` |
+
+A type may declare a static and an instance method with the same name; `Type.name()` calls the static one
+and `value.name()` the instance one.
 
 ### Static Fields
 
-Static fields are shared across all instances of a type. They are declared using `static var` (mutable) or `static let` (immutable):
+`static var` and `static let` declare one value per type, read and written as `Type.name`:
 
 ```maxon
-typealias CounterId = int(0 to u64.max)
+typealias Byte = int(0 to u8.max)
 
-type Counter
-		static var count = 0
-		static let MAX_COUNT = 1000
+type Limits
+	static let MAX_COUNT = 1000
+	static let SEPARATOR = 61 as Byte
+	static var used = 2
+end 'Limits'
 
-		var id as CounterId
-
-		static function create() returns Counter
-				Counter.count = Counter.count + 1
-				return Counter{id: Counter.count}
-		end 'create'
-end 'Counter'
+function main() returns ExitCode
+	Limits.used = Limits.used + 1
+	print("{Limits.MAX_COUNT} {Limits.SEPARATOR} {Limits.used}\n")   // 1000 61 3
+	return 0
+end 'main'
 ```
 
-**Accessing Static Fields:**
-```maxon
-var c1 = Counter.create()    // Counter.count becomes 1
-var c2 = Counter.create()    // Counter.count becomes 2
-print(Counter.count)         // Prints: 2
-print(Counter.MAX_COUNT)     // Prints: 1000
-```
+- A static field needs an initializer. Assigning to a `static let` is **E2013**; naming a static the type
+  does not declare is **E2073**.
+- An initializer may be a literal, a factory call (`static var shared = Cache.create()`), a literal of the
+  enclosing type, or an array literal. A literal of *another* type is **E3076** — call its factory.
+- **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
+  order rather than declaration order. Initializers that depend on each other in a cycle are **E2012**.
+- A `let` without `static` in a type body is an ordinary field with a default.
 
-**Static Field Rules:**
-- Declared with `static var` or `static let` inside a type body
-- Must have an initializer value (no uninitialized static fields)
-- Accessed using `TypeName.fieldName` syntax (not instance syntax)
-- `static var` fields can be reassigned; `static let` fields are immutable
+### Equality and Copying
 
-**Initialization behavior** depends on the initializer expression:
-- **Constant initializers** (integer, float, bool literals) are evaluated at compile time
-- **Complex initializers** (function calls, struct literals, array literals) are evaluated **lazily on first access** -- see [Lazy Static Initializers](#lazy-static-initializers) below
-
-**Differences from Instance Fields:**
-
-| Feature | Instance Field | Static Field |
-|---------|---------------|--------------|
-| Storage | Per instance | One per type |
-| Access | `instance.field` | `Type.field` |
-| Declaration | `var field type` | `static var field = value` |
-| Requires initializer | No (can use type default) | Yes |
-
-### Lazy Static Initializers
-
-Static fields initialized with complex expressions -- function calls, struct literals, or array literals -- are evaluated lazily. The initializer runs the first time the field is accessed, and the result is cached for all subsequent accesses.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Config
-		static var instance = Config.create()
-
-		static function _create() returns Config
-				return Config{value: 42}
-		end '_create'
-
-		export var value as Tally
-
-		export static function instance() returns Config
-				return Config.instance   // initializer runs on first call only
-		end 'instance'
-end 'Config'
-```
-
-**Lazy initialization guarantees:**
-- The initializer executes exactly once, on the first access to the static field
-- Subsequent accesses return the cached value without re-evaluating the initializer
-- `static var` fields can be reassigned after initialization; the initializer does not run again
-- `static let` fields are immutable after initialization (planned)
-- Constant initializers (integer, float, bool literals) remain compile-time constants and are not lazy
-
-**Common patterns:**
-
-Caching expensive computations:
-```maxon
-type WSCache
-		static var ws = CharacterSet.whitespacesAndNewlines()
-
-		export static function isWhitespace(c Character) returns bool
-				return WSCache.ws.contains(c)
-		end 'isWhitespace'
-end 'WSCache'
-```
-
-Struct literal defaults:
-```maxon
-typealias Coord = int(0 to u64.max)
-
-type Point
-		export var x as Coord
-		export var y as Coord
-
-		export static function create(x Coord, y Coord) returns Point
-				return Point{x: x, y: y}
-		end 'create'
-end 'Point'
-
-type Defaults
-		static var origin = Point.create(0, y: 0)
-
-		export static function getOrigin() returns Point
-				return Defaults.origin
-		end 'getOrigin'
-end 'Defaults'
-```
-
-Array literal initialization:
-```maxon
-typealias Amount = int(i64.min to i64.max)
-typealias Slot = int(0 to u64.max)
-
-type Lookup
-		static var values = [10, 20, 30]
-
-		export static function get(index Slot) returns Amount
-				return try Lookup.values.get(index) otherwise -1
-		end 'get'
-end 'Lookup'
-```
-
-Multiple lazy statics in the same type are each initialized independently on first access:
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Cache
-		static var a = Cache.buildA()
-		static var b = Cache.buildB()
-		export var n as Tally
-
-		static function _buildA() returns Cache
-				return Cache{n: 10}
-		end '_buildA'
-
-		static function _buildB() returns Cache
-				return Cache{n: 20}
-		end '_buildB'
-end 'Cache'
-```
+- `a == b` and `a != b` on two records call the type's own `equals(other)` method, which must return `bool`.
+  Declaring `implements Equatable` is not required. A type with no `equals` cannot be compared: **E3005**
+  (`cannot compare struct with struct`). Ordering (`<`) on records is refused the same way.
+- `a is b` asks whether two names refer to the **same record**
+  (see [Reference Identity](#reference-identity-operators)).
+- A type whose fields are all cloneable gets `clone()` automatically, producing an independent deep copy
+  (see [Memory Model](#explicit-cloning)).
 
 ### Interfaces
 
-Interfaces define a set of method signatures that types can implement:
-
-```maxon
-typealias HashValue = int(i64.min to i64.max)
-
-interface Hashable
-		function hash() returns HashValue
-end 'Hashable'
-```
-
-Structs declare conformance using the `implements` keyword:
-
-```maxon
-typealias Coord = int(i64.min to i64.max)
-typealias HashValue = int(i64.min to i64.max)
-
-type Point implements Hashable
-		var x as Coord
-		var y as Coord
-
-		function hash() returns HashValue
-				return x + y * 31
-		end 'hash'
-end 'Point'
-```
-
-**Static Interface Methods**
-
-Interfaces can declare static methods using the `static` keyword. Static interface methods don't receive an implicit `self` parameter and are typically used for factory methods:
-
-**Interface Notes:**
-- `Self` in interface method parameters/returns refers to the conforming type
-- A type can conform to multiple interfaces: `type Foo implements A, B`
-- Methods implementing interface requirements follow the same syntax as regular methods
-- Static interface methods use `static function method()` syntax in implementations
-- One interface can extend another with `interface Derived extends Base`. A type that lists `implements Derived` must declare every method from `Derived` and every method transitively inherited from `Base`; missing methods inherited via `extends` are reported with a `(from BaseName)` suffix in the diagnostic
-
-**Interface-Typed Parameters**
-
-Functions can use interface types directly as parameter types. Any concrete type that implements the interface can be passed as an argument:
+An interface lists method signatures a type promises to provide:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-interface Drawable
-	function draw() returns Tally
-end 'Drawable'
+interface Shape
+	function area() returns Tally
+end 'Shape'
 
-function render(item Drawable) returns Tally
-	return item.draw()
-end 'render'
-```
+type Square implements Shape
+	export let side as Tally
 
-The compiler monomorphizes the function at compile time, creating specialized copies for each concrete type used at call sites. This provides static dispatch with no runtime overhead. If the argument's type does not implement the required interface, a compile error is reported. Interface inheritance is respected: a type implementing a derived interface also satisfies parameters typed with the base interface.
-
-**Interface-Typed Return Values**
-
-Functions can declare an interface as their return type. When every `return` in the body yields the same concrete implementing type, the compiler statically infers that type at the call site so chained method dispatch on the result resolves without runtime overhead:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-interface Producer
-	function produce() returns Amount
-end 'Producer'
-
-type Widget implements Producer
-	let value as Amount
-
-	export static function create(value Amount) returns Widget
-		return Widget{value: value}
+	export static function create(side Tally) returns Self
+		return Self{side: side}
 	end 'create'
 
-	function produce() returns Amount
-		return value
-	end 'produce'
-end 'Widget'
+	function area() returns Tally
+		return side * side
+	end 'area'
+end 'Square'
 
-function makeProducer() returns Producer
-	return Widget.create(42)
-end 'makeProducer'
+function describe(item Shape) returns String
+	return "area {item.area()}"
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Square.create(3))}\n")    // area 9
+	return 0
+end 'main'
 ```
 
-**Interface-Typed Fields**
+- A type lists every interface it conforms to: `type Foo implements A, B`. A missing or mis-typed method is
+  **E3016**.
+- `Self` in a requirement means the conforming type.
+- A requirement may be `static function`; the conforming type provides it as a static method.
+- `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
+  both, and satisfies parameters typed `Base`.
 
-Struct fields can declare an interface as their type. The field stores any value of a type that conforms to the interface, and methods invoked on the field dispatch to the implementing type. When the compiler can trace the concrete type stored into the field at construction, dispatch is resolved statically with no runtime overhead:
+**Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
+does above: a parameter typed `Shape` accepts any conforming type, a function may return an interface,
+and a field may hold one. Where the compiler can see the concrete type, calls dispatch statically;
+otherwise they dispatch through a witness table at run time.
+
+**The standard interfaces** (declared in the standard library):
+
+| Interface | Requirement |
+|-----------|-------------|
+| `Equatable` | `function equals(other Self) returns bool` |
+| `Hashable` | `function hash() returns HashValue` |
+| `Comparable` | `function compare(other Self) returns Ordering` |
+| `Cloneable` | `function clone() returns Self` |
+| `Stringable` | `function toString() returns String` |
+| `FormattedStringable` | `function toString(format String) returns String` |
+| `Error` | none — a marker for thrown values |
+| `Iterable uses Element, Iter` | `function createIterator() returns Iter throws IterationError` |
+| `Parsable` | `static function fromString(input String) returns Self throws Error` |
+
+A type used in string interpolation needs a `toString()` method; one used with a format specifier
+(`{value:spec}`) needs `toString(format String)`.
+
+### Hashable and Hasher
+
+A type used as a `Map` key or `Set` element implements `Hashable` and `Equatable`:
 
 ```maxon
-typealias TagId = int(0 to u64.max)
+typealias Score = int(i64.min to i64.max)
 
-interface Tagged
-	function tag() returns TagId
-end 'Tagged'
+type Cell implements Hashable, Equatable
+	export let row as Score
+	export let col as Score
 
-type Holder
-	export let t as Tagged
-
-	static function create(t Tagged) returns Self
-		return Self{t: t}
+	static function create(row Score, col Score) returns Self
+		return Self{row: row, col: col}
 	end 'create'
-end 'Holder'
+
+	function hash() returns HashValue
+		return (row * 31 + col) and 0xFFFFFFFF
+	end 'hash'
+
+	function equals(other Self) returns bool
+		return row == other.row and col == other.col
+	end 'equals'
+end 'Cell'
+
+typealias CellNames = Map with (Cell, String)
+
+function main() returns ExitCode
+	var names = CellNames.create()
+	names.upsert(Cell.create(1, col: 2), value: "b1")
+	let found = try names.get(Cell.create(1, col: 2)) otherwise "missing"
+	print("{found}\n")     // b1
+	return 0
+end 'main'
 ```
 
-### Where Clauses (Type Parameter Constraints)
+Payload-free enums are `Hashable` and `Equatable` automatically; unions are not (see
+[Unions](#comparing-union-values)).
 
-The `where` clause constrains type parameters to require specific interface conformance. This enables the compiler to verify method calls on type parameters and to reject concrete types that don't satisfy the constraints.
+For a digest over bytes, the standard library's `Hasher` is an incremental 64-bit FNV-1a fold that
+returns a `HashDigest` (`bits(64)`):
 
 ```maxon
-type Map uses Key, Value implements BuiltinDictionaryLiteral where Key is Hashable
-		// Key is guaranteed to have hash() method
-end 'Map'
+function main() returns ExitCode
+	var hasher = Hasher.create()
+	hasher.combine("abc".toByteArray())
+	print("{hasher.finalize():016x}\n")     // e71fa2190541574b
+	return 0
+end 'main'
 ```
 
-Multiple interfaces on the same parameter use `and`:
+The fold carries no length tag — combining `"ab"` then `"c"` equals combining `"abc"` — so combine each
+part's length yourself when the boundaries matter. `Hasher.empty()` and `Hasher.combined(state, bytes:)`
+are the same fold as pure functions.
+
+### Parsable
+
+`Parsable` is the interface for types that parse themselves from text. `int`, `float` and `bool` provide
+`fromString`, which throws `ParseError.invalidFormat`:
 
 ```maxon
-type Container uses T where T is Hashable and Equatable
+function main() returns ExitCode
+	let n = try int.fromString("42") otherwise 0
+	let f = try float.fromString("2.5") otherwise 0.0
+	print("{n} {f}\n")     // 42 2.5
+	return 0
+end 'main'
 ```
 
-Multiple constrained parameters use comma separation:
+A type conforms with a static `fromString` that throws an error type:
 
 ```maxon
-type Pair uses A, B where A is Hashable, B is Cloneable
+typealias Cents = int(0 to i64.max)
+
+enum MoneyError implements Error
+	negative
+end 'MoneyError'
+
+type Money implements Parsable
+	export let cents as Cents
+
+	static function fromString(input String) returns Self throws MoneyError
+		let value = try int.fromString(input) otherwise throw MoneyError.negative
+		if value < 0 'negative'
+			throw MoneyError.negative
+		end 'negative'
+
+		return Self{cents: value as Cents}
+	end 'fromString'
+end 'Money'
 ```
 
-When creating a type alias, the compiler checks that concrete types satisfy the constraints:
+A `fromString` that does not throw, or throws a type that is not an error, is **E3016**.
+
+### Initializing From Literals
+
+A type can be written from a string or character literal with `Type from "…"`, which calls its
+`static function init(value String) returns Self`. The type must declare the conformance:
+
+| Interface | Literal | Requirement |
+|-----------|---------|-------------|
+| `InitableFromStringLiteral` | `T from "text"` | `static function init(value String) returns Self` |
+| `InitableFromCharLiteral` | `T from 'c'` | `static function init(value Character) returns Self` |
 
 ```maxon
-typealias Tally = int(0 to u64.max)
-typealias StringMap = Map with (String, Tally)    // OK: String implements Hashable
+type Wrapper implements InitableFromStringLiteral
+	export let value as String
+
+	static function init(value String) returns Wrapper
+		return Wrapper{value: value}
+	end 'init'
+end 'Wrapper'
+
+let greeting = Wrapper from "hello"
+
+function main() returns ExitCode
+	print("{greeting.value}\n")
+	return 0
+end 'main'
 ```
 
-### Generic-Instance and Function-Type Aliases Are Brands
+`Type from "…"` is also allowed as a module-level initializer. Using it on a type without the conformance is
+**E3005** (`Type 'Wrapper' does not conform to InitableFromStringLiteral`).
 
-A typealias over a generic instance or a function type names a type a value may already have, under its own name — and the name is the type. `typealias Xs = Array with Integer` and `typealias Ys = Array with Integer` are one instance (one layout, one method set) under two brands: an `Xs` does not flow into a `Ys` slot at any door unless the author writes `xs as Ys`, which re-brands the value and emits no operation. A `[...]` literal carries no brand and fits either; a closure literal or a declared function carries no brand and fits any function alias of its shape. An interface requirement over `Xs` is implemented only by a method spelled over `Xs`. A cast to a DIFFERENT instance is still refused (E3131).
+The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
+`Map`, and `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
+`CharSet from ['a', 'e']`. (`InitableFromArrayLiteral` and `InitableFromDictionaryLiteral` declare that
+surface for the standard collections; `Alias from [...]` is not yet available for user types.)
 
-### Per-Instance Typealiases
+### Generic Types
 
-A ranged typealias declared inside a generic type body produces a nominally distinct type for each concrete instantiation — the general nominal rule, applied once per instance.
+`uses` declares type parameters. A generic type is instantiated with `with`, through a typealias:
 
 ```maxon
-type Pool uses T
-	export typealias Idx = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
 
-	export function push(item T) returns Idx
-		// ...
-	end 'push'
+type Box uses T
+	export var item as T
 
-	export function get(index Idx) returns T
-		// ...
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function get() returns T
+		return item
 	end 'get'
-end 'Pool'
+end 'Box'
 
-typealias NodeId = int(0 to u64.max)
-typealias PoolA = Pool with NodeId
-typealias PoolB = Pool with NodeId
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.create(42)
+	let inferred = Box.create("hi")        // Box with String, from the argument
+	print("{b.get()} {inferred.get()}\n")  // 42 hi
+	return 0
+end 'main'
 ```
 
-`PoolA.Idx` and `PoolB.Idx` are distinct types — passing one where the other is expected produces a compile error, exactly as passing an `Age` where a `Year` is expected does. Literal integers that fit the range are still accepted. To convert between per-instance aliases, use `as`:
+- Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
+- A static factory called on the bare generic name infers the arguments from its parameters.
+- One compiled body serves every instantiation.
+- Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a `float` type argument is not
+  yet supported (**E2062**); a type argument to a non-generic type is **E2055**.
 
-```text
-let bIdx = aIdx as PoolB.Idx
-```
+### Where Clauses
 
-Dot-syntax `as` casts are also supported:
-
-```text
-let idx = 0 as PoolA.Idx
-```
-
-### Interface Extensions
-
-Extensions add methods to interfaces that are automatically available on all types conforming to that interface. Unlike regular interface methods that each conforming type must implement, extension methods have a single implementation that works for all conformers.
-
-**Declaration:**
+`where` constrains a type parameter to conform to interfaces, which lets the body call their methods:
 
 ```maxon
-typealias Tally = int(0 to u64.max)
+typealias Code = int(i64.min to i64.max)
 
-extension Iterable
-	function count() returns Tally
-		var n = 0
-		for _ in self 'loop'
-			n = n + 1
-		end 'loop'
-		return n
-	end 'count'
-end 'Iterable'
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Tagged uses T where T is Digest
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function itemDigest() returns Code
+		return item.digest()
+	end 'itemDigest'
+end 'Tagged'
 ```
 
-**How Extensions Work:**
-- The method becomes available on all types that conform to the interface
-- The `self` keyword refers to the concrete type instance
-- Extension methods can call any method required by the interface
-- Associated types from the interface are resolved to the concrete type's bindings
+- Several interfaces on one parameter: `where T is Hashable and Equatable`.
+- Several parameters: `where K is Hashable, V is Cloneable`.
+- An instantiation whose argument does not conform is **E3017** (`Type 'X' does not satisfy constraint
+  'Digest' required by type parameter 'T' of 'Tagged'`).
+- A constraint can bind an associated type: `where S is Cursor with E`.
 
-**Using Associated Types:**
+### Associated Types
 
-Extensions can use the interface's associated types. These are automatically substituted with the concrete type's associated type bindings:
+An interface can declare associated types with `uses`; a conforming type binds them with `with`:
 
 ```maxon
 typealias Slot = int(0 to u64.max)
+typealias Score = int(i64.min to i64.max)
 
 interface Container uses Element
-	function get(index Slot) returns Element
+	function at(index Slot) returns Element
 end 'Container'
 
-extension Container
-	function first() returns Element
-		return self.get(0)
-	end 'first'
-end 'Container'
+type Scores implements Container with Score
+	export var base as Score
+
+	export static function create(base Score) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function at(index Slot) returns Score
+		return base + (index as Score)
+	end 'at'
+end 'Scores'
 ```
 
-When called on a type like `IntArray implements Container with Integer` (where `Integer` is a ranged typealias for `int`), the return type `Element` becomes `Integer`.
+Several associated types bind positionally: `implements Iterable with (Entry, MapIterator)`. A missing
+binding or a method whose types disagree with the binding is **E3016**.
 
-**Extension Method Synthesis:**
+### Parameterized Existentials
 
-When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `IntArray` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
-
-**Extension Rules:**
-- Declared with `extension InterfaceName ... end 'InterfaceName'`
-- Methods use `self` to access the conforming type instance
-- Associated types resolve to the concrete type's bindings
-- Extensions from parent interfaces are applied transitively
-
-### Conditional Extensions
-
-Extensions can include a `where` clause to restrict which conforming types receive the extension methods. Only types whose associated type bindings satisfy the constraints will have the methods synthesized.
-
-**Syntax:**
+An alias over an interface with its associated types bound — `typealias IntegerSeq = Seq with Integer` —
+is a value type that holds **any** conforming value and dispatches at run time:
 
 ```maxon
-extension Iterable where Element is Equatable
-	function contains(element Element) returns bool
-		for item in self 'loop'
-			if item == element 'found'
-				return true
-			end 'found'
-		end 'loop'
-		return false
-	end 'contains'
-end 'Iterable'
+typealias Integer = int(i64.min to i64.max)
+
+interface Seq uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Seq'
+
+type Upto implements Seq with Integer
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+typealias IntegerSeq = Seq with Integer
+
+function total(source IntegerSeq) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+
+	return sum
+end 'total'
+
+function main() returns ExitCode
+	print("{total(Upto.create(4))}\n")     // 10
+	return 0
+end 'main'
 ```
 
-The `where` clause follows the same syntax as type-level where clauses: `where TypeParam is Interface`, with `and` for multiple interfaces on the same parameter.
+The `with` arguments are a claim checked against every conformer that reaches the existential; a conformer
+binding the associated type differently is **E3125**.
 
-**Behavior:**
+### The `Self` Type
 
-When a type conforms to the extended interface, the compiler checks whether the type's associated type bindings satisfy the `where` constraints:
-- If they do, the extension methods are synthesized for that type
-- If they don't, the methods are silently skipped (no error)
+Inside a type, interface or extension body, `Self` names the enclosing type. It is legal in signatures
+(`returns Self`), in literals (`Self{...}`), and as the base of a member expression: `Self.create(…)`,
+`Self.someCase`, `Self.MAX` mean exactly what the type's own name would. `Self` outside a type declaration
+is **E2015**.
 
-For example, `Array with Integer` (where `Integer` is a ranged typealias for `int`) conforms to `Iterable`. Since `Integer` implements `Equatable`, the `contains` method is available on `Array with Integer`. A hypothetical `Array with SomeNonEquatableType` would not receive the `contains` method.
+### Interface Extensions
 
-**Multiple Constraints:**
-
-Multiple constraints on the same parameter use `and`:
-
-```maxon
-extension Container where Key is Hashable and Equatable
-	// Methods available only when Key is both Hashable and Equatable
-end 'Container'
-```
-
-**Mixing Unconditional and Conditional Extensions:**
-
-An interface can have both unconditional extensions and conditional extensions. Types that don't satisfy the `where` clause still receive the unconditional extension methods:
+`extension InterfaceName` adds methods to **every** type that conforms to the interface, with one
+implementation:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-extension Seq
-	function countItems() returns Tally
-		var n = 0
-		for _ in self 'loop'
-			n = n + 1
-		end 'loop'
-		return n
-	end 'countItems'
-end 'Seq'
+interface Shape
+	function area() returns Tally
+end 'Shape'
 
+extension Shape
+	function doubledArea() returns Tally
+		return self.area() * 2
+	end 'doubledArea'
+end 'Shape'
+```
+
+- `self` is the conforming value; the extension may call any requirement of the interface.
+- Associated types resolve to each conformer's binding.
+- Extensions of a parent interface apply to types conforming to a derived one.
+
+### Conditional Extensions
+
+A `where` clause restricts an extension to conformers whose associated types satisfy it. With the `Seq`
+interface above:
+
+```text
 extension Seq where Element is Equatable
-	function includes(target Element) returns bool
+	function has(target Element) returns bool
 		for item in self 'loop'
-			if item == target 'yes'
+			if item == target 'found'
 				return true
-			end 'yes'
+			end 'found'
 		end 'loop'
+
 		return false
-	end 'includes'
+	end 'has'
 end 'Seq'
 ```
 
-In this example, all types conforming to `Seq` get `countItems()`, but only those whose `Element` implements `Equatable` get `includes()`.
+`Upto.create(4).has(3)` is available because `Integer` is `Equatable`. Several constraints on one
+parameter join with `and`: `where Key is Hashable and Equatable`.
+
+Conformers that do not satisfy the clause simply do not get the method; calling it on one is **E4006**,
+which names the unmet constraint.
 
 ### Conditional Interface Conformance
 
-Extensions can add interface conformance conditionally using both `implements` and `where` clauses. When a concrete type alias satisfies the `where` constraints, the type gains the declared interface conformance.
+An extension can also add a conformance under a condition:
 
-**Syntax:**
-
-```maxon
+```text
 extension Array implements Hashable, Equatable where Element is Hashable and Equatable
 	function hash() returns HashValue
 		// ...
@@ -1361,66 +1436,42 @@ extension Array implements Hashable, Equatable where Element is Hashable and Equ
 end 'Array'
 ```
 
-**Behavior:**
+The constraint is checked wherever an instantiation is created: an explicit typealias
+(`typealias IntArr = Array with Integer`), a bracketed literal (`[1, 2]`, `["a": 1]`), or a static factory
+call on the bare generic name (`Box.create("hi")`). If `Integer` is `Hashable` and `Equatable`, `Array with
+Integer` is too and can be a `Map` key; if not, an instantiation used where the conformance is required is
+**E3017**.
 
-The compiler checks the `where` constraints wherever an instantiation is created, not only where one is
-spelled. If `Integer` implements both `Hashable` and `Equatable`, then `Array with Integer` conforms to
-`Hashable` and `Equatable`, enabling it to be used as a `Map` key or `Set` element; if it implements neither,
-the instantiation is `E3017` at the site that created it.
+### Extensions Over Primitives
 
-An instantiation is created by any of:
+`extension int`, `extension float` and `extension bool` add methods to a primitive, and may declare
+conformances. Inside, `self` is the value and `Self` the primitive:
 
-- an explicit `typealias` (`typealias IntArr = Array with Integer`);
-- a bracketed literal, whose first element or pair fixes the arguments (`[1, 2]`, `["a": 1]`), at file scope
-  as well as in a body;
-- a **static factory call on a bare generic base**, whose arguments fix the type parameters
-  (`Box.create("hi")` on `type Box uses T` with `static function create(item T) returns Self` creates
-  `Box with String`). A factory that declares no parameter at a type parameter fixes nothing and yields the
-  base type; an OVERLOADED factory fixes nothing either, because which parameter list the arguments fill is
-  settled after the call is read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+extension int
+	export function doubled() returns Integer
+		return self * 2
+	end 'doubled'
+end 'int'
+
+function main() returns ExitCode
+	let n = 21
+	print("{n.doubled()}\n")     // 42
+	return 0
+end 'main'
+```
+
+A `hash`, `equals`, `compare`, `toString` or `clone` you declare in such an extension replaces the built-in
+one. An extension body cannot declare stored `var`/`let` members (**E2015**).
 
 ---
 
 ## Tuples
 
-Tuples are fixed-size, ordered collections of values with potentially different types. They use parenthesized syntax for both type annotations and literals.
-
-### Tuple Literals
-
-Create tuples using parenthesized, comma-separated expressions:
-
-```maxon
-var t = (10, 20)              // 2-element int tuple
-var mixed = (42, "hello")     // int and String
-var triple = (1, 2, 39)       // 3-element tuple
-```
-
-**Note:** A single parenthesized expression `(expr)` is NOT a tuple -- it is a parenthesized expression. Tuples require at least two elements.
-
-### Element Access
-
-Access tuple elements using positional dot syntax `.0`, `.1`, `.2`, etc.:
-
-```maxon
-var t = (10, 20)
-t.0   // 10
-t.1   // 20
-```
-
-### Field Assignment
-
-Tuple fields are mutable and can be assigned individually:
-
-```maxon
-var t = (0, 0)
-t.0 = 20
-t.1 = 22
-// t is now (20, 22)
-```
-
-### Tuple Types
-
-In function parameters and return types, tuple types use parenthesized type lists:
+A tuple is a fixed-size, ordered group of values that may have different types. Tuples are written with
+parentheses, both as values and as types.
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
@@ -1432,197 +1483,178 @@ end 'sum'
 function makePair(a Amount, b Amount) returns (Amount, Amount)
 	return (a, b)
 end 'makePair'
+
+function main() returns ExitCode
+	var t = (0, 0)
+	t.0 = 20
+	t.1 = 22
+	print("{sum(t)}\n")                      // 42
+
+	let mixed = (42, "hello")
+	print("{mixed.0} {mixed.1}\n")           // 42 hello
+
+	let (x, y) = makePair(10, b: 32)
+	print("{x} {y}\n")                       // 10 32
+	return 0
+end 'main'
 ```
+
+### Literals and Element Access
+
+- `(a, b)` builds a tuple; a tuple has at least two elements. `(expr)` is just a parenthesized expression.
+- Elements are read and written by position: `t.0`, `t.1`, `t.2`.
+- A tuple type in a signature is a parenthesized type list: `(Amount, String)`. It can also be named:
+  `typealias Span = (Amount, Amount)`.
 
 ### Destructuring Declarations
 
-Tuples can be destructured into new variables using `var` or `let`:
+`let (a, b) = expr` and `var (a, b) = expr` bind each element to a new name. `_` discards an element:
 
 ```maxon
-var (x, y) = makePair(10, b: 32)   // x = 10, y = 32
-let (a, b) = (10, 20)              // immutable bindings
-```
-
-Use `_` to discard individual elements:
-
-```maxon
-var (result, _) = compute()    // discard second element
-var (_, status) = fetch()      // discard first element
-```
-
-If the function is pure, at least one element must be used:
-
-```maxon
-(_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
+let (first, _) = makePair(1, b: 2)
 ```
 
 ### Tuple Assignment
 
-Assign tuple values to **existing** mutable variables:
+A tuple pattern on the left of `=` assigns to existing `var`s, and may declare new names in the same pattern:
 
 ```maxon
-var x = 0
-var y = 0
-(x, y) = makePair(10, b: 32)  // x = 10, y = 32
+var p = 0
+var q = 0
+(p, q) = makePair(1, b: 2)       // both existing
+(p, let r) = makePair(3, b: 4)   // p existing, r newly declared
+(q, _) = makePair(5, b: 6)       // discard the second element
 ```
 
-**Mixed declaration and assignment** -- combine existing variables with new declarations:
-
-```maxon
-var x = 0
-(x, var y) = makePair(10, b: 32)     // x existing, y newly declared
-(var a, var b) = makePair(10, b: 32)  // both newly declared
-(x, let z) = makePair(3, b: 4)       // x existing, z immutable
-```
-
-**Discard elements:**
-
-```maxon
-(x, _) = makePair(42, b: 99)    // discard second element
-```
-
-**Rules:**
-- All named variables (without `var`/`let`) must already be declared with `var`
-- Immutable (`let`) variables cannot be reassignment targets (error E2013)
-- The number of names must exactly match the tuple's element count (error E3005)
-- Use `_` to discard individual elements
-- If all elements are discarded and the function is pure, error E3064 is raised
+- A name without `var`/`let` must already be a `var`; a `let` target is **E2013**.
+- The number of names must match the element count (**E3005**).
+- Discarding every element of a pure function's result is **E3064**.
 
 ### Destructuring in For Loops
 
-Tuple destructuring works in `for` loops when the iterator yields tuples:
+A `for` loop over tuples can destructure each one — a `Map` yields `(key, value)` pairs:
 
 ```maxon
-var m = ["a": 1, "b": 2]
-for (key, value) in m 'loop'
-	print("{key}: {value}\n")
-end 'loop'
-```
-
-Use `_` to discard loop variables:
-
-```maxon
-for (_, value) in m 'loop'
-	sum = sum + value
+let ages = ["ada": 36, "alan": 41]
+var total = 0
+for (_, age) in ages 'loop'
+	total = total + age
 end 'loop'
 ```
 
 ### Memory Semantics
 
-- Tuples are heap-allocated structs with reference counting
-- Each field occupies 8 bytes (primitives and pointers)
-- Tuples containing managed types (strings, structs) have their reference counts managed automatically
-- Tuples are assigned by reference (like structs). Use `.clone()` for an independent copy
+A tuple is a reference-counted record, like a `type`. Assigning a tuple shares it; a tuple holding managed
+values (strings, records) releases them when the last reference goes away.
 
 ---
 
 ## Enums
 
-Enums define a fixed set of named constants with optional raw values (int, float, string, char, struct). Enums auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values -- use `union` for that.
+An `enum` declares a fixed set of named cases. Enum cases carry no associated data — a type whose cases
+carry data is a [union](#unions). A case may have a **raw value** (see
+[Raw-Value Enums](#raw-value-enums)).
 
 ### Simple Enums
 
-The simplest form of enum defines named cases with no additional data:
-
 ```maxon
 enum Direction
-		north
-		south
-		east
-		west
+	north
+	south
+	east
+	west
 end 'Direction'
+
+function main() returns ExitCode
+	let dir = Direction.north
+	if dir == Direction.north 'up'
+		print("{dir.name}\n")      // north
+	end 'up'
+
+	return 0
+end 'main'
 ```
 
-Create enum values using dot notation:
-
-```maxon
-var dir = Direction.north
-```
+A case is written `Type.case`. Enum values compare with `==` and `!=`, and every payload-free enum is
+automatically `Equatable` and `Hashable`, so it can be a `Map` key or `Set` element. Inside `match` arms,
+cases are written bare (see [Match Statement](#match-statement)).
 
 ### Enum Methods
 
-Enums can have methods, similar to structs:
+An enum can declare instance methods after its cases. Inside one, `self` is the case value; inspect it with
+`match self`. `Self.case` names a case of the enclosing enum.
 
 ```maxon
 enum Direction
-		north
-		south
+	north
+	south
 
-		function opposite() returns Direction
-				return match self 'check'
-						north gives Direction.south
-						south gives Direction.north
-				end 'check'
-		end 'opposite'
-end 'Direction'
-```
-
-Call methods using type-qualified syntax:
-
-```maxon
-var dir = Direction.north
-var opp = Direction.opposite(self: dir)  // Direction.south
-```
-
-Enum methods carry their **own** visibility, exactly like struct methods — a
-method takes an optional `export` / `module` modifier before `function`, and a
-bare method (no modifier) is file-private. A non-exported method on an exported
-enum is a private helper: calling it from another file is rejected with
-`E3008`. The method's visibility does **not** inherit from the enum declaration.
-
-### Enum as Function Parameter
-
-Enums can be used as function parameters and return types:
-
-```maxon
-enum Status
-		on
-		off
-end 'Status'
-
-function isOn(s Status) returns bool
-		return match s 'check'
-				on gives true
-				off gives false
-		end 'check'
-end 'isOn'
-
-function toggle(s Status) returns Status
-		return match s 'check'
-				on gives Status.off
-				off gives Status.on
-		end 'check'
-end 'toggle'
-```
-
-### Creating Enums from Names (`fromName`)
-
-The `fromName` static method creates an enum value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
-
-```maxon
-enum Direction
-		north
-		south
-		east
-		west
+	export function opposite() returns Direction
+		return match self 'flip'
+			north gives Self.south
+			south gives Self.north
+		end 'flip'
+	end 'opposite'
 end 'Direction'
 
-// Compile-time known name
-var dir = try Direction.fromName("north") otherwise Direction.south
-
-// Runtime string
-function getDirection(name String) returns Direction
-		return try Direction.fromName(name) otherwise Direction.north
-end 'getDirection'
+function main() returns ExitCode
+	print("{Direction.north.opposite().name}\n")    // south
+	return 0
+end 'main'
 ```
 
-**Notes:**
-- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
-- Compile-time literal names are validated at compile time
+- A method carries its own visibility — `export`, `module` or `public` — and is file-private without one,
+  whatever the enum's own visibility. Calling a private method from another file is **E3008**.
+- An enum declares no fields, so `self.something` inside a method is **E2015**; use `match self`.
+- `static function` is not supported on an enum (**E2015**).
+
+### Enum Properties
+
+Every enum case has:
+
+| Property | Result |
+|----------|--------|
+| `.name` | the case name as a `String` |
+| `.ordinal` | the zero-based declaration position |
+| `.rawValue` | the case's raw value (the ordinal when none is declared) |
+
+and every enum type has:
+
+| Member | Result |
+|--------|--------|
+| `Type.allCases` | an `Array` of every case, in declaration order |
+| `Type.allCaseNames` | an `Array with String` of every case name |
+| `Type.fromName(name)` | the case with that name; throws `noSuchCaseName` when none matches |
+| `Type.fromRawValue(raw)` | the case with that raw value; throws `noSuchRawValue` when none matches |
+
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function lookup(name String) returns Color
+	return try Color.fromName(name) otherwise Color.red
+end 'lookup'
+
+function main() returns ExitCode
+	for color in Color.allCases 'each'
+		print("{color.name}={color.ordinal} ")      // red=0 green=1 blue=2
+	end 'each'
+
+	print("\n{lookup("blue").name} {lookup("purple").name}\n")   // blue red
+	return 0
+end 'main'
+```
+
+A literal name or raw value that matches no case is caught at compile time (**E3034**). Both lookups throw,
+so they need `try`.
 
 ### Struct-Backed Enums
 
-Enums can be backed by a struct type, associating compile-time constant metadata with each case. Access the backing struct via `.rawValue`:
+A case's raw value can be a record of compile-time constants, which attaches metadata to each case. Read
+it through `.rawValue`:
 
 ```maxon
 typealias Latency = int(0 to 50)
@@ -1638,592 +1670,175 @@ enum Instruction
 	store = OpMeta{latency: 3, isMemory: true}
 end 'Instruction'
 
-let op = Instruction.load
-let lat = op.rawValue.latency     // 4
-let mem = op.rawValue.isMemory    // true
-```
-
-**Notes:**
-- All cases must use the same struct type
-- Every case must provide a backing value (no bare cases)
-- Struct field values must be compile-time constants (integers, floats, booleans, enum member references like `Priority.high`, or top-level constants)
-- At runtime, the enum is stored as an ordinal; `.rawValue` constructs the backing struct
-
-### Enum Interface Conformance
-
-Enums can conform to interfaces using the `implements` keyword, similar to types:
-
-```maxon
-enum FileError implements Error
-		notFound
-		permissionDenied
-		alreadyExists
-end 'FileError'
-
-enum HttpError int implements Error
-		badRequest = 400
-		notFound = 404
-		serverError = 500
-end 'HttpError'
-```
-
-**Notes:**
-- The `implements Interface` clause comes after the optional backing type
-- Multiple interfaces can be specified: `enum Foo implements A, B`
-- The `Error` interface can only be implemented by enums or unions (not types/structs)
-
----
-
-## Unions
-
-Unions define a type with a fixed set of named cases that can carry optional associated values. Unions do NOT implement `Equatable` or `Hashable`, do not support `==`/`!=` comparison. Use `match` to inspect union values.
-
-Unions support `.name` (returns the case name as a `String`) and `.ordinal` (returns the zero-based declaration position). Unions also have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order. `.allCases` is not available on unions because cases may carry associated values; use `.unionCases` to access the discriminant as a first-class enum (see [Union Cases](#union-cases-discriminant-as-an-enum) below).
-
-Unions can additionally have a per-variant struct backing — see [Struct-Backed Unions](#struct-backed-unions) below.
-
-### Simple Unions
-
-The simplest form of union defines named cases with no additional data:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-union Option
-		some(value Amount)
-		none
-end 'Option'
-```
-
-### Associated Values
-
-Cases can carry additional data called associated values:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-typealias ErrorCode = int(0 to u64.max)
-
-union Result
-		success(value Amount)
-		failure(code ErrorCode, message String)
-		pending
-end 'Result'
-```
-
-Construct cases with associated values:
-
-```maxon
-var r1 = Result.success(42)                    // Single param is positional
-var r2 = Result.failure(404, message: "Not found")  // First positional, second named
-var r3 = Result.pending
-```
-
-### Pattern Matching with Value Extraction
-
-Use `match` statements to extract associated values from union cases. Each binding name becomes a local variable within the case body:
-
-```maxon
-match result 'handle'
-		success(value) then return value
-		failure(code, msg) then print(msg)
-		pending then print("waiting...")
-end 'handle'
-```
-
-Match expressions also support value extraction using `gives`:
-
-```maxon
-var extracted = match container 'get'
-		none gives 0
-		some(n) gives n * 2
-end 'get'
-```
-
-You can mix cases with and without bindings:
-
-```maxon
-match result 'check'
-		success(v) then return v    // Extracts value
-		pending then return 0       // No extraction needed
-end 'check'
-```
-
-**Discarding associated values:** When you don't need the associated value, omit the parentheses entirely:
-
-```maxon
-match container 'check'
-		some then return 1        // omit parentheses to ignore associated value
-		none then return 0
-end 'check'
-```
-
-**Notes:**
-- Binding names must match the number of associated values in the case definition
-- Bindings are only in scope within the case body
-- Cases without associated values don't need parentheses
-
-### Mutable Match Bindings
-
-When a union variable is declared with `var`, match bindings on its associated values are mutable. Assigning to a binding writes the new value back to the union in-place:
-
-```maxon
-var box = Box.full(10)
-match box 'update'
-		full(value) then value = 42    // Writes 42 back into box
-		empty then return
-end 'update'
-// box is now Box.full(42)
-```
-
-When the union variable is declared with `let`, bindings are immutable (read-only copies).
-
-### Comparing Union Values
-
-Union values cannot be compared using `==` or `!=` (error E3066). The only way to inspect a union value is through `match`. This restriction exists to prevent a class of bugs that happen when a new case is added that is unaccounted for and code that handles the union either falls through or uses a default value that is wrong.
-
-```maxon
-// ERROR E3066: Cannot compare union values with ==
-// if r1 == r2 'check' ... end 'check'
-
-// Use match instead
-match result 'check'
-		success(v) then handleSuccess(v)
-		failure(c, msg) then handleFailure(c, msg: msg)
-		pending then handlePending()
-end 'check'
-```
-
-### Creating Unions from Names (`fromName`)
-
-The `fromName` static method creates a union value from a string name. It throws `EnumError.invalidName` if the name doesn't match any case:
-
-For unions with associated values, pass the values as additional arguments when the name is a compile-time literal:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-union Container
-		empty
-		value(n Amount)
-end 'Container'
-
-// With associated values (name must be compile-time literal)
-var c = try Container.fromName("value", 42) otherwise Container.empty
-
-// Cases without associated values work with runtime strings
-function getContainer(name String) returns Container
-		return try Container.fromName(name) otherwise Container.empty
-end 'getContainer'
-```
-
-**Notes:**
-- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
-- Compile-time literal names are validated at compile time
-- Associated value types are validated at compile time
-- Runtime strings only support cases without associated values
-
-### Union Methods
-
-Unions can have methods, similar to structs:
-
-```maxon
-union Direction
-		north
-		south
-
-		function opposite() returns Direction
-				return match self 'check'
-						north gives Direction.south
-						south gives Direction.north
-				end 'check'
-		end 'opposite'
-end 'Direction'
-```
-
-As with enum and struct methods, a union method carries its own visibility: an
-optional `export` / `module` modifier before `function`, defaulting to
-file-private. The method's visibility is independent of the union declaration's.
-
-### Union Interface Conformance
-
-Unions can conform to interfaces using the `implements` keyword:
-
-```maxon
-union FileError implements Error
-		notFound
-		permissionDenied(path String)
-end 'FileError'
-```
-
-**Notes:**
-- The `Error` interface can be implemented by enums or unions (not types/structs)
-
-### Struct-Backed Unions
-
-Each union variant can be tagged with a compile-time struct value, the same shape as struct-backed enums. Use `.rawValue` on a union value to read the variant's backing struct. The variant's associated values are independent of the backing struct — they coexist, with the payload accessed by `match` and the metadata accessed by `.rawValue`.
-
-```maxon
-typealias Latency = int(0 to 50)
-
-type OpMeta
-	export let latency as Latency
-	export let isMemory as bool
-end 'OpMeta'
-
-union MirOp
-	movImm(dest VarSlot, value MachineWord) = OpMeta{latency: 1, isMemory: false}
-	load(dest VarSlot, addr VarSlot)        = OpMeta{latency: 4, isMemory: true}
-	store(addr VarSlot, src VarSlot)        = OpMeta{latency: 3, isMemory: true}
-end 'MirOp'
-
-let op = MirOp.load(d, addr: a)
-let lat = op.rawValue.latency     // 4
-let mem = op.rawValue.isMemory    // true
-```
-
-This is the union analogue of [Struct-Backed Enums](#struct-backed-enums). Use it to carry per-variant compile-time metadata (memory/store/call flags, instruction latency, scheduling hints, inliner policy bits) without writing exhaustive match expressions in every consumer — readers query the backing struct directly via `.rawValue.field`.
-
-**Notes:**
-- All variants must use the same backing struct type
-- Every variant must provide a backing value (no bare-tagged variants in a backed union)
-- Backing struct field values must be compile-time constants (integers, floats, booleans, enum member references like `OpPattern.passThrough`, or top-level constants)
-- At runtime, the union discriminant is stored as an ordinal; `.rawValue` constructs the backing struct on demand
-
-### Union Cases (Discriminant as an Enum)
-
-Every `union` has a compiler-synthesized companion type `U.unionCases` — a simple integer-backed enum with one bare case per variant of `U`, in declaration order. It is the union's discriminant exposed as a first-class enum value.
-
-```maxon
-typealias Length = int(0 to u64.max)
-
-union Shape
-	circle(radius Length)
-	square(side Length)
-	point
-end 'Shape'
-
-// Shape.unionCases is conceptually:
-//   enum Shape.unionCases
-//     circle    // rawValue 0
-//     square    // rawValue 1
-//     point     // rawValue 2
-//   end
-```
-
-Because `U.unionCases` is a regular enum it inherits all of the standard enum machinery: `.allCases`, `.allCaseNames`, `.rawValue`, `.fromRawValue`, `.fromName`, `.name`, and `.ordinal`. Match arms over a `U.unionCases` value are exhaustiveness-checked, just like match arms over the union itself.
-
-The intended use is symmetric (de)serialization: write the variant's `rawValue` to a buffer alongside its payload; on read, lift the raw integer back to a `U.unionCases` via `fromRawValue` and match on it to dispatch the payload reader. Match arms are single-statement, so multi-step writers and readers extract per-variant helpers:
-
-```maxon
-typealias Length = int(0 to u64.max)
-
-function writeShapeCircle(buf ByteArray, radius Length)
-	writeDword(buf, value: Shape.unionCases.circle.rawValue)
-	writeQword(buf, value: radius)
-end 'writeShapeCircle'
-
-function writeShapeSquare(buf ByteArray, side Length)
-	writeDword(buf, value: Shape.unionCases.square.rawValue)
-	writeQword(buf, value: side)
-end 'writeShapeSquare'
-
-function writeShape(buf ByteArray, value Shape)
-	match value 'tag'
-		circle(r) then writeShapeCircle(buf, radius: r)
-		square(s) then writeShapeSquare(buf, side: s)
-		point then writeDword(buf, value: Shape.unionCases.point.rawValue)
-	end 'tag'
-end 'writeShape'
-
-function readShapeCircle(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
-	let radius = readQword(buf, offset: offset)
-	return (Shape.circle(radius), offset + 8)
-end 'readShapeCircle'
-
-function readShapeSquare(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
-	let side = readQword(buf, offset: offset)
-	return (Shape.square(side), offset + 8)
-end 'readShapeSquare'
-
-function readShape(buf ByteArray, offset ByteOffset) returns (Shape, ByteOffset)
-	let raw = readDword(buf, offset: offset)
-	let pos = offset + 4
-	let kase = try Shape.unionCases.fromRawValue(raw) otherwise panic("corrupt cache: unknown Shape tag {raw}")
-	match kase 'tag'
-		circle then return readShapeCircle(buf, offset: pos)
-		square then return readShapeSquare(buf, offset: pos)
-		point then return (Shape.point, pos)
-	end 'tag'
-end 'readShape'
-```
-
-Both `match` statements are exhaustiveness-checked: the writer matches over a `Shape` value, the reader matches over a `Shape.unionCases` value. Adding a new variant to `Shape` automatically extends `Shape.unionCases`, which produces non-exhaustive-match errors in *both* the writer and reader. There is no path to a compiling-but-broken codec.
-
-**Notes:**
-- `.unionCases` raw values are declaration ordinals (0, 1, 2, ...). Reordering variants of `U` changes the on-disk format if `rawValue` is being persisted; treat serialized unions as append-only.
-- Plain `enum` types do not need `.unionCases` — they already are their own discriminant and expose `.allCases` / `.fromRawValue` directly.
-
----
-
-## Variables
-
-### Mutable Variables (`var`)
-```maxon
-var x = 42              // Type inferred
-x = x + 5               // Reassignment allowed
-```
-
-### Immutable Variables (`let`)
-```maxon
-let pi = 3.14159        // Cannot be reassigned
-let name = "Maxon"
-// pi = 3.14            // ERROR: Cannot assign to immutable variable
-```
-
-Calling a mutating method on a `let` variable is a compile error. Mutating methods include `push`, `pop`, `set`, `remove`, `clear`, `append`, `insert`, `resize`, `reserve`, `setLength`, `grow`, `upsert`, and similar methods that modify the receiver's state. Use `var` for variables that need mutation:
-
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias IntArray = Array with Tally
-
-let items = IntArray.create()
-// items.push(1)        // ERROR: cannot call mutating method 'push' on immutable variable
-var items2 = IntArray.create()
-items2.push(1)           // OK — items2 is var
-```
-
-**Rules:**
-- All variables must be initialized at declaration
-- Type is always inferred from the initializer
-- Scope is block-scoped
-- Primitives are stack-allocated; structs with all-primitive fields that don't escape scope are stack-promoted automatically; `var` arrays use heap buffers (with automatic cleanup)
-- Variables declared with `var` that are never reassigned produce an error (E3077). Use `let` instead if the variable is not mutated. E3077 is withheld where a `let` in its place would not compile — where a mutable door would move or refuse it (see [Immutable XOR Mutable](#immutable-xor-mutable)).
-- For struct-typed variables, `var b = a` hands `b` the same object rather than a copy; use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
-- A mutable name takes an immutable (`let`) name's record only by MOVING it (see [Immutable XOR Mutable](#immutable-xor-mutable)). A `let` bound to a fresh record and named by nothing else moves into a `var`, and reading it afterwards is E3102; any other `let` — an alias, an element or other borrow, a module-level `let` — is refused (E3078) while it is read after the binding, and a field of a `let` is refused always. Value types (int, float, bool, byte) are always independent copies and are allowed. Use `let` instead of `var`, or call `.clone()` to create an independent mutable copy:
-  ```maxon
-  let a = Point.create(1, y: 2)
-  var b = a                 // OK — a MOVES into b; reading a afterwards is E3102
-  let c = Point.create(3, y: 4)
-  let d = c                 // d aliases c: two immutable names
-  // var e = c              // ERROR E3078: cannot assign immutable variable 'c' to mutable binding 'e'
-  var f = c.clone()         // OK — f is an independent mutable copy
-  ```
-- All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
-- The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring (e.g., `for (_, _) in pairs`). In match patterns, `_` can discard individual bindings (e.g., `pair(_, second)`) but discarding all bindings is an error (E3081) — omit the parentheses instead: `pair then ...`.
-- **Interface method exception**: methods that implement an interface contract are exempt from the unused-parameter check on their parameters. The implementer is forced to declare every parameter the interface names, even when a particular implementation does not need one of them. The check still applies to local `let`/`var` bindings inside the method, and to non-interface methods on the same type.
-
-### Top-Level Variables
-
-Variables can be declared at the top level of a module (outside any function):
-
-```maxon
-var globalCounter = 0
-let MAX_SIZE = 1024
-
 function main() returns ExitCode
-		globalCounter = globalCounter + 1
-		return globalCounter
+	let op = Instruction.load
+	print("{op.rawValue.latency} {op.rawValue.isMemory}\n")    // 4 true
+	return 0
 end 'main'
 ```
 
-**Top-Level Variable Rules:**
-- `var` declares a mutable top-level variable (can be reassigned from any function)
-- `let` declares an immutable top-level constant (compile-time evaluated when possible)
-- Most initializers must be constant expressions (integer, float, bool, string literal, or a SCALAR enum's member reference like `Color.red`)
-- `Type from "literal"` expressions (e.g., `FilePath from "path"`) are also allowed as top-level `let` initializers; these are runtime-initialized before `main()` executes
-- Static factory calls (e.g., `let shared = Counter.create()`) and array literals (e.g., `var items = [1, 2, 3]`) are also allowed; their initializers run in a per-file `__module_init` function before `main()`
-- A union case reference is a constant only when the union is a bare discriminant. A union with any payload-bearing case is a heap box, so `var hold = Hold.unowned` and `var hold = Hold.owned(5)` alike are runtime-initialized in `__module_init` and the slot owns its occupant. The split follows the REPRESENTATION, not whether the case is written with a payload at the declaration site
-- Initialized before `main()` executes
-- Accessible from any function in the same file (use `export` for cross-file visibility)
+- Every case uses the same struct type and provides a value.
+- Field values are compile-time constants: numbers, booleans, enum cases, top-level constants.
+- The enum is stored as its ordinal; `.rawValue` builds the record on demand. `fromRawValue` is not
+  available for a struct-backed enum.
 
-**Use Cases:**
-- Configuration constants (`let MAX_BUFFER_SIZE = 4096`)
-- Counters and state shared across function calls (`var callCount = 0`)
-- Program-wide settings
+### Enum Interface Conformance
+
+An enum can declare conformances after its name:
+
+```maxon
+enum FileError implements Error
+	notFound
+	permissionDenied
+end 'FileError'
+
+enum HttpError implements Error
+	badRequest = 400
+	notFound = 404
+end 'HttpError'
+```
+
+The header is only `enum Name` and an optional `implements` clause; the backing type is inferred from the
+raw values, never written.
 
 ---
 
-## Enums (Raw-Value Enums)
+## Raw-Value Enums
 
-Enums without associated values define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `.allCases`, `.allCaseNames`, `fromRawValue()`, and `fromName()`.
+A raw value gives each case a constant: an integer, a float, a string, a character, a record, or a
+function.
 
 ### Declaration
 
 ```maxon
 enum HttpStatus
-		ok = 200
-		notFound = 404
-		serverError = 500
+	ok = 200
+	notFound = 404
+	serverError = 500
 end 'HttpStatus'
 ```
 
-Cases without explicit values auto-increment from 0 (or from the previous explicit value + 1):
+Cases without a value count up from 0, or from the previous explicit integer value plus one. Negative values
+are allowed:
 
 ```maxon
-enum Color
-		red       // 0
-		green     // 1
-		blue      // 2
-end 'Color'
-
 enum Priority
-		low         // 0
-		medium      // 1
-		high = 10
-		critical    // 11
+	low          // 0
+	medium       // 1
+	high = 10
+	critical     // 11
 end 'Priority'
+
+enum Temperature
+	cold = -10
+	freezing = 0
+	warm = 25
+end 'Temperature'
 ```
+
+Counting up applies only to integer raw values; a case without a value beside non-integer values is an
+error.
 
 ### Backing Types
 
-Enums support integer, float, String, Character, struct, and function backing types.
+The raw values decide the backing type:
 
 ```maxon
 enum Threshold
-		low = 0.1
-		medium = 0.5
-		high = 0.9
+	low = 0.1
+	high = 0.9
 end 'Threshold'
 
 enum ContentType
-		json = "application/json"
-		html = "text/html"
+	json = "application/json"
+	html = "text/html"
 end 'ContentType'
 
 enum Escape
-		newline = '\n'
-		tab = '\t'
+	newline = '\n'
+	tab = '\t'
 end 'Escape'
 ```
 
-Struct backing attaches compile-time constant metadata to each case. Field values must be compile-time constants (integers, floats, booleans) or nested struct literals:
+`.rawValue` has the backing type — `ContentType.json.rawValue` is the `String` `"application/json"`.
+[Struct-backed enums](#struct-backed-enums) attach a record per case.
 
-```maxon
-type OpInfo
-		export let latency as int(0 to 100)
-		export let throughput as int(0 to 10)
-end 'OpInfo'
-
-enum Instruction
-		add = OpInfo{latency: 1, throughput: 2}
-		mul = OpInfo{latency: 3, throughput: 1}
-		div = OpInfo{latency: 40, throughput: 1}
-end 'Instruction'
-
-let lat = Instruction.div.rawValue.latency  // 40
-```
-
-At runtime, struct-backed enums are stored as ordinals. The struct is reconstructed on `.rawValue` access. `fromRawValue()` is not available for struct-backed enums.
-
-Function backing attaches a top-level function reference to each case. All cases must share the same function signature, which becomes the enum's backing type. The function may be declared later in the same file or in a different file; the binding is resolved after every file's top-level declarations have been pre-scanned.
+**Function backing** attaches a function to each case; all cases share one signature, and `.rawValue` is
+the function value:
 
 ```maxon
 typealias Operand = int(i64.min to i64.max)
 
 function doubleFn(x Operand) returns Operand
-		return x * 2
+	return x * 2
 end 'doubleFn'
 
 function tripleFn(x Operand) returns Operand
-		return x * 3
+	return x * 3
 end 'tripleFn'
 
 enum Op
-		doubleOp = doubleFn
-		tripleOp = tripleFn
+	doubleOp = doubleFn
+	tripleOp = tripleFn
 end 'Op'
 
-let f = Op.doubleOp.rawValue
-let r = f(21)   // 42
+function main() returns ExitCode
+	let f = Op.tripleOp.rawValue
+	print("{f(14)}\n")     // 42
+	return 0
+end 'main'
 ```
 
-At runtime, function-backed enums are stored as ordinals; `.rawValue` lowers to a select chain that recovers the function pointer for the live case. `fromRawValue()` is not available for function-backed enums.
-
-Auto-increment (bare case names with no explicit value) is only valid for integer-backed enums. Mixing bare names with non-integer explicit values is a compile error.
-
-Negative integer values are supported:
-
-```maxon
-enum Temperature
-		freezing = 0
-		cold = -10
-		warm = 25
-end 'Temperature'
-```
+`fromRawValue` is available for integer, float, string and character backings, not for struct or function
+backings.
 
 ### Comparison
 
-Enums without associated values allow direct `==` and `!=` comparison:
+Cases compare with `==` and `!=`. A string-backed case also compares directly with a `String`, and a
+character-backed case with a `Character`, by its raw value:
 
 ```maxon
-var s = HttpStatus.notFound
-if s == HttpStatus.notFound 'check'
-		// ...
-end 'check'
-if s != HttpStatus.ok 'check2'
-		// ...
-end 'check2'
+enum ContentType
+	json = "application/json"
+	html = "text/html"
+end 'ContentType'
+
+function isJson(c ContentType) returns bool
+	return c == "application/json"
+end 'isJson'
 ```
+
+Comparing `.rawValue` itself with `==` is **E3097** — compare the case (`value == Type.case`) instead.
 
 ### Match
 
-Enum matches require exhaustive case coverage — every case must be named by some arm. Match arms use bare case names (unqualified); using qualified `Type.case` syntax in a match arm is a compile error (E3075). Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
+A match on an enum names every case, bare (**E2026** lists any that are missing). `Type.case` in an arm is
+**E3075**, a plain `default` arm is **E2046**, and covering a case twice is **E2027**. An arm covering
+several cases lists them with `or`, one per line:
 
 ```maxon
-// Exhaustive: all cases listed
-var result = match s 'handle'
-		ok gives 1
-		notFound gives 2
-		serverError gives 3
-end 'handle'
+enum Priority
+	low
+	medium
+	high = 10
+	critical
+end 'Priority'
+
+function urgency(p Priority) returns String
+	return match p 'check'
+		low or
+			medium gives "not urgent"
+		high or
+			critical gives "urgent"
+	end 'check'
+end 'urgency'
 ```
-
-An arm covering several cases names each of them with `or`, one alternative per line. Qualified `Type.case` syntax in match arms is a compile error (E3075):
-
-```text
-match p 'check'
-    low or
-        medium then print("not urgent")
-    high or
-        critical then print("urgent")
-end 'check'
-```
-
-Covering a case twice — in two arms, or twice in one chain — is an error (E2027). A RANGE of cases (`low to medium`) is E3146.
-
-### Raw Value Access
-
-All enums support `.rawValue`. Simple enums return the case ordinal (0, 1, 2…); backed enums return the explicit value, typed by the backing kind — `int` for int-backed, `float` for float-backed, `String` for string-backed, and `Character` for char-backed:
-
-```maxon
-var c = Color.green
-var ordinal = c.rawValue   // 1
-
-var s = HttpStatus.notFound
-var code = s.rawValue      // 404 (int)
-```
-
-For string- and char-backed enums, `.rawValue` returns the declared backing literal as a `String` / `Character` (the value is reconstructed from the ordinal at runtime):
-
-```maxon
-enum Status
-	active = "ACTIVE"
-	closed = "CLOSED"
-end 'Status'
-
-var st = Status.active
-var raw = st.rawValue          // "ACTIVE" (String)
-if st.rawValue == "ACTIVE" 'check'   // String/char-backed enums compare against their scalar peer
-	// ...
-end 'check'
-```
-
-A string-backed enum value compares with `==` / `!=` against a `String` (and a char-backed value against a `Character`) by comparing the declared backing literal; both sides may also be the same enum type.
 
 ### Implicit Coercion to the Backing Primitive
 
-A simple or int/float-backed enum case coerces *implicitly* to a numeric primitive (`int`, `byte`, `short`, `float`) wherever that type is expected — a function argument, a collection element, a `return` value, or a
-struct-literal field initializer. No `.rawValue` and no explicit cast are needed; the case's backing value is used directly. This is the same rule that lets a `byte` compare against an enum case (`b == Ascii.space`), extended to value positions.
+A case of a simple, integer-backed or float-backed enum is used as its raw value wherever a number is
+expected — a function argument, a collection element, a comparison, a `return`, a struct field — with no
+`.rawValue`:
 
 ```maxon
 enum JsonByte
@@ -2231,3115 +1846,1909 @@ enum JsonByte
 	space = 0x20
 end 'JsonByte'
 
-var out = ByteArray.create()
-out.push(JsonByte.lBracket)        // coerces to Byte — no .rawValue needed
-out.push(JsonByte.space)
+function main() returns ExitCode
+	var out = ByteArray.create()
+	out.push(JsonByte.lBracket)                     // pushes 0x5B
+	out.push(JsonByte.space)
+	let first = try out.get(0) otherwise 0
+	print("{first == JsonByte.lBracket}\n")         // true
+	return 0
+end 'main'
 ```
 
-String-, char-, function-, and struct-backed enums are excluded: their runtime value is the ordinal, not the backing literal, so they still require an explicit `.rawValue` (which reconstructs the backing value). Use `.rawValue` explicitly whenever you want the value rather than relying on a primitive-typed context to drive the coercion.
-
-### Name Access
-
-All enums have a `.name` property returning the case name as a `String`. For backed enums, `.name` always returns the case name, not the raw value:
-
-```maxon
-var s = HttpStatus.notFound
-var code = s.rawValue   // 404
-var n = s.name          // "notFound"
-```
-
-### Ordinal Access
-
-All enums have an `.ordinal` property returning the zero-based declaration position as an `int`. For simple enums, `.ordinal` is identical to `.rawValue`. For backed enums, `.ordinal` is the position in declaration order, not the backing value:
-
-```maxon
-var c = Color.green
-var pos = c.ordinal    // 1 (same as .rawValue for simple enums)
-
-var s = HttpStatus.notFound
-s.ordinal              // 1 (second case in declaration order)
-s.rawValue             // 404 (backing value)
-s.name                 // "notFound"
-```
-
-`.ordinal` is available on all enum backing types (int, float, string, char).
-
-### All Cases (`allCases`)
-
-All enums have a static `.allCases` property that returns an `Array` containing all cases in declaration order:
-
-```maxon
-for color in Color.allCases 'loop'
-	print("{color.name}\n")
-end 'loop'
-// Prints: red, green, blue
-
-var count = Color.allCases.count()  // 3
-```
-
-`.allCases` works with all backing types (simple, int, float, string, char).
-
-### All Case Names (`allCaseNames`)
-
-All enums and unions have a static `.allCaseNames` property returning an `Array with String` of the case names in declaration order:
-
-```maxon
-for name in Color.allCaseNames 'loop'
-	print("{name}\n")
-end 'loop'
-// Prints: red, green, blue
-
-var count = Color.allCaseNames.count()  // 3
-```
-
-Unlike `.allCases`, `.allCaseNames` is available on unions too — even unions whose cases carry associated values — because only the case name strings are returned.
-
-### Converting from Raw Value (`fromRawValue`)
-
-The `fromRawValue` static method converts a raw value to an enum case. It throws `EnumError.invalidRawValue` if no case matches:
-
-```maxon
-var s = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok  // HttpStatus.notFound
-```
-
-For string- and char-backed enums, `fromRawValue` takes the backing literal type (`String` / `Character`) and matches against each case's declared backing literal:
-
-```maxon
-var st = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.closed
-```
-
-`fromRawValue` is not available for struct-backed or function-backed enums (their raw value can't be reconstructed from a literal lookup).
-
-### Converting from Name (`fromName`)
-
-The `fromName` static method converts a string name to an enum case. It throws `EnumError.invalidName` if no case matches:
-
-```maxon
-var s = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok  // HttpStatus.notFound
-
-// Runtime string
-function getStatus(name String) returns HttpStatus
-		return try HttpStatus.fromName(name) otherwise HttpStatus.ok
-end 'getStatus'
-```
-
-**Notes:**
-- Both `fromRawValue` and `fromName` throw; use `try...otherwise` or `try...catch`
-- Compile-time literal arguments are validated at compile time
-
-### As Function Parameters and Return Types
-
-```maxon
-function isSuccess(s HttpStatus) returns bool
-		if s == HttpStatus.ok 'check'
-				return true
-		end 'check'
-		return false
-end 'isSuccess'
-
-function getDefault() returns HttpStatus
-		return HttpStatus.ok
-end 'getDefault'
-```
+String-, character-, struct- and function-backed enums do not coerce; use `.rawValue`.
 
 ### Keywords as Case Names
 
-Keywords can be used as enum case names:
+A keyword can be a case name, since cases are always written qualified (`TokenKind.end`) or bare inside a
+match arm:
 
 ```maxon
 enum TokenKind
-		function
-		return
-		end
-		if
+	function
+	return
+	end
+	if
 end 'TokenKind'
-```
-
-### Export
-
-```maxon
-export enum Permission
-		none = 0
-		read = 1
-		write = 2
-end 'Permission'
 ```
 
 ### Error Conditions
 
-- **E3030**: Duplicate case name within the same enum block
-- **E3031**: Duplicate explicit value within the same enum block
-- **E3032**: Mixing backing types (e.g., int and String values in the same block)
-- **E3034**: Accessing an unknown case (`Color.purple` when `purple` is not defined)
+| Code | Cause |
+|------|-------|
+| E3030 | duplicate case name |
+| E3031 | duplicate raw value |
+| E3032 | raw values of different backing types in one enum |
+| E3034 | an unknown case (`Color.purple`), or a literal `fromName`/`fromRawValue` argument that matches no case |
+| E3097 | comparing `.rawValue` with `==` |
+
+---
+
+## Unions
+
+A `union` declares a fixed set of cases, each of which may carry **associated values**. A value of a union
+is exactly one case with its payload, and `match` is how you read it.
+
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+union Outcome
+	success(value Amount)
+	failure(code Amount, message String)
+	pending
+end 'Outcome'
+
+function describe(r Outcome) returns String
+	return match r 'show'
+		success(v) gives "ok {v}"
+		failure(code, message) gives "failed {code}: {message}"
+		pending gives "waiting"
+	end 'show'
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Outcome.success(42))}\n")
+	print("{describe(Outcome.failure(404, message: "not found"))}\n")
+	print("{describe(Outcome.pending)}\n")
+	return 0
+end 'main'
+```
+
+### Constructing Cases
+
+A case with a payload is constructed like a call — first argument positional, the rest named after the
+payload fields: `Outcome.failure(404, message: "not found")`. A case without a payload is written like an
+enum case: `Outcome.pending`.
+
+Payloads may be integers, booleans, strings, records, other unions and collections. A `float` payload is
+not supported yet (**E2015**).
+
+### Pattern Matching
+
+In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are local to the arm.
+
+- The number of bindings matches the case's payload fields.
+- Discard one binding with `_`: `failure(_, message)`.
+- To ignore the whole payload, omit the parentheses: `success then …`. Writing `success(_)` with every
+  binding discarded is **E3081**.
+- An `or`-chain can list payload cases bare; their payloads are not accessible in that arm.
+- A match on a union must cover every case (**E2026**); use `default throws` or `default panic(…)` for a
+  deliberate catch-all (see [Statements](#default-throws-and-default-panic)).
+
+### Mutable Match Bindings
+
+When the matched value is a `var` (or a union parameter the function may write), assigning to a binding
+writes back into the union:
+
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+union Box
+	empty
+	full(value Amount)
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.full(10)
+	match b 'update'
+		full(value) then value = 42
+		empty then return 1
+	end 'update'
+
+	match b 'read'
+		full(value) then print("{value}\n")    // 42
+		empty then print("empty\n")
+	end 'read'
+
+	return 0
+end 'main'
+```
+
+When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**.
+
+### Comparing Union Values
+
+Unions have no `==` or `!=` (**E3066** `cannot compare union values using '==', use 'match' instead`).
+Inspecting a union through `match` means that adding a case later flags every place that must decide what
+to do with it. For the same reason unions are not automatically `Equatable` or `Hashable`; a union may
+still declare `implements Equatable` with its own `equals` method and call it explicitly.
+
+### Union Properties
+
+A union value has `.name`, `.ordinal` and `.rawValue`, and a union type has `Type.allCaseNames` and
+`Type.fromName(name)`. `fromName` takes the payload as extra arguments when the name is a literal
+(`Container.fromName("value", 42)`); with a run-time string it only produces cases without a payload.
+There is no `.allCases`, because a payload case has no single value — use `.unionCases` below.
+
+A case can declare an explicit integer tag, which becomes its `.rawValue` (the `.ordinal` is still the
+declaration position):
+
+```maxon
+typealias Id = int(0 to 255)
+
+union Instr
+	add(dest Id, src Id) = 5
+	neg(dest Id) = 9
+end 'Instr'
+```
+
+### Union Methods
+
+A union can declare instance methods; inspect `self` with `match`:
+
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Amount)
+	square(side Amount)
+	point
+
+	export function area() returns Amount
+		return match self 'calc'
+			circle(r) gives 3 * r * r
+			square(s) gives s * s
+			point gives 0
+		end 'calc'
+	end 'area'
+end 'Shape'
+
+function main() returns ExitCode
+	print("{Shape.square(4).area()}\n")    // 16
+	return 0
+end 'main'
+```
+
+As with enums, a method carries its own visibility, and `static function` is not supported.
+
+### Union Interface Conformance
+
+```maxon
+typealias HttpCode = int(100 to 599)
+
+union FetchError implements Error
+	notFound
+	status(code HttpCode)
+end 'FetchError'
+```
+
+Unions and enums are the types that can be thrown (see
+[Error Handling](#defining-error-types)).
+
+### Struct-Backed Unions
+
+Each case can also carry a compile-time record, exactly like a
+[struct-backed enum](#struct-backed-enums). The payload and the record are
+independent: `match` reads the payload and `.rawValue` reads the record.
+
+```maxon
+typealias Latency = int(0 to 50)
+typealias Slot = int(0 to 255)
+
+type OpMeta
+	export let latency as Latency
+	export let isMemory as bool
+end 'OpMeta'
+
+union MachineOp
+	movImm(dest Slot, value Slot) = OpMeta{latency: 1, isMemory: false}
+	load(dest Slot, addr Slot) = OpMeta{latency: 4, isMemory: true}
+	store(addr Slot, src Slot) = OpMeta{latency: 3, isMemory: true}
+end 'MachineOp'
+
+function main() returns ExitCode
+	let op = MachineOp.load(1, addr: 2)
+	print("{op.rawValue.latency} {op.rawValue.isMemory}\n")    // 4 true
+	return 0
+end 'main'
+```
+
+Every case uses the same record type and provides a value of compile-time constants.
+
+### Union Cases (Discriminant as an Enum)
+
+Every union `U` has a companion enum `U.unionCases` with one bare case per union case, in declaration
+order. It is an ordinary enum — `.allCases`, `.allCaseNames`, `.fromRawValue`, `.fromName`, `.name`,
+`.ordinal`, `.rawValue` — and a `match` over it is exhaustiveness-checked.
+
+That makes serialization safe to extend: write a case's `rawValue` next to its payload, and on reading, lift
+the stored tag back with `fromRawValue` and `match` on it. Adding a case to `U` adds it to `U.unionCases`,
+so both the writer's and the reader's `match` stop compiling until they handle it.
+
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Amount)
+	square(side Amount)
+	point
+end 'Shape'
+
+function kindOf(tag Amount) returns String
+	let kind = try Shape.unionCases.fromRawValue(tag) otherwise panic("unknown Shape tag {tag}")
+	return match kind 'kind'
+		circle gives "circle"
+		square gives "square"
+		point gives "point"
+	end 'kind'
+end 'kindOf'
+
+function main() returns ExitCode
+	let s = Shape.square(3)
+	print("{kindOf(s.rawValue)}\n")    // square
+	return 0
+end 'main'
+```
+
+The tags are declaration positions unless a case declares its own, so reordering cases changes stored
+tags; treat a persisted union as append-only.
+
+---
+
+## Variables
+
+### Mutable Variables (`var`)
+
+```maxon
+var x = 42              // type inferred from the initializer
+x = x + 5               // reassignment allowed
+```
+
+### Immutable Variables (`let`)
+
+```maxon
+let pi = 3.14159
+let name = "Maxon"
+// pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
+```
+
+A `let` cannot be mutated through a method either: calling a method that writes its receiver (`push`,
+`append`, `set`, `remove`, `clear`, …) on a `let` is **E3019**.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var items = TallyArray.create()
+	items.push(1)                    // fine: items is a var
+	// let fixed = TallyArray.create()
+	// fixed.push(1)                 // E3019: cannot pass 'fixed' to function that mutates parameter 'self'
+	print("{items.count()}\n")
+	return 0
+end 'main'
+```
+
+### Rules
+
+- Every variable is initialized where it is declared, and its type is inferred from the initializer.
+  Local declarations take no type annotation.
+- Variables are block-scoped.
+- **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
+  instead of 'var'`).
+- **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
+  bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
+  times in one pattern (`for (_, _) in pairs`). Names such as `_x` are ordinary variables. A method that
+  implements an interface requirement is exempt for its parameters, since the interface dictates them.
+- **Records are shared, not copied.** `var b = a` for a record-typed `a` hands `b` the same record; use
+  `a.clone()` for an independent copy (see
+  [Reference-by-Default Assignment](#reference-by-default-assignment)).
+  Numbers, `bool` and other scalar values are always independent copies.
+- **A mutable name takes an immutable name's record only by moving it** (see
+  [Immutable XOR Mutable](#immutable-xor-mutable)):
+
+  ```maxon
+  typealias Coord = int(i64.min to i64.max)
+
+  type Point
+  	export var x as Coord
+
+  	export static function create(x Coord) returns Point
+  		return Point{x: x}
+  	end 'create'
+  end 'Point'
+
+  function main() returns ExitCode
+  	let a = Point.create(1)
+  	var b = a                 // a MOVES into b; reading a afterwards is E3102
+  	b.x = 10
+
+  	let c = Point.create(3)
+  	let d = c                 // d aliases c: two immutable names
+  	// var e = c              // E3078: cannot assign immutable variable 'c' to mutable binding 'e'
+  	var f = c.clone()         // an independent record
+  	f.x = 30
+  	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 3 3 30
+  	return 0
+  end 'main'
+  ```
+
+### Top-Level Variables
+
+Variables can be declared at file scope, outside any function:
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+var callCount = 0
+let MAX_SIZE = 1024
+var names = ["ada", "alan"]
+let dataFile = FilePath from "data.txt"
+
+function bump() returns Tally
+	callCount = callCount + 1
+	return callCount
+end 'bump'
+
+function main() returns ExitCode
+	_ = bump()
+	print("{callCount} {MAX_SIZE} {names.count()} {dataFile.filename()}\n")   // 1 1024 2 data.txt
+	return 0
+end 'main'
+```
+
+- `var` declares module state any function in the file can reassign; `let` declares a constant.
+- An initializer is a literal, a constant expression, an enum case, an array or dictionary literal,
+  `Type from "literal"`, or a static factory call (`let shared = Cache.create()`). Any other function call is
+  **E2045** (`Function calls are not allowed in global variable initializers`).
+- Every initializer runs **before `main`**, once, in dependency order. Initializers that depend on each
+  other in a cycle are **E2012**.
+- A top-level declaration is private to its file unless marked `export`, `module` or `public`.
+- A [service](#services--spawn) handler may not read or write a module-level `var`
+  (**E3143**); keep service state in its fields.
 
 ---
 
 ## Functions
 
-### Declaration Syntax
-```maxon
-// Function with return value
-function name(param type [= default], ...) returns returnType
-		// statements
-		return value
-end 'name'
+### Declaration
 
-// Function with no return value (implicit void)
-function name(param type [= default], ...)
-		// statements
+```text
+function name(param Type, other Type = default) returns ReturnType throws ErrorType
+	statements
 end 'name'
 ```
-
-**Block Identifier**: The string after `end` must match the function name.
-
-**Return Type**: Functions that return a value must specify `returns` followed by the type. Functions that don't return a value should omit the `returns` clause entirely.
-
-**Discarding Parameters**: Use `_` as the parameter name to discard an unused parameter and suppress the unused-variable error:
-
-```maxon
-function onClick(_ MouseEvent)
-	// the MouseEvent argument is intentionally unused
-end 'onClick'
-```
-
-### Named Arguments
-
-Maxon uses a **first-positional, rest-named** rule for function and method calls:
-- **First argument**: Always positional. Labelling the first argument is rejected as **E2052 "first arg cannot be named"**.
-- **Subsequent arguments**: Must use `name: value` syntax (omitting the label triggers **E3005**)
-- Named arguments (after the first) can appear in any order
-- Parameters with default values can be omitted
-
-**Examples:**
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
 
 function add(a Amount, b Amount) returns Amount
-		return a + b
+	return a + b
 end 'add'
 
-add(3, b: 4)      // First positional, second named
+function greet(name String)
+	print("Hello, {name}\n")
+end 'greet'
+```
 
-function connect(host String, port Port) returns bool
-		// ...
+- The label after `end` repeats the function's name.
+- A function that returns a value declares `returns Type`; one that returns nothing omits the clause.
+- A parameter is written `name Type`. Parameter types follow the
+  [typealias rule](#primitives-go-through-a-typealias).
+- A function that can fail declares `throws ErrorType` (see
+  [Error Handling](#error-handling)).
+- Name a parameter `_` to accept and ignore an argument: `function onClick(_ MouseEvent)`.
+- A function is private to its file unless marked `export`, `module` or `public` (see
+  [Namespaces](#namespaces)).
+
+### Named Arguments
+
+Maxon calls use a **first-positional, rest-named** rule:
+
+- The first argument is positional. Labelling it is **E2052** (`the first argument cannot be named`).
+- Every later argument is written `name: value`; omitting a label is **E2053**.
+- Named arguments may appear in any order, and parameters with defaults may be omitted.
+
+```maxon
+typealias Amount = int(i64.min to i64.max)
+
+function connect(host String, port Amount, secure bool = false) returns String
+	return "{host}:{port} secure={secure}"
 end 'connect'
 
-connect("localhost", port: 8080)  // First positional, second named
-
-// Single parameter functions
-function greet(name String)
-		print("Hello, " + name)
-end 'greet'
-
-greet("Alice")    // Single param is positional
+function main() returns ExitCode
+	print("{connect("localhost", port: 8080)}\n")                    // localhost:8080 secure=false
+	print("{connect("example.com", secure: true, port: 443)}\n")     // example.com:443 secure=true
+	return 0
+end 'main'
 ```
 
 ### Default Values
 
-Parameters can have default values. Parameters with defaults can be omitted at the call site. Any literal expression is supported as a default value, including integers, floats, booleans, strings, arrays, enum cases, struct construction, character literals, and byte string literals.
+A parameter may declare a default, used when the call omits that argument. The default is any expression —
+a literal, an enum case, a factory call, a byte string — and is evaluated at each call that needs it.
 
 ```maxon
-typealias Tally = int(0 to u64.max)
+typealias Retries = int(0 to 10)
+
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
 
 function greet(name String, title String = "Mr.")
-		print("Hello, {title} {name}")
+	print("Hello, {title} {name}\n")
 end 'greet'
 
-greet("Smith")                    // Uses default title
-greet("Smith", title: "Dr.")      // Override default
+function schedule(job String, retries Retries = 3, level Priority = Priority.medium, separator Character = '/')
+	print("{job}{separator}{retries}{separator}{level.name}\n")
+end 'schedule'
 
-// String default
-function connect(host String = "localhost") returns ExitCode
-		// ...
-end 'connect'
-
-// Array default
-function process(items IntArray = [10, 20, 12]) returns Tally
-		// ...
-end 'process'
-
-// Integer default
-function retry(attempts AttemptCount = 3) returns ExitCode
-		// ...
-end 'retry'
-
-// Float default
-function scale(factor ScaleFactor = 1.0) returns ScaleFactor
-		// ...
-end 'scale'
-
-// Bool default
-function run(verbose bool = false) returns ExitCode
-		// ...
-end 'run'
-
-// Enum default
-function setLevel(level Priority = Priority.medium) returns ExitCode
-		// ...
-end 'setLevel'
-
-// Struct default
-function draw(origin Point = Point.create(0, y: 0)) returns ExitCode
-		// ...
-end 'draw'
-
-// Character default
-function setSeparator(sep Character = '/') returns ExitCode
-		// ...
-end 'setSeparator'
-
-// Byte string default
-function send(header ByteArray = b"HTTP/1.1") returns ExitCode
-		// ...
-end 'send'
+function main() returns ExitCode
+	greet("Smith")                          // Hello, Mr. Smith
+	greet("Smith", title: "Dr.")            // Hello, Dr. Smith
+	schedule("backup")                      // backup/3/medium
+	schedule("sync", level: Priority.high)  // sync/3/high
+	return 0
+end 'main'
 ```
 
-**Rules:**
-- Parameters with defaults must come after required parameters
-- Default values are evaluated at call site
-- Arguments may be omitted if they have defaults
-- Any literal expression is supported as a default value
+Parameters with defaults come after the parameters without them.
 
 ### Caller-Location Defaults (`__line__`, `__file__`)
 
-Two keywords are legal **only** as a parameter's default value, and each expands at the call
-site rather than the declaration, so every caller supplies its own location without writing
-anything. They exist so a helper — an assertion library, a logger — can report the line in
-the *caller's* file instead of a line inside itself.
+`__line__` and `__file__` are legal **only** as a parameter's default value. They expand at each **call
+site**, so a helper — an assertion, a logger — can report where it was called from:
 
-| Keyword | Value | Declare the parameter as |
-|---------|-------|--------------------------|
-| `__line__` | Line of the token naming the callee at the call site | `SourceLineNumber` |
-| `__file__` | Calling file's path, relative to the compile root, `/`-separated | `String` |
+| Default | Value at the call site | Declare the parameter as |
+|---------|------------------------|--------------------------|
+| `__line__` | the line of the callee's name | `SourceLineNumber` |
+| `__file__` | the calling file's path, relative to the compile root, with `/` separators | `String` |
 
 ```maxon
-function expectPositive(value Tally, from String = __file__, at SourceLineNumber = __line__) returns bool
-		if value <= 0 'bad'
-				printError("{from}:{at}: expected a positive value\n")
-				return false
-		end 'bad'
-		return true
-end 'expectPositive'
+function check(ok bool, message String, from String = __file__, at SourceLineNumber = __line__)
+	if not ok 'failed'
+		print("{from}:{at}: {message}\n")
+	end 'failed'
+end 'check'
+
+function main() returns ExitCode
+	check(1 + 1 == 2, message: "arithmetic")
+	check(2 + 2 == 5, message: "expected 5")                          // main.maxon:9: expected 5
+	check(false, message: "forwarded", from: "other.maxon", at: 42)   // other.maxon:42: forwarded
+	return 0
+end 'main'
 ```
 
-`SourceLineNumber` is a stdlib typealias for `int(1 to i32.max)`. There is no matching alias
-for `__file__` because Maxon has no typealias over a struct type; declare the parameter
-`String`.
-
-**Rules:**
-- Use both or neither. A failure inside a shared helper resolves `__line__` against *that
-	helper's* file, so a line number without a file names a line in no particular file.
-- Expansion is per call site: two calls to the same function on two lines receive two values.
-- An explicitly passed argument wins — the default is not expanded at all. This is how one
-	helper forwards a location it was itself given: `fail("...", from: from, at: at)`.
-- `__file__` is relative, never absolute. An absolute path is a fact about the build machine,
-	not about the program; embedding one would make the same commit produce different bytes on
-	two checkouts.
-- Anywhere other than a parameter default is error E2060 — including an ordinary expression
-	and a struct field default, which shares the `= expr` spelling but expands at a struct
-	literal rather than a call.
-- Both names are reserved words, so no program can declare or shadow them.
-
-Because Maxon expressions are newline-delimited, a call always occupies one line, so
-`__line__` has only one line to name. The rule is nevertheless stated against the token
-naming the callee — the function name, or the method name after the final `.` — so it stays
-unambiguous if the grammar ever admits a call that spans lines.
+- Declare both or neither: a line number without its file names a line in no particular file.
+- An explicit argument replaces the default, which is how a helper forwards the location it was given:
+  `check(ok, message: m, from: from, at: at)`.
+- `__file__` is always relative, so the same source builds the same binary on any machine.
+- Anywhere else — an ordinary expression, a struct field default — is **E2060**.
 
 ### Function Overloads
 
-Maxon supports function overloading — multiple functions with the same name but different signatures.
+Several functions may share a name when their parameters differ.
 
-#### Disambiguation by Parameter Types
-
-When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
+**By parameter type** — the argument types choose the overload:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-function process(value Tally) returns Tally
-		return value * 2
-end 'process'
+function measure(value Tally) returns Tally
+	return value * 2
+end 'measure'
 
-function process(value String) returns Tally
-		return value.count()
-end 'process'
+function measure(value String) returns Tally
+	return value.count()
+end 'measure'
 
-process(42)        // calls process(value int)
-process("hello")   // calls process(value String)
+function main() returns ExitCode
+	print("{measure(21)} {measure("hello")}\n")    // 42 5
+	return 0
+end 'main'
 ```
 
-#### Disambiguation by Parameter Names
-
-When overloads have different parameter names, the caller uses named arguments to select the correct overload:
+**By parameter name** — overloads whose later parameters have different names are chosen by the labels
+at the call:
 
 ```maxon
-function create(name String) returns String
-		return name
-end 'create'
+typealias Integer = int(i64.min to i64.max)
 
-function create(label String) returns String
-		return label
-end 'create'
+function slice(start Integer, endIndex Integer) returns Integer
+	return endIndex - start
+end 'slice'
 
-create(name: "foo")    // calls first overload
-create(label: "bar")   // calls second overload
+function slice(start Integer, length Integer) returns Integer
+	return start + length
+end 'slice'
+
+function main() returns ExitCode
+	print("{slice(10, endIndex: 32)} {slice(10, length: 32)}\n")    // 22 42
+	return 0
+end 'main'
 ```
 
-#### Ambiguous Calls
-
-If the compiler cannot determine which overload to call based on argument types alone, it requires named arguments. Calling an ambiguous overload without named arguments produces error **E3007**.
-
-#### Same-Name Static and Instance Methods
-
-A type may define both a `static` method and an instance method with the same name. They are disambiguated by call syntax, not by parameter signature, so the two may even share identical parameters:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-type Box
-		export var value as Amount
-
-		export static function create(value Amount) returns Box
-				return Box{value: value}
-		end 'create'
-
-		static function getValue() returns Amount
-				return 9
-		end 'getValue'
-
-		function getValue() returns Amount
-				return value
-		end 'getValue'
-end 'Box'
-
-let b = Box.create(42)
-b.getValue()      // instance — returns 42
-Box.getValue()    // static   — returns 9
-```
-
-`Type.method()` always calls the static method; `instance.method()` always calls the instance method. Declaring two methods of the *same* kind (both static or both instance) with an identical signature is still a duplicate-definition error (**E3006**).
-
-### Examples
-
-**No Parameters**
-```maxon
-typealias Answer = int(i64.min to i64.max)
-
-function getAnswer() returns Answer
-		return 42
-end 'getAnswer'
-```
-
-**Void Return Type**
-```maxon
-function greet(name String)
-		print("Hello, " + name)
-end 'greet'
-```
-
-**Multiple Parameters**
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-function add(a Amount, b Amount) returns Amount
-		return a + b
-end 'add'
-
-var result = add(3, b: 4)
-```
-
-**Named Arguments for Clarity**
-```maxon
-typealias Amount = int(i64.min to i64.max)
-typealias NonZeroInt = int(1 to i64.max)
-
-function divide(dividend Amount, divisor NonZeroInt) returns Amount
-		return dividend / divisor    // divisor's type excludes 0 — a bare divide, no `try` (see Division by Zero)
-end 'divide'
-
-var result = divide(10, divisor: 2)  // first arg positional, rest named
-```
-
-**Array Parameters**
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias IntArray = Array with Tally
-
-function sum(numbers IntArray) returns Tally
-		var total = 0
-		for num in numbers 'loop'
-				total = total + num
-		end 'loop'
-		return total
-end 'sum'
-```
-
-### Calling Functions
-
-**First Positional, Rest Named:**
-```maxon
-var result = add(3, b: 4)         // First positional, second named
-var answer = getAnswer()          // No parameters
-greet("Alice")                    // Single param is positional
-divide(100, divisor: 5)           // First positional, second named
-```
+- A call that more than one overload matches is **E3007** (`Ambiguous overload`). Because the first argument
+  is never labelled, two single-parameter overloads of the same type cannot be told apart.
+- Declaring the same overload twice, with the same parameter names and types, is a duplicate
+  definition (**E3006**). Overloads with the same parameter types but different parameter names are
+  separate declarations; a call whose labels cannot tell them apart is **E3007**.
+- A type may declare a `static` method and an instance method with the same name and parameters:
+  `Type.name()` calls the static one and `value.name()` the instance one.
 
 ### Parameter Passing
 
-Maxon uses **automatic pass-by-reference** for parameters that are assigned to inside the function body.
-
-**By-value (read-only parameters):** If a function only reads a parameter, the value is passed directly — no indirection overhead.
-
-**By-reference (mutated parameters):** If a function assigns to a parameter (directly or through a field or element), the compiler passes a pointer to the caller's storage. This allows the called function to mutate the caller's variable.
+A parameter the function only reads is passed by value. A parameter the function **assigns to** — directly,
+or through one of its fields or elements — is passed by reference, so the write reaches the caller's
+variable:
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
 function increment(n Tally)
-		n = n + 1       // assigns to n — passed by reference
+	n = n + 1
 end 'increment'
 
 function main() returns ExitCode
-		var x = 10
-		increment(x)    // x is now 11
-		return x
+	var x = 10
+	increment(x)
+	print("{x}\n")     // 11
+	return 0
 end 'main'
 ```
 
-**Mutability rules:**
+- Passing a `var` lets the callee's writes propagate.
+- Passing a `let` to a parameter the callee writes is **E3019** (`cannot pass 'y' to function that mutates
+  parameter 'n'`). A method writing a field of its **own** receiver is not a parameter write, so
+  `let acc = Accumulator.create()` followed by `acc.add(10)` is legal.
+- Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
 
-- If the caller passes a `var` variable, the parameter is mutable and assignments propagate back to the caller.
-- If the caller passes a `let` variable to a function that mutates its parameter — directly, or through a field or element of it — the compiler raises error **E3019**. A method writing a field of its *own* receiver is not a parameter mutation, so `let acc = Accumulator.create(0)` followed by `acc.add(10)` is legal.
-- If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
+### Function Types and Function Values
 
-```maxon
-typealias Tally = int(0 to u64.max)
-
-function double(n Tally)
-		n = n * 2
-end 'double'
-
-function main() returns ExitCode
-		var x = 5
-		double(x)       // OK — x is var; x becomes 10
-
-		let y = 5
-		double(y)       // ERROR E3019: cannot pass let variable to mutating parameter
-
-		double(5)       // OK — literal creates a temporary; mutation has no visible effect
-		return x
-end 'main'
-```
-
-### Function Types and Function-Typed Values
-
-Functions in Maxon are first-class values: they can be stored in variables, passed as arguments, and returned from other functions. A *function type* is written with the `function` keyword and must be named via `typealias` — the literal `function(...) returns T` form is legal only as the right-hand side of a `typealias` declaration. Anywhere else (parameters, return types, struct fields, variable annotations, generic arguments), reference the alias by name.
-
-```maxon
-typealias Score = int(i64.min to i64.max)
-
-typealias UnaryOp = function(Score) returns Score    // takes one Score, returns Score
-typealias Compare = function(Score, Score) returns bool  // two Scores, returns bool
-typealias Callback = function()                       // takes nothing, returns void
-```
-
-The `returns` clause is omitted for a void-returning function type. Once defined, the alias can be used at every use site — function parameter, return type, struct field, or generic argument:
+Functions are values: a bare function name (no parentheses) is a reference to it, and it can be stored,
+passed and returned. A function type is written with `function` and is always named by a typealias; the
+alias is what appears in parameters, returns, fields and generic arguments.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 typealias UnaryOp = function(Score) returns Score
-typealias HandlerMap = Map with (String, UnaryOp)
+
+function double(x Score) returns Score
+	return x * 2
+end 'double'
 
 function apply(f UnaryOp, x Score) returns Score
-		return f(x)
+	return f(x)
 end 'apply'
 
 function pickDouble() returns UnaryOp
-		return double                  // function reference, no parens
+	return double
 end 'pickDouble'
 
 function main() returns ExitCode
-		let f = pickDouble()           // f has type UnaryOp
-		return f(21)                   // 42
+	let f = pickDouble()
+	print("{f(21)} {apply(double, x: 4)}\n")    // 42 8
+	return 0
 end 'main'
 ```
 
-A bare function name (no parens) evaluates to a function reference. Closures (see below) and function references are both valid where a function-typed value is expected.
+Omit `returns` for a function type that returns nothing: `typealias Callback = function()`. A function type cannot express `throws`, so a
+throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
+Function-type aliases are [brands](#generic-instance-and-function-type-aliases-are-brands).
 
 ### Closures
 
-Closures are anonymous functions expressed inline using `gives` syntax:
-
-```maxon
-function(param) gives expression
-function(param1, param2) gives expression
-function() gives expression
-```
-
-**Capture by reference:** Closures capture variables from the enclosing scope by reference, not by value. This means changes to a captured variable after the closure is created are visible inside the closure when it executes.
-
-```maxon
-typealias Score = int(i64.min to i64.max)
-
-function main() returns ExitCode
-		var x = 10
-		let addX = function(n Score) gives n + x     // captures x by reference
-		x = 20
-		let result = addX(5)             // evaluates with x == 20, result is 25
-		return result
-end 'main'
-```
-
-**A closure that captures may not escape its defining frame.** Capture-by-reference is what
-forces this: the environment holds the ADDRESSES of the enclosing frame's stack slots, so it is
-meaningful only while that frame is alive. Letting the closure outlive the frame would leave every
-captured read dereferencing a dead frame. So a closure that captures cannot be **returned** out of
-the frame that built it, nor stored in a **struct field**, a **global**, a **container**, or a
-union's **associated-value payload** — each of those is heap storage that outlives every frame.
-All are rejected with **E3099**.
-
-A closure that captures **nothing** is unaffected: it lowers to a plain function reference, has no
-environment to lose, and may be returned and stored freely. And a capturing closure passed *down*
-to a callee that only **calls** it is fine — the defining frame is alive for the whole of that
-call.
+A closure is an anonymous function written `function(parameters) gives expression`:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 typealias UnaryOp = function(Score) returns Score
 
-function makeAdder(bump Score) returns UnaryOp
-		let f = function(n Score) gives n + bump
-		return f          // E3099: cannot return a closure that captures
-end 'makeAdder'
+function apply(f UnaryOp, x Score) returns Score
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	var offset = 10
+	let addOffset = function(n Score) gives n + offset
+	offset = 20
+	print("{apply(addOffset, x: 5)}\n")     // 25: the closure sees the current offset
+	return 0
+end 'main'
 ```
 
-**Notes:**
-- Closure parameters may optionally omit the type annotation when the type can be inferred from context.
-- Closures can only appear where a function-type value is expected.
-- Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
-- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `function(_ Integer) gives 42`
-- A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
+- **Captures are by reference.** A closure reads a captured variable's current value when it runs.
+- **A closure that captures cannot outlive its frame.** Returning one, or storing it in a field, a
+  global, a container or a union payload, is **E3099**. Passing it down to a function that calls it is fine.
+  A closure that captures nothing is a plain function reference and can go anywhere.
+- A parameter's type may be omitted when the expected function type supplies it.
+- Closure parameters must be used (**E3012**); write `_` for an unused one.
+- Inside an instance method a closure may use `self`; elsewhere `self` is **E2001**.
+- Assigning to a captured `let` is an error, as it is outside the closure.
 
 ### Function Purity and Discarded Results
 
-Maxon requires function return values to be used. The compiler infers whether each function is **pure** or **impure** and enforces different rules for discarding results.
+A function's result must be used. The compiler infers whether a function is **pure** (no output, no writes
+to globals or parameters, only pure callees) or **impure**, and the rules for ignoring a result differ:
 
-#### Pure vs Impure Functions
-
-A function is **pure** if it has no side effects: it does not write to stdout/stderr, does not modify global state, does not mutate parameters, and only calls other pure functions. Purity is inferred automatically by the compiler -- there is no annotation.
-
-A function is **impure** if it performs any side effect, either directly or by calling another impure function. Examples of impure operations include:
-- Writing to stdout or stderr (e.g., `print`)
-- Modifying global or static variables
-- Mutating parameters
-- Calling runtime functions
-- Calling other impure functions (transitively)
-
-Functions with no return type are always considered impure (their result cannot be discarded because there is no result).
-
-#### Discarding Pure Function Results
-
-Pure function results **must** be used -- they cannot be discarded, even with `_ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-function double(x Amount) returns Amount
-		return x * 2
-end 'double'
-
-double(5)               // Error E3064: result of pure function 'double' must be used
-_ = double(5)       // Error E3064: result of pure function 'double' must be used
-let result = double(5)  // OK: result is used
-```
-
-#### Discarding Impure Function Results
-
-Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `_ =`:
+| Callee | Bare call statement | `_ = call()` |
+|--------|---------------------|--------------|
+| pure function | **E3064** — the call does nothing | **E3064** |
+| impure function | **E3065** — result not used | allowed |
+| chainable method (returns its own receiver type) | allowed | allowed |
 
 ```maxon
 typealias Tally = int(0 to u64.max)
 
 var counter = 0
+
 function incrementAndGet() returns Tally
-		counter = counter + 1
-		return counter
+	counter = counter + 1
+	return counter
 end 'incrementAndGet'
 
-incrementAndGet()               // Error E3065: result of 'incrementAndGet' is not used
-_ = incrementAndGet()       // OK: explicitly discarded
-let count = incrementAndGet()   // OK: result is used
+function main() returns ExitCode
+	_ = incrementAndGet()              // explicitly discarded
+	let now = incrementAndGet()        // used
+	// incrementAndGet()               // E3065: result of 'incrementAndGet' is not used
+	print("{now}\n")                   // 2
+	return 0
+end 'main'
 ```
 
-#### Chainable Methods
-
-Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `_ =`, since the common pattern is to call them for their side effect on the receiver:
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-type Counter
-		var value as Tally
-
-		export static function create(value Tally) returns Counter
-				return Counter{value: value}
-		end 'create'
-
-		function increment() returns Counter
-				value = value + 1
-				return self
-		end 'increment'
-end 'Counter'
-
-var c = Counter.create(0)
-c.increment()  // OK: chainable method, result can be discarded
-```
-
-#### Discarding Tuple Elements
-
-When destructuring a tuple, individual elements can be discarded with `_`. If the function is pure, at least one element must be used:
-
-```maxon
-var (result, _) = pureFunc()   // OK: one element used
-(_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
-```
-
-#### Error Codes
-
-| Code | Meaning |
-|------|---------|
-| E3064 | Result of a pure function must be used (cannot be discarded) |
-| E3065 | Result of an impure function is not used (use `_ = expr` to discard) |
-
-### Extern Functions
-
-Declare external functions (Windows API, C libraries):
-```maxon
-typealias Handle = int(i64.min to i64.max)
-typealias ProcessExitCode = int(0 to u32.max)
-
-extern function GetStdHandle(nStdHandle Handle) returns Handle
-extern function ExitProcess(uExitCode ProcessExitCode) returns ProcessExitCode
-```
-
-**Notes:**
-- No function body or `end` statement
-- No name mangling
-- Assumes C calling convention
-- Must exist at link time
-
-### Test Declarations
-
-A `test` is a top-level declaration parallel to `function`, named with a quoted prose name
-rather than an identifier:
-
-```maxon
-test 'adds two numbers'
-	try Expect.equal(add(2, 2), expected: 4)
-end 'adds two numbers'
-```
-
-The name may contain anything except a `'`, and the `end` label must repeat it verbatim.
-
-A test takes **no parameters** and **no `returns`**. There is nothing to get wrong, which is
-the point: a malformed test is a parse error rather than a test that silently passes.
-
-**Implied `throws TestFailure`.** Every test implicitly declares `throws TestFailure`
-(`stdlib/Testing.maxon`); nobody writes the clause, and it cannot be written. That is what makes
-a forgotten `try` on an assertion **E3057 at compile time** rather than an assertion whose
-failure nothing observes, and it is what lets a test body use a bare `try` with no `otherwise` —
-outside a throwing function that is an error.
-
-**Tests live in `*.test.maxon` files.** A `test` declaration in any other file is **E2058**. One
-rule in one place: which declarations a build carries is answerable from the file list alone.
-
-**Two names.** A prose name cannot be a symbol — it reaches name mangling, the executable's
-symbol table, the `.mxdbg` sidecar and panic stack traces. So a test compiles to an ordinary
-function whose `Name` is `<namespace>.__test_<sanitized>` (every character outside `[A-Za-z0-9_]`
-becomes `_`) while its prose is kept verbatim as the function's display name. Two tests in one
-file whose names sanitize alike are **E3107**, which names both — a collision between
-`adds two` and `adds-two` is invisible in either name alone. Nothing calls a test, so tests are
-roots for dead-function elimination rather than something it reaches.
-
-**Any uncaught throw fails the test.** Outside a test, a bare `try` propagates, so the callee's
-`throws` type must be the enclosing function's own and anything else is **E3059**. Inside a test
-body that requirement is dropped: a bare `try` on **any** error type compiles, and an error that
-reaches it fails that test rather than escaping it.
-
-```maxon
-test 'returns 404 when the user is missing'
-	let response = try Api.lookup("nobody")     // throws ApiError — uncaught, FAILS the test
-	try Expect.equal(response.status(), expected: 404)
-end 'returns 404 when the user is missing'
-```
-
-The compiler substitutes the handler the author would otherwise have had to write: it reports the
-error's type, its case and the `try`'s own file and line through `__TestReport.threw`, then throws
-`TestFailure.assertion`. So a test still throws exactly `TestFailure` — the foreign error is
-reported and dropped, never propagated — and a failure caused by an unexpected error says which
-error it was.
-
-The relaxation is a narrowing of the propagation check itself, so it reaches nowhere else: an
-ordinary `function` holding the identical `try` still gets E3059, and a closure written inside a
-test body is a separate function that cannot express `throws` at all (**E3101**), so a bare `try`
-inside one is refused unchanged. An `otherwise` the author wrote always wins — the substitution
-only ever happens where there is none. See `specs/test-uncaught-throw.md`.
-
-`test` is a [contextual keyword](#contextual-keywords) and is not reserved.
-
-**Running them** is `maxon test [directory]`, which discovers every `test` in the project's
-`*.test.maxon` files, compiles them into one binary with a generated entry point, and runs them.
-The project's own `main` needs no change — it simply stops being reachable and is dropped. See
-[`docs/CLI_REFERENCE.md`](CLI_REFERENCE.md#maxon-test) for the flags, the five ways a test can
-fail, and a worked example; the matcher roster is in
-[`docs/STDLIB_REFERENCE.md`](STDLIB_REFERENCE.md#testing-expect).
+A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
+keep at least one element (`(_, _) = pure()` is **E3064**).
 
 ---
 
 ## Expressions
 
-### Operator Precedence (highest to lowest)
+### Operator Precedence
 
-1. **Postfix**: `.` (member access), `as` (cast), function call `()`
-2. **Unary**: `-` (negation), `not` (logical/bitwise not)
-3. **Multiplicative**: `*` `/` `mod`
-4. **Additive**: `+` `-`
-5. **Shift**: `shl` `shr`
-6. **Comparison**: `==` `!=` `<` `>` `<=` `>=` `is` `is not`
-7. **AND**: `and`
-8. **XOR**: `xor`
-9. **OR**: `or`
-10. **Conditional**: `<true_value> if <condition> else <false_value>` (lowest precedence)
+From highest to lowest:
+
+1. **Postfix**: `.` (member access), `()` (call)
+2. **Unary**: `-` (negation), `not`
+3. **Cast**: `as`
+4. **Multiplicative**: `*` `/` `mod`
+5. **Additive**: `+` `-`
+6. **Shift**: `shl` `shr`
+7. **Comparison**: `==` `!=` `<` `>` `<=` `>=` `is` `is not`
+8. **AND**: `and`
+9. **XOR**: `xor`
+10. **OR**: `or`
+11. **Range**: `to` `upto`
+12. **Conditional**: `value if condition else other`
+
+Parentheses override precedence: `(2 + 3) * 5` is `25`. A cast applies to the negated value:
+`-x as Small` is `(-x) as Small`.
 
 ### Arithmetic Operators
 
-| Operator | Description | Types | Example |
-|----------|-------------|-------|---------|
-| `+` | Addition | int, float | `a + b` |
-| `-` | Subtraction | int, float | `a - b` |
-| `*` | Multiplication | int, float | `a * b` |
-| `/` | Division | int, float | `a / b` |
-| `mod` | Modulo | int only | `a mod b` |
+| Operator | Meaning | Operands |
+|----------|---------|----------|
+| `+` | addition | integers, floats |
+| `-` | subtraction | integers, floats |
+| `*` | multiplication | integers, floats |
+| `/` | division (integers truncate toward zero) | integers, floats |
+| `mod` | remainder | integers |
 
-**Notes:**
-- Mixed int/float operations promote int to float
-- `/` and `mod` are **fallible** — a divide or modulo whose divisor cannot be proven non-zero throws `DivisionByZero`; see [Division by Zero](#division-by-zero).
+- Both operands have the same type. An unaliased integer mixed with a float is promoted to float; two
+  different typealiases are **E3005** until one side is cast (see
+  [Arithmetic](#arithmetic)).
+- Integer arithmetic is 64-bit two's complement and **wraps** on overflow.
+- `+` is not defined on `String`; use interpolation or `append`.
+- `bool` values do not take part in arithmetic (**E2004**).
 
 ### Division by Zero
 
-Integer and float `/`, and integer `mod`, are **fallible operations**: dividing by zero is not a silent `0`, an unhandled panic, or a CPU trap — the failure is expressed in the type system, so the behavior is identical on every target.
+Dividing by zero is not undefined behaviour and does not crash: `/` and `mod` whose divisor **might** be zero
+**throw** `DivisionByZero`, so the failure is part of the type system and behaves identically on every target.
 
-- A divisor the compiler can prove **non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0 — compiles to a **bare divide** with no check.
-- A divisor the compiler **cannot** prove non-zero (a full-range `int`, which includes 0) makes the divide **throw `DivisionByZero`**. Like any throwing operation it must be handled with `try`, or propagated by a `throws` function (see [Error Handling](#error-handling)):
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-function tryDivide(a Amount, b Amount) returns Amount
-	return try (a / b) otherwise 0        // b may be zero — supply a fallback
-end 'tryDivide'
-```
-
-Or give the divisor a type that excludes 0, so the divide is provably safe:
+- **The divisor is provably non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0
+  — and the divide compiles as-is, with no check.
+- **The divisor might be zero** — the divide throws, and must be written `try (a / b) otherwise …` (or
+  propagated from a function that `throws`). A bare divide is **E3057** (`throwing division requires try`).
+- **The divisor is always zero** — a literal `0`, `0.0`, or a constant bound to one — is **E3103**
+  (`division by zero: the divisor of '/' is always 0`).
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
-typealias NonZeroInt = int(1 to i64.max)
+typealias NonZero = int(1 to 1000)
 
-function ratio(a Amount, b NonZeroInt) returns Amount
-	return a / b                          // bare divide — no `try` needed
+function ratio(a Amount, b Amount) returns Amount
+	return try (a / b) otherwise 0          // b may be zero: supply a fallback
 end 'ratio'
+
+function share(total NonZero, parts NonZero) returns NonZero
+	return total / parts                    // parts excludes 0: no try
+end 'share'
+
+function main() returns ExitCode
+	print("{ratio(10, b: 0)} {ratio(10, b: 3)} {share(100, parts: 4)}\n")   // 0 3 25
+	return 0
+end 'main'
 ```
 
-- A divisor the compiler holds as the constant **0** (`a / 0`, `a / 0.0`) is neither recoverable nor safe — it is a compile-time error (**E3103**).
-
-**`try` wraps the throwing operation itself, not the surrounding expression.** Because `try` binds like a primary, a divide nested inside a larger expression cannot ride along inside it — parenthesize the divide as the direct operand of `try`, or use a multi-line `try` block:
+The error value is the case `divisionByZero`, which a handler can match:
 
 ```maxon
-let bad = try (10 + a / b) otherwise 0   // ERROR (E2001): `try` wraps the `+`, not the divide
-let d = try (a / b) otherwise 0          // extract the divide...
-let good = 10 + d                        // ...then use it
+try (total / count) otherwise (e) 'handle'
+	match e 'kind'
+		divisionByZero then print("nothing to divide by\n")
+	end 'kind'
+end 'handle'
 ```
 
-**Float division** throws on a zero divisor too: `1.0 / 0.0` does not silently yield `inf`, and a `-0.0` divisor also throws. Only division *by zero* is intercepted — `inf`/`nan` produced by other operations (overflow, `0.0 * inf`, domain errors) are ordinary IEEE-754 values and are unaffected. There is no float `mod`.
+- **`try` applies to the division itself.** `try (10 + a / b)` is **E2015** (`try must be applied to a
+  call`); compute the quotient first, then use it.
+- **Float division** throws on a zero divisor too, including `-0.0`. `inf` and `NaN` produced any other way
+  are ordinary IEEE values. There is no float `mod`.
+- `i64.min mod -1` is `0` on every target. `i64.min / -1` has no representable quotient, and a `try`
+  cannot catch it: on x64-windows the program stops with `panic: integer overflow`, on x64-linux with
+  `panic: integer divide by zero`, and on wasm32-wasi with a wasm trap. On arm64 the result is `i64.min`.
 
 ### Comparison Operators
 
-| Operator | Description | Result Type |
-|----------|-------------|-------------|
-| `==` | Equal to | bool |
-| `!=` | Not equal to | bool |
-| `<` | Less than | bool |
-| `>` | Greater than | bool |
-| `<=` | Less than or equal | bool |
-| `>=` | Greater than or equal | bool |
+| Operator | Meaning |
+|----------|---------|
+| `==` `!=` | equal, not equal |
+| `<` `>` `<=` `>=` | ordering |
 
-Using `==` or `!=` on struct types requires the type to implement the `Equatable` interface (error E3069 if it does not). Primitives, `String`, and `Array` support `==` and `!=` without restriction. For reference identity comparison (same heap object), use `is` and `is not` instead.
+All produce `bool`. Numbers, `bool` and `Character` support every comparison; `String` supports only `==`
+and `!=`. Comparing two records with `==` calls the type's `equals` method (see
+[Equality and Copying](#equality-and-copying)); unions cannot be compared
+(**E3066**). Values of different types never compare (**E3005**).
 
 ### Reference Identity Operators
 
-| Operator | Description | Result Type |
-|----------|-------------|-------------|
-| `is` | Same reference (same heap object) | bool |
-| `is not` | Different references | bool |
-
-`is` and `is not` compare whether two struct-typed variables refer to the same heap object. They cannot be used on primitive types (`int`, `float`, `bool`, `byte`) — using them produces error E3068.
+`a is b` is `true` when two names refer to the **same** record; `a is not b` is its negation. They apply only
+to records — on numbers or `bool` they are **E3068**.
 
 ```maxon
-function areSame(a Point, b Point) returns bool
+function sameRecord(a Point, b Point) returns bool
 	return a is b
-end 'areSame'
+end 'sameRecord'
 ```
 
-### Logical / Bitwise Operators
+### Logical and Bitwise Operators
 
-The keyword operators `and`, `or`, `xor`, and `not` are context-dependent: they perform logical operations on `bool` operands and bitwise operations on `int` operands.
+The word operators are logical on `bool` operands and bitwise on integer operands:
 
-| Operator | On `bool` | On `int` | Example |
-|----------|-----------|----------|---------|
-| `and` | Logical AND | Bitwise AND | `a > 0 and b < 10` / `flags and 0xff` |
-| `or` | Logical OR | Bitwise OR | `x == 1 or x == 2` / `flags or 0x01` |
-| `xor` | Logical XOR | Bitwise XOR | `a xor b` / `value xor mask` |
-| `not` | Logical NOT (unary) | Bitwise NOT (unary) | `not done` / `not mask` |
+| Operator | On `bool` | On integers | Example |
+|----------|-----------|-------------|---------|
+| `and` | logical AND | bitwise AND | `0xF0 and 0x3C` is `48` |
+| `or` | logical OR | bitwise OR | `0xF0 or 0x0F` is `255` |
+| `xor` | logical XOR | bitwise XOR | `0xF0 xor 0xFF` is `15` |
+| `not` | logical NOT | bitwise NOT | `not 0` is `-1` |
 
-`and` and `or` short-circuit when both operands are `bool`: the right-hand side
-is evaluated only if the left-hand side does not already determine the result
-(`false and _` skips the right; `true or _` skips the right). This lets a
-left-hand guard make the right-hand side safe to evaluate, e.g.
-`i < arr.count() and (try arr.get(i) otherwise default) > 0`. Integer `and`/`or`
-remain bitwise and always evaluate both sides.
+On `bool` operands `and` and `or` **short-circuit**: the right side runs only if the left side does not
+already decide the result, so a guard on the left can protect the right:
+
+```maxon
+let ok = i < items.count() and (try items.get(i) otherwise 0) > 0
+```
+
+Integer `and`/`or` always evaluate both sides.
 
 ### Shift Operators
 
-Shift operators work on integers only.
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `shl` | shift left | `1 shl 4` is `16` |
+| `shr` | shift right | `256 shr 4` is `16` |
 
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `shl` | Shift left | `1 shl 4` (result: 16) |
-| `shr` | Shift right | `256 shr 4` (result: 16) |
-
-**`shr` fills by the LEFT operand's signedness — arithmetic on a signed operand, logical on an
-unsigned one.** This is Go's rule, and a shift is not symmetric in its operands: the right one is
-a *distance*, and only the left one decides the fill. A bare `int` is signed, so `shr`
-sign-propagates: `(0 - 8) shr 1` is `-4`. A value whose ranged type is unsigned — a range with a
-low bound of 0, `int(0 to u64.max)` being Maxon's `uint64` — zero-fills instead: `u64.max shr 60`
-is `15`, not `-1`. `shl` always fills the vacated low bits with zeros, whatever the signedness.
-
-**The count is not masked, and there is no upper limit on it.** A shift by `n` behaves as if the
-value were shifted one place `n` times, so a count of 64 or more shifts *every bit out* — `a shl 64`
-is `0`, and that is legal, not an error. This matters because the hardware *masks* the count into
-`0..63` instead: unguarded, `a shl 64` would compute `a shl 0` (leaving `a` unchanged). The compiler
-saturates the count so that never happens — folding it when it can see it, and guarding it at run
-time (through `cl`) when it cannot.
-
-**A negative count is an error.** It is not a shift the other way: masked, `a shl -1` would silently
-compute `a shl 63`, the *maximum left shift* — a wrong answer with the opposite sign. A count the
-compiler can fold (a literal, a named constant, or constant arithmetic) is rejected with **E2054**;
-a count that only appears at run time panics.
+- **`shr` fills according to the left operand's type.** A signed value shifts arithmetically
+  (`(0 - 8) shr 1` is `-4`); an unsigned alias or a `bits(n)` pattern fills with zeros
+  (`u64.max as Word shr 60` is `15`). `shl` always fills with zeros.
+- **A count of 64 or more shifts every bit out** — `1 shl 64` is `0`. It is not reduced modulo 64.
+- **A negative count is an error.** A count known at compile time is **E2054**; one that turns out
+  negative at run time panics with `negative shift count`.
 
 ### Unary Operators
 
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `-` | Negation | `-x` |
-| `not` | Logical NOT / Bitwise NOT | `not condition` / `not mask` |
+| Operator | Meaning |
+|----------|---------|
+| `-x` | negation |
+| `not x` | logical NOT (`bool`) or bitwise NOT (integer) |
 
-The `-` operator cannot be chained directly. Use parentheses for nested negation:
-```maxon
-var y = -(-x)      // OK: parenthesized
-var z = -(x + 1)   // OK: subexpression
-// var w = --x      // Error: consecutive negation operators
-```
+`-` does not chain: write `-(-x)`, since `--x` is a syntax error. `not not x` is allowed.
 
-**On a float, `-` is IEEE-754 negation — a sign-bit flip, not `0.0 - x`.** The two differ on exactly
-one input: `0.0 - (+0.0)` is `+0.0`, while `-(+0.0)` is `-0.0`. The flip is what Maxon does at every
-entrance — a literal `-0.0` carries the sign bit, `-x` over a variable or parameter emits a negate
-(`fneg` on arm64, `f64.neg` on wasm, an `xorpd` against a sign mask on x64), and `-K` over a float
-constant folds to the flipped bits — so `let z = 0.0; print("{-z}")` prints `-0.0`, `-(-0.0)` is
-`+0.0`, `-inf` mirrors, and a NaN's sign bit flips with its payload kept. On an integer, `-x` is
-two's-complement negation and yields a plain `int`, whatever ranged alias `x` was declared with.
+On a float, `-x` flips the sign bit (IEEE-754 negation), so `-0.0` is a distinct value and `-(0.0)` prints
+`-0.0`. Negating a signed integer alias keeps the alias; negating an unsigned alias gives an unaliased value.
 
-The `not` operator can be applied repeatedly:
-```maxon
-var a = not not x  // OK: double bitwise NOT (identity for integers)
-```
-
-### Parentheses
-Override precedence:
-```maxon
-(2 + 3) * 5    // 25, not 17
-```
-
-### Conditional (Ternary) Expression
-
-The conditional expression evaluates one of two values based on a boolean condition:
+### Conditional Expression
 
 ```text
-<true_value> if <condition> else <false_value>
+<value> if <condition> else <other>
 ```
 
-The condition must be `bool`. Both arms must produce the same type. The conditional expression binds looser than all binary operators, so operands are evaluated naturally without extra parentheses:
+The condition is `bool` and both branches have the same type. The conditional binds more loosely than every
+operator, and chains to the right:
 
 ```maxon
-let x = a + b if flag else c * d    // (a + b) if flag else (c * d)
-let abs = x if x > 0 else -x
-let label = "yes" if enabled else "no"
-```
-
-Conditional expressions can be chained. They associate to the right:
-
-```maxon
+let magnitude = x if x >= 0 else -x
 let tier = "gold" if score > 90 else "silver" if score > 70 else "bronze"
-// equivalent to: "gold" if score > 90 else ("silver" if score > 70 else "bronze")
+print("Status: {"on" if enabled else "off"}\n")
 ```
 
-Conditional expressions work inside string interpolation, including with nested string literals:
+### Ranges
+
+`a to b` (inclusive) and `a upto b` (exclusive) produce a range. In a `for` header or a `match` pattern a
+range is syntax; elsewhere an integer range is a `Range` or `OpenRange` value that can be stored and
+iterated (see [For Loop](#for-loop)).
+
+### `sizeof` and `countof`
+
+Both take a **type** and produce a compile-time integer.
+
+- `sizeof(T)` is the size of a value of type `T` in bytes: `sizeof(int)` and `sizeof(float)` are `8`,
+  `sizeof(bool)` is `1`, and a record type is the size of its fields.
+- `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
+  is `3`. Inside such a container's own body, `countof(Self)` is the receiver's count. A type with no fixed
+  element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
+  `count()` instead.
 
 ```maxon
-print("Status: {"on" if flag else "off"}")
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+type Pair
+	export var left as Int
+	export var right as Int
+end 'Pair'
+
+function main() returns ExitCode
+	print("{countof(Vec3)} {sizeof(Pair)} {sizeof(bool)}\n")    // 3 16 1
+	return 0
+end 'main'
 ```
 
-### Array Access
+### Collection Access
 
-Array elements are accessed using the `.get()` method, which throws `ArrayError.indexOutOfBounds` if the index is at or past `count()`, or `ArrayError.emptySlot` if the index is INSIDE `count()` and the slot there was never filled (a null pointer — only reachable for a managed element type, and only through the raw `__ManagedMemory.setLength` layer, since `Array.resize` on such a type is refused at compile time):
-```maxon
-var arr = [1, 2, 3, 4, 5]
-var first = try arr.get(0) otherwise 0
-var last = try arr.get(arr.count() - 1) otherwise 0
-```
+Maxon has no subscript operator: `items[0]` is a syntax error. Elements are read and written through
+methods, and **every access is bounds-checked**:
 
-Array elements are modified using the `.set()` method:
-```maxon
-var arr = [1, 2, 3]
-try arr.set(0, value: 100) otherwise panic("index out of range")  // First positional, second named
-```
+- `get(index)` returns the element, or **throws** `ArrayError.indexOutOfBounds` when the index is at or past
+  `count()`. Like any throwing call it needs `try`.
+- `set(index, value:)` replaces an element and throws the same error for an index past the end.
+- `first()`, `last()`, `pop()` and `remove(index)` throw when there is no such element.
+- An index is a non-negative integer: a negative literal is **E3005**, and a computed negative index panics
+  with a range check.
 
-### Creating Empty Arrays
-
-Create an empty typed array using a type alias:
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias IntArray = Array with Tally
-
-var numbers = IntArray.create()         // Empty array
-numbers.push(42)                 // Add elements with push
-```
-
-To preallocate with a specific length (elements zero-initialized):
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias IntArray = Array with Tally
-
-var buffer = IntArray.create()
-buffer.resize(100)               // Length is now 100
-try buffer.set(0, value: 42) otherwise panic("index out of range")   // Can set any index 0-99
-```
-
-The zero-initialization holds for slots the array has used *before*, not just for
-freshly allocated ones — growing back over slots given up by `clear()`, `remove()`,
-`pop()`, or a shrinking `resize()`/`truncate()` also reads back zeros. Those operations
-erase each slot as they vacate it, so the slots between `count()` and `capacity()` are
-always zero.
-
-`resize` is available only where a zero IS an element, so only for an element stored
-INLINE (an `int`, a `float`, a `bool`, a `byte`, a ranged typealias over one of those, a
-payload-free enum). A MANAGED element type — a struct, a `String`, a nested container, a
-boxed union — is stored as a pointer, a zeroed slot there is a NULL rather than a value,
-and Maxon has no default constructor to make one; `resize` on such an array is refused at
-compile time (**E3106**), naming the element type. Grow one with `push(value)` or
-`growFilled(newLength, value:)`, which supply the element, and shrink one with
-`truncate(newLength)`, which needs none:
-
-```maxon
-typealias StrArray = Array with String
-
-var names = StrArray.create()
-names.growFilled(3, value: "")   // three real, empty Strings
-names.push("ada")                // append one
-names.truncate(2)                // drop the tail, releasing what leaves
-```
-
-To preallocate capacity without changing length (for performance):
 ```maxon
 typealias Tally = int(0 to u64.max)
-typealias IntArray = Array with Tally
+typealias TallyArray = Array with Tally
 
-var buffer = IntArray.create()
-buffer.reserve(100)              // Capacity is 100, length is 0
-buffer.push(42)                  // Now length is 1
+function main() returns ExitCode
+	var values = TallyArray.create()
+	values.push(10)
+	values.push(20)
+
+	let second = try values.get(1) otherwise 0           // 20
+	let missing = try values.get(5) otherwise 0          // 0: index 5 is out of range
+	try values.set(0, value: 99) otherwise panic("index out of range")
+	print("{second} {missing} {try values.first() otherwise 0}\n")   // 20 0 99
+	return 0
+end 'main'
 ```
+
+**Sizing an array.** `create()` makes an empty array; `push(value)` appends; `reserve(n)` grows capacity
+without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so it is available
+only for elements stored inline — integers, floats, `bool`, payload-free enums. For an array of records,
+strings or other managed values, `resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
+with `truncate(n)`:
+
+```maxon
+typealias Names = Array with String
+
+function main() returns ExitCode
+	var names = Names.create()
+	names.growFilled(3, value: "")    // three empty strings
+	names.push("ada")
+	names.truncate(2)
+	print("{names.count()}\n")        // 2
+	return 0
+end 'main'
+```
+
+The collection types and their full method lists are in the [standard library reference](STDLIB_REFERENCE.md).
 
 ---
 
 ## Statements
 
-### Expression Statement
-Any expression followed by newline:
+Maxon statements are newline-delimited: one statement per line, no semicolons. Every block — `if`,
+`else`, `while`, `for`, `match`, `try` — opens with a quoted **block label** and closes with `end` and the
+same label. A missing label is **E2042**, and a match whose `end` names a different label is **E2043**.
+
+### Expression Statements
+
+A call on its own line is a statement. Its result must be used or explicitly discarded (see
+[Function Purity and Discarded Results](#function-purity-and-discarded-results)):
+
 ```maxon
-print(x)           // Single param is positional
-add(3, b: 4)       // First positional, rest named
-x = x + 1
+print("hello\n")
+_ = incrementAndGet()
 ```
 
-### Return Statement
-```maxon
-return expression
-```
-Must appear in every code path of non-void functions.
+### Return
 
-### Variable Declaration
-```maxon
-var x = 10
-let y = 20
+```text
+return <expression>
+return
 ```
 
-### Assignment
+A function with a `returns` clause must return a value on every path; a path that falls off the end is
+**E3013** (`missing return statement`). A function without `returns` uses a bare `return`, or none.
+
+### Variable Declaration and Assignment
+
 ```maxon
-variable = expression
+var count = 10
+let limit = 20
+count = count + limit
 ```
 
-**Note:** Cannot assign to `let` variables (immutable).
-
-Assigning a variable to itself is a compile error (E3067), since it has no effect:
-```maxon
-x = x         // ERROR: self-assignment has no effect
-p.x = p.x     // ERROR: self-assignment has no effect
-```
+Assigning to a `let` is **E2013**. Assigning a variable to itself (`x = x`, `p.x = p.x`) has no effect
+and is **E3067**. See [Variables](#variables) for the full rules.
 
 ### Tuple Assignment
 
-Assign multiple values from a tuple expression (or function returning a tuple) to existing mutable variables in a single statement:
+Assign the elements of a tuple to existing `var`s, declare new names in the same pattern, or discard
+elements with `_`:
 
-```maxon
-(variable1, variable2) = expression
-```
-
-**Notes:**
-- All named variables must already be declared with `var`
-- Immutable (`let`) variables cannot be targets (error E2013)
-- The number of names must exactly match the tuple's element count (error E3005 on mismatch)
-- Use `_` to discard individual elements
-- If all elements are discarded (`(_, _) = ...`) and the function is pure, error E3064 is raised
-
-**Example:**
 ```maxon
 var x = 0
 var y = 0
-(x, y) = makePair(10, b: 32)  // x = 10, y = 32
+(x, y) = makePair(10, b: 32)      // x = 10, y = 32
+(x, let z) = makePair(3, b: 4)    // x existing, z newly declared
+(y, _) = makePair(5, b: 6)        // discard the second element
 ```
 
-**Discard individual elements:**
-```maxon
-(result, _) = compute()   // discard second element
-(_, status) = fetch()     // discard first element
-```
+- Every name without `var`/`let` must already be a `var`; a `let` target is **E2013**.
+- The number of names must match the tuple's element count (**E3005**).
+- Discarding every element of a pure function's result is **E3064**.
 
 ### If Statement
 
-**Syntax**
-```maxon
-if condition 'label'
-		statements
+```text
+if <condition> 'label'
+	<statements>
 end 'label'
 ```
 
-**With Else**
+`else` follows the closing `end` on the same line and opens its own labelled block. An else-if chain
+nests another `if` in that position:
+
 ```maxon
-if condition 'then'
-		statements
-end 'then' else 'else'
-		statements
-end 'else'
+if size == 0 'zero'
+	print("empty\n")
+end 'zero' else if size < 10 'small'
+	print("small\n")
+end 'small' else 'large'
+	print("large\n")
+end 'large'
 ```
 
-**Notes:**
-- Block identifier required after `if` condition
-- Block identifier must match on `else` and `end` keywords
-- Condition must be `bool` type
-- Can nest arbitrarily
-- Empty blocks are a compile error (E3082) — every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at least one statement
+- The condition must be `bool`; there is no implicit truthiness.
+- An empty block is **E3082**. A block holding only a comment is empty too, since a comment is not a
+  statement. This applies to every `if`, `else`, `while`, `for` and `try … otherwise` block.
 
 ### While Loop
-```maxon
-while condition 'label'
-		statements
-end 'label'
-```
 
-**Example:**
 ```maxon
 var i = 0
 while i < 10 'loop'
-		print("{i}")
-		i = i + 1
+	print("{i}\n")
+	i = i + 1
 end 'loop'
 ```
 
 ### For Loop
-```maxon
-for variable in iterable 'label'
-		statements
-end 'label'
-```
 
-**Iterating over collections:**
+`for … in` iterates anything that implements `Iterable`: arrays, strings, maps, sets, lists, ranges and
+your own types.
+
 ```maxon
-var numbers = [1, 2, 3, 4, 5]
+let numbers = [1, 2, 3, 4, 5]
 for num in numbers 'loop'
-		print("{num}")
+	print("{num}\n")
 end 'loop'
 ```
 
-**Iterating over ranges:**
-
-Ranges are created using `to` (inclusive) or `upto` (exclusive) expressions:
+**Ranges.** `a to b` is inclusive and `a upto b` excludes `b`. Integer and `Character` ranges are both
+supported:
 
 ```maxon
-// Inclusive range: 1, 2, 3, 4, 5
-for i in 1 to 5 'loop'
-		print("{i}")
-end 'loop'
+for i in 1 to 5 'inclusive'      // 1, 2, 3, 4, 5
+	print("{i}")
+end 'inclusive'
 
-// Exclusive range: 1, 2, 3, 4
-for i in 1 upto 5 'loop'
-		print("{i}")
-end 'loop'
+for i in 1 upto 5 'exclusive'    // 1, 2, 3, 4
+	print("{i}")
+end 'exclusive'
 
-// Character ranges
-for c in 'a' to 'z' 'loop'
-		print("{c}")
+for c in 'a' to 'z' 'letters'
+	print("{c}")
+end 'letters'
+```
+
+In a `for` header a range compiles to a counted loop with no allocation. Anywhere else an integer range is
+a value: `a to b` is a `Range` and `a upto b` an `OpenRange`, both `Iterable`, so a range can be stored,
+passed and iterated later:
+
+```maxon
+let r = 1 upto 4
+for x in r 'loop'
+	print("{x}")                 // 1, 2, 3
 end 'loop'
 ```
 
-Range expressions are supported for `int` and `Character`.
-
-**Ranges as first-class values:**
-
-Outside a `for-in` header, an integer range expression evaluates to a `Range` (`to`, inclusive) or `OpenRange` (`upto`, exclusive) value from the standard library. Both implement `Iterable`, so they can be bound to a variable, passed as an argument, or chained with `.createIterator()` / `.withIterator()`. Inside a `for-in` header the same syntax desugars directly to a counted loop with no allocation.
+**Destructuring.** When the elements are tuples — a map yields `(key, value)` — the loop variable can be
+a tuple pattern:
 
 ```maxon
-let r = 1 upto 5                           // OpenRange value
-for x in r 'loop' ... end 'loop'           // iterates 1, 2, 3, 4
-
-let it = try (1 to 4).createIterator() otherwise return 0
-for v in it 'loop' ... end 'loop'          // iterates 1, 2, 3, 4
+let ages = ["ada": 36, "alan": 41]
+for (name, age) in ages 'loop'
+	print("{name}: {age}\n")
+end 'loop'
 ```
 
-Character ranges and ranges over user-defined types remain `for-in`-only.
-
-**Iterating with the underlying iterator:**
-
-Append `.withIterator()` to any iterable to get an `(Iterator, Element)` tuple — the iterator exposes navigation methods like `index()`, `advance()`, `retreat()`, `advanceBy(n)`, `retreatBy(n)`, `seek(index)`, and `peek(ahead)`:
+**Positions.** `.withIterator()` pairs each element with the iterator that produced it, which exposes
+`index()` and navigation methods such as `advance()`, `retreat()`, `seek(index)` and `peek(ahead)`:
 
 ```maxon
-var names = ["Alice", "Bob", "Charlie"]
+let names = ["Alice", "Bob", "Charlie"]
 for (iter, name) in names.withIterator() 'loop'
-		print("{iter.index()}: {name}\n")
+	print("{iter.index()}: {name}\n")
 end 'loop'
-// 0: Alice
-// 1: Bob
-// 2: Charlie
 ```
-
-This works on all iterable types (Array, String, Map, Set, List, etc.). The `WithIterIterator` is a lazy wrapper — no intermediate collection is created.
 
 **Notes:**
-- Loop variable is immutable (like `let`)
-- Ranges use `to` for inclusive end and `upto` for exclusive end
-- Desugars to a loop over the `Iterator` protocol: `advance(1)` (throws `IterationError.exhausted` at end) followed by `current()` (infallible read of the element in view)
-- The compiler calls `createIterator()` before each loop to obtain a fresh iterator, enabling safe re-iteration and nested loops over the same collection
-- Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element can be discarded independently: `for (key, _) in pairs 'loop'`
+- The loop variable is immutable.
+- Each loop obtains a fresh iterator (`createIterator()`), so a collection can be re-iterated and nested
+  loops over one collection are safe.
+- Loop variables must be used (**E3012**). Write `_` for one you do not need: `for _ in items 'loop'`,
+  `for (key, _) in pairs 'loop'`.
+
+### Break and Continue
+
+```text
+break              // leave the innermost loop
+break 'label'      // leave the labelled enclosing loop
+continue           // next iteration of the innermost loop
+continue 'label'   // next iteration of the labelled enclosing loop
+```
+
+```maxon
+var total = 0
+for i in 0 upto 3 'rows'
+	for j in 0 upto 3 'cols'
+		if j == 2 'skip'
+			continue 'rows'
+		end 'skip'
+
+		total = total + i + j
+	end 'cols'
+end 'rows'
+```
+
+A label that names the innermost loop is redundant and is **E2048**; use a label only to reach an outer
+loop, or to reach a loop from inside a `match` arm (where a bare `break` leaves the `match`).
 
 ### Match Statement
 
-Match statements provide pattern matching on values, executing different code based on the matched pattern. Each case is a single line with exactly one statement.
-
-**Syntax**
-```maxon
-match expression 'label'
-		pattern then statement
-		pattern1 or pattern2 then statement
-		pattern then statement and fallthrough
-		pattern then break
-		default then statement
-end 'label'
-```
-
-**Example:**
-```maxon
-var x = 2
-match x 'check'
-		1 then return 10
-		2 or 3 then return 20
-		default then return 0
-end 'check'
-```
-
-**With Fallthrough:**
-```maxon
-var result = 0
-match x 'cascade'
-		1 then result = result + 10 and fallthrough
-		2 then result = result + 20
-		default then result = 100
-end 'cascade'
-```
-
-When `x = 1`, the first case matches, adds 10, then falls through to case 2 (adds 20), giving a total of 30.
-
-**With Break:**
-
-Use `break` in a match arm to exit the match without executing any code for that arm. An unlabeled `break` exits the innermost match. A labeled `break` can target any enclosing match or loop:
-
-```maxon
-while running 'loop'
-		match state 'check'
-				0 then break              // exits match, continues loop
-				1 then break 'loop'       // exits loop
-				default then process()
-		end 'check'
-end 'loop'
-```
-
-`break` is not allowed in match expressions (with `gives`), since every arm must produce a value.
-
-**Union Case Pattern Matching (Associated Values):**
-
-For unions with associated values, use `CaseName(bindings)` syntax to extract values:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-typealias ErrorCode = int(0 to u64.max)
-
-union Result
-		success(value Amount)
-		failure(code ErrorCode)
-end 'Result'
-
-var r = Result.success(42)
-match r 'handle'
-		success(v) then return v      // v binds to 42
-		failure(c) then return c
-end 'handle'
-```
-
-**Notes:**
-- Block identifier required after `match expression` and on `end`
-- Each case is a single line with one statement
-- Block-opening statements (`if`, `while`, `for`, nested `match`, and the multi-line `try ... end` / `try ... otherwise 'label' ... end` block forms) are rejected in match arms with **E2049**. All single-statement `try` forms are allowed: bare propagation (`try call()`), `try call() otherwise panic("...")`, `try call() otherwise ignore`, `try call() otherwise return/break/continue/throw ...`, and `try call() otherwise <expr>`.
-- Multiple patterns can be combined with `or`
-- `break` exits the match statement (or a labeled enclosing loop/match)
-- `and fallthrough` continues to the next case (skipping its pattern check)
-- `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, name them in an `or`-chain with `break` (see [Enum and Union Match Alternatives](#enum-and-union-match-alternatives) below), or use `default throws` / `default panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums use bare case names in match arms — qualified `Type.case` syntax is a compile error (E3075).
-- Overlapping patterns are reported as errors (error E2027).
-- All matches must be exhaustive. For non-enum matches (int, float, string, char), a `default` arm is required.
-- `default` matches any non-enum value not matched by previous patterns
-- `default` must be the last case if present
-- Union case patterns: `CaseName(binding1, binding2)` extracts associated values
-- Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `pair(_, second)`
-- To discard all associated values, omit the parentheses entirely: `success then ...` — using `success(_)` when all bindings are discarded is an error (E3081)
-
-**Enum and Union Match Alternatives:**
-
-An arm that covers several cases names each of them, joined by `or`, **one alternative per line**. The chain continues onto the next line after a trailing `or`; the last alternative carries the arm's `then` or `gives` and its body.
-
-```maxon
-union IrOp
-		maxon(op MaxonOp)
-		arith(op ArithOp)
-		cf(op CfOp)
-		func(op FuncOp)
-end 'IrOp'
-
-match op 'dispatch'
-		maxon(hlOp) then lowerMaxonOp(hlOp, dstBlock: dstBlock)
-		arith or
-			cf or
-			func then dstBlock.ops.push(op)
-end 'dispatch'
-```
-
-There is no case RANGE. `arith to func` is **E3146**: a range covered the cases whose declaration position fell in its span, so a case added inside that span was absorbed silently and exhaustiveness never fired — the arm handled a case nobody had decided about. Naming each case is what makes E2026 point at every match site when an enum grows.
-
-Packing two alternatives onto one line is **E3147**. One per line keeps an arm readable when it covers twenty cases, and makes adding or removing one a one-line diff.
-
-**Rules:**
-- An alternative that binds a payload uses binding syntax (`walk(dir)`); a bare case name binds nothing.
-- Every alternative counts toward exhaustiveness, so an arm listing every case is exhaustive.
-- Covering a case twice — in two arms, or twice in one chain — is **E2027**.
-- Cases with associated values may appear as bare alternatives; their payloads are simply inaccessible in that arm.
-- Scalar range patterns (`1 to 10`, `'a' to 'z'`, `min upto 0`) are unaffected: those are values in an ordered domain, where a new value cannot appear between the bounds behind the author's back.
-
-**Range Patterns:**
-
-Range patterns match values within a bounded range:
-
-| Syntax | Meaning | Example |
-|--------|---------|---------|
-| `a to b` | Inclusive range (a ≤ x ≤ b) | `1 to 5` matches 1, 2, 3, 4, 5 |
-| `a upto b` | Exclusive upper (a ≤ x < b) | `1 upto 5` matches 1, 2, 3, 4 |
-
-Both endpoints are required and each must be a literal: there is no open-ended form and no
-wildcard range. A `default` arm covers everything the ranges leave out.
+`match` compares a value against patterns, one arm per line. Each arm is `pattern then <statement>` — a
+single statement.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
-typealias Category = int(0 to u64.max)
+typealias Category = int(0 to 3)
 
 function classify(n Score) returns Category
-		match n 'check'
-				1 to 5 then return 1     // 1 to 5 inclusive
-				6 upto 10 then return 2  // 6 to 9 (exclusive of 10)
-				default then return 0    // everything else
-		end 'check'
+	match n 'check'
+		0 then return 1
+		1 to 5 then return 2
+		6 upto 10 then return 3
+		default then return 0
+	end 'check'
 end 'classify'
 ```
 
-Range patterns work with integers, floats, and any type implementing the `Comparable` interface (like `Character`):
+**Patterns:**
 
-```maxon
-typealias CharClass = int(0 to u64.max)
+| Pattern | Matches |
+|---------|---------|
+| `42`, `"text"`, `'c'` | a single value |
+| `a to b` | an inclusive range: `1 to 5` is 1 through 5 |
+| `a upto b` | a range excluding `b`: `1 upto 5` is 1 through 4 |
+| `min upto b`, `min to b`, `a to max` | an open-ended range: `min upto 0` is every negative value |
+| `caseName` | an enum or union case (bare name, never `Type.case`) |
+| `caseName(x, y)` | a union case, binding its associated values |
+| `p1 or` ⏎ `p2` | any of several patterns, one per line |
+| `default` | anything not matched above; must be the last arm |
 
-function charType(c Character) returns CharClass
-		match c 'classify'
-				'a' to 'z' then return 1  // lowercase letters
-				'A' to 'Z' then return 2  // uppercase letters
-				'0' to '9' then return 3  // digits
-				default then return 0     // other
-		end 'classify'
-end 'charType'
-```
+Range patterns work on integers, floats and any `Comparable` type such as `Character`. Each bound is a
+literal, or `min`/`max` for an open end. A range covering exactly one value (`5 to 5`, `'a' upto 'b'`) is **E2027** — write the
+value. Covering a value or case twice is also **E2027**.
 
-A range pattern that covers exactly one value is rejected as E2027 — `5 to 5`, `5 upto 6`, `'a' to 'a'`, and `'a' upto 'b'` (adjacent codepoints) are mistakes; use the bare value (`5`, `'a'`) instead. Range patterns are SCALAR only: a range over enum or union cases is E3146.
-
-Range patterns can be combined with `or`:
+**Alternatives.** An arm covering several patterns joins them with `or`, **one alternative per line**; the
+last alternative carries `then` and the body. Two alternatives on one line are **E3147**.
 
 ```maxon
 match score 'grade'
-		90 to 100 or 85 to 89 then return "A"
-		70 to 84 then return "B"
-		default then return "C"
+	90 to 100 or
+		85 to 89 then print("A\n")
+	70 to 84 then print("B\n")
+	default then print("C\n")
 end 'grade'
 ```
 
-### Match Expression
+**Exhaustiveness.** A match on an enum or union must name every case (**E2026** lists the missing ones).
+A plain `default` arm on an enum or union is **E2046**: when a case is added later, a silent default would
+absorb it. To ignore some cases, name them in an `or`-chain ending in `break`; to treat them as a bug or an
+error, use `default panic("…")` or `default throws` (below). Matches on other types (integers, floats,
+strings, characters) need a `default` arm unless the patterns cover every value.
 
-Match expressions return a value and can be assigned to variables. Use `gives` instead of `then`:
-
-**Syntax**
 ```maxon
-let result = match expression 'label'
-		pattern1 gives value1
-		pattern2 or pattern3 gives value2
-		default gives defaultValue
-end 'label'
+enum Level
+	trace
+	info
+	warning
+	error
+end 'Level'
+
+function report(level Level)
+	match level 'filter'
+		error then print("error!\n")
+		trace or
+			info or
+			warning then break
+	end 'filter'
+end 'report'
 ```
 
-**Example:**
+There is no range over enum or union cases (`trace to warning` is **E3146**): a case declared inside the
+span later would be absorbed without anyone deciding about it.
+
+**Break and fallthrough.** `break` in an arm leaves the `match`; `break 'label'` leaves an enclosing loop.
+`<statement> and fallthrough` runs the arm and then the next arm's body without testing its pattern:
+
 ```maxon
-var grade = "B"
-let points = match grade 'convert'
-		"A" gives 4
-		"B" gives 3
-		"C" gives 2
-		default gives 0
-end 'convert'
+var result = 0
+match x 'cascade'
+	1 then result = result + 10 and fallthrough
+	2 then result = result + 20
+	default then result = 100
+end 'cascade'
+// x == 1 gives 30, x == 2 gives 20
 ```
 
-**Union Case Extraction:**
+**Union payloads.** `caseName(a, b)` binds a union case's associated values for that arm:
+
 ```maxon
 typealias Amount = int(i64.min to i64.max)
 
-union Container
-		empty
-		value(n Amount)
-end 'Container'
+union Outcome
+	success(value Amount)
+	failure(code Amount, message String)
+	pending
+end 'Outcome'
 
-var c = Container.value(10)
-var result = match c 'get'
-		empty gives 0
-		value(n) gives n * 2    // result = 20
-end 'get'
+function show(r Outcome)
+	match r 'handle'
+		success(v) then print("ok {v}\n")
+		failure(_, message) then print("failed: {message}\n")
+		pending then print("waiting\n")
+	end 'handle'
+end 'show'
 ```
 
 **Notes:**
-- All cases must return the same type
-- `and fallthrough` is NOT allowed in match expressions
-- Block identifier required
-- Union bindings work the same as in match statements
+- An arm body is one statement. Block-opening statements (`if`, `while`, `for`, a nested `match`, a
+  multi-line `try`) are **E2049** — call a function instead. Every single-line `try` form is allowed.
+- Arms use bare case names; `Level.trace` in an arm is **E3075**.
+- Bindings must be used (**E3012**); discard one with `_`: `pair(_, second)`. To ignore all of a case's
+  payload, omit the parentheses (`success then …`); `success(_)` with every binding discarded is **E3081**.
+- `and fallthrough` cannot follow `return`.
 
-#### Per-Arm `panic` and `throws`
+### Match Expression
 
-Because match expressions don't allow arbitrary statements in arm bodies, but you may still need a specific case to signal an unrecoverable error or throw a recoverable one, individual arms may use `panic("message")` or `throws ErrorType.case` in place of `gives <expr>`. The arm terminates instead of producing a value, so the match expression's result type is inferred only from the `gives` arms.
+A match that produces a value uses `gives` instead of `then`:
 
 ```maxon
-let n = match c 'check'
-		red panic("red not allowed here")
-		green throws ColorError.unsupported
-		blue gives 42
-		default gives 0
-end 'check'
+let points = match letterGrade 'convert'
+	"A" gives 4
+	"B" gives 3
+	"C" gives 2
+	default gives 0
+end 'convert'
 ```
 
-- `panic("...")` arms accept either a string literal or an interpolated string, just like the `panic` statement and `default panic`.
-- `throws ErrorType.case` arms require the enclosing function to declare `throws ErrorType` (the same rule as the `throw` statement and `default throws`).
-- A diverging arm covers its pattern for exhaustiveness purposes exactly like a `gives` arm.
-- This applies only to match *expressions* — match statements already accept `panic`/`throw` via the normal `then <statement>` form.
+Every `gives` arm must produce the same type. `break` and `and fallthrough` are not allowed in a match
+expression, since every arm must yield a value or leave.
 
-### Default Throws / Default Panic in Match
-
-When matching on an enum, all cases must normally be covered explicitly (exhaustive matching). Plain `default` is forbidden because it defeats the purpose of exhaustiveness: if a new case is added to the enum later, the `default` arm would silently handle it, often with incorrect behavior. This class of bug — adding a new variant and forgetting to update match sites — is a common source of subtle, hard-to-diagnose errors in languages that allow catch-all defaults on sum types.
-
-To handle only a subset of cases, you have two options:
-
-1. **An `or`-chain with `break`**: When the unhandled cases are not errors — you simply don't need to act on them — name them in a chain, one per line, ending in `break`. Every alternative counts toward exhaustiveness, so a case added later is flagged by the compiler rather than absorbed.
+**Diverging arms.** An arm may leave instead of producing a value, with `panic("…")` or
+`throws ErrorType.case`. The result type comes from the `gives` arms; a diverging arm still counts toward
+exhaustiveness. `throws` requires the enclosing function to declare that error type.
 
 ```maxon
-match level 'filter'
-		error then handleError()
-		fatal then handleFatal()
-		trace to warning then break
-end 'filter'
+function weight(c Color) returns Amount
+	return match c 'weigh'
+		red panic("red has no weight")
+		green gives 1
+		blue gives 2
+	end 'weigh'
+end 'weight'
 ```
 
-2. **`default throws` or `default panic("message")`**: When unhandled cases represent genuine errors that should not occur silently:
+### Default Throws and Default Panic
 
-- **`default throws`** throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature. The error is catchable by the caller.
-- **`default panic("message")`** terminates the program with an error message when no other case matches. This is not catchable and should be used for cases that represent programming errors.
+`default throws ErrorType.case` and `default panic("message")` are the two `default` forms allowed on an
+enum or union, in both match statements and match expressions:
 
-Both forms work in all match types (enum and primitive types).
-
-**Statement Form:**
-
-```maxon
-function handleShape(shape Shape) throws ShapeError
-		match shape 'draw'
-				circle(r) then drawCircle(r)
-				square(s) then drawSquare(s)
-				default throws ShapeError.unsupported
-		end 'draw'
-end 'handleShape'
-```
-
-If `shape` is `triangle`, the function throws `ShapeError.unsupported`, which the caller must handle with `try`.
-
-**Statement Form (panic):**
+- **`default throws`** throws the error when no arm matches. The enclosing function must declare
+  `throws ErrorType`, and the caller handles it with `try`.
+- **`default panic("…")`** stops the program with that message (see
+  [Panic](#panic)). Use it for cases that indicate a bug.
 
 ```maxon
-function handleShape(shape Shape)
-		match shape 'draw'
-				circle(r) then drawCircle(r)
-				square(s) then drawSquare(s)
-				default panic("unsupported shape")
-		end 'draw'
-end 'handleShape'
-```
+typealias Amount = int(i64.min to i64.max)
 
-If `shape` is `triangle`, the program terminates with the message "unsupported shape".
-
-**Expression Form:**
-
-```maxon
-function describeShape(shape Shape) returns String throws ShapeError
-		let desc = match shape 'describe'
-				circle(r) gives "circle with radius {r}"
-				square(s) gives "square with side {s}"
-				default throws ShapeError.unsupported
-		end 'describe'
-		return desc
-end 'describeShape'
-```
-
-**Example:**
-
-```maxon
 union Shape
-		circle(radius Real)
-		square(side Real)
-		triangle(base Real, height Real)
+	circle(radius Amount)
+	square(side Amount)
+	triangle(base Amount, height Amount)
 end 'Shape'
 
-enum ShapeError implements Error
-		unsupported
+union ShapeError implements Error
+	unsupported(name String)
 end 'ShapeError'
 
-function getArea(shape Shape) returns Real throws ShapeError
-		return match shape 'calc'
-				circle(r) gives 3.14159 * r * r
-				square(s) gives s * s
-				default throws ShapeError.unsupported
-		end 'calc'
-end 'getArea'
+function area(shape Shape) returns Amount throws ShapeError
+	return match shape 'calc'
+		circle(r) gives 3 * r * r
+		square(s) gives s * s
+		default throws ShapeError.unsupported("triangle")
+	end 'calc'
+end 'area'
 
 function main() returns ExitCode
-		var shape = Shape.circle(5.0)
-		let area = try getArea(shape) otherwise 0.0
-		print("{area}")
-		return 0
+	let a = try area(Shape.square(4)) otherwise 0
+	print("{a}\n")                                    // 16
+	return 0
 end 'main'
 ```
-
-**Notes:**
-- `default throws` and `default panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums and unions is forbidden (error E2046)
-- For `default throws`: the error value must be a valid enum case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
-- For `default panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
-- Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
-- For matches on other types (int, float, string, char), `default` with arbitrary code remains valid as before
-
-### Break Statement
-```maxon
-break           // Break from innermost loop
-break 'label'   // Break from loop with specified label
-```
-Exits the innermost loop (while or for), or breaks to a specific labeled loop.
-
-**Example:**
-```maxon
-while true 'outer'
-		while true 'inner'
-				break 'outer'  // Breaks out of outer loop
-		end 'inner'
-end 'outer'
-```
-
-Labeling a `break` with the innermost enclosing loop's own label is
-redundant — unlabeled `break` already targets that loop — and is rejected
-as E2048. The label is meaningful only when an outer loop must be exited,
-or when a `match` arm sits between the `break` and its target loop.
-
-### Continue Statement
-```maxon
-continue           // Continue innermost loop
-continue 'label'   // Continue loop with specified label
-```
-Skips to next iteration of the innermost loop, or continues to a specific labeled loop.
-
-Like `break`, `continue 'label'` is rejected as E2048 when `label` names
-the innermost enclosing loop. Use bare `continue` for the innermost loop,
-or a label only when an outer loop is the actual target.
 
 ---
 
 ## Error Handling
 
-Maxon uses a unified error handling system based on typed errors. Functions either return a value or throw an error—there are no optional types or null values. Error types must be enums conforming to the `Error` interface.
+Maxon has two kinds of failure:
+
+- **Errors** are expected outcomes — a missing file, invalid input. A function declares the error type it
+  `throws`, and every caller handles it with `try`. There are no exceptions that unwind silently, no null
+  values and no optional types.
+- **Panics** are bugs — a broken invariant, an out-of-range value reaching a checked place. A panic stops
+  the program with a message and a stack trace, and cannot be caught.
 
 ### Defining Error Types
 
-Error types are enums that conform to the `Error` interface:
+An error type is an `enum` or a `union` that implements `Error`:
 
 ```maxon
-// Simple enum error
+typealias HttpCode = int(100 to 599)
+
 enum FileError implements Error
-		notFound
-		permissionDenied
-		alreadyExists
+	notFound
+	permissionDenied
+	alreadyExists
 end 'FileError'
 
-// Int-backed enum error (for error codes)
-enum HttpError int implements Error
-		badRequest = 400
-		notFound = 404
-		serverError = 500
-end 'HttpError'
-
-// String-backed enum error (for messages)
-enum ValidationError String implements Error
-		emptyField = "Field cannot be empty"
-		invalidFormat = "Invalid format"
-end 'ValidationError'
+union FetchError implements Error
+	timedOut
+	status(code HttpCode)
+end 'FetchError'
 ```
 
-**Note:** Only enums can conform to `Error`. Attempting to make a type (struct) conform to `Error` produces a compile error (E023).
+A union error carries data about the failure, read back with `match`. Only enum and union values can be
+thrown; throwing a record is **E3005** (`throw requires an error enum value`).
 
 ### Throwing Functions
 
-Functions that can throw errors declare the error type with `throws`:
+A function that can fail declares its error type with `throws`, after any `returns`:
 
 ```maxon
-function readFile(path String) returns String throws FileError
-		if not exists(path) 'check'
-				throw FileError.notFound
-		end 'check'
-		return contents
-end 'readFile'
+typealias Amount = int(i64.min to i64.max)
 
-// Void function that throws
-function resetConfig() throws FileError
-		if not exists("config.json") 'check'
-				throw FileError.notFound
-		end 'check'
-		// reset logic...
-end 'resetConfig'
+enum ParseError implements Error
+	empty
+	invalidSyntax
+end 'ParseError'
+
+function parseDigit(s String) returns Amount throws ParseError
+	if s.isEmpty() 'empty'
+		throw ParseError.empty
+	end 'empty'
+
+	return match s 'digit'
+		"0" gives 0
+		"1" gives 1
+		"2" gives 2
+		default throws ParseError.invalidSyntax
+	end 'digit'
+end 'parseDigit'
+
+function requireName(name String) throws ParseError
+	if name.isEmpty() 'missing'
+		throw ParseError.empty
+	end 'missing'
+end 'requireName'
 ```
 
-**Syntax:**
-```maxon
-function name(params) returns ReturnType throws ErrorType
-function name(params) throws ErrorType  // void function that throws
-```
+`throw` is legal only in a function that declares `throws`, and the value must be of the declared type.
 
-### Throw Statement
+### Panic
 
-Use `throw` to throw an error value:
-
-```maxon
-throw FileError.notFound
-throw HttpError.serverError
-```
-
-**Rules:**
-- `throw` is only valid inside functions with a `throws` declaration
-- The thrown value must match the declared error type
-
-### Panic Statement
-
-The `panic` statement immediately terminates the program with an error message and stack trace. It is used to signal unrecoverable errors — situations that represent bugs in the program rather than expected error conditions.
-
-```maxon
-panic("something went wrong")
-```
-
-The argument can be a plain string literal or an interpolated string. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
+`panic("message")` stops the program. The message may be interpolated. The program writes the message with
+its source location and a stack trace to stderr and exits with code **1**:
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
 
 function processValue(x Amount) returns Amount
-		if x < 0 'negative'
-				panic("processValue: negative input, got {x}")
-		end 'negative'
-		return x * 2
+	if x < 0 'negative'
+		panic("processValue: negative input, got {x}")
+	end 'negative'
+
+	return x * 2
 end 'processValue'
+
+function main() returns ExitCode
+	print("{processValue(-3)}\n")
+	return 0
+end 'main'
 ```
 
-Output when `main` calls it with `-3`:
 ```text
-panic at example.maxon:5: processValue: negative input, got -3
+panic at main.maxon:5: processValue: negative input, got -3
 Stack trace:
   in processValue
   in main
   in mrt_start
 ```
 
-The trace lists the call chain innermost first, at most 100 frames of it; a deeper chain ends with an `  ...additional frames elided...` line.
+The trace lists the call chain innermost first, up to 100 frames. The runtime raises the same kind of panic
+for a failed [range check](#range-checks) and a negative shift count.
 
-Use `panic` for invariant violations and unreachable code paths. For expected error conditions (invalid user input, missing files, etc.), use `throw`/`try`/`otherwise` instead.
+Use `panic` for invariant violations and unreachable paths; use `throw` for conditions a caller should
+handle.
 
 ### Calling Throwing Functions
 
-When calling a function that throws, you must use `try`:
+Every call to a throwing function is marked with `try`. A call without it is **E3057** (`throwing function
+requires try`). `try` is followed by exactly one of:
 
-```maxon
-// Compile error - must use try
-let contents = readFile("config.json")  // ERROR
-
-// Correct - use try with otherwise
-let contents = try readFile("config.json") otherwise ""
-```
-
-The `try` keyword is always required when calling throwing functions, even when using `otherwise`.
+- **nothing** — propagate the error to the caller ([Error Propagation](#error-propagation)), or
+- an **`otherwise`** clause that handles it.
 
 ### Handling Errors with `otherwise`
 
-The `otherwise` keyword provides unified error handling for throwing expressions. There are six forms:
-
-#### Default Value Form
-
-Provide a default value when an error occurs:
+#### Default Value
 
 ```maxon
-let value = try mayFail() otherwise 42
+let digit = try parseDigit(text) otherwise 0
 ```
 
-If `mayFail()` throws, `value` is assigned `42`. The default expression must match the return type.
+If the call throws, the expression takes the fallback value, which must have the call's result type.
+
+#### Ignore
 
 ```maxon
-function readConfig() returns String
-		// If readFile throws, use empty string as default
-		let contents = try readFile("config.json") otherwise ""
-		return contents
-end 'readConfig'
+try requireName(name) otherwise ignore
 ```
 
-#### Ignore Form
+Discards the error. Reserve it for best-effort work such as cleanup.
 
-Discard errors when you don't need the result:
+#### Panic
 
 ```maxon
-try mayFail() otherwise ignore
+let slot = try slots.get(index) otherwise panic("unreachable: index was validated")
 ```
 
-This silently ignores any thrown error. Use sparingly—typically for cleanup operations where errors can be safely ignored.
+Turns an error that cannot happen into a panic, instead of hiding it behind a made-up default.
 
-```maxon
-function cleanup()
-		// Best-effort cleanup, ignore failures
-		try deleteFile("temp.txt") otherwise ignore
-end 'cleanup'
-```
+#### Single Statement
 
-#### Panic Form
-
-Crash immediately if an error occurs. Use for unreachable error paths where a failure indicates a bug:
-
-```maxon
-let slot = try slots.get(idx) otherwise panic("unreachable: index was validated")
-```
-
-This is preferred over a silent default value when the error path should never execute. If it does, the program terminates with a stack trace rather than silently miscompiling or producing wrong results.
-
-#### Single-Statement Form
-
-Run a single statement on the error path. Supported statements are `return`, `break`, `continue`, and `throw`:
-
-```maxon
-let value = try mayFail() otherwise return -1
-```
-
-Each of these statements terminates the error path, so the success value still flows out of the `try` expression normally. Use single-statement form when the error handler is a single early exit — for anything more complex, use the block form.
+`return`, `break`, `continue` or `throw` on the error path:
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
+typealias StringArray = Array with String
 
-// Early return on error
-function runIt() returns Amount
-		let value = try mayFail() otherwise return -1
-		return value
-end 'runIt'
+enum AppError implements Error
+	badInput
+end 'AppError'
 
-// Bail out of a loop on error
-while true 'loop'
-		let v = try next() otherwise break
-		total = total + v
-end 'loop'
+function firstDigitOrMinusOne(text String) returns Amount
+	let value = try parseDigit(text) otherwise return -1
+	return value
+end 'firstDigitOrMinusOne'
 
-// Skip failed items
-for item in items 'items'
-		let parsed = try parse(item) otherwise continue
-		results.append(parsed)
-end 'items'
+function sumDigits(parts StringArray) returns Amount
+	var total = 0
+	for part in parts 'each'
+		let d = try parseDigit(part) otherwise continue      // skip bad parts
+		total = total + d
+	end 'each'
 
-// Re-throw as a different error type
-function outer() returns Amount throws OuterError
-		let v = try inner() otherwise throw OuterError.failed
-		return v
-end 'outer'
+	return total
+end 'sumDigits'
+
+function strictDigit(text String) returns Amount throws AppError
+	return try parseDigit(text) otherwise throw AppError.badInput   // convert the error
+end 'strictDigit'
 ```
 
-Each statement has the same requirements it normally has: `break`/`continue` must be inside a loop, `throw` requires the enclosing function to declare `throws`, and `return`'s value must match the enclosing function's return type.
+Each statement follows its usual rules: `break` and `continue` need a loop, `throw` needs a `throws` clause.
 
-#### Block Handler Form
-
-Execute a block of code when an error occurs:
+#### Block Handler
 
 ```maxon
-try readFile("config.json") otherwise 'handler'
-		print("File not found, using defaults")
-		useDefaults()
-end 'handler'
-```
-
-The block executes only if an error is thrown.
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-function loadData() returns Amount
-		var result = 0
-		try parseFile("data.txt") otherwise 'err'
-				result = -1  // Mark as failed
-				logError("Parse failed")
-		end 'err'
-		return result
-end 'loadData'
+try parseDigit(text) otherwise 'failed'
+	print("could not parse {text}\n")
+	return 1
+end 'failed'
 ```
 
 #### Block with Error Binding
 
-Capture the error as a typed enum for inspection:
+`otherwise (e)` binds the error value for a `match`:
 
 ```maxon
-try readFile("config.json") otherwise (e) 'handler'
-		match e 'check'
-				notFound then print("File not found")
-				permissionDenied then print("Permission denied")
-				alreadyExists then print("Already exists")
-		end 'check'
-end 'handler'
+try parseDigit(text) otherwise (e) 'failed'
+	match e 'kind'
+		empty then print("no input\n")
+		invalidSyntax then print("not a digit\n")
+	end 'kind'
+end 'failed'
 ```
 
-The error is bound to the variable `e` as a typed enum value, allowing you to match on specific error cases. For error unions with associated values, you can extract the payload in the match arm.
-
-```maxon
-function processFile(path String)
-		try readFile(path) otherwise (err) 'handler'
-				match err 'kind'
-						notFound then print("File not found")
-						permissionDenied then print("Permission denied")
-						alreadyExists then print("Already exists")
-				end 'kind'
-		end 'handler'
-end 'processFile'
-```
-
-The `(e)` binding is a regular local variable, so the standard unused-variable check (E3012) rejects a binding that is declared but never read inside the handler. If you only need to detect failure and have no use for the typed error value, drop the binding and use the bare block form `try expr otherwise 'handler' ... end 'handler'` instead.
+The binding must be used (**E3012**); if the kind of error does not matter, use the plain block form.
 
 ### Error Propagation
 
-Use `try` without `otherwise` to propagate errors to the caller. This is only valid inside functions declared with `throws`:
+A bare `try` passes the error on to the caller. It is legal only in a function that declares `throws` with
+the **same** error type:
 
 ```maxon
-function loadConfig() returns Config throws FileError
-		// If readFile throws, the error propagates to our caller
-		let contents = try readFile("config.json")
-		return parse(contents)
-end 'loadConfig'
+function doubleDigit(text String) returns Amount throws ParseError
+	let d = try parseDigit(text)       // a ParseError propagates to our caller
+	return d * 2
+end 'doubleDigit'
 ```
 
-**Rules:**
-- `try` without `otherwise` is only valid in functions with `throws`
-- The propagated error type must be the same type as the enclosing function's declared error type. Propagation re-throws the callee's error value through the caller's error flag, so a type mismatch would cause the caller to decode bits of one enum as tags of another. If the types differ, add an `otherwise` clause to convert.
-- Using `try` without `otherwise` in a non-throwing function is a compile error
+- In a function with no `throws` clause it is **E3059** (`the error has nowhere to go`).
+- When the callee's error type differs from the function's, it is **E3059** (`try propagates 'E' but
+  enclosing function throws 'Other' — add 'otherwise' to convert`); convert with
+  `otherwise throw Other.case`.
+- Inside a [test](#testing), a bare `try` on any error type is allowed: an error that reaches
+  it fails the test.
 
-### Try Block (Multi-Call Error Handling)
+### Try Blocks
 
-The `try 'label' ... end 'label' otherwise (e) 'handler' ... end 'handler'` construct wraps a sequence of statements so that every throwing call inside funnels its error to a single shared handler. Inside the body, bare calls to throwing functions do **not** require the `try` keyword — the compiler implicitly promotes them.
-
-```maxon
-try 'reading'
-		let raw = readFile("config.json")
-		let parsed = parseJson(raw)
-		let port = parsed.get("port")
-		print("{port}")
-end 'reading'
-otherwise (e) 'handler'
-		match e 'kind'
-				FileError.notFound        then print("missing")
-				FileError.permissionDenied then print("denied")
-				ParseError.unexpectedToken then print("bad json")
-				MapError.missingKey       then print("no port")
-		end 'kind'
-end 'handler'
-```
-
-**Rules:**
-
-- The `try` body MUST contain at least one bare call to a throwing function (E3083).
-- The `otherwise` clause takes one of three forms:
-	- **Block handler** — `otherwise (e) 'handler' ... end 'handler'` MUST contain a `match` on the binding (E3084).
-	- **Terminal panic** — `otherwise [(e)] panic("message")` halts the program when the body throws.
-	- **Terminal throws** — `otherwise [(e)] throws ErrorType.case` re-throws a fixed error to the caller. The enclosing function must declare `throws ErrorType`.
-- The `(e)` binding is optional for the terminal forms. When supplied it has the same type as in the block-handler form (single enum or synthesized error union) and may be referenced inside the panic message's interpolation or inside the throw expression — for example, `otherwise (e) throws AppError.wrap(e)` to wrap the original error as a payload of the new error case. A binding declared but never read is rejected by the standard unused-variable check (E3012).
-- If the body throws calls of a single error enum type, `e` has that enum type and match patterns use bare case names (e.g. `notFound`).
-- If the body throws calls of two or more distinct error enum types, `e` has a synthesized error-union type. Each match arm targets a specific `EnumName.caseName` pair:
-	- Fully-qualified form `EnumName.caseName` is always accepted.
-	- Bare `caseName` is accepted only when the case name is unique across the union members. Shared names (e.g. two enums both with `notFound`) are rejected with E3085.
-- The match must be exhaustive across every `(EnumName, caseName)` pair unless a `default` arm is provided.
-- An explicit `try expr otherwise ...` inside the body still works for any single call — its error is consumed by its own handler and does not contribute to the synthesized union.
-- Nested try blocks compose: the inner block absorbs its own throws; the outer block sees only what its own bare calls throw. A terminal `otherwise throws E.x` inside an inner try block routes through the outer block's shared error sink, just like a bare `throw`.
-
-#### Terminal Form Examples
-
-```maxon
-typealias Tally = int(0 to u64.max)
-
-// Panic when the body throws — useful for unreachable error paths.
-try 'reading'
-		parseFile("data.json")
-end 'reading'
-otherwise panic("unreachable: data.json is bundled with the binary")
-
-// Re-throw a fixed error to the caller.
-function compute() returns Tally throws AppError
-		try 'work'
-				doStuff()
-		end 'work'
-		otherwise throws AppError.failed
-		return 0
-end 'compute'
-
-// Bind the original error and wrap it as the payload of the new error.
-function compute2() returns Tally throws AppError
-		try 'work'
-				doStuff()
-		end 'work'
-		otherwise (e) throws AppError.wrap(e)
-		return 0
-end 'compute2'
-```
-
-### Conditional Try (if try)
-
-The `if try` construct provides conditional execution based on whether a throwing expression succeeds.
-
-#### Boolean Form
-
-Check if an expression succeeds without binding the result:
-
-```maxon
-if try mayFail() 'check'
-		print("Success!")
-end 'check'
-```
-
-The if-block executes only if the expression succeeds (doesn't throw).
-
-#### Binding Form
-
-Unwrap and bind the success value:
-
-```maxon
-if let value = try mayFail() 'check'
-		print("Got: {value}")
-end 'check'
-```
-
-If successful, the unwrapped value is bound to `value` and available within the if-block.
-
-#### Mutable Binding Form
-
-Use `var` instead of `let` to make the bound name reassignable inside the then-block:
-
-```maxon
-if var value = try mayFail() 'check'
-		value = value + 10
-		return value
-end 'check'
-```
-
-The binding is scoped to the then-block; mutations do not propagate back to the source expression.
-
-#### With Else Clause
-
-Handle the error case:
-
-```maxon
-if try mayFail() 'check'
-		print("Success!")
-end 'check' else 'err'
-		print("Failed!")
-end 'err'
-```
-
-#### With Error Binding
-
-Capture the error value in the else block:
-
-```maxon
-if let value = try mayFail() 'check'
-		print("Got: {value}")
-end 'check' else (e) 'err'
-		print("Error occurred")
-end 'err'
-```
-
-The error is bound to `e` and available within the else-block.
-
-### Standard Library Error Types
-
-The standard library provides error types for built-in operations:
-
-```maxon
-// Array access errors
-enum ArrayError implements Error
-		indexOutOfBounds  // index >= length
-		emptySlot         // index < length, but that slot was never filled (a null pointer)
-end 'ArrayError'
-
-// Map operations
-enum MapError implements Error
-		keyNotFound
-		keyAlreadyExists
-end 'MapError'
-
-// Iterator exhaustion
-enum IterationError implements Error
-		exhausted
-end 'IterationError'
-
-// File metadata errors
-enum FileInfoError implements Error
-		notFound              // file does not exist
-end 'FileInfoError'
-```
-
-Array and Map access methods throw these errors:
-
-```maxon
-var arr = [1, 2, 3]
-let val = try arr.get(5) otherwise 0  // Returns 0 on out of bounds
-
-var map = ["key": 42]
-let result = try map.get("missing") otherwise -1  // Returns -1 if key not found
-```
-
-### Error Enum Types
-
-Functions with `throws` return an error type internally:
-
-```maxon
-// This function returns "String or FileError" internally
-function readFile(path String) returns String throws FileError
-```
-
-**Memory Layout:**
-```
-+--------+--------------------------------+
-| tag(8) | value OR error ordinal         |
-+--------+--------------------------------+
-   0=ok    success value
-   1=err   enum ordinal (8 bytes)
-```
-
-### Complete Example
+A `try` block runs several statements and sends every error to one handler. Inside the block, calls to
+throwing functions need no `try` of their own:
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
 
-enum ParseError implements Error
-		invalidSyntax
-		unexpectedEnd
-end 'ParseError'
+enum FileError implements Error
+	notFound
+end 'FileError'
 
-function parseNumber(s String) returns Amount throws ParseError
-		if s.isEmpty() 'empty'
-				throw ParseError.unexpectedEnd
-		end 'empty'
-		// parsing logic...
-		return 42
-end 'parseNumber'
+enum ConfigError implements Error
+	badPort
+end 'ConfigError'
+
+function readConfig(name String) returns String throws FileError
+	if name == "missing" 'absent'
+		throw FileError.notFound
+	end 'absent'
+
+	return "port=80"
+end 'readConfig'
+
+function parsePort(text String) returns Amount throws ConfigError
+	if text == "port=80" 'ok'
+		return 80
+	end 'ok'
+
+	throw ConfigError.badPort
+end 'parsePort'
+
+function load(name String)
+	try 'reading'
+		let raw = readConfig(name)
+		let port = parsePort(raw)
+		print("port {port}\n")
+	end 'reading'
+	otherwise (e) 'handler'
+		match e 'kind'
+			FileError.notFound then print("missing\n")
+			ConfigError.badPort then print("bad config\n")
+		end 'kind'
+	end 'handler'
+end 'load'
 
 function main() returns ExitCode
-		// Use default value on error
-		let num1 = try parseNumber("42") otherwise 0
-		
-		// Handle error in block
-		var num2 = 0
-		try parseNumber("invalid") otherwise 'err'
-				num2 = -1
-		end 'err'
-		
-		// Handle with error binding
-		try parseNumber("") otherwise (e) 'handler'
-				match e 'kind'
-						invalidSyntax then print("Invalid syntax")
-						unexpectedEnd then print("Unexpected end of input")
-				end 'kind'
-		end 'handler'
-		
-		return num1
+	load("app")        // port 80
+	load("missing")    // missing
+	return 0
 end 'main'
 ```
+
+- The block must contain at least one call that throws (**E3083**).
+- The `otherwise` clause is one of:
+  - a **handler block** `otherwise (e) 'label' … end 'label'`, which must `match` on the binding (**E3084**);
+  - **`otherwise [(e)] panic("message")`**, which panics if the block throws;
+  - **`otherwise [(e)] throws ErrorType.case`**, which throws a fixed error to the caller — the binding
+    can be wrapped as a payload: `otherwise (e) throws AppError.wrap(e)`.
+- When the block's calls throw one error type, `e` has that type and arms use bare case names. When they
+  throw several, `e` is a combined error: arms name `ErrorType.case`, and a bare case name is accepted only
+  when it is unique across the types (**E3085** otherwise). The match is exhaustive over every pair unless
+  it has a `default` arm.
+- A call inside the block with its own `try … otherwise` handles its own error, which does not reach the
+  block's handler. Nested try blocks compose the same way.
+
+### Conditional Try (`if let … = try`)
+
+`if let` runs a block only when a throwing call succeeds, binding its result:
+
+```maxon
+if let value = try parseDigit(text) 'parsed'
+	print("got {value}\n")
+end 'parsed' else (e) 'failed'
+	match e 'kind'
+		empty then print("no input\n")
+		invalidSyntax then print("not a digit\n")
+	end 'kind'
+end 'failed'
+```
+
+- `if var value = try …` makes the binding reassignable inside the block.
+- The `else` block is optional, and so is its `(e)` binding.
+- `if try call() 'label'`, with no binding, is only for a call that returns nothing; testing a call that
+  returns a value that way discards the value and is **E3124**.
+
+### Errors in Other Positions
+
+- A match arm or match expression can throw with `throws ErrorType.case` or `default throws` (see
+  [Default Throws and Default Panic](#default-throws-and-default-panic)).
+- A promise from a throwing `async` call is awaited with `try await` (see
+  [Concurrency](#throwing-async-functions)).
+- A division whose divisor might be zero throws `DivisionByZero` (see
+  [Division by Zero](#division-by-zero)).
+- A function type cannot declare `throws`, so a throwing function cannot be used as a function value
+  (**E3101**).
+
+### Standard Library Error Types
+
+| Error | Cases | Thrown by |
+|-------|-------|-----------|
+| `ArrayError` | `indexOutOfBounds`, `emptySlot` | `Array` element access |
+| `MapError` | `keyNotFound`, `keyAlreadyExists` | `Map.get`, `Map.insert` |
+| `IterationError` | `exhausted`, `atStart` | iterators |
+| `StringError` | `notFound`, `invalidIndex` | `String` search and indexing |
+| `ParseError` | `invalidFormat` | `int.fromString`, `float.fromString`, `bool.fromString` |
+| `DivisionByZero` | `divisionByZero` | `/` and `mod` with a divisor that may be zero |
+| enum lookups | `noSuchCaseName`, `noSuchRawValue` | `fromName`, `fromRawValue` |
+
+The [standard library reference](STDLIB_REFERENCE.md) lists the error types of each module.
+
+---
+
+## Testing
+
+Tests are part of the language: a `test` declaration sits beside the code it tests, and
+[`maxon test`](CLI_REFERENCE.md) finds, compiles and runs them.
+
+### Test Declarations
+
+A `test` is a top-level declaration named with a quoted phrase instead of an identifier:
+
+```maxon
+test 'adds two numbers'
+	try Expect.equal(2 + 2, expected: 4)
+end 'adds two numbers'
+```
+
+- The name may contain any character except `'`, and the `end` label repeats it exactly (**E2008** on a
+  mismatch). An empty name is **E2059**.
+- A test takes no parameters and has no `returns` clause.
+- `test` is a contextual keyword: it opens a declaration only at the top level and only when a quoted name
+  follows, so `test` remains usable as a variable or parameter name.
+
+### Test Files
+
+Tests live in files whose names end in **`.test.maxon`**. A `test` in any other file is **E2058**. A regular
+build skips `*.test.maxon` files, and `maxon test` compiles them together with the rest of the project and
+a generated entry point — the project does not need a `main`.
+
+```text
+temperature/
+├── temperature.maxon          # the code
+└── temperature.test.maxon     # its tests
+```
+
+### Assertions
+
+Every test implicitly declares `throws TestFailure` (you cannot write the clause yourself). The `Expect`
+assertions throw `TestFailure.assertion` when they fail, so each is called with `try` — a forgotten `try` is
+a compile error (**E3057**), never an assertion whose failure goes unnoticed.
+
+`temperature.maxon`:
+
+```maxon
+typealias Celsius = int(-273 to 10000)
+typealias Fahrenheit = int(-460 to 18032)
+
+/// Converts a Celsius reading to Fahrenheit, rounding toward zero.
+export function toFahrenheit(c Celsius) returns Fahrenheit
+	return c * 9 / 5 + 32
+end 'toFahrenheit'
+
+export function describe(c Celsius) returns String
+	if c <= 0 'freezing'
+		return "freezing"
+	end 'freezing'
+
+	return "above freezing"
+end 'describe'
+```
+
+`temperature.test.maxon`:
+
+```maxon
+test 'boiling point converts'
+	try Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
+end 'boiling point converts'
+
+test 'zero is freezing'
+	try Expect.equal(describe(0), expected: "freezing")
+	try Expect.startsWith(describe(5), needle: "above")
+end 'zero is freezing'
+
+test 'body temperature'
+	try Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
+end 'body temperature'
+```
+
+```text
+$ maxon test temperature --no-timing
+temperature/temperature.test.maxon:
+  ✓ boiling point converts
+  ✓ zero is freezing
+  ✓ body temperature
+
+ 3 pass
+ 0 fail
+
+ 3 tests across 1 file.
+```
+
+The integer assertions take `AssertedInt` (`int(i64.min to i64.max)`), so a value of another alias is cast
+to it; float assertions take `AssertedReal`. The matchers:
+
+| Matcher | Checks |
+|---------|--------|
+| `Expect.equal(actual, expected:)`, `Expect.notEqual(actual, expected:)` | integers, strings, booleans |
+| `Expect.greaterThan(actual, than:)`, `lessThan`, `atLeast`, `atMost` | integers and floats |
+| `Expect.close(actual, expected:, within:)` | floats within a tolerance |
+| `Expect.isTrue(actual)`, `Expect.isFalse(actual)` | booleans |
+| `Expect.contains(haystack, needle:)`, `startsWith`, `endsWith`, `isEmpty` | strings |
+| `Expect.fail(message)` | always fails |
+
+Every matcher also takes an optional `message:` that is printed when it fails, and reports the line of the
+assertion itself. A failing assertion prints what it expected and what it received — had the last test
+expected `99`, the run would report:
+
+```text
+FAIL  temperature/temperature.test.maxon > body temperature
+  FAIL temperature.test.maxon:11: Expect.equal
+    expected: 99
+    received: 98
+    message: rounds toward zero
+```
+
+The full assertion reference is on the [Testing](STDLIB_REFERENCE.md#testing) page of the standard library.
+
+### Uncaught Errors in Tests
+
+Inside a test body, a bare `try` may propagate **any** error type — not only `TestFailure`. An error that
+reaches the end of the test fails that test and reports the error and the `try` that threw it:
+
+```maxon
+test 'a missing user throws'
+	let name = try lookup(0)          // lookup throws LookupError
+	try Expect.equal(name, expected: "user")
+end 'a missing user throws'
+```
+
+```text
+FAIL  users/lookup.test.maxon > a missing user throws
+  threw LookupError.notFound
+  at lookup.test.maxon:2
+```
+
+- An `otherwise` clause you write always takes precedence.
+- The relaxation applies to the test body only. The same bare `try` in an ordinary function is still
+  **E3059**, and a closure written inside a test is an ordinary function.
+- A `panic` cannot be caught; the test is reported as crashed.
+
+### Test Diagnostics
+
+| Code | Cause |
+|------|-------|
+| E2008 | the `end` label does not repeat the test's name |
+| E2058 | a `test` declaration outside a `*.test.maxon` file |
+| E2059 | an empty test name |
+| E3057 | an assertion (or other throwing call) without `try` |
+| E3107 | two tests in one file whose names compile to the same symbol — each character outside `A–Z`, `a–z`, `0–9` and `_` becomes `_`, so `'adds two'` and `'adds-two'` collide |
+
+### Running Tests
+
+`maxon test [directory]` discovers every `test` under the directory, runs them and exits `0` when all pass,
+`1` when any fails (or there are none), and `2` when the tests do not compile. `--list` prints the tests
+without running them. A test binary's heap is checked for leaks like any program's, and a leaking test is
+reported as such. See the [CLI reference](CLI_REFERENCE.md) for its flags.
 
 ---
 
 ## Namespaces
 
+A Maxon program is every `.maxon` file in a project directory, compiled together. There are no import
+statements: a file sees its own declarations, the declarations other files make visible, and the standard
+library.
+
 ### Automatic Derivation
-Namespaces are derived from file paths:
 
-| File Path | Namespace |
-|-----------|-----------|
-| `math.maxon` | (global) |
+A file's namespace is its directory path relative to the project root, joined with `.`:
+
+| File | Namespace |
+|------|-----------|
+| `main.maxon` | (none) |
 | `utils/helpers.maxon` | `utils` |
-| `stdlib/fmt/integer.maxon` | `stdlib.fmt` |
+| `lib/fmt/integer.maxon` | `lib.fmt` |
 
-### Export Keyword
+Every file in one directory shares that directory's namespace.
 
-Functions, types, enums, typealiases, and top-level variables are file-scoped by default. Use the `export` keyword to make them visible to other files:
+### Visibility
+
+Top-level declarations — functions, types, enums, unions, typealiases, variables — are **private to their
+file** unless marked. Three modifiers widen that:
+
+| Modifier | Visible to | Checked for unused exports |
+|----------|------------|----------------------------|
+| *(none)* | the declaring file | — |
+| `module` | files in the declaring directory and its subdirectories | yes (**E3094**) |
+| `export` | every file | yes (**E3092**, **E3093**) |
+| `public` | every file | no |
+
+The same modifiers apply to members inside a type: fields, methods and static members are private to the
+type unless marked, independently of the type's own visibility. At most one modifier may be written;
+combining two is **E2001** (`'export' and 'public' cannot be combined`).
+
+### `export`
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
 export function publicAdd(a Score, b Score) returns Score
-		return a + b
+	return a + b
 end 'publicAdd'
 
-function privateHelper(x Score) returns Score
-		return x * 2
+function privateHelper(x Score) returns Score     // file-private
+	return x * 2
 end 'privateHelper'
 ```
 
-Only `publicAdd` can be called from other files.
+Calling a non-exported function from another file is **E3008** (`function 'privateHelper' is not
+exported`).
 
-**Exporting types and enums:**
+`export` also states an expectation: **this program uses the declaration from another file.** When
+nothing outside the declaring file refers to it, the compiler reports **E3092** (`exported function
+'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
+declaring directory it suggests `module` (**E3093**). These checks run on multi-file programs that
+otherwise compile.
 
-```maxon
-typealias Coord = int(i64.min to i64.max)
+### `public`
 
-export type Point
-	export var x as Coord
-	export var y as Coord
-end 'Point'
-
-export enum Color
-	red
-	green
-	blue
-end 'Color'
-```
-
-Without `export`, types and enums are only usable within the file where they are declared.
-
-**Exporting typealiases:**
+`public` gives exactly the visibility of `export` and declares the symbol **API surface**: something that
+exists for callers outside this program, so "nothing here uses it" is not a finding. Library code marks its
+surface `public`; the standard library does so throughout.
 
 ```maxon
-export typealias Score = int(0 to 100)
+typealias Length = int(0 to 1000)
+
+public function area(width Length, height Length) returns Length
+	return width * height
+end 'area'
 ```
 
-Non-exported typealiases are only visible within their file. The standard library is the one
-exception, and it is a real one now that a typealias is a type rather than a spelling: every stdlib
-alias is seeded into every file, `export`ed or not, so a name like `AssertedInt` can be written
-wherever a value has to cross into a stdlib signature. Without that, a caller holding its own alias
-would have no way to name the type `Expect.equal` asks for.
+`export` and `public` are reserved words. `module` is contextual: it is a modifier only directly before a
+declaration and remains usable as an ordinary name.
 
-**Exporting top-level variables:**
+### `module`
 
-```maxon
-export var sharedCounter = 0
-export let MAX_CONNECTIONS = 100
+A `module` declaration is visible to every file in the declaring file's directory and in its subdirectories,
+and to nothing outside that subtree — for helpers shared across a feature folder:
+
+```text
+project/
+├── main.maxon                 # cannot call helper()
+└── feature/
+    ├── api.maxon              # module function helper() — declared here
+    ├── routes.maxon           # can call helper()
+    └── internal/
+        └── cache.maxon        # can call helper()
 ```
 
-Exported variables can be read and (for `var`) modified from other files in the same project.
-
-**Exporting methods within types:**
-
-Individual methods can be exported independently of the type itself:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-export type Calculator
-	var result as Amount
-
-	export function add(n Amount)
-		result = result + n
-	end 'add'
-
-	function internalReset()
-		result = 0
-	end 'internalReset'
-end 'Calculator'
-```
-
-### Module Keyword (directory-scoped visibility)
-
-`module` is a third visibility tier between file-scoped (the default) and `export`. A `module`-marked declaration is visible to every file in the **same directory** as the declaring file AND every file in **any subdirectory** of that directory — but not to files outside that subtree.
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-// project/feature/internal.maxon
-module function helper() returns Amount
-	return 42
-end 'helper'
-
-// project/feature/main.maxon — same directory, can call helper()
-function caller() returns Amount
-	return helper()
-end 'caller'
-
-// project/feature/sub/deep.maxon — subdirectory, can also call helper()
-function deepCaller() returns Amount
-	return helper()
-end 'deepCaller'
-
-// project/other.maxon — outside feature/, CANNOT call helper()
-```
-
-`module` and `export` are mutually exclusive — combining them is a parse error. The keyword applies in every position where `export` does: top-level functions, types, enums, unions, typealiases, top-level vars/lets, and per-method or per-field modifiers inside types. A code outside the declarer's directory subtree that tries to use a `module` symbol gets error `E3088: function 'X' is module-scoped and not visible from this directory`.
-
-In Maxon, "module" in this context means a directory subtree — useful for sharing helpers across a feature folder without leaking them to the rest of the program.
-
-### Public Keyword (API surface)
-
-`public` is the fourth visibility tier. It makes a declaration visible to every file — **exactly as
-`export` does** — and additionally states that the declaration is API surface.
-
-| modifier | visible to | audited by the unused-export family? |
-|---|---|---|
-| *(none)* | the declaring FILE | — |
-| `module` | the declaring DIRECTORY and its subdirectories | yes (E3094) |
-| `export` | every file | yes (E3092, E3093) |
-| `public` | every file | **no** |
-
-Anything that asks *"may this file name that symbol?"* answers identically for `export` and `public`.
-They differ in one thing only, which is what the author is saying about USE:
-
-- `export` — other files may see this, **and I expect this program to use it**. If nothing outside the
-  declaring file references it, that is a real finding (`E3092`).
-- `public` — this is **API surface**; do not ask who calls it. A shared module may legitimately publish
-  a symbol that this particular program never reaches, and "no caller in this compilation" is not the
-  same fact as "dead".
-
-```maxon
-// A library's surface: reported by nothing, whoever does or does not call it.
-public function parse(text String) returns Score
-	return 0
-end 'parse'
-
-// An expectation about THIS program: E3092 if no other file calls it.
-export function usedByTheApp() returns Score
-	return 1
-end 'usedByTheApp'
-```
-
-`stdlib/` marks its whole public surface this way, which is why the compiler needs no special knowledge
-of where the standard library lives.
-
-There is deliberately no `module public`: `E3094` keeps its full force, and a `module` declaration that
-wants exemption is promoted to `public`, which changes its visibility and says so.
-
-All three modifiers are mutually exclusive. Combining any two is `E2001`, positioned at the second one,
-and the pair is named in a fixed order (`export`, then `module`, then `public`) whichever order they
-were written in — so one illegal program has exactly one diagnostic.
+Using a `module` declaration from outside its subtree is **E3088** (`function 'helper' is module-scoped
+and not visible from this directory`). A `module` declaration that nothing outside its file uses is
+**E3094**.
 
 ### Qualified Names
-Call functions with full namespace:
-```maxon
-var result = stdlib.fmt.format_int(42)
-```
 
-### Suffix Matching
-If unambiguous, use short name:
-```maxon
-var result = format_int(42)   // Finds stdlib.fmt.format_int
-```
+Qualify a name with its namespace to be explicit, or to choose between two declarations with the same
+name:
 
-### Cross-File Bare-Name Ambiguity
-
-When two files in different directories both expose a declaration with the same bare name and a third file references it without qualification, the compiler reports an ambiguity error and asks the user to qualify with the appropriate directory namespace.
-
-- **Functions** — bare-name calls with multiple visible definitions trigger **E3095** (`Ambiguous bare-name call to 'X': multiple visible definitions found. Qualify with a directory name.`). Qualify the call with the directory namespace (`api.format(...)`, `lib.fmt.format(...)`).
-- **Typealiases** — bare-name type references with multiple reachable definitions trigger **E3063** (`Ambiguous typealias 'X': multiple visible definitions found. Qualify with a directory name.`). Write the qualified form (`api.Score`, `lib.fmt.Score`) at the use site. Same-file duplicates remain **E3061** since qualification cannot disambiguate two declarations in the same file. File-private aliases (no modifier) are scoped to their declaring file and never contribute to cross-file ambiguity.
-
-See `specs/typealias-collision.md` and `specs/namespaces.md` for the canonical tests.
-
----
-
-## Async/Await (Concurrency)
-
-Maxon supports concurrency via `async` and `await`. An `async` call does **not** create a new thread of any kind: it starts the callee as a **coroutine of the green thread that called it**, with a growable stack (starting at 2KB, doubling on demand). The coroutine runs until it reaches a blocking operation, at which point it parks and the machine takes up its green thread's other runnable work — its sibling coroutines first, then anything else; `await` resumes the caller and collects the result. "Parallel work" is therefore overlapped **waiting**, not parallel execution.
-
-The restriction that an `async` target must yield (`E3073`, below) is the rule this model *is*: `async` exists to overlap waiting, so spawning something that can never give up the green thread buys nothing.
-
-Creating a green thread that is scheduled independently is `spawn`, and `spawn` starts a **service** (see `specs/services.md`). The runtime carries the whole GMP (Goroutine-Machine-Processor) substrate — per-processor run queues, work stealing, and a poller carrying timers, children, pipes and sockets. A `spawn` is what publishes a token to that substrate; an `async` coroutine publishes none, being readied onto its owner's strand instead, so an `async`-only program keeps one token and one machine at every processor count.
-
-`spawn` is a **contextual** keyword, not a reserved word: it is recognized as an identifier followed by a name, so `spawn` remains a perfectly good spelling for a function, a static, a parameter, a field or a local. A `spawn Calc.create()` anywhere in a program makes `Calc` a **service**, and the compiler synthesizes two companion types beside it — `Calc.request` (the message union) and `Calc.handle` (what a `spawn` yields, whose method surface is exactly `Calc`'s `export`/`public` INSTANCE methods). There is no bare `spawn f()` green thread: the target must be a static factory of a declared type returning that type, and anything else is **E3134**. A message's arguments are MOVED, so a parameter whose TYPE can never have exactly one owner on the far side — a `Promise`, a function value, a value held at an interface type — is **E3135**.
-
-Services **run**, and so do their **replies**: the mailbox, the green thread, the dispatch loop and the reply channel are all built. A handler that returns a value hands it back through `try await handle.method()` — the reply slot is a green thread that never runs, so `Promise`, `await`, `try await` and `awaitAny` are the ordinary ones. A **generic** type is spawnable: one `Calc.request` and one `Calc.handle` serve every instantiation — the `T`-typed payload is an opaque word carrying the layout descriptor — and the instantiation rides the handle's own TYPE, spelled `Calc.handle with <Args>` wherever a parameter, field or element has to hold one. A CONSTRAINED generic (`uses T where T is …`) is still **E2015**: an instance method of one takes a hidden witness pointer per constraint, and the synthesized loop has no `self` to source one from. `specs/services.md` carries the live cases.
-
-### Starting a Coroutine
-
-Use `async` before a function call to start it as a coroutine of the current green thread:
-
-```maxon
-var promise = async someFunction(arg1, arg2)
-```
-
-The `async` expression returns a promise value that can be awaited later. It creates no thread of any kind — see the model above.
-
-### Awaiting Results
-
-Use `await` to wait for a coroutine to complete and retrieve its result:
-
-```maxon
-var result = await promise
-```
-
-If the coroutine has already completed, `await` returns immediately. Otherwise the awaiting green thread **parks**: it hands its machine back to the scheduler, which runs whatever else is runnable, and the completing coroutine readies the waiter. No wait ever runs another green thread on the waiter's stack (`specs/sched-park.md`).
-
-### Overlapping Waits
-
-Several coroutines can be in flight at once, and their WAITING overlaps:
-
-```maxon
-var p1 = async taskA()
-var p2 = async taskB()
-var r1 = await p1
-var r2 = await p2
-```
-
-Both are started before either is awaited, so whichever blocks first gives the green thread to the other. Nothing here runs on two processors — that is what a service is for.
-
-### Void Functions
-
-Functions that return no value can also be started with `async`:
-
-```maxon
-var p = async doWork()
-await p
-```
-
-### Services — `spawn`
-
-A **service** is an ordinary `type`. There is no `service` keyword and no member keyword; `spawn` is the only new syntax, and what it yields is a HANDLE whose method surface is exactly that type's `export`/`public` instance methods:
-
-```maxon
-type Calc
-	var count as int
-
-	static function create() returns Self
-		return Self{count: 0}
-	end 'create'
-
-	export function bump(by int)          // a MESSAGE: export + instance
-		self.count = self.count + by
-	end 'bump'
-
-	function record(v int) returns int    // private: NOT on the handle
-		return v
-	end 'record'
-end 'Calc'
-
-let c = Calc.create()          // a plain value — direct calls, fully testable
-let h = spawn Calc.create()    // a `Calc.handle` — the same methods, as messages
-```
-
-Dispatch is decided by the receiver's TYPE, so no method ever changes meaning; a service is synchronously unit-testable by constructing one directly; and a self-send deadlock is impossible to spell, because a private helper is not on the handle. `spawn Calc.create()` calls the factory DIRECTLY — `static function` is excluded from the message roster structurally, having no `self`.
-
-**A send MOVES or LENDS.** A `spawn`'s factory arguments, a reply, and a message argument that is a `var`, a temporary or a literal are moved into the service, which becomes their one owner. A message argument that is a `let` local owning its graph is **lent**: the sender's binding stays readable and the service reads the same graph, whose counts are stepped atomically while two green threads hold it. This is not ergonomics: a box one green thread holds is counted with a plain load/add/store, so a send that put one box into two green threads' hands without saying so would corrupt the heap rather than merely be slow. A parameter whose TYPE cannot cross at all is **E3135** — a `Promise`, a function value, a value held at an interface type, an opaque type parameter — and an argument this frame does not solely own is **E3138**. A value a handler keeps is sent from a `var`, or as a `.clone()`.
-
-**A lent graph is frozen from the send on (E3160).** Neither the lent binding nor any value read out of it — a field, an element, a payload, a `let` alias, a `for` or `match` binding — may be bound or assigned to a `var`, stored in a field, a union payload or a container, returned, captured by a closure, passed to a parameter its callee keeps, or handed to a method or a parameter that writes it. Reads, interpolation, `let` bindings, parameters that neither write nor keep, and a second send stay legal. A value whose type holds nothing a statement can write — a service handle, or a struct whose fields are all `let` over such types — is exempt. *From the send on* is the CONTROL FLOW and not the text: a door the send cannot reach — one on the other arm of the `if` or `match` whose arm sent — is not frozen, and a door the next trip of a loop reaches is. The handler is held to the same rule, whole-program: one whose parameter escapes through such a door refuses every send that lends to it (E3160 at the send, naming the escape), and one that writes its parameter refuses it with **E3019**.
-
-**Soleness is not transitive, so the GRAPH is walked at run time.** A container, a record with a managed field and a union with a managed payload all cross, because a box this frame owns alone can still point at a record something else owns: `push` increfs what it is handed, and the retain can happen inside a callee the send site cannot see. Before the hand-off the compiler emits a synthesized per-type walk over the value's graph. Every reachable refcounted record must have exactly one owner; a `.rdata` string literal is immortal and passes with no count to check; a shared copy-on-write buffer (what `.clone()` and `.slice()` leave behind) is DETACHED, as a write would detach it; and for a lend every record the walk reaches is marked shared. A reachable record with a second owner is not a diagnostic — the frame is past every compile-time gate — so the process **aborts with exit 96** on the sending green thread, before anything is enqueued. What is still refused outright is only what no walk can be built for: an existential, an opaque type parameter, or a graph reaching an OS handle or a base-struct-less generic instance.
-
-**The reply road runs the same walk.** A handler's returned value must be one the handler's own frame minted (**E3137** otherwise), and its graph is proved by the same walk immediately before the reply cell is completed — so a fresh container whose ELEMENTS are the service's state aborts rather than crossing.
-
-**A service can be gone.** `h.shutdown()` enqueues a poison pill behind everything queued, and dropping the last handle closes the mailbox, which drains it the same way. `stdlib/Builtins.maxon` declares `ServiceError.stopped` for the reply that will report it.
-
-**Services run wherever a green thread does: every native lane — `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux`.** A running service reaches a green thread's hand-assembled context switch, so the lane set is that switch's; a `spawn` compiled for `wasm32-wasi` is refused with **E3104**, the same diagnostic `sleep` gives there. `specs/services.md`'s *Targets* section and its `error.a-service-is-rejected-on-wasm` case are the source of truth for the lane set.
-
-### Yielding
-
-`Runtime.yield()` gives up the current green thread's turn to whatever else is runnable and resumes behind it — the caller's own coroutines first, then other green threads. It occupies no timer (unlike `sleep(0)`), and when nothing else is runnable it polls due timers and exited children and returns promptly, so `while not done { Runtime.yield() }` is a busy wait that makes progress rather than a block. `await` and `sleep` are the blocking waits.
-
-### Throwing Async Functions
-
-Async functions that throw require `try await` instead of plain `await`:
-
-```maxon
-var p = async mayFail(true)
-var result = try await p otherwise 0
-```
-
-The `try await` syntax supports the same `otherwise` clauses as `try` on synchronous calls:
-- `try await p otherwise <default>` -- use a default value on error
-- `try await p otherwise panic("msg")` -- panic on error
-- `try await p otherwise ignore` -- for void throwing functions
-- `try await p otherwise return -1` (or `break`/`continue`/`throw ...`) -- run a single statement on error
-- `try await p` -- propagate the error (inside a throwing function)
-
-### Cancellation
-
-A promise exposes a `.cancel()` method:
-
-```maxon
-var p = async longRunning()
-p.cancel()
-```
-
-`.cancel()` **consumes** the promise and takes the same road an unawaited promise takes at scope exit: the coroutine is reclaimed and cancelled. One that has not started never runs; a parked one is taken off whatever would have woken it — its `sleep` timer, its child, its poll descriptor — and its stack freed. A coroutine already running is renounced rather than interrupted, so it runs its body out with nothing left to take its result. The promise is spent either way, so a later use of it is **E3142** (`specs/async-promise-drop.md`).
-
-### Typed promises in collections
-
-Promises can be stored in collections and struct fields by declaring an explicit `Promise with T` type. The compiler boxes the green-thread handle into a `Promise<T>` struct at the storage site and unboxes it at the matching `await`. This pattern lets you fan out N tasks and join them in a second loop:
-
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias IntPromise = Promise with Tally
-typealias IntPromiseArray = Array with IntPromise
-
-var arr = IntPromiseArray.create()
-for i in 0 upto n 'spawn'
-	arr.push(async compute(i))
-end 'spawn'
-var total = 0
-for p in arr 'join'
-	total = total + await p
-end 'join'
-```
-
-### Restrictions
-
-- `async` can only be used on direct function calls (not closures or indirect calls)
-- `async` can only target functions that yield (contain I/O operations, `sleep`, or `await` points)
-
-### Key Properties
-
-- **One owner** -- an `async` coroutine belongs to the green thread that created it and runs only where that green thread's work runs: a green thread and its coroutines are one **strand**, and at most one machine runs any member of a strand at a time. The owner's WAIT does not pin it — a coroutine started before a `sleep` runs during the sleep
-- **Coroutines switch only where they wait** -- a coroutine hands over to its siblings at `await` points, `sleep` calls, `Runtime.yield()` and I/O operations, never in between
-- **Green threads are preempted** -- a green thread (`main`'s included) that has held its processor for 10 ms is stopped at its next function entry and put behind every other runnable green thread, and may resume on another OS thread
-- **Growable stacks** -- every green thread, `main` included, starts on a 2KB stack (8KB on x64-Windows, which reserves 4KB of it for the OS's exception dispatch) that doubles until the frame asking fits, up to 1GB; past that the program aborts with exit 98
-- **Plain reference counting** -- every refcount step on a box happens on the machine running that box's strand, one machine at a time, so a retain or release has no second party and needs no atomic. The exception is a graph LENT to a service, which is marked shared at the send and counted atomically while two green threads hold it. Shared state that genuinely crosses OS threads (the runtime's own counters and queues) is a different question and is protected accordingly.
-- **An unawaited promise is dropped, not drained** -- at scope exit the compiler reclaims the coroutine: one that never started never runs, and a parked one's wait is cancelled in place. The runtime counts green threads and aborts with exit 75 if one is neither awaited nor dropped
-
-`wasm32-wasi` has **no green threads at all**: a WASI component has no addressable call stack for a context switch to move, so `async`, `sleep` and every other green-thread entry are refused there with **E3104**. `specs/async-scheduler.md`'s *Targets* section is the one statement of that gate.
-
-A **service** is where these read differently: a `spawn`ed green thread is published to the P/M substrate from its first instruction, so it may run on another OS thread from the start, may be stolen from one processor to another, and is what fills the ring and keeps the worker loop busy. What crosses a send is either MOVED — the box changes hands, and one green thread holds it — or LENT, a `let`'s graph both green threads read, marked shared, counted atomically and frozen (E3160).
-
-**How many processors a program gets: all of them**, by default — the scheduler builds one processor per logical CPU the OS reports. `MAXON_MAX_PROCS=N` in the environment sets that count exactly, clamped to the range `1 … cpuCount`, so it lowers as well as raises; a value that is not a processor count (unset, non-numeric, or below one) leaves the default alone and is never an error. It is `GOMAXPROCS` under another name. `MAXON_PREEMPT=off` withdraws the monitor's preemption — no green thread is asked to yield after 10 ms and no processor is retaken from a blocked kernel call, so a CPU-bound green thread then holds its processor for as long as it runs; `on` (or unset) is the default, and any other value aborts the program at start with exit 116. An `async`-only program's coroutines never leave the green thread that made them, whatever the count; above one processor, that green thread may resume on another OS thread after it is preempted.
-
----
-
-## Standard Library
-
-### Core Functions
-
-**I/O Functions**
-```maxon
-print(value String)                     // Print string to stdout
-```
-
-**Math Functions**
-```maxon
-abs(x float) float              // Absolute value (int auto-promoted to float)
-sqrt(x float) float             // Square root
-floor(x float) float            // Round toward negative infinity
-ceil(x float) float             // Round toward positive infinity
-round(x float) float            // Round to nearest (banker's rounding)
-trunc(x float) int              // Truncate toward zero
-min(a float, b float) float     // Minimum of two values
-max(a float, b float) float     // Maximum of two values
-
-// Math library (stdlib) — called as Math.sin(x), Math.cos(x), etc.
-Math.sin(x float) float         // Sine (radians)
-Math.cos(x float) float         // Cosine (radians)
-Math.tan(x float) float         // Tangent (radians)
-Math.atan(z float) float        // Arc tangent
-Math.atan2(y float, x float) float // Two-argument arc tangent
-Math.exp(x float) float         // e^x
-Math.log(x float) float         // Natural logarithm
-Math.log2(x float) float        // Base-2 logarithm
-Math.log10(x float) float       // Base-10 logarithm
-Math.pow(base float, exponent float) float // Power
-```
-
-**Compile-Time Functions**
-```maxon
-sizeof(TypeName) int            // Size of a type in bytes (compile-time constant)
-countof(TypeName) int           // Elements a fixed-size container type holds
-```
-
-`countof` accepts a fixed-size container type (`Vector with 3 Int`, or `Self` inside the container's own body) and answers how many ELEMENTS it holds, where `sizeof` answers how many BYTES one value occupies. A type that states no element count — a primitive, a struct, a growable `Array` — is refused: an `Array`'s length is a runtime field of the record, so ask the value for its `count()`.
-
-`sizeof` accepts a type name (not a variable) and returns its storage size in bytes as a compile-time integer constant. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
-
-**Formatting Functions**
-```maxon
-format_int(value int) String    // Format int as string
-format_float(value float) String // Format float as string
-```
-
-### FilePath
-
-`FilePath` is a type-safe wrapper around `String` for filesystem paths. It normalizes path separators to the platform-native format on construction and provides methods for path manipulation.
-
-**Construction:**
-```maxon
-var p = FilePath from "C:\\Users\\test.txt"              // From string literal (panics on invalid chars)
-var q = try FilePath.from("hello.maxon") otherwise ...   // From string (throws FilePathError)
-var r = FilePath from "file:///C:/Users/test.txt"        // file:// URLs are converted to paths
-var s = try FilePath.from("file:///home/user/f.txt") otherwise ...  // Also works with from()
-```
-
-Both `init()` and `from()` transparently accept `file://` URLs, parsing them with `URL.parse()` and extracting the filesystem path. On Windows, the leading `/` before drive letters is stripped (e.g. `/C:/path` becomes `C:\path`). Non-file URL schemes (e.g. `https://`) cause a panic in `init()` or throw `FilePathError.notFileURL` in `from()`.
-
-**Component Extraction:**
-```maxon
-p.filename()         // "test.txt"
-p.fileExtension()    // ".txt"
-p.stem()             // "test"
-try p.parent()       // FilePath("C:\\Users") — throws FilePathError.noParent if no parent
-```
-
-**Path Manipulation:**
-```maxon
-p.join("docs")                  // Append component with platform separator
-p.join(otherFilePath)           // Join with another FilePath
-p.changeExtension(".exe")       // Replace file extension
-p.normalize()                   // Returns self (normalized on construction)
-```
-
-**Query Methods:**
-```maxon
-p.isEmpty()          // true if path is empty string
-p.isAbsolute()       // true for drive paths (C:\) or UNC paths (\\server)
-p.isRelative()       // opposite of isAbsolute
-```
-
-**Resolution:**
-```maxon
-p.resolve(base)      // resolve relative path against base; absolute paths returned unchanged
-```
-
-**Static Methods:**
-```maxon
-FilePath.separator()   // Platform-native separator ("\" on Windows, "/" on Linux)
-```
-
-`FilePath` implements `Equatable`, `Hashable`, `Stringable`, and `InitableFromStringLiteral`.
-
-All `File` and `Directory` methods accept `FilePath` parameters:
-```maxon
-let fp = FilePath from "data.txt"
-let content = try File.readText(fp) otherwise ...
-try File.writeText(fp, content: "hello")
-let files = try Directory.list(FilePath from "./") otherwise ...
-```
-
-### File
-
-`File` provides static methods for reading, writing, deleting, and querying files. All methods accept `FilePath` parameters. It is defined in `stdlib/File.maxon`.
-
-**Reading Files:**
-```maxon
-let text = try File.readText(path) otherwise ""           // Read as UTF-8 string (throws FileReadError)
-let bytes = try File.readBinary(path) otherwise empty     // Read as ByteArray (throws FileReadError)
-```
-
-**Writing Files:**
-```maxon
-try File.writeText(path, content: "hello") otherwise ...           // Write string (throws FileWriteError)
-try File.writeBinary(path, content: data) otherwise ...            // Write bytes (throws FileWriteError)
-try File.writeText(path, content: "#!/bin/sh", mode: FilePermission.executable)  // Write with permissions
-```
-
-**Query and Delete:**
-```maxon
-File.exists(path)                                         // Check if file exists (returns bool)
-try File.delete(path) otherwise ...                       // Delete file (throws FileDeleteError)
-```
-
-**File Metadata:**
-```maxon
-let info = try File.info(path) otherwise ...              // Get file metadata (throws FileInfoError)
-info.size                                                 // FileSize — file size in bytes
-info.modifiedTime                                         // Timestamp — last modification (Unix epoch seconds)
-info.createdTime                                          // Timestamp — creation time (Unix epoch seconds)
-info.accessedTime                                         // Timestamp — last access (Unix epoch seconds)
-info.isDirectory                                          // bool — true if path is a directory
-info.isReadOnly                                           // bool — true if file is read-only
-```
-
-`File.info` retrieves all metadata from a single OS call. Throws `FileInfoError.notFound` when the file does not exist.
-
-**Type Aliases:**
-```maxon
-typealias FileSize = int(0 to u64.max)     // File size in bytes
-typealias Timestamp = int(0 to u64.max)    // Unix epoch seconds
-```
-
-**FileInfo Type:**
-```maxon
-type FileInfo
-	export let size as FileSize
-	export let modifiedTime as Timestamp
-	export let createdTime as Timestamp
-	export let accessedTime as Timestamp
-	export let isDirectory as bool
-	export let isReadOnly as bool
-end 'FileInfo'
-```
-
-**Error Types:**
-
-| Error | Description |
-|-------|-------------|
-| `FileReadError.notFound` | File not found when reading |
-| `FileWriteError.failed` | Write operation failed |
-| `FileDeleteError.notFound` | File not found when deleting |
-| `FileInfoError.notFound` | File not found when querying metadata |
-
-**FilePermission Enum:**
-
-| Case | Description |
-|------|-------------|
-| `normal` | Standard file permissions (0666) |
-| `executable` | Executable permissions (0755, Unix) |
-
-### URL
-
-`URL` provides RFC 3986 compliant URI parsing, serialization, and reference resolution. It is defined in `stdlib/URL.maxon`.
-
-**Parsing:**
-```maxon
-var url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
-	// handle error
-end 'err'
-```
-
-**Always-available accessors:**
-```maxon
-url.scheme()     // "https" (empty string for relative references)
-url.path()       // "/path" (always present, may be empty)
-```
-
-**Throwing accessors** (throw `URLError.fieldNotPresent` if not set):
-```maxon
-var host = try url.host() otherwise "default"       // "example.com"
-var port = try url.port() otherwise 443             // 8080
-var ui = try url.userinfo() otherwise ""            // userinfo before @
-var query = try url.query() otherwise ""            // "q=1"
-var frag = try url.fragment() otherwise ""          // "top"
-```
-
-**Serialization:**
-```maxon
-url.toString()   // "https://example.com:8080/path?q=1#top"
-```
-
-**Reference Resolution** (RFC 3986 Section 5):
-```maxon
-var base = try URL.parse("http://a/b/c/d?q") otherwise ...
-var resolved = try URL.resolve(base, reference: "../g") otherwise ...
-resolved.toString()  // "http://a/b/g"
-```
-
-**Error Types:**
-
-| Error | Description |
-|-------|-------------|
-| `URLError.emptyInput` | Input is empty or whitespace-only |
-| `URLError.invalidScheme` | Scheme starts with non-alpha or contains invalid characters |
-| `URLError.invalidHost` | Malformed host (e.g., unclosed IPv6 bracket) |
-| `URLError.invalidPort` | Port is non-numeric or exceeds 65535 |
-| `URLError.invalidEncoding` | Malformed percent-encoding (e.g., `%GG`, `%2`) |
-| `URLError.relativeWithoutBase` | `resolve()` called with a base URL that has no scheme |
-| `URLError.fieldNotPresent` | Accessor called for a component not present in the URL |
-
-`URL` implements `Equatable` and `Stringable`.
-
-### CharacterSet
-
-`CharacterSet` represents a set of characters for use with string trimming and character classification. It is defined in `stdlib/CharacterSet.maxon`.
-
-**Static Factory Methods**
-
-Create a `CharacterSet` using one of the built-in factory methods:
-
-```maxon
-var ws = CharacterSet.whitespacesAndNewlines()  // All Unicode whitespace including newlines
-var spaces = CharacterSet.whitespaces()         // Spaces and tabs only (no newlines)
-var nl = CharacterSet.newlines()               // Newline characters only (LF, CR, CRLF, etc.)
-var digits = CharacterSet.decimalDigits()       // Unicode decimal digits (Nd category)
-var letters = CharacterSet.letters()            // Unicode letters and marks (L*, M* categories)
-var alnum = CharacterSet.alphanumerics()        // Unicode letters, marks, and numbers
-var punct = CharacterSet.punctuation()          // Unicode punctuation (P* categories)
-var custom = CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // Custom set
-```
-
-**Instance Methods**
-
-```maxon
-ws.contains('A')    // false
-ws.contains(' ')    // true
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `contains(c Character)` | `bool` | Check if the character is in the set |
-
-### Unicode
-
-`Unicode` provides Unicode character classification utilities. It is defined in `stdlib/Unicode.maxon`.
-
-**Static Methods**
-
-```maxon
-Unicode.isWhitespace(32)    // true (space)
-Unicode.isWhitespace(65)    // false ('A')
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `isWhitespace(cp Codepoint)` | `bool` | Check if a codepoint is Unicode whitespace |
-
-### String Trimming
-
-The `String` type provides methods for removing characters from the start and end of a string. Each method has two forms: one that accepts a `CharacterSet` parameter, and a convenience overload that trims whitespace by default.
-
-**Trimming with CharacterSet**
-
-```maxon
-"123hello456".trim(CharacterSet.decimalDigits())     // "hello"
-"...hello!!!".trim(CharacterSet.punctuation())       // "hello"
-"xxxhelloxxx".trimStart(CharacterSet.from(CharSet from ['x']))     // "helloxxx"
-"xxxhelloxxx".trimEnd(CharacterSet.from(CharSet from ['x']))       // "xxxhello"
-```
-
-**Trimming Whitespace (convenience)**
-
-```maxon
-"  hello  ".trim()          // "hello"
-"  hello  ".trimStart()     // "hello  "
-"  hello  ".trimEnd()       // "  hello"
-```
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `trim(in CharacterSet)` | `String` | Remove matching characters from both ends |
-| `trimStart(in CharacterSet)` | `String` | Remove matching characters from the start |
-| `trimEnd(in CharacterSet)` | `String` | Remove matching characters from the end |
-| `trim()` | `String` | Remove whitespace from both ends |
-| `trimStart()` | `String` | Remove whitespace from the start |
-| `trimEnd()` | `String` | Remove whitespace from the end |
-
-The no-argument convenience methods are equivalent to calling the `CharacterSet` variants with `CharacterSet.whitespacesAndNewlines()`.
-
-### String Append
-
-`String.append` grows a string's buffer in place, avoiding the allocation of a new string. When called with an interpolated string argument, the interpolation parts are written directly into the buffer without materializing a temporary string. Uses a 2x growth strategy for amortized O(1) append.
-
-```maxon
-var s = "Hello"
-s.append(" World")       // s is now "Hello World"
-
-var name = "World"
-s.append(" {name}!")      // interpolation written directly into buffer
-```
-
-The compiler also automatically optimizes the pattern `s = "{s}..."` into an in-place append when it detects the string being reassigned to itself with additional content. This means loops like:
-
-```maxon
-var s = ""
-while condition 'loop'
-	s = "{s}{value},"     // automatically optimized to in-place append
-end 'loop'
-```
-
-are efficient without requiring explicit `append` calls.
-
-| Method | Description |
-|--------|-------------|
-| `append(other String)` | Append another string's content in place |
-
-### List
-
-`List` is a generic doubly linked list backed by `__ManagedList` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
-
-**Creating a List**
-
-Create a concrete List type with `typealias`, then instantiate it with `create()`:
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias IntList = List with Tally
-
-var list = IntList.create()             // Empty list
-```
-
-**Adding Elements**
-```maxon
-list.prepend(1)                  // Add to front — O(1)
-list.append(2)                   // Add to back — O(1)
-try list.insert(1, value: 99) otherwise panic("index out of range")  // Insert at index — O(n)
-```
-
-**Accessing Elements**
-```maxon
-var first = try list.first() otherwise 0   // First element (throws ArrayError)
-var last = try list.last() otherwise 0     // Last element (throws ArrayError)
-var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayError)
-```
-
-**Removing Elements**
-```maxon
-var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
-var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
-var at2 = try list.remove(2) otherwise 0          // Remove at index — O(n)
-list.clear()                                       // Remove all elements
-```
-
-**Query**
-```maxon
-list.count()                     // Number of elements
-list.isEmpty()                   // true if empty
-```
-
-**Iteration**
-
-`List` implements `Iterable`, so it supports `for`-`in` loops:
-```maxon
-for item in list 'loop'
-		print("{item}")
-end 'loop'
-```
-
-**Complexity Summary**
-
-| Operation | Time |
-|-----------|------|
-| `prepend` | O(1) |
-| `removeFirst` | O(1) |
-| `append` | O(1) |
-| `removeLast` | O(1) |
-| `get`, `insert`, `remove` | O(n) |
-| `first`, `last`, `count`, `isEmpty` | O(1) |
-| iteration (for-in) | O(n) total |
-
-### Networking (TcpClient)
-
-`TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
-
-**NetworkPort Alias**
-
-The `NetworkPort` type alias constrains port numbers to the valid TCP range:
-```maxon
-public typealias NetworkPort = int(0 to 65535)
-```
-`0` is in range because it is what `TcpListener.bind` asks for when it wants whichever free port the kernel has. It is never the port of a live connection or of a bound listener, and `TcpClient.connect` is refused by the OS if it is given one.
-
-**NetworkError**
-
-All networking operations throw `NetworkError`, an enum conforming to `Error`:
-```maxon
-enum NetworkError implements Error
-		resolveFailed       // DNS lookup failed
-		connectFailed       // TCP connection refused or timed out
-		sendFailed          // OS-level send error
-		recvFailed          // OS-level recv error
-		connectionClosed    // peer closed the connection
-		timedOut            // a read or write deadline ended the wait
-		bindFailed          // the address or port could not be bound and listened on
-		acceptFailed        // no connection could be taken from the listener
-end 'NetworkError'
-```
-
-**Connecting**
-
-`TcpClient.connect` resolves the hostname, creates a TCP socket, and connects:
-```maxon
-let client = try TcpClient.connect("example.com", port: 4242)
-```
-
-**Sending Data**
-
-`send` transmits all bytes of a string, looping internally to handle partial sends. It returns the total number of bytes sent:
-```maxon
-let bytesSent = try client.send("Hello\n")
-```
-
-**Receiving Data**
-
-`recv` reads up to `bufferSize` bytes from the connection and returns them as a `String`:
-```maxon
-let response = try client.recv(1024)
-```
-
-**Closing**
-
-`close` is idempotent and safe to call multiple times. The socket also closes automatically when the `TcpClient` goes out of scope:
-```maxon
-client.close()
-```
-
-**API Summary**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
-| `TcpClient.adopt(socket __ManagedSocket)` | `TcpClient` | — | Wrap a socket `TcpListener.accept()` answered |
-| `send(data String)` | `ByteCount` | `NetworkError` | Send all bytes of a string |
-| `recv(bufferSize ByteCount)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
-| `close()` | — | — | Close the connection (idempotent) |
-| `TcpListener.bind(host String, port NetworkPort)` | `TcpListener` | `NetworkError` | Bind a port and begin listening |
-| `port()` | `NetworkPort` | — | The port the kernel bound, for a `bind` of `0` |
-| `accept()` | `TcpClient` | `NetworkError` | Take the next connection, parking until one arrives |
-| `close()` | — | — | Stop listening and release the port (idempotent) |
-
-**Listening (TcpListener)**
-
-`TcpListener`, in `stdlib/TcpListener.maxon`, is the server side. It has no `send` and no `recv` — `accept()` is the only way to get something that does — and it closes automatically when the last reference goes out of scope. `accept()` suspends its green thread on the network poller until a connection arrives, so a waiting server holds no machine.
-
-Binding port `0` asks the kernel for whichever port is free and `port()` reports the one it gave, which is how two programs on one machine avoid choosing the same address:
-```maxon
-let listener = try TcpListener.bind("127.0.0.1", port: 0)
-print("listening on {listener.port()}\n")
-
-let conn = try listener.accept()
-let request = try conn.recv(1024)
-_ = try conn.send(request)
-```
-`SO_REUSEADDR` is not set, so a second `bind` onto a port a live listener already holds is refused with `bindFailed` rather than quietly splitting one backlog between two listeners.
-
-**Example: Simple TCP Client**
 ```maxon
 function main() returns ExitCode
-		let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
-				print("connection failed")
-				return 1
-		end 'err'
-		_ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
-				print("send failed")
-				return 1
-		end 'err'
-		let response = try client.recv(4096) otherwise 'err'
-				print("recv failed")
-				return 1
-		end 'err'
-		print(response)
-		client.close()
-		return 0
+	let a = geometry.area(3, height: 4)
+	let side = 7 as geometry.Length
+	print("{a} {side}\n")
+	return 0
 end 'main'
 ```
 
-### The Runtime Tier
+Qualification works for functions and typealiases (`lib.fmt.format(x)`, `50 as api.Score`). It never
+bypasses visibility. Types are referred to by their bare name.
 
-`runtime/` sits at the checkout root beside `stdlib/`, and the compiler loads both on every compile.
-Its `.maxon` files are a PRIVILEGED SOURCE TIER: they parse, type-check and lower like any other
-file, but the runtime the compiler puts into every program is written there, in Maxon, instead of
-being built as IR inside the compiler. Two rules that hold everywhere else are lifted inside the cone,
-and two that hold nowhere else are imposed on it.
+### Bare Names and Ambiguity
 
-⛔ **THE TWO DIRECTORIES TRAVEL TOGETHER.** The compiler locates `stdlib/` by walking up from its own
-executable and reaches `runtime/` as its sibling, so a compiler with only one of them beside it cannot
-compile anything at all. Release archives, both install scripts, the Docker image and the Homebrew
-formula all ship the pair.
+A bare name resolves when exactly one visible declaration has it. When several do:
 
-#### What a runtime file may do, and nothing else may
+- a declaration at the project root, or in an enclosing directory, takes precedence over one in a nested
+  directory, and a project declaration takes precedence over a standard-library one;
+- otherwise the reference is ambiguous. A function call is **E3095** (`Ambiguous bare-name call to 'describe':
+  multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
+  beta.describe`), and a typealias is **E3063**. Qualify the name to resolve it.
 
-| Privilege | Why |
-|-----------|-----|
-| **Declare a `__`-prefixed name.** The E2051 reservation that keeps user code out of that space is lifted across the whole cone | the reserved prefix is the runtime's own name space |
-| **Declare `maxon_force_segfault`.** The one runtime entry whose name wears no prefix, because a backtrace prints it; the same E2051 reserves that word from a free function in any other file | the name is the compiler's, and a second free function of it would rename the runtime's own symbol |
-| **Call a `__Raw.*` intrinsic.** `__Raw` is the closed table of raw machine and OS operations — the floor below which there is no Maxon | a runtime is written on that floor |
+Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
-⛔ **A `__Raw` call from outside `runtime/` is E3152.** The privilege belongs to the tier, not to any
-name in it, so no re-export or wrapper carries it out.
-
-⛔ **A runtime entry is unreachable from outside the tier by either route.** Calling one is **E3004**;
-naming one as a function value (`let f = __parallel_boundary`) is **E3155**. The reservation is over the
-NAME, so binding it and calling the binding reaches nothing the direct call could not.
-
-#### What a runtime file may not do
-
-| Restriction | Code |
-|-------------|------|
-| No managed value — asked of the TYPE the file spells (a field, a return, a parameter, a cast target) and of the NAME a binding gives a value whose type was never written; the reference-counting pass emits calls into the very runtime this tier defines | **E3153** |
-| Nothing wider than `module` — `runtime/` is loaded into every program, so an `export` or `public` declaration contests names with the programs it is linked into, the compiler compiling itself among them | **E3154** |
-
-### Builtin Managed Types
-
-The compiler provides several builtin managed types that wrap OS-level resources (file handles, sockets, directory search handles). These types use RAII via destructors: when the last reference to a managed object goes out of scope, the compiler automatically calls the destructor to release the underlying OS resource.
-
-Managed types are not used directly by application code. Instead, stdlib wrapper types (`File`, `Directory`, `TcpClient`) provide the public API. The managed types are documented here for completeness and for stdlib authors.
-
-#### `__ManagedSocket`
-
-Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Networking (TcpClient)](#networking-tcpclient) for details.
-
-All `__ManagedSocket` methods that can fail at the OS layer throw `__ManagedSocketError` instead of returning sentinel values; callers must wrap them in `try`. `close` stays non-throwing (it is idempotent).
-
-**Static Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `tcpConnect(managed, port)` | `__ManagedSocket` | `__ManagedSocketError` | Resolve hostname and connect a TCP socket. Throws `resolveFailed` when DNS fails, `connectFailed` when the connection is refused. |
-
-**Instance Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `sendFrom(managed, offset, length)` | `int` | `__ManagedSocketError` | Send `length` bytes from the managed buffer at `offset`. Throws `bufferOutOfBounds` if `offset + length > capacity`, `sendFailed` on OS error. |
-| `recv(managed)` | `int` | `__ManagedSocketError` | Receive up to `managed.capacity` bytes. Returns `0` when the peer closed gracefully. Throws `recvFailed` on OS error. |
-| `close()` | -- | -- | Close the socket handle. Idempotent; also called automatically by the destructor. |
-
-#### `__ManagedFile`
-
-Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.
-
-All `__ManagedFile` methods that can fail at the OS layer throw `__ManagedFileError` instead of returning sentinel values; callers must wrap them in `try`. `exists` and `close` stay non-throwing (a missing file is a valid answer; close is idempotent).
-
-**Static Methods:**
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `openRead(managed)` | `__ManagedFile` throws `__ManagedFileError` | Open a file for reading. |
-| `openWrite(managed)` | `__ManagedFile` throws `__ManagedFileError` | Open a file for writing (creates or truncates). |
-| `openWriteExecutable(managed)` | `__ManagedFile` throws `__ManagedFileError` | As `openWrite`, with executable permission bits on Unix. |
-| `exists(managed)` | `int` | Check if a file exists. Returns 1 if it does, 0 otherwise. |
-| `delete(managed)` | -- throws `__ManagedFileError` | Delete a file. |
-| `stat(managed)` | `int` throws `__ManagedFileError` | Return a raw stat-buffer pointer; release with `statFree`. |
-| `statField(buffer, index)` | `int` | Read field `index` (0..5) from a stat buffer. Stdlib invariant — panics on null buffer or OOB index. |
-| `statFree(buffer)` | -- | Free a stat buffer. Stdlib invariant — panics on null buffer. |
-
-**Instance Methods:**
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `size()` | `int` throws `__ManagedFileError` | Get the file size in bytes. |
-| `read(managed, size)` | `int` throws `__ManagedFileError` | Read up to `size` bytes into the managed buffer. Throws `readFailed` if `size > managed.capacity` or on I/O error. |
-| `write(managed)` | `int` throws `__ManagedFileError` | Write the managed buffer. Returns bytes written. |
-| `close()` | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
-
-The `managed` parameters refer to `__ManagedMemory` buffers (the internal backing store of `String` and `ByteArray`).
-
-#### `__ManagedDirectory`
-
-Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or Linux `opendir`/`readdir`). Used internally by `Directory`.
-
-**Static Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `openSearch(managed)` | `__ManagedDirectory` | `__ManagedDirectoryError` | Open a directory search with a glob pattern. Throws `openSearchFailed` if the path does not exist or access is denied. |
-| `exists(managed)` | `bool` | -- | Check if a path exists and is a directory. |
-| `create(managed)` | -- | `__ManagedDirectoryError` | Create a directory. Throws `createFailed` on failure. |
-| `currentPath()` | `__ManagedMemory` | `__ManagedDirectoryError` | Get the current working directory as a managed string. Throws `currentPathFailed` on OS failure. |
-
-**Instance Methods:**
-
-| Method | Returns | Throws | Description |
-|--------|---------|--------|-------------|
-| `filename()` | `__ManagedMemory` | -- | Get the filename of the current search result. Panics on a closed iterator. |
-| `next()` | `int` | `__ManagedDirectoryError` | Advance to the next search result. Returns non-zero if found, `0` when no more entries. Throws `nextFailed` on OS error. |
-| `close()` | -- | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
-
----
-
-## Build System
-
-A Maxon project is a directory of `.maxon` files — there is nothing to declare. A directory that wants to say *how* it is built puts a **`build.maxon`** beside its sources, and `maxon build` with no path compiles that file, runs its `build` task, and performs the build it describes.
-
-```
-myproject/
-├── build.maxon          # the build manifest, if the directory needs one
-├── main.maxon           # entry point
-├── lib.maxon
-└── utils/
-    └── math.maxon       # files in subdirectories are included
-```
-
-### build.maxon
-
-⭐ **A manifest is a PROGRAM, not a configuration file.** It is ordinary Maxon with the whole standard library available, so a build can *compute* what it compiles — read a directory, choose by host, derive a version from git — rather than only spell it out. The compiler does not parse it; it runs it and reads the build description it prints.
-
-Its entry point is **`build`**, not `main`: a manifest holds tasks, and `build` is the one this command asks for by name. It returns `ExitCode`, and a non-zero return or a crash fails the build with nothing compiled.
-
-```maxon
-export function build() returns ExitCode
-	var targets = BuildConfigArray.create()
-	targets.push(Build.target("app", source: "src", output: "build/app"))
-	targets.push(Build.target("tool", source: "tool", output: "build/tool"))
-	Build.buildTargets(targets)
-	return 0
-end 'build'
-```
-
-One target needs no name; several are **listed rather than guessed at**, so `maxon build` with no argument prints their names and compiles nothing, and `maxon build <name>` selects one. `build.maxon` at the root of this repository is a worked example: it declares `maxon-bin` and `dev-mcp`, and derives the compiler's version from git.
-
-The `Build.*` calls, the precedence between a manifest and the command line, and the rest of the surface are documented in [docs/CLI_REFERENCE.md](CLI_REFERENCE.md#the-build-manifest), which is the authority.
-
-`build.maxon` is never swept into the program being built: it is a program in its own right.
+The standard library's typealiases are usable from every file, including ones the standard library does not
+export, so a value can always be cast to the alias a library signature asks for (`x as AssertedInt`).
 
 ### Multi-Project Workspaces
 
-Multiple projects can coexist in a workspace. Each is a directory, and the path you name is the one that gets compiled:
+Several projects can share a workspace. Each is a directory, and the directory you build is the one that is
+compiled:
 
-```
+```text
 workspace/
 ├── project-a/
 │   ├── build.maxon      # how project A is built
@@ -5349,15 +3758,417 @@ workspace/
     └── main.maxon
 ```
 
-⚠ **The language server does not discover projects.** It holds the open buffers and nothing else, so a document is checked as itself plus `stdlib/` — never alongside the sibling sources a `maxon build` of that directory would compile. A diagnostic that depends on what a sibling file declares is therefore answered about a program you did not write.
+See [Build System](#build-system) and [Project Structure](CLI_REFERENCE.md#project-structure) for
+what a project directory contains.
+
+**The language server checks open files.** It checks a document together with the standard library, not with the sibling files a
+`maxon build` of its directory would compile. A diagnostic that depends on what another file declares may
+differ from what the build reports.
+
+---
+
+## Concurrency
+
+Maxon has two concurrency tools:
+
+- **`async` / `await`** start a **coroutine** of the current green thread. Coroutines overlap *waiting* — for a
+  timer, a socket, a child process — without creating threads.
+- **`spawn`** starts a **service**: a green thread of its own, scheduled independently and able to run in
+  parallel on another processor. You talk to it through messages.
+
+Both run on the runtime's scheduler, which maps green threads onto a pool of OS threads. There are no
+locks or atomics in user code: a value is only ever reachable from one green thread at a time, except
+where a service send lends it read-only (below).
+
+### Starting a Coroutine
+
+`async` before a call starts the callee as a coroutine and returns a **promise**:
+
+```maxon
+typealias Score = int(0 to 1000)
+
+function slowDouble(n Score, delay Milliseconds) returns Score
+	sleep(delay)
+	print("finished {n} after {delay} ms\n")
+	return n * 2
+end 'slowDouble'
+
+function main() returns ExitCode
+	let a = async slowDouble(10, delay: 60)
+	let b = async slowDouble(20, delay: 20)
+	let ra = await a
+	let rb = await b
+	print("sum={ra + rb}\n")
+	return 0
+end 'main'
+```
+
+```text
+finished 20 after 20 ms
+finished 10 after 60 ms
+sum=60
+```
+
+Both coroutines start before either is awaited, so their sleeps overlap and the program takes about 60 ms,
+not 80.
+
+- `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
+- `async` applies to a direct call of a function or a static method. It cannot start a closure, an
+  indirect call or an instance method (**E2015**).
+- The callee must be able to wait — call `sleep`, `await`, `Runtime.yield()`, or perform file, socket or
+  process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
+  yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
+
+### Awaiting Results
+
+`await promise` returns the coroutine's result. If it has finished, `await` returns at once; otherwise the
+awaiting green thread **parks** and the scheduler runs other work until the result is ready. A coroutine
+that returns nothing is awaited as a statement: `await p`.
+
+A promise is consumed exactly once. Awaiting it twice, or using it after `.cancel()`, is **E3142**; awaiting
+inside a loop a promise that was started outside the loop is **E3100**.
+
+### Throwing Async Functions
+
+A promise from a throwing function is awaited with `try await`, which accepts every `otherwise` form a
+synchronous `try` does:
+
+```maxon
+enum FetchError implements Error
+	notFound
+end 'FetchError'
+
+function lookup(key String) returns String throws FetchError
+	sleep(5)
+	if key == "missing" 'absent'
+		throw FetchError.notFound
+	end 'absent'
+
+	return "value-of-{key}"
+end 'lookup'
+
+function main() returns ExitCode
+	let good = async lookup("x")
+	let bad = async lookup("missing")
+	let g = try await good otherwise "none"
+	let m = try await bad otherwise (e) 'failed'
+		match e 'why'
+			notFound then print("lookup failed: notFound\n")
+		end 'why'
+		return 0
+	end 'failed'
+
+	print("{g} {m}\n")
+	return 1
+end 'main'
+```
+
+Plain `await` on a throwing promise is **E3057**; `try await` on a promise that cannot throw is **E3055**.
+
+### Promises in Collections and Fields
+
+A promise can be stored when its type is named: `Promise with T` for a function returning `T`, and
+`Promise with (T, E)` for one that also throws `E`. Storing a throwing promise under a type that omits the
+error is **E3098**.
+
+```maxon
+typealias Tag = int(0 to 100)
+typealias TagPromise = Promise with Tag
+typealias TagPromiseArray = Array with TagPromise
+
+function nap(delay Milliseconds, tag Tag) returns Tag
+	sleep(delay)
+	return tag
+end 'nap'
+
+function main() returns ExitCode
+	var naps = TagPromiseArray.create()
+	naps.push(async nap(200, tag: 1))
+	naps.push(async nap(20, tag: 2))
+	naps.push(async nap(100, tag: 3))
+
+	let first = __Builtins.awaitAny(naps)
+	print("first finished: index {first}\n")     // index 1
+
+	var sum = 0
+	for p in naps 'drain'
+		sum = sum + await p
+	end 'drain'
+
+	print("sum of tags={sum}\n")                  // 6
+	return 0
+end 'main'
+```
+
+**Waiting for the first of several.** `__Builtins.awaitAny(array)` parks until any promise in the array has
+finished and returns its index. It consumes nothing: every promise, the winner included, is still awaited
+(or dropped) afterwards. An already-finished promise is returned without parking.
+
+### Cancellation and Dropped Promises
+
+`promise.cancel()` consumes a promise without waiting for it. A promise that is never awaited is dropped
+when it goes out of scope (or is overwritten), which has the same effect.
+
+- A coroutine that has **not started** never runs.
+- A coroutine that has **already started** is not interrupted: it runs to the end of its body, and its
+  result is discarded.
+- A promise held in an array or a field is dropped with its container.
+
+### Yielding
+
+`Runtime.yield()` gives other runnable work a turn and then continues. It never blocks and uses no timer
+(unlike `sleep(0)`); when nothing else is runnable it returns promptly. Use it in a loop that polls for a
+condition; use `await` or `sleep` to actually wait.
+
+### Services — `spawn`
+
+A **service** is an ordinary `type` started with `spawn`. `spawn Type.factory(args)` calls a static
+factory of the type and runs the result on a new green thread, returning a **handle**. The handle's methods
+are exactly the type's `export` and `public` instance methods; each call on the handle is a **message** the
+service handles one at a time, in order.
+
+```maxon
+typealias Count = int(0 to 1000000)
+
+type Calc
+	var count as Count
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function bump(by Count)
+		self.count = self.count + by
+	end 'bump'
+
+	export function total() returns Count
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	h.bump(3)                                       // fire-and-forget message
+	h.bump(4)
+	let n = try await h.total() otherwise 0         // a message with a reply
+	print("total={n}\n")                            // total=7
+
+	h.shutdown()
+	let after = try await h.total() otherwise (e) 'stopped'
+		match e 'why'
+			stopped then print("service stopped\n")
+		end 'why'
+		return 0
+	end 'stopped'
+
+	print("unexpected {after}\n")
+	return 1
+end 'main'
+```
+
+- **The same type is still a plain value.** `Calc.create()` without `spawn` is an ordinary record with
+  ordinary calls, so a service's logic is unit-testable without threads.
+- **Messages.** A method that returns nothing and throws nothing is sent and forgotten. A method that returns
+  a value, or throws, is awaited: `try await h.method(…)`. The reply can always fail with
+  `ServiceError.stopped`, so plain `await` is **E3057**; the method's own error type merges with it in the
+  handler's `match`.
+- **Private methods are not messages.** Calling a non-exported method or a static through a handle is
+  **E3136**. A service cannot send to itself.
+- **Shutdown.** `h.shutdown()` stops the service after the messages already queued. Dropping the last
+  handle does the same. Replies requested afterwards fail with `ServiceError.stopped`.
+- **The target** of `spawn` must be a static factory that returns its own type; anything else — including a
+  bare `spawn f()` — is **E3134**.
+- **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
+  `typealias StringBoxHandle = Box.handle with String`.
+- Services that `await` each other in a cycle are **E3139**.
+- `spawn` is a contextual keyword; it remains usable as a name.
+
+**What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
+either side could write, because the two green threads may run at the same time on different processors:
+
+- A `var`, a temporary or a literal argument is **moved** into the service; reading the sender's variable
+  afterwards is **E3102**. Factory arguments and replies are moved too.
+- A `let` argument that owns its value outright is **lent**: the sender keeps reading it, and from the send
+  onwards neither side may store it anywhere writable, return it, capture it or pass it to anything that
+  writes it (**E3160**).
+- A value the sender does not solely own — captured by a closure, held in a container, borrowed from a
+  parameter — is **E3138**; send a `.clone()`.
+- A parameter type that cannot cross at all — a promise, a function value, a value held at an interface
+  type — is **E3135**. A reply that is part of the service's own state is **E3137**; return a copy.
+- Before a send, the runtime also checks the value's whole object graph. If some nested record has a second
+  owner the compiler could not see, the program aborts with exit code **96** before anything is sent.
+
+**Module-level state.** A service handler — and anything it calls — may not read or write a module-level
+`var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.
+
+**Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
+through awaited replies when order matters.
+
+### I/O and Waiting
+
+Operations that wait **park** their green thread instead of blocking an OS thread: `sleep`, `await`, socket
+operations (`TcpClient.connect`, `send`, `recv`, `TcpListener.accept`) and waiting on a child process. A
+parked green thread holds no processor, so a server waiting in `accept()` costs nothing while idle.
+
+File and directory operations yield to other work before each call into the operating system and are
+started with `async` like any other waiting function (`try await` for the throwing ones such as
+`File.readText`). The [standard library reference](STDLIB_REFERENCE.md) documents the file, network and process
+APIs.
+
+### The Scheduler
+
+- **Green threads.** Every green thread starts on a small stack that grows on demand, so thousands are
+  cheap.
+- **Parallelism.** By default the scheduler creates one processor per logical CPU. The environment
+  variable `MAXON_MAX_PROCS=N` sets the count, clamped to between 1 and the CPU count; a value that is not a
+  positive number leaves the default. Services use the processors in parallel; an `async`-only program's
+  coroutines stay on the green thread that started them.
+- **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry and moved
+  behind the other runnable work, so a CPU-bound loop cannot starve the rest of the program.
+  `MAXON_PREEMPT=off` disables preemption; `on`, or unset, is the default, and any other value makes the
+  program exit at start-up with code 116.
+- **Coroutines switch only where they wait**: at `await`, `sleep`, `Runtime.yield()` and I/O.
+
+The [CLI reference](CLI_REFERENCE.md) lists the environment variables a compiled program reads.
+
+### Exit Codes
+
+| Exit code | Cause |
+|-----------|-------|
+| 75 | a green thread was neither awaited nor dropped when the program ended |
+| 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
+| 96 | a service send found a value with a second owner |
+| 98 | a green thread's stack grew past its limit |
+| 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
+
+### Targets
+
+Green threads, `async`, `sleep`, `awaitAny` and services run on every native target. `wasm32-wasi` has no
+green threads, so each of them is **E3104** there, reported at the call.
+
+---
+
+## Build System
+
+A Maxon project is a directory of `.maxon` files — there is nothing to declare. `maxon build <directory>`
+compiles every source file beneath it. A directory that wants to say *how* it is built puts a
+**`build.maxon`** beside its sources, and `maxon build` with no path runs it.
+
+```text
+myproject/
+├── build.maxon          # the build manifest, if the project needs one
+├── main.maxon           # entry point
+├── lib.maxon
+├── lib.test.maxon       # tests: compiled only by maxon test
+└── utils/
+    └── math.maxon       # subdirectories are included
+```
+
+A directory walk skips three things:
+
+- **`build.maxon`** — it describes the build and is never part of the program being built.
+- **`*.test.maxon`** — test files; [`maxon test`](#testing) compiles them.
+- **any directory containing a `.maxonignore` file**, with everything beneath it.
+
+Naming a file explicitly on the command line compiles it regardless. See
+[Project Structure](CLI_REFERENCE.md#project-structure) for the full layout rules.
+
+### A Manifest Is a Program
+
+`build.maxon` is ordinary Maxon with the whole standard library available. The compiler does not parse it
+as configuration: it compiles it for the host, runs it, and performs the build it describes. A build can
+therefore **compute** what it compiles — list a directory, choose sources by host, derive a version from
+git — instead of only spelling it out.
+
+Its entry point is a function named **`build`**, not `main`. It returns `ExitCode`; a non-zero return or a
+crash fails the build before anything is compiled.
+
+```maxon
+function build() returns ExitCode
+	Build.build("src", output: "out/hello")
+	return 0
+end 'build'
+```
+
+The output path omits the extension: the compiler adds the target's (`.exe` on Windows, `.wasm` for
+`wasm32-wasi`, none on Linux and macOS). Relative paths resolve against the manifest's directory.
+
+### Describing the Build
+
+`Build` (in the standard library) writes the build description the compiler reads back:
+
+| Call | Meaning |
+|------|---------|
+| `Build.build(source, output:, debugInfo: true, version: "", defines:)` | compile one file or directory to one output |
+| `Build.target(name, source:, output:, debugInfo: true, version: "", defines:)` | describe one named target, returning a `BuildConfig` |
+| `Build.buildTargets(targets)` | declare several named targets (a `BuildConfigArray`) |
+| `Build.buildWithConfig(config)` | build one `BuildConfig`, whose `sources` may list several files and directories compiled as one program, in order |
+
+- `debugInfo` controls the debug-information sidecar written beside the executable.
+- `version` stamps a dotted version into the executable's metadata.
+- `defines` is a `StringArray` of `"name=value"` entries, each replacing the written default of a top-level
+  `String` constant — the same as `maxon build --define`. This is how a manifest passes a value it computed,
+  such as a version derived from git, into the program.
+
+**Several targets** are listed rather than guessed at:
+
+```maxon
+function build() returns ExitCode
+	var targets = BuildConfigArray.create()
+	targets.push(Build.target("app", source: "app", output: "out/app", version: "1.2.3"))
+	targets.push(Build.target("tool", source: "tool", output: "out/tool", debugInfo: false))
+	Build.buildTargets(targets)
+	return 0
+end 'build'
+```
+
+`maxon build` with no argument then prints the target names and compiles nothing; `maxon build app`
+builds one.
+
+**Several sources in one program** use a `BuildConfig`:
+
+```maxon
+function build() returns ExitCode
+	var sources = StringArray.create()
+	sources.push("src")
+	sources.push("vendor/thirdparty")
+
+	let config = BuildConfig.create("myprogram", output: "out/myprogram", sources: sources, debug_info: true)
+	Build.buildWithConfig(config)
+	return 0
+end 'build'
+```
+
+Sources are compiled in exactly the order listed. An empty `sources` list is refused (`build.maxon named
+no sources to compile`) rather than read as "everything here".
+
+### The Command Line Wins
+
+Flags typed on the command line outrank the manifest: `-o` replaces the output path, `--target` chooses
+the target (the manifest itself always runs on the host), a `--define` is applied after the manifest's
+defines, and debug information is written only if both the manifest and the command line allow it.
+
+The [CLI reference](CLI_REFERENCE.md) documents `maxon build` and its flags.
 
 ---
 
 ## Memory Model
 
+Maxon manages memory with **reference counting** decided at compile time. There is no garbage collector and
+no manual `free`: a record is released when its last reference goes away, and the compiler proves at compile
+time that no reference is used after that.
+
+### Values and Records
+
+- **Scalars** — integers, floats, `bool`, payload-free enum values — are plain values. Assigning one copies
+  it.
+- **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
+  live on the heap. A variable holds a **reference** to its record.
+
 ### Reference-by-Default Assignment
 
-Assigning a struct-typed variable to another variable copies the **heap pointer**, creating a reference (alias) to the same object:
+Storing a record somewhere else shares it rather than copying it, so a field write through one holder is
+visible through every other:
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
@@ -5373,159 +4184,45 @@ end 'Point'
 
 typealias PointArray = Array with Point
 
-var a = Point.create(1, y: 2)
-var points = PointArray.create()
-points.push(a)          // the array holds a second reference to a's object
-var b = try points.get(0) otherwise panic("pushed")
-b.x = 99
-print("{a.x}")          // 99 -- a and b share the same object
+function main() returns ExitCode
+	var a = Point.create(1, y: 2)
+	var points = PointArray.create()
+	points.push(a)                                        // the array shares a's record
+	var b = try points.get(0) otherwise panic("pushed")
+	b.x = 99
+	print("{a.x}\n")                                      // 99: a and b are one record
+
+	b = Point.create(5, y: 6)                             // rebinding b leaves a alone
+	a = Point.create(7, y: 8)
+	points.push(a)
+	print("{points.count()}\n")                           // 2
+	return 0
+end 'main'
 ```
 
-Field mutation through one holder affects every other, because they all point to the same heap-allocated object. Reassignment, however, rebinds the variable to a new object without affecting the others:
-
-```maxon
-b = Point.create(5, y: 6)  // rebinds b to a new object -- a is unaffected
-print("{a.x}")          // 99 -- a still points to the object it shares with the array
-```
-
-A bare `var b = a` MOVES `a` rather than sharing it — reading `a` afterwards is E3102 — and a mutable name takes an
-immutable one's object only that way (see [Immutable XOR Mutable](#immutable-xor-mutable)).
-
-All types in Maxon use reference semantics on assignment — the variable is rebound to a new value only when reassigned with an expression. The practical distinction is that struct field mutations are visible through aliases, whereas arithmetic on ranged integers and primitives always produces a new value and rebinds the variable, leaving the original unchanged.
+Reassigning a variable rebinds it to another record without touching the old one. Use
+[`clone()`](#explicit-cloning) when you need an independent copy.
 
 ### Immutable XOR Mutable
 
-Every record is reference-counted and every value of a record type is a reference to it. A record is written
-through MUTABLE paths or read through IMMUTABLE names, never both at once. The immutable names are a `let` binding
-(including a `for` loop variable and an `if let`), a module-level `let`, and a parameter the function does not
-write. Mutable holders may share a record: a store into a field or a container, and an argument a callee keeps,
-take a reference of their own and CO-OWN what they are handed. So does an immutable name (`let u = t` aliases).
+A record is either **written through mutable holders** or **read through immutable names** — never both at
+once. The compiler enforces this, which is what makes sharing by reference safe.
 
-What is checked is where a mutable name or a write could reach a record an immutable name still reads. A check
-of a value is by LIVENESS: an immutable name counts only when some path from the site reads it. A `let` is live to
-its last read, and to the end of a loop it was bound before and read inside — but a read on the other arm of an
-`if` the site is on one arm of is on no path from it (the arms of a `match` are not told apart this way). A
-module-level `let`, and a `let` a closure captured, are live everywhere: the closure reads it wherever it is
-called.
+**Immutable names** are `let` bindings (including `for` loop variables and `if let` bindings), module-level
+`let` constants, and parameters the function does not write. **Mutable holders** are `var` bindings, fields,
+container elements and parameters the function writes. Several holders may share a record: storing it into a
+field or container, or passing it to a callee that keeps it, adds a reference.
 
-A `let` LENT to a service is read by the service for as long as the service holds it, which this frame cannot
-bound, so from the send on its graph is FROZEN rather than judged by liveness: neither the binding nor any value read
-out of it may reach storage through which it could be written — a `var`, a field or payload, a container, a
-`return`, a callee that keeps it, a closure — nor a method or a parameter that writes it (**E3160**; see
-[Services](#services--spawn)).
+The checks are by **liveness**: an immutable name matters only while some later statement still reads it.
 
-Two different fields of one record are two places — a record read out of `pair.left` is no record read out of
-`pair.right`, however deep below them the two reads go — when the two fields hold two records. Where the record
-was made in the same function and every use of it is in view there, that is checked: a record stored into both
-fields, or handed twice to the call that made it (`Pair.create(p, right: p)`), makes them one place. **Where the
-fields were filled out of view — a parameter's record, module storage, or a record a callee filled beyond the
-arguments it was handed — two fields are taken to hold two records, and a program that put one record into both
-there is not refused.**
-
-- **A `var` binding or assignment** — `var q = p`, `q = p`. A `let` that is its record's sole reference (bound to a
-  fresh record, named by no other live name), spelled bare, MOVES: reading `p` afterwards is **E3102**, and moving a
-  `let` declared outside a loop from inside it is E2015. A bare `let` that is not its record's sole reference and is
-  read afterwards, and a field of an immutable name (`var i = o.inner`, refused whether or not `o` is read again),
-  is **E3078**. A value no name spells — a call result, an element, a merge — that may be, or lie within, the record
-  of an immutable name read afterwards, or that is read out of mutable storage a live `let` borrows (`let s = try
-  arr.get(0)` then `var e = try arr.get(0)` while `s` is still used), is **E3078** when the `var` WRITES that record
-  while it holds it: a field write through it, a method that writes its receiver, or passing it at a parameter the
-  callee writes — a named callee's, or that of any body a call through an interface or a function value may land
-  on. A `var` that is only rebound and read — a chain cursor, `var cur = try chain.head()` then `cur =
-  try cur.next()` — is a rebindable shared reference and mutates nothing.
-- **An argument at a parameter the callee writes** — **E3019** for an immutable name spelled as the argument,
-  whether or not it is read again (see [Parameter Passing](#parameter-passing)), the callee writing a FIELD of
-  that parameter included, and for a value — one a `var`
-  holds included — that may be the record of an immutable name read after the call (`grow(pass(a))`,
-  `pass(a).push(9)`), that a live `let` borrows out of the same mutable storage, or that may be the same record as
-  a live `let` by another road.
-- **A write** — a field write or a method that writes its receiver — is checked where it happens, against every
-  immutable name read after it, whichever of the two was declared first. Through a record such a name may be, or
-  that a live `let` borrows out of the same mutable storage (`var e = try arr.get(0)`, `let s = try arr.get(0)`,
-  `e.x = 9` while `s` is still read), or that may be the same record as a live `let` by another road — both the
-  record of a `let` that moved after it went into a container — it is **E3159** (a method writing a receiver that
-  may be the name's own record is the E3019 above). More: `let p = box.item` then `box.item.x = 99`, or
-  `let a = Point.create(1)`, `box.item = a`, `box.item.x = 99` while `a` is still read. `x.append(…)` on a `String`
-  is such a write. A write through a `var` whose binding was already refused (E3078) is not refused again. A field
-  read after the field was stored on every path since the `let` read it — with a value that cannot be the `let`'s record — is the new record, not the
-  `let`'s. A `let` refuses a write to its OWN record at whatever depth a callee reaches to make it — a callee
-  writing a field of the parameter the `let` filled is the E3019 above — while a method writing a field of its
-  *own* receiver is the one write that is not a parameter mutation, so `let acc = Accumulator.create(0)` then
-  `acc.add(10)` stands. A write to a record merely lying within the `let`'s record is refused only where that
-  record is an immutable one itself.
-
-A value that IS an immutable record — one whose type declares every field `let` — is written by nothing, so it
-meets none of these checks; what it holds is judged by its own type. A `String` or `Character` a name does not own
-is copied by a `var` binding and by a store, a `let` bound to a string literal names an immortal record every
-door copies, and a module-level `let` that is image data is copied by every store. `clone()` is the way to hand a
-mutable name an independent record.
-
-```maxon
-let a = Point.create(1, y: 2)
-var arr = PointArray.create()
-arr.push(a)                 // arr co-owns a's record
-var b = a                   // a moves into b
-// print("{a.x}")           // ERROR E3102: use of moved value 'a'
-let first = try arr.get(0) otherwise panic("pushed")
-// var e = try arr.get(0) otherwise panic("pushed")   // ERROR E3078: `first` is read below
-var e = (try arr.get(0) otherwise panic("pushed")).clone()   // OK — an independent record
-e.x = 9
-print("{first.x} {b.x}")
-```
-
-### Stack Promotion
-
-The compiler performs escape analysis to identify struct literals that can be safely stack-allocated instead of heap-allocated. A struct is promoted to the stack when all of the following are true:
-
-- All fields are primitive types (no heap-allocated field types)
-- Neither the variable nor any alias escapes the function (not returned, stored into a heap field, captured by a closure, or passed to a function that escapes it)
-- The `@heap` directive is not used
-
-Stack-promoted structs are freed automatically when the stack frame is reclaimed — no reference counting overhead is incurred. This optimization is transparent and preserves the same semantics as heap allocation.
-
-The `@heap` annotation forces a struct to be heap-allocated, bypassing stack promotion:
-
-```maxon
-@heap var p = Point.create(1, y: 2)  // always heap-allocated
-```
-
-`@heap` is only valid on `var` or `let` declarations whose initializer produces a struct.
-
-### Explicit Cloning
-
-To create an independent deep copy of a struct, use the `.clone()` method:
-
-```maxon
-var a = Point.create(1, y: 2)
-var b = a.clone()       // deep copy -- b is independent of a
-b.x = 99
-print("{a.x}")          // 1 -- a is unchanged
-```
-
-The type must implement the `Cloneable` interface to use `.clone()`. See [Cloneable Interface](#cloneable-interface) below.
-
-### Cloneable Interface
-
-The `Cloneable` interface is defined in the standard library:
-
-```maxon
-interface Cloneable
-	function clone() returns Self
-end 'Cloneable'
-```
-
-**Auto-conformance:** The compiler automatically generates `Cloneable` conformance for any struct whose fields are all Cloneable types. You do not need to write the conformance manually unless you need custom clone behavior.
-
-**Built-in Cloneable types:**
-- All primitives (`int`, `float`, `bool`, `byte`)
-- `String`
-- `Array` (when the element type is Cloneable)
-
-**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable, the compiler will not auto-generate conformance. You must implement `clone()` manually or restructure the type.
-
-### Auto-Equatable
-
-The compiler also auto-generates `Equatable` conformance for structs whose fields all implement `Equatable`. The synthesized `equals()` method compares each field using `==` (for primitives) or `.equals()` (for nested structs).
+| Situation | Result |
+|-----------|--------|
+| `var b = a` where `a` is a `let` that is its record's only reference | `a` **moves** into `b`; reading `a` afterwards is **E3102** |
+| `var b = a` where the record is also named by another live `let`, or `a` is a field of an immutable name (`var i = o.inner`) | **E3078** |
+| a `var` bound to a value that may be a live `let`'s record — a call result, a container element — and then written | **E3078** |
+| a field write, or a method that writes its receiver, on a record a live `let` may still read | **E3159** |
+| a `let`, or a value that may be a live `let`'s record, passed to a parameter the callee writes | **E3019** |
+| mutating a collection while a `let` borrowed from it is live | **E3070** (see [Borrow Checking](#borrow-checking)) |
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
@@ -5539,415 +4236,557 @@ type Point
 	end 'create'
 end 'Point'
 
-// Point auto-conforms to Equatable (all fields are primitive)
-var a = Point.create(1, y: 2)
-var b = Point.create(1, y: 2)
-if a == b 'equal'           // true -- content equality
-	print("equal")
-end 'equal'
+typealias PointArray = Array with Point
+
+function main() returns ExitCode
+	let a = Point.create(1, y: 2)
+	var arr = PointArray.create()
+	arr.push(a)                     // arr co-owns a's record
+	var b = a                       // a moves into b
+	b.x = 5
+	// print("{a.x}\n")             // E3102: use of moved value 'a'
+
+	let first = try arr.get(0) otherwise panic("pushed")
+	// var e = try arr.get(0) otherwise panic("pushed")
+	// e.x = 9                      // E3078: 'get' may share storage with immutable variable 'first'
+	var e = (try arr.get(0) otherwise panic("pushed")).clone()
+	e.x = 9                         // fine: an independent record
+	print("{first.x} {b.x} {e.x}\n")   // 5 5 9
+	return 0
+end 'main'
 ```
 
-If a struct contains a field that doesn't implement `Equatable` (such as a function type), using `==` produces error E3069.
+Some consequences:
 
-Generic collection instances that conform to `Equatable` — such as `Array with Byte` (`ByteArray`) or any `Array` of `Equatable` elements — also compare by content: `==` and `!=` dispatch to their `equals()` method, so two distinct arrays holding the same elements compare equal.
+- A `var` that is only rebound and read — walking a chain with `cur = try cur.next()` — writes nothing and is
+  never refused.
+- A method writing a field of its **own** receiver is not a parameter write: `let acc = Accumulator.create()`
+  then `acc.add(10)` is legal.
+- A record whose type declares every field `let` can never be written, so none of these checks apply to it.
+- `String` and `Character` values a name does not own are copied when bound to a `var` or stored.
+- A `let` lent to a [service](#services--spawn) is frozen from the send onwards
+  (**E3160**).
+- The analysis tracks records made and used within one function. Two fields of a record received from
+  elsewhere — a parameter, module storage — are assumed to hold different records.
 
-```maxon
-let a = "set".toByteArray()
-let b = "set".toByteArray()
-a == b                      // true -- content equality, despite distinct objects
-a is b                      // false -- different heap objects
-```
+### Explicit Cloning
 
-To compare reference identity (whether two variables point to the same heap object), use the `is` operator:
-
-```maxon
-var a = Point.create(1, y: 2)
-var b = a.clone()           // deep copy
-var c = a                   // alias (reference to same object)
-a is b                      // false -- different objects
-a is c                      // true -- same object
-```
-
-### Scope Cleanup
-
-When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, the runtime decrements the refcount and frees the memory if it reaches zero.
+`clone()` returns an independent deep copy:
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
 
-function compute() returns Coord
-	var a = Point.create(10, y: 20)  // allocated on heap, refcount = 1
-	var b = Point.create(30, y: 40)  // allocated on heap, refcount = 1
-	return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
-end 'compute'
+type Point
+	export var x as Coord
+
+	export static function create(x Coord) returns Point
+		return Point{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1)
+	var b = a.clone()
+	b.x = 99
+	print("{a.x} {b.x} {a is b}\n")    // 1 99 false
+	return 0
+end 'main'
 ```
 
-**Return values:** When a struct is returned from a function, the returned variable is not released at scope exit — the caller takes responsibility for its lifetime.
-
-```maxon
-function makePoint() returns Point
-	var p = Point.create(1, y: 2)
-	return p                      // p is NOT freed; caller is responsible
-end 'makePoint'
-```
-
-**Container cleanup:** Containers with heap-allocated elements (e.g., `List with MyStruct`) perform deep cleanup when freed. Each element's refcount is decremented, and elements whose refcount reaches zero are freed recursively. For `List`, the compiler walks all managed list nodes and decrefs their stored values before freeing the managed list itself.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias TokenList = List with Token
-
-function example() returns Tally
-	var list = TokenList.create()
-	list.append(Token.create(1))   // Token incref'd by the managed list node
-	list.append(Token.create(2))   // Token incref'd by the managed list node
-	return 0                     // list freed: each Token decref'd (rc→0→freed),
-															 // then managed list nodes freed, then managed list freed
-end 'example'
-```
-
-### Stack Allocation
-- Local variables (`var`, `let`)
-- Function parameters
-- Automatic lifetime (scope-based)
-
-### Heap Allocation
-- Arrays (all array types)
-- Strings (when dynamically allocated)
-- Automatically freed at end of scope
-- No manual `free` or garbage collector needed
+`clone()` comes from the `Cloneable` interface (`function clone() returns Self`). The compiler generates it
+for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
+cloneable. Declare `clone()` yourself for custom behaviour, or when a field's type is not cloneable.
 
 ### Borrow Checking
 
-The borrow checker prevents mutation of a collection while references to its elements are alive. When you obtain a reference from a mutable source (e.g., `var s = try arr.get(0) otherwise ""`), that source cannot be mutated until the reference is no longer used.
-
-Borrows use non-lexical lifetimes (NLL): a borrow ends at the last use of the borrowing variable, not at the end of its scope.
-
-```maxon
-var arr = ["hello"]
-var s = try arr.get(0) otherwise ""
-arr.push("world")    // ERROR E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
-```
+A `let` bound to an element read out of a mutable collection **borrows** from that collection. While the
+borrow is live, the collection cannot be mutated — directly or through a function that mutates it:
 
 ```maxon
-var arr = ["hello"]
-var s = try arr.get(0) otherwise ""
-print("{s}\n")        // last use of s — borrow expires here
-arr.push("world")    // OK: borrow has expired
+function main() returns ExitCode
+	var arr = ["hello"]
+	let s = try arr.get(0) otherwise ""
+	// arr.push("world")      // E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
+	print("{s}\n")            // the borrow ends at its last use...
+	arr.push("world")         // ...so this is fine
+	print("{arr.count()}\n")
+	return 0
+end 'main'
 ```
 
-The borrow checker also detects indirect mutation through helper functions:
+Borrows end at the borrowing variable's **last use**, not at the end of its scope.
+
+### Stack Promotion
+
+A record that never escapes its function — never returned, stored in a field or container, captured by a
+closure, or passed to a callee that keeps it — and whose fields are all scalars is allocated on the stack
+instead of the heap, with no reference counting. This is automatic and does not change behaviour.
+`@heap let p = Point.create(1)` forces heap allocation for one declaration.
+
+### Scope Cleanup
+
+When a reference goes out of scope the record's count drops, and a record whose count reaches zero is freed
+along with everything it holds — a container releases each element, a record each field. A returned record
+is handed to the caller rather than freed.
 
 ```maxon
-function clearList(list StringList)
-	list.clear()
-end 'clearList'
+typealias TokenId = int(0 to 1000)
 
-var val = try list.first() otherwise "none"
-clearList(list)       // ERROR E3070: cannot mutate 'list' via 'clearList' while it is borrowed by 'val'
+type Token
+	export let id as TokenId
+
+	export static function create(id TokenId) returns Token
+		return Token{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenList = List with Token
+
+function countTokens() returns TokenId
+	var list = TokenList.create()
+	list.append(Token.create(1))
+	list.append(Token.create(2))
+	return list.count()             // list, then both tokens, are freed on return
+end 'countTokens'
 ```
 
-### Safety
-- No bounds checking on arrays
-- No null checks
-- Use-after-move prevented at compile time (see Ownership System above)
-- Mutation of borrowed collections prevented at compile time (see Borrow Checking above)
+A type cannot contain itself (**E4014**), so reference cycles between records cannot be built and reference
+counting reclaims everything.
 
-### Calling Convention
-- Parameters that are only read are passed by value (simple types in registers, arrays as pointer)
-- Parameters that are assigned to inside the callee are passed by reference (pointer to caller's storage)
-- Return values passed by value (in register or stack)
+### The Leak Checker
+
+Every program that uses the heap checks, when `main` returns, that every allocation was released. If any
+was not, the program's exit code becomes **101** (nothing else is printed). Reference counting is managed by
+the compiler, so a leak is not something ordinary code is expected to cause; `maxon test` reports a leaking
+test as leaked. A green thread that was never
+awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
+
+### Safety Summary
+
+| Hazard | What Maxon does |
+|--------|-----------------|
+| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`; there is no unchecked access |
+| Value outside a typealias's range | compile error for a known value, **panic** at run time otherwise |
+| Division by zero | compile error for a constant zero; otherwise the division throws `DivisionByZero` |
+| Negative shift count | compile error for a known count, **panic** at run time otherwise |
+| Integer overflow | wraps (two's complement); a range check catches it where the value reaches a checked place |
+| Null | there is no null: every variable, field and element holds a value |
+| Use after move, or writing a record an immutable name reads | compile error |
+| Mutating a collection while an element is borrowed | compile error (**E3070**) |
+| Use after free, double free | prevented by compile-time reference counting |
 
 ---
 
 ## Code Generation
 
 ### Native Backend
-- Maxon has its own code generator: no LLVM, and no assembler or linker step
-- It writes each target's object format itself, so a build produces a standalone executable directly
-- ⚠ The set of targets grows. `maxon help build` and
-  [CLI_REFERENCE.md](CLI_REFERENCE.md)'s `--target` table are the current list; naming them here
-  would be a second copy free to go stale.
+
+- Maxon has its own code generator: no LLVM, no external assembler and no linker step.
+- It writes each target's executable format directly, producing a standalone executable.
+- The supported targets are listed under `--target` in the [CLI reference](CLI_REFERENCE.md).
 
 ### Optimizations
-- Constant folding
-- Dead code elimination
+
+The compiler's optimization passes include:
+
+- constant folding and simplification of constant operands
+- inlining of small functions and of functions called once
+- common subexpression elimination and loop-invariant code motion
+- loop unswitching and jump threading
+- value-range analysis, which removes range and bounds checks that provably cannot fail
+- strength reduction of division and `mod` by constants
+- stack promotion of records that do not escape
+- dead function and dead global elimination
+- hot/cold code layout and jump tables for `match`
+- register allocation
+
+Optimizations never change a program's behaviour, including its panics and range checks.
 
 ### Runtime Library
-- Written in Maxon, under `maxon-bin/Compiler/Runtime/`, and COMPILED IN rather than linked
-- Provides the implementations behind the intrinsics — memory management, the scheduler, string and
-  arithmetic helpers
-- No C runtime dependency, and nothing to ship beside the executable
+
+- The runtime — memory management, the scheduler, string and arithmetic helpers — is written in Maxon and
+  compiled into each program.
+- There is no C runtime dependency and nothing to ship beside the executable.
 
 ---
 
 ## Common Patterns
 
-### Main Function Template
+### Program Template
+
 ```maxon
 function main() returns ExitCode
-		// program logic
-		return 0
+	print("Hello, world!\n")
+	return 0
 end 'main'
 ```
 
-### Loops with Break
+### Loop With an Early Exit
+
 ```maxon
-var i = 0
-while true 'forever'
-		if i >= 10 'done'
-				break
+function main() returns ExitCode
+	var i = 0
+	while true 'forever'
+		if i >= 3 'done'
+			break
 		end 'done'
-		print("{i}")
+
+		print("{i}\n")
 		i = i + 1
-end 'forever'
+	end 'forever'
+
+	return 0
+end 'main'
 ```
 
-### Array Iteration
+### Iterating With an Index
+
 ```maxon
-var numbers = [1, 2, 3, 4, 5]
-for i in numbers 'iter'
-		var num = try numbers.get(i) otherwise 0
-		print("{num}")
-end 'iter'
+function main() returns ExitCode
+	let names = ["ada", "alan", "grace"]
+	for (iter, name) in names.withIterator() 'each'
+		print("{iter.index()}: {name}\n")
+	end 'each'
+
+	return 0
+end 'main'
 ```
 
+### Recursion
 
-### Factorial Example
 ```maxon
 typealias Operand = int(i64.min to i64.max)
 
 function factorial(n Operand) returns Operand
-		if n <= 1 'base'
-				return 1
-		end 'base'
-		return n * factorial(n - 1)
+	if n <= 1 'base'
+		return 1
+	end 'base'
+
+	return n * factorial(n - 1)
 end 'factorial'
 
 function main() returns ExitCode
-		let result = factorial(5)
-		print("{result}")  // 120
-		return 0
+	print("{factorial(5)}\n")     // 120
+	return 0
+end 'main'
+```
+
+### Building a String
+
+`String` has no `+`; interpolate, or `append` in place:
+
+```maxon
+function main() returns ExitCode
+	var csv = ""
+	for n in 1 to 3 'each'
+		csv.append("{n},")
+	end 'each'
+
+	print("{csv}\n")     // 1,2,3,
+	return 0
+end 'main'
+```
+
+### A Lookup With a Fallback
+
+```maxon
+typealias Age = int(0 to 150)
+typealias Ages = Map with (String, Age)
+
+function main() returns ExitCode
+	var ages = Ages.create()
+	ages.upsert("ada", value: 36)
+	let known = try ages.get("ada") otherwise 0
+	let unknown = try ages.get("bob") otherwise 0
+	print("{known} {unknown}\n")     // 36 0
+	return 0
+end 'main'
+```
+
+### A Factory That Validates
+
+```maxon
+typealias Percent = int(0 to 100)
+
+enum PercentError implements Error
+	outOfRange
+end 'PercentError'
+
+type Progress
+	export let done as Percent
+
+	export static function create(done Percent) returns Self
+		return Self{done: done}
+	end 'create'
+
+	export static function parse(text String) returns Self throws PercentError
+		let value = try int.fromString(text) otherwise throw PercentError.outOfRange
+		if value < 0 or value > 100 'range'
+			throw PercentError.outOfRange
+		end 'range'
+
+		return Self{done: value as Percent}
+	end 'parse'
+end 'Progress'
+
+function main() returns ExitCode
+	let p = try Progress.parse("42") otherwise Progress.create(0)
+	print("{p.done}%\n")     // 42%
+	return 0
 end 'main'
 ```
 
 ---
 
-## Compilation Commands
-
-```bash
-# Compile a single file
-maxon build hello.maxon
-
-# Build current directory (uses build.maxon if present)
-maxon build
-
-# Build a project directory
-maxon build myproject/
-
-# Emit IR alongside executable
-maxon build app.maxon --emit-ir
-
-# Compile if needed, then run — everything after the path is the PROGRAM's own argv
-maxon run app.maxon --verbose
-
-# The same with no command word, which is what a `#!/usr/bin/env maxon` script arrives as
-maxon app.maxon --verbose
-
-# Run spec fragment tests
-maxon spec-test
-
-# Run tests matching a pattern
-maxon spec-test --filter=array
-```
-
----
-
-## Error Handling
+## Common Errors
 
 ### Compile-Time Errors
 
-**Type Errors**
+Each example below is refused with the diagnostic shown.
+
+**Type mismatch**
+
 ```maxon
-var x = 5 + "string"    // ERROR: Type mismatch
+let x = 5 + "string"          // E2004: Cannot operate on int and String
 ```
 
-**Missing Return**
-```maxon
-typealias Tally = int(0 to u64.max)
+**Missing return**
 
-function test() returns Tally
-		var x = 5
-		// ERROR: Missing return statement
-end 'test'
+```maxon
+function compute() returns Tally
+	print("working\n")
+end 'compute'                 // E3013: missing return statement: 'compute'
 ```
 
-**Immutable Assignment**
+**Assigning to a `let`**
+
 ```maxon
 let x = 5
-x = 10                  // ERROR: Cannot assign to immutable variable
+x = 10                        // E2013: cannot assign to immutable variable: 'x'
 ```
 
-**Self-Assignment**
+**Self-assignment**
+
 ```maxon
-var x = 5
-x = x                   // ERROR: self-assignment has no effect
+x = x                         // E3067: self-assignment has no effect: 'x = x'
 ```
 
-**Borrow Conflict**
-```maxon
-var arr = ["hello"]
-var s = try arr.get(0) otherwise ""
-arr.push("world")       // ERROR E3070: cannot mutate 'arr' while borrowed by 's'
-```
+**A `var` that never changes**
 
-**Var Never Reassigned**
 ```maxon
 var x = 10
-return x                // ERROR E3077: variable 'x' is never reassigned; use 'let' instead of 'var'
+return x                      // E3077: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 
-**Var From Immutable**
+**An unused variable**
+
 ```maxon
-let a = Point.create(1, y: 2)
-let b = a               // b aliases a, so neither is the record's sole reference
-var c = a               // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'c'
-print("{b.x}")
+let unused = 3                // E3012: unused variable: 'unused'
 ```
 
-**Write Through an Immutable Name's Record**
+**Discarding a result**
+
 ```maxon
-let p = box.item
-box.item.x = 99         // ERROR E3159: cannot write through 'box.item', which may be the record of immutable variable 'p'; use clone()
-print("{p.x}")
+double(5)                     // E3064: result of pure function 'double' must be used
+incrementAndGet()             // E3065: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
+_ = 42                        // E3067: expected a function call
 ```
 
-**Useless Discard**
+**A missing `try`**
+
 ```maxon
-_ = 42              // ERROR: discarding a non-call expression has no effect
+parseDigit("7")               // E3057: throwing function requires try: 'parseDigit'
 ```
 
-**Unknown Keyword**
+**Mutating through an immutable name**
+
 ```maxon
-functon test()          // ERROR: Unknown keyword 'functon'
+let items = TallyArray.create()
+items.push(1)                 // E3019: cannot pass 'items' to function that mutates parameter 'self'
 ```
 
-**Mismatched Block Identifiers**
+**Moving out of a `let`**
+
+```maxon
+let a = Point.create(1)
+var b = a
+b.x = 2
+print("{a.x}\n")              // E3102: use of moved value 'a'
+```
+
+**Sharing a record between a `var` and a live `let`**
+
+```maxon
+let a = Point.create(1)
+let b = a
+var c = a                     // E3078: cannot assign immutable variable 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+```
+
+**Mutating a borrowed collection**
+
+```maxon
+var arr = ["hello"]
+let s = try arr.get(0) otherwise ""
+arr.push("world")             // E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
+print("{s}\n")
+```
+
+**A closure escaping its frame**
+
+```maxon
+function makeAdder(bump Score) returns UnaryOp
+	let f = function(n Score) gives n + bump
+	return f                  // E3099: cannot return a closure that captures
+end 'makeAdder'
+```
+
+**A bare primitive type**
+
+```maxon
+function half(n int) returns int     // E3005: Cannot use bare 'int' as a type. Define a typealias with range constraints
+```
+
+**Mixing typealiases**
+
+```maxon
+let bad = score + meters      // E3005: operator '+' requires both operands to be the same type: 'Score' and 'Meters' are different typealiases — cast one side with 'as'
+```
+
+**A mismatched block label**
+
+```maxon
+match x 'check'
+	1 then print("one\n")
+	default then print("other\n")
+end 'wrong'                   // E2043: block identifier mismatch: expected 'check', got 'wrong'
+```
+
+**An empty block**
+
 ```maxon
 if x > 0 'check'
-		print("{x}")
-end 'wrong'             // ERROR: Expected 'check', got 'wrong'
+end 'check'                   // E3082: empty block: 'check'
 ```
 
-**Empty Block**
+A block holding only a comment is empty too.
+
+**A non-exhaustive match**
+
 ```maxon
-if x > 0 'check'
-end 'check'             // ERROR E3082: empty block
+match level 'filter'
+	error then print("error!\n")
+end 'filter'                  // E2026: match on enum 'Level' is not exhaustive, missing: trace, info
 ```
-Every `if`, `else`, `while`, `for`, and `try...otherwise` block must contain at least one statement. Comment-only blocks are also considered empty since comments are not statements.
 
-### Runtime Behavior
+**A redundant loop label**
 
-**Caught at runtime (clean panic, exit 1)**
+```maxon
+while i < 3 'loop'
+	break 'loop'              // E2048: 'break' with label 'loop' targets its own loop
+end 'loop'
+```
 
-CPU faults — division (or modulo) by zero, null pointer dereference, and stack overflow — are caught by the runtime safety handler, which writes a `panic: ...` line to stderr and exits with status 1. On x64 the panic line is followed by a symbolized stack trace of the faulting thread (frame 0 names the faulting function, resolved from the faulting instruction pointer); on arm64-macos only the panic line is printed.
+### Run-Time Behavior
 
-**Undefined Behavior (no error)**
-- Array out-of-bounds access
-- Wrap-around on regular signed/unsigned integer arithmetic
+Nothing in Maxon is undefined behaviour. At run time:
+
+| Event | Behavior |
+|-------|----------|
+| `panic("…")`, a failed range check, a negative shift count | the program prints `panic at <file>:<line>: <message>` and a stack trace to stderr and exits with code **1** |
+| an index past the end of a collection | `get`/`set` throw `ArrayError.indexOutOfBounds`, handled with `try` |
+| division or `mod` by zero | throws `DivisionByZero`, handled with `try` |
+| integer overflow | wraps around (two's complement), with no error |
+| an allocation never released | exit code **101** |
+| a green thread neither awaited nor dropped | exit code **75** |
+| deadlock | exit code **92** |
+
+`maxon run` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).
 
 ---
 
 ## Best Practices for AI Agents
 
-1. **Always match block identifiers**: `if x > 0 'check'` must end with `end 'check'`
+These rules cover the mistakes code generators make most often when writing Maxon.
 
-2. **Initialize all variables**: No uninitialized variables allowed
+1. **Label every block and repeat the label on `end`.** `if x > 0 'positive'` … `end 'positive'`. Choose
+   labels that say what the block does.
 
-3. **Use clear initializers**: Type is always inferred from the value
+2. **Never use bare `int` or `float` in a declaration.** Declare a typealias named for the purpose and use
+   it for parameters, returns, fields and type arguments:
+
    ```maxon
-	 var count = 0    // Type inferred as int
+   typealias Tally = int(0 to u64.max)
+   typealias TallyArray = Array with Tally
    ```
 
-4. **Return from all code paths**:
+3. **Pass the first argument positionally and name the rest.** `connect("localhost", port: 8080)`. Naming
+   the first argument is an error.
+
+4. **Construct records through a static factory.** `Point{x: 1}` is legal only inside `Point`'s own body;
+   elsewhere call `Point.create(1)`.
+
+5. **Prefer `let`.** A `var` that is never reassigned or mutated is an error. Every declared name must be
+   used; write `_` for one you do not need.
+
+6. **Handle every throwing call.** Write `try call() otherwise <fallback>`, `otherwise panic("why")` when
+   failure is impossible, or a bare `try` inside a function that `throws` the same error type.
+
+7. **Access collections through methods, with `try`.** There is no `items[i]`:
+
    ```maxon
-	 function test(x Integer) returns Integer
-			 if x > 0 'pos'
-					 return 1
-			 end 'pos'
-			 return -1        // Don't forget this
-	 end 'test'
+   let value = try items.get(index) otherwise 0
    ```
 
-5. **Remember int/float distinction**:
-   ```maxon
-	 var x = 5           // int
-	 var y = 5.0         // float (note decimal point)
-   ```
+8. **Guard divisions.** Use `try (a / b) otherwise …`, or give the divisor a range that excludes zero.
 
-7. **Prefer `let` for immutability**:
-   ```maxon
-	 let pi = 3.14159    // Prevents accidental modification
-   ```
+9. **Build strings with interpolation.** `"{name}: {count}"`; there is no `+` on `String`.
 
-8. **Export only necessary functions**:
-   ```maxon
-	 export returns int    // Public API
-	 returns int      // Private helper
-   ```
+10. **Match exhaustively.** Name every enum or union case; put several on one arm with `or`, one per line;
+    use `default panic("…")` or `default throws` instead of a plain `default`.
 
-9. **Handle array access errors**:
-   ```maxon
-	 // Use otherwise for safe access with default
-	 var val = try arr.get(index) otherwise 0
+11. **Cast between typealiases explicitly.** Two different aliases never mix; write `value as Target`.
 
-	 // Or check bounds first
-	 if index < arr.count() 'safe'
-			 var val = try arr.get(index) otherwise 0
-	 end 'safe'
-   ```
+12. **Use `clone()` for an independent copy.** Assigning a record shares it.
 
-10. **Use meaningful block identifiers**:
+13. **Keep tests in `*.test.maxon` files** and call every assertion with `try`:
+
     ```maxon
-		while not done 'process'     // 'process' describes the loop
-				// ...
-		end 'process'
-    ```
-
-11. **First argument positional, rest named**:
-    ```maxon
-		greet("Alice")                        // Single param is positional
-		connect("localhost", port: 8080)      // First positional, rest named
-		move(start, end: end)                 // First positional, rest named
-    ```
-
-12. **Parameters with defaults can be omitted**:
-    ```maxon
-		function greet(name String, title String = "Mr.")
-		greet("Smith")                // Uses default
-		greet("Smith", title: "Dr.")  // Override default
-    ```
-
-13. **Use `try otherwise` for error handling**:
-    ```maxon
-		let value = try mayFail() otherwise 42  // Default value on error
-		try cleanup() otherwise ignore          // Ignore errors in cleanup
-
-		// Use block handler for complex error handling
-		try loadData() otherwise 'err'
-				logError("Failed to load data")
-				useDefaults()
-		end 'err'
-    ```
-
-14. **Propagate errors with `try` in throwing functions**:
-    ```maxon
-		function process() returns Result throws WorkflowError
-				let data = try loadData()  // Propagates error to caller
-				return transform(data)
-		end 'process'
+    test 'adds two numbers'
+    	try Expect.equal(2 + 2, expected: 4)
+    end 'adds two numbers'
     ```
 
 ---
 
-**End of Reference**
+## The Runtime Tier
+
+This section is for contributors to the compiler and runtime; ordinary programs never meet these rules.
+
+`runtime/` sits at the checkout root beside `stdlib/`, and the compiler loads both on every compile. Its
+`.maxon` files are a privileged source tier: they parse, type-check and lower like any other file, but the
+runtime compiled into every program is written there, in Maxon, rather than built as IR inside the compiler.
+Two rules that hold everywhere else are lifted for these files, and two that hold nowhere else are imposed on
+them.
+
+**The two directories travel together.** The compiler finds `stdlib/` by walking up from its own executable
+and reaches `runtime/` as its sibling, so a compiler with only one of them beside it cannot compile anything.
+Release archives, the install scripts, the Docker image and the Homebrew formula all ship both.
+
+### What a Runtime File May Do
+
+| Privilege | Why |
+|-----------|-----|
+| Declare a `__`-prefixed name — the **E2051** reservation that keeps other code out of that space is lifted | the prefix is the runtime's own name space |
+| Declare `maxon_force_segfault` — the one runtime entry without the prefix, because a backtrace prints it; E2051 reserves the name everywhere else | a second free function of that name would rename the runtime's symbol |
+| Call a `__Raw.*` intrinsic — the closed table of raw machine and OS operations | a runtime is written on that floor |
+
+A `__Raw` call from outside `runtime/` is **E3152**; the privilege belongs to the tier, so no wrapper or
+re-export carries it out. A runtime entry is unreachable from outside the tier: calling one is **E3004**, and
+naming one as a function value (`let f = __parallel_boundary`) is **E3155**.
+
+### What a Runtime File May Not Do
+
+| Restriction | Code |
+|-------------|------|
+| Use a managed value — in a type it spells (a field, return, parameter or cast target) or in a binding whose type is inferred — because reference counting calls into the runtime this tier defines | **E3153** |
+| Declare anything wider than `module` — `runtime/` is linked into every program, so an `export` or `public` name would collide with the programs it is part of | **E3154** |

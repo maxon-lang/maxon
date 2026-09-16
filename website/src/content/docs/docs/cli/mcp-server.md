@@ -2,28 +2,25 @@
 title: MCP Server
 description: Connect AI coding agents directly to the Maxon compiler with the built-in Model Context Protocol server.
 sidebar:
-  order: 2
+  order: 6
 ---
 
-Maxon includes a native **Model Context Protocol (MCP)** server built directly into the compiler binary:
+Maxon includes a **Model Context Protocol (MCP)** server built into the compiler binary:
 
 ```bash
 maxon mcp-server
 ```
 
-Because Maxon was designed from the ground up as a language *written by AI, for AI*, the compiler provides first-class tooling for AI coding assistants. Rather than relying on external scripts or fragile shell wrappers, any MCP-compatible client (such as Claude Desktop, Cursor, Antigravity, or VS Code) can interact directly with the Maxon compiler over standard input and output using JSON-RPC 2.0.
+Any MCP-compatible client (Claude Desktop, Claude Code, Cursor, Antigravity, VS Code and others) can use
+it to build, run, test, format and inspect Maxon code through structured tools, instead of shell
+commands. There is nothing else to install: the server is a command of every `maxon` binary.
 
-There are no Node.js dependencies, external packages, or separate services to install — `maxon mcp-server` is an integral command in every Maxon distribution.
+## Quick setup
 
----
+Add the server to your client's configuration.
 
-## Quick Setup
-
-Add the Maxon MCP server to your client's configuration file:
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows, `~/Library/Application Support/Claude/` on macOS):
+**Claude Desktop:** `claude_desktop_config.json` (in `%APPDATA%\Claude\` on Windows,
+`~/Library/Application Support/Claude/` on macOS):
 
 ```json
 {
@@ -36,198 +33,197 @@ Add to `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows, `~/Library/
 }
 ```
 
-### Cursor & Antigravity
+**Cursor, Claude Code and Antigravity:** `.cursor/mcp.json` or `.mcp.json` in your project root, with
+the same content.
 
-Add to `.cursor/mcp.json` or `.mcp.json` in your project root:
+**Other clients:** configure a stdio server with command `maxon` and arguments `["mcp-server"]`.
 
-```json
-{
-  "mcpServers": {
-    "maxon": {
-      "command": "maxon",
-      "args": ["mcp-server"]
-    }
-  }
-}
+## `maxon mcp-server`
+
+```bash
+maxon mcp-server         # standard mode
+maxon mcp-server --dev   # also exposes the compiler-development tools
 ```
 
-### VS Code
+| Option | Description |
+|--------|-------------|
+| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, and the `repoRoot` and `from` arguments of `build` |
 
-Configure via your preferred MCP client extension or workspace configuration pointing to:
-- **Command:** `maxon`
-- **Arguments:** `["mcp-server"]`
+The server reads newline-delimited JSON-RPC 2.0 messages on stdin and writes responses to stdout. It
+implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `tools/list` and
+`tools/call`.
 
----
+| Mode | Invocation | Tools |
+|------|------------|-------|
+| Standard | `maxon mcp-server` | 8: `build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` |
+| Developer | `maxon mcp-server --dev` | 11: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
 
-## Operating Modes
+**An argument a tool does not declare is refused** with `invalidParams`, never ignored, so the arguments
+listed below are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is
+refused the same way, as is an argument of the wrong JSON type.
 
-The Maxon MCP server provides two operational modes:
+Tools that run the compiler answer with a JSON object holding `success`, the `command` that ran,
+`exitCode`, `stdout` and `stderr`. They act in the server's working directory, which is normally your
+project.
 
-| Mode | Invocation | Exposed Tools | Audience |
-|---|---|---|---|
-| **Standard Mode** | `maxon mcp-server` | 8 tools (`build`, `run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`) | Application and library developers using Maxon |
-| **Developer Mode** | `maxon mcp-server --dev` | 11 tools (all standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome`, plus worktree options on `build`) | Contributors developing the Maxon compiler |
-
----
-
-## Standard Tools
-
-When launched as `maxon mcp-server`, the server advertises 8 standard tools.
-
-**An argument a tool does not declare is refused** with `invalidParams`, rather than ignored. An argument that is silently dropped leaves the caller believing their run honoured something it never did — so the arguments listed below are exactly the ones that exist.
+## Standard tools
 
 ### `build`
 
-Compile a Maxon source file, directory, project manifest, or inline snippet.
+Compiles a source file, a directory, a manifest target or an inline snippet, as `maxon build` does.
 
-- **Arguments:**
-  - `path` *(string, optional)*: A `.maxon` source file or project directory. Defaults to the current directory (`build.maxon`).
-  - `source` *(string, optional)*: Inline Maxon source to build instead of a path. Mutually exclusive with `path`.
-  - `output` *(string, optional)*: Destination path for the output binary.
-  - `target` *(string, optional)*: A cross-compile target (`x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux`, `wasm32-wasi`), or the name of a target declared in `build.maxon`. A value containing a dash is passed as `--target=`; a bare word names a manifest target.
-  - `emitIr` *(boolean, optional)*: Emit the intermediate representation alongside the build.
-- **Returns:** `success`, the `command` that ran, `exitCode`, `stdout`, and `stderr`.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string | Source file or project directory. Omitted, the working directory's `build.maxon` runs. |
+| `source` | string | Inline Maxon source to build instead of a path. Give `path` or `source`, not both. |
+| `output` | string | Output executable path (`-o`) |
+| `target` | string | A target such as `wasm32-wasi` (a value containing `-` is passed as `--target=`), or the name of a target declared in `build.maxon` (a bare word) |
+| `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
 
 ### `run`
 
-Compile (or reuse a cached build of) a Maxon program and execute it immediately.
+Compiles, or reuses a cached build of, a program and runs it, as `maxon run` does.
 
-- **Arguments:**
-  - `path` *(string, optional)*: The `.maxon` source file or directory to run.
-  - `source` *(string, optional)*: Inline Maxon source to compile and run. Mutually exclusive with `path`; give one.
-  - `arguments` *(array of strings, optional)*: Command-line arguments passed to the running program.
-- **Returns:** Program exit code and standard output/error.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string | The `.maxon` file or directory to run |
+| `source` | string | Inline Maxon source to compile and run. Give `path` or `source`. |
+| `arguments` | array of strings | Command-line arguments for the program |
+
+The answer carries the program's exit code, stdout and stderr.
 
 ### `test`
 
-Run a project's native `test` declarations.
+Runs a project's `test` declarations, as `maxon test` does.
 
-- **Arguments:**
-  - `path` *(string, optional)*: Project or directory to test (default: current directory).
-  - `filter` *(string, optional)*: Selects tests by name or file — case-insensitive, and comma-separated patterns are a union.
-- **Returns:** Test execution summary and failure diagnostics.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string | Project directory (default: the working directory) |
+| `filter` | string | Selects tests by name or file: case-insensitive, comma-separated patterns are a union |
 
 ### `fmt`
 
-Re-print Maxon source in canonical layout.
+Formats Maxon source, as `maxon fmt` does.
 
-- **Arguments:**
-  - `path` *(string, optional)*: A `.maxon` file or a directory, rewritten **in place**. Defaults to the working directory.
-  - `source` *(string, optional)*: Inline Maxon source to format. Nothing is written; the formatted text comes back in `formatted`. Mutually exclusive with `path`.
-- **Returns:** With `path`, the formatter's own output. With `source`, the `formatted` text.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string | File or directory, rewritten **in place**. Omitted, the whole working directory is formatted. |
+| `source` | string | Inline source to format. Nothing is written; the result's `formatted` field holds the text. Give `path` or `source`, not both. |
 
 ### `check`
 
-Perform fast syntactic and semantic validation without generating machine code.
+Checks one source file for errors without producing an executable, by running
+`maxon verify-warm-rebuild` on it. Diagnostics come back in `stderr`.
 
-- **Arguments:**
-  - `path` *(string, required)*: The file to check.
-- **Returns:** Type-check errors, warnings, and diagnostic spans.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string, required | The `.maxon` file to check |
 
 ### `dump_ir`
 
-Emit compiler Intermediate Representation (IR) for inspection or debugging.
+Builds a source file with `--emit-ir`, which writes its Target IR to `<output>.ir` beside the executable.
+The answer's `stdout`/`stderr` name the file written; read the IR from that file.
 
-- **Arguments:**
-  - `path` *(string, required)*: Path to the source file to inspect.
-- **Returns:** The textual IR emitted by the compiler pipeline.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `path` | string, required | The `.maxon` source file |
 
 ### `lookup_error_code`
 
-Look up a Maxon compiler error code.
+Looks up a compiler error code.
 
-- **Arguments:**
-  - `code` *(string or integer, required)*: `3014`, `"3014"`, `"E3014"`, or the registry case name `"semanticUnneededCast"`.
-- **Returns:** The code, its canonical registry name, the compilation stage its leading digit names, and the registry's documentation of it.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `code` | string or integer, required | `3014`, `"3014"`, `"E3014"`, or the registry case name `"semanticUnneededCast"` |
 
-The code, name and stage come from the error-code registry compiled into the binary, so they are answered by any install. The prose lives in the registry's source comments; when the compiler sits in a checkout it is read from there and `documentationAvailable` is `true`, and otherwise that field is `false` and the answer says so.
-
-**A number no registry case claims is refused**, not answered. An explanation of a code that does not exist reads as an answer and is not one.
+The answer gives the code, its registry name, the compilation stage its leading digit names, and its
+documentation. The name and stage come from the registry compiled into the binary, so every install
+answers them. The documentation is read from the compiler's source when the compiler sits in a source
+checkout; otherwise `documentationAvailable` is `false`. A number no error code claims is refused.
 
 ### `info`
 
-Retrieve compiler metadata and environment information.
+Takes no arguments. Returns `name`, `version`, `commit`, `commitDate`, `executable` (the running
+compiler's path) and `hostTarget`.
 
-- **Arguments:** None.
-- **Returns:** Version string, commit hash, commit date, the path of the running executable, and the host target.
+## Developer tools (`--dev`)
 
----
+These tools are for working on the Maxon compiler itself, in a checkout of its repository.
 
-## Compiler Contributor Mode (`--dev`)
+### Which tree, and which compiler
 
-When working on the Maxon compiler repository itself, start the server with `--dev`:
+One server can serve several checkouts or worktrees, so every developer tool, and `build` in developer
+mode, takes a `repoRoot` argument:
 
-```bash
-maxon mcp-server --dev
-```
+| Argument | Type | Description |
+|----------|------|-------------|
+| `repoRoot` | string | Absolute path of the Maxon checkout to act in. Defaults to the checkout the server's own compiler sits in. |
 
-In addition to all 8 standard tools, developer mode enables 3 contributor-specific tools and expands the `build` tool:
+- `repoRoot` must be **absolute**. A relative path, or a directory that is not a Maxon checkout, is
+  refused, never replaced by another tree.
+- A tool acting on a tree runs **that tree's own compiler**, `<repoRoot>/maxon-bin/.maxon/maxon`, because
+  the compiler finds its standard library by walking up from its own executable. A tree whose compiler
+  has not been built is refused, naming the `build` tool.
+- **Every answer echoes the `repoRoot` it used**, on success and on refusal.
+
+In developer mode `build` also accepts:
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `repoRoot` | string | The checkout to build in |
+| `from` | string | A compiler binary to build **with**, instead of the tree's own (for a tree whose compiler slot is empty or broken) |
 
 ### `run_spec_test`
 
-Execute the compiler's language specification test suite (`spec-test`), returning structured pass/fail counts.
+Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`, `durationMs`,
+`exitCode`, `memoryLeak` (exit code 101) and `rawTail` (the last 4 KiB of output).
 
-- **Arguments:**
-  - `filter` *(string, optional)*: Passed to `--filter=`. **One case-sensitive substring** of the `<spec>/<test>` label — not a list.
-  - `directory` *(string, optional)*: Spec directory to run. Defaults to `specs`.
-  - `updateRequired` *(boolean, optional)*: Regenerate the committed `RequiredIR` blocks. **Always pair with `filter`** — unfiltered it rewrites every golden in the suite.
-  - `log` *(string, optional)*: Passed to `--log=` (e.g. `ir:debug`).
-  - `network` *(boolean, optional)*: Also run the live network fragments.
-  - `target` *(string, optional)*: Cross-compile target (e.g. `wasm32-wasi`).
-  - `workers` *(integer, optional)*: Worker subprocess count. A debugging tool; the runner's own default is what the suite runs at.
-  - `repoRoot` *(string, optional)*: Absolute path to the Maxon checkout to run in.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `filter` | string | `--filter=`: one case-sensitive substring of the `<spec>/<test>` label, not a list |
+| `directory` | string | Spec directory (default `specs`) |
+| `updateRequired` | boolean | `--update-required`: rewrite the committed IR goldens. Always pair it with `filter`; unfiltered, it rewrites every golden. |
+| `log` | string | `--log=` value, such as `ir:debug` |
+| `network` | boolean | `--network`: also run the cases that reach a real external host |
+| `target` | string | `--target=` value, such as `wasm32-wasi` |
+| `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
+| `repoRoot` | string | The checkout to run in |
 
 ### `run_scale_test`
 
-Run the scaling instrument: compile a doubling ladder of generated programs and report per-phase memory and CPU.
+Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. It
+has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic).
 
-**It has no verdict and nothing to pass.** The ratio between rungs is the reading — ×2 is linear, ×4 quadratic.
-
-- **Arguments:**
-  - `rungs` *(integer, optional)*: How many rungs to climb (1–8, default 6). Each rung doubles the program.
-  - `repeat` *(integer, optional)*: How many times each rung is compiled (1–25, default 3).
-  - `note` *(string, optional)*: Record this run in `docs/optimization-log.md` with this text as the reason.
-  - `emitCorpus` *(string, optional)*: Dump the generated corpus to this directory and compile nothing.
-  - `log` *(string, optional)*: Passed to `--log=`.
-  - `repoRoot` *(string, optional)*: Absolute path to the Maxon checkout to run in.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `rungs` | integer | Rungs to climb (1–8, default 6). Each rung doubles the program. |
+| `repeat` | integer | Compiles per rung (1–25, default 1). CPU takes the minimum; memory is cross-checked. |
+| `note` | string | Record the run in `docs/optimization-log.md` with this text as the reason |
+| `emitCorpus` | string | Write the generated programs to this directory and compile nothing |
+| `log` | string | `--log=` value |
+| `repoRoot` | string | The checkout to run in |
 
 ### `spec_test_outcome`
 
-Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a failure summary.
+Runs spec tests for a filter and returns a `tests` array of `{spec, test, status}` entries (`PASS` or
+`FAIL`), a `failures` array of `{spec, message}`, and the counts.
 
-- **Arguments:**
-  - `filter` *(string, required)*: Passed to `--filter=`. One case-sensitive substring, typically a label like `arithmetic/addition`.
-  - `target` *(string, optional)*: Cross-compile target.
-  - `network` *(boolean, optional)*: Also run the live network fragments.
-  - `repoRoot` *(string, optional)*: Absolute path to the Maxon checkout to run in.
+| Argument | Type | Description |
+|----------|------|-------------|
+| `filter` | string, required | One case-sensitive substring, typically a label like `arithmetic/addition` |
+| `target` | string | `--target=` value |
+| `network` | boolean | Also run the cases that reach a real external host |
+| `repoRoot` | string | The checkout to run in |
 
-### Contributor `build` extensions
+## Rebuilding the compiler under a running server
 
-In `--dev` mode, `build` accepts two more arguments:
-- `repoRoot` *(string, optional)*: Absolute path of the checkout to build.
-- `from` *(string, optional)*: A compiler binary to build WITH, instead of the target tree's own. This is the seed case — the tree's own slot may be empty precisely because that is what is being fixed.
+The server is the compiler, so building the compiler (for example with the `build` tool and
+`path: "maxon-bin"`) replaces the executable the server runs from. That works: once the compile
+succeeds, the running image is renamed to `maxon.previous` and the new compiler is written in its
+place, and the server keeps answering from the renamed image. A server started before an earlier
+rebuild is running an older `maxon.previous`; that file is renamed aside to `maxon.retired-<stamp>` and
+deleted by a later rebuild once the server has exited. A failed build leaves the running compiler in the
+slot.
 
-### Which tree, and which compiler in it
-
-One server process serves every checkout and worktree, and its working directory belongs to the editor rather than to you. So:
-
-- `repoRoot` must be **absolute**; a relative path would resolve against the server's own working directory. Relative paths and directories that are not checkouts are refused, never quietly swapped for another tree.
-- A tool acting on a tree spawns **that tree's own compiler**, at `<repoRoot>/maxon-bin/.maxon/maxon`. The compiler resolves `stdlib/` by walking up from its own executable, so running the server's binary against your sources would compile them against a different standard library. A tree whose compiler has not been built is refused, naming the `build` tool.
-- **Every answer echoes the `repoRoot` it used**, on success and on refusal alike. It is the only way to check that a call acted where you meant.
-
----
-
-## Concurrent Rebuilding
-
-A common scenario in AI-assisted compiler development is asking the agent to rebuild the compiler binary while the MCP server is actively running.
-
-The server is the compiler, so this is a process being asked to replace its own executable.
-
-- When `maxon build maxon-bin` is invoked, the compiler detects that the output is the running executable image.
-- A running executable cannot be deleted, but it can be renamed. Once the compile succeeds, the compiler renames the active binary to `maxon.previous` and writes the freshly compiled one in its place.
-- The MCP server process keeps running from the vacated image and answers subsequent requests without interruption.
-- A server started before an earlier rebuild is running the old `maxon.previous` itself. The next rebuild cannot delete that file, so it renames it aside to `maxon.retired-<stamp>` and deletes it on a later rebuild once the server has exited.
-
-⚠ **The running server is still the compiler it was started as.** It serves from the image that was renamed away, so its answers come from the code you built *from*, not the code you just built. Restart the MCP server when you want the new compiler to answer.
-
-A failed build leaves the running compiler in the slot, so the tree always has a compiler that can build the fix.
+**The running server is still the compiler it was started as.** Restart it when you want the newly
+built compiler to answer.

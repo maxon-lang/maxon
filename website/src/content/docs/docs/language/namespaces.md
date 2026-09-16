@@ -5,135 +5,147 @@ sidebar:
   order: 12
 ---
 
-### Automatic Derivation
-Namespaces are derived from file paths:
+A Maxon program is every `.maxon` file in a project directory, compiled together. There are no import
+statements: a file sees its own declarations, the declarations other files make visible, and the standard
+library.
 
-| File Path | Namespace |
-|-----------|-----------|
-| `math.maxon` | (global) |
+## Automatic Derivation
+
+A file's namespace is its directory path relative to the project root, joined with `.`:
+
+| File | Namespace |
+|------|-----------|
+| `main.maxon` | (none) |
 | `utils/helpers.maxon` | `utils` |
-| `stdlib/fmt/integer.maxon` | `stdlib.fmt` |
+| `lib/fmt/integer.maxon` | `lib.fmt` |
 
-### Export Keyword
+Every file in one directory shares that directory's namespace.
 
-Functions, types, enums, typealiases, and top-level variables are file-scoped by default. Use the `export` keyword to make them visible to other files:
+## Visibility
+
+Top-level declarations — functions, types, enums, unions, typealiases, variables — are **private to their
+file** unless marked. Three modifiers widen that:
+
+| Modifier | Visible to | Checked for unused exports |
+|----------|------------|----------------------------|
+| *(none)* | the declaring file | — |
+| `module` | files in the declaring directory and its subdirectories | yes (**E3094**) |
+| `export` | every file | yes (**E3092**, **E3093**) |
+| `public` | every file | no |
+
+The same modifiers apply to members inside a type: fields, methods and static members are private to the
+type unless marked, independently of the type's own visibility. At most one modifier may be written;
+combining two is **E2001** (`'export' and 'public' cannot be combined`).
+
+## `export`
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
 export function publicAdd(a Score, b Score) returns Score
-		return a + b
+	return a + b
 end 'publicAdd'
 
-function privateHelper(x Score) returns Score
-		return x * 2
+function privateHelper(x Score) returns Score     // file-private
+	return x * 2
 end 'privateHelper'
 ```
 
-Only `publicAdd` can be called from other files.
+Calling a non-exported function from another file is **E3008** (`function 'privateHelper' is not
+exported`).
 
-**Exporting types and enums:**
+`export` also states an expectation: **this program uses the declaration from another file.** When
+nothing outside the declaring file refers to it, the compiler reports **E3092** (`exported function
+'geometry.perimeter' is never referenced outside its declaring file`), and when every use is inside the
+declaring directory it suggests `module` (**E3093**). These checks run on multi-file programs that
+otherwise compile.
 
-```maxon
-typealias Coord = int(i64.min to i64.max)
+## `public`
 
-export type Point
-	export var x as Coord
-	export var y as Coord
-end 'Point'
-
-export enum Color
-	red
-	green
-	blue
-end 'Color'
-```
-
-Without `export`, types and enums are only usable within the file where they are declared.
-
-**Exporting typealiases:**
+`public` gives exactly the visibility of `export` and declares the symbol **API surface**: something that
+exists for callers outside this program, so "nothing here uses it" is not a finding. Library code marks its
+surface `public`; the standard library does so throughout.
 
 ```maxon
-export typealias Score = int(0 to 100)
+typealias Length = int(0 to 1000)
+
+public function area(width Length, height Length) returns Length
+	return width * height
+end 'area'
 ```
 
-Non-exported typealiases are only visible within their file.
+`export` and `public` are reserved words. `module` is contextual: it is a modifier only directly before a
+declaration and remains usable as an ordinary name.
 
-**Exporting top-level variables:**
+## `module`
+
+A `module` declaration is visible to every file in the declaring file's directory and in its subdirectories,
+and to nothing outside that subtree — for helpers shared across a feature folder:
+
+```text
+project/
+├── main.maxon                 # cannot call helper()
+└── feature/
+    ├── api.maxon              # module function helper() — declared here
+    ├── routes.maxon           # can call helper()
+    └── internal/
+        └── cache.maxon        # can call helper()
+```
+
+Using a `module` declaration from outside its subtree is **E3088** (`function 'helper' is module-scoped
+and not visible from this directory`). A `module` declaration that nothing outside its file uses is
+**E3094**.
+
+## Qualified Names
+
+Qualify a name with its namespace to be explicit, or to choose between two declarations with the same
+name:
 
 ```maxon
-export var sharedCounter = 0
-export let MAX_CONNECTIONS = 100
+function main() returns ExitCode
+	let a = geometry.area(3, height: 4)
+	let side = 7 as geometry.Length
+	print("{a} {side}\n")
+	return 0
+end 'main'
 ```
 
-Exported variables can be read and (for `var`) modified from other files in the same project.
+Qualification works for functions and typealiases (`lib.fmt.format(x)`, `50 as api.Score`). It never
+bypasses visibility. Types are referred to by their bare name.
 
-**Exporting methods within types:**
+## Bare Names and Ambiguity
 
-Individual methods can be exported independently of the type itself:
+A bare name resolves when exactly one visible declaration has it. When several do:
 
-```maxon
-typealias Amount = int(i64.min to i64.max)
+- a declaration at the project root, or in an enclosing directory, takes precedence over one in a nested
+  directory, and a project declaration takes precedence over a standard-library one;
+- otherwise the reference is ambiguous. A function call is **E3095** (`Ambiguous bare-name call to 'describe':
+  multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
+  beta.describe`), and a typealias is **E3063**. Qualify the name to resolve it.
 
-export type Calculator
-	var result as Amount
+Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
-	export function add(n Amount)
-		result = result + n
-	end 'add'
+The standard library's typealiases are usable from every file, including ones the standard library does not
+export, so a value can always be cast to the alias a library signature asks for (`x as AssertedInt`).
 
-	function internalReset()
-		result = 0
-	end 'internalReset'
-end 'Calculator'
+## Multi-Project Workspaces
+
+Several projects can share a workspace. Each is a directory, and the directory you build is the one that is
+compiled:
+
+```text
+workspace/
+├── project-a/
+│   ├── build.maxon      # how project A is built
+│   └── main.maxon
+└── project-b/
+    ├── build.maxon      # how project B is built
+    └── main.maxon
 ```
 
-### Module Keyword (directory-scoped visibility)
+See [Build System](/docs/language/build-system/) and [Project Structure](/docs/cli/project-structure/) for
+what a project directory contains.
 
-`module` is a third visibility tier between file-scoped (the default) and `export`. A `module`-marked declaration is visible to every file in the **same directory** as the declaring file AND every file in **any subdirectory** of that directory — but not to files outside that subtree.
-
-```maxon
-// project/feature/internal.maxon
-module function helper() returns Integer
-	return 42
-end 'helper'
-
-// project/feature/main.maxon — same directory, can call helper()
-function caller() returns Integer
-	return helper()
-end 'caller'
-
-// project/feature/sub/deep.maxon — subdirectory, can also call helper()
-function deepCaller() returns Integer
-	return helper()
-end 'deepCaller'
-
-// project/other.maxon — outside feature/, CANNOT call helper()
-```
-
-`module` and `export` are mutually exclusive — combining them is a parse error. The keyword applies in every position where `export` does: top-level functions, types, enums, unions, typealiases, top-level vars/lets, and per-method or per-field modifiers inside types. A code outside the declarer's directory subtree that tries to use a `module` symbol gets error `E3088: function 'X' is module-scoped and not visible from this directory`.
-
-In Maxon, "module" in this context means a directory subtree — useful for sharing helpers across a feature folder without leaking them to the rest of the program.
-
-### Qualified Names
-Call functions with full namespace:
-```maxon
-var result = stdlib.fmt.format_int(42)
-```
-
-### Suffix Matching
-If unambiguous, use short name:
-```maxon
-var result = format_int(42)   // Finds stdlib.fmt.format_int
-```
-
-### Cross-File Bare-Name Ambiguity
-
-When two files in different directories both expose a declaration with the same bare name and a third file references it without qualification, the compiler reports an ambiguity error and asks the user to qualify with the appropriate directory namespace.
-
-- **Functions** — bare-name calls with multiple visible definitions trigger **E3095** (`Ambiguous bare-name call to 'X': multiple visible definitions found. Qualify with a directory name.`). Qualify the call with the directory namespace (`api.format(...)`, `lib.fmt.format(...)`).
-- **Typealiases** — bare-name type references with multiple reachable definitions trigger **E3063** (`Ambiguous typealias 'X': multiple visible definitions found. Qualify with a directory name.`). Write the qualified form (`api.Score`, `lib.fmt.Score`) at the use site. Same-file duplicates remain **E3061** since qualification cannot disambiguate two declarations in the same file. File-private aliases (no modifier) are scoped to their declaring file and never contribute to cross-file ambiguity.
-
-See `specs/typealias-collision.md` and `specs/namespaces.md` for the canonical tests.
-
----
+**The language server checks open files.** It checks a document together with the standard library, not with the sibling files a
+`maxon build` of its directory would compile. A diagnostic that depends on what another file declares may
+differ from what the build reports.

@@ -61,8 +61,8 @@ export default defineConfig({
             },
           ],
         }),
-        // Fails the build on a broken internal link. The docs are re-synced from the
-        // compiler repo by hand, so links rot silently otherwise.
+        // Fails the build on a broken internal link, including a link to a heading anchor that
+        // no longer exists on the page it names.
         starlightLinksValidator({
           errorOnRelativeLinks: false,
           // The bespoke marketing pages are real routes, but they live outside Starlight
@@ -93,7 +93,7 @@ export default defineConfig({
           items: [{ autogenerate: { directory: 'docs/getting-started' } }],
         },
         {
-          // Sixteen pages, and the only group long enough to swamp the sidebar. Starlight
+          // The longest group, long enough to swamp the sidebar. Starlight
           // still opens it automatically for whichever page you are actually on.
           label: 'Language Reference',
           collapsed: true,
