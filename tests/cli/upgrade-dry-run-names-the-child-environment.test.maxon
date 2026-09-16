@@ -1,0 +1,44 @@
+// upgrade-dry-run-names-the-child-environment.test.maxon - the dry run prints every environment
+// variable the real run sets, so what the child is handed is visible before anything is installed.
+//
+// On Windows one of them is `PSModulePath`, naming this Windows PowerShell's own module directory.
+// The child is started by THIS process rather than by the caller's shell, and pwsh rewrites that
+// variable only for a Windows PowerShell it starts itself: inherited from a pwsh caller it names
+// another edition's modules first, and `Get-FileHash` cannot autoload. Nowhere else does the variable
+// mean anything, so nowhere else may the command name it.
+
+let StagedRootName = "upgrade-child-environment-root"
+let CommandLabel = "command: "
+let ModulePathVariableName = "PSModulePath"
+
+#if os(Windows)
+	// Windows PowerShell's own module directory, as the rendered assignment spells it. The tail is what
+	// discriminates: `WindowsPowerShell` alone is in the executable's own path, so a needle short of
+	// `Modules` would be satisfied by a command that sets no module path at all.
+	let ModulesDirTail = "WindowsPowerShell\\v1.0\\Modules"
+#endif
+
+test 'upgrade --dry-run names every variable the run would set for the child'
+	let staged = stageCompiler(StagedRootName, binaryIn: ScriptInstallBinDirName, stdlibIn: CaseDirItself)
+	let run = runDriver([UpgradeCommandWord, DryRunFlag], binary: staged)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from a script install did not succeed. It said: {run.stdout}{run.stderr}")
+
+	var commandLine = ""
+
+	for line in run.stdout.split("\n") 'eachLine'
+		if line.startsWith(CommandLabel) 'theCommandLine'
+			commandLine = line
+		end 'theCommandLine'
+	end 'eachLine'
+
+	try Expect.isFalse(commandLine.isEmpty(), message: "`maxon {UpgradeCommandWord} {DryRunFlag}` printed no `{CommandLabel}` line. It said: {run.stdout}")
+
+	#if os(Windows)
+		try Expect.contains(commandLine, needle: "{ModulePathVariableName}=", message: "the command sets no {ModulePathVariableName} for the Windows PowerShell it starts, so that child inherits the caller's. From pwsh, the caller's names another edition's modules first and `Get-FileHash` cannot autoload. It said: {commandLine}")
+		try Expect.contains(commandLine, needle: ModulesDirTail, message: "the {ModulePathVariableName} the command sets does not name this Windows PowerShell's own module directory ({ModulesDirTail}), so another edition's could still come first. It said: {commandLine}")
+	#else
+		try Expect.isFalse(commandLine.contains(ModulePathVariableName), message: "the command sets {ModulePathVariableName}, which only Windows PowerShell reads. It said: {commandLine}")
+	#endif
+end 'upgrade --dry-run names every variable the run would set for the child'
