@@ -2,6 +2,13 @@
 
 Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
 
+## 2026.9.2
+
+### Changed
+
+- Nothing in the extension. The version moves because 2026.9.1 was published from a release that was
+  cut again, and a version already on the Marketplace cannot be published twice.
+
 ## 2026.9.1
 
 ### Changed
