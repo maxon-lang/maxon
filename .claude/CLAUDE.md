@@ -21,6 +21,20 @@ own build, gates and traps, and those rules load with it:
 ⇒ **Touching the compiler means those rules apply whether or not they are in front of you.** If you are
 about to build, gate or measure it and have not read `maxon-bin/CLAUDE.md` this session, read it first.
 
+## Documentation
+
+**A user-visible change updates its documentation in the same commit.** User-visible means a command, flag or
+help text; a diagnostic; syntax or semantics; a `public` stdlib API; a runtime environment variable; target
+support; LSP, VS Code or MCP behaviour.
+
+- **Edit the SOURCE, never the site.** `website/MAINTAINING.md`'s "what changed → which source" map names the
+  `docs/*.md` file (or the error-code registry) that owns each surface.
+- **Then regenerate the site:** `node website/scripts/sync-docs.mjs`. The reference pages are generated from
+  those sources and `website.yml` fails on drift, so a hand edit to a generated page is overwritten.
+- **The doc-coverage gates catch an undocumented surface:** `maxon test tests/cli -t reference-documents`,
+  `tests/mcp -t reference-documents`, `tests/docs`. They check names, not truth — a statement the change made
+  false is found by grepping the docs for what changed.
+
 ## Code Quality
 
 Apply these standards when writing or reviewing any code:

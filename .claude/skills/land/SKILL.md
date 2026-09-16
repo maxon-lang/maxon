@@ -263,6 +263,13 @@ That is a cost call, not a rule.)*
 
 ⛔ **Cases go in `specs/`.**
 
+**A user-visible change also names its documentation gate — but not as a red-first case.** When it adds a
+command, option, MCP tool or `public` stdlib API, the doc-coverage gate that owns the surface
+(`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`) reads the
+built compiler or the tree's `stdlib/`, so it is green today and turns red only once the new surface exists.
+It is not in this set; it is acceptance, read in §2 after the code and in §7's battery. Every other
+user-visible change still owes its `docs/` source an edit (§2), which the gates cannot see.
+
 **Then SEE IT RED.** A spec is data — no rebuild needed to run one.
 
 ```
@@ -331,6 +338,10 @@ deliverable stays one chunk and one commit.)*
   `Runtime/RuntimeAbort.maxon` and six files under `specs/`. Follow the enum, not them.
 - **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
   target. Size is never a reason to stop; see the two boxes at the top of this file.
+- **A user-visible change updates its documentation in this change** (`.claude/CLAUDE.md`, Documentation):
+  the `docs/` source `website/MAINTAINING.md`'s map names, a grep of `docs/` for every name the change
+  moved, then `node website/scripts/sync-docs.mjs` to regenerate the site pages, then the doc-coverage
+  gate §1 named. Never a hand edit to a generated page.
 
 ⚠ **Whoever writes the code, §5's reviewer must not be them.**
 
@@ -434,6 +445,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
 | **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin -o temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
+| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
 
@@ -466,9 +478,9 @@ folded into the green — and §8's CI watch is where every lane you skipped is 
 ## 8. Commit and push
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
-the compiler source, the spec cases, **every golden the runs touched — minted, modified or deleted** —
-and any `optimization-log.md` row. ⛔ **Not a commit per piece, and never a partial landing with the rest
-"to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
+the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
+golden the runs touched — minted, modified or deleted** — and any `optimization-log.md` row.
+⛔ **Not a commit per piece, and never a partial landing with the rest "to follow"** — the battery you just ran was run on the whole tree, so the whole tree is what it
 licensed you to push.
 
 **The message carries what the diff cannot:** the wrong answer that motivated the change, the mechanism,

@@ -79,6 +79,12 @@ gate, the changelog entry, shellcheck, CI at this commit, and the built binary's
 
 ⚠ **SKIPPED IS NOT PASSED.** The summary names every skip; read them rather than the exit code alone.
 
+⛔ **EVERY `### Added` AND `### Changed` ITEM HAS A PAGE THAT DESCRIBES IT.** The tag deploys maxon.dev, and
+a feature the changelog announces but no page explains sends its reader nowhere. For each item, find the
+section of the `docs/` source that describes the shipped behaviour (`website/MAINTAINING.md`'s map says
+which); a missing or false one is written on this branch, synced with `node website/scripts/sync-docs.mjs`,
+and committed before the tag.
+
 ## 4 · Tag
 
 ```bash

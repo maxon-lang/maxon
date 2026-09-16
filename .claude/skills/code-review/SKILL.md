@@ -97,8 +97,14 @@ it to every changed file, do not restate it.** The three that get missed:
   by READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not in the battery, so
   "unverified on arm64" is never a review finding and never blocks the change.
 
-Update documentation (`LANGUAGE_REFERENCE.md`, `STDLIB_REFERENCE.md`, `QUICK_REFERENCE.md`,
-`BNF_SYNTAX.md`) if the change warrants it.
+**DOCUMENTATION IS A FINDING, NOT A SUGGESTION** (`.claude/CLAUDE.md`'s Documentation section):
+
+- **A user-visible change with no update to its `docs/` source** — per `website/MAINTAINING.md`'s
+  "what changed → which source" map — is a finding, fixed before the commit.
+- **A doc statement the diff made untrue** is a finding too. Grep `docs/` and `vscode-extension/README.md`
+  for every command, flag, API name and diagnostic the diff changes or removes.
+- **The generated pages must match:** run `node website/scripts/sync-docs.mjs` and read its diff. A
+  hand edit under `website/src/content/docs/docs/{cli,language,stdlib,spec,best-practices}/` is a finding.
 
 ## 6. Rebuild and re-run the gates — STANDALONE ONLY
 
