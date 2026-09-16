@@ -1,6 +1,9 @@
 // Test: http-client.async-trace-interleave
-function doHttp() returns ExitCode throws HttpError
-	let response = try HttpClient.get("http://192.0.2.1/get")
+// Far longer than a loopback connect and send, which is all the HTTP task does before it waits.
+let settleMs = 200
+
+function doHttp(port NetworkPort) returns ExitCode throws HttpError
+	let response = try HttpClient.get("http://127.0.0.1:{port}/get")
 	if response.statusCode() == StatusCode.ok 'ok'
 		return 0
 	end 'ok'
@@ -16,9 +19,14 @@ function doFileIo() returns ExitCode
 end 'doFileIo'
 
 function main() returns ExitCode
-	let httpTask = async doHttp()
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let fileTask = async doFileIo()
+	let httpTask = async doHttp(listener.port())
 	let fileResult = await fileTask
+
+	sleep(settleMs)
+	listener.close()
+
 	let httpResult = try await httpTask otherwise 99
 	return httpResult + fileResult
 end 'main'
@@ -87,9 +95,10 @@ data {
   __slab_arena_list@464 = i64 0
   __slab_arena_map_l1@472 = i64 0
   __slab_state@480 = i64 0
-  __mrt_console_probe_stdin@488 = i8 0
-  __mrt_console_probe_stdout@489 = i8 0
-  __mrt_console_probe_stderr@490 = i8 0
+  __ms_wsa_started@488 = i64 0
+  __mrt_console_probe_stdin@496 = i8 0
+  __mrt_console_probe_stdout@497 = i8 0
+  __mrt_console_probe_stderr@498 = i8 0
 }
 
 func @doHttp {
@@ -97,39 +106,133 @@ func @doHttp {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_34]  ; "http://192.0.2.1/get"
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 65535
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.leaRegRdata rax, [rip + __str_rec_36]  ; "http://127.0.0.1:"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_37]  ; "/get"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot3, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rdx, slot3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
     x64.callDirect HttpClient.get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body
+    x64.movRegReg rbx, r8
+    x64.movRegReg r12, r10
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, tryok
   tryerr:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.movRegReg r10, r12
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  tryok:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
   __il_body:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
   __il_cont:
     x64.cmpRegImm32 rax, 200
     x64.jcc notEqual, ifcont
   ok:
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_HttpResponse
     x64.movRegImm32 r10, 0
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r8
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_HttpResponse
     x64.movRegImm32 r10, 0
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_144]  ; "panic at http-client.async-trace-interleave.test:5: Range check failed: value outside typealias 'NetworkPort'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -143,7 +246,7 @@ func @doFileIo {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "no_such_file.txt"
+    x64.leaRegRdata rcx, [rip + __str_rec_38]  ; "no_such_file.txt"
   __il_body#5:
     x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
@@ -182,7 +285,7 @@ func @doFileIo {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_47]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_51]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -199,48 +302,116 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
-    x64.leaRegFunc rcx, [rip + doHttp]
-    x64.callDirect __gt_spawn
+    x64.leaRegRdata rcx, [rip + __str_rec_39]  ; "127.0.0.1"
+    x64.movRegImm32 rdx, 0
+    x64.callDirect TcpListener.bind
     x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_ready
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
     x64.leaRegFunc rcx, [rip + doFileIo]
     x64.callDirect __gt_spawn
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
     x64.callDirect __gt_ready
-    x64.movRegReg rcx, r12
-    x64.callDirect __gt_await
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_try_await
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ml_port
+    x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
-  tryerr:
-    x64.movRegImm32 rax, 99
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rax, r8
-  trycont:
-    x64.leaRegRegReg r8, rax, r12
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_126]  ; "panic at TcpListener.maxon:32: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_139]  ; "panic at http-client.async-trace-interleave.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+  tryok#13:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic#16
+  __rc_chk#17:
+    x64.cmpRegImm32 r13, 65535
+    x64.jcc greater, __rc_panic#16
+  __il_cont#11:
+    x64.leaRegFunc rcx, [rip + doHttp]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 200], r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 200
+  __rc_ok#19:
+    x64.callDirect __gt_sleep
+  __il_body#21:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __ms_close
+  __il_cont#9:
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.movRegImm32 rax, 99
+    x64.jmp trycont
+  tryok#3:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.leaRegRegReg r12, rax, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_TcpListener
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#7
+  __rc_chk#8:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic#7
+  __rc_ok#6:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_275]  ; "panic at TcpListener.maxon:35: Range check failed: value outside typealias 'NetworkPort'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_145]  ; "panic at http-client.async-trace-interleave.test:31: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
