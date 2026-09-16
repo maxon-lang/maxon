@@ -4202,9 +4202,10 @@ error E3160: <fragment>:30:2: `b` was lent to another green thread at <fragment>
 
 <!-- test: borrow.error.a-lent-let-may-not-reach-a-parameter-that-writes-it -->
 <!-- unsupported-targets: wasm32-wasi -->
-A direct call accepts a `let` handed to a parameter whose FIELD it writes
-(`SemanticCheck.checkImmutableArgToMutatingParam`); after a lend that write lands in the graph the service
-is reading. Which parameters a function writes is a whole-program fact, so this is pinned on the native
+A `let` may not be handed to a parameter whose FIELD the callee writes: `poke` writing `p.n` writes the
+caller's record, so the call earns E3019 (`SemanticCheck.checkImmutableArgToMutatingParam`) on its own, and
+the lend adds the freeze on top — both are reported, because the second says why this write would also cross
+a green thread. Which parameters a function writes is a whole-program fact, so this is pinned on the native
 lanes.
 ```maxon
 type Box
@@ -4241,6 +4242,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
+error E3019: <fragment>:30:2: cannot pass 'b' to function that mutates parameter 'p' (in main)
 error E3160: <fragment>:30:7: `b` was lent to another green thread at <fragment>:29:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
 ```
 
@@ -4295,8 +4297,8 @@ error E3160: <fragment>:35:38: `b` was lent to another green thread at <fragment
 
 <!-- test: borrow.error.a-lent-let-may-not-reach-an-async-callee-that-writes-it -->
 <!-- unsupported-targets: wasm32-wasi -->
-The write half of the same door: `poke` writes its parameter's field, which a `let` may be handed and a LENT
-one may not. Whole-program, so pinned on the native lanes.
+The write half of the same door, one `async` out: `poke` writes its parameter's field, which a `let` may not
+fill at all (E3019), and the lend freezes it on top of that. Whole-program, so pinned on the native lanes.
 ```maxon
 type Box
 	export var n as Integer
@@ -4335,14 +4337,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
+error E3019: <fragment>:32:22: cannot pass 'b' to function that mutates parameter 'p' (in main)
 error E3160: <fragment>:32:27: `b` was lent to another green thread at <fragment>:31:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
 ```
 
 <!-- test: borrow.error.a-lent-let-may-not-reach-a-callee-that-writes-it-through-async -->
 <!-- unsupported-targets: wasm32-wasi -->
-A callee that writes what it was handed is a door however deep the write is: `relay` writes nothing itself and
-spawns `replace`, which does. The summary closes over the spawn, so `relay` writes its parameter and the send
-is frozen against it. Whole-program, so pinned on the native lanes.
+A callee that writes what it was handed refuses a `let` however deep the write is: `relay` writes nothing
+itself and spawns `replace`, which does. The summary closes over the spawn, so `relay` writes its parameter —
+E3019 at the call — and the lend freezes it on top of that. Whole-program, so pinned on the native lanes.
 ```maxon
 type Box
 	export var n as Integer
@@ -4384,6 +4387,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
+error E3019: <fragment>:37:9: cannot pass 'b' to function that mutates parameter 'q' (in main)
 error E3160: <fragment>:37:15: `b` was lent to another green thread at <fragment>:36:9, so what it holds is frozen: passing it to `relay`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
 ```
 

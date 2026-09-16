@@ -504,7 +504,15 @@ end 'declarationAlreadyReported'
 // diagnostic. `resolveType`'s recovery answer for an unknown name is what lands in the shape, and the
 // pipeline's error gate stops the build before anything reads it.
 function resolveFunctionAliasShapes(project Project, signatures ProgramSignatures)
-	for (name, alias) in project.functionTypeAliases 'eachAlias'
+	// Keys out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
+	var names = ByteArrayArray.create()
+
+	for (name, _) in project.functionTypeAliases 'eachDeclaredAlias'
+		names.push(name)
+	end 'eachDeclaredAlias'
+
+	for name in names 'eachAlias'
+		let alias = try project.functionTypeAliases.get(name) otherwise panic("resolveFunctionAliasShapes: '{String.from(name)}' was read out of the alias registry and is no longer in it")
 		var resolvedParams = MaxonTypeArray.create()
 		var preErasedNames = ByteArrayArray.create()
 
@@ -897,7 +905,14 @@ end 'pendingWithPair'
 // hashes the same names into the same slots), which is what the byte-identical-output gate needs;
 // and a program with two undeclared field types has two independent bugs, not an ordering.
 function checkStructFieldTypes(project Project, signatures ProgramSignatures)
-	for (_, layout) in project.structTypes 'eachStruct'
+	// Layouts out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
+	var layouts = StructLayoutArray.create()
+
+	for (_, layout) in project.structTypes 'eachDeclaredStruct'
+		layouts.push(layout)
+	end 'eachDeclaredStruct'
+
+	for layout in layouts 'eachStruct'
 		for fieldType in layout.fieldTypes 'eachField'
 			_ = resolveType(project, signatures: signatures, t: fieldType, readerFilePath: layout.declFilePath)
 		end 'eachField'

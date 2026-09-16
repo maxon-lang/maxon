@@ -1,0 +1,23 @@
+// Test: let-to-field-writing-callee-error
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	let a = Box.create()
+	bump(a)
+	return a.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:18:2: cannot pass 'a' to function that mutates parameter 'b' (in main)

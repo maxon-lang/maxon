@@ -263,5 +263,10 @@ export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeNameRem
 		remappedCases.push(remappedFields)
 	end 'eachCase'
 
-	layout.casePayloads = remappedCases
+	// Written through the layout's own door, after the read loop above rather than inside it: the write is
+	// then the layout's own (which is what lets a caller reach this through a binding it may not write) and
+	// it cannot land in a column the loop is still walking.
+	for index in 0 upto remappedCases.count() 'eachRemapped'
+		layout.retypeCasePayloads(index as CaseIndex, payloads: try remappedCases.get(index) otherwise panic("remapEnumLayoutPayloadTypes: remappedCases.get OOB at {index} inside its own count"))
+	end 'eachRemapped'
 end 'remapEnumLayoutPayloadTypes'

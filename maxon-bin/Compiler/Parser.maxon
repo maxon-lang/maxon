@@ -29637,7 +29637,7 @@ export type Parser
 			return
 		end 'namesNoLocalBinding'
 
-		let binding = self.scope.getInfo(name)
+		var binding = self.scope.getInfo(name)
 
 		if not binding.mutable 'namesNoVarInScope'
 			return
@@ -34463,6 +34463,23 @@ export type Parser
 		let value = binding.boundValue
 		let managed = self.bindingIsOwned(binding)
 
+		// ⚖⚖ **THE STORE BELOW WRITES THE SCRUTINEE'S BOX, AND WHERE THE SCRUTINEE IS A PARAMETER THAT BOX IS
+		// THE CALLER'S.** So a body whose arm writes back summarises as writing that parameter's record, and
+		// E3019 can answer at the call — without this seed `bump(s)` whose arm is `n = 42` reported nothing and
+		// mutated a caller's `let` (`specs/mutable-enums.md`'s two `error.let-to-a-callee-that-writes-back-*`).
+		// It is the RECORD-WRITE column and not E3019's narrow one, because a write-back is neither a container
+		// method on the parameter nor a store into a field of `self`: putting it there would refuse a `let`
+		// RECEIVER for a method that writes back its own payload, which is the exemption one tier up.
+		//
+		// ⛔ **A MANAGED WRITE-BACK ALSO FREES WHAT THE BOX HELD** — the decref below — so it seeds E3070's
+		// column too: that released payload is exactly the storage an outstanding borrow could point into.
+		let writtenParams = paramMaskOfValue(func, value: binding.payloadScrutBox)
+		func.writesThroughParamMask = func.writesThroughParamMask or writtenParams
+
+		if managed 'theDisplacedPayloadIsFreed'
+			func.storageWrittenParamMask = func.storageWrittenParamMask or writtenParams
+		end 'theDisplacedPayloadIsFreed'
+
 		// ⭐⭐ **AN ESCAPE ROUTE OF ITS OWN, GUARDED HERE BECAUSE IT IS *THIS STORE* THAT ESCAPES.** A
 		// payload binding looks like a plain local — assigning a capturing closure to a real local is legal and
 		// must stay legal — so the refusal cannot live at the assignment. What makes this one an escape is the
@@ -38617,7 +38634,7 @@ export type Parser
 	// Build the flag split + handler + merge for a parsed `tryCall`. `result` is the success value,
 	// `flag` its error flag, both defined by the `tryCall` in `currentBlock`.
 	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tempFloor TempDropMark) returns ValueId throws ParseError
-		let entryBlock = self.currentBlock
+		var entryBlock = self.currentBlock
 
 		// `NoErrorFlag`, not a bare `0`: this is the dual-register ABI's "no error in flight" value, the one
 		// the throw ENCODE's bias reserves, and it is read here and by the block form's own flag test.
@@ -48754,7 +48771,10 @@ export type Parser
 		// HERE, beside the ownership question it is the second half of, and BEFORE the temporary-scrutinee
 		// enrolment below so the question is asked of the author's own bindings. See
 		// `scrutineeBindingIsMutable`.
-		let scrutMutable = self.scrutineeBindingIsMutable(scrut)
+		// ⚖ Derived ONCE here because two readers ask it — `scrutineeBindingIsMutable`, which states the
+		// ruling, and `declarePayloadBindings`' co-ownership demotion, which must not contradict it.
+		let scrutIsAParameter = valueIsAParameter(scrut, paramCount: func.paramCount)
+		let scrutMutable = self.scrutineeBindingIsMutable(scrut, isAParameter: scrutIsAParameter)
 
 		// "Some reaching path left the scrutinee consumed" — the merge-level union of the per-arm bit, which
 		// is NOT the same as "some arm of THIS match moved a payload out": a nested `match m` in an arm body
@@ -49097,7 +49117,7 @@ export type Parser
 				if hasPayloadBindings 'openArmBindings'
 					self.currentBlock = bodyBlock
 					self.scope.pushScope()
-					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(armPayloadEnum))
+					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, scrutIsAParameter: scrutIsAParameter, layout: requireEnumLayout(armPayloadEnum))
 
 					if armMovedManaged 'consumed'
 						// The scrutinee is dead for the REST OF THIS ARM from here — its slot is nulled, so the
@@ -49397,27 +49417,39 @@ export type Parser
 	end 'bindingIsPartiallyMoved'
 
 	// ⭐⭐ **MAY A `match` ARM WRITE THROUGH THIS SCRUTINEE'S PAYLOAD BINDINGS (`specs/mutable-enums.md`)?**
-	// True iff a MUTABLE binding is the live owner of the box — `var b = Box.full(10)` yes, `let b` no.
+	// A binding that OWNS the box decides it — `var b = Box.full(10)` yes, `let b` no — and where no binding
+	// owns it, the two shapes below do.
 	//
 	// ⭐ **IT ASKS OWNERSHIP, NOT THE TOKENS.** Ownership answers the question from the fact that
-	// actually licenses the store, and answers it in this compiler's own currency (a `ValueId`): a
-	// parameter, a receiver, a field read and a computed expression all own nothing here, so none of
-	// them is writable, and a TEMPORARY (`match makeBox() …`) is enrolled by
-	// `giveTemporaryScopeLifetime` as `mutable: false` precisely so a write into a box that is about
-	// to be dropped is refused. Probing for `identifier` + the match label before the scrutinee is
-	// parsed would answer the same for a bare local only, and would need a second grammar for "what
-	// shapes may appear before a match label".
+	// actually licenses the store, and answers it in this compiler's own currency (a `ValueId`). Probing for
+	// `identifier` + the match label before the scrutinee is parsed would answer the same for a bare local
+	// only, and would need a second grammar for "what shapes may appear before a match label".
+	//
+	// ⚖ **A UNION-TYPED PARAMETER IS A MUTABLE SCRUTINEE** (user ruling), and it is the only shape that owns
+	// no binding and still answers `true`. A parameter is a borrowed reference to the CALLER's record, which
+	// the callee may already write — a `String` parameter takes `append` — and the caller's argument answers
+	// for that write at the call, by the very E3019 that judges it.
+	//
+	// ⛔ **A TEMPORARY IS NOT ONE, THOUGH ITS FRAME OWNS IT.** `scrutMutable` is also the move-out's gate
+	// (`scrutSolelyOwned and not scrutMutable`), so admitting a temporary would silently move
+	// `match <a constructed union>` off the destructive move-out and onto `retainedCoOwn` — a refcount change
+	// on a common path, in the class the member-alias leak came out of — and a nested `match` on the same box
+	// would then answer read-only where the outer answered mutable. Nothing needs it.
+	//
+	// ⛔ **WHAT MOVES IS WRITABILITY AT THIS ONE SHAPE.** `scrutSolelyOwned` still decides the destructive
+	// move-out on its own stricter evidence, a temporary, a field read and a co-owned expression still answer
+	// `false`, and a `let` local OWNS its box, so it never reaches this line and stays read-only.
 	//
 	// ⚠ **IT IS MEMBERSHIP, AND THE ACQUISITION DECISION (`scrutSolelyOwned`) IS PROVENANCE — THEY DISAGREE ON
 	// THE LOOP-CARRIED PHI.** This one is right about mutability there and the provenance columns are wrong about
 	// ownership, so a `var` union matched inside the loop that reassigns it comes out mutable-but-retained.
 	// `declarePayloadBindings` demotes that combination to read-only at the branch that chose the retain —
 	// see the `borrowedRetain` arm, and the exit-101 leak that measured it.
-	function scrutineeBindingIsMutable(scrut ValueId) returns bool
+	function scrutineeBindingIsMutable(scrut ValueId, isAParameter bool) returns bool
 		let index = self.liveOwnerIndexOf(scrut)
 
 		if self.noLiveOwner(index) 'ownedByNoBinding'
-			return false
+			return isAParameter
 		end 'ownedByNoBinding'
 
 		let owner = try self.ownedBindings.get(index) otherwise panic("scrutineeBindingIsMutable: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
@@ -51755,7 +51787,7 @@ export type Parser
 	// keyword may not override an immutable scrutinee, and that is the honest rule — the write is a
 	// store into the scrutinee's box, so the scrutinee's own mutability is the permission being asked
 	// for.
-	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, layout EnumLayout) returns bool throws ParseError
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, scrutIsAParameter bool, layout EnumLayout) returns bool throws ParseError
 		var movedManaged = false
 
 		for binding in bindings 'each'
@@ -51842,7 +51874,12 @@ export type Parser
 					// so the honest answer is E2013 rather than a guessed release. Where the frame IS the sole
 					// owner there is no such holder, and the binding keeps the mutability `specs/mutable-enums.md`
 					// gives it; `writeBackPayload` releases the slot's displaced payload for it.
-					if not scrutSolelyOwned 'anotherOwnerReadsThisBox'
+					//
+					// ⚖ **A PARAMETER'S OTHER OWNER IS THE CALLER, WHICH IS NAMED AT THE CALL SITE AND JUDGED
+					// THERE BY E3019** (user ruling) — so it is exactly not the holder-this-frame-cannot-name
+					// the demotion exists for. Every other co-owned box still demotes. See
+					// `scrutineeBindingIsMutable`, which states the ruling; the fact is derived once at the match.
+					if not scrutSolelyOwned and not scrutIsAParameter 'anotherOwnerReadsThisBox'
 						bindingInfo.mutable = false
 					end 'anotherOwnerReadsThisBox'
 				end 'retainedCoOwn'
@@ -53537,7 +53574,7 @@ export type Parser
 	// so the hook lives HERE, below the seed, and those sites call this directly. The mark is recorded off
 	// the current block so `parseTernaryExpression` detaches the true arm from wherever control actually is.
 	function parseValueExpression(func IrFunction, rangeIsAValue bool = true) returns ValueId throws ParseError
-		let block = self.currentBlock
+		var block = self.currentBlock
 
 		// ⭐ **THE E3019 BLAME NAME IS CLEARED HERE, at the one door every value expression enters through.**
 		// A one-token identifier that resolved via a primary path publishing nothing must read "writable"
@@ -53758,7 +53795,7 @@ export type Parser
 			throw ParseError.ternaryNonBoolCondition(typeTagName(condTag), line: ifTok.line, column: ifTok.column)
 		end 'nonBoolCondition'
 
-		let condExit = self.currentBlock
+		var condExit = self.currentBlock
 
 		// The CONDITION is unconditional, so its own temporaries die on the single path, in the block the
 		// condition left control in — the `if`-statement rule, applied to the ternary's condition.
@@ -73840,10 +73877,10 @@ export type Parser
 	// precisely that second list, three tiers away from the one the parser already consults.
 	//
 	// ⭐⭐ **IT ANSWERS E3019 AND W117, AND IT DELIBERATELY NO LONGER ANSWERS E3070** — see `IrFunction`'s
-	// table, which is where the columns are defined. `receiverOwner` is E3019's ("does passing an immutable
-	// binding here make it an error?", NO for a self-field write, the ruling `self-keyword.md:self-with-params`
+	// table, which is where the columns are defined. `receiverOwner` is the narrow answer E3019 reads ALONE at
+	// a method's receiver slot (NO for a self-field write, the ruling `self-keyword.md:self-with-params`
 	// pins); `receiverStorage` is which parameter's record this receiver denotes, which W117's union below
-	// needs and which E3019 must not read.
+	// needs and which the receiver slot must not read.
 	//
 	// ⛔⛔ **THE E3070 COLUMN USED TO BE SET HERE, OFF `mutatesReceiver`, AND THAT WAS THE ROOT OF A WHOLE
 	// FAMILY OF USE-AFTER-FREES.** E3070's two halves — the same-body site and the cross-function
@@ -74065,7 +74102,7 @@ export type Parser
 	// makes the test a comparison rather than a lookup — see `receiverOwnerMask`'s ⚠ block for why this is
 	// a question about the VALUE and `VarInfo.isParameter` is a different one about the BINDING.
 	function paramMaskOfValue(func IrFunction, value ValueId) returns ParamPositionMask
-		if value >= valueIdAtParamPosition(func.paramCount) 'notAParameter'
+		if not valueIsAParameter(value, paramCount: func.paramCount) 'notAParameter'
 			return NoParamPositions
 		end 'notAParameter'
 
@@ -76284,7 +76321,7 @@ export type Parser
 			let baseName = self.baseBindingName(baseTok)
 
 			if self.scope.contains(baseName) 'localBase'
-				let baseBinding = self.scope.getInfo(baseName)
+				var baseBinding = self.scope.getInfo(baseName)
 				let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
 
 				// ⚠ **THE BINDING THREADED ON IS THE MATERIALIZED ONE, NOT THE ONE THE SCOPE HANDED BACK (W66).**
@@ -76380,7 +76417,7 @@ export type Parser
 	// No `baseBindingOf` here, and it would be a no-op if there were: `createValueBinding` cannot mint a
 	// self-field alias, so such a base always holds its own value.
 	function resolveValueFieldChain(baseTok Token, value ValueId, valueType MaxonType, mutable bool) returns FieldChainStep throws ParseError
-		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: value)
+		var binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: value)
 		let base = try self.requireStructBase(binding, baseTok: baseTok)
 		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding)
 	end 'resolveValueFieldChain'
@@ -76983,10 +77020,11 @@ export type Parser
 		// header carries the two widths this has been measured wrong at. A scalar field frees nothing at all
 		// and a `String` field frees no container, which is the whole of what it excludes.
 		//
-		// `writtenParamMask` (E3019) deliberately stays untouched beside both — the row `IrFunction`'s table
-		// already carries for the field-chain write whose base is a parameter: **no / yes**. Setting E3019's
-		// column here would make `let state = …` + `clearAll(state)` an error, which is the very program
-		// `array-managed-field-reassign:reassign-empty-array-field` pins at exit 0.
+		// `writtenParamMask` deliberately stays untouched beside both — the row `IrFunction`'s table already
+		// carries for the field-chain write whose base is a parameter: **no / yes**. Setting it here would put
+		// the write into the narrow column E3019 reads ALONE at a method's receiver slot, refusing
+		// `let acc = …` + `acc.add(10)` for a method that assigns its own field. The refusal a field write
+		// through a PARAMETER earns rides `writesThroughParamMask` below instead.
 		let fieldType = self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames)
 		let subjectName = self.borrowSubjectNameAt(baseIndex)
 		let storeFreesBorrowableStorage = self.typeOwnsBorrowableStorage(fieldType)
@@ -77001,11 +77039,11 @@ export type Parser
 
 		// ⭐ This is the door neither of the other two masks records at all. `bump(b Box)` whose body is
 		// `b.n = 99` writes the caller's record and would otherwise be summarised as writing nothing, so
-		// `let G = Box.make()` + `bump(G)` would compile and MUTATE a global the program declared `let`.
-		// Neither existing mask could be widened to catch it: E3019's would refuse `let a = Box.make()` +
-		// `bump(a)`, which is legal, and E3070's is scoped to fields whose drop frees something, on
-		// purpose. Ungated by field type, for the reason the sibling door above carries: a scalar field
-		// of a `let` global's box is as much the global as an array field is.
+		// `let a = Box.create()` + `bump(a)` would compile and write a binding the program declared `let`.
+		// Neither existing mask could be widened to catch it: E3019's narrow column is what the RECEIVER slot
+		// reads alone, and E3070's is scoped to fields whose drop frees something, on purpose. Ungated by
+		// field type, for the reason the sibling door above carries: a scalar field of a `let`'s box is as
+		// much the binding as an array field is.
 		func.writesThroughParamMask = func.writesThroughParamMask or self.subjectStorageMask(func, subjectName: subjectName)
 
 		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
@@ -78759,7 +78797,7 @@ export type Parser
 		// check must not run there. A name that is NOT a local (a top-level constant or `var`) is never
 		// owned and never moved, so it stays on the original resolve path.
 		if self.scope.contains(tok.value) 'local'
-			let binding = self.scope.getInfo(tok.value)
+			var binding = self.scope.getInfo(tok.value)
 			try self.requireBindingLive(binding, nameTok: tok)
 			self.lastBareBindingImmutableName = self.immutableReceiverNameOf(binding, baseTok: tok)
 
@@ -80696,7 +80734,7 @@ export type Parser
 			return
 		end 'anInheritedWitness'
 
-		let binding = self.scope.getInfo(name)
+		var binding = self.scope.getInfo(name)
 
 		if binding.isCellBinding 'capturedByItsCell'
 			return
@@ -90453,7 +90491,7 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		let memberTok = try self.consumeMemberNameToken()
 
-		let baseBinding = self.scope.getInfo(self.baseBindingName(baseTok))
+		var baseBinding = self.scope.getInfo(self.baseBindingName(baseTok))
 
 		// The base is a USE of the binding, so it takes the same liveness/move guard every other read of a
 		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.

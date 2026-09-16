@@ -1312,7 +1312,7 @@ export function buildStrCopy(module StdModule)
 	let src = 1 as ValueId
 	let len = 2 as ValueId
 
-	let done = emitForwardCopy(module, func: func, cur: entry, dest: dest, src: src, byteCount: len, ids: ids)
+	var done = emitForwardCopy(module, func: func, cur: entry, dest: dest, src: src, byteCount: len, ids: ids)
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1737,11 +1737,11 @@ function buildMmIncref(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	let owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: ptr, immortal: immortal, ids: ids)
+	var owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: ptr, immortal: immortal, ids: ids)
 	module.setTerminator(immortal, op: StdOp.retVoid)
 	module.setTerminator(owned, op: StdOp.retVoid)
 
@@ -1763,11 +1763,11 @@ function buildMmRetain(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	let owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: ptr, immortal: immortal, ids: ids)
+	var owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: ptr, immortal: immortal, ids: ids)
 	module.setTerminator(immortal, op: StdOp.ret(ptr))
 	module.setTerminator(owned, op: StdOp.ret(ptr))
 
@@ -1805,7 +1805,7 @@ function buildMmOwn(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	let owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: box, immortal: copy, ids: ids)
+	var owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: box, immortal: copy, ids: ids)
 
 	let header = emitHeaderBase(module, block: copy, ptr: box, ids: ids)
 	let size = emitLoadField(module, block: copy, record: header, offset: HeaderSizeOffset, ids: ids)
@@ -1852,7 +1852,7 @@ function buildMmOwnDeep(module StdModule)
 	let box = 0 as ValueId
 	let cloner = 1 as ValueId
 
-	let owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: box, immortal: cloned, ids: ids)
+	var owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: box, immortal: cloned, ids: ids)
 
 	let fresh = ids.mint()
 	module.appendOp(cloned, op: StdOp.callIndirect(fresh, calleeReg: cloner, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(box)))
@@ -1882,7 +1882,7 @@ function buildMmBoxWalk(module StdModule, action CascadeAction)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	let descend = emitBoxWalkStep(module, func: func, block: entry, box: box, action: action, stop: done, ids: ids)
+	var descend = emitBoxWalkStep(module, func: func, block: entry, box: box, action: action, stop: done, ids: ids)
 	module.setTerminator(descend, op: StdOp.branch(done.id))
 	module.setTerminator(done, op: StdOp.retVoid)
 
@@ -1947,7 +1947,7 @@ function buildMmShareBuffer(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let buffer = 0 as ValueId
 
@@ -2177,8 +2177,8 @@ end 'sharedAllocationGuardBox'
 //
 // ⚠ `func` is needed because the route and the event SPLIT `entry` into new blocks.
 export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
-	let step = emitStepOwnerCount(module, func: func, entry: entry, ptr: record, delta: OneFewer, immortal: lower, ids: ids)
-	let cur = emitMmDecrefEvent(module, func: func, block: step.block, ptr: record, priorCount: step.prior, ids: ids)
+	var step = emitStepOwnerCount(module, func: func, entry: entry, ptr: record, delta: OneFewer, immortal: lower, ids: ids)
+	var cur = emitMmDecrefEvent(module, func: func, block: step.block, ptr: record, priorCount: step.prior, ids: ids)
 
 	let noOwnerLeft = emitConst(module, block: cur, value: SoleOwnerRefcount, ids: ids)
 	let wasShared = emitCmp(module, block: cur, a: step.prior, b: noOwnerLeft, pred: StdCmpPred.ne, ids: ids)
@@ -3081,7 +3081,7 @@ end 'insertIfDestructorSymbol'
 // A void `(i64) -> void` signature — the X64 backend discards nothing, and there is no `call_indirect`
 // type tag to satisfy (static dispatch), so it needs no `i64` return.
 function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -3104,8 +3104,8 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 			continue
 		end 'scalarCase'
 
-		let caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
-		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+		var caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
+		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		let tagConst = ids.mint()
 		module.appendOp(cur, op: StdOp.const(tagConst, value: layout.tagOfIndex(ci), valueType: StdType.i64))
 		let isCase = ids.mint()
@@ -3591,7 +3591,7 @@ typealias ManagedFieldDropArray = Array with ManagedFieldDrop
 // skeleton the union cascade uses too, minus the tag switch — hence the shared `emitNullGuardedDrop`.
 function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray, takesDescriptor bool = false)
 	let paramCount = DictionaryDestructorParamCount if takesDescriptor else PlainDestructorParamCount
-	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4055,7 +4055,7 @@ end 'installGenericInstanceCascades'
 // through the SAME `emitCloneCall` a struct field takes, so the two entry points of one operation cannot come
 // to copy differently.
 function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(clonerSymbol(signatures.mangleGenericInstance(id)), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4090,7 +4090,7 @@ typealias ManagedFieldCascadeArray = Array with ManagedFieldCascade
 // cascade's null-guard does. `emitFieldCascadeDestructor`'s dual, minus the refcount check: a clone never
 // frees, it always allocates.
 function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName String, clones ManagedFieldCascadeArray, project Project)
-	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4213,11 +4213,11 @@ end 'synthesizeGenericInstanceCascade'
 // (no case owns a managed payload) is a pure blit, which is exactly the fresh independent box its element copy
 // needs.
 function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
@@ -4227,7 +4227,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 
-	let fellThrough = emitUnionManagedCaseChain(module, func: func, cur: copied, box: newBox, layout: layout, dest: done, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
+	var fellThrough = emitUnionManagedCaseChain(module, func: func, cur: copied, box: newBox, layout: layout, dest: done, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
 
 	module.setTerminator(fellThrough, op: StdOp.branch(done.id))
 	module.setTerminator(done, op: StdOp.ret(newBox))
@@ -4251,8 +4251,8 @@ function emitUnionManagedCaseChain(module StdModule, func IrFunction, cur IrBloc
 			continue
 		end 'scalarCase'
 
-		let caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
-		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+		var caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
+		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		let tagConst = emitConst(module, block: chain, value: layout.tagOfIndex(ci), ids: ids)
 		let isCase = emitCmp(module, block: chain, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
 		module.setTerminator(chain, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
@@ -4390,7 +4390,7 @@ end 'synthesizeElementRecordCascade'
 // `<containerWalk>(box, funcAddr(elementWalk))`. No null guard, deliberately: `emitElementWalkRange` and
 // `emitListElementWalk` each test the slot one level up and never `callIndirect` a null element.
 function synthesizeElementRecordWalk(module StdModule, id GenericInstanceId, signatures ProgramSignatures, action CascadeAction)
-	let func = IrFunction.createFromStd(perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id)), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id)), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -4406,11 +4406,11 @@ end 'synthesizeElementRecordWalk'
 // walk step, then each managed field behind the per-field null-guard a moved-out slot needs.
 // `emitFieldCascadeDestructor`'s shape minus the free, and `emitFieldCascadeCloner`'s minus the allocation.
 function emitFieldCascadeWalk(module StdModule, symbolName ByteArray, walks ManagedFieldCascadeArray, action CascadeAction)
-	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
@@ -4430,16 +4430,16 @@ end 'emitFieldCascadeWalk'
 // chain `synthesizeUnionCloner` walks — the LIVE case's managed payloads. A scalar-only union is the box step
 // alone.
 function synthesizeUnionWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
-	let func = IrFunction.createFromStd(perTypeCascadeSymbol(action, typeName: layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
+	var func = IrFunction.createFromStd(perTypeCascadeSymbol(action, typeName: layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	let walked = emitBoxWalkStep(module, func: func, block: entry, box: box, action: action, stop: done, ids: ids)
-	let fellThrough = emitUnionManagedCaseChain(module, func: func, cur: walked, box: box, layout: layout, dest: done, project: project, signatures: signatures, action: action, ids: ids)
+	var walked = emitBoxWalkStep(module, func: func, block: entry, box: box, action: action, stop: done, ids: ids)
+	var fellThrough = emitUnionManagedCaseChain(module, func: func, cur: walked, box: box, layout: layout, dest: done, project: project, signatures: signatures, action: action, ids: ids)
 
 	module.setTerminator(fellThrough, op: StdOp.branch(done.id))
 	module.setTerminator(done, op: StdOp.retVoid)

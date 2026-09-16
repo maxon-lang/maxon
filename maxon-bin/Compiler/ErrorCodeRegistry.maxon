@@ -480,13 +480,14 @@ export enum ErrorCode
 
 	// An immutable binding's record reaches a parameter the callee writes, or the receiver of a container method that
 	// writes it (push/pop/set/append/...). A `let` local, a `let` alias of a parameter or a module-level `let` named at
-	// the call is refused wherever the callee writes that position. A value — one a `var` holds included — is refused
-	// while an immutable binding is read after the call whose record it may be (`grow(pass(a))`, `pass(a).push(9)`),
-	// that borrows it out of the same mutable storage, or that may be the same record by another road. Make the
-	// binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation check and, of a value, by
-	// `StorageProvenance`. A `let` LENT to a message whose handler writes that parameter by any means, a field write
-	// included, is refused at the send the same way: the handler would write the sender's graph from another green
-	// thread.
+	// the call is refused wherever the callee writes that position, a write of a FIELD of the parameter included — how
+	// deep the callee reaches does not change whose record it wrote. A method writing a field of its own receiver is
+	// the one write that is not a parameter mutation, so `let acc = …` then `acc.add(10)` stands. A value — one a
+	// `var` holds included — is refused while an immutable binding is read after the call whose record it may be
+	// (`grow(pass(a))`, `pass(a).push(9)`), that borrows it out of the same mutable storage, or that may be the same
+	// record by another road. Make the binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation
+	// check and, of a value, by `StorageProvenance`. A `let` LENT to a message whose handler writes that parameter is
+	// refused at the send the same way: the handler would write the sender's graph from another green thread.
 	semanticImmutableRefToMutatingParam = "E3019"
 
 	// An enum declares the same case name twice.

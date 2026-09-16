@@ -1749,7 +1749,7 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	var header = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
 	var append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let list = 0 as ValueId
@@ -1849,7 +1849,7 @@ function buildListWalk(module StdModule, name ByteArray, walksElements bool, act
 	var header = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
 	var step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let list = 0 as ValueId
@@ -1867,7 +1867,7 @@ function buildListWalk(module StdModule, name ByteArray, walksElements bool, act
 	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
-	let nodeWalked = emitBoxWalkStep(module, func: func, block: body, box: node, action: action, stop: step, ids: ids)
+	var nodeWalked = emitBoxWalkStep(module, func: func, block: body, box: node, action: action, stop: step, ids: ids)
 	emitListElementWalk(module, func: func, body: nodeWalked, step: step, node: node, elementWalk: elementWalk, walksElements: walksElements, ids: ids)
 
 	let next = emitLoadField(module, block: step, record: node, offset: ListNextOffset, ids: ids)

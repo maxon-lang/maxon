@@ -481,17 +481,23 @@ end 'CorpusDeclarations'
 function corpusDeclarations(readerPath FilePath) returns CorpusDeclarations
 	// See this file's header: the buffer's PATH is registered and its text is not.
 	match lspDocumentProject(readerPath, content: "") 'buffer'
-		loaded(project) then return resolvedCorpus(project)
+		loaded(project) then return project.resolvedCorpus()
 		unavailable then return CorpusDeclarations.unavailable
 	end 'buffer'
 end 'corpusDeclarations'
 
-function resolvedCorpus(project Project) returns CorpusDeclarations
-	_ = try queryAllModule(project) otherwise return CorpusDeclarations.unavailable
-	let signatures = try queryProgramSignatures(project) otherwise return CorpusDeclarations.unavailable
+// ⚖ **THE STEP IS THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH IT.** Both queries below
+// write the project, and a method writing its own receiver is legal on a binding nothing may write from
+// outside; the same work spelled `resolvedCorpus(project)` hands that payload to a parameter the callee
+// writes, which is E3019.
+extension Project
+	function resolvedCorpus() returns CorpusDeclarations
+		_ = try queryAllModule(self) otherwise return CorpusDeclarations.unavailable
+		let signatures = try queryProgramSignatures(self) otherwise return CorpusDeclarations.unavailable
 
-	return CorpusDeclarations.loaded(project, signatures: signatures)
-end 'resolvedCorpus'
+		return CorpusDeclarations.loaded(self, signatures: signatures)
+	end 'resolvedCorpus'
+end 'Project'
 
 // The member half of a `<Type>.<member>` registration name.
 function memberNameIn(qualified String, prefix String) returns String

@@ -1,0 +1,134 @@
+// Test: parameter-payload-to-a-writing-callee
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function raise(c Counter)
+	c.n = c.n + 32
+end 'raise'
+
+function bump(s Slot)
+	match s 'step'
+		holding(c) then raise(c)
+		empty then return
+	end 'step'
+end 'bump'
+
+function main() returns ExitCode
+	var s = Slot.holding(Counter.create(10))
+	bump(s)
+	match s 'read'
+		holding(c) then return c.n
+		empty then return 0
+	end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 10
+  __il_body#10:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#9:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.storeBaseDispReg.word64 [x19 + 8], x20
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __il_cont#11
+  matchnext#16:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead#15
+  matcharm#13:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+  __il_body#19:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.add x0, x0, 32
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+  __il_cont#18:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+  __il_cont#11:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#4
+  matcharm#2:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Slot
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchnext#4:
+    arm64.cmp x0, 1
+    arm64.b.ne matchdead#3
+  matcharm#1:
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
+    arm64.cmp x21, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x21, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Slot
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  matchdead#3:
+  matchdead#15:
+  matchcont:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at parameter-payload-to-a-writing-callee.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,28 @@
+// Test: error.let-global-to-a-callee-that-calls-a-self-writing-method
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+let G = Box.make()
+
+function tick(b Box)
+	b.bump()
+end 'tick'
+
+function main() returns ExitCode
+	tick(G)
+	return G.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)

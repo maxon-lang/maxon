@@ -2576,7 +2576,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 			panic("spliceWave: '{String.from(module.getFunc(callerIndex).name)}' receives a splice in the wave that also splices it away — a callee must be processed before its caller is ready, and this one was made ready while still pending")
 		end 'bothSidesOfOneWave'
 
-		let facts = try callerFacts.get(callerIndex) otherwise panic("spliceWave: no site facts for a caller whose callees this wave admitted — the admission loop above takes them first")
+		var facts = try callerFacts.get(callerIndex) otherwise panic("spliceWave: no site facts for a caller whose callees this wave admitted — the admission loop above takes them first")
 		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(callerIndex), funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: facts.ids, seeded: true)
 		splicer.spliceCalledOnceSites(facts, wave: wave)
 	end 'eachSplicingCaller'
@@ -3686,7 +3686,7 @@ type SiteSplicer
 	// follows one — the callee's own dead return, present for the callee's arity — never runs and is
 	// replaced by the caller's (`copyBodies`).
 	function copyBlockOps(calleeBlock IrBlock, freshRef BlockRef, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction) returns bool
-		let fresh = self.blockAt(freshRef)
+		var fresh = self.blockAt(freshRef)
 
 		for opIdx in calleeBlock.opRefs 'eachOp'
 			// ⚠ **THE OP IS READ THROUGH `getOp` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE

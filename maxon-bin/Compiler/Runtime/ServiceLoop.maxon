@@ -231,13 +231,13 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	let range = SourceRange.none()
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
 
-	let entry = fn.currentBlock()
-	let receive = fn.openBlock(b"serve")
+	var entry = fn.currentBlock()
+	var receive = fn.openBlock(b"serve")
 	let req = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 	let noRequest = fn.emitCompare(req, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
 	fn.terminateBlock(entry, op: MaxonOp.branch(receive.id), range: range)
 
-	let dispatch = fn.openBlock(b"dispatch")
+	var dispatch = fn.openBlock(b"dispatch")
 	let tag = fn.mintOfType(MaxonType.integer)
 	fn.emit(MaxonOp.loadIndirect(tag, addr: req, offset: UnionTagOffset, valueType: MaxonType.integer), range: range)
 
@@ -245,7 +245,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	// switch's dense table in TAG order — `request.tagOfIndex(i)` is `i` by construction
 	// (`ServiceCompanions.addServiceRequestCase` derives each tag from the case count), so the table's index
 	// IS the case index.
-	let exit = fn.openBlock(b"stopping")
+	var exit = fn.openBlock(b"stopping")
 	fn.emitPositionalCallDiscarding(MboxCloseName, args: argsOf(ServiceMailboxParam), range: range)
 
 	var armIds = BlockIdArray.create()
@@ -268,7 +268,7 @@ end 'buildServiceLoop'
 // The exit path: drain whatever is still queued through the request union's own cascade, drop the state, and
 // hand back this green thread's own ticket. `exit` has already closed the mailbox.
 function buildServiceDrain(fn SynthesizedFunction, project Project, signatures ProgramSignatures, stateType MaxonType, exit IrBlock, range SourceRange)
-	let drain = fn.openBlock(b"drain")
+	var drain = fn.openBlock(b"drain")
 	let leftover = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 	let drained = fn.emitCompare(leftover, rhs: fn.emitTypedLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, range: range)
 	fn.terminateBlock(exit, op: MaxonOp.branch(drain.id), range: range)
@@ -284,7 +284,7 @@ function buildServiceDrain(fn SynthesizedFunction, project Project, signatures P
 	//
 	// ⚠ It goes through the MAILBOX's own pointer rather than naming the symbol — see `MboxAbandonName` for
 	// the E3004 that forced it and for why one door is better than two anyway.
-	let abandonOne = fn.openBlock(b"abandon")
+	var abandonOne = fn.openBlock(b"abandon")
 	fn.emitPositionalCallDiscarding(MboxAbandonName, args: twoArgs(ServiceMailboxParam, second: leftover), range: range)
 	fn.terminateBlock(abandonOne, op: MaxonOp.branch(drain.id), range: range)
 
@@ -343,7 +343,7 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
 	let box = ServiceAbandonBoxParam
 
-	let entry = fn.currentBlock()
+	var entry = fn.currentBlock()
 	let tag = fn.mintOfType(MaxonType.integer)
 	fn.emit(MaxonOp.loadIndirect(tag, addr: box, offset: UnionTagOffset, valueType: MaxonType.integer), range: range)
 
@@ -574,19 +574,19 @@ end 'emitServiceReplyCompletion'
 // is a diamond.
 function emitRoutedReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, errorFlag ValueId, reply ServiceReplyTarget, range SourceRange)
 	let threw = fn.emitCompare(errorFlag, rhs: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.ne, range: range)
-	let caught = fn.currentBlock()
+	var caught = fn.currentBlock()
 
 	// ⭐⭐ **THE THROWN EDGE WRITES THE FUSED ORDINAL, NOT THE RAW FLAG.** A reply's one error word carries a
 	// `(member, case)` pair on a two-member dispatch line, and the handler's own flag is the SECOND member's
 	// half of it — so the shift `ServiceCompanions.serviceReplyHandlerFusedShift` computes is added here, and
 	// `Parser.serviceReplyErrorMembers` builds the awaiter's table from the very same offset.
-	let thrown = fn.openBlock(b"replythrew")
+	var thrown = fn.openBlock(b"replythrew")
 	completeServiceReply(fn, reply: reply, result: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), threw: emitFusedHandlerFlag(fn, signatures: signatures, callee: callee, errorFlag: errorFlag, range: range), range: range)
 
 	// ⚠ On the THROWN path the success register holds whatever the exit left there — the undefined slot
 	// `AsyncReleaser`'s header calls a wild free — so the VALUE word is written only on the edge that really
 	// produced one, and the thrown edge writes a 0 the releaser's null guard reads as "nothing was put here".
-	let answered = fn.openBlock(b"replyok")
+	var answered = fn.openBlock(b"replyok")
 	completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
 
 	let handled = fn.openBlock(b"handled")

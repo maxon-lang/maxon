@@ -323,6 +323,10 @@ type Item
 	static function create(label String) returns Item
 		return Self{label: label}
 	end 'create'
+
+	export function rename(to String)
+		self.label = to
+	end 'rename'
 end 'Item'
 
 union Op
@@ -332,10 +336,6 @@ end 'Op'
 
 typealias Ops = Array with Op
 
-function mutate(item Item)
-	item.label = "MUTATED"
-end 'mutate'
-
 function main() returns ExitCode
 	var a = Ops.create()
 	a.push(Op.holds(Item.create("original label long enough for a heap record")))
@@ -343,7 +343,7 @@ function main() returns ExitCode
 	let b = a.clone()
 	let bOp = try b.get(0) otherwise Op.none
 	match bOp 'mut'
-		holds(it) then mutate(it)
+		holds(it) then it.rename("MUTATED")
 		none then return 3
 	end 'mut'
 
@@ -472,7 +472,7 @@ end 'mutate'
 
 function main() returns ExitCode
 	let a = Op.holds(Item.create("original label long enough for a heap record"))
-	let b = a.clone()
+	var b = a.clone()
 
 	match b 'mut'
 		holds(it) then mutate(it)
@@ -505,6 +505,10 @@ type Item
 	static function create(label String) returns Item
 		return Self{label: label}
 	end 'create'
+
+	export function rename(to String)
+		self.label = to
+	end 'rename'
 end 'Item'
 
 union Op
@@ -520,16 +524,12 @@ type Decl
 	end 'create'
 end 'Decl'
 
-function mutate(item Item)
-	item.label = "MUTATED"
-end 'mutate'
-
 function main() returns ExitCode
 	let a = Decl.create(Op.holds(Item.create("original label long enough for a heap record")))
 	let b = a.clone()
 
 	match b.op 'mut'
-		holds(it) then mutate(it)
+		holds(it) then it.rename("MUTATED")
 		none then return 3
 	end 'mut'
 

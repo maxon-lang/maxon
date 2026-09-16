@@ -2964,7 +2964,7 @@ function emitGtStrandUnref(module StdModule, func IrFunction, cur IrBlock, owner
 	let wasLast = emitCmp(module, block: cur, a: prior, b: emitConst(module, block: cur, value: 1, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(wasLast, thenBlockId: arrive.id, elseBlockId: done.id))
 
-	let arrived = emitGtArriveAndReclaimIfSecond(module, func: func, cur: arrive, gt: owner, ticket: GtTeardownRunnerTicket, otherTicket: GtTeardownConsumerTicket, ids: ids)
+	var arrived = emitGtArriveAndReclaimIfSecond(module, func: func, cur: arrive, gt: owner, ticket: GtTeardownRunnerTicket, otherTicket: GtTeardownConsumerTicket, ids: ids)
 	module.setTerminator(arrived, op: StdOp.branch(done.id))
 	return done
 end 'emitGtStrandUnref'
@@ -3775,7 +3775,7 @@ function buildGtRunMain(module StdModule, target Target)
 	emitRuntimeAbort(module, func: func, block: unfinished, abort: RuntimeAbort.mainThreadSwitchedBackUnfinished, ids: ids)
 
 	let code = emitLoadField(module, block: finished, record: mainGt, offset: GtOffResult, ids: ids)
-	let doneBlock = emitGtArriveAndReclaimIfSecond(module, func: func, cur: finished, gt: mainGt, ticket: GtTeardownConsumerTicket, otherTicket: GtTeardownRunnerTicket, ids: ids)
+	var doneBlock = emitGtArriveAndReclaimIfSecond(module, func: func, cur: finished, gt: mainGt, ticket: GtTeardownConsumerTicket, otherTicket: GtTeardownRunnerTicket, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.ret(code))
 	module.functions.push(func)
 end 'buildGtRunMain'
@@ -4063,7 +4063,7 @@ function buildGtOwnerDone(module StdModule)
 	emitSchedSignalMainMachine(module, block: signalDrain, ids: ids)
 	module.setTerminator(signalDrain, op: StdOp.branch(arrive.id))
 
-	let doneBlock = emitGtArriveAndReclaimIfSecond(module, func: func, cur: arrive, gt: gt, ticket: GtTeardownConsumerTicket, otherTicket: GtTeardownRunnerTicket, ids: ids)
+	var doneBlock = emitGtArriveAndReclaimIfSecond(module, func: func, cur: arrive, gt: gt, ticket: GtTeardownConsumerTicket, otherTicket: GtTeardownRunnerTicket, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -5134,7 +5134,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	module.setTerminator(greenUnreffed, op: StdOp.retVoid)
 
 	var coroArrived = emitGtArriveAndReclaimIfSecond(module, func: func, cur: coroDone, gt: gt, ticket: GtTeardownRunnerTicket, otherTicket: GtTeardownConsumerTicket, ids: ids)
-	let doneAfterCell = module.addBlock(func, label: b"runnercelldone", heat: BlockHeat.normal)
+	var doneAfterCell = module.addBlock(func, label: b"runnercelldone", heat: BlockHeat.normal)
 	module.setTerminator(coroArrived, op: StdOp.condBranch(isCell, thenBlockId: doneAfterCell.id, elseBlockId: coroUnref.id))
 	module.setTerminator(doneAfterCell, op: StdOp.retVoid)
 

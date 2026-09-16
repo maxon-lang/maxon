@@ -1053,6 +1053,12 @@ export function maskWithParam(mask ParamPositionMask, param ParamCount) returns 
 	return mask or (1 shl param)
 end 'maskWithParam'
 
+// `mask` with parameter `param`'s bit cleared — the third and last spelling of the bit order the two above
+// define.
+export function maskWithoutParam(mask ParamPositionMask, param ParamCount) returns ParamPositionMask
+	return mask xor (mask and maskWithParam(NoParamPositions, param: param))
+end 'maskWithoutParam'
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
@@ -1305,7 +1311,7 @@ export type IrFunction
 	//
 	// | question | mask |
 	// |---|---|
-	// | "does passing an immutable binding HERE make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write this parameter as a container, or a field of its own receiver?" | `writtenParamMask` (E3019's narrow half) |
 	// | "does this body write the storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
 	//
 	// ⚠ **NEITHER MASK CONTAINS THE OTHER. THEY DIVERGE IN FOUR PLACES, IN BOTH DIRECTIONS** — this list is
@@ -1316,7 +1322,7 @@ export type IrFunction
 	// | the write | `writtenParamMask` | `storageWrittenParamMask` | why |
 	// |---|---|---|---|
 	// | self-field alias (`items.clear()`) or self-field store (`items = …`) | no | **yes** | the ruling below |
-	// | field-chain container whose base is a parameter (`bag.items.clear()`) | no | **yes** | E3019 records no field write, by the same ruling |
+	// | field-chain container whose base is a parameter (`bag.items.clear()`) | no | **yes** | this column records no field write, by the same ruling |
 	// | `String` receiver that is a parameter | **yes** | no | a String is not a container and hands out no borrow |
 	// | `Set` receiver that is a parameter | **yes** | no | likewise |
 	// | `__ManagedList` INSERTION (`ml.insertLast(x)`) | **yes** | no | it writes the record but frees no node |
@@ -1371,6 +1377,10 @@ export type IrFunction
 	// names. SemanticCheck then closes it under the call graph (`buildParamMutationSummary`) — a callee
 	// that writes what it was handed makes its caller write what IT was handed — and the closure is what
 	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
+	//
+	// ⚠ **IT IS THE WHOLE OF E3019's QUESTION AT A METHOD'S RECEIVER SLOT AND HALF OF IT EVERYWHERE ELSE**,
+	// where the call-site check unions it with `writesThroughParamMask` below — the receiver slot is the one
+	// position a field write through the parameter does not refuse, which is the ruling that table states.
 	export var writtenParamMask as ParamPositionMask
 
 	// ⭐ **THE PARAMETERS WHOSE BORROWABLE STORAGE THIS BODY FREES (E3070's cross-function half)** — bit `i`
@@ -1411,25 +1421,29 @@ export type IrFunction
 	//
 	// | question | column |
 	// |---|---|
-	// | "does passing an immutable BINDING here make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write this parameter as a container, or a field of its own receiver?" | `writtenParamMask` (E3019's narrow half) |
 	// | "does this body FREE borrowable storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
 	// | "does this body write a field of a box it did not just build?" | `assignsIntoAnExistingAggregate` (E3064) |
 	// | **"does this body write the record this parameter denotes, at all?"** | **this** |
 	//
-	// ⛔⛔ **IT EXISTS BECAUSE THE FIRST COLUMN CANNOT BE WIDENED TO ANSWER IT.** `function bump(b Box) b.n =
-	// 99 end` called as `bump(a)` on a `let a` compiles and prints `n 99` — a direct field store through a
-	// parameter is legal for an immutable BINDING — so adding it to E3019's column would refuse a legal
-	// program. It is NOT legal through a `let`-declared GLOBAL, where `let G = Box.make()` + `bump(G)`
-	// silently mutates a global the program declared immutable. Same shape, different subject, different
-	// answer — which is exactly what a separate column is for.
+	// ⛔⛔ **IT IS ITS OWN COLUMN BECAUSE THE RECEIVER SLOT NEEDS THE NARROWER ANSWER.** E3019 refuses an
+	// argument at `writtenParamMask or` this — `function bump(b Box) b.n = 99 end` called as `bump(a)` on a
+	// `let a` writes the caller's record and is refused — but a method writing a field of its OWN receiver is
+	// not a parameter mutation, and this column carries that write too (`Parser.noteReceiverWrite` unions the
+	// receiver's storage in). Folding the two into one would make `let acc = Accumulator.create(0)` +
+	// `acc.add(10)` an error, which is the divergence `specs/parameter-mutation.md` documents.
 	//
 	// Seeded by the PARSER at every door that writes through a binding — the receiver door
 	// (`Parser.noteReceiverWrite`), the field-store door (`Parser.parseFieldAssignment`) and the self-field
 	// store — and closed under the call graph by the SAME least fixpoint as the two above
-	// (`buildParamMutationSummary`), so `bump` forwarding to a `poke` that writes inherits the bit. Read only
-	// by E3019's call-site check, and only for an argument that ALIASES AN IMMUTABLE GLOBAL: an ordinary
-	// immutable binding is still judged by `writtenParamMask` alone, which is what keeps that diagnostic's
-	// scope byte-identical. Zero for a Std-phase function.
+	// (`buildParamMutationSummary`), so `bump` forwarding to a `poke` that writes inherits the bit. Read by
+	// E3019's call-site check at every argument position but a method's receiver, and there too for an
+	// argument that ALIASES AN IMMUTABLE GLOBAL — nothing may write a global the program declared immutable.
+	// Zero for a Std-phase function.
+	//
+	// ⚖ **THE CLOSURE STOPS A METHOD'S OWN RECEIVER BIT AT THE EDGE** (`SemanticCheck.propagateAcrossEdges`,
+	// where the ruling is stated), so a caller that merely calls a self-writing method on its parameter does
+	// not inherit it. The bit still stands on the METHOD itself, which is what the global door reads.
 	export var writesThroughParamMask as ParamPositionMask
 
 	// ⭐⭐ **WHICH OF THIS FUNCTION'S SSA VALUES MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD** — the

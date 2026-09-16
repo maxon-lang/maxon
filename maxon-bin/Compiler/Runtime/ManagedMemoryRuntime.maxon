@@ -1507,7 +1507,7 @@ function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffs
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var doAct = module.addBlock(func, label: b"doact", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let record = 0 as ValueId
@@ -2609,7 +2609,7 @@ function buildManagedMoveElems(module StdModule)
 	var packedBottom = module.addBlock(func, label: b"mvpackbot", heat: BlockHeat.normal)
 	var byteTop = module.addBlock(func, label: b"mvbytetop", heat: BlockHeat.normal)
 	var byteBottom = module.addBlock(func, label: b"mvbytebot", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 6)
 	let destBuffer = 0 as ValueId
@@ -2725,7 +2725,7 @@ function buildManagedZeroElems(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var packedArm = module.addBlock(func, label: b"zrpack", heat: BlockHeat.normal)
 	var byteArm = module.addBlock(func, label: b"zrbyte", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let buffer = 0 as ValueId
@@ -3475,7 +3475,7 @@ function buildManagedCowDetach(module StdModule)
 	var checkShared = module.addBlock(func, label: b"chkshared", heat: BlockHeat.normal)
 	var checkRc = module.addBlock(func, label: b"chkrc", heat: BlockHeat.normal)
 	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
@@ -3600,7 +3600,7 @@ function buildManagedGrow(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
 	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0 as ValueId
@@ -4255,7 +4255,7 @@ function buildManagedIncref(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
@@ -5755,7 +5755,7 @@ function buildManagedWalk(module StdModule, name ByteArray, walksElements bool, 
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count())
 	let arr = 0 as ValueId
@@ -5775,7 +5775,7 @@ function buildManagedWalk(module StdModule, name ByteArray, walksElements bool, 
 		let buffer = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 		let length = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 		let es = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-		let afterWalk = emitElementWalkRange(module, func: func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: elementWalk, action: action, ids: ids)
+		var afterWalk = emitElementWalkRange(module, func: func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: elementWalk, action: action, ids: ids)
 		module.setTerminator(afterWalk, op: StdOp.branch(done.id))
 	end 'eachElement' else 'noElementWalk'
 		module.setTerminator(walked, op: StdOp.branch(done.id))
@@ -5968,7 +5968,7 @@ function buildManagedAppendOpaque(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var trivial = module.addBlock(func, label: b"trivial", heat: BlockHeat.normal)
 	var managed = module.addBlock(func, label: b"managed", heat: BlockHeat.normal)
-	let join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let dest = 0 as ValueId

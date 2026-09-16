@@ -1,0 +1,24 @@
+// Test: error.let-to-a-callee-that-writes-back-a-managed-payload
+union Named
+	anonymous
+	named(name String)
+end 'Named'
+
+function rename(n Named)
+	match n 'step'
+		named(name) then name = "world"
+		anonymous then return
+	end 'step'
+end 'rename'
+
+function main() returns ExitCode
+	let n = Named.named("hello")
+	rename(n)
+	match n 'read'
+		named(name) then return name.byteLength()
+		anonymous then return 0
+	end 'read'
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:16:2: cannot pass 'n' to function that mutates parameter 'n' (in main)

@@ -1318,10 +1318,10 @@ error E2015: <fragment>:24:2: Unsupported: writing through 'a', which aliases a 
 ```
 
 <!-- test: error.let-global-passed-to-field-writing-callee -->
-⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT — MEASURED SILENTLY
-MUTATING THE GLOBAL BEFORE W117** (`g 99`, where the program declares `G` a `let`).
-Neither of the two masks that existed could see it: E3019's deliberately records no field write, and
-E3070's is scoped to ARRAY fields. The third column is this program.
+⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT** — measured silently
+mutating the global (`g 99`, where the program declares `G` a `let`) before the record-write column existed.
+Neither of the other two masks can see it: the narrow one E3019 reads alone at a receiver slot records no
+field write, and E3070's is scoped to fields whose drop frees something. The third column is this program.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1346,6 +1346,41 @@ end 'main'
 ```
 ```maxoncstderr
 error E3019: <fragment>:19:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
+```
+
+<!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method -->
+⚖ The same refusal ONE FRAME DOWN, where the callee writes nothing of its own and only calls a method that
+writes its own receiver. That write is exempt for a `let` BINDING — the exemption `parameter-mutation.md`
+documents — and a global is the subject it is NOT exempt for, so the record-write closure is taken twice and
+the call site reads whichever column its subject calls for. `G.bump()` written directly is refused too.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+let G = Box.make()
+
+function tick(b Box)
+	b.bump()
+end 'tick'
+
+function main() returns ExitCode
+	tick(G)
+	return G.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
 ```
 
 <!-- test: error.let-global-accessor-result-to-field-writing-callee -->

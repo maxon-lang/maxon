@@ -44,7 +44,7 @@ let DiagnosticSourceName = "maxon"
 // it already had, which is what "not checked" looks like.
 module function publishBufferDiagnostics(uri String, text String)
 	match lspDocumentProject(lspDocumentPath(uri), content: text) 'buffer'
-		loaded(project) then publishCheckedDiagnostics(uri, text: text, project: project)
+		loaded(project) then project.publishCheckedDiagnostics(uri, text: text)
 		unavailable then return
 	end 'buffer'
 end 'publishBufferDiagnostics'
@@ -61,27 +61,33 @@ end 'clearPublishedDiagnostics'
 // drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
 // full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
 // bytes go instead; the ARRAY standing on the project is what is published.
-function publishCheckedDiagnostics(uri String, text String, project Project)
-	beginDiagnosticCapture()
-	runBufferChecks(project)
-	_ = endDiagnosticCapture()
+// ⚖ **THE STEP IS THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH IT.** The compile below
+// writes the project, and a method writing its own receiver is legal on a binding nothing may write from
+// outside; the same work spelled `publishCheckedDiagnostics(project: project)` hands that payload to a
+// parameter the callee writes, which is E3019.
+extension Project
+	function publishCheckedDiagnostics(uri String, text String)
+		beginDiagnosticCapture()
+		runBufferChecks(self)
+		_ = endDiagnosticCapture()
 
-	var doc = JsonDoc.create()
-	let index = LspLineIndex.build(text)
-	let tokens = lspDocumentTokens(text)
-	let path = lspDocumentPath(uri)
-	var items = JsonNodeIdArray.create()
+		var doc = JsonDoc.create()
+		let index = LspLineIndex.build(text)
+		let tokens = lspDocumentTokens(text)
+		let path = lspDocumentPath(uri)
+		var items = JsonNodeIdArray.create()
 
-	for diagnostic in project.diagnostics 'each'
-		if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
-			continue
-		end 'notThisDocuments'
+		for diagnostic in self.diagnostics 'each'
+			if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
+				continue
+			end 'notThisDocuments'
 
-		items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
-	end 'each'
+			items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
+		end 'each'
 
-	writeDiagnosticsNotification(uri, items: items, doc: doc)
-end 'publishCheckedDiagnostics'
+		writeDiagnosticsNotification(uri, items: items, doc: doc)
+	end 'publishCheckedDiagnostics'
+end 'Project'
 
 // ⚠ **A REFUSED COMPILE IS THE NORMAL CASE HERE, NOT AN ERROR TO REPORT.** A buffer under edit usually
 // does not compile — `LspCompletion.maxon`'s header measures that every recovered fixture is refused

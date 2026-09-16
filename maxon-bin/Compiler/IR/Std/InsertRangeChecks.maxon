@@ -1134,7 +1134,7 @@ type RangeCheckEmitter
 	// calls `mrt_panic`.
 	function emitPanicBlock(message ByteArray) returns IrBlock
 		// Reached only when the range check refuses.
-		let panicBlock = self.module.addBlock(self.func, label: b"__rc_panic", heat: BlockHeat.cold)
+		var panicBlock = self.module.addBlock(self.func, label: b"__rc_panic", heat: BlockHeat.cold)
 		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
 		self.module.appendOp(panicBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
 		appendDeadReturn(self.module, func: self.func, block: panicBlock, ids: self.ids)
@@ -1186,7 +1186,7 @@ type RangeCheckEmitter
 			if i == lastIndex 'lastCheck'
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: okId))
 			end 'lastCheck' else 'moreChecks'
-				let next = self.module.addBlock(self.func, label: b"__rc_chk", heat: BlockHeat.normal)
+				var next = self.module.addBlock(self.func, label: b"__rc_chk", heat: BlockHeat.normal)
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: next.id))
 				current = next
 			end 'moreChecks'

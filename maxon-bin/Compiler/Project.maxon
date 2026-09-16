@@ -5733,10 +5733,10 @@ export type EnumLayout
 		return try self.caseBackingFields.get(index) otherwise panic("EnumLayout.backingFieldsAt: caseBackingFields.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'backingFieldsAt'
 
-	// ⭐ **REPLACE CASE `index`'s PAYLOAD SLOTS — `StructLayout.retypeField`'s twin (N3)**, for the same one
-	// caller and the same one reason: a payload declared with a generic alias two files declare differently
-	// cannot be resolved until every file has folded. Whole-array, where the struct side sets one cell,
-	// because a `PayloadField`'s columns are `let`.
+	// ⭐ **REPLACE CASE `index`'s PAYLOAD SLOTS — `StructLayout.retypeField`'s twin (N3)**, and the ONE door
+	// onto this column: a payload declared with a generic alias two files declare differently cannot be
+	// resolved until every file has folded, and an id remap rewrites the same slots for the same reason. It
+	// takes a whole array where the struct side sets one cell, because a `PayloadField`'s columns are `let`.
 	export function retypeCasePayloads(index CaseIndex, payloads PayloadFieldArray)
 		try self.casePayloads.set(index, value: payloads) otherwise panic("EnumLayout.retypeCasePayloads: casePayloads.set OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'retypeCasePayloads'
@@ -6618,6 +6618,12 @@ end 'paramExistentialSiteAt'
 // Param NAMES are the load-bearing field: a call reorders its labelled arguments
 // (`add(2, b: 3)`) to the callee's declaration order by matching each `name:` label
 // to the parameter position holding that name. Param TYPES back arity/type checking.
+
+// Where a method's receiver sits in its parameter list — the position `parseTypeMember` binds `__self` at,
+// named so the rules that treat the receiver differently from every other parameter read as the one fact they
+// share rather than as a repeated `0`.
+export let ReceiverParamPosition = 0 as ParamCount
+
 export type FuncSignature
 	export var paramNames as ByteArrayArray
 	export var paramTypes as MaxonTypeArray
@@ -6727,8 +6733,15 @@ export type FuncSignature
 	// parameter list, and LowerMaxonToStd reads it to source a layout descriptor from the receiver rather than
 	// the constructor result. Two decisions that must agree on where the receiver is, so they read one bit.
 	export function takesReceiver() returns bool
-		return self.paramNames.count() > 0 and (try self.paramNames.get(0) otherwise panic("FuncSignature.takesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
+		return self.paramNames.count() > 0 and (try self.paramNames.get(ReceiverParamPosition) otherwise panic("FuncSignature.takesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
 	end 'takesReceiver'
+
+	// Does parameter `pos` name the receiver? `takesReceiver`'s per-POSITION twin, and the one home of "this
+	// argument fills the `self` slot" — E3019's call-site rule and the mutation summary's exemption column
+	// both decide about the receiver, and a second spelling is a second chance for them to disagree.
+	export function paramIsTheReceiver(pos ParamCount) returns bool
+		return pos == ReceiverParamPosition and self.takesReceiver()
+	end 'paramIsTheReceiver'
 
 	// Does any parameter declare a bare type parameter (`create(v T)`) — i.e. is this the SHARED body of a
 	// generic type's method, whose signature cannot say what its arguments must be (P1.7)? The

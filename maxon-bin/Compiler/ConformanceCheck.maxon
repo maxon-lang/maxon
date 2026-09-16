@@ -107,7 +107,18 @@ end 'checkConformance'
 // `FunctionNameIndex.create` would be one more O(functions) map build per compile for an answer already in
 // hand.
 function checkGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures)
-	for (enumName, _) in project.enumTypes 'eachEnum'
+	// ⚖ **THE CANONICAL NOTE'S MAP HALF, STATED HERE AND REFERENCED FROM THE OTHER THREE SITES.** The index
+	// loop the ruling calls for (`IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`) has no spelling over a
+	// MAP, so the keys come out first and the walk runs over them: iterating `project.<a registry>` holds
+	// `project` for the body, and a call in that body that writes `project` is the same conflict by another
+	// road. One array per pass over the types a program declares.
+	var enumNames = ByteArrayArray.create()
+
+	for (enumName, _) in project.enumTypes 'eachDeclaredEnum'
+		enumNames.push(enumName)
+	end 'eachDeclaredEnum'
+
+	for enumName in enumNames 'eachEnum'
 		if not signatures.namesAPayloadFreeEnum(enumName) 'grantsNothing'
 			continue
 		end 'grantsNothing'

@@ -88,7 +88,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	let mutationEdgesByCallee = edgesByCallee if mutationEdges is callEdges else mutationEdges.byCallee(funcNames.functions.count())
 
 	let storageEdges = collectStorageReachEdges(mutationEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
-	let mutationSummary = buildParamMutationSummary(funcNames, edges: mutationEdges, byCallee: mutationEdgesByCallee, storageEdges: storageEdges, provenanceWrites: provenance.receiverWriteSeeds)
+	let mutationSummary = buildParamMutationSummary(funcNames, funcSignatures: project.funcSignatures, edges: mutationEdges, byCallee: mutationEdgesByCallee, storageEdges: storageEdges, provenanceWrites: provenance.receiverWriteSeeds)
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
 
 	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
@@ -1250,7 +1250,7 @@ function buildEscapeSummary(module MaxonModule, funcNames FunctionNameIndex, fun
 		masks.push(directlyEscapingParams(func, module: module, funcSignatures: funcSignatures))
 	end 'seed'
 
-	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(masks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 
 	var summary = ParamEscapeSummary.create()
 
@@ -1753,11 +1753,21 @@ export type ParamMutationSummary
 	// measurements that make it a third column rather than a reading of the other two.
 	export let recordWriteMasks as ParamPositionMaskArray
 
+	// ⚖⚖ **THE FOURTH COLUMN IS THE THIRD ONE'S SAME SEED CLOSED UNDER A NARROWER RELATION, AND TWO COLUMNS
+	// ARE WHAT KEEPS TWO SUBJECTS FROM SHARING ONE ANSWER.** A method writing a field of its own receiver is
+	// not a parameter mutation for a `let` BINDING (user ruling), so the closure that answers for a binding
+	// stops a method's receiver bit at the edge; a `let`-declared GLOBAL is refused by that same write, so the
+	// closure that answers for a global must not. Applying the exemption inside the ONE drain threw the
+	// global's evidence away before the subject was known — `let G = Box.make()` handed to a `tick(b Box)`
+	// whose body is `b.bump()` reported nothing (`specs/static-variables.md`'s
+	// `error.let-global-to-a-callee-that-calls-a-self-writing-method`). One fact, derived once, per column.
+	export let bindingWriteMasks as ParamPositionMaskArray
+
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as FuncIndexByName
 
-	export static function create(masks ParamPositionMaskArray, storageMasks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
-		return Self{masks: masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, funcIndexByName: funcIndexByName}
+	export static function create(masks ParamPositionMaskArray, storageMasks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, bindingWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
+		return Self{masks: masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, bindingWriteMasks: bindingWriteMasks, funcIndexByName: funcIndexByName}
 	end 'create'
 
 	// Which parameters a call to `callee` writes. `NoParamPositions` for a name the module does not declare —
@@ -1776,13 +1786,29 @@ export type ParamMutationSummary
 		return self.maskAt(self.storageMasks, callee: callee)
 	end 'storageMaskOf'
 
-	// ⭐ **WHICH PARAMETERS' RECORDS A CALL TO `callee` WRITES BY ANY MEANS (W117)** — read ONLY for an
-	// argument that aliases an immutable global, which is what keeps E3019's scope for an ordinary immutable
-	// binding byte-identical. ⚠ It is a superset of neither of the two above and a subset of neither; see
-	// `IrFunction`'s table, which carries one row per question and now has four.
+	// ⭐ **WHICH PARAMETERS' RECORDS A CALL TO `callee` WRITES BY ANY MEANS (W117)** — the widest answer, with
+	// nothing exempted: what a `let`-declared GLOBAL is refused by, and what `StorageProvenance` asks of a
+	// value. ⚠ It is a superset of neither of the two above and a subset of neither; see `IrFunction`'s table,
+	// which carries one row per question.
 	export function recordWriteMaskOf(callee ByteArray) returns ParamPositionMask
 		return self.maskAt(self.recordWriteMasks, callee: callee)
 	end 'recordWriteMaskOf'
+
+	// ⚖ **THE SAME QUESTION ASKED FOR A `let` BINDING**, which a method writing a field of its own receiver
+	// does not answer yes to — see the column.
+	export function bindingWriteMaskOf(callee ByteArray) returns ParamPositionMask
+		return self.maskAt(self.bindingWriteMasks, callee: callee)
+	end 'bindingWriteMaskOf'
+
+	// ⭐ **THE THREE COLUMNS E3019'S CALL-SITE CHECK READS, THROUGH ONE NAME LOOKUP.** The name→index hash is
+	// the only cost on the path of every call in the program, and three accessors would pay it three times to
+	// answer one question about one callee. `NoParamPositions` in all three for a name the module does not
+	// declare — a compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported
+	// as E3004.
+	export function writesOf(callee ByteArray) returns (ParamPositionMask, ParamPositionMask, ParamPositionMask)
+		let index = try self.funcIndexByName.get(callee) otherwise return (NoParamPositions, NoParamPositions, NoParamPositions)
+		return (self.maskAtIndex(self.masks, index: index), self.maskAtIndex(self.recordWriteMasks, index: index), self.maskAtIndex(self.bindingWriteMasks, index: index))
+	end 'writesOf'
 
 	// Which parameters a call landing on any of `indices` writes, or writes the record of — `maskOf` and
 	// `recordWriteMaskOf` together, by function index.
@@ -1796,14 +1822,19 @@ export type ParamMutationSummary
 		return written
 	end 'writtenMaskAtAnyOf'
 
-	// The one indexed read both columns share. `NoParamPositions` for a name the module does not declare — a
-	// compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
+	// The one NAME-keyed read every column shares. `NoParamPositions` for a name the module does not declare —
+	// a compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
 	// — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a membership
 	// test first.
 	function maskAt(column ParamPositionMaskArray, callee ByteArray) returns ParamPositionMask
 		let index = try self.funcIndexByName.get(callee) otherwise return NoParamPositions
-		return try column.get(index) otherwise panic("ParamMutationSummary.maskAt: function index {index} for '{String.from(callee)}' is outside the mask column — both are built over `module.functions` in one pass")
+		return self.maskAtIndex(column, index: index)
 	end 'maskAt'
+
+	// The indexed read under all of them, split out so a caller holding a resolved index pays no second hash.
+	function maskAtIndex(column ParamPositionMaskArray, index FuncIndex) returns ParamPositionMask
+		return try column.get(index) otherwise panic("ParamMutationSummary.maskAtIndex: function index {index} is outside the mask column — every column is built over `module.functions` in one pass")
+	end 'maskAtIndex'
 end 'ParamMutationSummary'
 
 // The reverse-call-graph edges, as three dense scalar columns plus the CSR key column. Edge `k` says:
@@ -1877,17 +1908,18 @@ end 'CallParamEdges'
 // backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
 // — which is a fine argument for the answer being harmless and no argument at all for it being made
 // silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
-function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, storageEdges CallParamEdges, provenanceWrites ParamPositionMaskArray) returns ParamMutationSummary
+function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures FuncSignatureMap, edges CallParamEdges, byCallee CsrGraph, storageEdges CallParamEdges, provenanceWrites ParamPositionMaskArray) returns ParamMutationSummary
 	let funcIndexByName = funcNames.byName
 
 	// ⭐⭐ **TWO SEEDS, ONE FIXPOINT RUN TWICE — and since W58 the graph serves a THIRD seed one caller up.**
 	// The parser records both per-function facts at the same doors (`Parser.noteReceiverWrite`,
-	// `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical for all of them — "a callee that does X to
-	// what it was handed makes its caller do X to what IT was handed" is one statement about one call graph —
-	// so the walk that finds the edges runs ONCE, in `semanticCheck`, and is drained here twice and in
-	// `buildEscapeSummary` a third time. That is what makes the transitive case work without a second rule:
-	// `wipe()` calling a `reset()` that clears the receiver's field inherits the bit through the very same
-	// edge E3019's column travels.
+	// `Parser.emitCheckedSelfFieldStore`); the CLOSURE is one statement about one call graph — "a callee that
+	// does X to what it was handed makes its caller do X to what IT was handed" — so the walk that finds the
+	// edges runs ONCE, in `semanticCheck`, and is drained here twice and in `buildEscapeSummary` a third time.
+	// That is what makes the transitive case work without a second rule: `wipe()` calling a `reset()` that
+	// clears the receiver's field inherits the bit through the very same edge E3019's column travels.
+	// ⚖ The record-write column carries ONE exemption the other two do not, and it is the receiver's; the
+	// ruling is stated at `propagateAcrossEdges`.
 	//
 	// ⚠⚠ **THE STORAGE COLUMN'S EDGE SET IS A SUPERSET, AND THIS PARAGRAPH SAID "SAME EDGES" UNTIL ARR4
 	// MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** E3019 asks about the ARGUMENT (is this value the
@@ -1905,6 +1937,11 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	var masks = ParamPositionMaskArray.create()
 	var storageMasks = ParamPositionMaskArray.create()
 	var recordWriteMasks = ParamPositionMaskArray.create()
+	var bindingWriteMasks = ParamPositionMaskArray.create()
+
+	// Which functions carry `self` at parameter 0, by the same index the masks use — what the binding column's
+	// drain exempts below.
+	var methodReceivers = BoolArray.create()
 
 	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
 	// (`ProvenanceTracer.collectProvenanceParamEdges`): E3019's seed and W117's alike, since both ask whether the
@@ -1912,19 +1949,27 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	for i in 0 upto funcNames.functions.count() 'seed'
 		let func = try funcNames.functions.get(i) otherwise panic("buildParamMutationSummary: functions.get OOB at {i} below its own count")
 		let writtenThroughAnAlias = try provenanceWrites.get(i) otherwise panic("buildParamMutationSummary: provenanceWrites.get OOB at {i} — the column is built over `funcNames.functions`")
+		let recordWrites = func.writesThroughParamMask or writtenThroughAnAlias
 		masks.push(func.writtenParamMask or writtenThroughAnAlias)
 		storageMasks.push(func.storageWrittenParamMask)
-		recordWriteMasks.push(func.writesThroughParamMask or writtenThroughAnAlias)
+		recordWriteMasks.push(recordWrites)
+		bindingWriteMasks.push(recordWrites)
+		methodReceivers.push(declaresAReceiver(funcSignatures, name: func.name))
 	end 'seed'
 
-	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
+	propagateParamMasks(masks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 
 	// ⭐ **W117's COLUMN DRAINS THE SAME RELATION A THIRD TIME, WHICH IS NOT A THIRD RELATION.** "A callee that
 	// writes what it was handed makes its caller write what IT was handed" is one statement about one call
-	// graph; the three columns differ only in what they were SEEDED with. It closes over the ARGUMENT edges
-	// rather than the wider storage set because its question is about the argument: does the record this call
-	// site handed over get written?
-	propagateParamMasks(recordWriteMasks, edges: edges, byCallee: byCallee)
+	// graph; the columns differ in what they were SEEDED with and in what the closure lets cross an edge. It
+	// closes over the ARGUMENT edges rather than the wider storage set because its question is about the
+	// argument: does the record this call site handed over get written?
+	propagateParamMasks(recordWriteMasks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: sharedNoExemptCallees)
+
+	// ⚖ **THE SAME SEED AND THE SAME RELATION, CLOSED WITH THE RECEIVER EXEMPTION APPLIED** — the `let`
+	// BINDING's answer, where the one above is the `let` GLOBAL's. See the column, and `propagateAcrossEdges`
+	// where the ruling is stated.
+	propagateParamMasks(bindingWriteMasks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: methodReceivers)
 
 	// The CSR over the WIDER set is built HERE and not in `semanticCheck`, because this is its only reader.
 	// A program that recorded no storage-reach edge closes both columns over one relation, so it reuses the
@@ -1938,9 +1983,18 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 		storageByCallee = storageEdges.byCallee(funcNames.functions.count())
 	end 'aWiderRelation'
 
-	propagateParamMasks(storageMasks, edges: storageEdges, byCallee: storageByCallee)
-	return ParamMutationSummary.create(masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, funcIndexByName: funcIndexByName)
+	propagateParamMasks(storageMasks, edges: storageEdges, byCallee: storageByCallee, receiverSlotStopsHere: sharedNoExemptCallees)
+	return ParamMutationSummary.create(masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, bindingWriteMasks: bindingWriteMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
+
+// Does the function registered under `name` carry `self` at parameter 0? ⛔ Absence answers `false` because
+// that is the SAFE direction for the one reader: a missing `true` only leaves a receiver bit crossing an edge
+// it could have stopped, which refuses a program E3019 already refused one frame down, while a wrong `true`
+// would drop a real write and let a `let` be mutated silently.
+function declaresAReceiver(funcSignatures FuncSignatureMap, name ByteArray) returns bool
+	let sig = try funcSignatures.get(name) otherwise return false
+	return sig.takesReceiver()
+end 'declaresAReceiver'
 
 // ⭐⭐⭐ **THE STORAGE COLUMN'S EDGE SET: the argument-is-a-parameter edges above, PLUS the parser's
 // receiver-owns-a-parameter's-array edges (ARR4).** `StorageReachEdge` carries the measurement — a
@@ -2225,7 +2279,7 @@ end 'addWitnessConformerEdges'
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
 // terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
-function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph)
+function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges, byCallee CsrGraph, receiverSlotStopsHere BoolArray)
 	var worklist = FuncIndexArray.create()
 	var queued = BoolArray.create()
 
@@ -2244,13 +2298,33 @@ function propagateParamMasks(masks ParamPositionMaskArray, edges CallParamEdges,
 		let calleeIndex = try worklist.get(head) otherwise panic("propagateParamMasks: worklist.get OOB at {head}")
 		head = head + 1
 		try queued.set(calleeIndex, value: false) otherwise panic("propagateParamMasks: queued.set OOB at {calleeIndex}")
-		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued)
+		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, receiverSlotStopsHere: receiverSlotStopsHere, worklist: worklist, queued: queued)
 	end 'drain'
 end 'propagateParamMasks'
 
+// ⭐ **THE COLUMN THAT EXEMPTS NOTHING, SHARED AND EMPTY.** `receiverSlotStopsHere` is only ever READ, and a
+// position it does not hold answers `false`, so three of the four drains need no per-function array at all.
+let sharedNoExemptCallees = BoolArray.create()
+
 // Propagate one callee's mask across every edge that reaches it, enqueueing each caller whose own mask grew.
-function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex FuncIndex, worklist FuncIndexArray, queued BoolArray)
-	let calleeMask = try masks.get(calleeIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {calleeIndex}")
+function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, edges CallParamEdges, calleeIndex FuncIndex, receiverSlotStopsHere BoolArray, worklist FuncIndexArray, queued BoolArray)
+	var calleeMask = try masks.get(calleeIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {calleeIndex}")
+
+	// ⚖ **A CALLEE THAT CALLS A SELF-WRITING METHOD ON ITS PARAMETER IS NOT MUTATING THAT PARAMETER** (user
+	// ruling). A method writing a field of its OWN receiver is legal on a `let` at a direct call —
+	// `let c = Counter.create()` then `c.bump()` — and the exemption must survive a frame, or `tick(c)` whose
+	// body is `c.bump()` would refuse what `c.bump()` allows. So the record-write column stops a method's own
+	// receiver-slot bit HERE, at the edge, and only a callee that writes `p.field` itself — at whatever depth
+	// the chain reaches — reaches its caller's column and earns E3019 there.
+	//
+	// The other two columns exempt nothing: E3019's own asks the narrower question already (`writtenParamMask`
+	// records no self-field write at all), and E3070's asks whose borrowable storage is freed rather than who
+	// may be handed what.
+	let stopsAtTheReceiver = try receiverSlotStopsHere.get(calleeIndex) otherwise false
+
+	if stopsAtTheReceiver 'aSelfWriteIsNotAParameterMutation'
+		calleeMask = maskWithoutParam(calleeMask, param: ReceiverParamPosition)
+	end 'aSelfWriteIsNotAParameterMutation'
 
 	for k in 0 upto byCallee.degree(calleeIndex as CsrIndex) 'eachEdge'
 		let row = byCallee.neighbour(calleeIndex as CsrIndex, k: k)
@@ -5679,37 +5753,37 @@ end 'reportConditionalExtensionWithheld'
 // ⭐ **A WITNESS DISPATCH *IS* CHECKED, and it is not the same case.** It names a REQUIREMENT, whose set of
 // implementations `checkConformance` fixed whole-program — so the summary reaches it through real edges
 // rather than through a blanket refusal. See `addWitnessParamEdges`.
-// ⭐⭐ **AND SINCE W117 IT IS ALSO THE DOOR FOR A `let`-DECLARED GLOBAL'S RECORD, THROUGH THE SAME ONE
-// REPORTER.** An argument that ALIASES an immutable global (the parser's per-value mark, published as
-// `IrFunction.immutableGlobalAliasValues`) is judged against a WIDER mask than an ordinary immutable binding
-// is: `maskOf` for both, plus `recordWriteMaskOf` for the alias.
+// ⭐⭐ **THE MASK IS THE UNION OF TWO WRITE COLUMNS, BECAUSE A FIELD WRITE THROUGH A PARAMETER WRITES THE
+// CALLER'S RECORD.** `let a = Box.create()` handed to a `bump(b Box)` whose body is `b.n = 99` is refused: a
+// `let` is immutable, and how deep the callee reaches to write it does not change whose record was written.
 //
-// ⛔ **THE WIDENING IS PER-ARGUMENT, NOT PER-CALL, AND THAT IS THE WHOLE OF WHY E3019 DOES NOT MOVE.**
-// `let a = Box.make()` handed to a `bump(b Box)` whose body is `b.n = 99` COMPILES and prints `n 99` — a
-// direct field write through a parameter is legal for an immutable BINDING, so widening `maskOf` would
-// refuse a legal program. The same call is NOT legal when what was handed over is a `let` GLOBAL's record:
-// `let G = Box.make()` + `bump(G)` would silently mutate a global the program declared immutable. Same
-// shape, different subject, different answer — so the subject decides which mask applies, one argument at
-// a time.
+// ⚖ **WHICH SECOND COLUMN IS DECIDED BY THE SUBJECT AND THE SLOT, and there are exactly three answers.** A
+// method writing a field of its own receiver is not a parameter mutation — `let acc = Accumulator.create(0)`
+// then `acc.add(10)` is legal, the divergence `specs/parameter-mutation.md` documents and
+// `self-keyword.md:self-with-params` pins:
+//
+//   • an ordinary immutable binding, at a NON-receiver slot → `bindingWriteMaskOf`, the closure that stops a
+//     method's receiver bit at the edge, so `tick(c Counter)` whose body is `c.bump()` accepts a `let` for
+//     the same reason `c.bump()` does;
+//   • an ordinary immutable binding AT the receiver slot → nothing but `maskOf`, because the exemption is
+//     about this very position and the callee's own seed still carries the bit;
+//   • an argument that ALIASES an immutable GLOBAL (the parser's per-value mark, published as
+//     `IrFunction.immutableGlobalAliasValues`) → `recordWriteMaskOf`, exempting nothing at either slot:
+//     nothing may write a global the program declared immutable, a self-writing method included.
 //
 // ⚠ **ONE REPORTER, DELIBERATELY.** A second check reading the third column would be a second site deciding
 // what "cannot be written through" means, free to drift from this one and to double-report the arguments they
 // both catch. The sentence is unchanged and stays true of both subjects: it names no immutability, only what
 // may not be passed where.
 function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
-	// ONE name resolution and one dense read — `maskOf` answers `NoParamPositions` for a callee the module
-	// does not declare, so the overwhelming majority of calls leave here after a single hash and an i64
-	// compare, with no membership probe in front of it.
-	let mask = mutationSummary.maskOf(callee)
+	// ONE name resolution for all three columns — a callee the module does not declare answers
+	// `NoParamPositions` in each, so the overwhelming majority of calls leave here after a single hash and
+	// two i64 compares, with no membership probe in front of them.
+	let (mask, recordWriteMask, bindingWriteMask) = mutationSummary.writesOf(callee)
 
 	// `StorageProvenance` asks which arguments a call writes (`noteArgumentWritten`) only of a function with an
 	// immutable name to guard, since only its doors read them (`ProvenanceTracer.gatherWrittenTargets`).
 	let asksWrittenArguments = func.provenanceSites().immutableBindings.values.count() > 0
-
-	// Which parameters' records the call writes by any means (W117). E3019 reads it only for an argument that
-	// aliases an immutable global; `StorageProvenance` reads it for every argument, since a `var` whose record is
-	// written through a call is what its E3078 door asks about.
-	let recordWriteMask = mutationSummary.recordWriteMaskOf(callee) if asksWrittenArguments or func.immutableGlobalAliasValues.count() > 0 else NoParamPositions
 
 	// A library body nothing in the program reaches — called only from a function nothing calls — was never read,
 	// so its summary says nothing about what it writes: every argument is taken as written by the door that asks.
@@ -5725,15 +5799,26 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("checkImmutableArgToMutatingParam: args.get OOB at {i} below its own count")
-		let aliasesAnImmutableGlobal = func.immutableGlobalAliasValues.contains(argId)
 		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
-		let effective = (mask or recordWriteMask) if aliasesAnImmutableGlobal else mask
 
-		if asksWrittenArguments and pos < sig.paramCount() and maskHasParam(mask or recordWriteMask, param: pos) 'itsRecordIsWritten'
-			provenance.noteArgumentWritten(argId, call: callRange, paramName: try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()"))
+		// An argument whose label names no parameter of the callee fills no position a mask can be read at;
+		// `slotCallArgs` has already reported it.
+		if pos >= sig.paramCount() 'fillsNoDeclaredParameter'
+			continue
+		end 'fillsNoDeclaredParameter'
+
+		let paramName = try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()")
+		let aliasesAnImmutableGlobal = func.immutableGlobalAliasValues.contains(argId)
+
+		if asksWrittenArguments and maskHasParam(mask or recordWriteMask, param: pos) 'itsRecordIsWritten'
+			provenance.noteArgumentWritten(argId, call: callRange, paramName: paramName)
 		end 'itsRecordIsWritten'
 
-		if pos >= sig.paramCount() or not maskHasParam(effective, param: pos) 'notAWrittenPosition'
+		// ⚖ The three answers of the header's ruling, in the order it states them.
+		let subjectWrites = recordWriteMask if aliasesAnImmutableGlobal else NoParamPositions if sig.paramIsTheReceiver(pos) else bindingWriteMask
+		let effective = mask or subjectWrites
+
+		if not maskHasParam(effective, param: pos) 'notAWrittenPosition'
 			continue
 		end 'notAWrittenPosition'
 
@@ -5749,8 +5834,6 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 		if blamed.isEmpty() and not aliasesAnImmutableGlobal 'writableArgument'
 			continue
 		end 'writableArgument'
-
-		let paramName = try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()")
 
 		// A tainted argument always reaches here with a blame — `Parser.expressionImmutableBlame` falls back to
 		// the shared noun when the expression names no binding — EXCEPT on the synthesized call paths that pass

@@ -1,0 +1,27 @@
+// Test: transitive-let-field-write-error
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function poke(b Box)
+	b.n = 99
+end 'poke'
+
+function relay(b Box)
+	poke(b)
+end 'relay'
+
+function main() returns ExitCode
+	let a = Box.create()
+	relay(a)
+	return a.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:22:2: cannot pass 'a' to function that mutates parameter 'b' (in main)

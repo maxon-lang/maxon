@@ -283,7 +283,7 @@ end 'installEnumLookupHelpers'
 function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project Project)
 	let comparesBytes = enumRawValueIsBytes(layout.backing)
 
-	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
+	var func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -294,7 +294,7 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project
 
 	for i in 0 upto layout.caseCount() 'eachCase'
 		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
-		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitRawValueTestBranch(module, block: cur, raw: raw, layout: layout, caseIndex: i, comparesBytes: comparesBytes, globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
 		emitOkReturn(module, block: hit, value: emitConst(module, block: hit, value: layout.tagOfIndex(i), ids: ids), ids: ids)
 		cur = nextTest
@@ -351,7 +351,7 @@ end 'enumRawValueIsBytes'
 // `synthesizeEnumFromNameCase` instead. A union all of whose cases carry payloads therefore gets a body
 // that is one error return, which is the honest answer rather than an absent function.
 function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Project)
-	let func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
+	var func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -366,7 +366,7 @@ function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Pro
 		end 'carriesAPayload'
 
 		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
-		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitNameTestBranch(module, block: cur, name: name, caseName: layout.caseNameAt(i), globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
 		emitCaseValueReturn(module, block: hit, layout: layout, caseIndex: i, project: project, ids: ids)
 		cur = nextTest
@@ -400,7 +400,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
 
-	let func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: enumLookupThrows())
+	var func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0, throwsTypeName: enumLookupThrows())
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

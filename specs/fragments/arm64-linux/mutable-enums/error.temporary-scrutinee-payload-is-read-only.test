@@ -1,0 +1,30 @@
+// Test: error.temporary-scrutinee-payload-is-read-only
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function raiseAndRead(c Counter) returns Integer
+	c.n = c.n + 32
+	return c.n
+end 'raiseAndRead'
+
+function main() returns ExitCode
+	match Slot.holding(Counter.create(10)) 'step'
+		holding(c) then return raiseAndRead(c)
+		empty then return 0
+	end 'step'
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:24:26: cannot pass 'c' to function that mutates parameter 'c' (in main)

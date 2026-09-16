@@ -35,6 +35,18 @@ end 'update'
 
 When the enum variable is immutable (`let`), match bindings are read-only copies, preserving the existing behavior.
 
+### What counts as a mutable scrutinee
+
+A `var` local is one, and so is a union-typed **parameter**: a parameter is a borrowed reference to the
+caller's record, which the callee may already write — `s.append(…)` on a `String` parameter is ordinary
+Maxon — and the caller's argument answers for that write through `E3019`, whether the arm writes a field of
+a payload or assigns the payload outright.
+
+Nothing else is. A `let` local is not, and neither is a TEMPORARY, though the frame that made it owns it: a
+scrutinee's mutability also decides whether a matched payload is moved out of its box or retained from it,
+so admitting a temporary would change what every `match` over a constructed union does with its refcounts,
+for no rule that needs it.
+
 ## Tests
 
 <!-- test: basic-mutable -->
@@ -259,4 +271,220 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: mutable-payload-of-a-parameter -->
+A union-typed PARAMETER is a mutable scrutinee, so its payload binding takes a field write — and the write
+lands in the caller's record, which is what the exit code reads back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function bump(s Slot)
+	match s 'step'
+		holding(c) then c.n = c.n + 32
+		empty then return
+	end 'step'
+end 'bump'
+
+function main() returns ExitCode
+	var s = Slot.holding(Counter.create(10))
+	bump(s)
+	match s 'read'
+		holding(c) then return c.n
+		empty then return 0
+	end 'read'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: parameter-payload-to-a-writing-callee -->
+The cross-function half of the same rule: the payload is handed to a callee that writes a field of it, which
+is `E3019`'s question rather than the arm's own. A parameter scrutinee's payload may fill that position.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function raise(c Counter)
+	c.n = c.n + 32
+end 'raise'
+
+function bump(s Slot)
+	match s 'step'
+		holding(c) then raise(c)
+		empty then return
+	end 'step'
+end 'bump'
+
+function main() returns ExitCode
+	var s = Slot.holding(Counter.create(10))
+	bump(s)
+	match s 'read'
+		holding(c) then return c.n
+		empty then return 0
+	end 'read'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.temporary-scrutinee-payload-is-read-only -->
+⚖ The control for the other half of the ruling: a union constructed AT the `match` is a temporary this frame
+owns, and its payload binding is still read-only. Admitting it would move the scrutinee off the destructive
+move-out and onto a retain, which is a refcount change on every `match` over a constructed union — and no
+rule asks for it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function raiseAndRead(c Counter) returns Integer
+	c.n = c.n + 32
+	return c.n
+end 'raiseAndRead'
+
+function main() returns ExitCode
+	match Slot.holding(Counter.create(10)) 'step'
+		holding(c) then return raiseAndRead(c)
+		empty then return 0
+	end 'step'
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/mutable-enums/error.temporary-scrutinee-payload-is-read-only.test:24:26: cannot pass 'c' to function that mutates parameter 'c' (in main)
+```
+
+<!-- test: error.let-to-a-callee-that-writes-back-a-payload -->
+⚖ The write-back is a store into the SCRUTINEE's box, so a callee whose arm assigns a payload of its
+parameter writes the caller's record — and a `let` may not fill that position. Without this the parameter
+ruling would have handed `bump` a licence its caller never granted.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Slot
+	empty
+	holding(n Integer)
+end 'Slot'
+
+function bump(s Slot)
+	match s 'step'
+		holding(n) then n = 42
+		empty then return
+	end 'step'
+end 'bump'
+
+function main() returns ExitCode
+	let s = Slot.holding(10)
+	bump(s)
+	match s 'read'
+		holding(n) then return n
+		empty then return 0
+	end 'read'
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.test:18:2: cannot pass 's' to function that mutates parameter 's' (in main)
+```
+
+<!-- test: error.let-to-a-callee-that-writes-back-a-managed-payload -->
+The MANAGED twin, which writes the caller's box twice over: the store publishes the new payload and the
+displaced one is decrefed out of the `let`'s own record.
+```maxon
+union Named
+	anonymous
+	named(name String)
+end 'Named'
+
+function rename(n Named)
+	match n 'step'
+		named(name) then name = "world"
+		anonymous then return
+	end 'step'
+end 'rename'
+
+function main() returns ExitCode
+	let n = Named.named("hello")
+	rename(n)
+	match n 'read'
+		named(name) then return name.byteLength()
+		anonymous then return 0
+	end 'read'
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.test:16:2: cannot pass 'n' to function that mutates parameter 'n' (in main)
+```
+
+<!-- test: error.let-scrutinee-payload-is-read-only -->
+⚖ The guard that the ruling moved only what it says: a `let` local is NOT a mutable scrutinee, so its payload
+binding stays read-only and may not fill a parameter the callee writes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function raise(c Counter)
+	c.n = c.n + 32
+end 'raise'
+
+function main() returns ExitCode
+	let s = Slot.holding(Counter.create(10))
+	match s 'step'
+		holding(c) then raise(c)
+		empty then return 0
+	end 'step'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/mutable-enums/error.let-scrutinee-payload-is-read-only.test:24:19: cannot pass 'c' to function that mutates parameter 'c' (in main)
 ```

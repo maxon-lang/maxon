@@ -40,7 +40,8 @@ increment(n)
 
 ### Immutability Enforcement
 
-If a `let` variable is passed to a function that assigns to that parameter, the compiler reports an error. This ensures immutable bindings cannot be modified indirectly.
+If a `let` variable is passed to a function that writes that parameter — assigning to it, or writing a field of
+it — the compiler reports an error. This ensures immutable bindings cannot be modified indirectly.
 
 ### Temporaries from Literals and Expressions
 
@@ -258,7 +259,7 @@ function setX(p Point)
 end 'setX'
 
 function main() returns ExitCode
-	let p = Point.create(1, y: 2)
+	var p = Point.create(1, y: 2)
 	setX(p)
 	print("{p.x}")
 	return 0

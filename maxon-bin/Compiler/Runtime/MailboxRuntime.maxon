@@ -296,7 +296,7 @@ function buildMboxSend(module StdModule)
 	var firstEnvelope = module.addBlock(func, label: b"sendfirst", heat: BlockHeat.normal)
 	var chainEnvelope = module.addBlock(func, label: b"sendchain", heat: BlockHeat.normal)
 	var linked = module.addBlock(func, label: b"sendlinked", heat: BlockHeat.normal)
-	let doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let mbox = 0 as ValueId
@@ -343,7 +343,7 @@ function buildMboxSend(module StdModule)
 	module.setTerminator(chainEnvelope, op: StdOp.branch(linked.id))
 
 	emitStoreField(module, block: linked, record: mbox, offset: MboxOffTail, value: env)
-	let woken = emitMboxWakeAndUnlock(module, func: func, cur: linked, mbox: mbox, ids: ids, label: b"sendwakeparked")
+	var woken = emitMboxWakeAndUnlock(module, func: func, cur: linked, mbox: mbox, ids: ids, label: b"sendwakeparked")
 	module.setTerminator(woken, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -426,7 +426,7 @@ function buildMboxClose(module StdModule)
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffClosed, value: emitConst(module, block: entry, value: MboxIsClosed, ids: ids))
-	let woken = emitMboxWakeAndUnlock(module, func: func, cur: entry, mbox: mbox, ids: ids, label: b"closewakeparked")
+	var woken = emitMboxWakeAndUnlock(module, func: func, cur: entry, mbox: mbox, ids: ids, label: b"closewakeparked")
 	module.setTerminator(woken, op: StdOp.retVoid)
 
 	module.functions.push(func)

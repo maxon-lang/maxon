@@ -15,7 +15,8 @@ binding — is `immutable-method-call.md`.
 
 Whether a parameter is written is a property of the CALLEE, not of the call, so it is answered by a
 whole-program summary: for each function, which of its parameters does its body write? A parameter is
-written when a receiver-writing container method is called on it (`dest.push(9)`), when a self field is
+written when a receiver-writing container method is called on it (`dest.push(9)`), when a FIELD of it is
+assigned (`b.n = 99`, at whatever depth the chain reaches), when a self field is
 assigned (`n = n + 1`, which writes parameter `self`), or when it is passed on to another function that
 writes the parameter it lands in. That last clause makes the summary a FIXPOINT — `f` calling `g` calling
 `h` mutates its parameter if `h` does — and it terminates for a recursive and a mutually recursive call
@@ -37,6 +38,10 @@ A `let` on a struct binding refuses a rebind (`acc = other`) and a direct field 
 reach inside the type's own methods: `let acc = Accumulator.create(0)` followed by `acc.add(10)` is legal
 and returns what the accumulation says, whether `add` writes `self.total`, writes the bare `total`, or
 pushes onto a container held in a field.
+
+The exemption is the RECEIVER slot and nothing wider. Handing the same `let` to a PARAMETER whose field the
+callee writes — `bump(b Box)` whose body is `b.n = 99` — is `E3019` at the call, because there the write is
+of a record the caller named `let` rather than of the callee's own `self`.
 
 This is a deliberate divergence from the runnable oracle, taken because **the oracle disagrees with
 itself**. Measured on one program with a `let` receiver: `self.total = self.total + value` is accepted
@@ -140,6 +145,68 @@ end 'main'
 ```
 ```maxoncstderr
 error E3019: specs/fragments/parameter-mutation/transitive-let-array-error.test:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)
+```
+
+<!-- test: let-to-field-writing-callee-error -->
+A `let` is immutable, and a callee writing a FIELD of its parameter writes the caller's record just as an
+assignment to the parameter itself would. The binding is what the rule is about, not the depth of the write.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	let a = Box.create()
+	bump(a)
+	return a.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/parameter-mutation/let-to-field-writing-callee-error.test:18:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
+```
+
+<!-- test: transitive-let-field-write-error -->
+The field write is two calls away: `relay` writes nothing itself and hands its parameter to `poke`, which
+writes a field of it. The whole-program fixpoint carries the bit back to the call the `let` is named at.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function poke(b Box)
+	b.n = 99
+end 'poke'
+
+function relay(b Box)
+	poke(b)
+end 'relay'
+
+function main() returns ExitCode
+	let a = Box.create()
+	relay(a)
+	return a.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/parameter-mutation/transitive-let-field-write-error.test:22:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
 ```
 
 <!-- test: async-transitive-let-array-error -->
@@ -394,6 +461,10 @@ reaches that roster, so both shapes drop together and neither is left half-enfor
 ⚠ The `Array` and `String` cases around this one are unaffected and stay green: both are still
 builtin-dispatched.
 
+⚖ It is also the pin for the TRANSITIVE receiver exemption: `Set.insert` writes its own `self` fields, and a
+callee that merely calls a self-writing method on its parameter is not mutating that parameter, so the bit
+stops at the call-graph edge instead of reaching `add`.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntSet = Set with Integer
@@ -410,6 +481,42 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: let-to-callee-calling-a-self-writing-method-ok -->
+⚖ The same exemption on a USER type rather than a stdlib container: `bump` writes `self.n`, and `tick` does
+nothing but call it on the parameter it was handed. A `let` may be handed there for the same reason
+`c.bump()` is legal on it directly — the exemption survives a frame. The Set case above pins the library
+path; this one pins the declared-type path, which is the other side of the propagation edge.
+
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Counter'
+
+function tick(c Counter)
+	c.bump()
+end 'tick'
+
+function main() returns ExitCode
+	let c = Counter.create()
+	tick(c)
+	tick(c)
+	return c.n as ExitCode
+end 'main'
+```
+```exitcode
+2
 ```
 
 <!-- test: let-global-string-to-appending-param-error -->

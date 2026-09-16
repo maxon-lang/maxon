@@ -562,13 +562,20 @@ function addConformerEdges(project Project, signatures ProgramSignatures, graph 
 		return
 	end 'noReferenceNamedAnInterface'
 
-	for (name, _) in project.structTypes 'eachStruct'
-		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
-	end 'eachStruct'
+	// Keys out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
+	var names = ByteArrayArray.create()
 
-	for (name, _) in project.enumTypes 'eachEnum'
+	for (name, _) in project.structTypes 'eachDeclaredStruct'
+		names.push(name)
+	end 'eachDeclaredStruct'
+
+	for (name, _) in project.enumTypes 'eachDeclaredEnum'
+		names.push(name)
+	end 'eachDeclaredEnum'
+
+	for name in names 'eachAggregate'
 		addConformerEdgesOf(project, signatures: signatures, graph: graph, name: name, conformer: graph.nodeOfDeclaredAggregate(name))
-	end 'eachEnum'
+	end 'eachAggregate'
 
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		addInstanceConformerEdges(project, signatures: signatures, graph: graph, id: id)

@@ -463,7 +463,10 @@ function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorT
 	scratch.walkOrder.clear()
 	recordLoopPreorder(tree, members: scratch.members, header: header, into: scratch.walkOrder)
 
-	for position in scratch.walkOrder 'eachBlock'
+	// An INDEX loop, not `for … in`: the element is a BORROW of `scratch`, and the call below is
+	// recorded as writing that same storage. ⚖ Canonical note at `ElimTrivialBlockArgs.elimTrivialBlockArgs`.
+	for i in 0 upto scratch.walkOrder.count() 'eachBlock'
+		let position = try scratch.walkOrder.get(i) otherwise panic("analyzeLoopBlocks: walkOrder.get OOB at {i} inside its own count")
 		analyzeLoopBlock(module, block: blockAtPosition(module, func: func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)
 	end 'eachBlock'
 end 'analyzeLoopBlocks'

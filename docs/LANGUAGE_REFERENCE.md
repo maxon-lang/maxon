@@ -2710,7 +2710,7 @@ end 'main'
 **Mutability rules:**
 
 - If the caller passes a `var` variable, the parameter is mutable and assignments propagate back to the caller.
-- If the caller passes a `let` variable to a function that mutates its parameter, the compiler raises error **E3019**.
+- If the caller passes a `let` variable to a function that mutates its parameter — directly, or through a field or element of it — the compiler raises error **E3019**. A method writing a field of its *own* receiver is not a parameter mutation, so `let acc = Accumulator.create(0)` followed by `acc.add(10)` is legal.
 - If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
 
 ```maxon
@@ -5434,7 +5434,8 @@ there is not refused.**
   on. A `var` that is only rebound and read — a chain cursor, `var cur = try chain.head()` then `cur =
   try cur.next()` — is a rebindable shared reference and mutates nothing.
 - **An argument at a parameter the callee writes** — **E3019** for an immutable name spelled as the argument,
-  whether or not it is read again (see [Parameter Passing](#parameter-passing)), and for a value — one a `var`
+  whether or not it is read again (see [Parameter Passing](#parameter-passing)), the callee writing a FIELD of
+  that parameter included, and for a value — one a `var`
   holds included — that may be the record of an immutable name read after the call (`grow(pass(a))`,
   `pass(a).push(9)`), that a live `let` borrows out of the same mutable storage, or that may be the same record as
   a live `let` by another road.
@@ -5447,8 +5448,11 @@ there is not refused.**
   `let a = Point.create(1)`, `box.item = a`, `box.item.x = 99` while `a` is still read. `x.append(…)` on a `String`
   is such a write. A write through a `var` whose binding was already refused (E3078) is not refused again. A field
   read after the field was stored on every path since the `let` read it — with a value that cannot be the `let`'s record — is the new record, not the
-  `let`'s. A `let` is shallow: a write to a record lying within its record is refused only when the `let`'s own
-  record is an immutable one.
+  `let`'s. A `let` refuses a write to its OWN record at whatever depth a callee reaches to make it — a callee
+  writing a field of the parameter the `let` filled is the E3019 above — while a method writing a field of its
+  *own* receiver is the one write that is not a parameter mutation, so `let acc = Accumulator.create(0)` then
+  `acc.add(10)` stands. A write to a record merely lying within the `let`'s record is refused only where that
+  record is an immutable one itself.
 
 A value that IS an immutable record — one whose type declares every field `let` — is written by nothing, so it
 meets none of these checks; what it holds is judged by its own type. A `String` or `Character` a name does not own
