@@ -1,8 +1,7 @@
 // Shared byte-writing utilities and typealiases used across emitters and writers.
 
-// `BytePos` is NOT declared here: `stdlib/String.maxon` exports it, identically, and a count of
-// bytes is one fact. Two more copies lived here and in `Compiler/PhaseProbe.maxon` until the flat
-// namespace check refused them.
+// `BytePos` is NOT declared here: `stdlib/String.maxon` exports it, and the flat namespace refuses a
+// second copy.
 export typealias ByteOffset = int(0 to u64.max)
 
 // Dense column of byte offsets — the two span columns of `SourceRangeTable`.
@@ -172,6 +171,32 @@ end 'writeQwordBE'
 export function alignUp(value BytePos, alignment BytePos) returns BytePos
 	return (value + alignment - 1) and not (alignment - 1)
 end 'alignUp'
+
+// The smallest power of two >= `n`, and 1 for 0.
+export function roundUpToPowerOfTwo(n BytePos) returns BytePos
+	var p = 1 as BytePos
+
+	while p < n 'grow'
+		p = p + p
+	end 'grow'
+
+	return p
+end 'roundUpToPowerOfTwo'
+
+// ⚠ `v < 1` is refused first because `v and (v - 1)` answers `0` for `i64.min` too, whose magnitude is
+// not representable.
+export function isPowerOfTwo(v ParsedInt) returns bool
+	return v >= 1 and (v and (v - 1)) == 0
+end 'isPowerOfTwo'
+
+// The shift a power of two reduces to; asked only of a `v` that `isPowerOfTwo` admits.
+export function log2OfPowerOfTwo(v ParsedInt) returns ShiftCount
+	if not isPowerOfTwo(v) 'notAPowerOfTwo'
+		panic("log2OfPowerOfTwo: {v} is not a power of two — ask `isPowerOfTwo` first")
+	end 'notAPowerOfTwo'
+
+	return trailingZeroCount(v as MachineWord) as ShiftCount
+end 'log2OfPowerOfTwo'
 
 // Assert a signed PC-relative displacement fits in `bits` two's-complement bits.
 // `byteOff` arrives as a u64 (MachineWord is unsigned), so a negative displacement

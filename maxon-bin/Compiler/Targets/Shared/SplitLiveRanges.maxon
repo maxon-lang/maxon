@@ -869,12 +869,7 @@ type PeakTree
 	// `build`.
 	export function reset(blockCount CfgIndex)
 		self.numBlocks = blockCount
-		var base = 1 as ColumnLength
-
-		while base < blockCount as ColumnLength 'toPowerOfTwo'
-			base = base + base
-		end 'toPowerOfTwo'
-
+		let base = roundUpToPowerOfTwo(blockCount as BytePos) as ColumnLength
 		self.leafBase = base
 
 		self.found.refill(blockCount as ElementIndex, value: false)
@@ -1207,14 +1202,17 @@ export type PressureIndex
 
 		for b in 0 upto topo.numBlocks 'eachBlock'
 			let ops = try opCounts.get(b) otherwise panic("PressureIndex.placeRuns: opCounts.get OOB for block {b}")
-			let run = roundUpToPowerOfTwo((((ops + 1) * SlotGap + 1) as PressureSlot))
-			let first = roundUpToRunBoundary(next, runLength: run)
+
+			// The run length is a power of two so its aligned subtree is one node, which is also what
+			// lets `alignUp` place it.
+			let run = roundUpToPowerOfTwo(((ops + 1) * SlotGap + 1) as BytePos) as PressureSlot
+			let first = alignUp(next as BytePos, alignment: run as BytePos) as PressureSlot
 			try self.blockFirst.set(b, value: first) otherwise panic("PressureIndex.placeRuns: blockFirst.set OOB for block {b}")
 			try self.blockLen.set(b, value: run) otherwise panic("PressureIndex.placeRuns: blockLen.set OOB for block {b}")
 			next = first + run
 		end 'eachBlock'
 
-		self.slotCount = roundUpToPowerOfTwo(next) as ColumnLength
+		self.slotCount = roundUpToPowerOfTwo(next as BytePos) as ColumnLength
 
 		for b in 0 upto topo.numBlocks 'eachNode'
 			// The node covering `[first, first + len)`: the leaves start at `slotCount`, so dividing the
@@ -2737,24 +2735,6 @@ function refreshBlockDemands(liveness LivenessResult, pressure PressureIndex, di
 		end 'eachClass'
 	end 'eachDirtyBlock'
 end 'refreshBlockDemands'
-
-// The smallest power of two >= `n` (and 1 for 0) — the run length a block's aligned subtree needs.
-function roundUpToPowerOfTwo(n PressureSlot) returns PressureSlot
-	var p = 1 as PressureSlot
-
-	while p < n 'grow'
-		p = p + p
-	end 'grow'
-
-	return p
-end 'roundUpToPowerOfTwo'
-
-// The smallest multiple of `runLength` that is >= `n`. A run length is a POWER OF TWO, so the rounding
-// is a mask rather than a division — which is also why it needs no zero guard.
-function roundUpToRunBoundary(n PressureSlot, runLength PressureSlot) returns PressureSlot
-	let mask = runLength - 1
-	return (n + mask) and not mask
-end 'roundUpToRunBoundary'
 
 // Every buffer the per-split pressure sweep and victim choice need, allocated ONCE per FUNCTION and
 // reused by every iteration of the driver's loop. See the file header for why per-iteration

@@ -320,6 +320,7 @@ Optional per-test directives go between the test marker and the maxon block:
 
 | Directive | Effect |
 |-----------|--------|
+| `<!-- disabled-test: test-name -->` | In place of the test marker, not beside it: a shelved case the compiler cannot yet pass. It is parsed and counted but never run; flip the marker to `test:` to revive it |
 | `<!-- Args: ... -->` | The argv the compiled program is spawned with, space-separated; a double-quoted run is one argument and may be empty (`""`). Capital `A`, matched exactly |
 | `<!-- unsupported-targets: t1, t2 -->` | Exclude the case from the named targets (`x64-windows`, `wasm32-wasi`, …; comma-separated); it runs on every other target. A missing or blank marker excludes nothing; a key naming no supported target, or a list naming every one, is a parse failure |
 | `<!-- targets: ... -->` | Retired. The parser refuses it: nothing reads it, so a case carrying it would run everywhere. Spell the lanes that cannot serve the case with `unsupported-targets:` instead |

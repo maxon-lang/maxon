@@ -359,25 +359,6 @@ function divideTwoToThe63(m PositiveModulus, quotient ParsedInt, remainder Parse
 	remainder = r0 + 1
 end 'divideTwoToThe63'
 
-// EXPORTED with `log2OfPowerOfTwo`: this pass reduces a DIVISION by a power of two to a shift,
-// `arm64MulImmForm` reduces a MULTIPLY by one to the same shift, and `MmRuntime.emitAlignUp` masks by one —
-// one question, and a second copy of the test is where it would drift.
-//
-// ⚠ `v < 1` is refused first because `v and (v - 1)` answers `0` for `i64.min` too, whose magnitude is
-// not representable.
-export function isPowerOfTwo(v ParsedInt) returns bool
-	return v >= 1 and (v and (v - 1)) == 0
-end 'isPowerOfTwo'
-
-// The shift a power of two reduces to; asked only of a `v` that `isPowerOfTwo` admits.
-export function log2OfPowerOfTwo(v ParsedInt) returns ShiftCount
-	if not isPowerOfTwo(v) 'notAPowerOfTwo'
-		panic("log2OfPowerOfTwo: {v} is not a power of two — ask `isPowerOfTwo` first")
-	end 'notAPowerOfTwo'
-
-	return trailingZeroCount(v as MachineWord) as ShiftCount
-end 'log2OfPowerOfTwo'
-
 // ⭐ **THE ONE ADMISSION RULE — what one `div`/`mod` site reduces to, written into `out`.** Every
 // refusal in this file's header is decided here and nowhere else, so the emitters below may assume
 // `2 <= divisorMagnitude <= i64.max` unconditionally.

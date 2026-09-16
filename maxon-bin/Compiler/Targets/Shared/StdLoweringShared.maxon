@@ -205,7 +205,7 @@ export type CalleeAbiTable
 		table.resultClasses.reserve(rowCount)
 		table.nameStarts.push(0)
 
-		let slotCount = slotCountFor(rowCount)
+		let slotCount = roundUpToPowerOfTwo((rowCount * SlotsPerRow) as BytePos) as ElementIndex
 		table.slots.refill(slotCount, value: slotCount as CalleeRow)
 
 		for func in funcNames.functions 'eachFunc'
@@ -308,17 +308,6 @@ end 'CalleeAbiTable'
 
 // Slots per row: a load factor of at most one half keeps a linear probe short.
 let SlotsPerRow = 2
-
-// The smallest power of two holding `SlotsPerRow` slots for every row.
-function slotCountFor(rowCount ElementIndex) returns ElementIndex
-	var slotCount = 1 as ElementIndex
-
-	while slotCount < rowCount * SlotsPerRow 'double'
-		slotCount = slotCount * 2
-	end 'double'
-
-	return slotCount
-end 'slotCountFor'
 
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
 // nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in
