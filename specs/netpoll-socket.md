@@ -471,6 +471,15 @@ program that retries a timeout to send them again, and the peer receives them tw
 
 ⭐ The race is built the same way: the deadline has passed and the send buffer has room before the send is
 issued, so the send completes the moment it is issued while its wait finds the deadline already expired.
+
+⛔ **THE PACKET IS A `(status, bytes)` PAIR, AND THE PAIR IS THE ANSWER, NOT THE STATUS ALONE.** A `WSASend` the
+cancel caught after part of its buffer was copied to the kernel completes cancelled with a non-zero count, and
+those bytes are on the wire; the runtime answers it as a short send with that count and no `timedOut` mark, and the
+deadline reports on the next call, which moves nothing. The receive twin — a cancelled `WSARecv` that had landed
+bytes — is the same block. The pinned `__ms_send_from` body shows the cancelled road testing the byte count before
+it chooses the `timedOut` exit. On x64-windows loopback the kernel accepts an 8, 64 or 256 MiB overlapped send
+whole with the peer reading nothing, so no spec program can park a send for a cancel to catch mid-copy, and the
+pinned body is the evidence.
 ```maxon
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
@@ -519,6 +528,9 @@ reported=3 timeouts=0 heard=xyz
 ```
 ```exitcode
 0
+```
+```RequiredRuntime
+__ms_send_from
 ```
 
 <!-- test: netpoll-socket.drop-a-parked-reader -->

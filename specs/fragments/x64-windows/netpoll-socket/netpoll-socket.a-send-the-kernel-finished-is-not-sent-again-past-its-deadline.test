@@ -546,3 +546,318 @@ func @main {
     x64.popReg rbp
     x64.ret
 }
+
+func @__ms_send_from {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.leaRegRegImm32 r14, rax, -1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, mschkoff
+  closedthrow:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 7
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  mschkoff:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, msoob
+  mschklen:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, msoob
+  msbound:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, msownb
+  msviewb:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+  __il_body#33:
+    x64.movRegReg rdx, rcx
+    x64.sarRegImm8 rdx, rcx, 63
+    x64.movRegReg rsi, rdx
+    x64.xorRegImm32 rsi, rdx, -1
+    x64.movRegImm32 rdi, 0
+    x64.subRegReg rdi, rdi, rcx
+    x64.shlRegImm8 rcx, rcx, 3
+    x64.andRegReg rdi, rdi, rdx
+    x64.andRegReg rcx, rcx, rsi
+    x64.orRegReg rdi, rdi, rcx
+  __il_cont#32:
+    x64.imulRegReg rax, rax, rdi
+  __il_body#34:
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.shrRegImm8 rax, rax, 3
+    x64.jmp mschkcap
+  msownb:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+  __il_body#39:
+    x64.movRegReg rdx, rcx
+    x64.sarRegImm8 rdx, rcx, 63
+    x64.movRegReg rsi, rdx
+    x64.xorRegImm32 rsi, rdx, -1
+    x64.movRegImm32 rdi, 0
+    x64.subRegReg rdi, rdi, rcx
+    x64.shlRegImm8 rcx, rcx, 3
+    x64.andRegReg rdi, rdi, rdx
+    x64.andRegReg rcx, rcx, rsi
+    x64.orRegReg rdi, rdi, rcx
+  __il_cont#38:
+    x64.imulRegReg rax, rax, rdi
+  __il_body#40:
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.shrRegImm8 rax, rax, 3
+  mschkcap:
+    x64.leaRegRegReg rcx, r12, r13
+    x64.cmpRegReg rcx, rax
+    x64.jcc lessEqual, mssend
+  msoob:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 1
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  mssend:
+    x64.callDirect __gt_io_park
+    x64.movRegReg r15, r14
+    x64.shlRegImm8 r15, r14, 1
+    x64.movRegReg rcx, r15
+    x64.callDirect __np_pd_op_begin
+    x64.storeSlotReg slot1, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rbx, rax, r12
+  mssendtry:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.mov rax, gs:[rax]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rax, rax, 96
+    x64.storeSlotReg slot2, rax
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.setccReg greater, rcx
+    x64.movRegReg rdx, r13
+    x64.subRegReg rdx, r13, rax
+    x64.imulRegReg rcx, rcx, rdx
+    x64.subRegReg r13, r13, rcx
+    x64.storeBaseDispReg.word64 [r12 + 0], r13
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.leaRegRegImm32 rax, r12, 16
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r14
+    x64.callDirect __np_op_aim
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 32], rax
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rsp + 40], rcx
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 48], rax
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.movRegImm32 r8, 1
+    x64.movRegImm32 r9, 0
+    x64.iatCall 89
+    x64.movRegReg rbx, rax
+    x64.iatCall 24
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rcx
+    x64.cmpRegImm32 rax, 997
+    x64.setccReg equal, rax
+    x64.orRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, msnostart
+  mswaitovl:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegSlot rax, slot1
+    x64.movRegReg rcx, r15
+    x64.callDirect __np_pd_wait
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, msnotready
+  mslanded:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 160]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, mswaitovl
+    x64.jmp mscompleted
+  msnotready:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, msstalecollect
+  mslatecollect:
+    x64.loadRegSlot rdx, slot2
+    x64.movRegReg rcx, r14
+    x64.iatCall 26
+    x64.callDirect __np_op_settle
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, mslatecollected
+  mscollect#23:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __np_pd_op_begin
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r8
+    x64.callDirect __np_pd_wait
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, mscollectbad#25
+  mscollected#24:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __np_op_close
+    x64.jmp mslatecollected
+  mscollectbad#25:
+    x64.movRegImm32 rcx, 111
+    x64.movReg32Reg32 rcx, rcx
+    x64.callDirect __gt_exit_process
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  mslatecollected:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rcx, [rax + 128]
+    x64.loadRegBaseDisp.word64 rax, [rax + 136]
+    x64.movRegImm32 rdx, 3221225760
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg equal, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+    x64.andRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, mscompleted
+  mslatefree:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_free
+  mslate:
+    x64.loadRegSlot rdx, slot1
+    x64.movRegReg rcx, r15
+    x64.callDirect __np_pd_mark_timed_out
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 4
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  msstalecollect:
+    x64.callDirect __np_op_settle
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, mscompleted
+  mscollect#26:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __np_pd_op_begin
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r8
+    x64.callDirect __np_pd_wait
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, mscollectbad#28
+  mscollected#27:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __np_op_close
+    x64.jmp mscompleted
+  mscollectbad#28:
+    x64.movRegImm32 rcx, 111
+    x64.movReg32Reg32 rcx, rcx
+    x64.callDirect __gt_exit_process
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  mscompleted:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rbx, [rax + 128]
+    x64.loadRegBaseDisp.word64 r13, [rax + 136]
+    x64.movRegImm32 rax, 3221225760
+    x64.cmpRegReg rbx, rax
+    x64.setccReg equal, r14
+    x64.cmpRegImm32 r13, 0
+    x64.setccReg equal, r15
+    x64.andRegReg r15, r15, r14
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_free
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rax
+    x64.cmpRegImm32 r15, 0
+    x64.setccReg equal, rcx
+    x64.andRegReg rcx, rcx, r14
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, msfail
+  msdone:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r13
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  msnostart:
+    x64.callDirect __np_op_clear
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_free
+  msfail:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 4
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
