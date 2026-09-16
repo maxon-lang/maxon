@@ -67,6 +67,18 @@ Three files under `website/` — the announcement post, the changelog page, and 
 the download links are built from. It **commits nothing**; the files are committed with everything
 else this branch carries.
 
+## 3b · Preflight — the checks the tag would otherwise apply
+
+```bash
+scripts/release-preflight.sh X.Y.Z
+```
+
+⛔ **RUN IT, AND RUN IT AFTER THE REBUILD.** Every check here also runs at the tag, where a failure
+costs a re-tag or a release whose links 404. It reads the worktree, the copied docs, the extension
+gate, the changelog entry, shellcheck, CI at this commit, and the built binary's version.
+
+⚠ **SKIPPED IS NOT PASSED.** The summary names every skip; read them rather than the exit code alone.
+
 ## 4 · Tag
 
 ```bash
@@ -94,6 +106,16 @@ a missing credential SKIPS with a notice and still reports success.
 Last, `publish` deletes `release/X.Y.Z` — the tag is the record, and the **Release tags** ruleset makes
 every `v*` tag immutable. ⚠ If the branch has a commit past the tag, that step FAILS and leaves the
 branch: tell the user, since it is work nothing shipped.
+
+**Then verify what actually shipped**, which is not the same question as whether the jobs are green:
+
+```bash
+scripts/release-postflight.sh X.Y.Z
+```
+
+⛔⛔ **DO NOT MERGE BACK UNTIL THIS IS CLEAN.** §6 commits the release's changelog, website material
+and extension version to `main`; run it over a release that has to be cut again and `main` carries a
+published extension version and a superseded entry, which the NEXT release then trips over.
 
 ## 6 · Merge the tag back
 

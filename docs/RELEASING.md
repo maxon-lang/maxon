@@ -283,6 +283,24 @@ It writes three files under `website/` — the announcement post, the changelog 
 `RELEASE_VERSION` the download links are built from — and **commits nothing**. Commit them with
 everything else this branch carries.
 
+### 3b. Run the preflight
+
+```bash
+scripts/release-preflight.sh X.Y.Z
+```
+
+⭐ **EVERY CHECK IT RUNS ALSO RUNS AT THE TAG, WHERE FAILING IS EXPENSIVE.** `guard` refuses a tag
+whose changelog entry or extension version is missing, and `website.yml`'s `deploy` is gated on its
+own build: a page that has drifted from `docs/` fails that build, `deploy` SKIPS, and the run still
+reports success — leaving the release notes pointing at a post the site never received. Asking here
+costs seconds and moves all of it before the tag exists.
+
+⚠ **A SKIPPED CHECK IS NOT A PASS** and the script says so: shellcheck absent, `gh` unauthenticated,
+no CI run yet. Read the skips before deciding the list is clean.
+
+⛔ Run it AFTER the rebuild, not before — `compiler-version` reads the built binary, and the number
+comes from the ref at BUILD time.
+
 ### 4. Tag it
 
 ```bash
@@ -332,6 +350,21 @@ collect the archives into one `dist/`, then `--publish`.
 ---
 
 ## Verifying a release, after it is published
+
+```bash
+scripts/release-postflight.sh X.Y.Z
+```
+
+⛔⛔ **A GREEN WORKFLOW IS NOT EVIDENCE THAT ANYTHING SHIPPED.** This asks the artifacts instead: the
+four archives and `SHA256SUMS` are attached, `releases/latest` redirects to this tag (which is what
+both installers resolve), the announcement post and changelog page answer 200, the served
+`install.sh` and `install.ps1` are byte-identical to this tag's copies — `maxon upgrade` fetches
+those at run time, so a stale one breaks upgrading from every shipped compiler — the website run's
+`deploy` job did not skip and its step logged `Deployment complete`, and all five downstream
+workflows ran. A MISSING downstream run is a failure, not an absence: a release created with
+`GITHUB_TOKEN` fires no `release: published`, so `publish` has to start them itself.
+
+Then, by hand, the things no script can judge:
 
 Re-download from the release page — not the local `dist/` copy, which is the thing under test:
 
