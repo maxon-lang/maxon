@@ -5,6 +5,10 @@ type Item
 	static function create(label String) returns Item
 		return Self{label: label}
 	end 'create'
+
+	export function rename(to String)
+		self.label = to
+	end 'rename'
 end 'Item'
 
 union Op
@@ -14,10 +18,6 @@ end 'Op'
 
 typealias Ops = Array with Op
 
-function mutate(item Item)
-	item.label = "MUTATED"
-end 'mutate'
-
 function main() returns ExitCode
 	var a = Ops.create()
 	a.push(Op.holds(Item.create("original label long enough for a heap record")))
@@ -25,7 +25,7 @@ function main() returns ExitCode
 	let b = a.clone()
 	let bOp = try b.get(0) otherwise Op.none
 	match bOp 'mut'
-		holds(it) then mutate(it)
+		holds(it) then it.rename("MUTATED")
 		none then return 3
 	end 'mut'
 
@@ -40,10 +40,9 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
 }
 
 func @main {
@@ -64,7 +63,7 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_5  ; "original label long enough for a heap record"
+    arm64.leaRdata x0, __str_rec_4  ; "original label long enough for a heap record"
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
     arm64.add x0, x21, 57
@@ -180,8 +179,8 @@ func @main {
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.movRegReg x0, x20
     arm64.bl __mm_incref
+    arm64.leaRdata x0, __str_rec_5  ; "MUTATED"
   __il_body#32:
-    arm64.leaRdata x0, __str_rec_4  ; "MUTATED"
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.bl __str_retain
     arm64.movRegReg x22, x0

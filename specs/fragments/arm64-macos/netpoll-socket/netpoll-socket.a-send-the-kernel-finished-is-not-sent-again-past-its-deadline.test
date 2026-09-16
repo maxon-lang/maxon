@@ -567,3 +567,164 @@ func @main {
     arm64.epilogue 208
     arm64.ret
 }
+
+func @__ms_send_from {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.sub x22, x0, 1
+    arm64.cbz x1, mschkoff
+  closedthrow:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 7
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  mschkoff:
+    arm64.cmp x20, 0
+    arm64.b.lt msoob
+  mschklen:
+    arm64.cmp x21, 0
+    arm64.b.lt msoob
+  msbound:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.cmp x0, 0
+    arm64.b.ge msownb
+  msviewb:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+  __il_body#21:
+    arm64.asr x2, x1, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x3, x2, x16
+    arm64.movImm x4, 0
+    arm64.sub x4, x4, x1
+    arm64.lsl x1, x1, 3
+    arm64.and x2, x4, x2
+    arm64.and x1, x1, x3
+    arm64.orr x1, x2, x1
+  __il_cont#20:
+    arm64.mul x0, x0, x1
+  __il_body#22:
+    arm64.add x0, x0, 7
+    arm64.lsr x0, x0, 3
+    arm64.b mschkcap
+  msownb:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
+  __il_body#27:
+    arm64.asr x2, x1, 63
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x3, x2, x16
+    arm64.movImm x4, 0
+    arm64.sub x4, x4, x1
+    arm64.lsl x1, x1, 3
+    arm64.and x2, x4, x2
+    arm64.and x1, x1, x3
+    arm64.orr x1, x2, x1
+  __il_cont#26:
+    arm64.mul x0, x0, x1
+  __il_body#28:
+    arm64.add x0, x0, 7
+    arm64.lsr x0, x0, 3
+  mschkcap:
+    arm64.add x1, x20, x21
+    arm64.cmp x1, x0
+    arm64.b.le mssend
+  msoob:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  mssend:
+    arm64.bl __gt_io_park
+    arm64.movRegReg x0, x22
+    arm64.bl __np_pd_op_begin
+    arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.add x19, x0, x20
+    arm64.b mssendtry
+  msclassify:
+    arm64.movImm x1, 0
+    arm64.sub x0, x1, x0
+    arm64.cmp x0, 35
+    arm64.cset x1, eq
+    arm64.cmp x0, 36
+    arm64.cset x2, eq
+    arm64.cmp x0, 4
+    arm64.cset x0, eq
+    arm64.orr x1, x1, x2
+    arm64.orr x0, x1, x0
+    arm64.cbz x0, msfail
+  mswait:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __np_pd_wait
+    arm64.cmp x0, 2
+    arm64.b.eq msfail
+  mswaitlive:
+    arm64.cmp x0, 1
+    arm64.b.eq mslate
+  mssendtry:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x21
+    arm64.movImm x3, 524288
+    arm64.importCall 68
+    arm64.bl mrt_host_socket_size_status
+    arm64.cmp x0, 0
+    arm64.b.lt msclassify
+    arm64.b msdone
+  mslate:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __np_pd_mark_timed_out
+    arm64.movImm x0, 0
+    arm64.movImm x9, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  msfail:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  msdone:
+    arm64.movImm x9, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

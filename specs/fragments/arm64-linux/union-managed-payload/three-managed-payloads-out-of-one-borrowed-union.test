@@ -20,10 +20,9 @@ end 'main'
 ExitCode: 6
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
 }
 
 func @main {
@@ -86,24 +85,19 @@ func @main {
     arm64.cmp x0, 0
     arm64.cset x0, hi
   scmerge:
-    arm64.cbz x0, ternaryfalse
-  ternarytrue:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_incref
-    arm64.movRegReg x23, x19
-    arm64.b matchcont
+    arm64.cbnz x0, matchcont
   ternaryfalse:
     arm64.leaRdata x0, __str_rec_4  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+    arm64.movRegReg x19, x23
   matchcont:
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.movRegReg x0, x19
-    arm64.bl __str_decref
-    arm64.movRegReg x19, x23
   __il_body#14:
     arm64.movRegReg x0, x19
     arm64.bl __write_stdout

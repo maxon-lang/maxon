@@ -18,7 +18,7 @@ end 'mutate'
 
 function main() returns ExitCode
 	let a = Op.holds(Item.create("original label long enough for a heap record"))
-	let b = a.clone()
+	var b = a.clone()
 
 	match b 'mut'
 		holds(it) then mutate(it)
@@ -35,10 +35,9 @@ end 'main'
 ExitCode: 0
 ---
 data {
-  __mm_alloc_count@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
 }
 
 func @main {
@@ -100,8 +99,8 @@ func @main {
     arm64.b.ne matchnext#4
   matcharm#1:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
   __il_body#14:
     arm64.leaRdata x0, __str_rec_4  ; "MUTATED"
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
