@@ -2,7 +2,7 @@
 
 What changed in each release of the Maxon compiler and standard library, newest first.
 
-## 0.2.2 — 2026-09-15
+## 0.2.2 — 2026-09-16
 
 ### Added
 
@@ -50,6 +50,10 @@ What changed in each release of the Maxon compiler and standard library, newest 
   left the tree with no compiler to build the fix — and the move failed outright when another
   process, such as a language server, still ran the previous binary. The move happens only once the
   compile has succeeded, and a previous binary still in use is retired aside rather than deleted.
+- On Windows, `maxon upgrade` ran the install script in a Windows PowerShell that inherited the
+  caller's `PSModulePath`. Started from pwsh, that names another edition's modules ahead of this
+  one's, and the script stopped with `The term 'Get-FileHash' is not recognized`. The child is
+  handed this PowerShell's own module directory.
 
 ## 0.2.1 — 2026-09-15
 

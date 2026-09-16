@@ -1,7 +1,7 @@
 ---
 title: Maxon 0.2.2
 description: Release notes for Maxon 0.2.2 — what changed in the compiler and standard library.
-date: 2026-09-15
+date: 2026-09-16
 authors: maxon
 tags:
   - release
@@ -59,6 +59,10 @@ excerpt: Maxon 0.2.2 is out. Here's what changed.
   left the tree with no compiler to build the fix — and the move failed outright when another
   process, such as a language server, still ran the previous binary. The move happens only once the
   compile has succeeded, and a previous binary still in use is retired aside rather than deleted.
+- On Windows, `maxon upgrade` ran the install script in a Windows PowerShell that inherited the
+  caller's `PSModulePath`. Started from pwsh, that names another edition's modules ahead of this
+  one's, and the script stopped with `The term 'Get-FileHash' is not recognized`. The child is
+  handed this PowerShell's own module directory.
 
 ## Install
 
