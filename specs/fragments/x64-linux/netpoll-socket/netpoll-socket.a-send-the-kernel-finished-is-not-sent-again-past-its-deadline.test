@@ -543,3 +543,177 @@ func @main {
     x64.popReg rbp
     x64.ret
 }
+
+func @__ms_send_from {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.leaRegRegImm32 r14, rax, -1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, mschkoff
+  closedthrow:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 7
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  mschkoff:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, msoob
+  mschklen:
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, msoob
+  msbound:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greaterEqual, msownb
+  msviewb:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+  __il_body#21:
+    x64.movRegReg rdx, rcx
+    x64.sarRegImm8 rdx, rcx, 63
+    x64.movRegReg rsi, rdx
+    x64.xorRegImm32 rsi, rdx, -1
+    x64.movRegImm32 rdi, 0
+    x64.subRegReg rdi, rdi, rcx
+    x64.shlRegImm8 rcx, rcx, 3
+    x64.andRegReg rdi, rdi, rdx
+    x64.andRegReg rcx, rcx, rsi
+    x64.orRegReg rdi, rdi, rcx
+  __il_cont#20:
+    x64.imulRegReg rax, rax, rdi
+  __il_body#22:
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.shrRegImm8 rax, rax, 3
+    x64.jmp mschkcap
+  msownb:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+  __il_body#27:
+    x64.movRegReg rdx, rcx
+    x64.sarRegImm8 rdx, rcx, 63
+    x64.movRegReg rsi, rdx
+    x64.xorRegImm32 rsi, rdx, -1
+    x64.movRegImm32 rdi, 0
+    x64.subRegReg rdi, rdi, rcx
+    x64.shlRegImm8 rcx, rcx, 3
+    x64.andRegReg rdi, rdi, rdx
+    x64.andRegReg rcx, rcx, rsi
+    x64.orRegReg rdi, rdi, rcx
+  __il_cont#26:
+    x64.imulRegReg rax, rax, rdi
+  __il_body#28:
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.shrRegImm8 rax, rax, 3
+  mschkcap:
+    x64.leaRegRegReg rcx, r12, r13
+    x64.cmpRegReg rcx, rax
+    x64.jcc lessEqual, mssend
+  msoob:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 1
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  mssend:
+    x64.callDirect __gt_io_park
+    x64.movRegReg rcx, r14
+    x64.callDirect __np_pd_op_begin
+    x64.movRegReg r15, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.leaRegRegReg rbx, rax, r12
+    x64.jmp mssendtry
+  msclassify:
+    x64.movRegImm32 rcx, 0
+    x64.subRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 11
+    x64.setccReg equal, rax
+    x64.cmpRegImm32 rcx, 115
+    x64.setccReg equal, rdx
+    x64.cmpRegImm32 rcx, 4
+    x64.setccReg equal, rcx
+    x64.orRegReg rax, rax, rdx
+    x64.orRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, msfail
+  mswait:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r14
+    x64.movRegReg rax, r15
+    x64.callDirect __np_pd_wait
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, msfail
+  mswaitlive:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, mslate
+  mssendtry:
+    x64.movRegReg rdi, r14
+    x64.movRegReg rsi, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegImm32 r10, 16384
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r9, 0
+    x64.x64Syscall 44
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, msclassify
+    x64.jmp msdone
+  mslate:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __np_pd_mark_timed_out
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 4
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  msfail:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 4
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  msdone:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rax
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

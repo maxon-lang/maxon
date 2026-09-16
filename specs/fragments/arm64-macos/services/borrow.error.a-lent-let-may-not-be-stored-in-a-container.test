@@ -1,0 +1,35 @@
+// Test: borrow.error.a-lent-let-may-not-be-stored-in-a-container
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(b Box)
+		self.seen = self.seen + b.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var xs = Boxes.create()
+	let b = Box.create()
+	h.take(b)
+	xs.push(b)
+	return xs.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3160: <fragment>:29:10: `b` was lent to another green thread at <fragment>:28:9, so what it holds is frozen: storing it in a container would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it

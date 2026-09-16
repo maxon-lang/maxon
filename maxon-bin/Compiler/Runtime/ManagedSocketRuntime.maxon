@@ -1278,12 +1278,14 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	module.appendOp(lateCollect, op: StdOp.osCancelIo(socket, ovlId: overlapped))
 	emitSocketCollectOutstanding(module, func: func, ids: ids, cur: lateCollect, mode: mode, cont: lateCollected)
 
-	// ⛔⛔ **THE PACKET, NOT THE DEADLINE, SAYS WHAT HAPPENED.** A transfer the kernel finished before the cancel
-	// reached it has already moved its bytes, so only a cancelled status is `timedOut`; answering `timedOut` for
-	// anything else loses a receive's bytes and makes a retried send send them twice.
-	let lateStatus = emitLoadField(module, block: lateCollected, record: gt, offset: GtOffIoStatus, ids: ids)
-	let cancelled = emitCmp(module, block: lateCollected, a: lateStatus, b: emitConst(module, block: lateCollected, value: NtStatusCancelled, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lateCollected, op: StdOp.condBranch(cancelled, thenBlockId: lateFree.id, elseBlockId: completed.id))
+	// ⛔⛔ **THE PACKET'S `(status, bytes)` PAIR, NOT THE DEADLINE, SAYS WHAT HAPPENED.** A transfer the kernel
+	// finished before the cancel reached it has already moved its bytes, and a cancel that caught a transfer
+	// part-way completes it cancelled with a non-zero count whose bytes are on the wire or in the buffer. Both are
+	// answered as the short transfer they are; the deadline reports on the next call, which moves nothing. Only a
+	// cancelled packet that moved nothing is `timedOut` — anything else marked so loses a receive's bytes and
+	// makes a retried send send them twice.
+	let (_, _, _, abandoned) = emitSocketPacketPair(module, block: lateCollected, gt: gt, ids: ids)
+	module.setTerminator(lateCollected, op: StdOp.condBranch(abandoned, thenBlockId: lateFree.id, elseBlockId: completed.id))
 	emitRawFree(module, block: lateFree, ptr: buffers, ids: ids)
 	module.setTerminator(lateFree, op: StdOp.branch(timedOut.id))
 
@@ -1294,16 +1296,32 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	// late road's reason: a transfer the close did not abort has moved its bytes.
 	emitSocketCollectOutstanding(module, func: func, ids: ids, cur: staleCollect, mode: mode, cont: completed)
 
-	// A zero NTSTATUS is the transfer; anything else is this operation's failure — a peer that reset the
-	// connection, and a request a dropped promise or a close cancelled. A graceful close is a zero status with
-	// zero bytes, which the stdlib reads as `connectionClosed` — the same answer a blocking `recv` gave it.
-	let status = emitLoadField(module, block: completed, record: gt, offset: GtOffIoStatus, ids: ids)
-	let moved = emitLoadField(module, block: completed, record: gt, offset: GtOffIoResult, ids: ids)
+	// A zero NTSTATUS is the transfer, and so is a cancelled one with a count: the bytes moved before the cancel
+	// landed. Anything else is this operation's failure — a peer that reset the connection, and a request a
+	// dropped promise or a close cancelled before it moved a byte. A graceful close is a zero status with zero
+	// bytes, which the stdlib reads as `connectionClosed` — the same answer a blocking `recv` gave it.
+	let (status, moved, cancelled, abandoned) = emitSocketPacketPair(module, block: completed, gt: gt, ids: ids)
 	emitRawFree(module, block: completed, ptr: buffers, ids: ids)
-	let succeeded = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: NtStatusSuccess, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let finished = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: NtStatusSuccess, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let kept = emitCmp(module, block: completed, a: abandoned, b: emitConst(module, block: completed, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let partial = emitBin(module, block: completed, a: cancelled, b: kept, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let succeeded = emitBin(module, block: completed, a: finished, b: partial, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(completed, op: StdOp.condBranch(succeeded, thenBlockId: ok.id, elseBlockId: failed.id))
 	completed.branchEdges.push(BranchEdge.create(ok.id, argIds: argsOf(moved)))
 end 'emitSocketOverlappedTransfer'
+
+// The completion packet's `(status, bytes)` pair, whether the status is the cancel's, and whether that cancel
+// caught the transfer before it moved a byte. The two readers of a packet decide on the PAIR — a cancelled
+// status alone does not say whether bytes moved — and `abandoned` is minted here so the late road's `timedOut`
+// test and `completed`'s acceptance are one predicate and its complement, not two that may drift apart.
+function emitSocketPacketPair(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns (ValueId, ValueId, ValueId, ValueId)
+	let status = emitLoadField(module, block: block, record: gt, offset: GtOffIoStatus, ids: ids)
+	let moved = emitLoadField(module, block: block, record: gt, offset: GtOffIoResult, ids: ids)
+	let cancelled = emitCmp(module, block: block, a: status, b: emitConst(module, block: block, value: NtStatusCancelled, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let empty = emitCmp(module, block: block, a: moved, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let abandoned = emitBin(module, block: block, a: cancelled, b: empty, opcode: StdBinOpcode.bitAnd, ids: ids)
+	return (status, moved, cancelled, abandoned)
+end 'emitSocketPacketPair'
 
 // ⛔⛔ **A WAIT THAT ENDED WITHOUT THE KERNEL'S ANSWER LEAVES THE CALLER'S BUFFER IN THE KERNEL'S HANDS, AND
 // THIS IS WHERE IT IS TAKEN BACK.** Collecting the packet is what proves the kernel has written its last byte,
