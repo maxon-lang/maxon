@@ -329,7 +329,9 @@ link_into_path() {
 			"$HOME/.local/bin"|"$HOME/bin") ;;
 			*) continue ;;
 		esac
-		[ -d "$entry" ] && [ -w "$entry" ] || continue
+		if [ ! -d "$entry" ] || [ ! -w "$entry" ]; then
+			continue
+		fi
 
 		if runs_install "$entry/maxon" "$1"; then
 			linked=0
