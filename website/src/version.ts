@@ -6,4 +6,4 @@
 //
 // ⛔ **A CODE FENCE CANNOT INTERPOLATE IT**, and a version typed into one goes stale at the next release.
 // A command that names the version is rendered with Starlight's `<Code>` from this constant instead.
-export const RELEASE_VERSION = '0.2.1';
+export const RELEASE_VERSION = '0.2.2';
