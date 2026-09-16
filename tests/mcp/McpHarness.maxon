@@ -253,33 +253,50 @@ export function containsString(arr StringArray, target String) returns bool
 	return false
 end 'containsString'
 
-export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArray
-	var props = StringArray.create()
+union SchemaLookup
+	found(properties JsonNodeId)
+	absent
+end 'SchemaLookup'
+
+// A tools/list response's `inputSchema.properties` object for one tool.
+function toolSchemaProperties(doc JsonDoc, toolName String) returns SchemaLookup
 	let resId = resultNode(doc)
-	let toolsId = try doc.getChild(resId, key: "tools") otherwise return props
-	let count = try doc.arrayLength(toolsId) otherwise return props
+	let toolsId = try doc.getChild(resId, key: "tools") otherwise return SchemaLookup.absent
+	let count = try doc.arrayLength(toolsId) otherwise return SchemaLookup.absent
 
 	for i in 0 upto count 'each'
 		let toolId = try doc.arrayAt(toolsId, index: i) otherwise continue
 		let name = try doc.getString(toolId, key: "name") otherwise continue
 
 		if name.equals(toolName) 'found'
-			let schemaId = try doc.getChild(toolId, key: "inputSchema") otherwise return props
-			let propsId = try doc.getChild(schemaId, key: "properties") otherwise return props
-			let node = doc.get(propsId)
-			let keyCount = node.keys.count()
-
-			for k in 0 upto keyCount 'eachKey'
-				let keyName = try node.keys.get(k) otherwise continue
-				props.push(keyName)
-			end 'eachKey'
-
-			return props
+			let schemaId = try doc.getChild(toolId, key: "inputSchema") otherwise return SchemaLookup.absent
+			let propsId = try doc.getChild(schemaId, key: "properties") otherwise return SchemaLookup.absent
+			return SchemaLookup.found(propsId)
 		end 'found'
 	end 'each'
 
-	return props
+	return SchemaLookup.absent
+end 'toolSchemaProperties'
+
+export function toolPropertyKeys(doc JsonDoc, toolName String) returns StringArray
+	return match toolSchemaProperties(doc, toolName: toolName) 'lookup'
+		found(propsId) gives doc.get(propsId).keys.clone()
+		absent gives StringArray.create()
+	end 'lookup'
 end 'toolPropertyKeys'
+
+// ⛔ A property or description that is not there is a BROKEN ROSTER, never an empty description.
+export function toolPropertyDescription(doc JsonDoc, toolName String, property String) returns String
+	match toolSchemaProperties(doc, toolName: toolName) 'lookup'
+		found(propsId) then return propertyDescriptionIn(doc, properties: propsId, toolName: toolName, property: property)
+		absent then panic("tools/list has no input schema for `{toolName}`: {Json.stringify(doc)}")
+	end 'lookup'
+end 'toolPropertyDescription'
+
+function propertyDescriptionIn(doc JsonDoc, properties JsonNodeId, toolName String, property String) returns String
+	let propertyId = try doc.getChild(properties, key: property) otherwise panic("`{toolName}` declares no property `{property}`: {Json.stringify(doc)}")
+	return try doc.getString(propertyId, key: "description") otherwise panic("`{toolName}`'s property `{property}` has no description: {Json.stringify(doc)}")
+end 'propertyDescriptionIn'
 
 // ⛔ A missing field is a BROKEN RESPONSE, not an empty one. Answering "" would let an assertion on
 // the payload pass against a response that never carried it.

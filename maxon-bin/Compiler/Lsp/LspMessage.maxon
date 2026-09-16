@@ -23,6 +23,7 @@ module enum LspJsonRpcErrorCode
 	invalidRequest = -32600
 	methodNotFound = -32601
 	invalidParams = -32602
+	internalError = -32603
 end 'LspJsonRpcErrorCode'
 
 // Builds one JSON object into a document. `JsonNode.objectNode` wants two parallel arrays, and every
@@ -81,8 +82,8 @@ module let LspNewTextKey = "newText"
 // `SymbolInformation` all carry one, and the protocol never renames a member.
 module let LspKindKey = "kind"
 
-/// The `Range` a byte span occupies. ⚠ It is the ONE place an `LspSpan` becomes protocol coordinates, so
-/// the UTF-16 conversion in `LspLineIndex.positionOf` cannot be skipped by one reader and applied by
+/// The `Range` a byte span occupies. ⚠ Every byte offset becomes protocol coordinates through
+/// `LspLineIndex.positionOf`, so the UTF-16 conversion cannot be skipped by one reader and applied by
 /// another.
 module function lspSpanRangeNode(doc JsonDoc, source String, index LspLineIndex, span LspSpan) returns JsonNodeId
 	let start = index.positionOf(source, offset: span.startByte)

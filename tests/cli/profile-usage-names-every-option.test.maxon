@@ -1,0 +1,65 @@
+// profile-usage-names-every-option.test.maxon — every option `maxon profile`'s usage text documents on a
+// line of its own is also in its `Usage:` line, which is the one line a reader copies a command from.
+//
+// ⭐ BOTH ROSTERS ARE READ OFF THE REFUSAL, so an option added to the body is demanded of the usage line
+// without this file naming it.
+//
+// Guarded exactly as the driver guards the command: elsewhere `profile` is refused by name and prints no
+// usage at all.
+
+#if os(Windows) and arch(x64)
+	let ProfileCommandWord = "profile"
+	let UsageLinePrefix = "Usage:"
+
+	// An option taking a value is spelled `--name=<placeholder>`, with a different placeholder in each
+	// half. What both halves share is the name up to and including the `=`.
+	let OptionValueSeparator = "="
+
+	test 'profile usage line names every option its body documents'
+		// No verb: the refusal that prints the usage.
+		let run = runOneArgument(ProfileCommandWord)
+
+		let observedExit = run.exitCode() as AssertedInt
+		try Expect.equal(observedExit, expected: 1, message: "`maxon {ProfileCommandWord}` with no verb was not refused. It said: {run.stdout}{run.stderr}")
+
+		let usageLines = usageLinesIn(run.stderr)
+		try Expect.equal(usageLines.count() as AssertedInt, expected: 1, message: "`maxon {ProfileCommandWord}`'s refusal does not carry exactly one `{UsageLinePrefix}` line. It said: {run.stderr}")
+		let usageLine = try usageLines.get(0) otherwise panic("profile-usage: exactly one usage line was just asserted")
+
+		let documented = labelsWhereOptionhoodIs(labelledWordsIn(run.stderr), isOption: true)
+		try Expect.isTrue(documented.count() > 0, message: "no option was read off `maxon {ProfileCommandWord}`'s usage body, so the comparison below would be vacuous. It said: {run.stderr}")
+
+		var missing = ListedWordArray.create()
+
+		for option in documented 'eachOption'
+			let name = optionName(option)
+
+			if not usageLine.contains(name) 'absent'
+				missing.push(name)
+			end 'absent'
+		end 'eachOption'
+
+		try Expect.isEmpty(listed(missing), message: "`maxon {ProfileCommandWord}` documents these options on lines of their own and leaves them out of its usage line: {listed(missing)}. The usage line is: {usageLine}")
+	end 'profile usage line names every option its body documents'
+
+	function usageLinesIn(text String) returns ListedWordArray
+		var lines = ListedWordArray.create()
+
+		for line in text.split("\n") 'eachLine'
+			if line.startsWith(UsageLinePrefix) 'aUsageLine'
+				lines.push(line.trim())
+			end 'aUsageLine'
+		end 'eachLine'
+
+		return lines
+	end 'usageLinesIn'
+
+	function optionName(option String) returns String
+		if not option.contains(OptionValueSeparator) 'aSwitch'
+			return option
+		end 'aSwitch'
+
+		let name = try option.split(OptionValueSeparator).get(0) otherwise panic("profile-usage: a split of a string containing its separator has a first part")
+		return "{name}{OptionValueSeparator}"
+	end 'optionName'
+#endif

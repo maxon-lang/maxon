@@ -26,6 +26,12 @@
 // have to invent one — and `tests/lsp/capability-agreement.test.maxon` asserts that every entry's
 // advertised capability is one the server answers, so the invention would go red. It lives in
 // `LspDiagnostics.maxon` and is written straight to the wire.
+//
+// ⛔ **A MAXON-ONLY REQUEST IS NOT AN `LspMethod` EITHER — it is an `LspExtensionMethod`.** Every
+// `LspMethod` is a `textDocument/*` request that names an open document and has a capability to advertise;
+// an extension request such as `maxon/generateIR` carries its own source and has no capability in LSP's
+// vocabulary, so it would falsify both halves of the seam above. It is routed beside the registry, never
+// advertised, and its answer is `LspServer.maxon`'s `answerExtension`.
 
 // Every LSP request this server routes. A method belongs here once it has a home; whether it has an
 // ANSWER is a separate question, and `LspServer.maxon`'s `servedMethods` is the one that asks it.
@@ -113,10 +119,22 @@ module function lspMethodArea(method LspMethod) returns LspArea
 	end 'area'
 end 'lspMethodArea'
 
-// Which `LspMethod` a wire name is, if any. A name nothing here claims is a method this server has no
-// home for at all — `initialize`, `shutdown`, a notification, or something LSP added since.
+// The requests the Maxon editor extension sends that LSP itself does not define.
+module enum LspExtensionMethod
+	generateIr
+end 'LspExtensionMethod'
+
+module function lspExtensionMethodWireName(method LspExtensionMethod) returns String
+	return match method 'wireName'
+		generateIr gives "maxon/generateIR"
+	end 'wireName'
+end 'lspExtensionMethodWireName'
+
+// Which request a wire name is, if any. A name nothing here claims is a method this server has no home
+// for at all — `initialize`, `shutdown`, a notification, or something LSP added since.
 module union LspMethodLookup
 	found(method LspMethod)
+	extensionMethod(method LspExtensionMethod)
 	unknown
 end 'LspMethodLookup'
 
@@ -126,6 +144,12 @@ module function lspMethodNamed(wireName String) returns LspMethodLookup
 			return LspMethodLookup.found(method)
 		end 'thisOne'
 	end 'eachMethod'
+
+	for method in LspExtensionMethod.allCases 'eachExtension'
+		if lspExtensionMethodWireName(method) == wireName 'thisExtension'
+			return LspMethodLookup.extensionMethod(method)
+		end 'thisExtension'
+	end 'eachExtension'
 
 	return LspMethodLookup.unknown
 end 'lspMethodNamed'
@@ -174,6 +198,13 @@ module type LspAnswer
 		return Self{doc: doc, result: doc.add(JsonNode.nullNode())}
 	end 'nothing'
 end 'LspAnswer'
+
+// An extension request's outcome. An extension request compiles the source it carries, so unlike a
+// `textDocument/*` request it has no "nothing here" to fall back on when the library tiers are missing.
+module union LspExtensionOutcome
+	answered(answer LspAnswer)
+	compilerUnavailable
+end 'LspExtensionOutcome'
 
 // `stdlib/Json.maxon`'s access error is private to that file, so a member walk out here cannot
 // propagate it. These two translate it once into an error this server can name, which is what lets a

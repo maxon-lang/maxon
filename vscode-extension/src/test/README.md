@@ -36,14 +36,7 @@ The test suite covers:
    - Language scheme support
    - Document management
 
-3. **Compiler Explorer**
-   - MIR generation (unoptimized and optimized)
-   - Assembly generation (unoptimized and optimized)
-   - Error handling for invalid code
-   - Multi-function code handling
-   - Active document detection
-
-4. **Extension Deactivation**
+3. **Extension Deactivation**
    - Graceful shutdown
    - Client cleanup
 

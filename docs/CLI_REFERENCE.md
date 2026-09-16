@@ -87,7 +87,7 @@ cannot run, and building one is what [`maxon build --target=`](#maxon-build) is 
 built from changes:
 
 ```
-<root>/maxon/run/<sha256 of the program's absolute path>/
+<root>/maxon/run/v<cache format>/<hash of the program's absolute path and entry point>/
 ├── hello-<key>.exe         # the build, named after the key it was built under
 └── hello-<key>.exe.mxdbg   # its debug-info sidecar, always written — a script is code being developed
 ```
@@ -100,7 +100,9 @@ written under a `.tmp` name of its own and renamed into place, so simultaneous c
 never share an output path; a rename that fails onto a name already there has been beaten to it by a run
 that built the very same bytes, and is a hit. Superseded builds are removed as each new one is published,
 best-effort and silently — one another process is executing cannot be deleted on Windows, and the run
-doing the removing has already built what it was asked for.
+doing the removing has already built what it was asked for. Builds an older cache format left — a slot
+directly under `maxon/run`, or under a `v<n>` older than this driver's — are removed the same way, while
+a newer format's are left to the driver that writes them.
 
 `<root>` is **`MAXON_RUN_CACHE_ROOT`** when that is set, then `LOCALAPPDATA` and `TEMP` on Windows, and
 `TMPDIR` then `/tmp` elsewhere. Windows has no directory every process may write to unasked, so a host

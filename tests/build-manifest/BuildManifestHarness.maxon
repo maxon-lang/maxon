@@ -1,0 +1,295 @@
+// BuildManifestHarness.maxon — the shared half every case under `tests/build-manifest/` reaches for:
+// staging a fixture project that carries a `build.maxon`, spawning `maxon build` in it with NO path, and
+// reading what the build left beside its executable.
+//
+// ⭐ **NO PATH IS WHAT SELECTS THE MANIFEST**, so the child's working directory is the staged project and
+// every argument a case adds is an option. A positional would be read as a target name or a source path,
+// and the case would be about a different door.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
+// missing compiler, an unspellable path, a spawn that never happened. A build that exits non-zero is the
+// surface under test, so it is asserted.
+//
+// ⛔ **EVERY CASE STAGES INTO A DIRECTORY NAMED FOR ITSELF**, because `maxon test` runs files concurrently
+// and a manifest's output path is relative to the directory it runs in.
+
+let FixturesDirName = "tests/build-manifest/fixtures"
+let StagingRootDirName = "temp/build-manifest"
+
+// `tests/README.md` rule 1: `<name>.fixture -> <name>`.
+let StoredFixtureSuffix = ".fixture"
+
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+let BuildCommandName = "build"
+export let CoverageFlag = "--coverage"
+export let NoDebugInfoFlag = "--no-debug-info"
+
+// The `output` every fixture manifest names. The fixtures and this constant are copies of one fact.
+let BuiltStem = "program"
+
+// Found by suffix rather than by respelling the sidecar's naming rule, so a sidecar under any name beside
+// the executable is seen.
+let SidecarSuffix = ".mxdbg"
+
+// A stable fragment of the driver's refusal of `--coverage` without the debug-info sidecar
+// (`coverageNeedsDebugInfoMessage`): the refusal's own wording.
+export let CoverageNeedsDebugInfoWording = "requires the debug-info sidecar"
+
+// A build the driver refuses before compiling anything exits 1; one refused because the checkout is
+// busy exits the driver's `NothingRanExitCode`. Two copies of the driver's numbers.
+export let RefusedExitCode = 1 as AssertedInt
+export let NothingRanExitCode = 2 as AssertedInt
+
+// A stable fragment of the tree lock's busy refusal (`TreeLock.reportBusy`).
+export let TreeLockBusyWording = "holds its tree lock"
+
+// `TreeLock.LockFileName`, and the directory whose presence makes a directory a checkout
+// (`stdlibDirAbove`). A second copy of each.
+let TreeLockFileName = ".maxon-tree.lock"
+let CheckoutMarkerDirName = "stdlib"
+
+// A record's content is echoed, never parsed for liveness: a lock is held while its MTIME is recent.
+let HeldLockRecord = "pid=0\ntoken=build-manifest-test\n"
+
+export let NoSidecarFixtureName = "no-sidecar"
+export let DefaultFixtureName = "default"
+export let VersionNotAStringFixtureName = "version-not-a-string"
+export let DefineWithoutSeparatorFixtureName = "define-without-separator"
+export let SourceNotAStringFixtureName = "source-not-a-string"
+export let DefinesNotAListFixtureName = "defines-not-a-list"
+export let DefineNotAStringFixtureName = "define-not-a-string"
+
+// Where a project's build products live (`<project>/.maxon/`).
+let ProjectProductsDirName = ".maxon"
+
+// The two halves of a case's staging directory: the project, and the run cache its builds are confined to.
+// Siblings, so the project's own source walk never reaches the cache.
+let StagedProjectDirName = "project"
+let StagedCacheDirName = "cache"
+
+// The variable that points the driver's run cache somewhere else, and the prefix the cache names a build
+// of `build.maxon` with (`<stem>-<key>`). Copies of the driver's spellings.
+let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let ManifestProgramNamePrefix = "build-"
+
+let PathSeparator = "/"
+let CarriageReturn = "\r"
+
+typealias PathArray = Array with FilePath
+
+// A runnable copy of one fixture under a directory named for the CASE, beside the run cache that case's
+// builds are confined to. The previous run's files go first, both halves: a stale executable or sidecar
+// would let a build that wrote none be read as though it had.
+export function stagedProject(caseLabel String, fixture String) returns FilePath
+	let caseRoot = "{StagingRootDirName}{PathSeparator}{caseLabel}"
+	clearStagedFiles(stagingDir(caseRoot))
+	let staged = stagingDir("{caseRoot}{PathSeparator}{StagedProjectDirName}")
+
+	let stored = fixtureDir("{FixturesDirName}{PathSeparator}{fixture}")
+
+	for entry in listing(stored) 'eachEntry'
+		let name = entry.filename()
+		let body = try File.readText(entry) otherwise panic("build-manifest tests: the gate could not run — could not read the stored fixture {entry.toString()}.")
+		try File.writeText(staged.join(withoutFixtureSuffix(name)), content: body) otherwise panic("build-manifest tests: the gate could not run — could not stage {name} into {staged.toString()}.")
+	end 'eachEntry'
+
+	return staged
+end 'stagedProject'
+
+// `maxon build <options>` in the staged project.
+export function spawnManifestBuild(staged FilePath, options StringArray) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(BuildCommandName)
+
+	for option in options 'eachOption'
+		arguments.push(option)
+	end 'eachOption'
+
+	let binary = testedCompilerPath()
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+	config.environment = Environment.inheritUpdating([CacheRootVariable: privateCacheRoot(staged).toString()])
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("build-manifest tests: the gate could not run — could not spawn `{BuildCommandName}` in {staged.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'spawnManifestBuild'
+
+// The run cache a case's builds are confined to: the project's sibling under the case's staging directory,
+// so a case neither writes into the developer's own cache nor reads a previous run out of it.
+function privateCacheRoot(staged FilePath) returns FilePath
+	let caseRoot = try staged.parent() otherwise panic("build-manifest tests: the gate could not run — {staged.toString()} has no parent to keep its run cache beside.")
+	return caseRoot.join(StagedCacheDirName)
+end 'privateCacheRoot'
+
+export function builtExecutable(staged FilePath) returns FilePath
+	return staged.join("{BuiltStem}{executableSuffix()}")
+end 'builtExecutable'
+
+// Every file in the staged project that is a debug-info sidecar, named for a report.
+export function sidecarsIn(staged FilePath) returns String
+	var found = ""
+
+	for entry in listing(staged) 'eachEntry'
+		if entry.filename().endsWith(SidecarSuffix) 'aSidecar'
+			found.append("{entry.toString()} ")
+		end 'aSidecar'
+	end 'eachEntry'
+
+	return found.trim()
+end 'sidecarsIn'
+
+// Every file under the staged project's products directory, named for a report. Directories a previous
+// run left are not files, so only what THIS run wrote is found — staging clears the files.
+export function filesInProjectProducts(staged FilePath) returns String
+	return listed(filesUnder(staged.join(ProjectProductsDirName)))
+end 'filesInProjectProducts'
+
+// Every build of the manifest program in the case's private run cache, named for a report. Found by the
+// stem the cache names a build after, which is the manifest's own file name.
+export function manifestProgramsCached(staged FilePath) returns String
+	var builds = PathArray.create()
+
+	for file in filesUnder(privateCacheRoot(staged)) 'eachFile'
+		let name = file.filename()
+
+		if name.startsWith(ManifestProgramNamePrefix) and not name.endsWith(SidecarSuffix) 'aManifestBuild'
+			builds.push(file)
+		end 'aManifestBuild'
+	end 'eachFile'
+
+	return listed(builds)
+end 'manifestProgramsCached'
+
+// Every file under `dir` at any depth; none when there is no such directory.
+function filesUnder(dir FilePath) returns PathArray
+	var found = PathArray.create()
+
+	if not Directory.isDirectory(dir) 'nothingThere'
+		return found
+	end 'nothingThere'
+
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			for nested in filesUnder(entry) 'eachNested'
+				found.push(nested)
+			end 'eachNested'
+
+			continue
+		end 'aDirectory'
+
+		found.push(entry)
+	end 'eachEntry'
+
+	return found
+end 'filesUnder'
+
+function listed(paths PathArray) returns String
+	var text = ""
+
+	for path in paths 'eachPath'
+		text.append("{path.toString()} ")
+	end 'eachPath'
+
+	return text.trim()
+end 'listed'
+
+// Makes the staged project a checkout of its own and plants a lock on it that a live holder just wrote.
+// ⛔ **THE LOCK IS THE STAGED PROJECT'S, NEVER THE REAL CHECKOUT'S**: a marker directory under the staged
+// project is the nearest one above it, so the lock this plants blocks no other command in this tree.
+export function plantHeldTreeLock(staged FilePath)
+	let marker = staged.join(CheckoutMarkerDirName)
+
+	if not Directory.create(marker) 'couldNotCreate'
+		panic("build-manifest tests: the gate could not run — could not create {marker.toString()}, which makes the staged project a checkout of its own.")
+	end 'couldNotCreate'
+
+	try File.writeText(staged.join(TreeLockFileName), content: HeldLockRecord) otherwise panic("build-manifest tests: the gate could not run — could not plant a tree lock in {staged.toString()}.")
+end 'plantHeldTreeLock'
+
+// ⛔ **THE ABSENCE OF AN EXECUTABLE IS ASSERTED BESIDE THE REFUSAL.** A refused build that still wrote one
+// did the work the refusal exists to prevent.
+export function requireRefused(staged FilePath, options StringArray, exitCode AssertedInt, wording String, what String) throws TestFailure
+	let build = spawnManifestBuild(staged, options: options)
+	let stderr = withoutCarriageReturns(build.stderr)
+
+	try Expect.equal(build.exitCode() as AssertedInt, expected: exitCode, message: "`{what}` over the staged manifest exited {build.exitCode()} and must be refused with exit {exitCode}. It wrote to stdout: {build.stdout} and to stderr: {stderr}")
+	try Expect.contains(stderr, needle: wording, message: "`{what}` over the staged manifest was not refused for the reason under test. It wrote to stderr: {stderr}")
+	try Expect.isFalse(File.exists(builtExecutable(staged)), message: "`{what}` over the staged manifest was refused and still wrote an executable to {builtExecutable(staged).toString()}.")
+end 'requireRefused'
+
+function withoutFixtureSuffix(name String) returns String
+	if not name.endsWith(StoredFixtureSuffix) 'notStored'
+		return name
+	end 'notStored'
+
+	let cut = name.split(StoredFixtureSuffix)
+	return try cut.get(0) otherwise panic("build-manifest tests: a split of '{name}' has a first part")
+end 'withoutFixtureSuffix'
+
+function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("build-manifest tests: the gate could not run — '{spelled}' is not a spellable path")
+	let binary = relative.resolve(Directory.currentPath())
+
+	if not File.exists(binary) 'noBinary'
+		panic("build-manifest tests: the gate could not run — there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	return binary
+end 'testedCompilerPath'
+
+function executableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'executableSuffix'
+
+function fixtureDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("build-manifest tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	if not Directory.isDirectory(path) 'notThere'
+		panic("build-manifest tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, the working directory a test binary inherits from `maxon test`.")
+	end 'notThere'
+
+	return path
+end 'fixtureDir'
+
+// Absolute, because it is handed to a child as its working directory.
+function stagingDir(spelled String) returns FilePath
+	var prefix = ""
+
+	for component in spelled.split(PathSeparator) 'eachComponent'
+		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
+		let ancestor = try FilePath.from(prefix) otherwise panic("build-manifest tests: the gate could not run — '{prefix}' is not a spellable path")
+
+		if not Directory.create(ancestor) 'couldNotCreate'
+			panic("build-manifest tests: the gate could not run — could not create '{prefix}', where a case's project is staged.")
+		end 'couldNotCreate'
+	end 'eachComponent'
+
+	let path = try FilePath.from(spelled) otherwise panic("build-manifest tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	return path.resolve(Directory.currentPath())
+end 'stagingDir'
+
+// Recursive, so a file a previous run wrote under the project's `.maxon/` cannot be read as this run's.
+function clearStagedFiles(dir FilePath)
+	for file in filesUnder(dir) 'eachFile'
+		try File.delete(file) otherwise panic("build-manifest tests: the gate could not run — could not clear {file.toString()} from a previous run's staging.")
+	end 'eachFile'
+end 'clearStagedFiles'
+
+function listing(dir FilePath) returns PathArray
+	return try Directory.list(dir) otherwise panic("build-manifest tests: the gate could not run — could not list {dir.toString()}")
+end 'listing'
+
+function withoutCarriageReturns(text String) returns String
+	return text.replace(CarriageReturn, with: "")
+end 'withoutCarriageReturns'

@@ -1,18 +1,12 @@
 // Debug/CoverageCommand.maxon — `maxon coverage`: run a `--coverage` binary and report what it
 // executed, or report from a run that already happened.
 //
-// ⭐⭐ **EVERY REFUSAL HERE IS THE REFERENCE'S OWN SENTENCE, AND THAT IS A CONTRACT RATHER THAN A
-// STYLE.** A coverage report joins three artifacts made at three different moments — the binary's
-// `.text` hash, the `.mxdbg` sidecar's coverage-point table, and the `.mxcov` counters the program
-// wrote on its way out. A counter is an ANONYMOUS INDEX, so a join that is not exactly right names real
-// source lines with numbers belonging to other lines: an instrument that LIES, which is worse than no
-// instrument. That is why each of these is a refusal rather than a best effort, and
-// `tests/coverage/coverage-refusals.test.maxon` compares this driver's stderr against the reference's
-// byte for byte — so a "better" wording here is the failure, not a fix.
-//
-// ⚠ **THE BANNER SAYS `maxon` WHERE THE REFERENCE SAYS `maxon`, AND THAT IS THE ONE DIFFERENCE THE
-// CORPUS NORMALIZES.** A usage banner spells the command a user should type, so demanding byte identity
-// there would demand that this driver tell people to run a binary they do not have.
+// ⭐⭐ **EVERY MISMATCH IS A REFUSAL, NEVER A BEST EFFORT.** A coverage report joins three artifacts made
+// at three different moments — the binary's `.text` hash, the `.mxdbg` sidecar's coverage-point table, and
+// the `.mxcov` counters the program wrote on its way out. A counter is an ANONYMOUS INDEX, so a join that
+// is not exactly right names real source lines with numbers belonging to other lines: an instrument that
+// LIES, which is worse than no instrument. A binary built without the sidecar is refused earlier, at
+// build time (`Main.refusedBuildOptions`).
 //
 // ⭐ **STDOUT IS THE REPORT AND NOTHING ELSE.** Every refusal and every word the measured program says
 // goes to stderr, which is what keeps a coverage run machine-readable — so a banner printed on stdout
@@ -23,8 +17,7 @@
 // and merging them re-earns a defect this tree removed once.
 
 // How this driver names itself and its subcommand in everything it prints. The subcommand word is the
-// SUBJECT of every refusal (`coverage: …`) and the driver name is the one thing the corpus normalizes away
-// before comparing this tool's transcripts with the reference's.
+// SUBJECT of every refusal (`coverage: …`).
 let CoverageDriverName = "maxon"
 let CoverageSubcommandName = "coverage"
 
@@ -48,8 +41,9 @@ let DefaultRunTimeoutSeconds = 600.0 as CoverageSeconds
 // rule alike.
 let PositiveSecondsRequirement = "needs a positive number of seconds"
 
-// The longest deadline accepted, in seconds — the reference's own ceiling, which is where its duration
-// conversion overflows. It is also what excludes an INFINITY: a float can carry one and a wait cannot.
+// The longest deadline accepted, in seconds: the most a signed 64-bit count of 100 ns ticks holds, far
+// inside what `deadlineMs` converts. It is also what excludes an INFINITY: a float can carry one and a
+// wait cannot.
 let MaxDeadlineSeconds = 922337203685.0 as CoverageSeconds
 
 // A deadline in seconds. Fractions are accepted so a gate can drive a sub-second deadline

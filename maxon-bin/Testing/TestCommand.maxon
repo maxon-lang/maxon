@@ -76,12 +76,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return refuseTestRun("not a directory: {reportPathDisplay(projectDir)}")
 	end 'notADirectory'
 
-	var target = detectHostTarget()
-
-	match resolveTargetFlag(args.targetSpec) 'targetSel'
-		resolved(t) then target = t
-		unrecognized(spec) then return reportUnknownTarget(spec)
-	end 'targetSel'
+	let target = try commandLineTarget(args.targetSpec) otherwise return 1
 
 	quietTheBuildChatter(args)
 

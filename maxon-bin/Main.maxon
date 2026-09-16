@@ -1,60 +1,30 @@
-// maxon compiler entry point (M1 driver).
-//
-// Parses the command line, dispatches a command, and maps the driver's
-// CompileError outcomes to an exit code. `build` reads the input file/directory,
-// runs the pipeline, and writes an executable. `verify-warm-rebuild` is the M2
-// warm-rebuild gate: it asserts the query spine is deterministic + incremental for
-// a file and exits 0 iff both properties hold. Diagnostics (E3001/E3002) are
-// printed by `compile`/`compileToCodeResult`; Main stays silent on the
-// `compileError` arm so a failing build's stderr is EXACTLY the reported
-// diagnostics (the `maxoncstderr` spec contract).
-//
-// CLI (documented):
-//   maxon build <file|directory>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,…] [--target=<cpu>-<os>]
-//   maxon verify-warm-rebuild <file>
-//   maxon lsp-server
-//   maxon spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]
-//   maxon help [<command>]
+// The driver: parses the command line, dispatches one command, and maps its outcome to an exit
+// code. The command reference is `commandReference()`, which `maxon help` prints.
 
-// The column a reference entry's prose starts in, and how wide the whole line may be. Nothing in the
-// reference is padded or broken by hand: `printWrappedProse` lays every row out from these two numbers
-// and the indent it is given, so a label that outgrows its column moves its own prose down a line
-// instead of going ragged, and a paragraph at the left margin gets the full width rather than an
-// entry's narrower measure.
+// Every reference row is laid out from these two numbers; see `printHelpEntry`.
 let UsageEntryColumnWidth = 32 as ColumnWidth
 let UsageLineWidth = 100
 
-// The default spec directory `spec-test` scans when no directory is given
-// (resolved against the process cwd — the runner is invoked from the repo root).
+// Resolved against the process cwd: the runner is invoked from the repo root.
 let DefaultSpecDir = "specs"
 
-// ⭐ **THE EXIT CODE THAT MEANS "NOTHING RAN".** Distinct from 1 (a command that RAN and reported
-// failures) and from 101 (a leak) on purpose: "nothing ran" and "something failed" are different
-// facts, and a caller reading only the exit code — a shell script, CI, the rung gate battery — must be
-// able to tell them apart. Same number and same meaning as `cross-target-gate.sh`'s own refusal.
-//
-// TWO refusals return it, and they belong to one family: a binary older than the sources it was built
-// from (`refuseIfStale`) and a checkout another command is already writing (`acquireTreeLock`). Both
-// say the same thing to the reader — the tree is not in a state to be measured, fix that and re-run —
-// so the number is declared once, HERE, where the driver's exit codes are decided.
+// Distinct from 1 (a command ran and reported failures) and from 101 (a leak): a caller reading
+// only the exit code, such as a shell script or CI, must be able to tell "nothing ran" from
+// "something failed". Same number and meaning as `cross-target-gate.sh`'s own refusal. Declared
+// here, where the driver's exit codes are decided, because more than one refusal returns it.
 module let NothingRanExitCode = 2
 
-// The CLI spellings a spec-test command line is RE-EMITTED from, because two things relaunch this
-// driver with one: a pool worker is this same executable (`SpecWorkerPool.spawnNoWait`), and a Linux
-// suite is handed to a compiler inside the OrbStack machine (`SpecTestRunner.spawnGuestSuite`). Named
-// here — where the parser that reads them back also lives — so the two halves of such a command line
-// cannot drift apart into a hang. The rest of the driver's flags are matched inline: they are read here
-// and nowhere else.
+// Re-emitted on the command lines that relaunch this driver — a pool worker
+// (`SpecWorkerPool.spawnNoWait`) and a delegated Linux suite (`SpecTestRunner.spawnGuestSuite`) —
+// and read back by the parser in this file, so the two halves cannot drift apart into a hang.
 module let SpecTestCommandName = "spec-test"
 
-// The CLI spellings a `build` command line is RE-EMITTED from, for the same reason and read back by the
-// same parser: two callers spawn a compiler with one — the delegated Linux lane's per-target compiler
-// (`SpecTestRunner.buildGuestCompiler`) and the scale-test ladder (`ScaleTestRunner.compileRung`).
+// Re-emitted by `SpecTestRunner.buildGuestCompiler` and `ScaleTestRunner.compileRung`, and read
+// back by the same parser.
 module let BuildSubcommandName = "build"
 
-// The remaining command words. Every one is a constant rather than a literal because TWO readers spell
-// each: `MaxonArgs.parse` matches it, and the reference `maxon help` prints it. A word written down twice
-// is a word that can be renamed in one place and go on being documented under the other.
+// Constants because `MaxonArgs.parse` matches each word and `maxon help` prints it: a word written
+// twice can be renamed in one place and stay documented under the other.
 let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
 let VerifyRecheckCommandName = "verify-recheck"
 let LspServerCommandName = "lsp-server"
@@ -65,126 +35,90 @@ module let OutputFlagName = "-o"
 
 let OutputFlagPrefix = "--output="
 
-// ⭐ **`fmt` TAKES NO OPTIONS AT ALL, AND THAT IS ENFORCED IN THE PARSER**, not left to the command:
-// silently DROPPING an unrecognized flag is the most destructive thing this command could do -
-// `maxon fmt --check` would find no path, fall back to the current directory and rewrite the whole tree
-// in place, the exact opposite of what the flag asked for. `MaxonArgs.parse` therefore records ANY
-// `-`-leading argument typed after this word as a bad option, including flags other commands implement.
+// `fmt` takes no options, including flags other commands implement: `runFmt` refuses any
+// `-`-leading argument (`anyOption`). Silently dropping one is destructive — `maxon fmt --check`
+// would find no path, fall back to the current directory and rewrite the whole tree in place.
 let FmtCommandName = "fmt"
 
-// ⚠ **`fmt`'s REFUSALS ARE ITS OWN SENTENCES, NOT the driver's `Usage:` line.**
-// `tests/fmt/fixtures/flag-refused`, `flag-refused-no-path` and `two-paths-refused` pin these bytes, so a
-// "better" wording here reddens that corpus rather than improving anything.
+// `fmt`'s refusals are its own sentences, not the driver's `Usage:` line. Pinned byte-for-byte by
+// `tests/fmt/fixtures/flag-refused`, `flag-refused-no-path` and `two-paths-refused`.
 let FmtUsageLine = "usage: maxon fmt [<file|directory>]   (formats in place; no options)"
 
-// ⭐⭐ **THE ONE COMMAND WHOSE TAIL IS NOT THIS DRIVER'S.** `monitor <exe> [args...]` hands everything
-// after the executable to the CHILD, so `parse` stops at this word and files the rest verbatim. Named
-// beside `fmt`'s for the same reason: a command word that decides how the REST of the line is read is not
-// an inline literal.
+// `monitor <exe> [args...]` hands everything after the executable to the child, so `parse` stops at
+// this word and files the rest verbatim.
 let MonitorCommandName = "monitor"
 
-// ⭐ `debug` — READ THE `.mxdbg` SIDECAR BACK. Like `monitor`, its tail is not this driver's: its
-// subcommands are spelled `--dump-info` / `--symbolize`, which every other arm of the parser would read
-// as options this driver does not implement and abort the run over. So the parse stops at this word and
-// files the rest verbatim, exactly as it does for `monitor`.
+// Tail-stopping like `monitor`: its subcommands are spelled `--dump-info` / `--symbolize`, which
+// the parser would otherwise refuse as options this driver does not implement.
 let DebugCommandName = "debug"
 
-// ⭐ `coverage` — RUN A `--coverage` BINARY AND REPORT WHAT IT EXECUTED. Tail-stopping for `monitor`'s
-// reason and then some: everything after the verb is the CHILD's command line, so a target's own flag
-// must not be consumed on its way past nor abort the run before the child is ever spawned.
+// Tail-stopping: everything after the verb is the child's command line, so a target's own flag must
+// not be consumed on its way past nor abort the run before the child is spawned.
 let CoverageCommandName = "coverage"
 
-// ⭐ `profile` — LAUNCH A PROGRAM AND SAMPLE WHERE ITS CPU TIME GOES. Tail-stopping for `coverage`'s reason
-// in its strongest form: `profile run <exe> <the target's own flags>` forwards everything after the
-// executable to a CHILD, so a flag this driver happens to implement must not be consumed on its way past
-// and one it does not must not abort the run before the child is ever spawned.
+// Tail-stopping: `profile run <exe> <flags>` forwards everything after the executable to the child.
 let ProfileCommandName = "profile"
 
-// ⭐ `run` — COMPILE A PROGRAM (or reuse a cached build of it) AND RUN IT. Tail-stopping for `profile`'s
-// reason: everything after the path is the PROGRAM's own command line.
+// Tail-stopping: everything after the path is the program's own command line.
 //
-// ⚠ **IT IS ALSO REACHED WITH NO WORD AT ALL** — a first argument ending in `MaxonSourceExtension`, which
-// is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`. See
-// `MaxonArgs.parse`'s two arms. `module` because `Run/RunCommand.maxon` names the command in its own
-// refusals, and a command renamed here must not leave those sentences naming the old word.
+// Also reached with no word at all: a first argument ending in `MaxonSourceExtension`, which is
+// what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`. See
+// `MaxonArgs.parse`. `module` because `Run/RunCommand.maxon` names the command in its own refusals.
 module let RunCommandName = "run"
 
-// ⭐ `upgrade` — UPDATE THE INSTALL THIS COMPILER RUNS FROM, and `--dry-run`, the one option it takes.
 // `module` because `Upgrade/UpgradeCommand.maxon` names both in its own refusals and usage line.
 module let UpgradeCommandName = "upgrade"
 module let DryRunFlag = "--dry-run"
 
-// The variable the install script reads its install root from. Declared here for `RunCacheRootVariable`'s
-// reason: the reference names it, and `upgrade` overrides it with the root the running compiler sits in.
+// Declared here because the reference names it, and `upgrade` overrides it with the root the
+// running compiler sits in.
 module let InstallRootVariable = "MAXON_INSTALL"
 
-// Where `run` keeps its compiled programs, when the caller says. Declared here rather than beside the
-// cache that reads it because the REFERENCE prints it too, and a variable a reader is told to set must be
-// the one the code consults.
+// Declared here rather than beside the cache because the reference prints it too: a variable a
+// reader is told to set must be the one the code consults.
 module let RunCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 
 module let WorkerPersistentFlag = "--worker-persistent"
 
-// Read by the parser and written by `specSelectionArgv`, both in this file, so neither leaves it.
 let FilterFlagPrefix = "--filter="
 
-// `module` because two of the suite's trailers name this flag as the remedy they are sending a reader to
-// (`SpecTestRunner.reportGoldenDrift`, `reportUnrunHere`), and a flag spelled again in a message is a flag
-// that can be renamed here while the messages go on naming the old one.
+// `module` because `SpecTestRunner.reportGoldenDrift` and `reportUnrunHere` name this flag as the
+// remedy.
 module let UpdateRequiredFlag = "--update-required"
 
-// ⭐ `--network` — RUN THE CASES THAT REACH A REAL EXTERNAL HOST. The cases marked `<!-- network: live -->`
-// across `tcp-client`, `async-tcp` and `http-client` open a socket to `tcpbin.com` / `httpbin.org`; a default
-// run leaves them out, because a suite whose verdict turns on somebody else's uptime is not a claim about this
-// compiler. The cases stay ACTIVE and PARSED — the marker sits on the CASE, never shelved as
-// `disabled-test:` — and this flag selects them (see `SpecTestRunner.networkModeAllows`), which is why
-// EXCLUDING them is announced rather than silent (`reportExclusions`).
+// Selects the cases marked `<!-- network: live -->`, which open a socket to a real external host. A
+// default run leaves them out: a verdict that turns on somebody else's uptime is not a claim about
+// this compiler. The cases stay active and parsed (see `SpecTestRunner.networkModeAllows`), and
+// excluding them is announced (`reportExclusions`). No count is written here: the marker is the
+// census.
 //
-// ⛔ **NO NUMBER IS WRITTEN HERE, DELIBERATELY.** "Seven" stood in six places in this harness while the
-// corpus held EIGHT — transcribed from v1's hard-coded roster by the very comment arguing such a roster rots
-// (`SpecParser.NetworkMarker`). The marker is the census; a count beside it is a second one.
-//
-// It is in the re-emitted set because the parent forwards it to every worker: both halves of the pool run
-// the same selection rule, and a worker that never heard the flag would answer for tests nobody counted.
+// Re-emitted to every worker: a worker that never heard the flag would answer for tests nobody
+// counted.
 module let NetworkFlag = "--network"
 
-// ⛔⛔ **`--compiler=<path>` IS WITHDRAWN, AND THE SPELLING IS KEPT SO THE REFUSAL CAN NAME IT.**
+// `--compiler=<path>` is withdrawn. `spec-test` compiles every case in this process, so the
+// compiler under test is this binary's own code and there is nothing a path could select; a flag
+// kept as a no-op would read as though it chose something.
 //
-// It named a DIFFERENT BINARY to build each selected test with, which was a real and separate fact
-// from "the executable a worker process is" for exactly as long as a test was built by a SUBPROCESS.
-// `spec-test` now compiles every case IN THIS PROCESS (G20), so the compiler under test is this
-// binary's own code and there is nothing a path could select. ⚖ **USER RULING 2026-08-22: in-process
-// only, no dual path** — a flag kept as a no-op would be a command line that reads as though it chose
-// something.
-//
-// ⚠ **IT IS REFUSED BY NAME, NOT LEFT TO THE ANONYMOUS `badOption` PATH.** A script still passing it
-// was RIGHT to, until this rung; "unknown option: --compiler=…" would tell its author that the driver
-// never heard of it, which is false and sends them looking for a typo. See `withdrawnOptionMessage`.
+// Refused by name rather than as an unknown option, so a script still passing it is told what
+// replaced it instead of being sent looking for a typo. See `withdrawnOptionMessage`.
 let WithdrawnCompilerFlagPrefix = "--compiler"
 
-// `--target=` is in this re-emitted set (not with `build`'s options) because a cross-target
-// spec run forwards it to every worker's command line — see SpecWorkerPool.spawnNoWait. The
-// parser below reads it back through this same constant, so the two halves cannot drift.
+// Re-emitted: a cross-target spec run forwards it to every worker (`SpecWorkerPool.spawnNoWait`),
+// and the parser reads it back through this constant.
 module let TargetFlagPrefix = "--target="
 
-// `module` because the guest delegation forwards a pool size the caller TYPED
-// (`SpecTestRunner.spawnGuestSuite`), and a flag emitted under a spelling this parser does not read
-// back is a flag that is silently refused.
+// `module` because the guest delegation forwards a pool size the caller typed
+// (`SpecTestRunner.spawnGuestSuite`), and a spelling this parser does not read back is silently
+// refused.
 module let WorkersFlagPrefix = "--workers="
 
-// ⭐ **WHICH DIRECTORY, WHICH CASES — the selection half of a `spec-test` command line, emitted ONCE.**
+// The selection half of a `spec-test` command line, for both re-emitters
+// (`SpecWorkerPool.spawnNoWait` and `SpecTestRunner.spawnGuestSuite`): both must answer for exactly
+// the set the parent planned.
 //
-// Two re-emitters read it: a pool worker is this executable relaunched
-// (`SpecWorkerPool.spawnNoWait`), and a Linux suite is delegated to a compiler inside the OrbStack
-// machine (`SpecTestRunner.spawnGuestSuite`). Both must answer for exactly the set the parent planned
-// for, and a selection spelled twice is two halves of one run free to select differently.
-//
-// The spec directory is the RESOLVED one, never the default the far side would otherwise re-derive
-// from its own working directory: which directory this run is about has already been decided, and a
-// second decision could differ. `--filter` and `--network` change WHICH cases are selected, so a reader
-// that never heard them answers with records nobody asked for; `--update-required` changes what the run
-// WRITES. Each is emitted only when it is set, so a default run's command line carries the directory
-// and nothing else.
+// The directory is the resolved one, never a default the far side would re-derive from its own
+// working directory. Each flag is emitted only when set.
 module function specSelectionArgv(specDir FilePath, filter String, updateRequired bool, includeNetwork bool) returns StringArray
 	var argv = StringArray.create()
 	argv.push(specDir.toString())
@@ -204,10 +138,8 @@ module function specSelectionArgv(specDir FilePath, filter String, updateRequire
 	return argv
 end 'specSelectionArgv'
 
-// ⭐ **`test`'S OWN FLAGS.** They are matched here with every other flag rather than parsed by the
-// command, because `MaxonArgs.parse` is the ONE reader of this driver's command line — a second parser
-// would be a second place for a flag to be understood, and a flag understood in one of them is silently
-// swallowed by the other. Each sets a FIELD; see `MaxonArgs.parse`'s note on why never a local.
+// Matched by `MaxonArgs.parse`, the one reader of this driver's command line: a second parser would
+// silently swallow a flag the first understood.
 let TestListFlag = "--list"
 let TestJsonFlag = "--json"
 let TestNoTimingFlag = "--no-timing"
@@ -217,165 +149,122 @@ let TestBailFlagPrefix = "--bail="
 let TestTimeoutFlagPrefix = "--timeout="
 let TestColorFlagPrefix = "--color="
 
-// The short filter, in both spellings a shell user reaches for. `-t=P` carries its value; `-t P` is the
-// separated form, which is what a pattern containing spaces needs.
+// `-t P` is the separated form, which a pattern containing spaces needs.
 let TestFilterShortFlag = "-t"
 let TestFilterShortPrefix = "-t="
 
 // Failures allowed before the run stops CLAIMING work, when `--bail` is given with no count.
 let DefaultBailAfter = 1
 
-// ⭐ **THE TWO IR-SIDECAR SPELLINGS.** ⛔ They used to be EXPORTED *"because the spec runner emits
-// them on the command line it spawns each fragment build with"* — and it does not: since G20 the spec
-// runner passes `emitIr` and `runtimeIrNames` as ARGUMENTS to `Compiler.compileToProduct`, so these
-// two are read here and nowhere else, exactly like the rest of `build`'s options.
-//
-// `--emit-ir` writes the lowered Target IR beside the exe. `--emit-ir-runtime=<name>,<name>` says
-// which WITHHELD functions that IR must ALSO render: a golden fragment otherwise shows only the
-// functions parsed from the PROGRAM's own source, so `mrt_start`, the allocator and the
-// `__str_*`/`__managed_*` families carry no golden at all — and neither does a `stdlib/` body such as
-// `String.trim`, which the compiler compiles into the same module and this withholds for the same reason (see
-// `TargetPrinter.printTargetModule`). Naming them is per-BUILD and
-// opt-in, so every fragment that does not ask is byte-for-byte what it was before the flag existed.
 let EmitIrFlag = "--emit-ir"
 
-// `--async-trace` — emit the green-thread trace (`spawn #`, `io_yield #`, `io_resume #`, `await #`) to stderr.
-// The spec harness asks for the same thing per case, for an `<!-- AsyncTrace -->` fragment, but it asks
-// `Compiler.compileToProduct` directly (G20) rather than by spelling this flag. Opt-in and per-BUILD, so a
-// program that does not ask is byte-for-byte what it was before the flag existed — the trace CALLS are not
-// emitted at all rather than being branched over at run time (see `GtRuntime.GtTraceEmitName`).
+// Opt-in per build: without it the trace calls are not emitted at all rather than branched over at
+// run time (see `GtRuntime.GtTraceEmitName`).
 let AsyncTraceFlag = "--async-trace"
 
-// ⭐ `--debugstream` — emit the DebugStream PRODUCER: the shared-memory ring `maxon monitor` decodes,
-// plus the mm_alloc / mm_incref / mm_decref / mm_free events the memory manager writes into it. The spec
-// harness asks for it per case, for an mm-trace fragment, through `Compiler.compileToProduct` — exactly as
-// it asks for `--async-trace`'s producer.
-//
-// ⚠⚠ **OPT-IN AND PER-BUILD, AND THAT IS A CORRECTNESS PROPERTY RATHER THAN A COURTESY.** With the flag
-// off NOT ONE instruction of this changes: the box header does not grow, `__mm_alloc`'s arity does not
-// change, no event site is branched over. Thousands of committed `.test` fragment goldens depend on it.
-// See `DebugStreamRuntime`'s header for the two-level gating rule this is the compile-time half of.
+// Opt-in per build, and that is a correctness property: with the flag off not one instruction
+// changes — the box header does not grow, `__mm_alloc`'s arity does not change, no event site is
+// branched over — and the committed `.test` goldens depend on it. See `DebugStreamRuntime`'s header
+// for the two-level gating rule.
 let DebugStreamFlag = "--debugstream"
 
-// ⭐⭐ `--no-debug-info` — DON'T write the `<output>.mxdbg` sidecar. An OPT-OUT, because the default is
-// ON: a binary built without debug info is one nobody can debug after the fact, and a user who never
-// heard of the flag would have every one of them.
+// An opt-out because the default is on: a binary built without debug info cannot be debugged after
+// the fact. On by default is safe because the sidecar is metadata and the executable is
+// byte-identical either way, gated by `tests/debug/byte-identical-debug-info.test.maxon`.
 //
-// ⚠ **THE SIDECAR IS METADATA AND THE EXECUTABLE IS BYTE-IDENTICAL EITHER WAY**, which is what makes an
-// on-by-default safe — the binary a user debugs is the binary they shipped. That property is gated where
-// it can be observed, in `tests/debug/byte-identical-debug-info.test.maxon`.
-//
-// ⚠ Only `build` acts on it. Every other command leaves the compiler's own default (off), so a spec-test
-// or a `maxon test` compile pays nothing for a sidecar nothing would read.
+// Only `build` acts on it; every other command keeps the compiler's own default (off).
 module let NoDebugInfoFlag = "--no-debug-info"
 
-// ⭐⭐ `--coverage` — INSTRUMENT FOR CODE COVERAGE: the binary counts each statement and branch arm it
-// executes and writes the counters to `<output>.mxcov` on its way out. It CHANGES THE EMITTED CODE, so
-// it is a separate build from the one you ship; `maxon coverage` reads what it produced.
-//
-// ⚠ **IT REQUIRES THE SIDECAR.** A counter is an anonymous index and what it counts lives in the
-// `.mxdbg` coverage-point table, so `--no-debug-info` beside it is refused in `runBuild` rather than
-// half-honoured. Spelled `module` because `Debug/CoverageCommand.maxon`'s banner names the flag its
-// input was built with, and a flag renamed here must not leave that sentence naming the old one.
+// Changes the emitted code, so it is a separate build from the one you ship. It requires the
+// sidecar: a counter is an anonymous index and what it counts lives in the `.mxdbg` coverage-point
+// table, so a build without it is refused (`refusedBuildOptions`). `module` because
+// `Debug/CoverageCommand.maxon`'s banner names the flag.
 module let CoverageFlag = "--coverage"
 
-// Why the pair above is refused, in the reference driver's own words — assembled from the flag names so
-// a rename cannot leave the sentence naming a flag that no longer exists.
+// Assembled from the flag names, so a rename cannot leave the sentence naming a flag that no longer
+// exists.
 function coverageNeedsDebugInfoMessage() returns String
-	return "{CoverageFlag} requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a {MxcovDataExtension} written by this binary could never be interpreted. Drop {NoDebugInfoFlag} (or debug_info:false in build.maxon), or drop {CoverageFlag}."
+	return "{CoverageFlag} requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a {MxcovDataExtension} written by this binary could never be interpreted. Drop {NoDebugInfoFlag} (or `debugInfo: false` in {BuildManifestFileName}), or drop {CoverageFlag}."
 end 'coverageNeedsDebugInfoMessage'
 
+// Names withheld functions the IR sidecar must also render: a golden otherwise shows only functions
+// parsed from the program's own source, so `mrt_start`, the allocator, the `__str_*`/`__managed_*`
+// families and `stdlib/` bodies carry no golden (see `TargetPrinter.printTargetModule`). Opt-in per
+// build, so a fragment that does not ask is unchanged.
 let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
-// `--metrics=<path>`, exported because the SCALE runner spawns one build per rung with it
-// (`ScaleTestRunner.compileRung`). ⛔ The spec runner used to spawn one per test as well, and read the
-// `total` row back for its cumulative-CPU indicator; it now takes that number straight off
-// `CompileProduct.totalCpuTicks` (G20), which is the same number from the same whole-compile probe
-// without the file. It was written out as a literal at the parser below AND at the scale runner
-// until a second harness would have made a third copy.
-// What makes an argument an OPTION rather than a positional: one leading dash. Named because four
-// readers ask it — `anyOption`'s unconditional record, the catch-all unknown-flag arm, `fmt`'s refusal
-// through the first of those, and `runCoverage`'s own tail parse — and a fifth spelling would be the
-// rule written down twice.
+// One leading dash makes an argument an option. `module` because `runCoverage`'s own tail parse
+// asks it too.
 module let OptionPrefix = "-"
 
-// ⭐ `maxon help [<command>]` — the whole reference, or one command's part of it. A COMMAND, because a
-// caller with nothing to go on does not have to know it: `maxon` with no arguments lists every command
-// there is, and this word is one of them.
+// A command rather than a flag, so `maxon` with no arguments lists it with every other command.
 let HelpCommandName = "help"
 
-// ⛔⛔ **`--help` / `-h` ARE WITHDRAWN, AND THE SPELLINGS ARE KEPT SO THE REFUSAL CAN NAME THEM** — for
-// the reason `--version` is withdrawn next door, and a reader owed the same sentence. These are the two
-// spellings every other CLI has taught people to try first, so a caller typing one is following a
-// convention rather than making a typo; "unknown option: --help" would tell them this driver has no help
-// at all. See `withdrawnOptionMessage`.
+// Withdrawn in favour of `maxon help`, and refused by name: these are the spellings every other CLI
+// teaches people to try first, so "unknown option: --help" would claim this driver has no help. See
+// `withdrawnOptionMessage`.
 let WithdrawnHelpFlag = "--help"
 let WithdrawnHelpFlagShort = "-h"
 
-// `maxon version` — which binary is this. A COMMAND, so the driver has one door onto the answer and a
-// reader learns it from the same list every other thing this binary does is listed in.
 let VersionCommandName = "version"
 
-// ⛔⛔ **`--version` / `-V` ARE WITHDRAWN, AND THE SPELLINGS ARE KEPT SO THE REFUSAL CAN NAME THEM.**
-// A flag spelling left beside `maxon version` would be a second door onto one answer, and the two would
-// drift the day either grew a qualifier.
-//
-// ⚠ **REFUSED BY NAME, NOT LEFT TO THE ANONYMOUS `badOption` PATH.** These are the spellings a
-// packager, a CI step and a bug-report template reach for first, so a reader who types one is following
-// a convention rather than making a typo; "unknown option: --version" would tell them this driver never
-// heard of it and send them hunting for one. See `withdrawnOptionMessage`.
+// Withdrawn: a flag beside `maxon version` would be a second door onto one answer, free to drift.
+// Refused by name because packagers, CI steps and bug-report templates reach for these first, and
+// "unknown option" would send the reader hunting for a typo. See `withdrawnOptionMessage`.
 let WithdrawnVersionFlag = "--version"
 let WithdrawnVersionFlagShort = "-V"
 
+// `module` because `ScaleTestRunner.compileRung` spawns one build per rung with it.
 module let MetricsFlagPrefix = "--metrics="
 
-// `--define=<name>=<value>`: replace a top-level `String` constant's written-out default.
-//
-// ⚠ **THE VALUE MAY CONTAIN `=` AND THE NAME MAY NOT**, so the split is at the FIRST one. A version
-// is rarely the case that needs it, but a description or a URL is, and a flag that mangled them would
-// be found only by reading the emitted binary.
+// The value may contain `=` and the name may not, so the split is at the first one: a description
+// or a URL needs it, and a mangled value would be found only by reading the emitted binary.
 let DefineFlagPrefix = "--define="
 let DefineNameValueSeparator = "="
 
-// `scale-test`'s own flags. Constants for the reason the command words above are: the parser reads each
-// one and the reference prints it, and two spellings of one flag drift the day either is renamed.
 let RungsFlagPrefix = "--rungs="
 let RepeatFlagPrefix = "--repeat="
 let NoteFlagPrefix = "--note="
 let ResultJsonFlagPrefix = "--result-json="
 let EmitCorpusFlagPrefix = "--emit-corpus="
 
-// Comma, matching every other list-valued flag and directive this project reads (`--target`s in a
-// `<!-- unsupported-targets: … -->` marker, the reference's own `UnsupportedTargetsDirectiveRegex`). One separator, so a
-// reader never has to ask which list is spelled which way.
+// Comma, like the `<!-- unsupported-targets: … -->` marker: one separator for every list this
+// project reads.
 let RuntimeNameSeparator = ","
 
-// Everything after the FIRST `=` of a `<name>=<value>` pair already split on it — the pieces from 1
-// onward, rejoined with the separator they were split at.
+enum DefinePairError implements Error
+	noSeparator
+end 'DefinePairError'
+
+// A pair with no `=` is refused rather than read as an empty value: `X` is more likely truncated,
+// and `X=` still spells empty.
 //
-// ⚠ **REJOINING IS THE POINT, NOT A ROUND TRIP.** `--define=Url=https://x/?a=b` splits into four
-// pieces, and only the first is the name; keeping piece 1 alone would silently truncate the value at
-// its first `=`. Rejoining exactly the tail restores it, and a `String` index is a GRAPHEME cursor
-// rather than an integer, so slicing at a byte offset is not the simpler alternative it looks like.
-function defineValueAfterName(cut StringArray) returns String
+// The value is every piece after the first, rejoined: `Url=https://x/?a=b` splits into four pieces.
+// Slicing at a byte offset is not simpler, because a `String` index is a grapheme cursor.
+function defineFromPair(pair String) returns Define throws DefinePairError
+	let cut = pair.split(DefineNameValueSeparator)
+
+	if cut.count() < 2 'noValueGiven'
+		throw DefinePairError.noSeparator
+	end 'noValueGiven'
+
 	var value = ""
 
 	for i in 1 upto cut.count() 'eachPiece'
-		let piece = try cut.get(i) otherwise ""
+		let piece = try cut.get(i) otherwise panic("defineFromPair: cut.get OOB — i < count by loop bound")
 		let separator = "" if i == 1 else DefineNameValueSeparator
 		value = "{value}{separator}{piece}"
 	end 'eachPiece'
 
-	return value
-end 'defineValueAfterName'
+	let name = try cut.get(0) otherwise panic("defineFromPair: cut.get OOB — count is at least 2")
+	return Define.create(name, value: value)
+end 'defineFromPair'
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
 
-	// ⭐ A WITHDRAWN OPTION IS REPORTED BEFORE AN UNKNOWN ONE, and the order is the point: this driver
-	// once accepted it, so its author needs to be told WHAT REPLACED IT rather than sent looking for a
-	// typo. `firstBadOption`'s "the first one typed wins" rule decides between two equally anonymous
-	// flags and does not reach across that difference.
+	// A withdrawn option is reported before an unknown one: its author needs to be told what replaced
+	// it rather than sent looking for a typo.
 	if not args.withdrawnOption.isEmpty() 'withdrawnOption'
 		printError("{withdrawnOptionMessage(args.withdrawnOption, command: args.command)}\n")
 
@@ -388,13 +277,11 @@ function main() returns ExitCode
 		return refusedCommandLineExit(args.command)
 	end 'withdrawnOption'
 
-	// An option the driver does not implement aborts BEFORE any command runs. Every
-	// command below would otherwise proceed as though the flag had been honoured,
-	// which is the one outcome a caller can neither see nor recover from.
-	// ⚠ `fmt`, `upgrade` and `mcp-server` are EXEMPT: each refuses every option it does not take itself,
-	// `fmt` in the reference's words (see `FmtUsageLine`), `upgrade` with stdout left empty, and
-	// `mcp-server` before it speaks a word of protocol. The latter two MUST be exempt — their own flag
-	// is recorded as a bad option so that no OTHER command silently accepts it.
+	// An option the driver does not implement aborts before any command runs: proceeding as though it
+	// had been honoured is the one outcome a caller can neither see nor recover from. `fmt`, `upgrade`
+	// and `mcp-server` are exempt because each refuses what it does not take itself, and the latter
+	// two must be: their own flag is recorded as a bad option so that no other command silently
+	// accepts it.
 	if not args.badOption.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.upgrade and args.command != MaxonCommand.mcpServer 'badOption'
 		printError("error: unknown option: {args.badOption}\n")
 		printCommandList()
@@ -423,23 +310,15 @@ function main() returns ExitCode
 	end 'cmd'
 end 'main'
 
-// The outcome of resolving a `--target=<cpu>-<os>` spelling: either the Target it
-// names, or the raw spelling for the error message when it names no known target.
 module union TargetResolution
 	resolved(target Target)
 	unrecognized(spec String)
 end 'TargetResolution'
 
-// Resolve a `--target` spelling to a Target, or report it unrecognized. The targets
-// maxon can build for are listed once, and matched by their own `targetToString`
-// spelling — so the parser and the printer read the same table and cannot drift into
-// accepting a spelling the compiler cannot name back. A spec that names none of them
-// is rejected; the list grows as backends land.
-//
-// EXPORTED because `GoldenCensus.reportUncomparedGoldens` asks the identical question of a
-// `fragments/<name>` LANE DIRECTORY's name — a lane is named by a target spelling, so "which target is
-// this?" has one answer and one reader. A private copy of the loop there would be a second table in all
-// but name, and its failure mode is a census that quietly stops covering the next backend that lands.
+// Matched against `targetToString`, so the parser accepts exactly the spellings the printer
+// produces. `module` because `GoldenCensus.reportUncomparedGoldens` asks the same question of a
+// lane directory's name; a private copy there would quietly stop covering the next backend that
+// lands.
 module function parseBuildTarget(spec String) returns TargetResolution
 	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == spec 'match'
@@ -450,21 +329,14 @@ module function parseBuildTarget(spec String) returns TargetResolution
 	return TargetResolution.unrecognized(spec)
 end 'parseBuildTarget'
 
-// ⭐ **EVERY TARGET THIS COMPILER CAN BUILD FOR — the one list.**
-//
-// It used to sit inline in the loop above, which was fine while the flag parser was the only thing that
-// wanted it. `SpecVerdictSelfTest` wants it too — its whole subject is which lane this host routes each
-// target to, and it must sweep ALL of them or it is a check scoped to whichever target its author
-// happened to think of. A second array spelled there would agree today and would then quietly stop
-// covering the next backend that lands, which is the one it would exist to catch.
+// The one list. `SpecVerdictSelfTest` sweeps it, and must cover every target or it is scoped to
+// whichever its author thought of.
 module function supportedTargets() returns TargetArray
 	return [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
 end 'supportedTargets'
 
-// ⭐ **THE TARGET LIST AS PROSE, SPELLED FROM `supportedTargets()` RATHER THAN BY HAND.** Two messages
-// each named a partial list and BOTH had already gone stale: the usage text omitted `arm64-linux`, and
-// the unknown-target error omitted `arm64-linux` and `wasm32-wasi`. A list a reader is told is the set
-// has to come from the set, or the next backend that lands is missing from both the moment it lands.
+// Spelled from `supportedTargets()`, so every message naming the set gains the next backend when it
+// lands.
 function supportedTargetList() returns String
 	var out = ""
 
@@ -479,38 +351,30 @@ function supportedTargetList() returns String
 	return out
 end 'supportedTargetList'
 
-// Resolve the optional `--target` flag shared by `build` and `spec-test`: the host target
-// (`detectHostTarget`) when the flag is empty, otherwise whatever `parseBuildTarget` makes of the
-// spelling (`unrecognized` when it names no known target). Folding the host default into one place
-// keeps the two commands from drifting on what "no --target" means.
-module function resolveTargetFlag(spec String) returns TargetResolution
+module enum TargetFlagError implements Error
+	unrecognized
+end 'TargetFlagError'
+
+// One reader for every command that takes `--target`, so none can drift on what no `--target`
+// means. An unrecognized spelling is reported here, so a caller only has to stop.
+module function commandLineTarget(spec String) returns Target throws TargetFlagError
 	if spec.isEmpty() 'host'
-		return TargetResolution.resolved(detectHostTarget())
+		return detectHostTarget()
 	end 'host'
 
-	return parseBuildTarget(spec)
-end 'resolveTargetFlag'
+	match parseBuildTarget(spec) 'targetSel'
+		resolved(t) then return t
+		unrecognized(unknown) then printError("error: unknown --target '{unknown}' (expected one of: {supportedTargetList()})\n")
+	end 'targetSel'
 
-// Report a `--target` spelling that names no known target, as an exit code the
-// build command returns directly. Separate from the match arm because a match arm
-// is one statement, and this one both prints and yields the code.
-module function reportUnknownTarget(spec String) returns ExitCode
-	printError("error: unknown --target '{spec}' (expected one of: {supportedTargetList()})\n")
-	return 1
-end 'reportUnknownTarget'
+	throw TargetFlagError.unrecognized
+end 'commandLineTarget'
 
 // The build script a directory may carry. See `runBuildManifest`.
 let BuildManifestFileName = "build.maxon"
 
-// Where the manifest's own executable is staged: inside `.maxon/`, which is already where this
-// project's build products live and already ignored everywhere.
-let ManifestOutputStem = ".maxon/build-manifest"
-
-// ⭐ **THE MANIFEST'S ENTRY POINT IS `build`, NOT `main`.** A manifest is a set of TASKS a project can
-// be asked to perform, not a program with one way in — `build` is simply the task this command asks
-// for, and the name it is asked for by. `compileToProduct` takes the entry function as an argument
-// precisely so a caller can name one, so nothing here is special-cased: the manifest is compiled the
-// way any program is, beginning somewhere else.
+// A manifest is a set of tasks, not a program with one way in; `build` is the task this command
+// asks for.
 let ManifestEntryFunction = b"build"
 
 // The fields of `stdlib/Build.maxon`'s JSON that this reads back.
@@ -519,25 +383,11 @@ let ManifestOutputKey = "output"
 let ManifestSourcesKey = "sources"
 let ManifestVersionKey = "version"
 let ManifestDefinesKey = "defines"
+let ManifestDebugInfoKey = "debug_info"
 
-// ⭐⭐ **`maxon build` WITH NO PATH RUNS `build.maxon`, WHICH IS A MAXON PROGRAM AND NOT A CONFIG
-// FILE.** That distinction is the whole design: a project's build is described by CODE, with the
-// standard library available to it, so the paths it compiles can be COMPUTED — read out of a
-// directory, chosen from the host, stamped from a version file — rather than only spelled out.
-// Nothing here parses the manifest. The compiler COMPILES it, RUNS it, and reads what it prints.
-//
-// ⭐ **THE PROTOCOL IS `stdlib/Build.maxon`'s JSON, ON STDOUT.** `Build.build(source, output:)` and
-// `Build.buildWithConfig(config)` write it; this reads it back. Both ends therefore share ONE
-// description of what a build is, held in the stdlib where each can see it, and a field added there
-// is a field both ends already agree on.
-//
-// ⚠ A directory with no `build.maxon` gets the usage line, because "build what?" is then a question
-// nobody has answered.
-// Which of a manifest's builds a command is about, and whether the manifest had one at all.
-//
-// ⛔ A NAME THAT IS NOT A TARGET IS NOT AN ERROR. `maxon build <x>` may equally mean "compile the path
-// x", so a manifest declaring no `x` answers `noSuchTarget` and the caller falls back to path
-// semantics — refusing here would make a manifest's presence break builds it was never part of.
+// A name that is not a target is not an error: `maxon build <x>` may mean the path x, so a manifest
+// declaring no `x` answers `noSuchTarget` and the caller falls back to path semantics. Refusing
+// would let a manifest break builds it was never part of.
 union ManifestRun
 	ran(code ExitCode)
 	noSuchTarget
@@ -553,11 +403,7 @@ function manifestBuilds(doc JsonDoc) returns JsonNodeIdArray
 	end 'notArray'
 
 	for i in 0 upto count 'eachBuild'
-		let id = try doc.arrayAt(doc.root, index: i) otherwise 'badElem'
-			return builds
-		end 'badElem'
-
-		builds.push(id)
+		builds.push(try doc.arrayAt(doc.root, index: i) otherwise panic("manifestBuilds: arrayAt OOB — i < count by loop bound"))
 	end 'eachBuild'
 
 	return builds
@@ -569,6 +415,9 @@ function manifestTargetName(doc JsonDoc, build JsonNodeId) returns String
 	return try doc.getString(build, key: ManifestNameKey) otherwise ""
 end 'manifestTargetName'
 
+// `build.maxon` is a Maxon program, not a config file, so the paths it compiles can be computed.
+// The compiler compiles and runs it and reads `stdlib/Build.maxon`'s JSON from its stdout, so both
+// ends share one description of a build.
 function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 	let manifest = Directory.currentPath().join(BuildManifestFileName)
 
@@ -583,19 +432,17 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 		return ManifestRun.ran(1)
 	end 'noManifest'
 
-	// ⛔ THE MANIFEST IS BUILT FOR THIS HOST, WHATEVER `--target` SAYS. It is a program this machine
-	// has to RUN in a moment, so a `--target=arm64-macos` build of it would produce something this host
-	// cannot execute. The flag describes the program the manifest ASKS FOR, never the manifest.
-	var manifestPaths = MaxonSourcePathArray.create()
-	manifestPaths.push(manifest)
-
-	let manifestProduct = try compileToProduct(manifestPaths, target: detectHostTarget(), outputOverride: ManifestOutputStem, runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: false, entryFunction: ManifestEntryFunction) otherwise (e) 'manifestCompileErr'
-		printError("error: {BuildManifestFileName} did not compile — the diagnostics above are its own\n")
-		reportCompileError(e)
+	// Built for this host whatever `--target` says: this machine is about to run it. The flag
+	// describes the program the manifest asks for.
+	//
+	// Kept in the run cache, never in the project: a path inside the project is written by every
+	// concurrent build of it, and which lock would apply is known only once the manifest has run.
+	let manifestProgram = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: ManifestEntryFunction, speaker: BuildSubcommandName) otherwise 'manifestNotBuilt'
+		printError("error: {BuildManifestFileName} could not be built — the reason is above\n")
 		return ManifestRun.ran(1)
-	end 'manifestCompileErr'
+	end 'manifestNotBuilt'
 
-	let run = try Subprocess.run(Executable.path(manifestProduct.outputPath), arguments: StringArray.create()) otherwise 'manifestRunErr'
+	let run = try Subprocess.run(Executable.path(manifestProgram), arguments: StringArray.create()) otherwise 'manifestRunErr'
 		printError("error: {BuildManifestFileName} compiled but could not be run\n")
 		return ManifestRun.ran(1)
 	end 'manifestRunErr'
@@ -613,9 +460,7 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 	return buildFromManifestOutput(run.stdout, args: args, targetName: targetName)
 end 'runBuildManifest'
 
-// `-o` on the command line, or the manifest's `output` when none was typed. A function rather than a
-// reassignment because a `String` binding is immutable and copying one to choose between two would be
-// a clone of a value neither branch changes.
+// A function rather than a reassignment, which would clone a `String` neither branch changes.
 function chosenOutput(fromManifest String, fromFlag String) returns String
 	if fromFlag.isEmpty() 'manifestDecides'
 		return fromManifest
@@ -624,12 +469,8 @@ function chosenOutput(fromManifest String, fromFlag String) returns String
 	return fromFlag
 end 'chosenOutput'
 
-// Read one `BuildConfig` off the manifest's stdout and compile what it names.
-//
-// ⚠ EVERY FIELD IS REQUIRED, AND A MISSING ONE IS AN ERROR RATHER THAN A DEFAULT QUIETLY SUPPLIED
-// HERE. The writer is `Build.emitBuildConfig`, which always emits all of them; a document missing one
-// did not come from it, and guessing what its author meant is how a build compiles the wrong thing
-// while reporting success.
+// A field the description states and this cannot use is an error, never a default: a guess is how a
+// build compiles the wrong thing while reporting success.
 function buildFromManifestOutput(stdout String, args MaxonArgs, targetName String) returns ManifestRun
 	let doc = try Json.parse(stdout) otherwise 'badJson'
 		printError("error: {BuildManifestFileName} printed something that is not a build description.\n")
@@ -641,8 +482,8 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 	let builds = manifestBuilds(doc)
 	let buildCount = builds.count()
 
-	// ⭐ ONE TARGET NEEDS NO NAME; SEVERAL ARE LISTED RATHER THAN GUESSED AT. Picking the first of
-	// several would build something the caller did not ask for and report success for it.
+	// Several targets and no name are listed rather than guessed at: picking the first would report
+	// success for a build nobody asked for.
 	var chosen = doc.root
 
 	if targetName.isEmpty() 'noNameGiven'
@@ -672,111 +513,155 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 		end 'noSuchName'
 	end 'nameGiven'
 
-	let output = try doc.getString(chosen, key: ManifestOutputKey) otherwise 'noOutput'
-		printError("error: {BuildManifestFileName}'s build description has no `{ManifestOutputKey}`\n")
-		return ManifestRun.ran(1)
-	end 'noOutput'
+	let output = try manifestOutput(doc, build: chosen) otherwise (e) 'badOutput'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestOutputKey, error: e))
+	end 'badOutput'
 
-	let sourcesId = try doc.getChild(chosen, key: ManifestSourcesKey) otherwise 'noSources'
-		printError("error: {BuildManifestFileName}'s build description has no `{ManifestSourcesKey}`\n")
-		return ManifestRun.ran(1)
-	end 'noSources'
+	let inputPaths = try manifestSources(doc, build: chosen) otherwise (e) 'badSources'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestSourcesKey, error: e))
+	end 'badSources'
 
-	let count = try doc.arrayLength(sourcesId) otherwise 'sourcesNotArray'
-		printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` is not a list of paths\n")
-		return ManifestRun.ran(1)
-	end 'sourcesNotArray'
-
-	// ⛔ AN EMPTY `sources` IS REFUSED, NOT READ AS "THIS DIRECTORY". Accepting it would compile the
-	// whole tree the manifest sits in — every spec, every test — under a command that named nothing at
-	// all. A manifest that means the current directory says so: `Build.build(".", output: …)`.
-	if count == 0 'noPaths'
+	// An empty `sources` is refused, not read as this directory: that would compile the whole tree
+	// under a command that named nothing. `Build.build(".", output: …)` says so explicitly.
+	if inputPaths.count() == 0 'noPaths'
 		printError("error: {BuildManifestFileName} named no sources to compile.\n")
 		printError("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.\n")
 		return ManifestRun.ran(1)
 	end 'noPaths'
 
-	var inputPaths = MaxonSourcePathArray.create()
-
-	for i in 0 upto count 'eachSource'
-		let elemId = try doc.arrayAt(sourcesId, index: i) otherwise 'badElem'
-			printError("error: {BuildManifestFileName}'s `{ManifestSourcesKey}` entry {i} could not be read\n")
-			return ManifestRun.ran(1)
-		end 'badElem'
-
-		let spelling = doc.get(elemId).stringValue
-		let path = try FilePath.from(spelling) otherwise 'badSourcePath'
-			printError("error: {BuildManifestFileName} named an invalid source path: {spelling}\n")
-			return ManifestRun.ran(1)
-		end 'badSourcePath'
-
-		inputPaths.push(path)
-	end 'eachSource'
-
-	// ⚠ `-o` ON THE COMMAND LINE OUTRANKS THE MANIFEST, for the reason every flag outranks a file: the
-	// person typing the command is answering a narrower question than the file was.
+	// `-o` outranks the manifest: the person typing answers a narrower question than the file does.
 	let outputOverride = chosenOutput(output, fromFlag: args.outputOverride)
 
-	var target = detectHostTarget()
+	let target = try commandLineTarget(args.targetSpec) otherwise return ManifestRun.ran(1)
 
-	match resolveTargetFlag(args.targetSpec) 'manifestTarget'
-		resolved(t) then target = t
-		unrecognized(spec) then return ManifestRun.ran(reportUnknownTarget(spec))
-	end 'manifestTarget'
+	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
+	// positive twin, and a manifest saying `false` means the project never wants one.
+	let manifestWantsDebugInfo = try manifestDebugInfo(doc, build: chosen) otherwise (e) 'badDebugInfo'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestDebugInfoKey, error: e))
+	end 'badDebugInfo'
 
-	// ⚠ AN ABSENT `version` IS NOT AN ERROR: a manifest written before the key existed must keep
-	// building, so a missing one reads as "unversioned".
-	//
-	// ⛔ THE DESCRIPTION'S `name` IS NOT THE PRODUCT NAME. It is whatever selected this build — a target
-	// name, or for `Build.build` the SOURCE path, which is `.` for a project built from its own
-	// directory. The binary's product name comes from the OUTPUT, which is what the thing is called.
-	let productVersion = try doc.getString(chosen, key: ManifestVersionKey) otherwise ""
+	// The description's `name` is not the product name: it is whatever selected this build, which for
+	// `Build.build` is the source path, often `.`. The product is named by the output.
+	let productVersion = try manifestVersion(doc, build: chosen) otherwise (e) 'badVersion'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestVersionKey, error: e))
+	end 'badVersion'
 
-	// ⭐ THE MANIFEST'S DEFINES COME FIRST AND THE COMMAND LINE'S FOLLOW, so a `--define` typed at the
-	// prompt overrides one the manifest computed — the same precedence `-o` has over the manifest's
-	// `output`, for the same reason. Resolution binds a name to one declaration and stamps it, and a
-	// later stamp replaces an earlier one, so ORDER is what expresses that precedence.
-	var defines = manifestDefines(doc, build: chosen)
+	// The manifest's defines come first, so a command-line `--define` overrides one it computed: a
+	// later stamp replaces an earlier one, so order expresses the precedence.
+	var defines = try manifestDefines(doc, build: chosen) otherwise (e) 'badDefines'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestDefinesKey, error: e))
+	end 'badDefines'
 
 	for supplied in args.defines 'eachCommandLineDefine'
 		defines.push(supplied)
 	end 'eachCommandLineDefine'
 
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage, productVersion: productVersion, defines: defines) otherwise (e) 'buildErr'
-		reportCompileError(e)
-		return ManifestRun.ran(1)
-	end 'buildErr'
-
-	print("Compiled -> {outputPath}\n")
-	return ManifestRun.ran(0)
+	return ManifestRun.ran(buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines))
 end 'buildFromManifestOutput'
 
-// The `defines` a build description carries, as the compiler's own pairs.
-//
-// ⚠ **A MALFORMED ENTRY IS SKIPPED HERE AND REFUSED LATER.** An entry with no `=` names no value, and
-// dropping it silently would be wrong — but the diagnostic that says so belongs to the resolution pass,
-// which reports every define problem at once. What this must not do is invent a name from a string that
-// does not contain one.
-function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray
+// `output` and `sources` are required; any other absent field reads as what `Build` writes when its
+// caller says nothing.
+union ManifestFieldError implements Error
+	missing
+	notABool
+	notAString
+	notAListOfStrings
+	notAPath(entry String)
+	notADefinePair(entry String)
+end 'ManifestFieldError'
+
+function reportMalformedManifestField(key String, error ManifestFieldError) returns ExitCode
+	let problem = match error 'whatIsWrong'
+		missing gives "is missing"
+		notABool gives "is not true or false"
+		notAString gives "is not a string"
+		notAListOfStrings gives "is not a list of strings"
+		notAPath(entry) gives "holds `{entry}`, which is not a path"
+		notADefinePair(entry) gives "holds `{entry}`, which is not a `<name>{DefineNameValueSeparator}<value>` pair"
+	end 'whatIsWrong'
+
+	printError("error: {BuildManifestFileName}'s `{key}` {problem}\n")
+	return 1
+end 'reportMalformedManifestField'
+
+// The readers below look a key up with `getChild`, whose one failure besides an absent key is a
+// description that is not an object, which has none of the keys either.
+
+function manifestOutput(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestOutputKey) otherwise throw ManifestFieldError.missing
+	return try manifestString(doc.get(valueId))
+end 'manifestOutput'
+
+function manifestSources(doc JsonDoc, build JsonNodeId) returns MaxonSourcePathArray throws ManifestFieldError
+	let listId = try doc.getChild(build, key: ManifestSourcesKey) otherwise throw ManifestFieldError.missing
+	var sources = MaxonSourcePathArray.create()
+
+	for spelling in try manifestStrings(doc, list: doc.get(listId)) 'eachSource'
+		sources.push(try FilePath.from(spelling) otherwise throw ManifestFieldError.notAPath(spelling))
+	end 'eachSource'
+
+	return sources
+end 'manifestSources'
+
+function manifestDebugInfo(doc JsonDoc, build JsonNodeId) returns bool throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestDebugInfoKey) otherwise return true
+	let value = doc.get(valueId)
+
+	if value.kind != JsonKind.jsonBool 'notABool'
+		throw ManifestFieldError.notABool
+	end 'notABool'
+
+	return value.boolValue
+end 'manifestDebugInfo'
+
+// Absent reads as "unversioned".
+function manifestVersion(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return ""
+	return try manifestString(doc.get(valueId))
+end 'manifestVersion'
+
+// Refused whole on the first bad entry: a build missing a define its manifest computed is a binary
+// claiming the constant's written-out default, and nothing would say so.
+function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray throws ManifestFieldError
 	var defines = DefineArray.create()
 	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return defines
-	let count = try doc.arrayLength(listId) otherwise return defines
 
-	for i in 0 upto count 'eachDefine'
-		let elemId = try doc.arrayAt(listId, index: i) otherwise continue
-		let pair = doc.get(elemId).stringValue
-		let cut = pair.split(DefineNameValueSeparator)
-
-		if cut.count() < 2 'noValueGiven'
-			continue
-		end 'noValueGiven'
-
-		let name = try cut.get(0) otherwise ""
-		defines.push(Define.create(name, value: defineValueAfterName(cut)))
+	for pair in try manifestStrings(doc, list: doc.get(listId)) 'eachDefine'
+		defines.push(try defineFromPair(pair) otherwise throw ManifestFieldError.notADefinePair(pair))
 	end 'eachDefine'
 
 	return defines
 end 'manifestDefines'
+
+function manifestString(value JsonNode) returns String throws ManifestFieldError
+	if value.kind != JsonKind.jsonString 'notAString'
+		throw ManifestFieldError.notAString
+	end 'notAString'
+
+	return value.stringValue
+end 'manifestString'
+
+function manifestStrings(doc JsonDoc, list JsonNode) returns ManifestStringArray throws ManifestFieldError
+	if list.kind != JsonKind.jsonArray 'notAList'
+		throw ManifestFieldError.notAListOfStrings
+	end 'notAList'
+
+	var strings = ManifestStringArray.create()
+
+	for entryId in list.children 'eachEntry'
+		let entry = doc.get(entryId)
+
+		if entry.kind != JsonKind.jsonString 'notAString'
+			throw ManifestFieldError.notAListOfStrings
+		end 'notAString'
+
+		strings.push(entry.stringValue)
+	end 'eachEntry'
+
+	return strings
+end 'manifestStrings'
+
+typealias ManifestStringArray = Array with String
 
 // The header goes to stdout, so a failing build's stderr is still exactly its diagnostics.
 function runBuild(args MaxonArgs) returns ExitCode
@@ -789,10 +674,9 @@ function runBuild(args MaxonArgs) returns ExitCode
 		end 'bareBuild'
 	end 'noPath'
 
-	// ⛔ A TARGET NAME OUTRANKS A PATH OF THE SAME SPELLING, and it has to: a target names an OUTPUT as
-	// well as a source, so `maxon build maxon-bin` resolved as a path would compile the same directory
-	// to a DIFFERENT file and quietly leave the real one stale. A spelling the manifest does not
-	// declare falls through to the path meaning below, so a manifest never breaks an ordinary build.
+	// A target name outranks a path of the same spelling: a target also names an output, so resolving
+	// `maxon build maxon-bin` as a path would compile to a different file and leave the real one
+	// stale.
 	if args.paths.count() == 1 'maybeTargetName'
 		let only = try args.paths.get(0) otherwise panic("runBuild: paths.get OOB — count is 1")
 
@@ -805,12 +689,8 @@ function runBuild(args MaxonArgs) returns ExitCode
 	return runBuildPaths(args)
 end 'runBuild'
 
-// Compile the positional paths — `build`'s meaning when no manifest target claimed them. Split out so
-// the fallback above is a RETURN rather than a match arm that does nothing.
-//
-// Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles` registers
-// them in that order and roots the project at their common ancestor, and an output name that is not
-// given is derived from the first of them.
+// Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles`
+// registers them in that order and roots the project at their common ancestor.
 function runBuildPaths(args MaxonArgs) returns ExitCode
 	var inputPaths = MaxonSourcePathArray.create()
 
@@ -823,49 +703,17 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 		inputPaths.push(path)
 	end 'eachPositional'
 
-	var target = detectHostTarget()
+	let target = try commandLineTarget(args.targetSpec) otherwise return 1
 
-	match resolveTargetFlag(args.targetSpec) 'targetSel'
-		resolved(t) then target = t
-		unrecognized(spec) then return reportUnknownTarget(spec)
-	end 'targetSel'
+	return buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: "", defines: args.defines)
+end 'runBuildPaths'
 
-	// ⛔ **REFUSED ON A TARGET WITH NO PRODUCER, RATHER THAN SILENTLY EMITTING NOTHING.** The whole failure
-	// mode of an instrument is an EMPTY answer that reads as "the program did none of that", so this must be
-	// said at the command line, loudly, before anything is compiled — and here rather than as a diagnostic,
-	// because nothing in the PROGRAM asked for it and there is no span to hang it on. The Std ops' own
-	// lowerings refuse too, but that is a backstop for a compiler bug that got past this gate.
-	//
-	// ⚠ **IT GUARDS THE COMMAND LINE AND ONLY THE COMMAND LINE.** The spec harness calls `compileToProduct`
-	// directly with a per-case `debugStream` and carries its own gate for the same fact
-	// (`SpecTestRunner.targetCanCaptureTrace`, which SKIPS such a case rather than compiling it). Both read
-	// `targetCanProduceDebugStream`, so the two doors cannot come to disagree about which lanes have one.
-	if args.debugStream and not targetCanProduceDebugStream(target) 'unsupportedDebugStream'
-		printError("error: {DebugStreamFlag} is not implemented for {targetToString(target)}. The DebugStream producer attaches to a NAMED shared segment named by an activation environment variable and stamps a millisecond stopwatch — two host facilities (`sharedMemory`, `uptimeClock`) this target does not provide, so the Std ops behind them (`osOpenNamedSegment`, `osMapNamedSegment`, `osTickCountMs`) have no lowering on this lane. Build for a target that has them, or implement those facilities here.\n")
+// The lock is asked of the command line's `-o`: `outputOverride` may be a manifest's own `output`,
+// which says nothing about who else writes the tree.
+function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion String, defines DefineArray) returns ExitCode
+	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
 		return 1
-	end 'unsupportedDebugStream'
-
-	// ⛔⛔ **BOTH COVERAGE REFUSALS RUN AHEAD OF THE TREE LOCK AND AHEAD OF THE BUILD CACHE.** A cache hit
-	// hands back a binary without ever reaching the compiler, so a rule enforced inside the compile is a
-	// rule a WARM build silently skips — and the binary it then hands back is instrumented code with no
-	// point table to interpret it, which is exactly the artifact these two exist to prevent.
-	//
-	// ⚠ The message is the REFERENCE'S, word for word: `tests/coverage/coverage-refusals.test.maxon`
-	// spawns both drivers at the same situation and compares their stderr byte for byte.
-	if args.coverage and not args.debugInfo 'coverageNeedsDebugInfo'
-		printError("{Diagnostic.create(ErrorCode.codeEmitterCoverageNeedsDebugInfo, message: coverageNeedsDebugInfoMessage()).render()}\n")
-		return 1
-	end 'coverageNeedsDebugInfo'
-
-	// ⛔ **NOT E3104, AND NOT `calleeHostFacility`.** That door is keyed on a callee name the USER'S SOURCE
-	// wrote and reports at that call's own span; a build flag has no span, and blaming a compiler-inserted
-	// call for it is a defect `TargetFacilities.maxon` records having made once already. This is
-	// `--debugstream`'s door, and it reads `targetCanMeasureCoverage` rather than naming a target pair,
-	// so the lanes that can measure are read off the facility table that already holds the answer.
-	if args.coverage and not targetCanMeasureCoverage(target) 'unsupportedCoverage'
-		printError("error: {CoverageFlag} is not implemented for {targetToString(target)}. An instrumented binary writes its counter block to a `<output>{MxcovDataExtension}` file as it exits — the `managedFile` host facility this target does not provide. Build for a target that has it, or implement that facility here.\n")
-		return 1
-	end 'unsupportedCoverage'
+	end 'refusedOptions'
 
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride)
 
@@ -873,56 +721,51 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 		return lockExit
 	end 'busyTree'
 
-	let buildExit = compileAndReport(inputPaths, target: target, args: args)
+	let buildExit = compileAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
 	releaseTreeLock()
 	return buildExit
-end 'runBuildPaths'
+end 'buildAndReport'
 
-// ⭐ **WHICH BUILDS ARE TREE-LEVEL, and therefore take this checkout's lock: a PROJECT build that was
-// not told where to put its output.** That is `maxon build maxon-bin` — the invocation that writes
-// `<project>/.maxon/` and the one that actually raced (see `TreeLock`).
+// `debugInfo` is the build's effective setting, which a manifest can turn off.
 //
-// ⚠ **AND IT IS WHAT KEEPS THE SUITE OFF THE LOCK.** The spec runner compiles every selected test
-// through a real `build` subprocess and the scale runner one per rung — thousands of them, in
-// parallel, INSIDE a run that already holds the lock. Every one of those passes `-o`, because the
-// harness owns the output path; so `-o` is exactly the line between "put it where the tree keeps its
-// products" and "put it where I said", and locking only the former is what makes a nested build a
-// non-event rather than a deadlock.
+// Every build road asks this before the tree lock and the build cache: a cache hit never reaches
+// the compiler, so a rule enforced inside the compile is one a warm build skips.
 //
-// A FILE build takes nothing either, for the same reason from the other end: it writes beside the file
-// it was handed, which is a scratch directory whenever it matters.
+// These are refusals of the command line, not diagnostics: nothing in the program asked for an
+// instrument, so there is no span, and an unsupported target is not E3104. The spec harness gates a
+// per-case `debugStream` itself; both read `targetCanProduceDebugStream`.
+function refusedBuildOptions(args MaxonArgs, target Target, debugInfo bool) returns bool
+	if args.debugStream and not targetCanProduceDebugStream(target) 'unsupportedDebugStream'
+		printError("error: {DebugStreamFlag} is not implemented for {targetToString(target)}. The DebugStream producer attaches to a NAMED shared segment named by an activation environment variable and stamps a millisecond stopwatch — two host facilities (`sharedMemory`, `uptimeClock`) this target does not provide, so the Std ops behind them (`osOpenNamedSegment`, `osMapNamedSegment`, `osTickCountMs`) have no lowering on this lane. Build for a target that has them, or implement those facilities here.\n")
+		return true
+	end 'unsupportedDebugStream'
+
+	if args.coverage and not debugInfo 'coverageNeedsDebugInfo'
+		printError("{Diagnostic.create(ErrorCode.codeEmitterCoverageNeedsDebugInfo, message: coverageNeedsDebugInfoMessage()).render()}\n")
+		return true
+	end 'coverageNeedsDebugInfo'
+
+	if args.coverage and not targetCanMeasureCoverage(target) 'unsupportedCoverage'
+		printError("error: {CoverageFlag} is not implemented for {targetToString(target)}. An instrumented binary writes its counter block to a `<output>{MxcovDataExtension}` file as it exits — the `managedFile` host facility this target does not provide. Build for a target that has it, or implement that facility here.\n")
+		return true
+	end 'unsupportedCoverage'
+
+	return false
+end 'refusedBuildOptions'
+
+// A build takes this checkout's lock only when it writes into a tree at a derived output path. Two
+// questions decide it, and neither is how many paths were typed:
 //
-// ⛔⛔ **A `count() != 1` BYPASS SAT HERE AND IT WAS A3m'S OWN REGRESSION** (BATCH10 review). Before
-// A3m `build` took ONE path and silently dropped the rest, so a multi-path build did not exist and
-// `count() > 1` was unreachable; A3m made it real and the guard was not widened with it. The bypass
-// said a build naming several paths "writes nothing this lock protects, because its output name comes
-// from the first SOURCE FILE rather than from `<project>/.maxon/`" — and `resolveOutputPath` derives a
-// DIRECTORY build's name from the first registered source file too, by the same line of the same
-// function. A fact both shapes share cannot be what tells them apart. `build maxon-bin/Compiler
-// maxon-bin/Testing` wrote into the checkout with no lock at all.
+// · Did the caller say where the output goes? A `-o` build writes where the caller said and takes
+//   nothing, which is what keeps the harnesses' nested `build … -o …` compiles from deadlocking
+//   inside a run that already holds the lock.
 //
-// ⇒ **THE RULE IS THE ONE `TreeLock`'s HEADER ALREADY STATES, ASKED OF THE PROJECT ROOT INSTEAD OF OF
-// THE ARGUMENT LIST**: the lock covers the checkout *"containing the path the command writes into"*,
-// and *"a `-o` build writes where the CALLER said and takes nothing"*. So there are exactly two
-// questions, and neither is how many paths were typed:
+// · Otherwise, is the project root a directory? `resolveOutputPath` writes beside the input when
+//   the root is a file, and into the tree otherwise.
 //
-//   · **Did the caller say where the output goes?** That is `-o`, and it is now asked FIRST and of
-//     every shape. It is the whole reason the suite's thousands of nested `build … -o …` compiles are
-//     a non-event inside a run that already holds the lock.
-//   · **Otherwise the output is DERIVED — into WHAT?** `resolveOutputPath` writes beside the input
-//     when the root is an existing FILE, and beside the first registered source otherwise. So the
-//     question is whether the project ROOT is a directory, i.e. whether this build lands in a TREE or
-//     beside one named file.
-//
-// ⚠ **AND THE ROOT IS ASKED OF `commonAncestorOf`, THE SAME FUNCTION `loadProject` ROOTS THE PROJECT
-// AT.** Not a second derivation: the lock and the compile cannot disagree about which tree is being
-// written because there is one answer to that. It also makes the single-path case provably unmoved —
-// `commonAncestorOf` returns its argument untouched when nothing narrows, so `build <file>` and
-// `build <directory>` reach the identical test they always did.
-//
-// A root with no `stdlib/` above it takes no lock regardless: `acquireTreeLock` answers that itself
-// (`maxon build /tmp/scratch.maxon` has nothing shared to guard), which is why there is no
-// separate scratch-path arm here.
+// The root comes from `commonAncestorOf`, the function `loadProject` roots the project at, so the
+// lock and the compile cannot disagree about which tree is written. A root with no `stdlib/` above
+// it takes no lock: `acquireTreeLock` answers that itself.
 function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String) returns ExitCode
 	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
 		return 0
@@ -942,12 +785,9 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 	return acquireTreeLock(root)
 end 'acquireBuildTreeLock'
 
-// The build itself, split out so `runBuild` has ONE exit through which the tree lock is released.
-// Maxon has no `defer`, and a release written at each of two returns is a release the third one
-// forgets — the lock would then survive its holder and be broken 60 s later as abandoned, which is
-// correct behaviour covering for a bug.
-function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs) returns ExitCode
-	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: args.debugInfo, coverage: args.coverage, defines: args.defines) otherwise (e) 'compileErr'
+// Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
+function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion String, defines DefineArray) returns ExitCode
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -956,10 +796,7 @@ function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args M
 	return 0
 end 'compileAndReport'
 
-// The M2 warm-rebuild gate: assert the query spine is deterministic and
-// incremental for `<file>`. Exit 0 iff both properties hold. On a file/IO error
-// the specific message is printed; a `compileError` stays silent (its diagnostics
-// were already printed by the pipeline).
+// Exit 0 iff the query spine is deterministic and incremental for `<file>`.
 function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	let usage = "maxon verify-warm-rebuild <file>"
 
@@ -992,9 +829,6 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	return 1
 end 'runVerifyWarmRebuild'
 
-// The `verify-recheck <file|dir>` command: assert one `Project` survives being checked more than
-// once. Shaped exactly like `runVerifyWarmRebuild` next door — same single-positional contract, same
-// host target, and the same "the gate printed its own reasons" exit rule.
 function runVerifyRecheck(args MaxonArgs) returns ExitCode
 	let usage = "maxon verify-recheck <file|dir>"
 
@@ -1027,29 +861,11 @@ function runVerifyRecheck(args MaxonArgs) returns ExitCode
 	return 1
 end 'runVerifyRecheck'
 
-// The `spec-test [dir]` command: run every active test in `dir` (default `specs`) on a pool of
-// persistent worker subprocesses, print per-test PASS/FAIL + an `N passed, M failed` summary, and
-// exit non-zero iff any test failed.
+// `harnessExe` is both what a pool worker is relaunched as and what compiles every selected test:
+// every case is compiled in this process, so there is no separate compiler under test.
 //
-// ⛔⛔ **ONE EXECUTABLE AGAIN — AND THIS HEADER SPENT A PARAGRAPH ARGUING THERE WERE TWO.** It read:
-// *"TWO EXECUTABLES, NOT ONE … `workerExe` what a pool worker IS … `compilerExe` the COMPILER UNDER
-// TEST — the binary each selected test is built with. This process unless `--compiler=<path>` names
-// another."* Both facts were real, and the second existed only because a test was BUILT BY A
-// SUBPROCESS whose executable a caller could name. Since G20 every test is compiled IN THIS PROCESS,
-// so "the compiler under test" is this binary's own code: there is nothing left for a path to select,
-// and `--compiler=` is WITHDRAWN rather than kept as a flag that could only lie (⚖ user ruling
-// 2026-08-22 — in-process only, no dual path). `harnessExe` is `Process.executablePath()`, and it is
-// both facts: what a worker is relaunched as, and what compiles every case. Not settable — a flag that
-// spawned some OTHER harness as a worker never had a caller either.
-//
-// ⚠ **WHAT THE SPLIT WAS FOR IS NOT LOST.** The 🚩 Phase 1 gate was precisely the configuration that
-// separated them — a harness compiled by maxon.exe driving maxon.exe as the compiler — and it is
-// CLOSED (2026-08-22: the two harnesses agreed byte for byte). Its maintenance form is a self-build
-// fixpoint diff, which is a question one binary can answer.
-//
-// There is ONE path through the pool, taken by every worker count including `--workers=1`. A serial
-// in-process branch for the single-worker case would be a second implementation of "run the suite",
-// and the two would drift — which is exactly what the worker-count-invariance gate exists to catch.
+// Every worker count, `--workers=1` included, takes the one path through the pool: a serial branch
+// would be a second implementation of running the suite, free to drift.
 function runSpecTest(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>] [--update-required] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
 		return 1
@@ -1060,90 +876,54 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'badSpecDir'
 
-	// This binary: what a worker process is relaunched as, and what compiles every selected test. See
-	// this function's header for why that is one value again.
 	let harnessExe = try Process.executablePath() otherwise 'noExe'
 		printError("error: could not determine the running executable's path\n")
 		return 1
 	end 'noExe'
 
-	// The effective target for this run: the host unless `--target` overrode it. Resolved up front so
-	// BOTH sides run the SAME target — the dispatcher's pool AND a relaunched worker, which re-parses
-	// the same `--target` from its own command line (SpecWorkerPool.spawnNoWait forwards it) and
-	// reaches this same resolution. A bad spelling fails once, here. The target reaches each selected
-	// test's build (`--target=<cpu>-<os>`) and, for a cross target, its run under the vendored runtime.
-	// Resolving before the worker branch prints nothing on the success path (only an unrecognized
-	// spelling prints, to stderr, and returns), so the worker's stdout wire stays untouched.
-	var effectiveTarget = detectHostTarget()
+	// Resolved up front so the dispatcher and a relaunched worker, which re-parses the forwarded
+	// `--target`, run the same target. Prints nothing on success, so a worker's stdout wire stays
+	// untouched.
+	let effectiveTarget = try commandLineTarget(args.targetSpec) otherwise return 1
 
-	match resolveTargetFlag(args.targetSpec) 'targetSel'
-		resolved(t) then effectiveTarget = t
-		unrecognized(spec) then return reportUnknownTarget(spec)
-	end 'targetSel'
-
-	// A WORKER, not a dispatcher: this process was spawned by a parent's pool and speaks the job
-	// protocol on stdin/stdout instead of running a suite and reporting on it. It must be checked
-	// before anything is printed — a worker's stdout is a wire, not a report.
+	// A worker speaks the job protocol on stdout, so this is checked before anything is printed.
 	if args.workerPersistent 'isPoolWorker'
-		// ⚠ A WORKER ASKS NOTHING BEFORE IT STARTS, and that is deliberate rather than an omission. It
-		// used to ask `requireRunnerAvailable` — because a worker is a second door onto the GOLDEN WRITER
-		// and a `maxoncstderr` case reaches that writer without ever launching a binary — and the point
-		// of asking was to PANIC for a target this host cannot execute. That refusal is gone (it threw
-		// away a whole lane's worth of checkable work), so the mint door is guarded where the writing
-		// happens instead: see `SpecTestRunner.writeFragmentFile`'s `mayMint`.
+		// A worker asks nothing before it starts. Minting goldens for a target this host cannot execute
+		// is guarded where the writing happens: see `SpecTestRunner.writeFragmentFile`'s `mayMint`.
 		return runPersistentWorker(specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 	end 'isPoolWorker'
 
-	// ⭐⭐ **GET OUT OF THE WAY BEFORE SATURATING THE MACHINE.** A full suite runs a pool of compiling
-	// subprocesses and will use every core it is given; at NORMAL priority that makes the box unusable
-	// while it runs. Below-normal costs nothing on an idle machine — MEASURED at 82.8 s against 83.1 s on
-	// the bootstrap's suite at a fixed worker count, inside the noise — because a de-prioritised process
-	// still gets every idle core. What it buys is that a foreground process preempts the pool instantly.
+	// Below-normal priority, so a foreground process preempts the pool, which otherwise saturates
+	// every core; a de-prioritised process still gets every idle core.
 	//
-	// ⚠ **AFTER THE WORKER BRANCH, AND THAT IS THE POINT: A WORKER MUST NOT CALL THIS.** Children inherit
-	// the priority class, so the one call here reaches every worker this dispatcher spawns AND every test
-	// binary those workers launch. Calling it again in a worker would be the same fact applied twice.
+	// After the worker branch: children inherit the priority class, so this one call reaches every
+	// worker and every test binary they launch.
 	//
-	// ⚠ The answer is DISCARDED here and that is not a swallowed failure: on this lane the only documented
-	// way to fail is an invalid handle, and the handle is a compile-time constant. What the value is FOR is
-	// `specs/process-background-priority.md`, which asserts it to tell a working lowering from one that
-	// did nothing — a question a caller cannot ask about itself.
+	// The answer is discarded: on this lane the only documented failure is an invalid handle, and the
+	// handle is a compile-time constant. `specs/process-background-priority.md` asserts the value.
 	__Builtins.enterBackgroundPriority()
 
-	// Whether the binaries this run is ABOUT to draw conclusions from are older than the tree they
-	// were built from, asked before anything is selected. A stale binary reports a verdict about code
-	// that is not here — a false red, or the same lie as a false green — so the honest answer is to
-	// run nothing at all. Asked by the PARENT for `requireRunnerAvailable`'s reason, and asked AFTER
-	// the worker branch above so a worker never re-asks it: one fact, reported once, on the process
-	// whose stdout is a report rather than a wire.
-	// The role reads as the SUBJECT of "<role> is STALE" (see `refuseIfStale`), so it is a bare noun
-	// phrase: a trailing relative clause put the verb behind "…it tests is STALE" and the sentence
-	// stopped parsing as English.
+	// A stale binary reports a verdict about code that is not here, so nothing runs. Asked by the
+	// parent only, after the worker branch, so the fact is reported once. The role is a bare noun
+	// phrase because `refuseIfStale` makes it the subject of "<role> is STALE".
 	let freshnessExit = refuseIfStale(harnessExe, role: "the spec-test harness (which is also the compiler it tests)")
 
 	if freshnessExit != 0 'staleBinary'
 		return freshnessExit
 	end 'staleBinary'
 
-	// Whether the RUNNER this target needs is installed, asked once and by the PARENT. A cross-target
-	// run whose runner is missing fails identically for every test, so discovering it per test turns
-	// one fact into hundreds of failures — and inside a worker, into a dead pipe whose real message is
-	// in another process's stderr. The workers inherit the answer by never starting.
-	//
-	// ⚠ A target with NO runner on this host at all is not refused here — it is a lane that compiles
-	// and compares everything and executes nothing, reported per case. See `requireRunnerAvailable`.
+	// Asked once, by the parent: a missing runner fails every test identically, and inside a worker it
+	// surfaces as a dead pipe. A target with no runner on this host at all is not refused here; see
+	// `requireRunnerAvailable`.
 	requireRunnerAvailable(effectiveTarget)
 
-	// ⭐⭐ **THIS TARGET'S SUITE IS NOT RUN HERE AT ALL — IT IS HANDED, WHOLE, TO A COMPILER INSIDE THE
-	// GUEST** (`SpecTestRunner.runSuiteInGuest`), which reaches this same function on the other side and
-	// asks everything below this line for itself, against this very tree: the machine mirrors the
-	// checkout at identical real paths.
+	// An in-guest target's suite is handed whole to a compiler inside the guest
+	// (`SpecTestRunner.runSuiteInGuest`), which reaches this function against the same tree: the
+	// machine mirrors the checkout at identical real paths.
 	//
-	// ⚠ **THE POSITION IS REQUIRED, NOT TIDY.** The tree lock is a FILE at the checkout root, so the
-	// guest contends for the very same one and a host still holding it would refuse its own delegated
-	// run. It is placed after `requireRunnerAvailable` because that probe is the delegation's preflight
-	// — `orb` installed, the machine reachable and able to execute — and after `refuseIfStale`, which
-	// proves the binary that builds the guest's compiler current.
+	// The position is required. The guest contends for the same tree lock file, so the host must not
+	// hold it yet; `requireRunnerAvailable` is the delegation's preflight, and `refuseIfStale` proves
+	// the binary that builds the guest's compiler current.
 	match runStrategyFor(effectiveTarget) 'lane'
 		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 		individually or
@@ -1151,36 +931,23 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 			noneHere then break 'lane'
 	end 'lane'
 
-	// ⭐ **AND THAT A VERDICT NOTHING RAN IS STILL COUNTED, REASONED AND NOT GREEN** — the mapping that
-	// lane rests on, asked in the same slot and for `requireRunnerAvailable`'s reason. It is pure and
-	// costs microseconds; see `SpecVerdictSelfTest` for why a lane whose whole job is reporting
-	// "not run" needs a guard that the reporting cannot quietly become "passed".
+	// That a verdict nothing ran is still counted and not green; see `SpecVerdictSelfTest`.
 	requireSpecVerdictMapping()
 
-	// ⭐ **AND THAT THE `.mxdbg` CONTAINER STILL ROUND-TRIPS**, asked in the same slot and for the same
-	// reason: it is pure, it costs microseconds, and the format is a contract with ANOTHER driver — the
-	// bootstrap reads a sidecar this compiler writes. A layout that has drifted is not a failed read, it
-	// is a silent misread, so it is checked before any case that writes one runs.
+	// The `.mxdbg` format is a contract with the bootstrap, which reads a sidecar this compiler
+	// writes. A drifted layout is a silent misread, so it is checked before any case writes one.
 	requireMxdbgRoundTrip()
 
-	// ⭐ **AND THAT NO TWO ERROR CODES SHARE A NUMBER**, asked in the same slot and for the same
-	// reason: it is pure, it costs microseconds, and a duplicate number is the one registry defect
-	// the language cannot refuse for itself (see `ErrorCodeSelfTest`).
+	// A duplicate error-code number is the one registry defect the language cannot refuse for itself;
+	// see `ErrorCodeSelfTest`.
 	requireErrorCodesUnique()
 
-	// The hand-built ladders' index against the ladders themselves, asked once and by the PARENT for
-	// `requireRunnerAvailable`'s reason. It rides the suite because the suite is the thing that already
-	// runs: a check nobody runs is exactly the drift it exists to catch, one level up (see LadderIndex).
+	// Rides the suite because the suite is what already runs; see `LadderIndex`.
 	requireLadderIndexComplete()
 
-	// ⭐ **AND WHETHER ANY OTHER COMMAND IS ALREADY WRITING THIS TREE.** Two suites share
-	// `<specDir>/.spec-tmp`, so one deletes what the other is compiling — a measured FALSE RED — and a
-	// build running alongside replaces the very binary this run is drawing verdicts from. Asked here,
-	// after every question that costs nothing, so a refusal is instant and before a worker exists.
-	//
-	// ⚠ A HARNESS FIXTURE SUB-RUN TAKES NO LOCK: it is spawned BY a parent suite that holds this same
-	// tree (see `requireHarnessRefusalsFire`), so acquiring here would refuse against its own parent.
-	// The predicate is the one the self-test already uses to recognise itself.
+	// Two suites share `<specDir>/.spec-tmp`, so one would delete what the other is compiling, and a
+	// build running alongside replaces the binary this run draws verdicts from. Asked after every free
+	// check, so a refusal is instant and precedes any worker.
 	let lockExit = acquireSuiteTreeLock(specDir)
 
 	if lockExit != 0 'busyTree'
@@ -1192,18 +959,9 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	return suiteExit
 end 'runSpecTest'
 
-// ⭐⭐ **`maxon fmt` — RE-PRINT MAXON SOURCES IN CANONICAL LAYOUT, IN PLACE.**
-//
-// The expectations under `tests/fmt/fixtures/` are the contract: each stream, each exit code and each
-// resulting tree is pinned there, so a change to this command's OBSERVABLE BEHAVIOUR shows up as a
-// fixture diff. That is why the two refusals below are spelled out here instead of going through this
-// driver's shared `refusedPositionalBeyond` — that helper says `error: unexpected extra argument: <x>`
-// followed by a `Usage:` line, and `fmt` says something else. See `FmtUsageLine`.
-//
-// ⚠ **A `-`-LEADING ARGUMENT NEVER REACHES THE WALK**: `MaxonArgs.parse` records every one of them as
-// a bad option the moment the command is `fmt`, and `main` routes that here rather than to its own
-// gate. The reason is in `FmtCommandName`, and it is not tidiness — a dropped flag makes this command
-// rewrite the working directory.
+// `tests/fmt/fixtures/` pins every stream, exit code and resulting tree, so the refusals below are
+// spelled here rather than through `refusedPositionalBeyond`, whose wording `fmt` does not use. A
+// `-`-leading argument never reaches the walk; see `FmtCommandName`.
 function runFmt(args MaxonArgs) returns ExitCode
 	if not args.anyOption().isEmpty() 'refusedOption'
 		printError("fmt: unrecognized option: {args.anyOption()}\n")
@@ -1223,19 +981,14 @@ function runFmt(args MaxonArgs) returns ExitCode
 	end 'selection'
 end 'runFmt'
 
-// What a `fmt` invocation's one argument resolves to.
 union FmtSelection
-	// The files to rewrite, in the order they will be visited.
 	files(paths FilePathArray)
 
-	// The argument names nothing on disk.
 	notFound
 end 'FmtSelection'
 
-// ⚠ **A NAMED FILE IS FORMATTED WHATEVER IT IS CALLED AND WHEREVER IT SITS** — a `build.maxon`, a
-// `.test` fragment, a file under a `.maxonignore`. Naming a path outright overrides every exclusion,
-// exactly as it does for `maxon build`: the filters belong to the WALK, which only ever sees paths it
-// discovered itself (see `Formatter.collectFormattableFiles`).
+// A named file is formatted whatever it is called and wherever it sits, as `maxon build` does: the
+// exclusions belong to the walk (`Formatter.collectFormattableFiles`).
 function fmtSelection(spelling String) returns FmtSelection
 	if spelling.isEmpty() 'noPathGiven'
 		return FmtSelection.files(collectFormattableFiles(Directory.currentPath()))
@@ -1256,8 +1009,7 @@ function fmtSelection(spelling String) returns FmtSelection
 	return FmtSelection.notFound
 end 'fmtSelection'
 
-// Rewrite each file whose formatted text DIFFERS from what is on disk, and report the two counts. A
-// file that is already canonical is not rewritten: `fmt` over a clean tree must leave every mtime alone.
+// An already-canonical file is not rewritten: `fmt` over a clean tree must leave every mtime alone.
 function formatEachFile(files FilePathArray) returns ExitCode
 	var changed = 0 as FormattedFileCount
 
@@ -1289,14 +1041,11 @@ function refusedFmtPath(spelling String) returns ExitCode
 	return 1
 end 'refusedFmtPath'
 
-// How many files one `fmt` run rewrote.
 typealias FormattedFileCount = int(0 to u64.max)
 
-// What separates the paths `fmt` names back when it refuses more than one.
 let PathListSeparator = ", "
 
-// The spellings joined for a message that has to name them all — a free function because the library
-// carries no `String.join`.
+// A free function because the library carries no `String.join`.
 function joinedWith(values SourcePathSpellingArray, separator String) returns String
 	var out = StringBuilder.create()
 	var first = true
@@ -1313,7 +1062,7 @@ function joinedWith(values SourcePathSpellingArray, separator String) returns St
 	return out.build()
 end 'joinedWith'
 
-// The tree lock for a suite run — taken for every run except a fixture sub-run, whose parent holds it.
+// Taken for every suite run except a fixture sub-run, whose parent suite holds it.
 function acquireSuiteTreeLock(specDir FilePath) returns ExitCode
 	if isHarnessFixtureSubRun(specDir) 'parentHoldsIt'
 		return 0
@@ -1322,24 +1071,18 @@ function acquireSuiteTreeLock(specDir FilePath) returns ExitCode
 	return acquireTreeLock(specDir)
 end 'acquireSuiteTreeLock'
 
-// The suite itself, split out so `runSpecTest` has ONE exit through which the tree lock is released —
-// see `compileAndReport` for why that shape rather than a release at each of five returns.
+// Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
 function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target) returns ExitCode
 	let run = try runSpecPool(harnessExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
 
-	// A run that selected NOTHING is a failure, not a pass. A mistyped `--filter`
-	// would otherwise report "0 passed, 0 failed" and exit 0 — a green suite that
-	// tested nothing, which is the most expensive kind of lie a test runner can
-	// tell. It is worse still under `--update-required`, where an empty selection
-	// silently regenerates no goldens while looking like it did the work.
+	// A run that selected nothing fails: a mistyped `--filter` would otherwise exit 0 having tested
+	// nothing, and under `--update-required` look as though it regenerated goldens.
 	if run.results.count() == 0 'selectedNothing'
-		// ⚠ **ON THIS PATH THE CENSUS COMES BEFORE THE VERDICT LINE, AND ONLY ON THIS PATH**, because here
-		// it is the only thing that can explain it. A default `--filter=http-client.get` selects nothing at
-		// all: every case it named reaches the public internet. "no tests selected" on its own states the
-		// consequence and hides the cause.
+		// Only here does the exclusion census precede the error, because it may be the only explanation:
+		// a default run's `--filter=http-client.get` selects nothing but live-network cases.
 		reportExclusions(run.excluded, effectiveTarget: effectiveTarget)
 
 		printError("error: no tests selected{filterSuffix(args.filter)}\n")
@@ -1348,43 +1091,31 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 
 	let testsExit = reportResults(run.results)
 
-	// ⭐ WHAT THIS RUN NEVER EVEN TRIED — the live-network cases and the ones whose instrument does not
-	// reach this lane, named and counted. It heads the "not run" family below because these are the ones
-	// nothing about the TARGET prevented: a reader who is
-	// not told sees a green column over a claim nobody exercised. It sits UNDER the verdicts rather than
-	// above them for `reportTargetSkips`'s reason — a note printed ahead of a few thousand report lines
-	// has scrolled away by the time the reader reaches the summary it qualifies.
+	// Under the verdicts rather than above them: a note printed ahead of thousands of report lines has
+	// scrolled away by the summary it qualifies. Unannounced, a green column hides claims nobody
+	// exercised.
 	reportExclusions(run.excluded, effectiveTarget: effectiveTarget)
 
-	// ⭐ WHAT THIS RUN DID NOT RUN, AND WHY — immediately under the verdicts, because it is a statement
-	// about the TESTS and must not sit below the two reports that are about the TREE. A skip is the one
-	// outcome that can look like coverage without being any, so it is named, counted and attributed to
-	// the target here rather than being left to the reader to notice a missing line.
+	// Immediately under the verdicts and above the two reports about the tree: a skip can look like
+	// coverage without being any.
 	reportTargetSkips(run.results, effectiveTarget: effectiveTarget)
 
-	// ⭐ AND WHAT THIS HOST COULD NOT EXECUTE, in the same slot and for the same reason — the other way
-	// a case can be counted without having been verified. One sentence for the whole lane, because the
-	// reason is the (target, host) pair rather than anything about a case.
+	// One sentence for the whole lane, because the reason is the (target, host) pair.
 	reportUnrunHere(tallyResults(run.results), effectiveTarget: effectiveTarget)
 
-	// AFTER the summary and BEFORE the exit branches, so a red run reports its cost too: a suite that
-	// went red because something got dramatically slower is exactly when the number is worth reading.
-	// STDERR, because stdout is the report and must stay byte-identical between worker counts — see
-	// `SuiteCpuTally.reportLine`, which is the only place this line is spelled.
+	// After the summary and before the exit branches, so a red run reports its cost too. Stderr,
+	// because stdout must stay byte-identical between worker counts; `SuiteCpuTally.reportLine` spells
+	// the line.
 	printError("{run.cpu.reportLine(run.poolSize)}\n")
 
-	// ⚖ **GOLDENS THAT CONTRADICT THE COMPILER — REPORTED, NEVER JUDGED**, on the same ruling as the census
-	// below and in the same slot, because both are facts about the TREE rather than about any test. It is
-	// that census's missing direction: it finds a reference nothing READS, this finds one that IS read and
-	// disagrees. See `SpecTestRunner.reportGoldenDrift` for why nothing else in this tree can.
+	// Golden drift is reported, never judged: this finds a golden that is read and disagrees. See
+	// `SpecTestRunner.reportGoldenDrift`.
 	reportGoldenDrift(run.results)
 
-	// ⚖ **GOLDENS NOTHING COMPARES — REPORTED, NEVER JUDGED** (user, 2026-08-02: *"the goldens are
-	// NOT supposed to be a gate, they are just for reference"*). It comes AFTER the verdicts and the
-	// summary, on stderr, because it is a fact about the TREE rather than about any test and must never
-	// displace the reason a test failed. A `.test` whose case was renamed away is read by nothing and
-	// shows in no diff, so only an enumeration can find it — see `GoldenCensus`. Asked on every run,
-	// filtered included: the answer is read out of the spec text, not out of what this run executed.
+	// Goldens nothing compares, reported, never judged: goldens are reference, not a gate. On stderr
+	// and last, so it never displaces the reason a test failed. A `.test` whose case was renamed away
+	// shows in no diff, so only an enumeration finds it (`GoldenCensus`). Asked on filtered runs too,
+	// because the answer comes from the spec text.
 	reportUncomparedGoldens(specDir, effectiveTarget: effectiveTarget)
 
 	if testsExit != 0 'someTestFailed'
@@ -1413,24 +1144,11 @@ function filterSuffix(filter String) returns String
 	return " matching --filter={filter}"
 end 'filterSuffix'
 
-// Resolve the spec directory: an explicit positional argument wins; otherwise
-// the default `specs`.
-//
-// ⭐⭐ **THE ANSWER IS ABSOLUTE WHICHEVER WAY IT WAS SPELLED, AND SINCE R4.8 THAT IS A CORRECTNESS
-// REQUIREMENT RATHER THAN TIDINESS.** Every path this run computes hangs off this one — the staged
-// source, the `-o` output base, the exe that gets SPAWNED (`SpecTestRunner.spawnOneRun`, or the batch
-// script `runWslBatch` writes) — and that spawn
-// now names its own working directory (`specRunWorkingDir`, `<checkoutRoot>/temp/`). A path relative to
-// the HARNESS's cwd handed to a child that no longer has that cwd is a path with two possible meanings,
-// and which one the OS picks is a PLATFORM detail: Windows resolves a partial `lpApplicationName`
-// against the CALLING process's directory (so it happens to work), while the arm64/macOS runtime does
-// `posix_spawn_file_actions_addchdir_np` and then `posix_spawnp`, which resolves it against the NEW one
-// (so it does not). A path that survives the crossing is the only kind this harness may hand out.
-//
-// ⚠ The default branch was ALREADY absolute (`Directory.currentPath().join(…)`) and the explicit branch
-// was not — one rule written twice, agreeing only because nothing in-tree passed a positional argument
-// except `HarnessSelfTest`, which passes a RELATIVE one. Both branches now go through the same
-// `resolve`, which is `join` for a relative spelling and the identity for an absolute one.
+// Absolute whichever way it was spelled, and that is a correctness requirement: every path the run
+// computes hangs off it, and the spawned test exe runs in `specRunWorkingDir`. A relative path
+// means different things across that crossing per platform — Windows resolves `lpApplicationName`
+// against the calling process's directory, while arm64-macOS's `posix_spawnp` after
+// `posix_spawn_file_actions_addchdir_np` resolves it against the new one.
 function resolveSpecDir(args MaxonArgs) returns FilePath throws FilePathError
 	// Bind the FilePath to a local first: a bare String constant is ambiguous between the
 	// String/FilePath overloads, and an inline `try` expression in an argument position does not
@@ -1439,8 +1157,6 @@ function resolveSpecDir(args MaxonArgs) returns FilePath throws FilePathError
 	return spelled.resolve(Directory.currentPath())
 end 'resolveSpecDir'
 
-// The spec directory AS TYPED — the positional argument, or the default when there was none. Split out
-// so the "make it absolute" rule above reads once instead of once per branch.
 function specDirSpelling(args MaxonArgs) returns String
 	let spelled = args.solePositional()
 
@@ -1451,21 +1167,10 @@ function specDirSpelling(args MaxonArgs) returns String
 	return spelled
 end 'specDirSpelling'
 
-// ⭐ **THE COMMANDS THAT TAKE AT MOST ONE POSITIONAL REFUSE A SECOND, rather than obeying the first
-// and dropping the rest — TRUE means it refused, and printed why.** `build` is the one command that
-// reads the whole list (A3m); for every other, a second positional is a command line the driver only
-// partly understood, and `main`'s `badOption` gate exists because proceeding on one of those is the
-// failure a caller can neither see nor recover from. An unrecognized FLAG was already refused there;
-// a second bare word was not, so `spec-test specs specs` ran the first directory and said
-// nothing at all about the second.
-// ⚠ **`allowed` IS A COUNT AND NOT A BOOL, BECAUSE ONE COMMAND ALLOWS NONE.** `build`, `spec-test` and
-// `verify-warm-rebuild` each read ONE positional and must refuse a second; `scale-test` reads NONE, so
-// for it the FIRST is already the typo — measured, it ran the whole ladder for `scale-test foo` and
-// never mentioned `foo`. A second copy of these two lines under a different predicate is how that
-// message drifts, so the predicate is the parameter and the message stays here.
-//
-// Exported for `Testing/ScaleTestRunner`, which owns `scale-test`'s entry point the way this file owns
-// the other three.
+// True when it refused, having printed why. A command reading at most `allowed` positionals refuses
+// the next rather than obeying the first and dropping the rest: that is a command line the driver
+// only partly understood. `allowed` is a count because some commands read none, and for them the
+// first positional is already the typo. `module` for `Testing/ScaleTestRunner`.
 module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount, usage String) returns bool
 	if args.paths.count() <= allowed 'withinBudget'
 		return false
@@ -1477,16 +1182,12 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
 	return true
 end 'refusedPositionalBeyond'
 
-// How many positional arguments a command reads. Two today — one, or none.
 typealias PositionalCount = int(0 to 1)
 
-// ⛔ **A COMMAND'S STREAMS BELONG TO ITS SUBJECT, NOT TO THE BUILD BEHIND IT.** The default log level is
-// INFO, at which every compile announces the bytes it wrote — noise on `test`'s stdout, which a reader is
-// about to diff against a fixture, and noise on `run`'s two streams, which are the PROGRAM's. Silenced
-// unless the caller asked for logging, which is the one thing that says they want the build's voice back.
-//
-// `module` because both commands live below this file — `Testing/` and `Run/` — and a second copy of it in
-// either is a rule two commands are free to answer differently.
+// A command's streams belong to its subject: at the default INFO level every compile announces the
+// bytes it wrote, which is noise on `test`'s fixture-compared stdout and on `run`'s program
+// streams. Silenced unless the caller asked for logging. `module` so `Testing/` and `Run/` share
+// one rule.
 module function quietTheBuildChatter(args MaxonArgs)
 	if args.logOverridden 'theCallerAskedForLogging'
 		return
@@ -1495,24 +1196,17 @@ module function quietTheBuildChatter(args MaxonArgs)
 	setLogLevel(LogLevel.ERROR)
 end 'quietTheBuildChatter'
 
-// ⭐ **WHAT `run` AND `upgrade` EXIT WITH WHEN THE FAILURE IS THEIR OWN** — the child was never reached,
-// or left no exit code to forward. Both forward their child's exit code otherwise. `refusedCommandLineExit`
-// answers with this for both words, so a command line `main` refuses and one either command refuses cannot
-// exit differently.
+// What `run` and `upgrade` exit with when the failure is their own; otherwise they forward the
+// child's exit code. `refusedCommandLineExit` uses it for both, so the two refusals cannot exit
+// differently.
 module let OwnFailureExit = 1 as ExitCode
 
-// A signal number a child died on.
 typealias SignalNumber = int(i64.min to i64.max)
 
-// ⭐⭐ **A CHILD WHOSE STDOUT, STDERR AND EXIT CODE ARE THE COMMAND'S OWN** — `run`'s program and
-// `upgrade`'s install script. `speaker` opens the only sentences said here, which are about a child that
-// could not report for itself.
+// The child's stdout, stderr and exit code are the command's own (`run`'s program, `upgrade`'s
+// install script). `module` so both commands share one spawn configuration.
 //
-// `module` because both commands live below this file, and a second copy in either is a spawn two commands
-// are free to configure differently.
-//
-// ⚠ **`timeoutMs = 0` IS THE CHILD'S OWN RUNTIME AS THE BUDGET.** A deadline here would kill a
-// long-running child the caller launched deliberately, and nothing here knows what one is.
+// `timeoutMs = 0`: a deadline would kill a long-running child the caller launched deliberately.
 module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, speaker String) returns ExitCode
 	var config = Configuration.create(executable)
 	config.arguments = arguments
@@ -1533,30 +1227,20 @@ module function spawnForwarding(executable Executable, arguments StringArray, en
 	end 'termination'
 end 'spawnForwarding'
 
-// A child killed by a signal has no exit code to forward, so the signal is named and the failure is the
-// command's own rather than a number invented on the child's behalf.
-//
-// ⚠ **NO TARGET'S EMITTED RUNTIME RAISES `signalled`** — `SubprocessRuntime` stores only the `exited` and
-// `timedOut` discriminators — so an abnormally terminated child arrives as `exited` carrying the raw OS
-// status (0xC00000FD for a Windows stack overflow, forwarded verbatim). The arm is what the union owes.
+// A signalled child has no exit code to forward, so the signal is named and the failure is the
+// command's own. No target's runtime raises `signalled` — `SubprocessRuntime` stores only the
+// `exited` and `timedOut` discriminators — so an abnormal termination arrives as `exited` with the
+// raw OS status; the arm is what the union owes.
 function reportSignalled(executable Executable, signal SignalNumber, speaker String) returns ExitCode
 	printError("{speaker}: {executable.displayName()} was killed by signal {signal}\n")
 	return OwnFailureExit
 end 'reportSignalled'
 
-// ⭐⭐ **WHAT A WITHDRAWN OPTION SAYS — one sentence per option this driver once had.**
+// A withdrawn option was understood once and is now impossible, so it owes an explanation an
+// unknown one does not. The `panic` holds this list to `MaxonArgs.parse`'s: a spelling recorded
+// there and unnamed here would be refused with an empty sentence.
 //
-// It is its OWN message and not `badOption`'s because the two are different facts about the reader:
-// an unknown option was never understood and is probably a typo, while a withdrawn one WAS
-// understood and is now structurally impossible. Only the second owes an explanation, and a script
-// carrying the flag needs to be edited rather than re-read.
-//
-// ⛔ **ONE ARM PER WITHDRAWN SPELLING, AND THE `panic` IS WHAT HOLDS THIS LIST TO `MaxonArgs.parse`'s.**
-// A spelling recorded there and unnamed here would be refused with an empty sentence — less than the
-// anonymous `badOption` path says, from the door that exists to say more.
-//
-// ⚠ `command` matters where a command gives the spelling a meaning of its own: after `upgrade`,
-// `--version` asks for a particular release, which the install script installs, not for `maxon version`.
+// `command` matters after `upgrade`, where `--version` asks the install script for a release.
 function withdrawnOptionMessage(option String, command MaxonCommand) returns String
 	if option.startsWith(WithdrawnCompilerFlagPrefix) 'theCompilerFlag'
 		return "error: {WithdrawnCompilerFlagPrefix}= was REMOVED. spec-test compiles every selected test IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one. Run the suite with the binary you mean to test: `<compiler> {SpecTestCommandName}`."
@@ -1573,22 +1257,12 @@ function withdrawnOptionMessage(option String, command MaxonCommand) returns Str
 	panic("withdrawnOptionMessage: '{option}' was recorded as a withdrawn option by `MaxonArgs.parse`, and this is the one place that says what replaced one — a flag recorded there and unnamed here would be refused with an empty sentence")
 end 'withdrawnOptionMessage'
 
-// Print each test's verdict and the summary, returning the process exit code (1
-// iff any test failed). The PASS/FAIL line is built via a match EXPRESSION (both
-// arms yield a real string) so the fail reason is extracted without a sentinel.
+// Golden drift is not in the pass/fail counts: a test whose golden no longer matches still passed,
+// so `0 failed` means the spec tests passed, and drift gets its own line.
 //
-// ⚖ **THESE TWO NUMBERS ARE THE PRODUCT, AND NOTHING ABOUT A GOLDEN IS IN THEM** (user, 2026-08-02:
-// *"the gate is the spec tests passing"*). A test whose committed golden no longer matches what the
-// compiler emits still PASSED — it is counted as one and printed as one. `0 failed` means the spec
-// tests passed, with no qualifications to read past. Drift gets a LINE OF ITS OWN below, which is what
-// lets the report say `0 failed` and `35 drifted` in one breath without either qualifying the other.
-//
-// ⚠ **A CASE THAT DID NOT RUN IS IN NEITHER NUMBER, AND ITS OWN LINE IS WHY THAT IS SAFE.** Counting
-// it as a pass would be a claim nothing supports, and counting it as a failure would redden every
-// cross-target run over a machine limit that is not a defect. The summary line's shape is deliberately
-// untouched — several scripts read `^N passed, M failed` — so each count follows on a line of its own,
-// and the reason behind each is named by its own note on stderr (`reportTargetSkips` names the
-// constructs; `reportUnrunHere` names the host limit, once, because every case shares it).
+// A case that did not run is in neither count; its own line and stderr note say why. The summary
+// line's shape is fixed — scripts read `^N passed, M failed` — so each extra count follows on a
+// line of its own.
 function reportResults(results SpecTestResultArray) returns ExitCode
 	for result in results 'each'
 		print("{verdictLine(result.outcome, label: testLabel(result.specName, testName: result.testName))}\n")
@@ -1597,8 +1271,7 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	let tally = tallyResults(results)
 	print("\n{tally.passed} passed, {tally.failed} failed\n")
 
-	// Silent at zero, which is the host lane and most of every other — the suite's convention for every
-	// trailer, where "no note" means none.
+	// Silent at zero, like every trailer.
 	if tally.skipped > 0 'anySkipped'
 		print("{tally.skipped} skipped — NOT RUN on this target (see the note on stderr for the constructs)\n")
 	end 'anySkipped'
@@ -1607,30 +1280,21 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 		print("{tally.notRunHere} not run here — COMPILED and compared against a committed golden where one exists, but this host cannot execute them (see the note on stderr)\n")
 	end 'anyUnrunnable'
 
-	// How many references were READ, silent at zero like every trailer. `scripts/shared-stdlib-memo-gate.sh`
-	// reads it: a warm-against-cold comparison over fewer programs than it names cannot fail, and without
-	// this line a run that compared nothing is indistinguishable from one that compared everything.
+	// `scripts/shared-stdlib-memo-gate.sh` reads this: without it a run that compared nothing is
+	// indistinguishable from one that compared everything.
 	if tally.compared > 0 'anyCompared'
 		print("{tally.compared} compared against a committed golden\n")
 	end 'anyCompared'
 
-	// ⚖ THE SECOND AXIS, IN THE SAME BREATH AS THE FIRST (see `GoldenDrift`). It sits under the two
-	// not-run lines because it qualifies neither of them: a drifted case is already counted in whichever
-	// column it earned, and this line says only that its committed reference no longer describes what the
-	// compiler emits. The differences are in the stderr trailer, which is where a multi-line report belongs.
+	// Under the not-run lines because it qualifies neither: a drifted case is already counted in its
+	// column. The differences are in the stderr trailer.
 	if tally.drifted > 0 'anyDrifted'
 		print("{goldenDriftSummary(tally.drifted)}\n")
 	end 'anyDrifted'
 
-	// ⛔ **A RUN IN WHICH NOTHING RAN IS A FAILURE, AND IT IS THE SAME FAILURE `runSpecSuite`'s
-	// empty-selection guard refuses one step earlier.** There the filter selected nothing; here
-	// everything it selected was refused by the target or unexecutable on this host. Both print
-	// `0 passed, 0 failed` and would otherwise exit 0 — a green run that tested nothing, which this
-	// runner already calls the most expensive lie it can tell — and the only difference between them is
-	// which side of the compile the emptiness arrived from. It is also the backstop on both not-run
-	// mechanisms: a compiler that started emitting E3104 everywhere, or a lane on which literally every
-	// case needs a runner this host lacks, would vanish the whole suite, and this is the line that
-	// refuses to call that green.
+	// A run in which nothing ran fails, like `runSpecSuite`'s empty selection: here everything
+	// selected was skipped by the target or cannot execute on this host. It is also the backstop
+	// should every case start answering E3104.
 	if tally.provedNothing() 'nothingRan'
 		printError("error: every selected test was SKIPPED or NOT RUN on this host, so this run proved nothing — the notes below name the constructs this target has no implementation for and the binaries this host cannot execute\n")
 		return 1
@@ -1643,15 +1307,9 @@ function reportResults(results SpecTestResultArray) returns ExitCode
 	return 0
 end 'reportResults'
 
-// One test's line in the report. A match EXPRESSION (every arm yields a real string) so the fail
-// reason is extracted without a sentinel; split out of the loop above so the printed text and the
-// tally beside it are not one `match` doing two jobs.
-//
-// A SKIP prints no reason: the reason is the compiler's E3104 diagnostic, which names an absolute
-// scratch path and is genuinely multi-line, and it is printed once per case in the stderr census
-// instead of being crammed onto a verdict line. A NOTRUN prints none either, for the opposite reason —
-// every case on such a lane shares ONE reason, so it is stated once in the trailer instead of several
-// thousand times here.
+// A SKIP prints no reason: E3104's diagnostic names a scratch path and spans lines, so the stderr
+// census prints it once per case. A NOTRUN prints none because every case on such a lane shares one
+// reason, stated once in the trailer.
 module function verdictLine(outcome TestOutcome, label String) returns String
 	return match outcome 'verdict'
 		pass gives "PASS {label}"
@@ -1661,9 +1319,8 @@ module function verdictLine(outcome TestOutcome, label String) returns String
 	end 'verdict'
 end 'verdictLine'
 
-// The FIRST bad option wins. A command line can be wrong in several ways at once, and reporting the
-// last one found would point at whichever flag happened to be typed rightmost rather than at the one
-// the reader would look for first.
+// The first bad option wins, so the report points at the flag a reader would look at first rather
+// than the rightmost.
 function firstBadOption(current String, arg String) returns String
 	if current.isEmpty() 'firstBad'
 		return arg
@@ -1672,38 +1329,22 @@ function firstBadOption(current String, arg String) returns String
 	return current
 end 'firstBadOption'
 
-// ⭐⭐ **THE USER-FACING MESSAGE FOR A FILE/IO `CompileError`, WRITTEN THROUGH THE ONE DIAGNOSTIC
-// SINK — so a caller compiling IN PROCESS reads exactly what a command line would have printed.**
+// Written through the diagnostic sink, so an in-process caller capturing it
+// (`SpecTestRunner.compileOneTest`) reads exactly what a command line prints — including the arms
+// that never reach `project.diagnostics`.
 //
-// ⛔ **IT USED TO CALL `printError` DIRECTLY, AND THAT WAS THE ONE GAP IN THE CAPTURE.**
-// `Diagnostics.emitDiagnosticLine`'s header recorded it as an outstanding obligation: every
-// `Diagnostic` went through the sink, but the SIX `CompileError` arms that never reach
-// `project.diagnostics` at all — `fileNotFound`, `directoryNotFound`, `noSourceFiles`, `readError`,
-// `noCommonRoot`, `stdlibNotFound`, `runtimeNotFound` — were printed here, past it. So a capture was exact for a REFUSED compile and
-// EMPTY for a build that died on a missing file. `SpecTestRunner.compileOneTest` calls this INSIDE its
-// capture, which is what closes that gap and why there is still only one renderer of these sentences.
+// The `compileError` arm is silent: its diagnostics were already emitted through the same sink, so
+// a failing build's stderr is exactly those lines (the `maxoncstderr` spec contract).
 //
-// The `compileError` arm is SILENT: its diagnostics were already emitted by the pipeline, through this
-// same sink, so a failing build says exactly those diagnostic lines and nothing else (the
-// `maxoncstderr` spec contract).
-//
-// ⚠ THE TRAILING NEWLINE IS THE SINK'S NOW, NOT EACH ARM'S. `emitDiagnosticLine` terminates what it is
-// handed (one call is one diagnostic), so an arm that kept its own would emit a blank line after every
-// message.
-//
-// Shared by every command's failure path so the mapping lives in one place — including the scale-test
-// runner, which is why it is exported.
+// `emitDiagnosticLine` terminates each line, so no arm carries its own newline.
 module function reportCompileError(e CompileError)
 	match e 'report'
 		fileNotFound(p) then emitDiagnosticLine("error: file not found: {p}")
 		directoryNotFound(p) then emitDiagnosticLine("error: directory not found: {p}")
 		noSourceFiles(r) then emitDiagnosticLine("error: no source files under {r}")
 
-		// NOT "share no directory": that is true of two drives and FALSE of two top-level directories on
-		// one, whose common directory is the drive root — a directory `FilePath` cannot hold, because
-		// `parent` cuts the separator off (see `Compiler.commonAncestorOf`). The sentence names what the
-		// compiler can and cannot do rather than asserting something about the filesystem that is wrong
-		// half the time, and the remedy works for both causes.
+		// Not "share no directory": two top-level directories on one drive share the drive root, which a
+		// `FilePath` cannot hold (see `Compiler.commonAncestorOf`).
 		noCommonRoot(first, other) then emitDiagnosticLine("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
 		readError(p) then emitDiagnosticLine("error: could not read {p}")
 		stdlibNotFound then emitDiagnosticLine("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
@@ -1712,13 +1353,11 @@ module function reportCompileError(e CompileError)
 	end 'report'
 end 'reportCompileError'
 
-// ⭐⭐ **WHAT A REFUSED COMMAND LINE EXITS WITH.** For `test` it is 2 — "the run could not happen" —
-// because that command documents 0/1/2 as three different answers and CI branches on the difference
-// between "a test failed" (1) and "the harness never ran" (2). Every other command has only "it ran"
-// and "it did not", and their 1 is load-bearing for callers that already read it.
+// `test` exits 2 on a refused command line because it documents 0/1/2 as three answers and CI
+// branches on "a test failed" versus "the harness never ran". Every other command's 1 is
+// load-bearing for callers that already read it.
 //
-// EXHAUSTIVE and with no default arm, so a command added tomorrow has to state which of the two it is
-// rather than inheriting an answer nobody chose for it.
+// Exhaustive with no default arm, so a new command has to state which it is.
 function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 	return match command 'whichCommand'
 		test gives NothingRanExitCode
@@ -1742,21 +1381,15 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 	end 'whichCommand'
 end 'refusedCommandLineExit'
 
-// ⭐⭐ **THE ONE LINE THAT SAYS WHICH BINARY THIS IS.** `version` prints it and the no-argument overview
-// leads with it, so a caller comparing what the two told them cannot find two answers. It carries the
-// host triple because "which maxon is this" is not fully answered by a number when four targets ship
-// under one name.
+// Shared by `version` and the no-argument overview, so the two cannot give different answers. It
+// carries the host triple because several targets ship under one name.
 function versionLine() returns String
 	return "maxon {CompilerVersion} ({CompilerCommit} {CompilerCommitDate}) ({targetToString(detectHostTarget())})"
 end 'versionLine'
 
-// ⭐ **ONE LINE, TO STDOUT, EXIT 0.** A version is read by scripts far more often than by people —
-// the release workflow compares it against the tag, and a packager scrapes it — so it goes to stdout
-// where a pipe can reach it.
-//
-// ⚠ **IT TAKES ONE OPTION AND REFUSES EVERY OTHER**, including the ones this driver implements
-// elsewhere. It speaks a protocol on stdout, so a flag honoured silently would corrupt a session no
-// caller can inspect; the refusal goes to stderr before the first frame.
+// It refuses every option but `--dev`, including ones this driver implements elsewhere: it speaks a
+// protocol on stdout, so a flag honoured silently would corrupt a session no caller can inspect.
+// The refusal goes to stderr before the first frame.
 function runMcpServerCommand(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {McpServerCommandName} [{DevFlag}]") 'unexpectedArgument'
 		return 1
@@ -1772,8 +1405,9 @@ function runMcpServerCommand(args MaxonArgs) returns ExitCode
 	return runMcpServer(args.devMode)
 end 'runMcpServerCommand'
 
-// ⚠ It reads NO positional, so the FIRST one is already the typo `refusedPositionalBeyond` exists to
-// name — `maxon version 1.2.3` must not print an answer that ignores half of what was typed.
+// To stdout, because scripts read it (the release workflow compares it against the tag). A
+// positional is refused: `maxon version 1.2.3` must not print an answer that ignores half of what
+// was typed.
 function runVersion(args MaxonArgs) returns ExitCode
 	if refusedPositionalBeyond(args, allowed: 0, usage: "maxon {VersionCommandName}") 'unexpectedArgument'
 		return 1
@@ -1783,82 +1417,62 @@ function runVersion(args MaxonArgs) returns ExitCode
 	return 0
 end 'runVersion'
 
-// ⛔ Asking a `MaxonCommand` for a fact only a real command has, when the value is `unknown` — which is
-// the ABSENCE of a command and carries no word, no arguments and no description. Every walk over the
-// roster goes through `namedCommands`, which leaves it out, so reaching this is a caller that did not.
+// `unknown` is the absence of a command and has no reference. Every roster walk goes through
+// `namedCommands`, which leaves it out, so reaching this is a caller that did not.
 enum HelpReferenceError implements Error
 	notACommand
 end 'HelpReferenceError'
 
 typealias MaxonCommandArray = Array with MaxonCommand
 
-// ⚠ **IT ENDS IN A COLON, AND A COMMAND LABEL NEVER DOES.** That is what tells a heading apart from a
-// section in `maxon help`, where both sit at the left margin — `tests/cli` reads the roster off exactly
-// that difference.
+// Ends in a colon, which no command label does: `tests/cli` tells a heading from a section by that.
 let CompilerWorkHeading = "Commands for working on the compiler itself:"
 
-// How the reference's prose is written: paragraphs separated by a newline, words by a space. Named
-// because `printHelpEntry` splits on both and its wrap arithmetic counts one of them.
 let ParagraphSeparator = "\n"
 let WordSeparator = " "
 
-// ⭐⭐ **WHO A COMMAND IS FOR, AND THEREFORE WHERE IT IS LISTED.** The whole roster is more than a
-// reader wanting to compile a program should have to read past, and four of its commands are about THIS
-// COMPILER rather than about any program it builds — a suite over `specs/`, a scaling ladder, and the
-// two spine gates. They are listed by `maxon help` and left out of what `maxon` prints.
-//
-// ⛔ **HIDDEN FROM A LISTING IS NOT HIDDEN FROM THE PARSER.** `commandFromWord` walks every named
-// command, so a command left off the short list is typed, parsed and run exactly as before, and
-// `maxon help <it>` documents it. A door that a listing does not mention is still a door; a door that
-// is not there is a feature withdrawn, and this is not that.
+// Decides where a command is listed: `maxon` lists only `usingTheCompiler`, `maxon help` lists
+// both. A command left off a listing is still parsed and run: `commandFromWord` walks every named
+// command.
 enum CommandAudience
-	// Someone USING this compiler on a program of their own. What `maxon` with no arguments lists.
 	usingTheCompiler
 
-	// Someone WORKING ON this compiler.
 	workingOnTheCompiler
 end 'CommandAudience'
 
-// One command's whole entry in the reference. The five facts are held together because they are read
-// together, and a second table of any one of them would be a roster that rots: `commandFromWord` decides
-// what the PARSER accepts by reading `word` back out of here.
+// Held together so no field has a second table: `commandFromWord` decides what the parser accepts
+// by reading `word` back out of here.
 type CommandReference
-	// The word that selects the command.
 	export var word as String
 
-	// Its argument sketch, or empty for a command that takes none.
+	// Empty for a command that takes none.
 	export var arguments as String
 
-	// ONE line, and the whole of what `maxon` with no arguments says about this command.
+	// One line, and all that `maxon` with no arguments says about the command.
 	export var summary as String
 
-	// The rest of the prose, or empty when the summary says everything. Paragraphs are separated by
-	// `ParagraphSeparator`; nothing here is wrapped or padded by hand.
+	// Empty when the summary says everything. Paragraphs are separated by `ParagraphSeparator`;
+	// nothing is wrapped by hand.
 	export var detail as String
 
-	// Who it is for, which decides which listings show it. See `CommandAudience`.
 	export var audience as CommandAudience
 
 	export static function create(word String, arguments String, summary String, detail String, audience CommandAudience) returns CommandReference
 		return Self{word: word, arguments: arguments, summary: summary, detail: detail, audience: audience}
 	end 'create'
 
-	// What the reader types, which is the label every listing shows.
 	export function label() returns String
 		return self.word if self.arguments.isEmpty() else "{self.word} {self.arguments}"
 	end 'label'
 
-	// Everything the long forms print, as one piece of prose.
 	export function description() returns String
 		return self.summary if self.detail.isEmpty() else "{self.summary} {self.detail}"
 	end 'description'
 end 'CommandReference'
 
-// ⭐⭐ **THE COMMAND ROSTER, AND THE ONLY ONE.** Every printer below walks it, and `MaxonArgs.parse`
-// selects the command through `commandFromWord`, which reads it backwards. So a command added to
-// `MaxonCommand` does not compile until it says what it is — the match is exhaustive with no default
-// arm — and cannot be documented under a word the parser does not accept, nor accepted under a word the
-// reference never prints.
+// The one command roster: every printer walks it and `commandFromWord` reads it backwards. The
+// match is exhaustive with no default arm, so a new `MaxonCommand` does not compile until it is
+// documented, and no word can be accepted without being printed.
 function commandReference(command MaxonCommand) returns CommandReference throws HelpReferenceError
 	return match command 'whichCommand'
 		build gives CommandReference.create(BuildSubcommandName, arguments: "<file|directory>...", summary: "Compile a Maxon program to an executable.", detail: "Several paths are compiled as ONE program, in the order given.", audience: CommandAudience.usingTheCompiler)
@@ -1882,12 +1496,8 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 	end 'whichCommand'
 end 'commandReference'
 
-// The options this reference lists, in the order it lists them.
-//
-// ⚠ **NOT EVERY FLAG THE PARSER ACCEPTS.** `--worker-persistent` is how a pool worker is told that it is
-// one — set by the parent on the command line it spawns, never typed by a person — and a flag nobody can
-// usefully type is not part of the surface this describes. It is PARSED all the same, because an
-// unrecognized flag aborts the run and a worker that could not read its own would fail to start.
+// Declaration order is listing order. `--worker-persistent` is absent: the parent sets it on a
+// worker's command line and nobody usefully types it, though it is still parsed.
 enum HelpOption
 	output
 	emitIr
@@ -1895,6 +1505,8 @@ enum HelpOption
 	target
 	noDebugInfo
 	coverageInstrumentation
+	asyncTrace
+	debugStream
 	define
 	metrics
 	specFilter
@@ -1918,9 +1530,8 @@ enum HelpOption
 	devMode
 end 'HelpOption'
 
-// One option's entry. ⭐ **THE COMMANDS ARE A FIELD, NOT A `(build, test)` PREFIX ON THE SENTENCE**,
-// because they decide where the option is PRINTED: it is listed under each command that reads it, so
-// `maxon help <command>` is that command's whole surface and a reader never filters a global list.
+// The commands are a field so the option is printed under each command that reads it, making `maxon
+// help <command>` that command's whole surface.
 type OptionReference
 	export var spelling as String
 	export var description as String
@@ -1931,9 +1542,8 @@ type OptionReference
 	end 'create'
 end 'OptionReference'
 
-// ⭐ **EVERY SPELLING IS THE CONSTANT THE PARSER MATCHES**, never a copy of it typed here: a flag renamed
-// at its declaration is renamed in the reference by the same edit, and cannot go on being documented
-// under a name nothing accepts.
+// Every spelling is the constant the parser matches, so a renamed flag is renamed here by the same
+// edit.
 function optionReference(option HelpOption) returns OptionReference
 	return match option 'whichOption'
 		output gives OptionReference.create("{OutputFlagName}, {OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build])
@@ -1942,6 +1552,8 @@ function optionReference(option HelpOption) returns OptionReference
 		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {supportedTargetList()} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.specTest, MaxonCommand.test])
 		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build])
 		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build])
+		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build])
+		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build])
 		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build])
 		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build])
 		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern>. A bare spec name selects that whole spec.", commands: [MaxonCommand.specTest])
@@ -1966,8 +1578,7 @@ function optionReference(option HelpOption) returns OptionReference
 	end 'whichOption'
 end 'optionReference'
 
-// The commands in declaration order, with `unknown` — which names none — left out. Every walk over the
-// roster comes through here, so the skip is stated ONCE and a printer cannot forget it.
+// Every roster walk comes through here, so `unknown` is skipped in one place.
 function namedCommands() returns MaxonCommandArray
 	var named = MaxonCommandArray.create()
 
@@ -1980,8 +1591,7 @@ function namedCommands() returns MaxonCommandArray
 	return named
 end 'namedCommands'
 
-// The commands written for one audience, still in declaration order — which is alphabetical, so a
-// filtered run is sorted for free and no listing has to sort anything.
+// Declaration order is alphabetical, so a filtered run needs no sort.
 function commandsFor(audience CommandAudience) returns MaxonCommandArray
 	var selected = MaxonCommandArray.create()
 
@@ -1996,11 +1606,8 @@ function commandsFor(audience CommandAudience) returns MaxonCommandArray
 	return selected
 end 'commandsFor'
 
-// The command a word selects — the roster read backwards, and the whole of how `MaxonArgs.parse` decides
-// that an argument is a command rather than a path.
-//
-// ⭐ `unknown` is this enum's own name for "no command", so returning it is the ANSWER and not a
-// sentinel: it is exactly the value the parser leaves the field at when no command word was typed.
+// How `MaxonArgs.parse` tells a command word from a path. `unknown` is this enum's name for no
+// command, so returning it is the answer, not a sentinel.
 function commandFromWord(word String) returns MaxonCommand
 	for command in namedCommands() 'eachCommand'
 		let reference = try commandReference(command) otherwise panic("commandFromWord: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
@@ -2013,11 +1620,8 @@ function commandFromWord(word String) returns MaxonCommand
 	return MaxonCommand.unknown
 end 'commandFromWord'
 
-// ⭐⭐ **NOTHING IN THIS REFERENCE IS LAID OUT BY HAND.** One label column and one prose width, and every
-// row — command or option — is wrapped from them. A hand-padded table goes ragged the day a label
-// outgrows the column and nothing says so, and the labels here are DERIVED: one names the colour modes,
-// another the supported targets, and both grow. An overlong label takes its own line and its prose
-// starts square underneath.
+// Every row is wrapped from one label column and one prose width, because labels are derived (the
+// colour modes, the supported targets) and grow. An overlong label takes its own line.
 function printHelpEntry(label String, text String)
 	if text.trim().isEmpty() 'noProse'
 		panic("printHelpEntry: '{label}' has no description, and every command and option in the reference owes the reader one")
@@ -2026,9 +1630,9 @@ function printHelpEntry(label String, text String)
 	let indent = padRight("", width: UsageEntryColumnWidth)
 	var firstPrefix = padRight(label, width: UsageEntryColumnWidth)
 
-	// ⚠ BYTES here and GRAPHEMES in the wrap, and the difference is not an oversight: this asks the same
-	// question `padRight` answered on the line above, and that one counts bytes. The prose asks a
-	// different question — how wide the line LOOKS — where an em-dash is one column and three bytes.
+	// Bytes here and graphemes in the wrap, deliberately: this asks `padRight`'s question, which
+	// counts bytes, while the wrap asks how wide the line looks, where an em-dash is one column and
+	// three bytes.
 	if label.byteLength() >= UsageEntryColumnWidth 'theLabelFillsItsColumn'
 		print("{label}\n")
 		firstPrefix = indent.clone()
@@ -2037,9 +1641,8 @@ function printHelpEntry(label String, text String)
 	printWrappedProse(text, firstPrefix: firstPrefix, indent: indent)
 end 'printHelpEntry'
 
-// Prose broken to `UsageLineWidth` columns, every line after the first opened with `indent` — which is
-// also what sets the measure, since an indented line has that much less room. Paragraphs are separated
-// by `ParagraphSeparator` and each starts a line of its own.
+// `indent` also sets the measure, since an indented line has that much less room. Each paragraph
+// starts a line of its own.
 function printWrappedProse(text String, firstPrefix String, indent String)
 	let width = UsageLineWidth - indent.count()
 	var prefix = firstPrefix
@@ -2070,9 +1673,8 @@ function printWrappedProse(text String, firstPrefix String, indent String)
 	end 'eachParagraph'
 end 'printWrappedProse'
 
-// ⭐ **WHAT `maxon` WITH NO ARGUMENTS SAYS**: which binary this is, that it is a preview, and one line per
-// command. It is the answer to the only question a caller with nothing to go on can ask, so it is SHORT —
-// the reference itself is one of the commands listed, and the footer names it.
+// Short, because it answers the only question a caller with nothing to go on can ask; the full
+// reference is one of the commands listed.
 function printOverview()
 	printVersionHeader()
 	print("\n")
@@ -2082,14 +1684,11 @@ end 'printOverview'
 // ASCII only, because a Windows console renders stdout in its own code page.
 let EarlyPreviewNotice = "warning: Maxon is an early preview. The language, standard library and tools may change incompatibly between releases."
 
-// Which compiler this is, and that it is a preview: what `build` and `maxon` alone open with.
 function printVersionHeader()
 	print("{versionLine()}\n{EarlyPreviewNotice}\n")
 end 'printVersionHeader'
 
-// The list alone — what the overview prints under the version line, and what every refusal in `main`
-// prints under its error. A refusal owes the reader the way back, and the way back is what this binary
-// does plus the word that opens the rest of it.
+// Also printed under every refusal in `main`: a refusal owes the reader the way back.
 function printCommandList()
 	print("Usage: maxon <command> [options]\n")
 	print("\n")
@@ -2102,13 +1701,11 @@ function printCommandList()
 
 	print("\n")
 
-	// ⚠ **IT SAYS THAT SOMETHING IS NOT SHOWN.** A short list that quietly omitted the commands for
-	// working on the compiler would leave a reader who needs `{SpecTestCommandName}` with no reason to
-	// look further; naming the omission is what makes the list short rather than incomplete.
+	// Names the omission, so a reader who needs `spec-test` knows to look further: the list is short,
+	// not incomplete.
 	printWrappedProse("Run `maxon {HelpCommandName}` for every command's options (including the ones for working on the compiler itself), or `maxon {HelpCommandName} <command>` for one command's.", firstPrefix: "", indent: "")
 end 'printCommandList'
 
-// One command's whole reference: what it does, and every option it reads, indented under it.
 function printCommandSection(command MaxonCommand)
 	let reference = try commandReference(command) otherwise panic("printCommandSection: `unknown` names no command, and every caller resolves a word to a real one first")
 	printHelpEntry(reference.label(), text: reference.description())
@@ -2122,16 +1719,14 @@ function printCommandSection(command MaxonCommand)
 	end 'eachOption'
 end 'printCommandSection'
 
-// The whole reference: every command, with its options under it, the two audiences in two runs. NOTHING
-// is left out here — this is where a command the short list does not show is found.
+// Nothing is left out here: this is where a command the short list omits is found.
 function printFullReference()
 	print("Usage: maxon <command> [options]\n")
 	printReferenceRun(CommandAudience.usingTheCompiler, heading: "")
 	printReferenceRun(CommandAudience.workingOnTheCompiler, heading: CompilerWorkHeading)
 end 'printFullReference'
 
-// One audience's run of sections, under its heading. An EMPTY heading prints none, which is the first
-// run: it is what this binary is for, and a heading over it would be labelling the default.
+// An empty heading prints none: the first run is what this binary is for.
 function printReferenceRun(audience CommandAudience, heading String)
 	if not heading.isEmpty() 'itIsHeaded'
 		print("\n")
@@ -2148,13 +1743,9 @@ function helpUsageLine() returns String
 	return "maxon {HelpCommandName} [<command>]"
 end 'helpUsageLine'
 
-// ⭐⭐ **`maxon help [<command>]` — THE REFERENCE, AND THE ONLY DOOR ONTO IT.** A command rather than a
-// flag, so that it is listed with everything else this binary does and a caller who has only ever run
-// `maxon` has already been told that it exists.
-//
-// ⚠ **IT TAKES NO OPTIONS, AND REFUSES THROUGH `anyOption` RATHER THAN `badOption`** — the door `fmt`
-// uses, and for one half of its reason: `badOption` never sees a flag this driver DOES implement, so
-// `maxon --emit-ir help` would otherwise print the reference as though the flag had meant something.
+// Refuses options through `anyOption` rather than `badOption`, which never sees a flag this driver
+// implements: `maxon --emit-ir help` would otherwise print the reference as though the flag meant
+// something.
 function runHelp(args MaxonArgs) returns ExitCode
 	if not args.anyOption().isEmpty() 'refusedOption'
 		printError("error: {HelpCommandName} takes no options: {args.anyOption()}\n")
@@ -2185,10 +1776,9 @@ function runHelp(args MaxonArgs) returns ExitCode
 	return 0
 end 'runHelp'
 
-// ⭐⭐ **NOTHING TYPED IS A QUESTION, NOT AN ERROR.** `maxon` alone is what a caller runs to find out what
-// this binary is, so it ANSWERS — the version and the command list — and exits 0. A word that names no
-// command, or an option with no command to apply it to, is a mistake and is reported as one: the same
-// list, under an error on stderr, exit 1.
+// Nothing typed is a question: `maxon` alone answers with the version and the command list and
+// exits 0. A word naming no command, or an option with no command, is a mistake: the same list
+// under an error on stderr, exit 1.
 function noCommandGiven(args MaxonArgs) returns ExitCode
 	if args.paths.isEmpty() and args.anyOption().isEmpty() 'nothingWasTyped'
 		printOverview()
@@ -2205,275 +1795,165 @@ function noCommandGiven(args MaxonArgs) returns ExitCode
 	return 1
 end 'noCommandGiven'
 
-// The parsed command the driver dispatches on.
-// ⭐⭐ **DECLARATION ORDER IS THE ORDER THE READER SEES, AND IT IS ALPHABETICAL BY COMMAND WORD.**
-// `namedCommands` walks `allCases`, so this list IS the listing `maxon` prints — and the one ordering
-// rule a gate can check is the one that holds: `tests/cli` asserts the advertised list is sorted, off
-// the binary's own output. An order by how often a command is used could not be checked by anything,
-// and is not one fact anyway — a compiler developer runs `spec-test` fifty times a day and `build`
-// twice, and someone using Maxon does the reverse.
-//
-// ⚠ Nothing reads a case's ordinal or raw value, so this order decides the listing and nothing else.
+// Declaration order is listing order, alphabetical by command word: `tests/cli` asserts the
+// advertised list is sorted, and no usage-frequency order could be checked. Nothing reads a case's
+// ordinal or raw value.
 enum MaxonCommand
 	build
 
-	// `maxon coverage <run|report> <exe>` — read back what a `--coverage` binary counted. Tail-stopping
-	// like `monitor`, and for the sharper form of its reason: the tail is a CHILD's command line.
 	coverage
 
-	// `maxon debug --dump-info <exe>` / `--symbolize <exe> <offset...>` — the read-only faces of the
-	// `.mxdbg` sidecar. Tail-stopping like `monitor`; see `DebugCommandName`.
 	debug
 
-	// `maxon fmt` - re-print `.maxon` sources in canonical layout, IN PLACE. See `runFmt`.
 	fmt
 
-	// `maxon help [<command>]` — the reference this driver prints about itself. See `runHelp`; the
-	// withdrawn flag spellings for the same question are refused by name at `WithdrawnHelpFlag`.
 	help
 	lspServer
 	mcpServer
 
-	// `maxon monitor` — run a `--debugstream` binary with a DebugStream ring attached and print the
-	// events it writes into it. The one command whose TAIL belongs to a child process rather than to this
-	// driver; see the `monitorTail` arm in `parse`.
 	monitor
 
-	// `maxon profile run <exe>` — sample a running program and report where its CPU time went. Tail-stopping
-	// like `coverage`, and for exactly its reason: the tail is a CHILD's command line.
 	profile
 
-	// `maxon run <file|directory> [args...]` — compile a program, or reuse a cached build of it, and run
-	// it. Tail-stopping like `profile`, and reached by a second door with no word at all: see
-	// `RunCommandName`.
 	run
 	scaleTest
 	specTest
 
-	// `maxon test` — a PROJECT's own unit tests, which is a different suite from `spec-test`'s: that one
-	// runs this compiler's specs, this one runs whatever the directory it is pointed at declares.
 	test
 
-	// `maxon upgrade` — update the install this compiler runs from. See `Upgrade/UpgradeCommand.maxon`.
 	upgrade
 	verifyRecheck
 	verifyWarmRebuild
 
-	// `maxon version` — which binary is this. See `runVersion`; the withdrawn flag spellings for the same
-	// question are refused by name at `WithdrawnVersionFlag`.
 	version
 
-	// ⛔ NOT A COMMAND and therefore not in the sorted run above: it is the ABSENCE of one, which is why
-	// `namedCommands` leaves it out of every listing. See `HelpReferenceError`.
+	// Not a command: the absence of one, left out of every listing by `namedCommands`.
 	unknown
 end 'MaxonCommand'
 
-// The positional arguments AS TYPED — source path SPELLINGS, not yet `FilePath`s, because a spelling
-// that is not a valid path is a command-line error the driver reports with the text the caller wrote.
-// A distinctly-named alias rather than `Project.StringArray` for the reason `MaxonSourcePathArray`
-// gives next door: a name that says what the list is FOR cannot be confused with the several other
-// `Array with String` aliases this compiler already carries.
+// Spellings, not yet `FilePath`s: an invalid path is a command-line error reported with the text
+// the caller wrote.
 export typealias SourcePathSpellingArray = Array with String
 
-// Thin M1 argument model: a command, its input paths, an optional output override,
-// and the `--emit-ir` toggle. Grows into v1's full option set (targets, logging,
-// cache flags, ...) as the driver gains those capabilities.
-// Exported: the scale-test runner lives in Testing/ and takes the parsed args, exactly as the
-// spec-test runner takes them from inside Main.
+// `module` because `Testing/ScaleTestRunner` takes the parsed args.
 module type MaxonArgs
 	export var command as MaxonCommand
 
-	// ⭐⭐ **EVERY POSITIONAL, IN THE ORDER TYPED (A3m).** `build` compiles them all and the ORDER is
-	// load-bearing — `Compiler.loadSourceFiles` registers sources in exactly this order, which is how
-	// a caller states which of two sibling files declares first without the loader ever sorting (see
-	// that function, and `StdlibLoader`'s no-sort ruling). Every other command takes at most one and
-	// `refusedPositionalBeyond` says so; before A3m the parser kept the first and dropped the rest
-	// here, silently, without even setting `badOption`.
+	// The order is load-bearing: `build` compiles every positional, and `Compiler.loadSourceFiles`
+	// registers sources in this order, which is how a caller states which of two sibling files
+	// declares first. Every other command refuses beyond its count (`refusedPositionalBeyond`).
 	export var paths as SourcePathSpellingArray
 	export var outputOverride as String
 	export var emitIr as bool
 
-	// Whether this build emits the green-thread async trace (`--async-trace`). See `AsyncTraceFlag`.
 	export var asyncTrace as bool
 
-	// Whether this build emits the DebugStream producer (`--debugstream`). See `DebugStreamFlag`.
 	export var debugStream as bool
 
-	// Whether this build writes the `<output>.mxdbg` sidecar. TRUE unless `--no-debug-info` was typed —
-	// see that flag for why the default is on. Read only by `build`.
+	// Read only by `build`; see `NoDebugInfoFlag` for why it defaults to true.
 	export var debugInfo as bool
 
-	// Whether this build instruments for code coverage (`--coverage`). See that flag. Read only by
-	// `build`, which refuses it against `debugInfo` and against a target with no file surface.
+	// Read only by `build`, which refuses it without `debugInfo` or on a target with no file surface.
 	export var coverage as bool
 
-	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
-	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
-	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
-	// request for the printing.
+	// Empty is the ordinary build, not a sentinel. Implies `emitIr` (see `parse`).
 	export var runtimeIrNames as RuntimeFunctionNameArray
 
-	// `--filter=<pattern>` (spec-test only): run only the tests whose `<spec>/<test>` label
-	// contains <pattern>. Empty selects the whole suite.
 	export var filter as String
 
-	// `--update-required` (spec-test only): REWRITE the committed `.test` goldens instead of
-	// checking the emitted IR against them. The goldens are a code-quality gate — running a test
-	// proves its allocation is CORRECT, but only the pinned IR can say the code did not get WORSE
-	// (an extra spill still computes the right answer). So regenerating them is the one way a
-	// codegen change enters the tree, and it is deliberately an explicit act: the diff is the review.
+	// Deliberately an explicit act: the resulting golden diff is the review.
 	export var updateRequired as bool
 
-	// `--workers=<n>` (spec-test only): how many persistent worker subprocesses the pool runs. 1 is
-	// the SAME pool with one worker in it, not a serial in-process branch — see runSpecTest.
+	// 1 is the same pool with one worker in it, not a serial branch; see `runSpecTest`.
 	export var workers as WorkerCount
 
-	// ⚠ Whether a `--workers=` was typed on this command line. Read by the delegated Linux lane
-	// (`SpecTestRunner.spawnGuestSuite`), which forwards the flag only when it was: the field above
-	// cannot answer that, because a typed count is free to equal the default this host computed.
+	// Whether `--workers=` was typed: `SpecTestRunner.spawnGuestSuite` forwards the flag only then,
+	// and a typed count may equal the default this host computed.
 	export var workersOverridden as bool
 
-	// `--worker-persistent` (spec-test only, INTERNAL): this process IS a pool worker. Set by the
-	// parent dispatcher on the command line it spawns, never typed by a person, and therefore left
-	// out of the usage text. Undocumented but PARSED: an unrecognized flag aborts the run, so a
-	// worker whose own flag was not understood would fail to start at all.
+	// Set by the parent on a worker's command line and never typed, so absent from the reference;
+	// parsed because an unrecognized flag aborts the run.
 	export var workerPersistent as bool
 
-	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
-	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
-	// `--log=compiler:debug`, which prints the same numbers as a table.
-	// Every `--define` on this command line, in the order they were written. An ARRAY and not a map:
-	// two defines of one name is a thing to notice, and a map would silently keep the last.
+	// An array, not a map: two defines of one name is a thing to notice, and a map would silently keep
+	// the last.
 	export var defines as DefineArray
 
 	export var metricsPath as String
 
-	// `--emit-corpus=<dir>` (scale-test only): dump the generated scaling corpus to <dir> for
-	// inspection instead of the temp directory it is otherwise built into and thrown away.
 	export var emitCorpus as String
 
-	// `--rungs=<n>` (scale-test only): how many rungs of the ladder to climb. Each doubles the
-	// program, so this is exponential in cost — see ScaleCorpus.
 	export var rungs as RungCount
 
-	// `--repeat=<n>` (scale-test only): how many times each rung is compiled. The CPU column takes
-	// the MINIMUM of the repeats (the least-disturbed sample); the memory columns take the first and
-	// are cross-checked for equality across the rest, since they are bit-for-bit reproducible and a
-	// difference is a broken run — see ScaleTestRunner's header.
 	export var repeat as RepeatCount
 
-	// `--note=<text>` (scale-test only): RECORD this run in docs/optimization-log.md, with <text> as
-	// the reason. A run without it reports and records nothing — scale-test is run dozens of times a
-	// day against dirty trees, and a log of all of them would be a log nobody reads. WITH it the row is
-	// written, whether or not a number moved: it is an INSTRUCTION from the operator, who is the only
-	// party who knows whether the run is a datapoint. The instrument can see exactly WHAT moved and can
-	// never see why, so the reason is demanded at the one moment it is still known — see
-	// Testing/ScaleHistory.maxon.
+	// A run without it records nothing: scale-test runs dozens of times a day against dirty trees. See
+	// `Testing/ScaleHistory.maxon`.
 	export var note as String
 
-	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung and per-phase
-	// memory, and the deltas from the last recorded run — as JSON.
-	//
-	// This exists so the MCP tool does not SCRAPE the human report. The report's columns are padded
-	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
-	// mis-parse rather than fail. A caller that wants data gets data.
+	// So the MCP tool gets data rather than scraping the padded human report, which would mis-parse
+	// silently the day a phase name outgrows its column.
 	export var resultJson as String
 
-	// `--target=<cpu>-<os>` (build, spec-test): use this target instead of the host
-	// (`detectHostTarget`). Empty selects the host. Resolved to a Target via `resolveTargetFlag` in
-	// both `runBuild` and `runSpecTest`; an unknown spelling aborts. Needed to cross-compile
-	// x64-windows on an arm64 host for golden verification, to select arm64-macos explicitly, and to
-	// drive the spec suite through the wasm32-wasi backend (cross-compile-and-run under wasmtime).
 	export var targetSpec as String
 
-	// Whether this spec run may reach a real external host (`--network`). FALSE by default, and the
-	// default is the whole point — see `NetworkFlag`.
 	export var includeNetwork as bool
 
-	// `--list` (test only): print the tests that WOULD run and compile nothing.
 	export var listOnly as bool
 
-	// `--json` (test only): emit the report as one JSON document instead of text.
 	export var jsonReport as bool
 
-	// `--no-timing` (test only): omit durations, which is what makes a run's stdout byte-reproducible.
-	// TRUE by default — the flag turns it off, so the field reads as what it controls rather than as
-	// the flag's own name.
+	// True by default; the field names what it controls rather than the flag.
 	export var showTiming as bool
 
-	// `--color=` (test only): when the report may use colour. See `TestRender.ReportColorMode` — `auto`
-	// is the default and asks the host through `__Builtins.stdoutWantsAnsiColor()`.
+	// `auto` asks the host through `__Builtins.stdoutWantsAnsiColor()`.
 	export var colorMode as ReportColorMode
 
-	// `--isolate` (test only): run every test in its own process, rather than a process per FILE.
 	export var isolate as bool
 
-	// `--bail[=N]` (test only): stop claiming new work once N tests have failed.
 	export var bail as BailPolicy
 
-	// `--timeout=<ms>` (test only): how long ONE test process may run before it is killed.
 	export var testTimeoutMs as DurationMs
 
-	// ⚠ Whether a `--log=` was accepted on this command line. Read by `test` alone, which SILENCES the
-	// compiler's INFO chatter so its stdout is a report rather than a build log — and must not do that
-	// behind the back of a caller who asked for the chatter. A bool and not the spec string: the spec was
-	// already applied by `parseLogOption`, and keeping it would be that setting stored twice.
+	// Whether `--log=` was accepted: `quietTheBuildChatter` must not silence a caller who asked for
+	// the chatter. A bool, because `parseLogOption` already applied the spec.
 	export var logOverridden as bool
 
-	// Set when an argument could not be understood. The driver refuses to run rather
-	// than proceed on a command line it only partly parsed — see `parse`.
-	// ⛔⛔ **EVERY `-`-LEADING ARGUMENT, RECORDED REGARDLESS OF WHICH ARM CONSUMES IT OR WHERE IT SAT.**
-	// `badOption` below is only the ones NO arm understood, and it is set from INSIDE the arm chain — so
-	// it can never see a flag this driver DOES implement. That is fatal for `fmt`, whose whole contract
-	// is that it takes no options: MEASURED before this field existed, `maxon --emit-ir fmt` set
-	// `emitIr`, left `badOption` empty, and FORMATTED THE CURRENT DIRECTORY IN PLACE, exit 0 — the exact
-	// incident the refusal exists to prevent.
+	// Every `-`-leading argument, whichever arm consumes it and wherever it sat. `badOption` holds
+	// only those no arm understood, so it never sees a flag this driver implements, and `maxon
+	// --emit-ir fmt` would format the current directory in place. A command-gated arm cannot replace
+	// this: the parser is order-independent, so a flag may precede the command word.
 	//
-	// ⚠ **A COMMAND-GATED ARM CANNOT FIX THAT, AND THE FIRST ATTEMPT WAS ONE.** This parser is
-	// ORDER-INDEPENDENT, so an arm asking `command == fmt` sees nothing when the flag is typed AHEAD of
-	// the word `fmt`. Recorded above the chain instead, unconditionally — the one site no ordering can
-	// reach around.
-	//
-	// ⭐ EVERY arrival is kept, not just the first, because a command that takes ONE option has to ask
-	// "any option OTHER than mine?" — and that question cannot be answered from a single remembered
-	// spelling once the caller has typed their own flag. See `firstOptionOtherThan`.
+	// Every arrival is kept so a command taking one option can ask for any option other than its own
+	// (`firstOptionOtherThan`).
 	export var optionsSeen as SourcePathSpellingArray
 
+	// Set when an argument could not be understood: `main` refuses to run on a partly parsed command
+	// line.
 	export var badOption as String
 
-	// `--dry-run` (upgrade only): say what would run, and run nothing.
 	export var dryRun as bool
 
-	// `--dev` (mcp-server only): expose compiler contributor tools.
 	export var devMode as bool
 
-	// ⭐ Set when an argument names an option this driver ONCE HAD and deliberately withdrew. A
-	// separate field from `badOption` because the two owe the reader different sentences and `main`
-	// prints them in different words: an unknown option was never understood, a withdrawn one was and
-	// is now structurally impossible. See `withdrawnOptionMessage`.
+	// An option this driver deliberately withdrew. Separate from `badOption` because the two owe the
+	// reader different sentences; see `withdrawnOptionMessage`.
 	export var withdrawnOption as String
 
-	// ⭐ **THE COMMAND LINE WITH NOTHING ON IT** — every field at the value an absent flag leaves it.
-	// The defaults live here, in ONE place, rather than in `parse`'s locals: `parse` accumulates into a
-	// record precisely so that it HAS no per-flag local (see its own note), and a default written at the
-	// declaration is a default no arm can forget to carry through.
-	//
-	// ⚠ **EVERY FIELD ABOVE IS `var` FOR THAT ONE CALLER.** Nothing else mutates a `MaxonArgs`, and
-	// nothing can through the `let` binding `main` holds it by (E3063) — the tier states who may write,
-	// and the binding states whether anyone does.
+	// The defaults live here rather than in `parse`'s locals: `parse` accumulates into a record (see
+	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
+	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	export static function create() returns MaxonArgs
 		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
 	end 'create'
 
-	// The first option this driver saw, whichever arm went on to consume it. A command that takes NO
-	// options refuses by this.
+	// A command that takes no options refuses by this.
 	export function anyOption() returns String
 		return try self.optionsSeen.get(0) otherwise ""
 	end 'anyOption'
 
-	// The first option that is not `allowed`. A command that takes EXACTLY ONE option refuses by this:
-	// `upgrade` with `--dry-run`, `mcp-server` with `--dev`. Both are exempt from `main`'s `badOption`
-	// gate precisely because their own flag would trip it.
+	// A command that takes exactly one option refuses by this (`upgrade`, `mcp-server`); both are
+	// exempt from `main`'s `badOption` gate because their own flag trips it.
 	export function firstOptionOtherThan(allowed String) returns String
 		for option in self.optionsSeen 'each'
 			if option != allowed 'notMine'
@@ -2484,38 +1964,22 @@ module type MaxonArgs
 		return ""
 	end 'firstOptionOtherThan'
 
-	// The one positional a command that takes at most one was given, or "" when there was none —
-	// the same "empty means absent" convention every other optional field here uses
-	// (`outputOverride`, `filter`, `note`). A SECOND positional never reaches this: the
-	// commands that read it call `refusedPositionalBeyond` first, so empty cannot mean two things.
+	// A second positional never reaches this: its callers call `refusedPositionalBeyond` first, so
+	// empty means only absent.
 	export function solePositional() returns String
 		return try self.paths.get(0) otherwise ""
 	end 'solePositional'
 
-	// Parse the process command line. argv[0] is the executable path (skipped).
-	// The FIRST command word selects the command and every later one is an ordinary
-	// positional (see `laterCommandWordIsAPath`); every bare (non-flag)
-	// argument is KEPT, in order, as a positional; `-o <path>` / `--output=<path>` set the output;
-	// `--emit-ir` requests the Target-IR sidecar; `--filter=<pattern>` narrows the
-	// spec-test selection; `--update-required` regenerates the spec-test goldens.
-	//
-	// An unrecognized `-`-leading argument is RECORDED, not ignored. It used to fall
-	// through to the positional branch and become the input path, so `spec-test
-	// --mm-trace` quietly looked for a spec directory literally named `--mm-trace`
-	// and reported an empty suite. A flag the driver does not implement must fail
-	// loudly, not be absorbed into an unrelated slot.
+	// argv[0] is the executable path. The first command word selects the command and a later one is a
+	// positional (see `laterCommandWordIsAPath`). An unrecognized `-`-leading argument is recorded as
+	// a bad option, never absorbed as a positional: `spec-test --mm-trace` must not look for a spec
+	// directory named `--mm-trace`.
 	export static function parse() returns MaxonArgs
-		// ⚠ **THE WORKING SET IS ONE RECORD BECAUSE TWENTY-ONE `var`s DO NOT FIT IN x64's REGISTERS**
-		// (`E5001`). A `var` assigned in one arm of this chain is handed on at every join, so each one
-		// becomes a phi on the loop header and the loop carries a register per flag — MEASURED at 33
-		// values live against 14 GPRs, which is a refusal, not a slowdown. `parsed.filter = …` is a FIELD
-		// STORE into one frame slot, so the loop carries ONE value however many flags are added below.
-		// ⇒ Adding a flag means adding a FIELD, never a local.
-		//
-		// ⚠ **AND A GREEN SUITE ON ANOTHER HOST WOULD NOT HAVE CAUGHT IT.** The refusal is x64's alone:
-		// arm64 allocates from 26 GPRs and fits a shape x64's 14 cannot, which is why
-		// `specs/register-pressure.md`'s `assigned-only-loop-carried-vars-overflow` — the smaller
-		// twin of this loop — carries `targets: x64-windows, x64-linux`.
+		// The working set is one record, not a `var` per flag: a `var` assigned in one arm becomes a phi
+		// on the loop header, and one register per flag exceeds x64's GPRs (E5001) — a refusal, not a
+		// slowdown. A field store keeps the loop carrying one value, so adding a flag means adding a
+		// field, never a local. arm64's larger register pool hides this; `specs/register-pressure.md`'s
+		// `assigned-only-loop-carried-vars-overflow` pins the x64 shape.
 		var parsed = Self.create()
 
 		let args = CommandLine.args()
@@ -2524,96 +1988,63 @@ module type MaxonArgs
 		while i < args.count() 'each'
 			let arg = try args.get(i) otherwise panic("MaxonArgs.parse: index {i} >= args.count() despite the while guard i<args.count()")
 
-			// Recorded BEFORE the chain decides anything, so it sees a flag whichever arm goes on to consume
-			// it and wherever on the line it sat. See `anyOption`.
+			// Recorded before the chain, so it sees a flag whichever arm consumes it. See `anyOption`.
 			if arg.startsWith(OptionPrefix) 'anOption'
 				parsed.optionsSeen.push(arg)
 			end 'anOption'
 
-			// ⭐⭐ **A `.maxon` FIRST ARGUMENT IS `run`, AND THAT IS WHAT A `#!/usr/bin/env maxon` SCRIPT
-			// ARRIVES AS.** A kernel execs the interpreter with the script's path ahead of the script's own
-			// arguments, so the word `run` is never typed and cannot be. The tail is filed verbatim WITH THE
-			// FILE IN IT, because both doors hand `runRun` the same shape: the program at position 0 and the
-			// program's own arguments after it.
-			//
-			// ⚠ **POSITION 1 AND A `.maxon` SPELLING, BOTH.** Position 1 is the only place a kernel puts it,
-			// and no command word ends in that extension — so this arm cannot swallow a word the chain below
-			// owns, and the first-word rule that chain enforces is untouched.
+			// A `.maxon` first argument is `run`: a kernel execs the interpreter for a `#!/usr/bin/env
+			// maxon` script with the script's path first. The tail keeps the file, so both doors hand
+			// `runRun` the program at position 0. Position 1 only, and no command word ends in that
+			// extension, so this cannot swallow a word the chain owns.
 			if i == 1 and parsed.command == MaxonCommand.unknown and arg.endsWith(MaxonSourceExtension) 'wordlessRun'
 				parsed.command = MaxonCommand.run
 				parsed.paths = monitorTail(args, from: i)
 				break
 			end 'wordlessRun'
 
-			// ⭐⭐ **`monitor` STOPS THE PARSE, AND THAT IS THE WHOLE OF HOW A CHILD'S COMMAND LINE SURVIVES
-			// THIS DRIVER.** The arms below are order-independent, so a child's `--filter=mm` would be read as
-			// `spec-test`'s TEST SELECTION and any flag this driver does not implement would set `badOption`
-			// and abort the run before the child was ever spawned. Everything after the word is filed as a
-			// positional verbatim instead, and `anyOption` never sees one of them.
-			//
-			// ⚠ **ONLY THE FIRST COMMAND WORD IS THE COMMAND**, exactly as the restore block below enforces
-			// for every other one: a `monitor` typed after a command already chosen is an ordinary path, which
-			// is what asking that none has been chosen yet says.
+			// Tail-stopping: the arms below are order-independent, so a child's `--filter=mm` would become
+			// `spec-test`'s selection and an unimplemented flag would abort the run before the child is
+			// spawned. Only the first command word is the command, so a later `monitor` is an ordinary path.
 			if arg == MonitorCommandName and parsed.command == MaxonCommand.unknown 'monitorCmd'
 				parsed.command = MaxonCommand.monitor
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
 			end 'monitorCmd'
 
-			// `debug` stops the parse for the same reason `monitor` does — its own subcommand words are
-			// `-`-leading, and every one of them would otherwise abort the run as an unknown option.
 			if arg == DebugCommandName and parsed.command == MaxonCommand.unknown 'debugCmd'
 				parsed.command = MaxonCommand.debug
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
 			end 'debugCmd'
 
-			// `coverage` stops the parse for `monitor`'s reason in its strongest form: `coverage run <exe>
-			// <the target's own flags>` forwards everything past the executable to a CHILD, so a flag this
-			// driver happens to implement would be consumed on its way past and one it does not would set
-			// `badOption` and abort the run before the child was ever spawned.
 			if arg == CoverageCommandName and parsed.command == MaxonCommand.unknown 'coverageCmd'
 				parsed.command = MaxonCommand.coverage
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
 			end 'coverageCmd'
 
-			// `profile` stops the parse for `coverage`'s reason exactly: everything after the executable is
-			// the profiled program's own command line.
 			if arg == ProfileCommandName and parsed.command == MaxonCommand.unknown 'profileCmd'
 				parsed.command = MaxonCommand.profile
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
 			end 'profileCmd'
 
-			// `run` stops the parse for `profile`'s reason: everything after the path is the PROGRAM's own
-			// command line, so a flag this driver implements must not be consumed on its way past and one it
-			// does not must not abort the run before the program is ever compiled.
 			if arg == RunCommandName and parsed.command == MaxonCommand.unknown 'runCmd'
 				parsed.command = MaxonCommand.run
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
 			end 'runCmd'
 
-			// The command as it stood BEFORE this argument, so the arms below can stay a plain chain and
-			// the first-word rule be applied once, after them. See `laterCommandWordIsAPath`.
-			//
-			// ⚠ **CLEARED, NOT MERELY REMEMBERED**, so that an arm firing below is detectable even when it
-			// re-selects the command already chosen. `maxon fmt fmt` is exactly that shape, and it is
-			// the destructive one: comparing the command before and after would read it as no change at
-			// all. Nothing between here and the restore reads the field.
+			// Cleared, not merely remembered, so an arm re-selecting the same command is detectable: `maxon
+			// fmt fmt` would otherwise read as no change. Nothing between here and the restore reads the
+			// field.
 			let commandBefore = parsed.command
 			parsed.command = MaxonCommand.unknown
 
-			// ⭐⭐ **ONE TABLE DECIDES WHICH WORDS ARE COMMANDS, AND THE REFERENCE READS THAT SAME TABLE**
-			// (`commandReference`, through `commandFromWord`). A chain of literals here would be a second
-			// roster: a command word could be renamed in one and go on being printed by the other, and a
-			// command added to `MaxonCommand` could be documented without ever being selectable.
-			//
-			// ⚠ The four tail-stopping words never reach this arm with the parse still open — each is
-			// consumed above while the command is still `unknown` — so recognizing them here is what makes
-			// a LATER one an ordinary path through the restore block below, exactly as every other command
-			// word is.
+			// `commandFromWord` reads the reference's own table, so there is no second roster here. The
+			// tail-stopping words reach this arm only once a command is chosen, so a later one becomes a
+			// path through the restore below.
 			let named = commandFromWord(arg)
 
 			if named != MaxonCommand.unknown 'commandWord'
@@ -2634,18 +2065,11 @@ module type MaxonArgs
 			end 'noDebugInfoFlag' else if arg == CoverageFlag 'coverageFlag'
 				parsed.coverage = true
 			end 'coverageFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
-				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
-				// tests `==`, and this one is the only arm that tests this prefix.
-				// ⚠ **THE CHECK IS ON THE PARSED NAMES, NOT ON THE RAW VALUE, and that is the whole
-				// point of doing it after the split.** A valueless `--emit-ir-runtime=` is a BAD OPTION,
-				// not an empty list — the same door `--compiler=` refuses through — but so is
-				// `--emit-ir-runtime=,` and `--emit-ir-runtime=" "`, which carry a NON-empty value that
-				// names no function: `splitRuntimeNames` drops empty parts, so a raw-value check passed
-				// them straight through to an empty list. Empty is how this field spells "the caller
-				// named no runtime function", so either spelling would render a sidecar with no runtime
-				// body under a command line that asked for one, and the golden built from it would pin
-				// exactly what it pinned before while claiming otherwise. One check, on the value that
-				// actually reaches the printer.
+				// Not swallowed by `--emit-ir`'s arm, which tests `==`.
+				//
+				// Checked on the parsed names, not the raw value: `--emit-ir-runtime=,` carries a non-empty
+				// value naming no function, and an empty list would render a sidecar with no runtime body under
+				// a command line that asked for one. Every such spelling is a bad option.
 				let named = splitRuntimeNames(try CommandLine.optionValue(arg) otherwise "")
 
 				if named.count() == 0 'noRuntimeNames'
@@ -2653,9 +2077,8 @@ module type MaxonArgs
 				end 'noRuntimeNames' else 'hasRuntimeNames'
 					parsed.runtimeIrNames = named
 
-					// A list of functions to PRINT is a request for the printing. Without this the flag
-					// would be silently inert whenever `--emit-ir` was forgotten — a no-op that looks like
-					// a rendering, which is the one outcome the printer's own refusals exist to prevent.
+					// A list of functions to print is a request for the printing; otherwise the flag would be
+					// inert whenever `--emit-ir` was forgotten.
 					parsed.emitIr = true
 				end 'hasRuntimeNames'
 			end 'emitIrRuntimeFlag' else if arg.startsWith(FilterFlagPrefix) 'filterFlag'
@@ -2667,15 +2090,11 @@ module type MaxonArgs
 			end 'networkFlag' else if arg.startsWith(WorkersFlagPrefix) 'workersFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 
-				// ⚠ RECORDED, because the delegated Linux lane forwards this flag only when it was typed
-				// and the count alone cannot say so. See `MaxonArgs.workersOverridden`. The flag was
-				// typed whatever its value parses to; an unusable one is refused below, and a refused
-				// command line runs nothing to forward it to.
+				// Recorded whatever the value parses to; see `workersOverridden`.
 				parsed.workersOverridden = true
 
-				// A bad value is a BAD OPTION, not a clamp — the same door as `--rungs`. `--workers=0`
-				// asks for a pool that can run nothing; quietly running the default instead would
-				// answer a question the caller never asked. See SpecWorkerPool.parseWorkerCount.
+				// A bad value is a bad option, not a clamp: `--workers=0` asks for a pool that runs nothing,
+				// and running the default would answer a different question. See `parseWorkerCount`.
 				match parseWorkerCount(raw) 'workersArg'
 					valid(count) then parsed.workers = count
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
@@ -2683,41 +2102,27 @@ module type MaxonArgs
 			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				parsed.workerPersistent = true
 			end 'workerPersistentFlag' else if arg.startsWith(WithdrawnCompilerFlagPrefix) 'withdrawnCompilerFlag'
-				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN — see `WithdrawnCompilerFlagPrefix` and
-				// `withdrawnOptionMessage`. The prefix is matched WITHOUT its `=`, so `--compiler`,
-				// `--compiler=`, and `--compiler=<path>` all land here: every spelling a caller might still
-				// be passing gets the sentence that says what happened to it, rather than only the one that
-				// happens to be well-formed.
-				//
-				// ⚠ IT MUST SIT AHEAD OF THE ANONYMOUS `-`-leading arm below, which would otherwise swallow
-				// it into `badOption` — the exact fall-through this refusal exists to avoid.
+				// Recorded as withdrawn; see `withdrawnOptionMessage`. Matched without its `=`, so
+				// `--compiler`, `--compiler=` and `--compiler=<path>` all get the sentence. Must precede the
+				// anonymous `-`-leading arm, which would swallow it into `badOption`.
 				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
 			end 'withdrawnCompilerFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
 				parsed.metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith(DefineFlagPrefix) 'defineFlag'
 				let pair = try CommandLine.optionValue(arg) otherwise ""
-				let cut = pair.split(DefineNameValueSeparator)
 
-				// A `--define` with no `=` names no value. Recorded as a BAD OPTION rather than read as
-				// "define it to the empty string": the two are different requests, and `--define=X` is far
-				// more likely a truncated command line than a deliberate empty one — which `--define=X=`
-				// still spells.
-				if cut.count() < 2 'noValueGiven'
+				if let define = try defineFromPair(pair) 'nameAndValue'
+					parsed.defines.push(define)
+				end 'nameAndValue' else 'noValueGiven'
 					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
-				end 'noValueGiven' else 'nameAndValue'
-					let name = try cut.get(0) otherwise ""
-					parsed.defines.push(Define.create(name, value: defineValueAfterName(cut)))
-				end 'nameAndValue'
+				end 'noValueGiven'
 			end 'defineFlag' else if arg.startsWith(EmitCorpusFlagPrefix) 'emitCorpusFlag'
 				parsed.emitCorpus = try CommandLine.optionValue(arg) otherwise ""
 			end 'emitCorpusFlag' else if arg.startsWith(RungsFlagPrefix) 'rungsFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 
-				// A bad value is recorded as a BAD OPTION, not clamped to the default. `main` refuses
-				// to run on a command line it only partly understood, which is the only honest
-				// response to `--rungs=99`: the caller asked for a ladder this suite will not climb
-				// (each rung DOUBLES the program), and quietly climbing a different one would answer
-				// a question they never asked. See ScaleCorpus.parseRungCount.
+				// A bad value is a bad option, not a clamp: each rung doubles the program, and quietly climbing
+				// a different ladder answers a question nobody asked. See `ScaleCorpus.parseRungCount`.
 				match parseRungCount(raw) 'rungsArg'
 					valid(count) then parsed.rungs = count
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
@@ -2725,11 +2130,7 @@ module type MaxonArgs
 			end 'rungsFlag' else if arg.startsWith(RepeatFlagPrefix) 'repeatFlag'
 				let raw = try CommandLine.optionValue(arg) otherwise ""
 
-				// The same door as `--rungs` and `--workers`: a bad value is a BAD OPTION, not a
-				// clamp. `--repeat=0` asks for a rung that is never compiled, and quietly compiling
-				// it three times would answer a question the caller never asked — the run they get
-				// back would then differ from the one they typed in the column that is least able to
-				// prove it. See ScaleTestRunner.parseRepeatCount.
+				// A bad value is a bad option, as for `--rungs`. See `ScaleTestRunner.parseRepeatCount`.
 				match parseRepeatCount(raw) 'repeatArg'
 					valid(count) then parsed.repeat = count
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
@@ -2751,9 +2152,7 @@ module type MaxonArgs
 			end 'isolateFlag' else if arg == TestBailFlag 'bailFlag'
 				parsed.bail = BailPolicy.after(DefaultBailAfter)
 			end 'bailFlag' else if arg.startsWith(TestBailFlagPrefix) 'bailCountFlag'
-				// A bad value is a BAD OPTION, not a clamp — the door `--workers` and `--rungs` already use.
-				// `--bail=nonsense` asks a question this command cannot answer, and answering a different
-				// one instead is the failure a caller can neither see nor recover from.
+				// A bad value is a bad option, as for `--workers`.
 				match parsePositiveFlagValue(try CommandLine.optionValue(arg) otherwise "") 'bailArg'
 					valid(failures) then parsed.bail = BailPolicy.after(failures as ReportedTestCount)
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
@@ -2771,9 +2170,7 @@ module type MaxonArgs
 			end 'colorFlag' else if arg.startsWith(TestFilterShortPrefix) 'shortFilterWithValue'
 				parsed.filter = try CommandLine.optionValue(arg) otherwise ""
 			end 'shortFilterWithValue' else if arg == TestFilterShortFlag 'shortFilterSeparated'
-				// `-t PATTERN` — the separated form, which is what a shell user types when the pattern has
-				// spaces. A `-t` with nothing after it is REFUSED rather than ignored: a filter that named
-				// no pattern would select EVERYTHING, which is the opposite of what was typed.
+				// A `-t` with nothing after it is refused: a filter naming no pattern would select everything.
 				i = i + 1
 				parsed.filter = try args.get(i) otherwise ""
 
@@ -2786,55 +2183,41 @@ module type MaxonArgs
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
 				end 'badSpec' else 'goodSpec'
-					// ⚠ RECORDED, because `test` and `run` SILENCE the compiler's own INFO chatter — and must
-					// not do so behind the back of a caller who explicitly asked for it. See
-					// `quietTheBuildChatter`.
+					// Recorded so `quietTheBuildChatter` leaves a caller's requested logging alone.
 					parsed.logOverridden = true
 				end 'goodSpec'
 			end 'logFlag' else if arg == DryRunFlag 'dryRunFlag'
 				parsed.dryRun = true
 
-				// ⛔ ALSO A BAD OPTION: only `upgrade` has a dry run, and `main` exempts it from `badOption`.
-				// Any other command that took the flag would do for real what the caller asked to see first.
+				// Also a bad option: only `upgrade` has a dry run, and `main` exempts it. Another command
+				// taking the flag would do for real what the caller asked to see first.
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'dryRunFlag' else if arg == DevFlag 'devFlag'
 				parsed.devMode = true
 
-				// ⛔ ALSO A BAD OPTION, for the reason `--dry-run` above is: only `mcp-server` has a
-				// contributor mode, and `main` exempts it from `badOption`. Any other command that took the
-				// flag would accept a word it does not act on.
+				// Also a bad option, as `--dry-run` is: only `mcp-server` has a contributor mode.
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'devFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
-				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN — see `WithdrawnVersionFlag` and
-				// `withdrawnOptionMessage`. Both spellings are matched EXACTLY: anything longer that merely
-				// starts with one of them names no option this driver ever had, and belongs on the anonymous
-				// path with every other typo.
+				// Recorded as withdrawn and matched exactly: a longer spelling names no option this driver had
+				// and is an ordinary typo.
 				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
 			end 'withdrawnVersionFlag' else if arg == WithdrawnHelpFlag or arg == WithdrawnHelpFlagShort 'withdrawnHelpFlag'
-				// ⛔ RECORDED AS WITHDRAWN, NOT AS UNKNOWN, and matched EXACTLY for the reason the version
-				// spellings above are. See `WithdrawnHelpFlag`.
+				// Recorded as withdrawn, matched exactly as the version spellings are.
 				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
 			end 'withdrawnHelpFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'
-				// KEPT, never dropped. WHICH of them a command uses is the COMMAND's question — `build`
-				// compiles them all in this order, everything else refuses a second — and that answer
-				// cannot be given here, where the arity of the command being parsed is not yet known.
+				// Kept: which positionals a command uses is the command's question, unanswerable before its
+				// arity is known.
 				parsed.paths.push(arg)
 			end 'positional'
 
-			// ⛔⛔ **ONLY THE FIRST COMMAND WORD ON A LINE IS THE COMMAND; A LATER ONE IS A PATH.** The
-			// arms above are order-independent by design, which is right for FLAGS and destructive for
-			// command words: MEASURED without this, in a tree holding a `fmt/` directory,
-			// `maxon fmt fmt` set the command twice, left `paths` EMPTY, fell back to `fmt`'s
-			// no-path default and REWROTE THE WHOLE WORKING DIRECTORY in place — exit 0, `2 file(s)
-			// changed`, a file the caller never named among them. That is the 92-file incident the option
-			// refusals exist to prevent, reached through the POSITIONAL door instead of the flag one.
-			//
-			// The BOOTSTRAP cannot have it and is the contract here: it dispatches on `args[0]` and hands
-			// `args[1..]` to `RunFmt`, so its `fmt fmt` formats `fmt/` and touches nothing else (measured,
-			// both compilers). Restoring the earlier command and re-filing the word as a positional is
-			// what makes this parser answer the same.
+			// Only the first command word is the command; a later one is a path. The arms are
+			// order-independent, which suits flags and is destructive for words: `maxon fmt fmt` in a tree
+			// holding `fmt/` would set the command twice, leave `paths` empty and rewrite the whole working
+			// directory. The bootstrap dispatches on `args[0]`, so its `fmt fmt` formats only `fmt/`;
+			// restoring the earlier command and filing the word as a positional makes this parser answer the
+			// same.
 			if parsed.command == MaxonCommand.unknown 'noCommandWordHere'
 				parsed.command = commandBefore
 			end 'noCommandWordHere' else if commandBefore != MaxonCommand.unknown 'laterCommandWordIsAPath'
@@ -2849,13 +2232,10 @@ module type MaxonArgs
 	end 'parse'
 end 'MaxonArgs'
 
-// A position in the process command line. Declared for `monitorTail`, which is the only place an index
-// into it leaves `MaxonArgs.parse`.
 typealias CommandLineIndex = int(0 to u32.max)
 
-// Everything after the word `monitor`, in the order typed. It is the CHILD's command line: no arm of the
-// parser consumes it and nothing here rewrites it. A function rather than a loop inside `parse`, because
-// that loop carries one register per live local and is already at the limit its own note records.
+// No arm of the parser consumes the child's command line and nothing rewrites it. A function rather
+// than a loop in `parse`, whose loop is register-bound (see its note).
 function monitorTail(args StringArray, from CommandLineIndex) returns SourcePathSpellingArray
 	var tail = SourcePathSpellingArray.create()
 
@@ -2866,10 +2246,6 @@ function monitorTail(args StringArray, from CommandLineIndex) returns SourcePath
 	return tail
 end 'monitorTail'
 
-// The function names an `--emit-ir-runtime=` value lists — split on the shared separator, each part
-// trimmed, empties dropped. The same shape `parseUnsupportedTargetKeys` gives a `<!-- unsupported-targets: … -->` value,
-// because they are the same kind of list and a second spelling of "comma-separated" would be one
-// more thing a reader has to check.
 function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
 	var names = RuntimeFunctionNameArray.create()
 

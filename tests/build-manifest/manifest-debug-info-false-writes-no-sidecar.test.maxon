@@ -1,0 +1,16 @@
+// manifest-debug-info-false-writes-no-sidecar.test.maxon — a manifest's `debugInfo: false` is honoured
+// exactly as `--no-debug-info` is: the build succeeds and leaves no `.mxdbg` beside the executable.
+//
+// ⚠ THE EXECUTABLE IS ASSERTED BEFORE THE SIDECAR'S ABSENCE. A build that wrote nothing would also have
+// written no sidecar.
+
+test 'a manifest with debugInfo false builds an executable and no sidecar'
+	let staged = stagedProject("debug-info-false-no-sidecar", fixture: NoSidecarFixtureName)
+
+	let build = spawnManifestBuild(staged, options: StringArray.create())
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "`maxon build` over a manifest saying `debugInfo: false` exited {build.exitCode()}. It wrote to stderr: {build.stderr}")
+	try Expect.isTrue(File.exists(builtExecutable(staged)), message: "`maxon build` exited 0 and wrote no executable to {builtExecutable(staged).toString()}.")
+
+	let sidecars = sidecarsIn(staged)
+	try Expect.isEmpty(sidecars, message: "the manifest said `debugInfo: false` and the build wrote a debug-info sidecar anyway: {sidecars}")
+end 'a manifest with debugInfo false builds an executable and no sidecar'

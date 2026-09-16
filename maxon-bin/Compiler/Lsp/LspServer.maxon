@@ -1,9 +1,9 @@
 // `maxon lsp-server` — the Language Server Protocol session over stdio.
 //
 // It runs the lifecycle (`initialize`, `shutdown`, `exit`), keeps the open documents in sync, routes
-// every language REQUEST through the registry in `LspMethod.maxon`, and pushes `publishDiagnostics` on
-// every document event. A method whose area answers nothing yet is refused with `-32601` and is not
-// advertised.
+// every language REQUEST through the registry in `LspMethod.maxon` and every Maxon-only request through
+// `LspExtensionMethod` beside it, and pushes `publishDiagnostics` on every document event. A method whose
+// area answers nothing yet is refused with `-32601` and is not advertised.
 //
 // ⛔ **NOTHING IN THIS FILE IS PER-AREA.** The dispatch table and the capability builder below are
 // COMPLETE — every method LSP defines for this server already has its arm — so an area is brought live
@@ -125,9 +125,14 @@ type LspSession
 
 		match lspMethodNamed(method) 'known'
 			found(language) then self.answerLanguageRequest(language, id: id, doc: doc)
+			extensionMethod(maxonOnly) then self.answerExtensionRequest(maxonOnly, id: id, doc: doc)
 			unknown then self.refuseMethod(method, id: id)
 		end 'known'
 	end 'handleRequest'
+
+	function refuseParams(wireName String, id LspRequestId)
+		self.refuse(id, code: LspJsonRpcErrorCode.invalidParams, message: "Invalid params - {wireName}")
+	end 'refuseParams'
 
 	// ⭐ A method with a home in `LspMethod` but no answer yet is refused EXACTLY as one this server has
 	// never heard of. From the client's side there is no difference: it asked for something that is not
@@ -148,12 +153,26 @@ type LspSession
 		end 'noAnswerYet'
 
 		let answer = try self.answerResolving(method, doc: doc) otherwise 'badParams'
-			self.refuse(id, code: LspJsonRpcErrorCode.invalidParams, message: "Invalid params - {spelling.wireName}")
+			self.refuseParams(spelling.wireName, id: id)
 			return
 		end 'badParams'
 
 		writeLspResult(answer.doc, id: id, result: answer.result)
 	end 'answerLanguageRequest'
+
+	function answerExtensionRequest(method LspExtensionMethod, id LspRequestId, doc JsonDoc)
+		let wireName = lspExtensionMethodWireName(method)
+
+		let outcome = try answerExtension(method, doc: doc) otherwise 'badParams'
+			self.refuseParams(wireName, id: id)
+			return
+		end 'badParams'
+
+		match outcome 'outcome'
+			answered(answer) then writeLspResult(answer.doc, id: id, result: answer.result)
+			compilerUnavailable then self.refuse(id, code: LspJsonRpcErrorCode.internalError, message: "Internal error - {wireName}: this compiler cannot locate its stdlib/ and runtime/ sources")
+		end 'outcome'
+	end 'answerExtensionRequest'
 
 	// Resolve the shape every `textDocument/*` request shares, then hand the area its request.
 	//
@@ -282,6 +301,15 @@ function answerFor(request LspRequest) returns LspAnswer throws LspParamsError
 		semanticTokens gives try semanticTokensAnswer(request)
 	end 'area'
 end 'answerFor'
+
+// The one place an extension request is handed to its handler, complete over `LspExtensionMethod`.
+function answerExtension(method LspExtensionMethod, doc JsonDoc) returns LspExtensionOutcome throws LspParamsError
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
+
+	return match method 'extension'
+		generateIr gives try generateIrAnswer(doc, params: params)
+	end 'extension'
+end 'answerExtension'
 
 // What every area answers today, put together once — for BOTH the `initialize` capabilities and the
 // decision to route a request, so the two can never disagree.

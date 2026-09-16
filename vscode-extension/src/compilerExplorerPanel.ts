@@ -6,7 +6,6 @@ interface IRError {
 	message: string;
 	line: number;
 	column: number;
-	type?: string;
 }
 
 interface GenerateIRResponse {
@@ -14,20 +13,11 @@ interface GenerateIRResponse {
 	errors: IRError[];
 }
 
-interface GenerateAsmResponse {
-	assembly: string;
-	errors: IRError[];
-}
-
-type OutputMode = 'mir' | 'asm';
-
 /**
  * Compiler Explorer View
  *
- * A webview view that lives in the Maxon activity bar container. Shows Maxon
- * source code in an editor and the generated output (MIR or x86-64 assembly)
- * in a separate panel below. Supports toggling between optimized and
- * unoptimized output.
+ * A webview view in the Maxon activity bar container: Maxon source in an editor, and below it the
+ * Target IR the compiler lowers it to — the text `maxon build --emit-ir` writes.
  */
 export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'maxon.compilerExplorerView';
@@ -36,8 +26,6 @@ export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider 
 	private readonly _disposables: vscode.Disposable[] = [];
 
 	private _currentSource: string = '';
-	private _optimize: boolean = false;
-	private _outputMode: OutputMode = 'mir';
 	private _debounceTimer: NodeJS.Timeout | undefined;
 
 	constructor(
@@ -65,14 +53,6 @@ export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider 
 					case 'sourceChanged':
 						this._currentSource = message.source;
 						this._debouncedGenerateOutput();
-						break;
-					case 'toggleOptimize':
-						this._optimize = message.optimize;
-						this._generateOutput();
-						break;
-					case 'setOutputMode':
-						this._outputMode = message.mode;
-						this._generateOutput();
 						break;
 					case 'requestOutput':
 						this._generateOutput();
@@ -130,37 +110,19 @@ export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider 
 		}
 
 		try {
-			if (this._outputMode === 'mir') {
-				log(`Generating MIR (optimize=${this._optimize})`);
-				const response = await client.sendRequest<GenerateIRResponse>(
-					'maxon/generateIR',
-					{
-						source: this._currentSource,
-						filename: 'compiler_explorer.maxon',
-						optimize: this._optimize
-					}
-				);
-				webview.postMessage({
-					command: 'updateOutput',
-					output: response.ir,
-					errors: response.errors
-				});
-			} else {
-				log(`Generating Assembly (optimize=${this._optimize})`);
-				const response = await client.sendRequest<GenerateAsmResponse>(
-					'maxon/generateAsm',
-					{
-						source: this._currentSource,
-						filename: 'compiler_explorer.maxon',
-						optimize: this._optimize
-					}
-				);
-				webview.postMessage({
-					command: 'updateOutput',
-					output: response.assembly,
-					errors: response.errors
-				});
-			}
+			log('Generating Target IR');
+			const response = await client.sendRequest<GenerateIRResponse>(
+				'maxon/generateIR',
+				{
+					source: this._currentSource,
+					filename: 'compiler_explorer.maxon'
+				}
+			);
+			webview.postMessage({
+				command: 'updateOutput',
+				output: response.ir,
+				errors: response.errors
+			});
 		} catch (error) {
 			log(`Error generating output: ${error}`);
 			webview.postMessage({
@@ -196,62 +158,6 @@ export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider 
 			display: flex;
 			flex-direction: column;
 			overflow: hidden;
-		}
-
-		.toolbar {
-			display: flex;
-			align-items: center;
-			padding: 6px 8px;
-			background-color: var(--vscode-sideBarSectionHeader-background);
-			border-bottom: 1px solid var(--vscode-panel-border);
-			gap: 8px;
-			flex-wrap: wrap;
-		}
-
-		.toolbar-spacer {
-			flex: 1;
-		}
-
-		.toggle-container {
-			display: flex;
-			align-items: center;
-			gap: 6px;
-		}
-
-		.toggle-label {
-			font-size: 11px;
-			color: var(--vscode-descriptionForeground);
-		}
-
-		.toggle-switch {
-			position: relative;
-			width: 30px;
-			height: 16px;
-			background-color: var(--vscode-input-background);
-			border: 1px solid var(--vscode-input-border);
-			border-radius: 8px;
-			cursor: pointer;
-			transition: background-color 0.2s;
-		}
-
-		.toggle-switch.active {
-			background-color: var(--vscode-button-background);
-		}
-
-		.toggle-switch::after {
-			content: '';
-			position: absolute;
-			top: 1px;
-			left: 1px;
-			width: 12px;
-			height: 12px;
-			background-color: var(--vscode-button-foreground);
-			border-radius: 50%;
-			transition: transform 0.2s;
-		}
-
-		.toggle-switch.active::after {
-			transform: translateX(14px);
 		}
 
 		.main-container {
@@ -350,48 +256,9 @@ export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider 
 			color: var(--vscode-errorForeground);
 			font-weight: 600;
 		}
-
-		.mode-selector {
-			display: flex;
-			background-color: var(--vscode-input-background);
-			border: 1px solid var(--vscode-input-border);
-			border-radius: 4px;
-			overflow: hidden;
-		}
-
-		.mode-btn {
-			padding: 2px 8px;
-			font-size: 11px;
-			background: transparent;
-			border: none;
-			color: var(--vscode-foreground);
-			cursor: pointer;
-			transition: background-color 0.2s;
-		}
-
-		.mode-btn:hover {
-			background-color: var(--vscode-list-hoverBackground);
-		}
-
-		.mode-btn.active {
-			background-color: var(--vscode-button-background);
-			color: var(--vscode-button-foreground);
-		}
 	</style>
 </head>
 <body>
-	<div class="toolbar">
-		<div class="mode-selector">
-			<button class="mode-btn active" id="mirBtn">MIR</button>
-			<button class="mode-btn" id="asmBtn">Assembly</button>
-		</div>
-		<span class="toolbar-spacer"></span>
-		<div class="toggle-container">
-			<span class="toggle-label">Optimized</span>
-			<div class="toggle-switch" id="optimizeToggle"></div>
-		</div>
-	</div>
-
 	<div class="main-container">
 		<div class="panel" id="sourcePanel">
 			<div class="panel-header">Source</div>
@@ -399,12 +266,8 @@ export class CompilerExplorerViewProvider implements vscode.WebviewViewProvider 
 				<textarea class="source-editor" id="sourceEditor" placeholder="Enter Maxon code here...
 
 Example:
-function add(a int, b int) returns int
-    return a + b
-end 'add'
-
-function main()
-    let result = add(1, 2)
+function main() returns ExitCode
+	return 0
 end 'main'"></textarea>
 			</div>
 		</div>
@@ -412,7 +275,7 @@ end 'main'"></textarea>
 		<div class="divider" id="divider"></div>
 
 		<div class="panel" id="outputPanel">
-			<div class="panel-header" id="outputPanelHeader">MIR Output</div>
+			<div class="panel-header">Target IR</div>
 			<div class="panel-content">
 				<div class="ir-output" id="outputView"></div>
 			</div>
@@ -424,37 +287,18 @@ end 'main'"></textarea>
 		const vscode = acquireVsCodeApi();
 		const sourceEditor = document.getElementById('sourceEditor');
 		const outputView = document.getElementById('outputView');
-		const outputPanelHeader = document.getElementById('outputPanelHeader');
 		const errorList = document.getElementById('errorList');
-		const optimizeToggle = document.getElementById('optimizeToggle');
-		const mirBtn = document.getElementById('mirBtn');
-		const asmBtn = document.getElementById('asmBtn');
 		const divider = document.getElementById('divider');
 		const sourcePanel = document.getElementById('sourcePanel');
 		const outputPanel = document.getElementById('outputPanel');
-
-		let isOptimized = false;
-		let outputMode = 'mir';
 
 		const previousState = vscode.getState();
 		if (previousState && previousState.source) {
 			sourceEditor.value = previousState.source;
 		}
-		if (previousState && previousState.outputMode) {
-			outputMode = previousState.outputMode;
-			if (outputMode === 'asm') {
-				asmBtn.classList.add('active');
-				mirBtn.classList.remove('active');
-				outputPanelHeader.textContent = 'Assembly Output';
-			}
-		}
-		if (previousState && previousState.isOptimized) {
-			isOptimized = previousState.isOptimized;
-			optimizeToggle.classList.toggle('active', isOptimized);
-		}
 
 		function saveState() {
-			vscode.setState({ source: sourceEditor.value, outputMode, isOptimized });
+			vscode.setState({ source: sourceEditor.value });
 		}
 
 		sourceEditor.addEventListener('input', () => {
@@ -473,44 +317,6 @@ end 'main'"></textarea>
 				sourceEditor.value = sourceEditor.value.substring(0, start) + '\\t' + sourceEditor.value.substring(end);
 				sourceEditor.selectionStart = sourceEditor.selectionEnd = start + 1;
 				sourceEditor.dispatchEvent(new Event('input'));
-			}
-		});
-
-		optimizeToggle.addEventListener('click', () => {
-			isOptimized = !isOptimized;
-			optimizeToggle.classList.toggle('active', isOptimized);
-			saveState();
-			vscode.postMessage({
-				command: 'toggleOptimize',
-				optimize: isOptimized
-			});
-		});
-
-		mirBtn.addEventListener('click', () => {
-			if (outputMode !== 'mir') {
-				outputMode = 'mir';
-				mirBtn.classList.add('active');
-				asmBtn.classList.remove('active');
-				outputPanelHeader.textContent = 'MIR Output';
-				saveState();
-				vscode.postMessage({
-					command: 'setOutputMode',
-					mode: 'mir'
-				});
-			}
-		});
-
-		asmBtn.addEventListener('click', () => {
-			if (outputMode !== 'asm') {
-				outputMode = 'asm';
-				asmBtn.classList.add('active');
-				mirBtn.classList.remove('active');
-				outputPanelHeader.textContent = 'Assembly Output';
-				saveState();
-				vscode.postMessage({
-					command: 'setOutputMode',
-					mode: 'asm'
-				});
 			}
 		});
 

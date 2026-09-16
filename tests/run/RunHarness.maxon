@@ -92,6 +92,16 @@ let CacheCommandDirName = "run"
 let SidecarSuffix = ".mxdbg"
 let PendingBuildMarker = ".tmp"
 
+// Where slots of OTHER cache formats sit below the run root: directly under it (the unversioned layout),
+// and under a `v<n>` format directory older, and newer, than any this driver writes.
+export let UnversionedFormatSlotPath = "0123456789abcdef"
+export let OlderFormatSlotPath = "v1/0123456789abcdef"
+export let NewerFormatSlotPath = "v999/0123456789abcdef"
+
+// What a planted build is called and holds. It is never run, so it need not be a program.
+let PlantedBuildStem = "main-0123456789abcdef"
+let PlantedBuildContent = "a build another cache format left"
+
 // The suffix that marks a source file as test code, what an ordinary Maxon source is called, and the one
 // ordinary source allowed to sit in this corpus. Read by the guards in `corpus.test.maxon`.
 export let TestSourceSuffix = ".test.maxon"
@@ -331,44 +341,94 @@ end 'executableSuffix'
 // READING THE CACHE
 // ============================================================================================
 
-// ⭐ **THE SLOT IS FOUND BY BEING THE ONLY ONE, NOT BY RESPELLING THE KEY RULE.** A case's cache is private
-// and holds one program's build, so a listing of exactly one entry both locates the slot and checks that
-// the driver put its build where its own layout says. Anything else is the instrument being wrong about
-// the run it has just performed.
-export function soleSlotDir(staged StagedCase) returns FilePath
-	let slots = staged.cache.join("{CacheVendorDirName}").join("{CacheCommandDirName}")
+// A build planted in the case's private cache at `slotPath` below the run root, as another compiler would
+// have left it. Answers where it went.
+export function plantCachedBuild(staged StagedCase, slotPath String) returns FilePath
+	let relative = try FilePath.from(slotPath) otherwise panic("run tests: the gate could not run — '{slotPath}' is not a spellable path")
+	let dir = runCacheRoot(staged).join(relative)
 
-	if not Directory.isDirectory(slots) 'nothingCached'
-		panic("run tests: the gate could not run — the driver cached nothing under {slots.toString()}. Every run in this corpus is pointed at a private cache through {CacheRootVariable}.")
+	if not Directory.create(dir) and not Directory.isDirectory(dir) 'couldNotCreate'
+		panic("run tests: the gate could not run — could not create {dir.toString()} to plant a build in.")
+	end 'couldNotCreate'
+
+	let build = dir.join("{PlantedBuildStem}{executableSuffix()}")
+	try File.writeText(build, content: PlantedBuildContent) otherwise panic("run tests: the gate could not run — could not plant {build.toString()}.")
+	return build
+end 'plantCachedBuild'
+
+// The directory the driver keeps its slots under, in the case's private cache.
+function runCacheRoot(staged StagedCase) returns FilePath
+	return staged.cache.join("{CacheVendorDirName}").join("{CacheCommandDirName}")
+end 'runCacheRoot'
+
+// Every directory under the run root that directly holds a file. Found at ANY depth, so no case has to
+// know how the driver groups its slots below that root.
+//
+// ⚠ **AN EMPTY DIRECTORY IS NOT A SLOT.** Staging clears files and cannot remove a directory — the standard
+// library has no directory removal — so a slot an earlier run used survives, empty, and holds nothing any
+// run could read.
+function slotDirs(staged StagedCase) returns PathArray
+	let root = runCacheRoot(staged)
+
+	if not Directory.isDirectory(root) 'nothingCached'
+		panic("run tests: the gate could not run — the driver cached nothing under {root.toString()}. Every run in this corpus is pointed at a private cache through {CacheRootVariable}.")
 	end 'nothingCached'
 
-	let entries = listing(slots)
+	var occupied = PathArray.create()
+	collectOccupiedDirs(root, into: occupied)
+	return occupied
+end 'slotDirs'
 
-	if entries.count() != 1 'notExactlyOne'
-		panic("run tests: the gate could not run — {slots.toString()} holds {entries.count()} slots and a case's cache is one program's. More than one means a staging tree was shared with another case.")
+function collectOccupiedDirs(dir FilePath, into PathArray)
+	var holdsAFile = false
+
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			collectOccupiedDirs(entry, into: into)
+		end 'aDirectory' else 'aFile'
+			holdsAFile = true
+		end 'aFile'
+	end 'eachEntry'
+
+	if holdsAFile 'aSlot'
+		into.push(dir)
+	end 'aSlot'
+end 'collectOccupiedDirs'
+
+// ⭐ **THE SLOT IS FOUND BY BEING THE ONLY ONE, NOT BY RESPELLING THE KEY RULE.** A case's cache is private
+// and holds one program's build, so exactly one slot both locates it and checks that the driver put its
+// build where its own layout says. Anything else is the instrument being wrong about the run it has just
+// performed.
+function soleSlotDir(staged StagedCase) returns FilePath
+	let occupied = slotDirs(staged)
+
+	if occupied.count() != 1 'notExactlyOne'
+		panic("run tests: the gate could not run — {staged.cache.toString()} holds {occupied.count()} occupied slots and a case's cache is one program's. More than one means a staging tree was shared with another case.")
 	end 'notExactlyOne'
 
-	return try entries.get(0) otherwise panic("run tests: the count is 1 on the line above")
+	return try occupied.get(0) otherwise panic("run tests: the count is 1 on the line above")
 end 'soleSlotDir'
 
-// The executables a slot holds: every entry that is neither a debug sidecar nor a build still being
-// written. Derived by elimination rather than by name, so no case has to know what the driver calls a
-// build, and returned as a LIST because one case's whole subject is that there is none.
+// The executables the cache holds: every entry of every slot that is neither a debug sidecar nor a build
+// still being written. Derived by elimination rather than by name, so no case has to know what the driver
+// calls a build, and returned as a LIST because one case's whole subject is that there is none.
 //
 // ⭐ **A PENDING NAME IS EXCLUDED HERE AND MUST BE**, because it is excluded from the driver's hit test
 // too: counting one would make a run that CRASHED mid-build read exactly like a cached one.
 export function slotExecutables(staged StagedCase) returns PathArray
 	var found = PathArray.create()
 
-	for entry in listing(soleSlotDir(staged)) 'eachEntry'
-		let name = entry.filename()
+	for dir in slotDirs(staged) 'eachSlot'
+		for entry in listing(dir) 'eachEntry'
+			let name = entry.filename()
 
-		if name.endsWith(SidecarSuffix) or name.endsWith(pendingBuildSuffix()) 'notAPublishedBuild'
-			continue
-		end 'notAPublishedBuild'
+			if name.endsWith(SidecarSuffix) or name.endsWith(pendingBuildSuffix()) 'notAPublishedBuild'
+				continue
+			end 'notAPublishedBuild'
 
-		found.push(entry)
-	end 'eachEntry'
+			found.push(entry)
+		end 'eachEntry'
+	end 'eachSlot'
 
 	return found
 end 'slotExecutables'

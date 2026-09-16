@@ -50,9 +50,9 @@ end 'runRun'
 
 // The one sentence a cache failure reaches a reader through: the arm IS the fact and its payload is the
 // sentence, so there is nothing to decide here.
-function reportCacheError(e RunCacheError)
+function reportCacheError(e RunCacheError, speaker String)
 	match e 'why'
-		unavailable(reason) then printError("{RunCommandName}: {reason}\n")
+		unavailable(reason) then printError("{speaker}: {reason}\n")
 	end 'why'
 end 'reportCacheError'
 
@@ -74,29 +74,40 @@ function programArguments(paths SourcePathSpellingArray) returns StringArray
 end 'programArguments'
 
 function runProgram(program FilePath, isProject bool, arguments StringArray) returns ExitCode
-	let target = detectHostTarget()
+	let executable = try cachedBuild(program, isProject: isProject, target: detectHostTarget(), entryFunction: MainFunctionName, speaker: RunCommandName) otherwise return OwnFailureExit
 
-	let slot = try locateRunSlot(program, isProject: isProject, target: target) otherwise (e) 'noCache'
-		reportCacheError(e)
-		return OwnFailureExit
-	end 'noCache'
-
-	// A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
-	// to compare — a build under that name was made from these very inputs.
-	if not File.exists(slot.executable) 'notCachedYet'
-		if not fillSlot(program, slot: slot, target: target) 'nothingToRun'
-			return OwnFailureExit
-		end 'nothingToRun'
-	end 'notCachedYet'
-
-	return spawnForwarding(Executable.path(slot.executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, speaker: RunCommandName)
+	return spawnForwarding(Executable.path(executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, speaker: RunCommandName)
 end 'runProgram'
 
-// Compile the program into its cache slot and publish it under the name its key gives it. FALSE when
-// there is nothing to run afterwards, having said why: a failed compile through the one diagnostic sink,
-// and a build that reported success and left nothing behind in this command's own words.
+// Why there is no cached build to run. Every cause has already been reported, in `speaker`'s words.
+export enum CachedBuildError implements Error
+	notBuilt
+end 'CachedBuildError'
+
+// The run cache's build of `program` from `entryFunction`: the one already published under these inputs'
+// key, or a fresh one compiled and published first. `maxon run` and a `build.maxon` manifest both come
+// through here, so neither writes a compiled program into the project it was run from.
 //
-// ⭐⭐ **THE COMPILE GOES TO A PATH NO OTHER RUN CAN BE WRITING.** Concurrent cold runs of one program
+// A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
+// to compare — a build under that name was made from these very inputs.
+export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String) returns FilePath throws CachedBuildError
+	let slot = try locateRunSlot(program, isProject: isProject, target: target, entryFunction: entryFunction) otherwise (e) 'noCache'
+		reportCacheError(e, speaker: speaker)
+		throw CachedBuildError.notBuilt
+	end 'noCache'
+
+	if not File.exists(slot.executable) 'notCachedYet'
+		try fillSlot(program, slot: slot, target: target, entryFunction: entryFunction, speaker: speaker)
+	end 'notCachedYet'
+
+	return slot.executable
+end 'cachedBuild'
+
+// Compile the program into its cache slot and publish it under the name its key gives it, having said why
+// when it cannot: a failed compile through the one diagnostic sink, and a build that reported success and
+// left nothing behind in `speaker`'s own words.
+//
+// ⭐⭐ **THE COMPILE GOES TO A PATH NO OTHER BUILD CAN BE WRITING.** Concurrent cold builds of one program
 // would otherwise contend over a single output file, where a loser's failed write reaches the PROGRAM's
 // stderr — the backend writers report a failed write by logging — and the `File.exists` check below is
 // satisfied by the winner's file, so the loser publishes a key over a binary it did not build.
@@ -104,26 +115,24 @@ end 'runProgram'
 // ⚠ **`debugInfo` DEFAULTS TO FALSE ON `compileToProduct` AND MUST NOT HERE.** A program launched this way
 // is one somebody is developing, and a crash with no sidecar beside the binary is a stack trace nobody can
 // read.
-function fillSlot(program FilePath, slot RunSlot, target Target) returns bool
+function fillSlot(program FilePath, slot RunSlot, target Target, entryFunction ByteArray, speaker String) throws CachedBuildError
 	var inputPaths = MaxonSourcePathArray.create()
 	inputPaths.push(program)
 
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: slot.pending.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: true) otherwise (e) 'compileFailed'
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: slot.pending.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: true, entryFunction: entryFunction) otherwise (e) 'compileFailed'
 		reportCompileError(e)
-		return false
+		throw CachedBuildError.notBuilt
 	end 'compileFailed'
 
-	// A successful return is a claim about the BUILD; what the spawn below needs is a claim about the FILE.
+	// A successful return is a claim about the BUILD; what the spawn needs is a claim about the FILE.
 	// Absent it, the spawn reports "could not run" about a compiler defect.
 	if not File.exists(product.outputPath) 'nothingWritten'
-		printError("{RunCommandName}: compiling {program.toString()} reported success but left no {product.outputPath.toString()}\n")
-		return false
+		printError("{speaker}: compiling {program.toString()} reported success but left no {product.outputPath.toString()}\n")
+		throw CachedBuildError.notBuilt
 	end 'nothingWritten'
 
 	try publishSlotBuild(slot, built: product.outputPath) otherwise (e) 'notPublished'
-		reportCacheError(e)
-		return false
+		reportCacheError(e, speaker: speaker)
+		throw CachedBuildError.notBuilt
 	end 'notPublished'
-
-	return true
 end 'fillSlot'

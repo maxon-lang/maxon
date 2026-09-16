@@ -54,22 +54,32 @@ module function clearPublishedDiagnostics(uri String)
 	writeDiagnosticsNotification(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create())
 end 'clearPublishedDiagnostics'
 
-// Drive the checks over `project` and publish everything they reported about this document.
-//
-// ⛔⛔ **THE COMPILE IS CAPTURED, AND THAT IS WHAT KEEPS THE SESSION ALIVE RATHER THAN TIDINESS.** Every
-// diagnostic the pipeline reports is written to STDERR by `emitDiagnosticLine`, and a client cannot
-// drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
-// full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
-// bytes go instead; the ARRAY standing on the project is what is published.
-// ⚖ **THE STEP IS THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH IT.** The compile below
+// What compiling a buffer produced. Either way `project.diagnostics` holds what the compile reported.
+module union LspBufferCompile
+	compiled(codeResult CodeResult)
+	refused
+end 'LspBufferCompile'
+
+// ⚖ **THESE STEPS ARE THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH THEM.** The compile
 // writes the project, and a method writing its own receiver is legal on a binding nothing may write from
 // outside; the same work spelled `publishCheckedDiagnostics(project: project)` hands that payload to a
 // parameter the callee writes, which is E3019.
 extension Project
-	function publishCheckedDiagnostics(uri String, text String)
+	// ⛔⛔ **THE COMPILE IS CAPTURED, AND THAT IS WHAT KEEPS THE SESSION ALIVE RATHER THAN TIDINESS.** Every
+	// diagnostic the pipeline reports is written to STDERR by `emitDiagnosticLine`, and a client cannot
+	// drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
+	// full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
+	// bytes go instead; the ARRAY standing on the project is what a caller reports.
+	module function compileBufferCaptured() returns LspBufferCompile
 		beginDiagnosticCapture()
-		runBufferChecks(self)
+		let outcome = compileBuffer(self)
 		_ = endDiagnosticCapture()
+		return outcome
+	end 'compileBufferCaptured'
+
+	// Drive the checks over this project and publish everything they reported about this document.
+	function publishCheckedDiagnostics(uri String, text String)
+		_ = compileBufferCaptured()
 
 		var doc = JsonDoc.create()
 		let index = LspLineIndex.build(text)
@@ -93,14 +103,10 @@ end 'Project'
 // does not compile — `LspCompletion.maxon`'s header measures that every recovered fixture is refused
 // before it has a type at all — and `compileToCodeResult` reports and throws by design. What is wanted
 // is `project.diagnostics`, which the refusing and the succeeding path both leave standing.
-//
-// It is a function of its own because `otherwise ignore` is rejected in value position (E3059), so
-// swallowing the refusal needs a handler that diverges.
-function runBufferChecks(project Project)
-	_ = try compileToCodeResult(project) otherwise 'refused'
-		return
-	end 'refused'
-end 'runBufferChecks'
+function compileBuffer(project Project) returns LspBufferCompile
+	let codeResult = try compileToCodeResult(project) otherwise return LspBufferCompile.refused
+	return LspBufferCompile.compiled(codeResult)
+end 'compileBuffer'
 
 // ⛔⛔ **A SINGLE-BUFFER COMPILE CANNOT HONESTLY PUBLISH A WHOLE-PROGRAM CLAIM.** "This program declares
 // no entry point" is a property of a PROGRAM; this server holds one FILE plus `stdlib/` and never the
@@ -127,7 +133,7 @@ end 'claimsAboutTheWholeProgram'
 // about this buffer, once the question above has taken the whole-program claims out. One naming another
 // file is `stdlib/`'s, and painting it into the author's document would put a squiggle on a line they did
 // not write.
-function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
+module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
 	return diagnostic.filePath.isEmpty() or diagnostic.filePath.toString() == path.toString()
 end 'reportsOn'
 
@@ -162,9 +168,9 @@ end 'diagnosticNode'
 //     so every punctuator carries `startByte == endByte == 0` (`LspCursor.maxon` states the same fact
 //     from the other side) — `tokenSpanAt` finds one by line and column and hands back a span that is
 //     empty, which is exactly the signal to fall back.
-function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
+module function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns LspSpan
 	if diagnostic.line == 0 'wholeProgram'
-		return LspSpan.create(0, endByte: 1)
+		return documentStartSpan()
 	end 'wholeProgram'
 
 	let anchored = tokenSpanAt(tokens, line: diagnostic.line, column: diagnostic.column)
@@ -182,6 +188,11 @@ function diagnosticSpan(diagnostic Diagnostic, source String, index LspLineIndex
 
 	return LspSpan.create(anchor, endByte: (anchor + 1) as ByteOffset)
 end 'diagnosticSpan'
+
+// The first byte of a document, where a diagnostic with no position of its own in it is placed.
+module function documentStartSpan() returns LspSpan
+	return LspSpan.create(0, endByte: 1)
+end 'documentStartSpan'
 
 // `PublishDiagnosticsParams` for `uri`, framed and written. The document travels with the items because
 // each of them is a node inside it.

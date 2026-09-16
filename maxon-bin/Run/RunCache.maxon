@@ -1,5 +1,5 @@
-// RunCache.maxon — where `maxon run` keeps a compiled program, and how it decides the one it kept is
-// still the program it was asked to run.
+// RunCache.maxon — where `maxon run` and a `build.maxon` manifest keep a compiled program, and how the
+// cache decides the one it kept is still the program it was asked for.
 //
 // ⭐⭐ **THE KEY IS THE BUILD'S FILENAME, WHICH IS WHAT MAKES A WRONG ANSWER UNREACHABLE.** Nothing is
 // recorded beside the executable and nothing is compared: a build named after the inputs it was made from
@@ -23,9 +23,21 @@
 // twice the largest source rather than the whole corpus — the standard library alone is megabytes, and
 // this runs ahead of every cached run.
 
-// Bumped when the manifest below changes shape, which invalidates every slot at once: two rules can agree
-// on a key by accident, and the name a key becomes says nothing about which rule spelled it.
-let CacheFormatVersion = "maxon-run-cache-1"
+// Bumped when the manifest below or the slot layout changes shape, which invalidates every slot at once:
+// two rules can agree on a key by accident, and the name a key becomes says nothing about which rule
+// spelled it.
+//
+// ⭐ **THE FORMAT IS A DIRECTORY, `<root>/maxon/run/v<n>/`, SO A SUPERSEDED ONE CAN BE FOUND.** A key is a
+// hash, so a slot of an older format sits under a name no run computes; only the directory above it says
+// which format it belongs to. Short, because every slot path spends from Windows' 260-character budget.
+let CacheFormat = 2 as CacheFormatNumber
+let CacheFormatPrefix = "v"
+
+// A format directory's name split at the prefix: nothing before it, and the number after it.
+let FormatNameParts = 2
+let FormatNumberPart = 1
+
+typealias CacheFormatNumber = int(1 to u32.max)
 
 #if os(Windows)
 	// Windows has no directory every process may write to unasked, so these two ARE the answer and a host
@@ -39,8 +51,8 @@ let CacheFormatVersion = "maxon-run-cache-1"
 	let PosixLastResortRoot = "/tmp"
 #endif
 
-// `<root>/maxon/run/<one directory per program>` — under a directory of this compiler's own, so a shared
-// temp area is not littered with slot names that say nothing about what put them there.
+// `<root>/maxon/run/<format>/<one directory per program>` — under a directory of this compiler's own, so a
+// shared temp area is not littered with slot names that say nothing about what put them there.
 let CacheVendorDirName = "maxon"
 let CacheCommandDirName = "run"
 
@@ -74,9 +86,11 @@ let VersionFieldLabel = "format"
 let CompilerFieldLabel = "compiler"
 let ProgramFieldLabel = "program"
 let StdlibFieldLabel = "stdlib"
+let EntryFieldLabel = "entry"
 
 typealias CacheVariableArray = Array with String
 typealias ManifestFieldArray = Array with String
+typealias BuildNameArray = Array with String
 
 // ⛔ **ONE ARM CARRYING THE SENTENCE.** Every cause — no writable root, an unreadable source, a compiler
 // that cannot name itself — is the SAME fact to the caller (there is no cache to build in) and a DIFFERENT
@@ -92,9 +106,10 @@ module type RunSlot
 	export let executable as FilePath
 	export let pending as FilePath
 	export let binarySuffix as String
+	export let formatsRoot as FilePath
 
-	static function create(directory FilePath, executable FilePath, pending FilePath, binarySuffix String) returns RunSlot
-		return Self{directory: directory, executable: executable, pending: pending, binarySuffix: binarySuffix}
+	static function create(directory FilePath, executable FilePath, pending FilePath, binarySuffix String, formatsRoot FilePath) returns RunSlot
+		return Self{directory: directory, executable: executable, pending: pending, binarySuffix: binarySuffix, formatsRoot: formatsRoot}
 	end 'create'
 end 'RunSlot'
 
@@ -109,18 +124,19 @@ end 'RunSlot'
 // ⚠ **THE STEM IS THERE FOR A READER AND FOR THE PROGRAM'S OWN `argv[0]`**, never for finding the build:
 // one slot directory holds one program's builds, so the key alone would locate them.
 //
-// ⚠ **THE MONOTONIC READING IS NOT UNIQUENESS, IT IS SEPARATION.** Its period is 100 ns on Windows, so two
-// runs starting inside one tick can spell one pending name; nothing short of an OS-allocated name rules
-// that out, and the cost of it is the two-writers-on-one-path this naming exists to make unreachable
-// everywhere else.
-module function locateRunSlot(program FilePath, isProject bool, target Target) returns RunSlot throws RunCacheError
-	let key = try freshnessKey(program, isProject: isProject, target: target)
+// ⭐ **THE PENDING NAME CARRIES THE PROCESS ID, WHICH IS WHAT MAKES IT ONE WRITER'S.** No two live
+// processes share an id, and a process fills at most one slot per program: `maxon run` builds its one
+// program and `maxon build` its one manifest, each once. A pending file a DEAD process left under a reused
+// id is overwritten, which costs nothing — its writer is gone.
+module function locateRunSlot(program FilePath, isProject bool, target Target, entryFunction ByteArray) returns RunSlot throws RunCacheError
+	let key = try freshnessKey(program, isProject: isProject, target: target, entryFunction: entryFunction)
 	let stem = try slotStem(program, isProject: isProject)
-	let dir = try slotDirectory(program)
+	let formatsRoot = try runCacheRoot()
+	let dir = try slotDirectory(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
 	let binarySuffix = executableExtension(target)
 	let built = "{stem}{SlotKeySeparator}{key}"
 
-	return RunSlot.create(dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{Clock.nowNanos()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix)
+	return RunSlot.create(dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{__Builtins.currentProcessId()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix, formatsRoot: formatsRoot)
 end 'locateRunSlot'
 
 // Take the built program's key-name, which IS publishing it: from that moment every other run reads it as
@@ -142,6 +158,7 @@ module function publishSlotBuild(slot RunSlot, built FilePath) throws RunCacheEr
 
 	publishDebugSidecar(built, to: slot.executable)
 	discardSupersededBuilds(slot)
+	discardOlderCacheFormats(slot)
 end 'publishSlotBuild'
 
 // The sidecar is named after the binary, so it travels with it: the name is the only thing linking a
@@ -169,26 +186,92 @@ end 'publishDebugSidecar'
 // ⛔ **A PENDING NAME IS LEFT ALONE — ANOTHER RUN IS WRITING IT.** Removing one costs that run its rename,
 // which it would then report as a failure with nothing published.
 function discardSupersededBuilds(slot RunSlot)
-	let entries = try Directory.list(slot.directory) otherwise return
 	let current = slot.executable.filename()
-	let currentSidecar = "{current}{MxdbgSidecarExtension}"
-	let pending = "{PendingBuildMarker}{slot.binarySuffix}"
-	let pendingSidecar = "{pending}{MxdbgSidecarExtension}"
+
+	var kept = BuildNameArray.create()
+	kept.push(current)
+	kept.push("{current}{MxdbgSidecarExtension}")
+
+	discardSlotBuilds(slot.directory, binarySuffix: slot.binarySuffix, kept: kept)
+end 'discardSupersededBuilds'
+
+// Every build an OLDER cache format left, which no run of this format can reach again. Swept when a build
+// is published, so a hit pays nothing for it, and under `discardSupersededBuilds`' rules: failures ignored,
+// pending names left alone — an older driver may be writing one now.
+//
+// ⚠ **A NEWER FORMAT'S DIRECTORY IS LEFT ALONE**, because a newer driver on this host is using it; sweeping
+// both ways would have two installed drivers discard each other's builds on every miss.
+//
+// ⛔ **ONLY THE DEPTH A FORMAT'S LAYOUT PUTS FILES AT IS SWEPT**, never a walk: a directory at any other
+// depth — a link planted in the cache included — is nothing a driver wrote, and a walk would follow it.
+//
+// ⚠ **THE FILES GO AND THEIR DIRECTORIES STAY.** The standard library has no directory removal, so a swept
+// slot remains as an empty directory, which costs a name and no bytes.
+function discardOlderCacheFormats(slot RunSlot)
+	let entries = try Directory.list(slot.formatsRoot) otherwise return
+	let nothingKept = BuildNameArray.create()
 
 	for entry in entries 'eachEntry'
 		let name = entry.filename()
 
-		if name == current or name == currentSidecar 'theBuildJustPublished'
+		// The unversioned layout kept its slots here, and a key is hex, so no slot name begins with the prefix.
+		if not name.startsWith(CacheFormatPrefix) 'aSlotOfTheUnversionedLayout'
+			discardSlotBuilds(entry, binarySuffix: slot.binarySuffix, kept: nothingKept)
 			continue
-		end 'theBuildJustPublished'
+		end 'aSlotOfTheUnversionedLayout'
 
-		if name.endsWith(pending) or name.endsWith(pendingSidecar) 'stillBeingWritten'
+		if not isOlderCacheFormatName(name) 'notOlder'
 			continue
-		end 'stillBeingWritten'
+		end 'notOlder'
+
+		let slots = try Directory.list(entry) otherwise continue
+
+		for olderSlot in slots 'eachOlderSlot'
+			discardSlotBuilds(olderSlot, binarySuffix: slot.binarySuffix, kept: nothingKept)
+		end 'eachOlderSlot'
+	end 'eachEntry'
+end 'discardOlderCacheFormats'
+
+// A prefixed name that is not the prefix and a number was written by no driver, and is left alone.
+function isOlderCacheFormatName(name String) returns bool
+	let parts = name.split(CacheFormatPrefix)
+
+	if parts.count() != FormatNameParts 'notAFormatName'
+		return false
+	end 'notAFormatName'
+
+	let digits = try parts.get(FormatNumberPart) otherwise panic("isOlderCacheFormatName: the count is {FormatNameParts} on the line above")
+	let format = try int.fromString(digits) otherwise return false
+
+	return format < CacheFormat
+end 'isOlderCacheFormatName'
+
+// A slot's files, but for `kept` and any build still being written. A non-directory `dir` lists nothing
+// and is left alone.
+function discardSlotBuilds(dir FilePath, binarySuffix String, kept BuildNameArray)
+	let entries = try Directory.list(dir) otherwise return
+
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+
+		if kept.contains(name) or isPendingBuildName(name, binarySuffix: binarySuffix) 'leftInPlace'
+			continue
+		end 'leftInPlace'
+
+		if Directory.isDirectory(entry) 'notABuild'
+			continue
+		end 'notABuild'
 
 		discardQuietly(entry)
 	end 'eachEntry'
-end 'discardSupersededBuilds'
+end 'discardSlotBuilds'
+
+// A build still being written, or its sidecar. The hit test cannot match one, and removing it costs its
+// writer the rename that publishes it.
+function isPendingBuildName(name String, binarySuffix String) returns bool
+	let pending = "{PendingBuildMarker}{binarySuffix}"
+	return name.endsWith(pending) or name.endsWith("{pending}{MxdbgSidecarExtension}")
+end 'isPendingBuildName'
 
 // A build that never took its name, sidecar included. What survives is a pending name, which the hit test
 // structurally cannot match.
@@ -271,12 +354,26 @@ function noCacheRootMessage() returns String
 	return "no directory to keep compiled programs in: none of {named} names one. Set {RunCacheRootVariable} to a writable directory."
 end 'noCacheRootMessage'
 
+// The directory every cache format keeps its own directory under.
+function runCacheRoot() returns FilePath throws RunCacheError
+	let root = try hostCacheRoot()
+	return root.join("{CacheVendorDirName}").join("{CacheCommandDirName}")
+end 'runCacheRoot'
+
+function cacheFormatName() returns String
+	return "{CacheFormatPrefix}{CacheFormat}"
+end 'cacheFormatName'
+
 // ⛔ **WHAT MATTERS IS THAT THE SLOT IS THERE AFTERWARDS, NOT THAT THIS RUN MADE IT.** `Directory.create`
 // answers false when the underlying create fails, and a run losing the mkdir to a simultaneous one fails
 // exactly that way against a directory that now EXISTS — so the creation alone is not the question to ask.
-function slotDirectory(program FilePath) returns FilePath throws RunCacheError
-	let root = try hostCacheRoot()
-	let dir = root.join("{CacheVendorDirName}").join("{CacheCommandDirName}").join(hexDigest(sha256(program.toString().toByteArray())))
+//
+// ⚠ **ONE SLOT PER PROGRAM AND ENTRY POINT.** A slot sweeps every build but its newest
+// (`discardSupersededBuilds`), so a `build.maxon` run from `main` and built as a manifest from `build`
+// sharing one slot would evict each other on every use.
+function slotDirectory(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath throws RunCacheError
+	let identity = manifestLine(program.toString(), fields: [String.from(entryFunction)])
+	let dir = formatsRoot.join(cacheFormatName()).join(hexDigest(sha256(identity.toByteArray())))
 
 	if not Directory.create(dir) and not Directory.isDirectory(dir) 'unusable'
 		throw RunCacheError.unavailable("could not create {dir.toString()}, where this program's build is kept. Set {RunCacheRootVariable} to a writable directory.")
@@ -318,10 +415,12 @@ end 'slotStem'
 // THE KEY
 // ============================================================================================
 
-function freshnessKey(program FilePath, isProject bool, target Target) returns String throws RunCacheError
+// The entry point is in the key because two entry points over one source are two programs.
+function freshnessKey(program FilePath, isProject bool, target Target, entryFunction ByteArray) returns String throws RunCacheError
 	var manifest = ""
 	manifest.append(versionLine())
 	manifest.append(try compilerLine(target))
+	manifest.append(manifestLine(EntryFieldLabel, fields: [String.from(entryFunction)]))
 
 	let sources = try programSources(program, isProject: isProject)
 	manifest.append(try digestLines(ProgramFieldLabel, paths: sources))
@@ -349,7 +448,7 @@ end 'manifestLine'
 
 function versionLine() returns String
 	var fields = ManifestFieldArray.create()
-	fields.push(CacheFormatVersion)
+	fields.push(cacheFormatName())
 
 	return manifestLine(VersionFieldLabel, fields: fields)
 end 'versionLine'

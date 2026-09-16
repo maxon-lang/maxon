@@ -1,0 +1,69 @@
+// `maxon/generateIR` — the Compiler Explorer panel's request: the Target IR a source text compiles to, or
+// the errors that stopped it.
+//
+// ⭐ **THE COMPILE IS THE ONE DIAGNOSTICS RUNS, AND IT WRITES NOTHING TO DISK.** `lspDocumentProject`
+// registers the text in memory and `compileToCodeResult` stops at a `CodeResult`, so no executable and no
+// `.ir` file lands in the author's workspace; the text is `renderTargetIr`'s, which is what `--emit-ir`
+// writes.
+
+let SourceKey = "source"
+let FilenameKey = "filename"
+let IrKey = "ir"
+let ErrorsKey = "errors"
+let IrErrorMessageKey = "message"
+let IrErrorLineKey = "line"
+let IrErrorColumnKey = "column"
+
+// The panel shows positions to a reader, counting from 1; LSP's coordinates count from 0.
+let ExplorerPositionBase = 1
+
+module function generateIrAnswer(incoming JsonDoc, params JsonNodeId) returns LspExtensionOutcome throws LspParamsError
+	let source = try lspMemberText(incoming, of: params, key: SourceKey)
+	let filename = try lspMemberText(incoming, of: params, key: FilenameKey)
+	let path = try FilePath.from(filename) otherwise throw LspParamsError.malformed
+
+	return match lspDocumentProject(path, content: source) 'explorer'
+		loaded(project) gives LspExtensionOutcome.answered(project.generatedIr(path, source: source))
+		unavailable gives LspExtensionOutcome.compilerUnavailable
+	end 'explorer'
+end 'generateIrAnswer'
+
+extension Project
+	// ⭐ **EVERY DIAGNOSTIC IS REPORTED, INCLUDING A WHOLE-PROGRAM CLAIM.** Unlike an open document, the
+	// explorer's source IS the whole program, so "no `main`" is true of what the author wrote.
+	function generatedIr(path FilePath, source String) returns LspAnswer
+		let ir = match compileBufferCaptured() 'compile'
+			compiled(codeResult) gives renderTargetIr(self, codeResult: codeResult)
+			refused gives ""
+		end 'compile'
+
+		var doc = JsonDoc.create()
+		let index = LspLineIndex.build(source)
+		let tokens = lspDocumentTokens(source)
+		var errors = JsonNodeIdArray.create()
+
+		for diagnostic in self.diagnostics 'each'
+			errors.push(irErrorNode(doc, diagnostic: diagnostic, path: path, source: source, index: index, tokens: tokens))
+		end 'each'
+
+		var result = LspJsonObject.create(doc)
+		result.put(IrKey, value: JsonNode.stringNode(ir))
+		result.putNode(ErrorsKey, value: doc.add(JsonNode.arrayNode(errors)))
+		return LspAnswer.of(doc, result: result.finish())
+	end 'generatedIr'
+end 'Project'
+
+// A diagnostic located in another file has no position in the source the panel shows, so it is placed at
+// the source's start and its message names where it really is.
+function irErrorNode(doc JsonDoc, diagnostic Diagnostic, path FilePath, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
+	let inTheSource = reportsOn(diagnostic, path: path)
+	let span = diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens) if inTheSource else documentStartSpan()
+	let message = diagnostic.message if inTheSource else "{diagnostic.filePath}:{diagnostic.line}:{diagnostic.column}: {diagnostic.message}"
+	let start = index.positionOf(source, offset: span.startByte)
+
+	var item = LspJsonObject.create(doc)
+	item.put(IrErrorMessageKey, value: JsonNode.stringNode(message))
+	item.put(IrErrorLineKey, value: JsonNode.numberNode((start.line + ExplorerPositionBase) as JsonFloat))
+	item.put(IrErrorColumnKey, value: JsonNode.numberNode((start.character + ExplorerPositionBase) as JsonFloat))
+	return item.finish()
+end 'irErrorNode'

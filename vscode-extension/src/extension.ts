@@ -544,7 +544,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	// Register commands for testing - these allow tests to call LSP methods via VS Code commands
 	const generateIRCommand = vscode.commands.registerCommand(
 		'maxon.generateIR',
-		async (params: { source: string; filename: string; optimize: boolean; }) => {
+		async (params: { source: string; filename: string; }) => {
 			if (!state?.client) {
 				throw new Error('Language server not started');
 			}
@@ -552,17 +552,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		}
 	);
 	ctx.subscriptions.push(generateIRCommand);
-
-	const generateAsmCommand = vscode.commands.registerCommand(
-		'maxon.generateAsm',
-		async (params: { source: string; filename: string; optimize: boolean; }) => {
-			if (!state?.client) {
-				throw new Error('Language server not started');
-			}
-			return state.client.sendRequest('maxon/generateAsm', params);
-		}
-	);
-	ctx.subscriptions.push(generateAsmCommand);
 
 	// ⛔ A REBUILT COMPILER RESTARTS THE SERVER. A server still running from the renamed-away `.previous`
 	// answers from the old compiler, and it keeps that file on disk until it exits.

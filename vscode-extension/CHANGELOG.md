@@ -2,6 +2,22 @@
 
 Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
 
+## 2026.9.3
+
+### Fixed
+
+- The Compiler Explorer shows the Target IR of the program you type, or its errors with their line and
+  column. Every request used to be refused by the language server, so the panel stayed empty.
+- Running spec tests from the Test Explorer reports each test's result. The run passed an option the
+  compiler refuses and read a report format it no longer prints, so no test was ever marked passed or
+  failed.
+
+### Removed
+
+- The Compiler Explorer's Assembly view and its Optimized toggle, and the `Maxon: Generate Assembly
+  (internal)` command. The compiler has no assembly listing and no optimization levels to choose
+  between; the panel is a single Target IR view.
+
 ## 2026.9.2
 
 ### Changed

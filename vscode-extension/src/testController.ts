@@ -22,17 +22,14 @@ interface ProfileBinding {
 	includes(spec: SpecFile): boolean;
 }
 
-const TEST_LINE_RE = /^\s*(?:\[W\d+\]\s+)?\[(PASS|FAIL)\]\s+(\S+)(?:\s+\((\d+)ms\))?\s*$/;
-// The runner reports failures as "specs/fragments-{target}/..." (SpecTestRunner.maxon);
-// the target segment is optional here so an unsuffixed path matches too.
-const FAILURE_PATH_RE = /^specs\/fragments(?:-[^/]+)?\/([^/]+)\/(.+)\.test$/;
-const SPEC_FAIL_RE = /^\s*\[FAIL\]\s+\S+\s+\(\d+\/\d+\)\s*$/;
-const SUMMARY_RE = /^Tests:\s+\d+\s+passed/;
-// The runner prefixes every line with a category code:
-//   "[TST] INFO: msg"  /  "[TST] ERROR: msg"
-// Strip the prefix so the patterns above can match the inner payload.
-const LOG_PREFIX_RE = /^\[[A-Z]{2,4}\]\s+(?:(?:ERROR|INFO|DEBUG|TRACE):\s+)?/;
-const ERROR_LINE_RE = /^\[[A-Z]{2,4}\]\s+ERROR:/;
+// `spec-test` prints one verdict line per selected test on stdout — `PASS <spec>/<test>`,
+// `FAIL <spec>/<test>: <reason>`, `SKIP <spec>/<test>` or `NOTRUN <spec>/<test>` (`verdictLine` in
+// maxon-bin/Main.maxon) — then `<n> passed, <m> failed`. A failure's reason continues on the lines
+// after its verdict until the next verdict or the summary, and may be empty on the verdict line itself.
+const PASS_LINE_RE = /^PASS (\S+)$/;
+const FAIL_LINE_RE = /^FAIL (\S+):(?: (.*))?$/;
+const NOT_RUN_LINE_RE = /^(?:SKIP|NOTRUN) (\S+)$/;
+const SUMMARY_RE = /^\d+ passed, \d+ failed$/;
 
 export function registerTestController(): vscode.Disposable {
 	const folders = vscode.workspace.workspaceFolders;
@@ -325,18 +322,19 @@ function buildFilters(
 
 interface PendingFailure {
 	item: vscode.TestItem;
-	durationMs?: number;
 	detail: string[];
 }
 
 interface ActiveRun {
 	requested: RequestedTests;
 	run: vscode.TestRun;
-	// Failures wait until end-of-process: the per-test verbose [FAIL] line
-	// arrives first (no detail), and the per-spec failure block follows with
-	// the actual error message. We pair them up at flush time.
+	// A failure is reported when the process closes, because its reason may continue on later lines.
 	pendingFailures: Map<string, PendingFailure>;
 	failureDetailFor?: string;
+	reported: Set<string>;
+	// Without the summary the runner stopped early, so a test it printed no verdict for was not excluded:
+	// it is unaccounted for.
+	sawSummary: boolean;
 }
 
 async function runWithFilter(
@@ -346,7 +344,7 @@ async function runWithFilter(
 	run: vscode.TestRun,
 	token: vscode.CancellationToken
 ): Promise<void> {
-	const args = ['spec-test', '--verbose'];
+	const args = ['spec-test'];
 	if (filter !== null) args.splice(1, 0, `--filter=${filter}`);
 	log(`Spawning ${binding.binary} ${args.join(' ')}`);
 	run.appendOutput(`> ${binding.binary} ${args.join(' ')}\r\n`);
@@ -367,12 +365,15 @@ async function runWithFilter(
 	const active: ActiveRun = {
 		requested,
 		run,
-		pendingFailures: new Map()
+		pendingFailures: new Map(),
+		reported: new Set(),
+		sawSummary: false
 	};
 
-	const lineHandler = makeLineHandler(active);
-	pipeLines(child.stdout, lineHandler);
-	pipeLines(child.stderr, lineHandler);
+	// Verdicts are on stdout only; stderr is shown, never parsed, so a note there cannot land inside a
+	// failure's reason.
+	pipeLines(child.stdout, makeVerdictLineHandler(active));
+	pipeLines(child.stderr, line => appendRunOutput(run, line));
 
 	await new Promise<void>(resolve => {
 		child.on('close', code => {
@@ -381,6 +382,7 @@ async function runWithFilter(
 			if (code !== 0 && code !== null && !token.isCancellationRequested) {
 				run.appendOutput(`\r\nProcess exited with code ${code}\r\n`);
 			}
+			if (!token.isCancellationRequested) settleUnreportedInScope(active, filter, code);
 			resolve();
 		});
 		child.on('error', err => {
@@ -392,64 +394,54 @@ async function runWithFilter(
 	});
 }
 
-function makeLineHandler(active: ActiveRun) {
+function appendRunOutput(run: vscode.TestRun, line: string): void {
+	run.appendOutput(line.replace(/\r?\n?$/, '') + '\r\n');
+}
+
+function makeVerdictLineHandler(active: ActiveRun) {
 	const { requested, run } = active;
+	const verdictFor = (id: string): vscode.TestItem | undefined => {
+		active.failureDetailFor = undefined;
+		const item = requested.itemById.get(id);
+		if (item) active.reported.add(id);
+		return item;
+	};
 	return (line: string) => {
-		run.appendOutput(line.replace(/\r?\n?$/, '') + '\r\n');
+		appendRunOutput(run, line);
+		const text = line.trimEnd();
 
-		const raw = line.trimEnd();
-		const trimmed = raw.replace(LOG_PREFIX_RE, '');
-		const isErrorLine = ERROR_LINE_RE.test(raw);
+		const pass = PASS_LINE_RE.exec(text);
+		if (pass) {
+			const item = verdictFor(pass[1]);
+			if (item) run.passed(item);
+			return;
+		}
 
-		const m = TEST_LINE_RE.exec(trimmed);
-		if (m) {
-			const status = m[1];
-			const id = m[2];
-			const ms = m[3] ? parseInt(m[3], 10) : undefined;
-			const item = requested.itemById.get(id);
+		const fail = FAIL_LINE_RE.exec(text);
+		if (fail) {
+			const item = verdictFor(fail[1]);
 			if (item) {
-				if (status === 'PASS') {
-					run.passed(item, ms);
-				} else {
-					// Defer reporting: the failure detail arrives later in
-					// the per-spec failure block.
-					active.pendingFailures.set(id, { item, durationMs: ms, detail: [] });
-				}
-			}
-			active.failureDetailFor = undefined;
-			return;
-		}
-
-		if (SPEC_FAIL_RE.test(trimmed) || SUMMARY_RE.test(trimmed)) {
-			active.failureDetailFor = undefined;
-			return;
-		}
-
-		const fp = FAILURE_PATH_RE.exec(trimmed);
-		if (fp) {
-			const id = `${fp[1]}/${fp[2]}`;
-			active.failureDetailFor = id;
-			if (!active.pendingFailures.has(id)) {
-				const item = requested.itemById.get(id);
-				if (item) {
-					// Per-spec block named a test we never saw a [FAIL] line for
-					// (e.g. compile error before per-test reporting). Treat it as
-					// a failure so it doesn't end up "skipped".
-					active.pendingFailures.set(id, { item, detail: [] });
-				}
+				active.pendingFailures.set(fail[1], { item, detail: fail[2] ? [fail[2]] : [] });
+				active.failureDetailFor = fail[1];
 			}
 			return;
 		}
 
-		// Anything else, while we're inside a failure detail block, is part
-		// of the message — but only ERROR-level lines, since the runner
-		// interleaves info lines like "Total compile time" and "Generated
-		// N fragment(s)" inside the failure block. We can't rely on indent
-		// because LOG_PREFIX_RE has already swallowed the leading
-		// whitespace from "[TST] ERROR:   detail".
-		if (active.failureDetailFor && isErrorLine && trimmed.length > 0) {
-			const pf = active.pendingFailures.get(active.failureDetailFor);
-			if (pf) pf.detail.push(trimmed);
+		const notRun = NOT_RUN_LINE_RE.exec(text);
+		if (notRun) {
+			const item = verdictFor(notRun[1]);
+			if (item) run.skipped(item);
+			return;
+		}
+
+		if (SUMMARY_RE.test(text)) {
+			active.failureDetailFor = undefined;
+			active.sawSummary = true;
+			return;
+		}
+
+		if (active.failureDetailFor && text.trim().length > 0) {
+			active.pendingFailures.get(active.failureDetailFor)?.detail.push(text);
 		}
 	};
 }
@@ -462,7 +454,7 @@ function flushPendingDetails(active: ActiveRun) {
 		if (pf.item.uri && pf.item.range) {
 			message.location = new vscode.Location(pf.item.uri, pf.item.range);
 		}
-		active.run.failed(pf.item, message, pf.durationMs);
+		active.run.failed(pf.item, message);
 	}
 	active.pendingFailures.clear();
 }
@@ -485,6 +477,20 @@ function pipeLines(
 	stream.on('end', () => {
 		if (buffer.length > 0) onLine(buffer);
 	});
+}
+
+// A requested test with no verdict in a run that reached its summary was not selected — a marker excludes it
+// on this host — so it is skipped. In a run that never reached its summary it is errored.
+function settleUnreportedInScope(active: ActiveRun, filter: string | null, code: number | null): void {
+	for (const item of active.requested.items) {
+		if (!itemMatchesFilter(item, filter) || active.reported.has(item.id)) continue;
+
+		if (active.sawSummary) {
+			active.run.skipped(item);
+		} else {
+			active.run.errored(item, new vscode.TestMessage(`spec-test exited with code ${code} before reporting this test; its output is in the run log.`));
+		}
+	}
 }
 
 function failAllInScope(

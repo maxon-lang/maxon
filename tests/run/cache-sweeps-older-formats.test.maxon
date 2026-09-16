@@ -1,0 +1,20 @@
+// cache-sweeps-older-formats.test.maxon — a build a run publishes discards the builds an OLDER cache format
+// left, which no run of this driver can reach again, and keeps a NEWER format's, which a newer driver on
+// the same host is still using.
+
+let SweepCaseLabel = "cache-sweeps-older-formats"
+
+test 'publishing a build discards an older cache format and keeps a newer one'
+	let staged = stageCase(SweepCaseLabel, fixture: HelloFixtureName)
+	let unversioned = plantCachedBuild(staged, slotPath: UnversionedFormatSlotPath)
+	let older = plantCachedBuild(staged, slotPath: OlderFormatSlotPath)
+	let newer = plantCachedBuild(staged, slotPath: NewerFormatSlotPath)
+
+	let run = runProgram(staged, program: stagedMain(staged))
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "the run failed, so it published nothing that could have swept the cache. It said: {run.stdout}{run.stderr}")
+
+	try Expect.isFalse(File.exists(unversioned), message: "{unversioned.toString()} is a build of the unversioned cache layout, which no run of this driver can reach, and a published build left it in place.")
+	try Expect.isFalse(File.exists(older), message: "{older.toString()} is a build of an older numbered cache format, which no run of this driver can reach, and a published build left it in place.")
+	try Expect.isTrue(File.exists(newer), message: "{newer.toString()} is a newer cache format's build, which a newer driver on this host may still be using, and a published build discarded it.")
+end 'publishing a build discards an older cache format and keeps a newer one'

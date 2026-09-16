@@ -246,14 +246,32 @@ end 'LspSpan'
 // A position that matches no token's anchor returns `none`, and the caller falls back to the
 // one-character range. That is the honest answer for a diagnostic anchored somewhere no token begins
 // (one reported with no position at all anchors at 0:0), not a failure.
+//
+// ⚠ A binary search, so a publish is O(diagnostics × log tokens). It is sound because `tokenize` pushes
+// every token at the position its scan started and scans never overlap, so anchors never decrease; two
+// tokens may share one (an empty string fragment and the `{` after it), and the FIRST of them answers.
 module function tokenSpanAt(tokens TokenArray, line LineNumber, column ColumnNumber) returns LspSpan
-	for token in tokens 'eachToken'
-		if token.line == line and token.column == column 'anchoredHere'
-			return LspSpan.create(token.startByte, endByte: token.endByte)
-		end 'anchoredHere'
-	end 'eachToken'
+	var low = 0 as TokenIndex
+	var high = tokens.count() as TokenIndex
 
-	return LspSpan.none()
+	while low < high 'lowerBound'
+		let middle = low + (high - low) / 2
+		let probe = try tokens.get(middle) otherwise panic("tokenSpanAt: {middle} lies inside [0, {tokens.count()})")
+
+		if probe.line < line or (probe.line == line and probe.column < column) 'beforeAnchor'
+			low = middle + 1
+		end 'beforeAnchor' else 'atOrAfterAnchor'
+			high = middle
+		end 'atOrAfterAnchor'
+	end 'lowerBound'
+
+	let found = try tokens.get(low) otherwise return LspSpan.none()
+
+	if found.line != line or found.column != column 'noTokenAnchoredHere'
+		return LspSpan.none()
+	end 'noTokenAnchoredHere'
+
+	return LspSpan.create(found.startByte, endByte: found.endByte)
 end 'tokenSpanAt'
 
 // The line terminator bytes. Named because `10` and `13` in a scan loop say nothing about why.

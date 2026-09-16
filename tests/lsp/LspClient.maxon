@@ -27,14 +27,13 @@
 //    stack trace) fills the buffer and both sides then wait on each other for ever. The symptom is a
 //    hang that `maxon test`'s shard deadline reports as TIMED OUT, and the cure is a drain in the
 //    server's direction, not here.
-//    ⚠ **THE SERVER NOW RUNS A WHOLE COMPILE PER `didOpen`, AND EVERY DIAGNOSTIC IT REPORTS WOULD GO TO
-//    STDERR.** `LspDiagnostics.publishCheckedDiagnostics` runs it inside a `beginDiagnosticCapture`
-//    for exactly this reason. MEASURED 2026-09-03 over a session that opened a document with an error,
-//    closed it and shut down: **0 bytes of stderr**.
+//    ⚠ **THE SERVER RUNS A WHOLE COMPILE PER `didOpen` AND PER `maxon/generateIR`, AND EVERY DIAGNOSTIC
+//    IT REPORTS WOULD GO TO STDERR.** `LspDiagnostics.compileBufferCaptured` runs both inside a
+//    `beginDiagnosticCapture` for exactly this reason.
 //
-// 3. **A NOTIFICATION CAN ARRIVE BEFORE THE RESPONSE.** A `publishDiagnostics` notification does
-//    arrive ahead of the first reply — and since the server publishes
-//    diagnostics too, that is now every request sent after a `didOpen` in this suite. Correlation is
+// 3. **A NOTIFICATION CAN ARRIVE BEFORE THE RESPONSE.** The server publishes diagnostics on every
+//    `didOpen`, so a `publishDiagnostics` notification arrives ahead of the reply to every request sent
+//    after one in this suite. Correlation is
 //    therefore STRICT on the integer `id`; a message carrying somebody else's id is dropped, and one
 //    carrying no id is STASHED for `awaitPublishedDiagnostics` rather than discarded.
 //
@@ -103,6 +102,7 @@ public typealias CodeActionItemArray = Array with CodeActionItem
 public typealias LspRangeArray = Array with LspRange
 public typealias SemanticTokenValueArray = Array with SemanticTokenValue
 public typealias PublishedDiagnosticArray = Array with PublishedDiagnostic
+public typealias GenerateIrErrorArray = Array with GenerateIrError
 
 // A span of a document, flat rather than nested. LSP nests it as `{start: {…}, end: {…}}`, but `end` is
 // a Maxon keyword and cannot name a field — and the client contract already spells folding ranges and
@@ -316,6 +316,28 @@ public type PublishedDiagnostics
 	end 'of'
 end 'PublishedDiagnostics'
 
+// One error `maxon/generateIR` reports. Line and column are ONE-based, as the Compiler Explorer panel shows
+// them to a reader, and carry the JSON integer's range for the reason the aliases above do.
+public type GenerateIrError
+	public var message as String
+	public var line as JsonInteger
+	public var column as JsonInteger
+
+	static function create(message String, line JsonInteger, column JsonInteger) returns GenerateIrError
+		return Self{message: message, line: line, column: column}
+	end 'create'
+end 'GenerateIrError'
+
+// What `maxon/generateIR` answered: the rendered IR, or the errors that prevented it.
+public type GenerateIrResult
+	public var ir as String
+	public var errors as GenerateIrErrorArray
+
+	static function of(ir String, errors GenerateIrErrorArray) returns GenerateIrResult
+		return Self{ir: ir, errors: errors}
+	end 'of'
+end 'GenerateIrResult'
+
 // Whether a stashed publish for the asked-about uri was there to take.
 union StashedPublish
 	found(published PublishedDiagnostics)
@@ -363,11 +385,10 @@ public type LspClient
 	var nextRequestId as LspRequestIdNumber
 
 	// ⭐⭐ **EVERY SERVER-INITIATED NOTIFICATION THIS CLIENT HAS SEEN AND NOT YET BEEN ASKED FOR, AS RAW
-	// FRAME BODIES IN ARRIVAL ORDER.** `awaitReply` used to DISCARD anything not addressed to its
-	// request, which was safe only while the server emitted nothing: `publishDiagnostics` arrives ahead
-	// of the next reply, so discarding it would make the one message this suite must assert on the one
-	// message no test could reach. Held raw and parsed on demand, because most of them are never asked
-	// for.
+	// FRAME BODIES IN ARRIVAL ORDER.** `publishDiagnostics` arrives ahead of the next reply, so an
+	// `awaitReply` that discarded what is not addressed to its request would make the one message this
+	// suite must assert on the one message no test could reach. Held raw and parsed on demand, because
+	// most of them are never asked for.
 	var notifications as StringArray
 
 	// Spawn this checkout's `lsp-server` with pipes on all three streams.
@@ -576,9 +597,8 @@ public type LspClient
 
 	// ⭐ **A METHOD THE SERVER WILL NEVER SERVE, so the refusal it draws is PERMANENT.**
 	// The smoke test needs one request that is refused, to prove the client decodes a JSON-RPC error
-	// object into `serverRefused` rather than mistaking it for a result. It used to use `hover` for
-	// that — which worked only while hover was unimplemented, and went red the day it landed. A test
-	// whose subject is "this feature is missing" expires the moment someone does their job.
+	// object into `serverRefused` rather than mistaking it for a result. A real method the server merely
+	// has not implemented yet would expire the day it is implemented.
 	// ⇒ The durable subject is the PROTOCOL rule: LSP requires an unknown method to answer
 	// `-32601`. This name is reserved for that and is deliberately not an LSP method.
 	public function unservedMethodRefusal(uri String) returns HoverResult throws LspClientError
@@ -753,6 +773,29 @@ public type LspClient
 
 		return SemanticTokensResult.of(data)
 	end 'semanticTokensFull'
+
+	// The Compiler Explorer's own request: a source text rather than an open document, so nothing about it
+	// is a `textDocument/*` shape.
+	public function generateIr(source String, filename String) returns GenerateIrResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodGenerateIr)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putString(SourceKey, value: source)
+		params.putString(FilenameKey, value: filename)
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		var errors = GenerateIrErrorArray.create()
+
+		for element in try elementsOf(replyDoc, id: try memberNode(replyDoc, of: result, key: ErrorsKey)) 'eachError'
+			let line = try integerMember(replyDoc, of: element, key: LineKey)
+			let column = try integerMember(replyDoc, of: element, key: ColumnKey)
+			errors.push(GenerateIrError.create(try stringMember(replyDoc, of: element, key: MessageKey), line: line, column: column))
+		end 'eachError'
+
+		return GenerateIrResult.of(try stringMember(replyDoc, of: result, key: IrKey), errors: errors)
+	end 'generateIr'
 
 	// ----------------------------------------------------------------------------------------
 	// Request plumbing
@@ -1337,6 +1380,7 @@ let MethodLinkedEditingRange = "textDocument/linkedEditingRange"
 let MethodRename = "textDocument/rename"
 let MethodCodeAction = "textDocument/codeAction"
 let MethodSemanticTokensFull = "textDocument/semanticTokens/full"
+let MethodGenerateIr = "maxon/generateIR"
 
 // JSON-RPC's reserved code for a method the server does not implement. `methodIsServed` tests for it
 // by NUMBER rather than by message text, because the sentence is a server's to word and the code is
@@ -1415,6 +1459,10 @@ let TargetRangeKey = "targetRange"
 let ChangesKey = "changes"
 let DocumentChangesKey = "documentChanges"
 let EditsKey = "edits"
+let FilenameKey = "filename"
+let IrKey = "ir"
+let ErrorsKey = "errors"
+let ColumnKey = "column"
 
 // The header field this client reads, lowercased: LSP header names are case-insensitive.
 let ContentLengthHeaderName = "content-length"

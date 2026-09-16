@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Seventeen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Eighteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -29,6 +29,7 @@ SERVER its tests spawn.
 | `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
+| `build-manifest/` | `maxon test`, under the compiler | `TestedCompilerStem` in `BuildManifestHarness.maxon` — the binary it spawns: the compiler under test, which is also the driver that runs each fixture's `build.maxon` and builds what it describes |
 | `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
 | `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test, or a copy of it staged under `temp/cli/` where an install would put it |
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
@@ -43,7 +44,7 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other fifteen: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other seventeen: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
@@ -82,6 +83,19 @@ tests/
     non-literal-refused.test.maxon          only a written-out string literal may be replaced
     ambiguous-name-refused.test.maxon       one name reaching two declarations is refused, naming both
     fixtures/<program>/...                  stored names only - see rule 1
+  build-manifest/
+    BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check
+    manifest-debug-info-false-writes-no-sidecar.test.maxon    `debugInfo: false` in the manifest: an executable and no `.mxdbg`
+    manifest-debug-info-false-refuses-coverage.test.maxon     `--coverage` over that manifest is refused, and writes nothing
+    manifest-no-debug-info-flag-refuses-coverage.test.maxon   `--coverage --no-debug-info` over a manifest is refused, and writes nothing
+    manifest-held-tree-lock-refuses-build.test.maxon          a manifest build in a checkout whose tree lock is held exits 2, and writes nothing
+    manifest-version-not-a-string-refused.test.maxon          a `version` that is not a string is refused, and writes nothing
+    manifest-define-without-separator-refused.test.maxon      a define with no `=` is refused, and writes nothing
+    manifest-defines-not-a-list-refused.test.maxon            `defines` that are not a list are refused, and write nothing
+    manifest-define-not-a-string-refused.test.maxon           a define that is not a string is refused, and writes nothing
+    manifest-source-not-a-string-refused.test.maxon           a source that is not a string is refused as malformed, and writes nothing
+    manifest-program-not-written-into-project.test.maxon      the compiled manifest is kept in the run cache, so nothing lands in the project's `.maxon/`
+    fixtures/<project>/build.maxon.fixture  main.maxon.fixture   stored names only - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
@@ -97,6 +111,8 @@ tests/
     no-arguments.test.maxon                 `maxon` alone answers, SHORT, sorted, and exits 0
     help-reference.test.maxon               the reference leads with the short list, then what it hides
     help-per-command.test.maxon             every documented command answers `help <command>` for itself
+    help-lists-trace-flags.test.maxon       `help build` lists `--async-trace` and `--debugstream`, which the parser accepts
+    profile-usage-names-every-option.test.maxon   every option `profile`'s usage body documents is in its `Usage:` line (x64-windows only, as `profile` is)
     hidden-command-still-parses.test.maxon  a command left off the short LIST is still a command
     withdrawn-help-flags.test.maxon         `--help` / `-h` refused BY NAME, naming the command
     unknown-command-refused.test.maxon      a word naming no command fails at both doors
@@ -126,6 +142,7 @@ tests/
     compile-error.test.maxon                refused, nothing run, and no build left in the slot
     cache-hit.test.maxon                    an unchanged program is not compiled a second time
     cache-miss-edit.test.maxon              an edited one is, and the new answer runs
+    cache-sweeps-older-formats.test.maxon   a published build discards an older cache format's builds and keeps a newer one's
     concurrent.test.maxon                   simultaneous cold runs of one program each behave like the only one
     directory.test.maxon                    a directory is compiled as ONE project
     wordless.test.maxon                     a `.maxon` first argument IS `run` - the shebang door
@@ -153,6 +170,7 @@ tests/
     McpHarness.maxon                        the shared JSON-RPC stdio harness and JSON helpers
     standard.test.maxon                     standard user-facing MCP server tests (8 standard tools)
     dev.test.maxon                          contributor MCP server tests (11 tools + --dev)
+    scale-defaults-agree-with-help.test.maxon    `run_scale_test` states the defaults `help scale-test` states
     rebuild.test.maxon                      a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.test.maxon   a self-rebuild succeeds while a server runs its `.previous`
     rebuild-with-a-compile-error.test.maxon      a self-rebuild that fails to compile leaves the slot untouched
@@ -182,7 +200,7 @@ Two independent reasons, and the second is the one that bites:
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
 `profile/ProfileHarness.maxon`, `run/RunHarness.maxon`, `cli/CliHarness.maxon`,
-`define/DefineHarness.maxon`, `examples/ExamplesHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
+`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
 named so the runner does not take them for test files. That is fine and is not an exception being
 smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
 `lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s are string constants inside its
@@ -457,6 +475,22 @@ the exception and spawns nothing — it holds the two guards that are about the 
 driver: every fixture directory is one the harness's roster names and every name in that roster is a
 directory, and no ordinary `.maxon` sits beside the case files nor any live one under `fixtures/`.
 
+## `build-manifest/` — what a `build.maxon` says about the build, honoured as the command line's flags are
+
+One subject: `maxon build` with NO path runs the staged project's `build.maxon` and builds what it
+describes. A manifest is a second way to say what a flag says, so the build it describes is held to the
+same rules as a path build — the sidecar the manifest turned off is not written, `--coverage` without the
+sidecar is refused whichever of the two turned it off, a busy checkout refuses it, and a description field
+the driver cannot use is refused rather than defaulted. The shared half lives in
+`BuildManifestHarness.maxon`; see the note under `debug/`.
+
+⛔ **THE REFUSAL CASES ASSERT THE ABSENCE OF AN EXECUTABLE BESIDE THE EXIT CODE.** An instrumented binary
+with no coverage-point table is the artifact the refusal exists to prevent.
+
+It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in its staging
+directory under `temp/build-manifest/`, which is also what makes the build path-less), and it keeps rule 5:
+one spawning `test`, one file. It runs at the default deadline.
+
 ## `console-write/` — which console API an emitted x64-windows image imports
 
 One case, and its subject is a program the compiler WROTE rather than one it ran. A Windows console
@@ -535,6 +569,8 @@ JSON-RPC messages, and inspecting structured responses.
   user mode, and an error code no registry case claims.
 - `dev.test.maxon` gates contributor mode (`maxon mcp-server --dev`): the 11 tools, the `repoRoot` and
   `from` arguments, checkout validation, and the `repoRoot` ECHO on both an answer and a refusal.
+- `scale-defaults-agree-with-help.test.maxon` reads the default each `run_scale_test` property states and the
+  default `maxon help scale-test` states for the same option, and holds them equal. One server and one `help` run.
 - `rebuild.test.maxon` gates the half of a self-rebuild that a live server depends on: its image is
   renamed out from under it and another is written in its place, and it keeps answering.
 - `rebuild-over-a-running-previous.test.maxon` gates the other half: a compiler building over its own
