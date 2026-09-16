@@ -41,6 +41,15 @@ let WordQuote = "\""
 	let PowerShellUnderSystemRoot = "System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 	let PowerShellOptions = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
 
+	// pwsh rewrites `PSModulePath` only for a Windows PowerShell IT starts, so one started through this
+	// process inherits the caller's: from pwsh that names another edition's modules first, and a cmdlet
+	// that has to autoload is reported as no cmdlet at all. `install.ps1` puts this directory first for
+	// itself too, but only once it has been fetched, and what this fetches is whatever the site serves.
+	// Set rather than extended: the script bootstraps a bare machine, so every cmdlet it reaches has to
+	// be one this PowerShell ships with, and those are all here.
+	let PowerShellModulePathVariable = "PSModulePath"
+	let PowerShellModulesUnderSystemRoot = "System32\\WindowsPowerShell\\v1.0\\Modules"
+
 	// The script's own switches. An upgrade leaves PATH as the install that is being upgraded left it.
 	let NoPathUpdateSwitch = "-NoPathUpdate"
 	let ScriptVersionSwitch = "-Version"
@@ -220,6 +229,55 @@ function shellWord(word String) returns String
 	return "{WordQuote}{word}{WordQuote}" if word.contains(WordBreak) else word
 end 'shellWord'
 
+type UpgradeVariable
+	export var name as String
+	export var value as String
+
+	export static function create(name String, value String) returns UpgradeVariable
+		return Self{name: name, value: value}
+	end 'create'
+end 'UpgradeVariable'
+
+typealias UpgradeVariableArray = Array with UpgradeVariable
+
+// ⭐ **ONE DESCRIPTION OF THE ENVIRONMENT THE UPGRADE SETS, READ BY BOTH THE RUN AND THE DRY RUN.**
+// `rendered` and `childEnvironment` read the same list and no other source, so neither can name a
+// variable the other does not. ⚠ They are read at two points, so a `set` belongs above the render that
+// reports it; one added below would reach the child unannounced. Ordered, because a `Map` is
+// open-addressed and the printed order would otherwise be an artefact of its hashing.
+type UpgradeEnvironment
+	var variables as UpgradeVariableArray
+
+	export static function create() returns UpgradeEnvironment
+		return Self{variables: UpgradeVariableArray.create()}
+	end 'create'
+
+	export function set(name String, value String)
+		self.variables.push(UpgradeVariable.create(name, value: value))
+	end 'set'
+
+	export function rendered() returns String
+		var line = ""
+
+		for variable in self.variables 'eachVariable'
+			let separator = "" if line.isEmpty() else WordBreak
+			line.append("{separator}{variable.name}={shellWord(variable.value)}")
+		end 'eachVariable'
+
+		return line
+	end 'rendered'
+
+	export function childEnvironment() returns Environment
+		var overrides = EnvMap.create()
+
+		for variable in self.variables 'eachVariable'
+			overrides.upsert(variable.name, value: variable.value)
+		end 'eachVariable'
+
+		return Environment.inheritUpdating(overrides)
+	end 'childEnvironment'
+end 'UpgradeEnvironment'
+
 // A program's fixed options, then the one argument that completes them.
 function argumentsEndingIn(leading StringArray, last String) returns StringArray
 	var arguments = leading.clone()
@@ -228,7 +286,8 @@ function argumentsEndingIn(leading StringArray, last String) returns StringArray
 end 'argumentsEndingIn'
 
 function upgradeScriptInstall(root FilePath, dryRun bool) returns ExitCode
-	let assignment = "{InstallRootVariable}={shellWord(root.toString())}"
+	var environment = UpgradeEnvironment.create()
+	environment.set(InstallRootVariable, value: root.toString())
 
 	#if os(Windows)
 		let noPowerShell = "Windows PowerShell, which runs the install script, is looked for under the absolute directory {SystemRootVariable} names, and it names none here"
@@ -240,12 +299,14 @@ function upgradeScriptInstall(root FilePath, dryRun bool) returns ExitCode
 			return refuse(noPowerShell)
 		end 'notAbsolute'
 
+		environment.set(PowerShellModulePathVariable, value: windowsDir.join("{PowerShellModulesUnderSystemRoot}").toString())
+
 		let installer = powerShellRunningTheScript(windowsDir)
-		let rendered = "{assignment} {installer.rendered()}"
+		let rendered = "{environment.rendered()} {installer.rendered()}"
 	#else
 		let download = scriptDownload()
 		let installer = shellReadingTheScript()
-		let rendered = "{download.rendered()} | {assignment} {installer.rendered()}"
+		let rendered = "{download.rendered()} | {environment.rendered()} {installer.rendered()}"
 	#endif
 
 	if dryRun 'describeOnly'
@@ -255,15 +316,14 @@ function upgradeScriptInstall(root FilePath, dryRun bool) returns ExitCode
 	end 'describeOnly'
 
 	printError("{commandAsTyped()}: updating the install in {root.toString()} (maxon {CompilerVersion})\n")
-	let environment = Environment.inheritUpdating([InstallRootVariable: root.toString()])
 
 	#if os(Windows)
-		return spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment, standardInput: InputSource.none, speaker: commandAsTyped())
+		return spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment.childEnvironment(), standardInput: InputSource.none, speaker: commandAsTyped())
 	#else
 		// ⭐ **TWO STEPS, NOT `curl | sh`**: a pipeline's status is its last command's, so a download that
 		// failed would hand `sh` an empty script and report success.
 		return match downloadScript(download) 'download'
-			fetched(script) gives spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment, standardInput: InputSource.bytes(script), speaker: commandAsTyped())
+			fetched(script) gives spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment.childEnvironment(), standardInput: InputSource.bytes(script), speaker: commandAsTyped())
 			failed(reason) gives refuse(reason)
 		end 'download'
 	#endif
