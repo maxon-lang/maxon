@@ -43,7 +43,6 @@ let sharedEmptyLiteralInitSites = LiteralInitSiteArray.create()
 let sharedEmptyInferredInstantiationSites = GenericInstantiationSiteArray.create()
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
-let sharedEmptyTransformArities = PendingTransformArityArray.create()
 
 // A statement that uses NONE of a call's result is rarer than either — one spelling opens the door
 // (`(_, _) = f()`) and almost no file writes it — so the empty column is shared for the reason above it.
@@ -302,13 +301,8 @@ export type FileParseArtifact
 	// after RESOLUTION (see PendingFunctionTypeDoor).
 	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
 
-	// This file's recorded container-`map` transforms awaiting whole-program arity agreement. Appended to
-	// `project.pendingTransformArities` by `commitPendingTransformArities`; drained beside the doors above,
-	// after RESOLUTION (see PendingTransformArity).
-	export var pendingTransformArities as PendingTransformArityArray
-
 	// ⭐ Sites that used none of a call's result, folded into `project.pendingDiscardedResults` by
-	// `commitPendingDiscardedResults`; drained beside the two lists above, after the effect summary is
+	// `commitPendingDiscardedResults`; drained beside the list above, after the effect summary is
 	// built (see PendingDiscardedResult).
 	export var pendingDiscardedResults as PendingDiscardedResultArray
 
@@ -457,7 +451,6 @@ export type FileParseArtifact
 			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			pendingFunctionTypeDoors: sharedEmptyFunctionTypeDoors,
-			pendingTransformArities: sharedEmptyTransformArities,
 			pendingDiscardedResults: sharedEmptyDiscardedResults,
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
@@ -784,19 +777,8 @@ export type FileParseArtifact
 		self.pendingFunctionTypeDoors.push(door)
 	end 'recordFunctionTypeDoor'
 
-	// Record a container `map`'s transform (see PendingTransformArity). Copy-on-write off the shared empty
-	// on the first push, for the reason `recordFunctionTypeDoor` is — and the stronger one it names: a
-	// `map` call is rarer still than a function-type door.
-	export function recordTransformArity(transform PendingTransformArity)
-		if self.pendingTransformArities.count() == 0 'firstTransform'
-			self.pendingTransformArities = PendingTransformArityArray.create()
-		end 'firstTransform'
-
-		self.pendingTransformArities.push(transform)
-	end 'recordTransformArity'
-
 	// Record a statement that used none of a call's result (see PendingDiscardedResult). Copy-on-write off
-	// the shared empty on the first push, for the reason `recordTransformArity` is.
+	// the shared empty on the first push, for the reason `recordFunctionTypeDoor` is.
 	export function recordDiscardedResult(site PendingDiscardedResult)
 		if self.pendingDiscardedResults.count() == 0 'firstSite'
 			self.pendingDiscardedResults = PendingDiscardedResultArray.create()
@@ -894,7 +876,6 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
-	commitPendingTransformArities(project, artifact: artifact)
 	commitPendingDiscardedResults(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
 
@@ -1701,14 +1682,6 @@ function commitPendingFunctionTypeDoors(project Project, artifact FileParseArtif
 		project.pendingFunctionTypeDoors.push(door)
 	end 'each'
 end 'commitPendingFunctionTypeDoors'
-
-// Append this file's recorded `map` transforms to the whole-program list — the twin of the door commit
-// above, and dedup-free for its reason: each entry is a distinct SITE with its own position.
-function commitPendingTransformArities(project Project, artifact FileParseArtifact)
-	for transform in artifact.pendingTransformArities 'each'
-		project.pendingTransformArities.push(transform)
-	end 'each'
-end 'commitPendingTransformArities'
 
 // The one sentence the six op-keyed tables share, written once so a seventh cannot be added with a
 // differently-worded net that says less. `held` is the table's own count at the first file of a round.

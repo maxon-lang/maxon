@@ -449,14 +449,14 @@ end 'main'
 ⭐ **The transform's PARAMETER is the container's element, by the declaration `map` is read from.** A
 transform declaring another type is handed the element regardless: `nums.map(function(a String) gives
 a.count())` over an int array compiled clean and SEGFAULTED, dereferencing the integer `1` as a `String`.
-The arity half of this contract is E3122's; this is the type half, and both are decided whole-program
-because a bare reference to a named function carries no closure literal to read.
+The arity and the parameter type are both decided whole-program, because a bare reference to a named
+function carries no closure literal to read.
 
-⚠ **THE SENTENCE MOVED AT X-array-retire AND THE VERDICT DID NOT.** `map` left the `Array` roster, so this
-is now a call to `stdlib/Interfaces.maxon:199`'s declared `transform fn(Element) returns Element` and the
-ORDINARY argument-agreement check refuses it, in the voice every other call gets. `Set`/`Map` still get the
-tailored sentence because those surfaces are still synthesized — see
-`closure-param-type-inference.md`, which carries the whole argument and the `print`/`sleep` precedent.
+Every container's `map` — `Array`'s, `Set`'s and `Map`'s alike — is a call to `stdlib/Interfaces.maxon`'s
+declared `map(transform ElementTransform)`, so the ORDINARY argument-agreement check refuses a transform of
+the wrong shape, in the voice every other call gets (E3005). No container synthesizes its own `map` or its
+own sentence — see `closure-param-type-inference.md`, which carries the whole argument and the
+`print`/`sleep` precedent.
 ```maxon
 
 function main() returns ExitCode

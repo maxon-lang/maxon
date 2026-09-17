@@ -261,6 +261,10 @@ Closures capture variables from the enclosing scope **by reference**. Changes to
 
 Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ Integer) gives 42`
 
+A closure passed where the parameter is declared with a function type may omit its parameter types, which
+come from that function type in order: `scores.sort(function(a, b) gives b.compare(a))`. An extra untyped
+parameter is E2003; an omitted type anywhere else is E2015.
+
 Inside an instance method, a closure may reference `self` (and `self.field`, `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
 ### Function Types

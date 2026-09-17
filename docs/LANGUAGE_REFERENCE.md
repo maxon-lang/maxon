@@ -2503,7 +2503,11 @@ end 'main'
 - **A closure that captures cannot outlive its frame.** Returning one, or storing it in a field, a
   global, a container or a union payload, is **E3099**. Passing it down to a function that calls it is fine.
   A closure that captures nothing is a plain function reference and can go anywhere.
-- A parameter's type may be omitted when the expected function type supplies it.
+- A parameter's type may be omitted when the closure is written directly as a call argument whose parameter
+  is declared with a function type: the closure's parameters take that type's parameter types, in order —
+  `scores.sort(function(a, b) gives b.compare(a))`. A parameter past that function type's arity is **E2003**,
+  and an omitted type anywhere else is **E2015**. When overloads of the callee declare different function
+  types at that argument, none is offered.
 - Closure parameters must be used (**E3012**); write `_` for an unused one.
 - Inside an instance method a closure may use `self`; elsewhere `self` is **E2001**.
 - Assigning to a captured `let` is an error, as it is outside the closure.

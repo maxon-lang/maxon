@@ -106,13 +106,8 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// cast reports the argument first, in the order the reader meets them.
 	checkFunctionTypeDoors(project)
 
-	// The container-`map` transforms the parser recorded (`PendingTransformArity`), beside the doors above
-	// and for their reason: a function value's parameter list is whole-program, and a lifted closure's does
-	// not reach the registry until merge.
-	checkTransformArities(project)
-
 	// E3064: the sites the parser recorded that used none of a call's result (`PendingDiscardedResult`),
-	// judged against the whole-program effect summary built here. Beside the two drains above and after
+	// judged against the whole-program effect summary built here. Beside the drain above and after
 	// `resolveOverloadedCalls`, whose rewrite is what makes a call op's `callee` the name the summary is
 	// keyed by.
 	checkDiscardedResults(project, module: module, signatures: signatures, funcNames: funcNames)
@@ -3469,8 +3464,7 @@ end 'witnessFormalDeclaredType'
 // inside the door the batch added, because the two doors classified the same fact apart.
 //
 // ⚠ **IT WRITES NO FOURTH RULE. It asks `aggregateNameFor` TWICE — LIVE, then PRE-ERASURE** — which is
-// exactly the two steps `checkOneArgType` takes for every argument it judges, and exactly what
-// `checkTransformParamType` does at the transform door. A formal whose identity SURVIVED (a struct's
+// exactly the two steps `checkOneArgType` takes for every argument it judges. A formal whose identity SURVIVED (a struct's
 // `structRef`, an existential's `interfaceRef`) is read live by the checker and must carry nothing, or one
 // name would sit in two places; a formal whose identity did NOT survive arrives as bare `integer`, and the
 // pre-resolution `named(id)` is the only thing that still knows what it was. `aggregateNameFor` decides both
@@ -4108,79 +4102,6 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	let code = ErrorCode.semanticUnsafeCast if door.door == FunctionTypeDoor.cast else ErrorCode.typeMismatch
 	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}', got '{actual}'", line: door.line, column: door.column, filePath: door.filePath)
 end 'checkOneFunctionTypeDoor'
-
-// ⭐ **DRAIN THE `map` TRANSFORMS — the PARAMETER half of the same relationship, at the one position whose
-// function type the COMPILER owns rather than a declaration.** Each entry is a function value bound as a
-// container `map`'s transform; the position calls it with exactly one argument and that argument is the
-// container's own element, and until this drained nothing compared either fact against what the value
-// declares. See `PendingTransformArity` and `Parser.requireElementTransform`.
-function checkTransformArities(project Project)
-	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for transformIndex in 0 upto project.pendingTransformArities.count() 'eachTransform'
-		checkOneTransform(project, transform: try project.pendingTransformArities.get(transformIndex) otherwise panic("checkTransformArities: transformIndex {transformIndex} is below project.pendingTransformArities.count()"))
-	end 'eachTransform'
-end 'checkTransformArities'
-
-// One transform. The governing name resolves for the same reason a door's does — a `function` tag is minted
-// only from a declared function, a lifted closure or a function alias, and `requireFunctionShapeOf` reads
-// all three.
-//
-// ⚠ **THE WHOLE SHAPE IS NOT ASKED, AND THAT IS DELIBERATE.** The RETURN half is already decided, in the
-// parser, by a rule `functionShapesAgree` cannot express (`Parser.elementTransformAnswersElement`: two
-// structs both `structRef` are not the same element), so asking `functionShapesAgree` here would either
-// duplicate that rule or contradict it. What is left for this tier is exactly the arity and the PARAMETER,
-// and the parameter is judged by the SAME `elementTypePreserved` the return half asks — one rule, two
-// extractions, which is the only arrangement in which the two halves of one declaration cannot disagree.
-function checkOneTransform(project Project, transform PendingTransformArity)
-	let shape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: transform.gotName, side: "transform")
-	let method = String.from(transform.methodName)
-
-	if shape.paramTypes.count() != transform.expectedArity 'wrongArity'
-		reportPositioned(project, code: ErrorCode.transformArityMismatch, message: "`{method}` calls its transform with {transform.expectedArity} argument(s) — the container's own element — but this transform declares {shape.paramTypes.count()} parameter(s); a transform is `function(Element) returns Element`", line: transform.line, column: transform.column, filePath: transform.filePath)
-		return
-	end 'wrongArity'
-
-	checkTransformParamType(project, transform: transform, shape: shape, method: method)
-end 'checkOneTransform'
-
-// ⭐⭐ **THE TRANSFORM'S PARAMETER IS THE CONTAINER'S ELEMENT, AND UNTIL THIS EXISTED IT WAS A REACHABLE
-// SEGFAULT.** `stdlib/Interfaces.maxon` declares the transform `function(Element) returns Element`, and the
-// walk hands it the element whatever it declares — so `nums.map(function(a String) gives a.count())` over an
-// int array compiled clean and died SIGSEGV, dereferencing the integer `1` as a `String` record pointer.
-//
-// The comparison is `elementTypePreserved`, the return half's own verdict; the only local part is the
-// identity EXTRACTION, and the two sides are read at DIFFERENT tiers — the element pre-resolution off the
-// record, the parameter post-resolution off the shape. `Parser.resolvedElementIdentity` carries why that
-// makes the element's recorded identity narrower than the parser's own.
-//
-// ⚠ **THE PARAMETER'S IDENTITY IS READ THE WAY `checkOneArgType` READS ITS PARAMETER'S — LIVE FIRST, THEN
-// THE PRE-ERASURE CARRIER — because one of the two aggregate kinds does not survive resolution.** A struct
-// parameter still says `structRef(Point)` here; a boxed union/enum parameter is bare `integer` and only
-// `FunctionShape.paramAggregateNames` still holds its name. Asking only the live answer made every enum
-// agree with every other enum — MEASURED as a compiling program that faults, see that column's header — so
-// the fallback is not a nicety, it is the half of the check that was missing.
-//
-// It is E3005 and not E3122: the arity ruling's code says how MANY parameters a transform declares, and
-// wearing it for a TYPE disagreement would print a sentence about a count that is correct.
-//
-// ⚠ Reached only past the arity check, so position 0 exists by construction.
-function checkTransformParamType(project Project, transform PendingTransformArity, shape FunctionShape, method String)
-	let paramType = try shape.paramTypes.get(0) otherwise panic("checkTransformParamType: paramTypes.get OOB at 0 — the arity check proved this transform declares {transform.expectedArity} parameter(s)")
-	let paramTag = maxonTypeTag(paramType)
-	var paramIdentity = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType), readerFilePath: transform.filePath)
-
-	if paramIdentity.isEmpty() 'erasedUnionParam'
-		paramIdentity = shapeParamIdentity(shape, index: 0)
-	end 'erasedUnionParam'
-
-	if elementTypePreserved(transform.elementTag, elementIdentity: transform.elementIdentity, otherTag: paramTag, otherIdentity: paramIdentity) 'agree'
-		return
-	end 'agree'
-
-	reportPositioned(project, code: ErrorCode.typeMismatch, message: "`{method}` calls its transform with the container's own element, which is '{displayNameOfAggregate(transform.elementTag, aggregate: transform.elementIdentity)}' — but this transform declares its parameter as '{displayNameOfAggregate(paramTag, aggregate: paramIdentity)}'; a transform is `function(Element) returns Element`, so its parameter IS the element", line: transform.line, column: transform.column, filePath: transform.filePath)
-end 'checkTransformParamType'
 
 // ⭐ **E3073 — a spawn of a function that can never suspend.** `async` exists to overlap waiting with other
 // work; a callee that only computes runs straight through on the spawning thread, so the spawn buys nothing
@@ -6796,7 +6717,7 @@ function resolvedSlotThroughCallInstance(project Project, signatures ProgramSign
 end 'resolvedSlotThroughCallInstance'
 
 // The RETURN slot of the substitution above — the `void`/`value` split, which a match arm's single statement
-// makes its own function exactly as `mappedArrayElementHint` is in the parser.
+// makes its own function.
 function returnTypeThroughCallInstance(project Project, signatures ProgramSignatures, returnType MaxonReturnType, gid GenericInstanceId) returns MaxonReturnType
 	match returnType 'returned'
 		void then break 'returned'

@@ -12910,18 +12910,6 @@ export type ProgramSignatures
 		return self.extensionShadowedMethods.contains(qualified)
 	end 'extensionMethodIsShadowed'
 
-	// ⭐ **DID AN `extension` PUBLISH `qualified`, rather than the conformer declaring it?** — the DIRECT read
-	// of the set above, and a genuinely different question from `conformerDeclaresOwnMethod`'s. That one is a
-	// CONJUNCTION asked while the fold is still running, and it answers `false` both for an extension's method
-	// and for a name nothing declares at all; a caller that needs to know the method's signature is the
-	// INTERFACE's — because only then does it know what that signature says without reading it — must ask
-	// about publication itself. `Parser.extensionElementTransformHint` is that caller: it offers a closure
-	// parameter type only for a `map` whose declaration it can name, and a conformer's own `map` is free to
-	// declare anything.
-	export function methodPublishedByExtension(qualified ByteArray) returns bool
-		return self.extensionPublishedMethods.contains(qualified)
-	end 'methodPublishedByExtension'
-
 	// Add one function's consume bits to the index AND fold them into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree about what
 	// the index contains. A function with NO consumed parameter is not recorded (its default answer is "not
@@ -15356,14 +15344,12 @@ export type ProgramSignatures
 	// against these types and `LowerMaxonToStd` derives the `callIndirect` FLOAT MASK from them, so changing
 	// `typealias Cb = function(Integer)` to `function(Real)` changes the code another file emits.
 	//
-	// ⛔⛔ **IT RIDES AS THE `paramSpelling` DIGEST AND NOT AS `alias.paramTypes`, AND THAT IS A MEASUREMENT
-	// RATHER THAN A PREFERENCE.** Every route into `foldFile` reads its aliases with `recordSignature: false`
-	// (the file sweep, the extension fold, all three nested readers), so the copy THIS function receives has
-	// an EMPTY `paramTypes` — always. MEASURED with a temporary panic on `paramTypes.count() > 0`: zero hits
-	// across `generic`, `function`, `first-class-functions/` and `cross-file-signatures/`, ~950 cases, each
-	// carrying the whole stdlib. Hashing that array would therefore have hashed nothing while reading like a
-	// fix. The digest is folded at PARSE time from the parameter TOKENS, unconditionally in both passes
-	// (`Parser.readFunctionTypeAlias`), which is why it is here to be read.
+	// ⛔⛔ **IT RIDES AS THE `paramSpelling` DIGEST AND NOT AS `alias.paramTypes`.** Every route into `foldFile`
+	// reads its aliases with `recordSignature: false` (the file sweep, the extension fold, all three nested
+	// readers), so the `paramTypes` THIS function receives are the sweep's tolerant reading, whose ids are the
+	// sweeping parser's interner's and whose `named` leaves stand for several different kinds of type. The
+	// digest is folded at PARSE time from the parameter TOKENS, unconditionally in both passes
+	// (`Parser.readFunctionTypeAlias`), so it is the one parameter fact both passes mint identically.
 	function recordFunctionTypeAlias(alias FunctionTypeAlias)
 		self.functionTypeAliases.upsert(alias.name, value: alias)
 		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeFunctionAlias), bytes: alias.name)

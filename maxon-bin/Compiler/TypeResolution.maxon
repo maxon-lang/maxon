@@ -297,19 +297,11 @@ export function maxonTypeOfStoredAliasReturn(alias FunctionTypeAlias, typeNames 
 	return MaxonReturnType.value(maxonTypeOfStoredTypeName(alias.returnTag, name: alias.returnTypeName, typeNames: typeNames, typeParamToken: alias.returnTypeParamToken, genericInstanceId: alias.returnGenericInstanceId))
 end 'maxonTypeOfStoredAliasReturn'
 
-// ⭐ **THE PARAMETER TWIN OF THE RETURN DOOR ABOVE, AND THE PAIR IS THE POINT.** By CLAUDE.md's letter this
-// is a thin wrapper — one delegation, one caller — and an inline call would name the same columns in the
-// same one place, so "it holds the column mapping" is not what earns it. What earns it is that **the param
-// and return halves of this record drifting apart is precisely this change's own defect class**: the return
-// half is what decayed to instance 0, the param half decayed identically and had to be pinned by its own
-// spec case because a fix to one would not have reached the other. A symmetric pair of doors is worth one
-// line for a record whose two halves have already been shown to drift.
-//
-// ⚠ **FILE-PRIVATE where its twin is `export`, and the asymmetry is correct rather than an oversight.**
-// `export` means "expected to be used outside this file" — the return door has real cross-file readers
-// (`Parser.functionValueReturn`), this one is reached only from `resolveFunctionAliasShapes` below, and an
-// `export` with no outside reader is `E3092`, which only the self-compile can see.
-function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
+// ⭐ **THE PARAMETER TWIN OF THE RETURN DOOR ABOVE, AND THE PAIR IS THE POINT.** It holds the parameter
+// record's column list, which `resolveFunctionAliasShapes` below and `Parser.closureParamOfferAt` both
+// rebuild through, so the parameter half cannot drift from the return half by one reader spelling the columns
+// differently.
+export function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
 	return maxonTypeOfStoredTypeName(param.tag, name: param.typeName, typeNames: typeNames, typeParamToken: param.typeParamToken, genericInstanceId: param.genericInstanceId)
 end 'maxonTypeOfStoredAliasParam'
 
@@ -608,9 +600,8 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		// `match` indexing an ordinal past its own last arm.
 		//
 		// ⚠ **A CONJUNCTION WITH THE TAG RULE RATHER THAN A REPLACEMENT FOR IT, AND THAT IS SAFE BECAUSE THE TWO
-		// ARE DISJOINT BY CONSTRUCTION.** The identity-first/tag-second shape `SemanticCheck.checkTransformParamType`
-		// and `TypeRules.elementTypePreserved` are written in is the same rule stated for a caller holding ONE
-		// side's live type; here both sides are already RESOLVED, so every tag whose identity survives resolution
+		// ARE DISJOINT BY CONSTRUCTION.** The identity-first/tag-second shape `TypeRules.columnValueMatches` is
+		// written in is the same rule stated for a caller holding ONE side's live type; here both sides are already RESOLVED, so every tag whose identity survives resolution
 		// (`structRef`, `interfaceRef`, `genericInstance`, `typeParameter`) is compared by id above while carrying
 		// an EMPTY column, and every tag whose identity does not survive arrives as bare `integer` with nothing
 		// for the tag rule to say. At most one of the two halves is informative about a position, so asking both

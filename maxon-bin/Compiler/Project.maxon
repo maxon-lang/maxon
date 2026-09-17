@@ -3545,13 +3545,12 @@ export type FunctionTypeAlias
 	// states the gate). The real parse's copy in `project.functionTypeAliases` is the one every shape reads.
 	export let returnAggregateName as ByteArray
 
-	// ⭐ **THE DECLARED PARAMETER TYPES**, in declaration order. EMPTY for an alias read by the
-	// whole-program token SWEEP rather than by a real parse, and that is a property of the sweep and not
-	// an omission: `Parser.parseTypeReference` answers a type spelling DIFFERENTLY there (the alias and
-	// generic-instance registries it consults are the ones still being built), so a swept parameter type
-	// can disagree with the real one. The sweep's copy therefore carries the return type — which it reads
-	// identically — and nothing else, and every consumer of a parameter type reads
-	// `project.functionTypeAliases`, the real parse's. See `Parser.readFunctionTypeAlias`.
+	// ⭐ **THE DECLARED PARAMETER TYPES**, in declaration order, AS THE PASS THAT READ THE ALIAS READ THEM.
+	// `Parser.parseTypeReference` answers a type spelling DIFFERENTLY in the whole-program token SWEEP (the alias
+	// and generic-instance registries it consults are the ones still being built), so the sweep's copy holds a
+	// function, generic or struct parameter as a bare `named` and no `aggregateName`. Whole-program consumers
+	// read `project.functionTypeAliases`, the real parse's; the one parse-time reader of the sweep's copy
+	// (`Parser.closureParamOfferAt`) repairs each slot from `declFilePath`. See `Parser.readFunctionTypeAlias`.
 	export let paramTypes as FunctionAliasParamArray
 
 	// ⭐⭐ **THE PARAMETER LIST AS THE AUTHOR SPELLED IT, DIGESTED — the ONE thing about the parameters that
@@ -7268,18 +7267,13 @@ export enum FunctionTypeDoor
 	enumCaseBacking
 
 	// ⭐ **AN ARRAY LITERAL'S ELEMENT PAST THE FIRST.** The instance is keyed on ONE element type, so every
-	// later element is read back at the FIRST one's shape; two function values differing in arity or return
-	// type is the same wrong answer every door above closes, reached through `[a, b]`.
-	//
-	// ⛔ **MEASURED:** `[oneArg, twoArg]` then `.get(1)` compiled and ran, calling `twoArg` with an argument
-	// nobody passed (E3122's own words). It has no later door — `Array` is parser-intrinsic, so a literal's
-	// elements travel through runtime entries carrying no `FuncSignature` and `SemanticCheck`'s argument
-	// doors never see them.
+	// later element is read back at the FIRST one's shape: `[oneArg, twoArg]` then `.get(1)` would call
+	// `twoArg` with an argument nobody passed. No later door sees it — a literal's elements travel through
+	// runtime entries carrying no `FuncSignature`.
 	//
 	// ⚠ **THE MAP LITERAL IS NOT THIS DOOR, THOUGH IT LOOKS LIKE ITS TWIN.** `["k": v]` desugars to real
-	// `Map.upsert` calls, so its columns are judged by `SemanticCheck.checkTypeParameterArgsAt` like any other
-	// signatured call. A second door for them was built here and then measured away: it reported the same
-	// mistake twice.
+	// `Map.upsert` calls, so `SemanticCheck.checkTypeParameterArgsAt` judges its columns like any other
+	// signatured call, and a door here would report the same mistake twice.
 	containerElement
 
 	// The ASSIGNMENT-shaped doors, which differ from each other only in what the place is CALLED. They are
@@ -7387,101 +7381,6 @@ export type PendingFunctionTypeDoor
 end 'PendingFunctionTypeDoor'
 
 export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDoor
-
-// ⭐⭐ **A FUNCTION VALUE BOUND AT A COMPILER-OWNED POSITION WHOSE CONTRACT FIXES ITS ARITY (E3122).** The
-// container `map`'s transform is the one such position: `map` is not an `Iterable` extension in the compiler but a
-// hand-synthesized builtin (`Parser.parseContainerMap`), so its transform meets no DECLARED function type
-// and passes through none of the THREE families that already compare two function shapes — every arm of
-// `FunctionTypeDoor` (drained by `SemanticCheck.checkFunctionTypeDoors`), `SemanticCheck.checkOneArgType`'s
-// function-argument arm for a DECLARED function-typed parameter, and `checkTypeParameterArgsAt`'s arm for a
-// generic instance's SUBSTITUTED type argument. Each family is named by where it lives rather than by how
-// many members it has: the count was written here as "five"/"four" and both numbers were stale within two
-// ticks, which is this project's signature bug wearing a census. Until this
-// record existed nothing checked it at all, and `nums.map(function(a Integer, b Integer) gives a + b)`
-// compiled on every target and READ AN ARGUMENT NOBODY PASSED (see E3122's registry entry for the
-// measurement, and `Parser.requireElementTransform` for the rule).
-//
-// ⛔ **DO NOT READ THE DOOR LIST ABOVE AS A CENSUS OF FUNCTION-VALUE POSITIONS — IT IS THE LIST OF DOORS,
-// AND THE POSITIONS ARE FOUND ONE AT A TIME.** A union PAYLOAD declared with a function alias reached NO
-// door at all: `Parser.requireScalarPayloadArg`'s only gate was `checkDeclaredType`, and `function` into
-// `function` answers `ok` on the TAG alone — no shape compare, no arity. MEASURED 2026-08-04, the same two
-// measurements that justify E3122, on a two-parameter function stored in a one-parameter payload and called
-// through it: arm64-macOS prints `v=7` (the second argument is the leftover slot) and `wasm32-wasi` traps
-// with the identical *"indirect call type mismatch"*. **CLOSED at BATCH18** — the payload is the `payload`
-// door above, recorded like every other, and `first-class-function.error.wrong-signature-into-union-payload`
-// pins it.
-//
-// Two further positions were reported UNVERIFIED alongside it. Both have since been MEASURED, and the report
-// was right about one and WRONG about the other:
-//
-//   • a witness-dispatched interface ARGUMENT (`Parser.dispatchWitnessMethod`) — **TRUE**, and closed at
-//     BATCH18. It checks arity (E3036) and labels and compared no argument TYPE anywhere, so `r.run("nope")`
-//     at a `run(n Integer)` requirement compiled while the identical DIRECT call was already E3005;
-//     `SemanticCheck.checkWitnessArgTypes` now routes those arguments through the shared `checkOneArgType`.
-//   • a generic type PARAMETER bound to a function type (`SemanticCheck.checkTypeParameterArgsAt`) —
-//     reported **FALSE** on the reasoning that *"the nominal half FIRES … and a function value cannot bind to
-//     a type parameter at all"*. ⛔ **THE REFUTATION WAS ITSELF WRONG, AND RE-MEASURING IT COST A LIVE
-//     MISCOMPILE.** The nominal half fires for every type argument that HAS a nominal identity, which is
-//     exactly the group a function type is NOT in: `typeArgAggregateName` answers empty for it, correctly,
-//     because a function type's identity is its SHAPE. And a function value binds to a type parameter
-//     routinely — `generic-type-parameter-slots.function-value-element` is a committed case that does it
-//     (`Holder with UnaryOp`, then `h.add(double)`), and a user `Box with UnaryOp` is the same shape.
-//     MEASURED on that `Box`: `OpBox.create(floatFn)` compiled clean and `.held()` then called a float
-//     function through an int calling convention. **CLOSED** — the substituted door now asks
-//     `SemanticCheck.checkFunctionArgShape`, the same comparison `checkOneArgType`'s concrete arm makes.
-//
-//     ⛔ **IT DOES NOT COVER THE ARRAY LITERAL, WHICH IS PARSER-INTRINSIC** — `[a, b]` builds through
-//     runtime entries with no `FuncSignature`, so its elements reach no argument door here and are checked by
-//     `FunctionTypeDoor.containerElement` instead. ⚠ This entry has now been wrong three times: refuted by
-//     reasoning, then re-claimed by reasoning (as "Map/Set never reach here", which is false — the corpus
-//     `Map`'s methods are ordinary signatured calls), before each route was actually RUN. That is worth more
-//     than any of the three facts: a position argued is not a position measured, in either direction.
-//
-// It is a SEPARATE record from `PendingFunctionTypeDoor` and not a sixth arm of it, because the two carry
-// different facts. That one names a declared function TYPE and its whole shape must agree; this one has no
-// declared type to name — `function(Element) returns Element` is a contract the compiler owns, whose return
-// half is already decided in the parser by a rule `functionShapesAgree` cannot express
-// (`Parser.elementTransformAnswersElement`: two structs both `structRef` are not the same element). So what
-// is left to compare whole-program is the ARITY and the transform's PARAMETER against the element — the two
-// facts below, which is why this carries the element alongside the arity rather than the arity alone.
-//
-// It is RECORDED rather than checked in place for `PendingFunctionTypeDoor`'s reason, and it is the reason
-// the check cannot be a closure-literal rule: a function value's own parameter list lives in the
-// whole-program `funcSignatures`/`functionAliasShapes`, which the parser does not have. `nums.map(twoArg)`
-// carries no closure at all, and its `twoArg` may be declared in another file.
-export type PendingTransformArity
-	// The governing name of the function value that arrived — a lifted closure, a declared function, or a
-	// function alias. Interner-free, exactly as `PendingFunctionTypeDoor.gotName`: a key into
-	// `funcSignatures`/`functionAliasShapes`, resolved by `TypeResolution.requireFunctionShapeOf`.
-	export var gotName as ByteArray
-
-	// The arity the position calls with. A field rather than the literal 1 so the rule and the sentence
-	// cannot come to disagree, and so a future `filter` can record its own.
-	export var expectedArity as ParamCount
-
-	// ⭐ **THE ELEMENT THE POSITION CALLS WITH, carried INTERNER-FREE as a `(tag, name)` pair** — exactly the
-	// shape `FunctionTypeAlias` keeps its types in, and for the identical reason: a `TypeNameId` is FILE-LOCAL
-	// until `mergeArtifact` remaps it, so a record that travels to the drain may carry no id at all.
-	//
-	// The tag is the element's PRE-resolution tag (a ranged alias is still `named` here), which is what the
-	// container-slot half of `elementTypePreserved` is written against. The identity is EMPTY unless the
-	// element is a STRUCT — see `Parser.resolvedElementIdentity` for why a union/enum element deliberately
-	// carries none across this boundary.
-	export var elementTag as ValueTypeTag
-	export var elementIdentity as ByteArray
-
-	// The container method whose contract states it, as the source spells it (`map`).
-	export var methodName as ByteArray
-	export var line as LineNumber
-	export var column as ColumnNumber
-	export var filePath as FilePath
-
-	export static function create(gotName ByteArray, expectedArity ParamCount, elementTag ValueTypeTag, elementIdentity ByteArray, methodName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingTransformArity
-		return Self{gotName: gotName, expectedArity: expectedArity, elementTag: elementTag, elementIdentity: elementIdentity, methodName: methodName, line: line, column: column, filePath: filePath}
-	end 'create'
-end 'PendingTransformArity'
-
-export typealias PendingTransformArityArray = Array with PendingTransformArity
 
 // ⭐⭐ **WHICH POSITION TOOK NOTHING, WHICH IS WHAT SEPARATES E3064 FROM E3065.** A pure callee's result may
 // not be dropped in either position; an IMPURE one's may, but only where the author said so — and `_ = f()`
@@ -7778,13 +7677,8 @@ export type Project
 	// with the other push-merge targets so a warm rebuild does not double it.
 	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
 
-	// ⭐ Recorded container-`map` transforms awaiting whole-program arity agreement (see
-	// PendingTransformArity). Filled and drained exactly as `pendingFunctionTypeDoors` above, and after
-	// resolution for the same reason: a lifted closure's signature is not in the registry until merge.
-	export var pendingTransformArities as PendingTransformArityArray
-
 	// ⭐ Recorded sites that used none of a call's result, awaiting the whole-program effect summary (see
-	// PendingDiscardedResult). Filled and drained exactly as the two lists above.
+	// PendingDiscardedResult). Filled and drained exactly as the list above.
 	export var pendingDiscardedResults as PendingDiscardedResultArray
 
 	// ⭐ THE TWO DEFERRED NAME DIAGNOSTIC LISTS (P1.9) — E3062 candidates and hidden `as` targets,
@@ -8242,7 +8136,6 @@ export type Project
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
-			pendingTransformArities: PendingTransformArityArray.create(),
 			pendingDiscardedResults: PendingDiscardedResultArray.create(),
 			// Aimed at the TARGET this project was created for, never the host — see `exitCodeHigh`.
 			typeAliases: RangedAliasRegistry.create(target.os),

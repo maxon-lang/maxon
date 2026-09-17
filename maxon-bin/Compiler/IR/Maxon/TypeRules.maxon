@@ -3388,42 +3388,24 @@ end 'notOperatorFor'
 // verdict lives here.
 //
 // ⚠ **IT IS THE TAG HALF ONLY, AND NO HASH-TABLE COLUMN CALLS IT DIRECTLY.** Every one of them
-// reaches it through `elementTypePreserved` below, so a column with a NOMINAL identity (a `Map` value
+// reaches it through `columnValueMatches` below, so a column with a NOMINAL identity (a `Map` value
 // declared as a struct or an enum) is settled by that identity and never falls to a tag comparison that
 // cannot see one. Two enums are both integral here, which is why calling in directly is a wrong answer
 // rather than a missed refinement.
 //
-// ⚠ **`map`'s TRANSFORM IS THE FOURTH READER — BOTH HALVES OF IT — AND IT IS THE SAME QUESTION.** "May this
-// value be stored in a slot declared `declared`?" is what element PRESERVATION asks of what the transform
-// ANSWERS and of what it TAKES — the array's element column is the slot, and the ranged-alias measurement
-// below is the very reason (a closure over `typealias Integer = int(…)` returns `named` where the element
-// reads `integer`, and the narrow spelling would refuse `[1,2,3].map(function(x Integer) gives x * 2)` — the
-// construct itself). Both halves reach it through `elementTypePreserved` below rather than calling here
-// directly, so the RETURN half (decided in the parser) and the PARAMETER half (decided whole-program, after
-// merge) cannot come to answer one question two ways.
-//
-// ⚠ It lives HERE rather than beside the container parsers because it acquired a reader in another tier.
-// `SemanticCheck` drains the transform's PARAMETER half, and a rule the parser owned privately would have
-// had to be spelled a second time there — the one-fact-twice bug this file exists to hold the cure for.
-//
-// ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`, AND THE NARROW SPELLING WAS A
-// MEASURED FALSE REFUSAL.** A value whose static type is a RANGED ALIAS carries the `named` tag until
-// TypeResolution collapses it — which is every parameter and every field read of `typealias Integer =
-// int(…)` — so `insert(v)` inside `function add(s IntSet, v Integer)` was rejected as *"`Set with int`
-// requires an int key — got a 'int' value"*, a sentence that argues against itself precisely because
-// `typeTagName` already reads `named` as `int`.
+// ⚠ **"IS THIS AN INT?" IS `tagIsIntegral`, NOT `== ValueTypeTag.integer`.** A value whose static type is a
+// RANGED ALIAS carries the `named` tag until TypeResolution collapses it — which is every parameter and every
+// field read of `typealias Integer = int(…)` — so the narrow spelling refuses `insert(v)` inside
+// `function add(s IntSet, v Integer)` with *"`Set with int` requires an int key — got a 'int' value"*.
 //
 // ⚠ A Character column asks the DEFINITELY question and not `tagIsByteRecord`: a `String` value is a byte
 // record too, and hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
 //
 // ⛔⛔ **EVERY TAG `ProgramSignatures.slotTypeFitsOneWord` ADMITS MUST BE ANSWERED HERE — THAT GATE SAYS WHAT
 // MAY *BE* A COLUMN AND THIS SAYS WHAT MAY BE *WRITTEN* TO ONE, AND A TAG PRESENT THERE AND ABSENT HERE IS
-// ADMITTED AT THE `typealias` AND REFUSED AT EVERY WRITE.** MEASURED, on `Map with (String, bool)` +
-// `m.upsert("a", value: true)`: `boolean` passed the gate, reached the integral fall-through below
-// (`tagIsIntegral(boolean)` is FALSE by construction — a bool is not a number) and was refused as *"this
-// `Map`'s value is a bool — got a 'bool' value"*, a sentence that argues against itself on a program the
-// widened value column exists to admit. The two facts live in two files and nothing but this paragraph holds
-// them together; widen one and come here.
+// ADMITTED AT THE `typealias` AND REFUSED AT EVERY WRITE.** A `boolean` column reaching the integral
+// fall-through below is refused as *"this `Map`'s value is a bool — got a 'bool' value"*. The two facts live
+// in two files and nothing but this paragraph holds them together; widen one and come here.
 function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) returns bool
 	// ⭐ **THE COLUMN TAGS THAT AGREE WITH THEMSELVES AND WITH NOTHING ELSE — one arm, because they differ in
 	// no other way.** A `Character`, a `bool` and a FUNCTION are each one machine word dropped by nothing,
@@ -3442,69 +3424,35 @@ function columnValueTagMatches(valueTag ValueTypeTag, declared ValueTypeTag) ret
 	end 'textColumn'
 
 	// ⚠⚠ **THE LAST ARM IS THE INT ARM, AND IT IS DELIBERATELY A FALL-THROUGH RATHER THAN A `tagIsIntegral`
-	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED TAGS, and that was
-	// MEASURED, not assumed.** A container's column gate runs where the container is MATERIALIZED
-	// (`IntSet.create()`), so a method call on an instance this function never created reaches here with any
-	// column type at all: `function add(s BadSet) s.insert(1.0) end` over `typealias BadSet = Set with float`
-	// reaches it with a float column. A panic on the residual would replace that program's refusal with a
-	// COMPILER CRASH, and the `insert(1)` spelling of the same program would lose its E2062 (the honest
-	// diagnostic, on the type argument) to it. So the residual must ANSWER, not crash.
+	// TEST WITH A PANIC PAST IT — because `declared` IS NOT CONFINED TO THE ADMITTED TAGS.** A container's
+	// column gate runs where the container is MATERIALIZED (`IntSet.create()`), so a method call on an instance
+	// this function never created reaches here with any column type at all: `function add(s BadSet)
+	// s.insert(1.0) end` over `typealias BadSet = Set with float` reaches it with a float column. A panic on the
+	// residual would replace that program's E2062 (the honest diagnostic, on the type argument) with a
+	// compiler crash, so the residual must ANSWER.
 	//
-	// ⛔ **BUT WHAT IT ANSWERS FOR A FLOAT IS A WRONG REFUSAL.** *"A nonsense sentence, but on a program that
-	// is refused either way"* excuses it only where `float` is no container's legal element, and a float array
-	// is FIRST-CLASS: `[1.5, 2.5].map(function(v float) gives v * 2.0)` — a program that must COMPILE — comes
-	// down `requireElementTransform` -> `elementTransformAnswersElement` -> here, reads FALSE off this arm and
-	// is refused as *"`map`'s transform answers a float value where the container's element is a float"*: a
-	// sentence that refutes itself, on a legal program. FILED AS ITS OWN RUNG — the fix is a FLOAT arm
-	// (`tagIsFloat(declared)` -> `tagIsFloat(valueTag)`) ahead of this one plus the spec case that pins it,
-	// and it is deliberately NOT carried by the conditional-extensions port, whose `contains` path never
-	// reaches this predicate. Until then this comment states the defect rather than licensing it.
-	//
-	// A further ADMITTED HASH-TABLE column type must likewise be answered ABOVE this arm — by the
-	// agrees-only-with-itself roster if it is its own type, by a class test of its own if it is a family — and
-	// its gate is not what will stop you forgetting. `function` and `boolean` are the two that have been: a
-	// `Map`'s VALUE column is not held to the key's three-name whitelist, so what may reach here as
-	// `declared` is the whole one-machine-word set. An AGGREGATE one never does — a nominal identity on
-	// either side settles the question in `elementTypePreserved` before this predicate is consulted at all.
+	// A further ADMITTED column type must be answered ABOVE this arm — by the agrees-only-with-itself roster
+	// if it is its own type, by a class test of its own if it is a family. An AGGREGATE one never reaches
+	// here: a nominal identity on either side settles the question in `columnValueMatches` first.
 	return tagIsIntegral(valueTag)
 end 'columnValueTagMatches'
 
-// ⭐⭐ **DOES A TYPE STAND FOR THE CONTAINER'S OWN ELEMENT? — `map`'s element-PRESERVATION test, stated ONCE
-// for the two halves of one declaration.** `stdlib/Interfaces.maxon` declares the transform
-// `function(Element) returns Element`, so the question asked of what it ANSWERS and the question asked of
-// what it TAKES are the same question, and the answer had better not depend on which half asks it.
+// ⭐⭐ **MAY A VALUE BE WRITTEN TO A HASH-TABLE COLUMN?** — the tag rule above, with the NOMINAL identity
+// asked first.
 //
-// It is TWO questions only in the sense the PAIR makes it two:
+//   • if EITHER side has a nominal identity the question is settled by identity and by nothing else. `Point`
+//     and `Size` are both `structRef`, and only the name says they differ.
+//   • only when NEITHER has one does the tag rule decide, for its ranged-alias reason: a ranged-int alias
+//     carries `named` where the column carries `integer`.
 //
-//   • if EITHER side has a NOMINAL identity the question is settled by identity and by nothing else. `Point`
-//     and `Size` are both `structRef`, and PRESERVING the element type means the SAME type, which only the
-//     name says. A tag test would be too weak here even where it answers.
-//   • only when NEITHER has one does the container-slot rule above decide, for that predicate's measured
-//     reason: a ranged-int alias carries `named` where the element carries `integer`, and refusing that pair
-//     would reject `[1,2,3].map(function(x Integer) gives x * 2)`, the construct itself.
-//
-// ⚠⚠ **A RULE WHERE THE ELEMENT ALONE DECIDES WHICH QUESTION IS ASKED IS A MEASURED CRASH.** Under it a
-// structural element admits *everything the container's own column would*, and a boxed enum's column
-// answer is `integral` — so `[1,2,3].map(function(c Color) gives show(c))` over an INT array compiles
-// clean and dies `STATUS_STACK_OVERFLOW`, the ordinals 1..3 matched against a two-case `match`. **The
-// identical call by DIRECT dispatch is `E3005: expected 'Color', got 'int'`** — one compiler answering one
-// question two ways. An identity on EITHER side is a fact the tag rule cannot see, so it
-// is the tag rule that must stand aside, not the identity. This is the same widening
-// is the tag rule that must stand aside, not the identity. This is the same widening
-// `SemanticCheck.checkOneArgType` already made for the mirror quadrant (a SCALAR parameter meeting an
-// AGGREGATE argument, which `tagAdmitsNoAggregate` guards) and for the same reason.
-//
-// ⚠ **EACH CALLER EXTRACTS THE IDENTITIES ITSELF, AND THE TWO EXTRACTORS ARE DELIBERATELY NOT THE SAME
-// FUNCTION** — the same split `SemanticCheck.checkOneArgType` makes between one RULE and two name
-// extractions. The parser compares two PRE-resolution types and reads both through `Parser.aggregateNameOf`;
-// the whole-program drain compares a pre-resolution element against a RESOLVED parameter and must therefore
-// read an identity that survives `resolveTypes` (see `Parser.resolvedElementIdentity`). Feeding one
-// extractor's answer to the other tier is what would produce a false refusal, so the tier is the caller's to
-// know and the verdict is this function's to give.
-export function elementTypePreserved(elementTag ValueTypeTag, elementIdentity ByteArray, otherTag ValueTypeTag, otherIdentity ByteArray) returns bool
-	if not elementIdentity.isEmpty() or not otherIdentity.isEmpty() 'eitherSideIsNominal'
-		return elementIdentity.equals(otherIdentity)
+// ⚠⚠ **LETTING THE COLUMN ALONE DECIDE WHICH QUESTION IS ASKED IS A CRASH.** A boxed enum's tag answer is
+// `integral`, so a structural column would admit an enum value and a `match` would later index an ordinal
+// past its own last arm. An identity on EITHER side is a fact the tag rule cannot see, so it is the tag rule
+// that must stand aside — the widening `SemanticCheck.checkOneArgType` makes for the mirror quadrant.
+export function columnValueMatches(declaredTag ValueTypeTag, declaredIdentity ByteArray, valueTag ValueTypeTag, valueIdentity ByteArray) returns bool
+	if not declaredIdentity.isEmpty() or not valueIdentity.isEmpty() 'eitherSideIsNominal'
+		return declaredIdentity.equals(valueIdentity)
 	end 'eitherSideIsNominal'
 
-	return columnValueTagMatches(otherTag, declared: elementTag)
-end 'elementTypePreserved'
+	return columnValueTagMatches(valueTag, declared: declaredTag)
+end 'columnValueMatches'

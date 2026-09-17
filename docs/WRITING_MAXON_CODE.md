@@ -878,11 +878,12 @@ Closure literals start with the `function` keyword:
 typealias Integer = int(i64.min to i64.max)
 
 let double = function(n Integer) gives n * 2
-items.sort(function(a, b) gives a.priority - b.priority)
+items.sort(function(a, b) gives a.priority.compare(b.priority))
 let always42 = function(_ Integer) gives 42
 ```
 
-Closures capture by reference.
+Closures capture by reference. A closure passed where the parameter is declared with a function type (like
+`sort`'s comparator) may omit its parameter types; everywhere else they are written.
 
 ### Function Types
 

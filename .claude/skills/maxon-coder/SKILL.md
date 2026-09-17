@@ -312,7 +312,7 @@ panic("invariant violated: {details}")                // unrecoverable
 
 // Closures (capture by reference) — a closure literal STARTS with `function`
 let double = function(n VisitCount) gives n * 2
-items.sort(function(a, b) gives a.priority - b.priority)
+items.sort(function(a, b) gives a.priority.compare(b.priority))   // untyped: sort's comparator type supplies them
 let always42 = function(_ VisitCount) gives 42
 
 // Tuples

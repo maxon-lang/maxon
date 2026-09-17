@@ -1774,14 +1774,10 @@ export union ParseError implements Error
 	// same two strings.
 	ambiguousTypeAlias(name String, candidates String, line LineNumber, column ColumnNumber)
 
-	// ⭐ A CLOSURE PARAMETER PAST THE FIRST, LEFT UNTYPED, IN THE ONE POSITION THAT TYPES ONE — the
+	// ⭐ A CLOSURE PARAMETER PAST THE ARITY OF THE FUNCTION TYPE ITS ARGUMENT OFFERS, LEFT UNTYPED — the
 	// second `b` of `nums.map(function(a, b) gives a + b)`. Renders as **E2003**, positioned at the
-	// parameter's NAME.
-	//
-	// A container's `map` offers the element type to ONE parameter, because that is the arity its transform
-	// is declared at; a later parameter has no second position to be typed from and nothing to infer it by.
-	// Accepted, it lifted a closure whose ABI has one more slot than the runtime's `callIndirect` passes, and
-	// the extra parameter read the environment pointer as its value — see `ClosureParamTypeHint`.
+	// parameter's NAME. There is no declared slot to type it from, and typing it anyway lifts a closure with
+	// more ABI slots than its caller passes — see `ClosureParamOffer`.
 	uninferrableClosureParam(paramName String, line LineNumber, column ColumnNumber)
 
 	// ⭐⭐ **A TOP-LEVEL INITIALIZER NAMING A STATIC ITS FILE MAY NOT SEE** — `var db = Database.create()`
@@ -2886,38 +2882,30 @@ union ParamDefaultOwner
 	interfaceRequirement
 end 'ParamDefaultOwner'
 
-// ⭐⭐ **THE PARAMETER TYPE A CALL POSITION SUPPLIES TO AN UNTYPED CLOSURE LITERAL** — `m.map(function(p)
-// gives p)`, where `p` carries no annotation.
+// ⭐⭐ **THE PARAMETER TYPES A CALL ARGUMENT OFFERS AN UNTYPED CLOSURE LITERAL WRITTEN AT IT** —
+// `scores.sort(function(left, right) gives right.compare(left))`, where neither parameter is annotated.
 //
-// ⭐ **IT IS NOT INFERRED; ONE POSITION HANDS IT DOWN.** Typing an omitted closure parameter from
-// the call-arg slot it lands in is a whole-program answer for a whole-program question. This parser
-// is single-pass, and there is exactly ONE position in the language that knows a CLOSURE's
-// parameter type before the argument is parsed: a container's `map`, whose transform is
-// `function(Element) returns Element` by the declaration `map` is read from
-// (`stdlib/Interfaces.maxon:187`). So the element type is passed down rather than solved for, and
-// every other position keeps the clean refusal an omitted type has always been. A general inference
-// pass would be a different mechanism, wanted by no construct the corpus writes today.
+// ⭐ **THEY ARE NOT INFERRED; THE PARAMETER'S DECLARED FUNCTION TYPE HANDS THEM DOWN.** This parser is
+// single-pass, so a closure's parameter types must be known before its body is read. A call argument whose
+// parameter is declared with a function type knows them already — `Array.sort(cmp SortComparator)` names
+// `function(Element, Element) returns Ordering` — so they are read off the callee's declaration
+// (`closureParamOfferAt`) rather than solved for. Every other position offers nothing.
 //
-// ⛔⛔ **THE OFFER IS FOR ONE PARAMETER, AND IT IS SPENT BY TAKING IT — the union carries the SPENT
-// state because a re-offered hint is a silent wrong answer.** Re-offering it on every iteration of
-// `parseFunctionParameters`' parameter loop would type BOTH parameters of `nums.map(function(a, b) gives
-// a + b)` as the element, lift a closure with three ABI slots `(a, b, __env)`, and meet a runtime
-// `callIndirect` that passes exactly two — `b` would read the env POINTER as its value and `a + b` would
-// degrade to `a`, compiling clean and printing a plausible number, which is the worst shape a defect has.
-// The program is E2003. Spending the offer is what makes "one parameter" a rule rather than a comment.
-union ClosureParamTypeHint
-	// The container's element type, on offer to the NEXT parameter this list reads — which is the FIRST one,
-	// since taking it turns the hint into `containerElementTaken`.
-	fromContainerElement(elementType MaxonType)
-
-	// The offer above, already taken. A LATER parameter left untyped has nothing to be typed from and no
-	// second position that could supply one, so it is refused as un-inferrable (E2003) — distinct from
-	// `none`, whose refusal is about a construct that infers nothing at all.
-	containerElementTaken
+// ⛔⛔ **THE OFFER IS POSITIONAL AND ITS ARITY IS THE DECLARED ONE.** Parameter k takes type k, and a parameter
+// past the end has no type to take — E2003, even when an earlier parameter declared its own. Typing it from
+// some other slot would lift a closure with more ABI slots than its caller passes: `nums.map(function(a, b)
+// gives a + b)` would read the env POINTER as `b` and print a plausible number.
+union ClosureParamOffer
+	// One type per parameter of the function type the argument's parameter is declared with, in order.
+	offered(paramTypes MaxonTypeArray)
 
 	// No position is offering a type, so an omitted parameter type is a parse error.
 	none
-end 'ClosureParamTypeHint'
+end 'ClosureParamOffer'
+
+// The one `none`, shared: a payload-free union case is still a heap object, and this is the answer for nearly
+// every argument that opens with `function`.
+let noClosureParamOffer = ClosureParamOffer.none
 
 // ⭐⭐ **WHOSE DEFAULT A CAPTURED HELPER PRODUCES — AND IT IS ALSO HOW THE HELPER'S NAME IS KNOWN**, which
 // is the one thing the language's two default doors do differently.
@@ -7980,17 +7968,6 @@ let IsEmptyMethod = b"isEmpty"
 // other surface still matches on it (`ClearMethod` is the buffer's, `CountMethod` the `Map`'s).
 let CountMethod = b"count"
 
-// `map(transform)` — the element-wise transform BOTH an `Array` and a `Set` serve, so it belongs in this
-// shared block for the block's own reason: one spelling, two dispatchers.
-let MapMethod = b"map"
-
-// ⭐ **HOW MANY PARAMETERS A TRANSFORM DECLARES — `function(Element) returns Element`, so ONE (E3122).** It
-// is the SOURCE-level count, and deliberately not the ABI one: the walk calls the transform with the element
-// plus the uniform `__env` slot (`ManagedMemoryRuntime.emitMappedElementPush`), and that slot is the compiler's, not
-// the program's. `requireElementTransform` records it and `SemanticCheck.checkTransformArities` compares
-// against it, so the rule and its sentence read one number.
-let ElementTransformArity = 1 as ParamCount
-
 // ⚠⚠ **`FromMethod = b"from"` STOOD HERE (A3g) AND IS DELETED (W129 review): ITS ONE READER —
 // `parseCharacterSetFrom`'s argument reject — WENT AT W115, AND THE CONSTANT OUTLIVED IT.** The RULE it was
 // found by is what belongs here, because it binds every constant in this block and not just that one:
@@ -8291,12 +8268,11 @@ end 'cursorSurfaceMemberNames'
 // left; the header's promise held in reverse — nothing else moved but the sentence, which is the same
 // seventeen-expectation churn the paragraph above prices, paid in the other direction.
 //
-// ⚠ **FOUR OF THOSE SEVEN DELETED NO CODE, AND THAT IS THE PARTITION SPEAKING RATHER THAN A HALF-JOB.**
+// ⚠ **FOUR OF THOSE SEVEN KEEP THEIR RUNTIME, AND THAT IS THE PARTITION SPEAKING RATHER THAN A HALF-JOB.**
 // `remove` and `capacity` are `__ManagedMemory` members too (`bufferSurfaceMemberNames`), so their arms and
-// their `__managed_remove`/`__managed_capacity` runtimes are FLOOR; `map`'s `__managed_map` is `Map.map`'s emission
-// (`parseContainerMap`, one caller over) and `hash`/`equals`' `__managed_hash`/`__managed_eq` are what a `Map` key's
-// WITNESS slot and the `==` OPERATOR name. What retired there is the `Array` SPELLING, which is exactly what
-// a roster is.
+// their `__managed_remove`/`__managed_capacity` runtimes are FLOOR; `hash`/`equals`' `__managed_hash`/`__managed_eq`
+// are what a `Map` key's WITNESS slot and the `==` OPERATOR name. What retired there is the `Array` SPELLING,
+// which is exactly what a roster is.
 //
 // ⭐⭐⭐ **ARR4 IS THE TERMINAL STRIKE, AND ITS PRODUCT IS THIS TABLE: EVERY REMAINING NAME RE-MEASURED
 // ALONE AGAINST ONE TREE, ON ONE DAY, WITH A PROGRAM THAT WAS RUN.** The eleven were struck ONE AT A TIME
@@ -15622,13 +15598,13 @@ export type Parser
 	// instance 0 is a real instance. Written only through `stateArrayLiteralTargetAt`.
 	var arrayLiteralTargetInstance as GenericInstanceId
 
-	// ⭐ **THE PARAMETER TYPE THE CURRENT CALL POSITION OFFERS AN UNTYPED CLOSURE LITERAL** — see
-	// `ClosureParamTypeHint`. `none` everywhere except across the one `parseExpression` that reads a
-	// container `map`'s transform argument, and `parseClosureExpression` TAKES it (reads and clears) at
-	// entry, so a closure nested inside the transform's body sees `none` and cannot adopt a type meant for
-	// the outer one. It is deliberately NOT among that function's ~25 saved per-function columns for exactly
-	// that reason: it is consumed before the body parses rather than held across it.
-	var closureParamHint as ClosureParamTypeHint
+	// ⭐ **THE PARAMETER TYPES THE CURRENT CALL ARGUMENT OFFERS A CLOSURE LITERAL** — see `ClosureParamOffer`.
+	// Keyed on the argument's first token for `cellArgumentTokenIndex`'s reason: only a literal OPENING there
+	// is the argument, so `f(g(function(x) gives x))` cannot hand `f`'s offer to the literal `g` receives.
+	// `parseClosureExpression` takes it before its body parses, so it is not among that function's saved
+	// per-function columns.
+	var closureParamOfferTokenIndex as TokenIndex
+	var closureParamOffer as ClosureParamOffer
 
 	// ⭐ **THE PRE-TERNARY MOVE BASE FOR A CODE PATH WITH NO OWNED BINDINGS (P1.5-A2c).** An inline
 	// conditional `<t> if <c> else <f>` parses its TRUE arm before the `if` reveals the form, so the
@@ -16065,7 +16041,8 @@ export type Parser
 			cellArgumentTokenIndex: NoCellArgumentRequest,
 			arrayLiteralTargetTokenIndex: 0,
 			arrayLiteralTargetInstance: NoGenericInstance,
-			closureParamHint: ClosureParamTypeHint.none,
+			closureParamOfferTokenIndex: 0,
+			closureParamOffer: noClosureParamOffer,
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create(), consumes: PromiseConsumeRecordArray.create(), awaiting: noAwaitedMoveReads, lent: noLentOnPath),
 			isStdlibSource: isStdlibSource,
 			buildsBodies: buildsBodies,
@@ -20231,8 +20208,7 @@ export type Parser
 	// ⚠ **NOT `StructLayout.bindingsForInterface("Iterable")`, WHICH IS THE OBVIOUS KEY AND IS THE WRONG
 	// ONE** — it answers only when the type names that interface LAST, so `implements Iterable with (…),
 	// Printable` would silently answer nothing, and it would be a SECOND derivation of the element disagreeing
-	// with the declaration whenever the two drift. `extensionElementTransformHint` measured that one door
-	// over. A callee's own declared return cannot drift from the callee.
+	// with the declaration whenever the two drift. A callee's own declared return cannot drift from the callee.
 	//
 	// ⚠ It is asked of the DECLARATIONS and not of the tokens for `calleeReturnsBareTypeParameter`'s reason:
 	// an inner alias may NAME the parameter, and the loop's own calls are emitted by the compiler and appear
@@ -20248,7 +20224,7 @@ export type Parser
 	end 'receiverCursorElementIsOpaque'
 
 	// The `value`/`void` split of the factory's declared return — unwrapped a level at a time because a
-	// `match` arm holds one statement, `mappedArrayElementHint`'s shape for its reason.
+	// `match` arm holds one statement.
 	function cursorReturnYieldsOpaqueElement(returnType MaxonReturnType) returns bool
 		match returnType 'returned'
 			value(cursor) then return self.cursorTypeYieldsOpaqueElement(cursor)
@@ -24537,9 +24513,9 @@ export type Parser
 		// A FUNCTION typealias — `function(paramTypes) [returns T]` (P1.5-A1). The literal `function(…)`
 		// form is legal ONLY as a typealias RHS (the spec), so this is the one place it is parsed as a
 		// type. It records its own registry (`FunctionTypeAlias`), not the ranged one.
-		// `recordFunctionSignature` is the REAL parse's signal that this alias's whole declared signature —
-		// its `#81` display string and its parameter types — is wanted; the sweep and the nested-alias reader
-		// pass false (see `readFunctionTypeAlias` for why only the real parse may record it).
+		// `recordFunctionSignature` is the REAL parse's signal that the signature facts only it can read — its
+		// `#81` display string, its storability refusals and its aggregate names — are wanted; the sweep and the
+		// nested-alias reader pass false (see `readFunctionTypeAlias`).
 		if self.at(TokenKind.function) 'functionAlias'
 			// A function alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference to
 			// `function`), so it may not take a compiler-owned type name — unlike the ranged form below, which
@@ -25883,14 +25859,14 @@ export type Parser
 	// the return) so it rides the no-remap fold, plus the `#81` `fn(…) returns …` DISPLAY STRING built from
 	// the same parameter list. An absent `returns` clause is a void function type.
 	//
-	// ⚠ **ONLY THE REAL PARSE MAY RECORD THE SIGNATURE, and that is a property of the SWEEP rather than an
+	// ⚠ **ONLY THE REAL PARSE MAY VETO OR CLASSIFY, and that is a property of the SWEEP rather than an
 	// optimization.** `parseTypeReference` answers a type spelling differently during the whole-program token
 	// sweep — `isFunctionAlias`/`isGenericAlias` consult the very registries the sweep is still building, so a
-	// parameter spelled with a function or generic alias reads back as a bare `named` there — and a fact
-	// recorded twice from two answers is two facts. The sweep and the nested-alias reader therefore pass
-	// `recordSignature: false` and store the RETURN type alone, which they read identically; every consumer
-	// of a parameter type reads the real parse's copy in `project.functionTypeAliases`. The params are PARSED
-	// either way: the syntax must be consumed, and a malformed one rejected, wherever it is met.
+	// parameter spelled with a function or generic alias reads back as a bare `named` there. The sweep and the
+	// nested-alias reader therefore pass `recordSignature: false`: their copy carries every slot's tag and
+	// identity columns as the sweep read them, and no storability refusal, aggregate name or display string.
+	// Whole-program consumers read the real parse's copy in `project.functionTypeAliases`; a reader of the
+	// sweep's copy repairs its `named` leaves from `declFilePath`.
 	function readFunctionTypeAlias(nameTok Token, recordSignature bool, visibility Visibility) returns FunctionTypeAlias throws ParseError
 		try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
@@ -25925,6 +25901,8 @@ export type Parser
 				// the tolerant sweep can supply without a counter it does not keep.
 				paramSpelling = Hasher.combined(self.mixWrittenTokens(paramSpelling, from: paramStart, to: self.pos), value: FunctionAliasParamBoundary)
 
+				var paramAggregateName = EmptySourceText
+
 				if recordSignature 'collectParam'
 					// ⭐ REFUSED HERE, and `recordSignature` is what keeps the tolerant declaration sweep out of it: the
 					// sweep passes `false` and must never veto, exactly as it must not for the six sibling positions.
@@ -25932,8 +25910,16 @@ export type Parser
 					// parameter position is E2010 — so one call site covers the position.
 					try self.requireStorableDeclaredType(paramType, position: DeclaredStoragePosition.functionTypeParameter, line: paramAnchor.line, column: paramAnchor.column)
 					paramTypes.push(paramType)
-					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), typeParamToken: functionAliasTypeParamToken(paramType), genericInstanceId: functionAliasInstanceId(paramType), aggregateName: self.erasedAggregateNameOf(paramType)))
+
+					// The one parameter fact the sweep cannot read identically, for `returnAggregateName`'s reason below.
+					paramAggregateName = self.erasedAggregateNameOf(paramType)
 				end 'collectParam'
+
+				// ⭐ **BOTH PASSES RECORD THE SLOT, EACH AS IT READS IT** — the return slot's arrangement. The sweep's
+				// copy is the only one a call site in ANOTHER file can reach while that file is parsed, and a closure
+				// literal written at a parameter of this type takes its parameter types from it
+				// (`Parser.closureParamOfferAt`), repairing the tolerant `named` leaves from `declFilePath`.
+				declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType), typeParamToken: functionAliasTypeParamToken(paramType), genericInstanceId: functionAliasInstanceId(paramType), aggregateName: paramAggregateName))
 
 				if not self.at(TokenKind.comma) 'endParams'
 					break
@@ -26887,7 +26873,7 @@ export type Parser
 		var paramSurfaces = DeclaredSurfaceArray.create()
 		var paramTypeStarts = TokenIndexColumn.create()
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.interfaceRequirement, paramTypeHint: ClosureParamTypeHint.none)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.interfaceRequirement, paramTypeOffer: noClosureParamOffer)
 		try self.consume(TokenKind.rightParen)
 
 		// NOTED, not thrown — see `requireNoUnstorableRequirementType` for why this reader may not refuse.
@@ -28784,7 +28770,7 @@ export type Parser
 
 			try self.consume(TokenKind.leftParen)
 			sweptOwnerName = self.signatures.memberRegistrationKey(sourceName, takesReceiver: takesReceiver)
-			try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sweptOwnerName), paramTypeHint: ClosureParamTypeHint.none)
+			try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sweptOwnerName), paramTypeOffer: noClosureParamOffer)
 			try self.consume(TokenKind.rightParen)
 		end 'aFunctionHead'
 
@@ -30142,14 +30128,10 @@ export type Parser
 	// declaration holds and `parseTypeReference` is about to destroy, captured at the last moment it is
 	// readable and carried alongside the columns it describes. It needs no signature-index entry, because the
 	// only reader is `bindParameters` — and both live inside one `parseFunction`.
-	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexColumn, owner ParamDefaultOwner, paramTypeHint ClosureParamTypeHint) throws ParseError
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexColumn, owner ParamDefaultOwner, paramTypeOffer ClosureParamOffer) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
-
-		// The offer as it stands for the parameter about to be read — the caller's hint for the first one,
-		// `containerElementTaken` for every one after it. See the spend below, beside the type read.
-		var offeredType = paramTypeHint
 
 		while true 'paramLoop'
 			// ⭐ A KEYWORD MAY BE A PARAMETER'S NAME (D8) — `function identity(type Integer)`, the shape
@@ -30172,19 +30154,7 @@ export type Parser
 			// here and read by `bindParameters`, exactly as `paramSurfaces` is. An index rather than the resolved
 			// instance because an OMITTED type resolves nothing at all and there is no absent-instance to invent.
 			let paramTypeStart = self.pos
-			let paramType = try self.parameterTypeOrHinted(offeredType, nameTok: nameTok)
-
-			// ⭐ **SPEND THE CALL POSITION'S OFFER — one offer, one parameter** (see `ClosureParamTypeHint`).
-			// Done whether or not THIS parameter took it: a hinted closure that declares its first parameter's
-			// type explicitly has still had the one position that types anything, so `function(a Integer, b)`
-			// is refused exactly as `function(a, b)` is. Only the offer is spent; `none` stays `none`, so an
-			// ordinary function's later untyped parameter keeps the refusal that names the one construct which
-			// does infer.
-			match offeredType 'spendOffer'
-				fromContainerElement then offeredType = ClosureParamTypeHint.containerElementTaken
-				containerElementTaken then break 'spendOffer'
-				none then break 'spendOffer'
-			end 'spendOffer'
+			let paramType = try self.parameterTypeOrOffered(paramTypeOffer, paramIndex: paramNames.count(), nameTok: nameTok)
 
 			// ⭐ **A DEFAULT VALUE IS CAPTURED, NOT PARSED HERE (BATCH2 slice 4)** — its expression becomes the
 			// whole body of a synthesized nullary helper, parsed at the END of the file by
@@ -30370,32 +30340,26 @@ export type Parser
 		return self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath)
 	end 'declaredGenericAliasInstance'
 
-	// ⭐ **THE DECLARED TYPE, OR THE ONE THE CALL POSITION SUPPLIED (`function(p) gives …`).** An OMITTED type
-	// is recognized by the parameter list's own punctuation standing where a type would begin — the `,` before
-	// the next parameter or the `)` that closes the list — which is the whole test, and it needs no lookahead:
-	// no type reference starts with either token.
+	// ⭐ **THE DECLARED TYPE, OR THE ONE THE CALL ARGUMENT OFFERS AT `paramIndex` (`function(p) gives …`).** An
+	// OMITTED type is recognized by the parameter list's own punctuation standing where a type would begin — the
+	// `,` before the next parameter or the `)` that closes the list — and needs no lookahead: no type reference
+	// starts with either token.
 	//
-	// A hint reaches here only from a container `map`'s transform argument (see `ClosureParamTypeHint`), so
-	// every other omission — including one in a NAMED function's parameter list, which no position types —
-	// still refuses, and says which construct does infer.
-	//
-	// ⭐ The two refusals are different mistakes and say so. `containerElementTaken` means a position
-	// DID supply a type and this parameter is past the one it supplies for — E2003, worded for the fix
-	// it names. `none` means no position supplies anything here, and names the one construct that
-	// does.
-	function parameterTypeOrHinted(hint ClosureParamTypeHint, nameTok Token) returns MaxonType throws ParseError
+	// ⭐ The two refusals are different mistakes and say so. An offer too short for `paramIndex` means a
+	// position DID supply types and this parameter is past them — E2003. `none` means nothing supplies a type
+	// here, including every NAMED function's parameter list, and the sentence names the construct that does.
+	function parameterTypeOrOffered(offer ClosureParamOffer, paramIndex ParamCount, nameTok Token) returns MaxonType throws ParseError
 		if not (self.at(TokenKind.comma) or self.at(TokenKind.rightParen)) 'declaredType'
 			return try self.parseTypeReference(BarePrimitiveVoice.asAType)
 		end 'declaredType'
 
-		match hint 'hinted'
-			fromContainerElement(elementType) then return elementType
-			containerElementTaken then throw ParseError.uninferrableClosureParam(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
-			none then break 'hinted'
-		end 'hinted'
+		match offer 'offer'
+			offered(paramTypes) then return try paramTypes.get(paramIndex) otherwise throw ParseError.uninferrableClosureParam(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			none then break 'offer'
+		end 'offer'
 
-		throw ParseError.unsupported("parameter '{String.from(nameTok.value)}' with no type — the compiler infers an omitted parameter type in exactly one position, a closure passed to a container's `{String.from(MapMethod)}`, whose transform takes the container's own element; every other parameter declares its type", line: nameTok.line, column: nameTok.column)
-	end 'parameterTypeOrHinted'
+		throw ParseError.unsupported("parameter '{String.from(nameTok.value)}' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type", line: nameTok.line, column: nameTok.column)
+	end 'parameterTypeOrOffered'
 
 	// Capture one parameter's `= <default>` for its owning declaration and leave the cursor on the token
 	// that ENDS it (the `,` before the next parameter, or the list's `)`), so the parameter loop resumes
@@ -65955,17 +65919,9 @@ export type Parser
 		// E3036 there too (`method-calls:19:4` over `\tc.increment(5)`), where the compiler read `:2` for both.
 		// ⚠ It was invisible while `append` had a synthesized arm, because that arm threw at `methodTok`
 		// itself; retiring the member moved the refusal to the call-site half and exposed it.
-		// ⭐ **THE TRANSFORM POSITION'S PARAMETER-TYPE OFFER, for a `map` an `extension` supplies** — the corpus
-		// twin of `parseElementTransformArg`'s, and it is spent by the SAME `parseFunctionParameters` rule.
-		// Restored on the SUCCESS path only, exactly as the builtin offer is and for the identical reason: a
-		// `ParseError` out of the arguments aborts the file's parse, so a hint left set reaches no later closure.
-		let savedHint = self.closureParamHint
-		self.closureParamHint = self.extensionElementTransformHint(base.box, methodName: memberTok.value, callee: callee)
-
 		// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver; the head above came from
 		// `base.layout`, so no token at this call site spells it (F31).
 		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName, anchor: baseTok), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box), mint: CalleeMint.resolvedTypeQualifier)
-		self.closureParamHint = savedHint
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 
 		if producesAByteView 'aFoldableByteView'
@@ -67252,7 +67208,7 @@ export type Parser
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		try self.requireRawByteFillFitsItsElement(giid, methodTok: methodTok)
 		try self.consumeEmptyArgList()
-		return try self.emitMaterializedFill(giid, callee: StrToBytesName, source: record, extraArgs: ValueIdArray.create(), range: range)
+		return try self.emitMaterializedFill(giid, callee: StrToBytesName, source: record, range: range)
 	end 'parseByteView'
 
 	// ⚠⚠ **`parseDecodedView` WAS HERE AND WENT WITH `String.codepoints()`/`String.utf16()` (W49 WAVE 6).**
@@ -67264,68 +67220,19 @@ export type Parser
 	// corpus's `CodepointView`/`UTF16View` are structs holding the `String`, so they mint no array
 	// instance at all and there is nothing left for the rule to decide.
 
-	// ⚠ **`parseMaterializedView` STOOD HERE AND IS FOLDED INTO `parseByteView` (W49 WAVE 6).** It described
-	// "what a materialized view IS" for THREE methods that could otherwise have come to disagree about who
-	// creates the array and who owns it. Two of the three retired, and a description with one subject is not a
-	// shared description — it is a hop. The contract it carried is `emitMaterializedFill`'s and is stated
-	// there, where the other callers can read it.
-
-	// ⭐⭐ **A PUSH-ONLY RUNTIME WALK THAT FILLS A CALLER-CREATED ARRAY — the one door, for the byte view AND
-	// for `map`.** Create the array HERE through `emitArrayCreateOp` (the one array-creation door),
-	// hand it to the walk as the SECOND argument, and enrol the ARRAY — not the void call's result — as the
-	// owned temporary.
-	//
-	// ⚠ **`(source, dest, …)` IS THE ARGUMENT ORDER EVERY SUCH RUNTIME ENTRY TAKES, and it is stated once
-	// here.** Two callees now share it (`__str_to_bytes` and `__managed_map`) where four did until W49
-	// wave 6 retired the two decoding views; a caller that assembled its own list would be free to swap the
-	// two records, which reads as a valid call at every tier and writes into the source at run time.
+	// ⭐⭐ **A PUSH-ONLY RUNTIME WALK THAT FILLS A CALLER-CREATED ARRAY.** The array is created HERE through
+	// `emitArrayCreateOp` (the one array-creation door), handed to the walk as the SECOND argument after its
+	// `(source, dest)` order, and the ARRAY — not the void call's result — is enrolled as the owned temporary.
 	//
 	// ⚠ The result is enrolled owned whatever the element is: `trackOwnedTemp` routes its scope-exit drop by
 	// TAG through `decrefCalleeFor` (`__managed_decref`), which destroys the elements the record's own
 	// `element_destroy@40` stamp names — so a managed-element fill needs nothing extra here.
-	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, extraArgs ValueIdArray, range SourceRange) returns ValueId throws ParseError
+	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, range SourceRange) returns ValueId throws ParseError
 		let filled = try self.emitArrayCreateOp(giid, range: range)
-		var args = pairArgs(source, second: filled)
-		args.append(extraArgs)
-		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(callee, args: pairArgs(source, second: filled), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(filled, exclusivity: OwnedHeapExclusivity.sole)
 		return filled
 	end 'emitMaterializedFill'
-
-	// ⭐⭐ **`container.map(transform)` — THE WHOLE OF `map`, FOR BOTH CONTAINERS THAT SERVE IT.** An `Array`
-	// and a `Set` differ in ONE thing here — which runtime walk reaches the next element — so the callee is a
-	// parameter and nothing else is. The result INSTANCE is the caller's to state because that is the one
-	// place the two genuinely disagree: an array maps to its OWN instance, a `Set with K` to `Array with K`.
-	//
-	// ⭐ `map` is a COMPILER-OWNED container method, not an `Iterable` extension.
-	// `stdlib/Interfaces.maxon:187` declares `map`/`filter`/`contains` as an `export extension
-	// Iterable` written in Maxon; `map` instead joins the container surface the same way
-	// `push`/`slice`/`count` do — a roster entry and a dispatch arm — which is what this compiler's
-	// own refusal has always said that surface IS.
-	// ⚠ Whether `map` should move onto the extension machinery — which keys off `conformersOf`,
-	// walking DECLARED types — is a decision for whoever takes it, and it may not be inferred from a
-	// premise about containers having no `createIterator`: `stdlib/Interfaces.maxon` and
-	// `stdlib/Array.maxon` both LOAD (the loader takes all of `stdlib/`) and `Array.createIterator` is
-	// what `for … in` reaches (`materializeIterableIterationSource`). The SEMANTICS come from that
-	// declaration: a NEW array, in iteration order, one `transform(item)` per element, and
-	// element-type-PRESERVING (`function(Element) returns Element`).
-	function parseContainerMap(func IrFunction, container ValueId, resultGiid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
-		// ⭐ **ADOPTED INTO THIS FILE'S INTERNER, because the element type no longer only has its TAG read.**
-		// `containerElementType` answers with the whole-program index's own ids, which was harmless while
-		// `requireElementTransform` was the only consumer — it compares tags. Since the element type also
-		// TYPES an untyped closure parameter (`parseElementTransformArg`'s hint), an id-bearing element (a
-		// `Map`'s `(Key, Value)` pair `structRef`) would reach the file's value columns wearing a foreign id
-		// and PANIC in `internedName` the moment anything asked for its name. MEASURED, on this spec's
-		// `m.map(function(p) gives p)`: `Parser.internedName: type-name id 44 is not in this file's interner`,
-		// through `valueIsCopyableTuple` on the closure's own return.
-		let transform = try self.parseElementTransformArg(func, elementType: self.signatures.adoptType(self.signatures.containerElementType(resultGiid), into: self.artifact.typeNames))
-
-		// The env travels with the VALUE, through the one door an in-frame indirect call asks
-		// (`emitClosureEnvArg`): a capturing closure's heap block, or a materialized null for a plain function
-		// reference or a non-capturing closure. The runtime's `callIndirect` is the uniform `(elem, __env)`
-		// ABI, so a capturing transform works here for the same reason `f(x)` does.
-		return try self.emitMaterializedFill(resultGiid, callee: callee, source: container, extraArgs: pairArgs(transform, second: self.emitClosureEnvArg(transform, range: range)), range: range)
-	end 'parseContainerMap'
 
 	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY THE `where` CLAUSE OF `Array`'s OWN CONDITIONAL
 	// CONFORMANCE? — the WITHHOLDING rule, and it is the SAME question, the same predicate and the same
@@ -67369,301 +67276,6 @@ export type Parser
 			unmet(unmetInterfaceName, bindingName) then throw ParseError.conditionalExtensionWithheld(String.from(self.signatures.arrayRecordDeclaredName()), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
 		end 'clause'
 	end 'requireArrayConformanceAvailable'
-
-	// `( transform )` — `map`'s single positional argument, a FUNCTION VALUE over the container's element.
-	// Parsed as an ordinary expression, so every producer of a function value reaches it: an inline closure
-	// literal, a bare reference to a named function, a function-typed parameter or field.
-	//
-	// ⭐ **IT IS ALSO THE ONE POSITION THAT CAN TYPE AN UNTYPED CLOSURE PARAMETER** — `m.map(function(p)
-	// gives p)`, which `specs/interface-extensions.md` writes. The transform's parameter IS the
-	// container's element by the declaration `map` is read from (`function(Element) returns Element`), so
-	// there is nothing to infer: the type is already in hand one line above the parse that needs it, and
-	// offering it is a hand-off rather than an inference pass. See `ClosureParamTypeHint`.
-	//
-	// ⚠ The hint is restored on the SUCCESS path only. A `ParseError` out of the argument aborts the file's
-	// parse, so a hint left set can reach no later closure literal — the same reason `parseClosureExpression`
-	// can leave `iterationLockedBindings` unbalanced on its own error path.
-	function parseElementTransformArg(func IrFunction, elementType MaxonType) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let argTok = self.current()
-		let savedHint = self.closureParamHint
-		self.closureParamHint = ClosureParamTypeHint.fromContainerElement(elementType)
-		let transform = try self.parseExpression(func, block: self.currentBlock)
-		self.closureParamHint = savedHint
-		try self.requireElementTransform(transform, elementType: elementType, argTok: argTok)
-		try self.consume(TokenKind.rightParen)
-		return transform
-	end 'parseElementTransformArg'
-
-	// ⭐⭐ **THE SAME OFFER, FOR A CONTAINER WHOSE `map` COMES FROM `extension Iterable` RATHER THAN FROM THE
-	// BUILTIN ROSTER (W41).** `stdlib/Map.maxon` is listed and the synthesized `Map` is retired, so `Map` is an
-	// ordinary user generic: `m.map(f)` no longer reaches `parseContainerMap` at all, it reaches
-	// `dispatchMethodOnBase` like any other struct method. The inference was keyed to the roster, so it went
-	// silent on the very construct `specs/interface-extensions.md` writes — the refusal named `map` while
-	// refusing the one `map` a corpus container has.
-	//
-	// ⭐ **THE OFFER IS THE ELEMENT OF THE ARRAY `map` IS DECLARED TO RETURN, and that is the SAME question the
-	// builtin path asks** (`parseContainerMap` hands `containerElementType(resultGiid)`). It is sound because
-	// `map` is element-type-PRESERVING — `stdlib/Interfaces.maxon:199` declares
-	// `map(transform ElementTransform) returns ElementArray` over one `Element`, which `requireElementTransform`
-	// states as the rule for the builtin twin. So "what element does this `map` produce" and "what element does
-	// its transform take" are one fact, and reading the DECLARATION is what keeps them one: the answer is the
-	// extension's own published signature, re-parsed per conformer with `Element` already substituted, not a
-	// re-derivation of the element from the `implements` clause.
-	//
-	// ⛔ **`StructLayout.bindingsForInterface("Iterable")` WAS THE OBVIOUS KEY AND IS THE WRONG ONE.** It answers
-	// only when the type names that interface LAST (its own header says so), so `implements Iterable with (…),
-	// Printable` would silently offer nothing — and it would be a SECOND derivation of the container's element,
-	// disagreeing with the declaration whenever a conformance and a signature drift apart. Reading the callee's
-	// own declared return cannot drift from the callee.
-	//
-	// ⚠ **GATED ON THE METHOD BEING THE EXTENSION'S, because a conformer that declares its OWN `map` may declare
-	// anything.** `methodPublishedByExtension` is what says the signature above is the one being called; without
-	// it, a `map(x Integer) returns IntArray` would have its return's element offered to a closure its own
-	// parameter list never asked for.
-	//
-	// Every gate FAILS SAFE — an unrecognized shape returns `none`, which is the existing positioned E2015
-	// naming the one construct that does infer, not a wrong type.
-	function extensionElementTransformHint(receiver ValueId, methodName ByteArray, callee ByteArray) returns ClosureParamTypeHint
-		if not methodName.equals(MapMethod) 'notTheTransformPosition'
-			return ClosureParamTypeHint.none
-		end 'notTheTransformPosition'
-
-		if not self.signatures.methodPublishedByExtension(callee) 'theConformersOwnMap'
-			return ClosureParamTypeHint.none
-		end 'theConformersOwnMap'
-
-		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declaredReturn'
-			declared(returnType) then return self.mappedArrayElementHint(receiver, returnType: returnType)
-			undeclared then break 'declaredReturn'
-		end 'declaredReturn'
-
-		return ClosureParamTypeHint.none
-	end 'extensionElementTransformHint'
-
-	// The `value`/`void` split of the declared return, one shape over from `retypeOpaqueReturn`'s and for its
-	// reason — a match arm holds one statement, so the union is unwrapped a level at a time.
-	function mappedArrayElementHint(receiver ValueId, returnType MaxonReturnType) returns ClosureParamTypeHint
-		match returnType 'returned'
-			value(declaredArray) then return self.mappedArrayElementOffer(receiver, declaredArray: declaredArray)
-			void then break 'returned'
-		end 'returned'
-
-		return ClosureParamTypeHint.none
-	end 'mappedArrayElementHint'
-
-	// ⚠ **FIXED BY THE RECEIVER'S INSTANCE FIRST.** `Iterable.map` is re-parsed once per CONFORMER, not once per
-	// INSTANCE, so `Map.map`'s declared `ElementArray` is `Array with Map.Entry` in the DECLARATION view — its
-	// element cites `Map`'s own type parameters. Offered unfixed, a closure would be typed against an opaque
-	// tuple its body could not read a field of; `slotTypeThroughReceiver` is the door that turns it into the
-	// `Array with (String, int)` this receiver actually holds, and it is the same door the field read and the
-	// method return already cross.
-	function mappedArrayElementOffer(receiver ValueId, declaredArray MaxonType) returns ClosureParamTypeHint
-		let fixed = self.slotTypeThroughReceiver(receiver, declared: self.calleeScopedContainerReturn(declaredArray))
-
-		if maxonTypeTag(fixed) != ValueTypeTag.genericInstance 'notAContainerReturn'
-			return ClosureParamTypeHint.none
-		end 'notAContainerReturn'
-
-		return ClosureParamTypeHint.fromContainerElement(self.signatures.adoptType(self.signatures.containerElementType(genericInstanceIdOf(fixed)), into: self.artifact.typeNames))
-	end 'mappedArrayElementOffer'
-
-	// ⭐⭐ **THE SWEPT RETURN TYPE IS A BARE NAME, AND `ElementArray` IS AN INNER GENERIC ALIAS OF THE
-	// CONFORMER** — `promoteBareGenericResultToCalleeScope`'s question asked of a TYPE instead of a minted
-	// VALUE, and of the one shape that door does not reach.
-	//
-	// `returnTypeOf` reads the token SWEEP's table, which records every written type as the bare name the source
-	// spelled (`parseTypeReference`'s `allFilesFolded` gate argues why it must). So `Iterable.map`'s
-	// `returns ElementArray`, folded onto conformer `Map`, arrives here as `named("ElementArray")` — and the
-	// registry that says what it MEANS keys it under the conformer, `Map.ElementArray`, because
-	// `foldExtensionDeclarationInto` files a nested `typealias ElementArray = Array with Element` through
-	// `qualifiedInnerGenericAlias`.
-	//
-	// ⚠ **`scopedGenericInstanceOf` CANNOT ANSWER FOR IT, which is why this is not simply that door reused.**
-	// That one re-scopes a bare generic BASE (`Inner` ⇒ `Inner with (Map.Key, Map.Value)`) and gates on
-	// `structTypeParamsOf`, which answers the shared empty for a name no `type` declares — and `ElementArray` is
-	// an alias, not a type. This is `parseTypeReference`'s inner-alias GENERIC arm, reached from a call site
-	// whose cursor is nowhere near the declaration that gives the name its meaning.
-	//
-	// ⚠ **THE RECORDED NAME IS ALREADY THE REGISTRY KEY — it needs no re-qualifying, and MEASURED, re-qualifying
-	// it is what made this door answer nothing.** The sweep files an extension's nested alias under the
-	// CONFORMER (`qualifiedInnerGenericAlias`) and records the return type under that same qualified spelling, so
-	// what arrives here is `Map.ElementArray`, not `ElementArray`. Joining the declaring type onto it a second
-	// time asked the registry about `Map.Map.ElementArray`, which nothing declares, and every corpus `map` fell
-	// through to the E2015 this function exists to retire.
-	//
-	// Anything else passes through untouched: a conformer that spells its return concretely
-	// (`returns IntArray`) is already what it needs to be, and a name in no generic-alias registry answers
-	// `none` two lines on rather than guessing.
-	function calleeScopedContainerReturn(declared MaxonType) returns MaxonType
-		if maxonTypeTag(declared) != ValueTypeTag.named 'notASweptBareName'
-			return declared
-		end 'notASweptBareName'
-
-		// ⚠ `allFilesFolded` for the reason `scopedGenericInstanceOf` states: the alias registry is one the
-		// declaration sweep is still filling, so an ungated answer would depend on the loader's walk order.
-		let name = self.internedName(typeNameIdOf(declared))
-
-		if not self.signatures.allFilesFolded or not self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'notAGenericAliasReturn'
-			return declared
-		end 'notAGenericAliasReturn'
-
-		return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
-	end 'calleeScopedContainerReturn'
-
-	// ⭐ **`map`'s TRANSFORM MUST BE A FUNCTION, AND IT MUST ANSWER THE CONTAINER'S OWN ELEMENT TYPE.**
-	// Both halves come from the declaration `function(Element) returns Element`: `map` is
-	// element-type-PRESERVING, so the result array is the SAME instance the receiver's element names
-	// and there is no second element type for the parser to infer, for `emitArrayCreateOp` to stamp,
-	// or for the runtime's word-shaped `callIndirect` to carry.
-	//
-	// The comparison is `elementTypePreserved` — nominal for an element that has an identity, and the
-	// container-slot rule (already written for a `Set`'s key and a `Map`'s two columns) for one that has not —
-	// and not `==`, for the reason `columnValueTagMatches`'s header measured: a ranged-int alias carries the
-	// `named` tag where the element carries `integer`, and refusing that pair would reject
-	// `[1,2,3].map(function(x Integer) gives x * 2)`, which is the construct itself.
-	//
-	// ⭐⭐ **AND ITS PARAMETER MUST BE THE ELEMENT — ONE OF THEM (E3122) AND OF THAT TYPE (E3005) — RECORDED
-	// HERE, DECIDED WHOLE-PROGRAM.** The third half of the same declaration, and the one the parser cannot
-	// answer: a function value's parameter list lives in `funcSignatures`/`functionAliasShapes`, which are not
-	// assembled until merge, and a lifted closure's is file-local until then (`closureReturns` records only
-	// its RETURN). So this records the value's governing NAME and the ELEMENT to judge it against, and
-	// `SemanticCheck.checkTransformArities` compares. See PendingTransformArity — including why it is not a
-	// sixth `PendingFunctionTypeDoor` arm.
-	//
-	// ⚠⚠ **THE TYPE HALF WAS A REACHABLE SEGFAULT, NOT AN ACCEPTED LOOSENESS.** `nums.map(function(a String)
-	// gives a.count())` over an int array compiled clean and died SIGSEGV (exit 139): the walk hands the
-	// transform the element regardless of what it declares, so the integer `1` was dereferenced as a `String`
-	// record pointer. The milder `gives 1` spelling compiled and printed a plausible answer — the contract was
-	// already broken there, the crash only arrives when the body USES the parameter.
-	//
-	// ⚠ **IT IS RECORDED FOR THE VALUE, NOT FOR A CLOSURE LITERAL, AND THAT IS THE WHOLE POINT.**
-	// `nums.map(twoArg)` has no closure in it — the arity belongs to a function that may be declared
-	// in another file — so a rule keyed on the closure parse could not see the shape at all.
-	// Unchecked, a program gets through that READS AN ARGUMENT NOBODY PASSED. The walk calls the
-	// transform with one element plus the uniform `__env` slot, so a second parameter is whatever that
-	// slot held: MEASURED at `sum=0` on arm64-macOS, and a `wasm32-wasi` trap ("indirect call type
-	// mismatch") because `call_indirect` type-checks the signature the other three targets merely
-	// assume.
-	function requireElementTransform(transform ValueId, elementType MaxonType, argTok Token) throws ParseError
-		let declared = maxonTypeTag(elementType)
-
-		if self.tagOf(transform) != ValueTypeTag.function 'notAFunction'
-			throw ParseError.unsupported("`{String.from(MapMethod)}` takes a transform FUNCTION — `function({typeTagName(declared)}) returns {typeTagName(declared)}` over the container's element — and got {articledTypeTagName(self.tagOf(transform))} value", line: argTok.line, column: argTok.column)
-		end 'notAFunction'
-
-		let returned = try self.elementTransformReturnType(transform, argTok: argTok)
-
-		if not self.elementTransformAnswersElement(returned, elementType: elementType) 'wrongElementType'
-			throw ParseError.unsupported("`{String.from(MapMethod)}`'s transform answers {articledTypeTagName(maxonTypeTag(returned))} value where the container's element is {articledTypeTagName(declared)} — the compiler's `{String.from(MapMethod)}` is element-type-PRESERVING (`stdlib/Interfaces.maxon:187` declares it `function(Element) returns Element`), so a transform to another type is a later slice", line: argTok.line, column: argTok.column)
-		end 'wrongElementType'
-
-		self.artifact.recordTransformArity(PendingTransformArity.create(self.internedName(self.valueNameId(transform)), expectedArity: ElementTransformArity, elementTag: declared, elementIdentity: self.resolvedElementIdentity(elementType), methodName: MapMethod, line: argTok.line, column: argTok.column, filePath: self.filePath))
-	end 'requireElementTransform'
-
-	// ⭐⭐ **DOES THE TRANSFORM ANSWER THE CONTAINER'S OWN ELEMENT TYPE — the RETURN half of the
-	// element-PRESERVATION test.** The verdict is `elementTypePreserved`, shared with the PARAMETER half; what
-	// is local here is only the identity EXTRACTION, and both ids are this FILE's, which is what makes the
-	// names comparable (`parseContainerMap` adopts the element into the file interner, and every answer
-	// `functionValueReturnType` gives is adopted there too).
-	//
-	// ⚠ **AN AGGREGATE ELEMENT IS SETTLED BY THE NAME, AND `columnValueTagMatches` CANNOT ANSWER FOR ONE AT
-	// ALL.** It is the HASH-TABLE COLUMN rule, and its own header records that its last arm is the INT arm and
-	// that `declared` is not confined to the admitted set — so a `structRef` element falls straight through it
-	// to `tagIsIntegral` and reads FALSE. MEASURED on `<map>.map(function(p) gives p)`, whose element is the
-	// entry pair: *"`map`'s transform answers a struct value where the container's element is a struct"*, a
-	// sentence that refutes itself. Widening THAT predicate is still the wrong door — the identity belongs on
-	// this side of it, which is why the hash-table column doors ask `elementTypePreserved` too now that a
-	// `Map`'s VALUE column may carry one (the one-word slot gate, now `requireListElementType`).
-	function elementTransformAnswersElement(returned MaxonType, elementType MaxonType) returns bool
-		return elementTypePreserved(maxonTypeTag(elementType), elementIdentity: self.declaredElementIdentity(elementType), otherTag: maxonTypeTag(returned), otherIdentity: self.declaredElementIdentity(returned))
-	end 'elementTransformAnswersElement'
-
-	// ⭐⭐ **THE NOMINAL IDENTITY A PARSE-TIER ELEMENT COMPARISON USES — `aggregateNameOf`'s answer, and
-	// EMPTY exactly where the comparison is the structural one.**
-	//
-	// ⚠⚠ **THE GATE USED TO BE `tagMayNameAggregate` ALONE, AND THAT WAS A MEASURED FALSE REFUSAL (A5i).**
-	// That predicate answers `structRef or named` — and a PLAIN RANGED ALIAS is `named` too until
-	// TypeResolution collapses it (`columnValueTagMatches`'s header carries the measurement). So an element
-	// declared `Array with Integer` / `Set with Integer` took the NOMINAL branch, compared the interned name
-	// `Integer` against the transform's `int`, missed, and was refused *"`map`'s transform answers an int
-	// value where the container's element is an int"* — a sentence that refutes itself, on a legal program.
-	// The discriminator was never the CONTAINER (both are refused identically): it is how the element
-	// ARRIVES, literal (`integer`, structural, accepted) versus declared (`named`, nominal, refused).
-	//
-	// `aggregateNameOf` already draws exactly the line that was wanted — `containsStruct` / `containsEnum` /
-	// `isPerInstanceAlias` name an aggregate, a plain ranged alias does not — so the cure is to ask the
-	// question the whole parser already asks, rather than to widen `tagMayNameAggregate`, which has nine
-	// callers including the MAP LITERAL's key and value inference (`literalColumnTypeFor`).
-	//
-	// ⚠ The `tagMayNameAggregate` gate is KEPT ahead of it, and that is deliberate rather than redundant:
-	// `aggregateNameOf` also names an `interfaceRef` and a `genericInstance`, which this door has always
-	// refused as elements and which admitting would open a lowering path nothing in the corpus exercises. A
-	// widening there is its own piece of work with its own cases, not a side effect of this one.
-	function declaredElementIdentity(t MaxonType) returns ByteArray
-		let tag = maxonTypeTag(t)
-
-		if not self.signatures.tagMayNameAggregate(tag) 'noNominalIdentityHere'
-			return EmptySourceText
-		end 'noNominalIdentityHere'
-
-		return self.aggregateNameOf(tag, nameId: typeNameIdOf(t))
-	end 'declaredElementIdentity'
-
-	// ⭐⭐ **THE ELEMENT IDENTITY THE WHOLE-PROGRAM PARAMETER HALF COMPARES — a STRUCT's or a boxed
-	// UNION/ENUM's name, and nothing else.**
-	//
-	// The parameter half compares this element against a transform's RESOLVED parameter type, one tier
-	// further on than `declaredElementIdentity` reads, and the two aggregate kinds get there by two routes: a
-	// STRUCT keeps its `structRef(id)` through resolution and is read live off the parameter, while a boxed
-	// union/enum ERASES to bare `integer` and is recovered from the carrier column
-	// `FunctionShape.paramAggregateNames`. `SemanticCheck.checkTransformParamType` asks for both in that
-	// order, exactly as `checkOneArgType` does with its `preErasedAggregate`, so ONE name here answers for
-	// either kind.
-	//
-	// ⚠⚠ **THE UNION/ENUM HALF WAS EXCLUDED HERE AND THAT WAS A REACHABLE CRASH (BATCH18 review).** The
-	// argument for excluding it was that a `FunctionShape` carries no pre-erasure column — true when written,
-	// and CURED rather than worked around, because the alternative it chose was to compare a union/enum
-	// element STRUCTURALLY, and an erased parameter and a `named` element are both integral: EVERY enum
-	// matched EVERY other. MEASURED on `<Array with Color>.map(function(c Shade) gives Color.red)` with
-	// `Color` 3-case and `Shade` 2-case — compiles clean, `STATUS_STACK_OVERFLOW` at run, an ordinal matched
-	// against a `match` that has no arm for it — and again through a named function and through a function
-	// ALIAS (`ACCESS_VIOLATION`). It is the SIGSEGV this door exists to close, wearing the other aggregate.
-	//
-	// ⚠⚠ **THE TEST IS "WHAT DOES THE NAME DENOTE?", NOT "IS THE TAG `structRef`?", AND THE NARROW SPELLING
-	// WAS A MEASURED FALSE REFUSAL.** A `typealias PointArray = Array with Point` hands this door a
-	// `named("Point")` — the SWEEP that recorded the type argument ran before anything could say what the
-	// name denoted — so the tag test read it as identity-less, fell to the structural branch and refused
-	// `a.map(function(p Point) gives p)` as *"the container's own element, which is 'int'"* on a program that
-	// compiles. It is `declaredElementIdentity`'s trap one level down: `named` is what a declared thing
-	// arrives as, and only the NAME says which kind of thing it is.
-	//
-	// ⚠ NARROWER than `declaredElementIdentity` still, and deliberately: an `interfaceRef`, a
-	// `genericInstance` and a per-instance alias all have a nominal identity at the PARSE tier and no carrier
-	// that survives to the drain, so each stays structural rather than being compared against a parameter
-	// that can no longer name itself. Widening any of them is its own piece of work — a carrier first, then
-	// the arm.
-	function resolvedElementIdentity(elementType MaxonType) returns ByteArray
-		let name = self.declaredElementIdentity(elementType)
-
-		if not self.signatures.containsStructFor(name, readerFilePath: self.filePath) and not self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'erasesOrHasNoIdentity'
-			return EmptySourceText
-		end 'erasesOrHasNoIdentity'
-
-		return name
-	end 'resolvedElementIdentity'
-
-	// The value type `transform` answers. A VOID function value is refused HERE rather than reaching the tag
-	// comparison, because "returns nothing" is a different complaint from "returns the wrong thing" and the
-	// container has no element for the void case to be compared against.
-	function elementTransformReturnType(transform ValueId, argTok Token) returns MaxonType throws ParseError
-		match self.functionValueReturn(transform).returnType 'returned'
-			value(returnType) then return returnType
-			void then break 'returned'
-		end 'returned'
-
-		throw ParseError.unsupported("`{String.from(MapMethod)}`'s transform returns NOTHING — every element must be transformed INTO a value the new array can hold", line: argTok.line, column: argTok.column)
-	end 'elementTransformReturnType'
 
 	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `dispatchStringMethod` twin, and a
 	// separate dispatcher for the reason the two types are separate: a Character has no `append`, no
@@ -69434,6 +69046,175 @@ export type Parser
 		self.stateArrayLiteralTargetAt(self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label), tokenIndex: valueStart)
 	end 'stateArrayLiteralTargetForArgument'
 
+	// ⭐⭐ **WHAT A CLOSURE LITERAL WRITTEN AT THIS ARGUMENT MAY TAKE ITS PARAMETER TYPES FROM** — asked before the
+	// value is parsed for `stateArrayLiteralTargetForArgument`'s reason: a closure's parameter types decide how its
+	// body parses. Only an argument that OPENS with `function` pays the lookup, and it answers whether it stated
+	// an offer, so the argument loop clears exactly the offers it made.
+	function stateClosureParamOfferForArgument(callee ByteArray, sourceIndex ParamCount, label ByteArray, valueStart TokenIndex, args ValueIdArray, receiverArgs ParamCount) returns bool
+		if self.kindAt(valueStart) != TokenKind.function 'noClosureLiteral'
+			return false
+		end 'noClosureLiteral'
+
+		self.closureParamOfferTokenIndex = valueStart
+		self.closureParamOffer = self.closureParamOfferAt(callee, sourceIndex: sourceIndex, label: label, args: args, receiverArgs: receiverArgs)
+		return true
+	end 'stateClosureParamOfferForArgument'
+
+	// The offer stated for the argument opening at `index`, taken — so a closure literal nested in this one's body,
+	// which opens at another token, sees none.
+	function takeClosureParamOfferAt(index TokenIndex) returns ClosureParamOffer
+		if self.closureParamOfferTokenIndex != index 'notThisArgumentsLiteral'
+			return noClosureParamOffer
+		end 'notThisArgumentsLiteral'
+
+		let offer = self.closureParamOffer
+		self.closureParamOffer = noClosureParamOffer
+		return offer
+	end 'takeClosureParamOfferAt'
+
+	// ⭐⭐ **THE PARAMETER TYPES THE CALLEE DECLARES FOR A CLOSURE AT ONE ARGUMENT.** Read off the whole-program
+	// index, because the callee may be declared in any file: each declaration of the name that can take this
+	// argument names its slot's type, and a slot declared with a function typealias offers that alias's parameter
+	// types — the sweep's reading, repaired from the alias's own file and fixed through the receiver's instance, so
+	// `SortComparator`'s `Element` is the receiver's element.
+	//
+	// ⛔ **AN OVERLOAD SET OFFERS ONLY WHAT EVERY CANDIDATE THAT COULD TAKE A CLOSURE AGREES ON.** Which member a
+	// call means is settled a pass later (`SemanticCheck.resolveOverloadedCalls`) and may turn on the closure's own
+	// types, so no candidate may be preferred here. A candidate with no slot for this argument, or whose slot is a
+	// concrete type no closure is, cannot be the one a closure literal resolves to and is set aside
+	// (`sort()` beside `sort(cmp)`). Two different function types, or a slot this door cannot judge — one the sweep
+	// did not read, or a type parameter the receiver does not fix — withhold the offer: the untyped parameter is
+	// then E2015, never a type taken from a member the call may not resolve to.
+	function closureParamOfferAt(callee ByteArray, sourceIndex ParamCount, label ByteArray, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+		if not self.signatures.allFilesFolded 'theAliasRegistriesAreStillFilling'
+			return noClosureParamOffer
+		end 'theAliasRegistriesAreStillFilling'
+
+		var offeredAlias = EmptySourceText
+
+		for candidate in self.signatures.overloadedDeclsOf(callee) 'eachCandidate'
+			if not self.signatures.isVisibleFrom(candidate.visibility, declFilePath: candidate.declFilePath, readerFilePath: self.filePath) 'notNameableFromHere'
+				continue
+			end 'notNameableFromHere'
+
+			// `argSlotPosition` answers one PAST the end for a label no parameter wears, so the fetch is also the
+			// arity and unknown-label test.
+			let swept = try candidate.paramTypes.get(argSlotPosition(candidate.paramNames, argIndex: sourceIndex, label: label)) otherwise continue
+			let slotType = self.slotTypeThroughCallReceiver(self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath), args: args, receiverArgs: receiverArgs)
+			let slotTag = maxonTypeTag(slotType)
+
+			if slotTag == ValueTypeTag.unresolved or slotTag == ValueTypeTag.typeParameter 'aSlotThisDoorCannotJudge'
+				return noClosureParamOffer
+			end 'aSlotThisDoorCannotJudge'
+
+			if slotTag != ValueTypeTag.function 'noClosureStandsHere'
+				continue
+			end 'noClosureStandsHere'
+
+			let aliasName = self.functionAliasKeyFor(self.internedName(typeNameIdOf(slotType)), callee: callee)
+
+			if not offeredAlias.isEmpty() and not offeredAlias.equals(aliasName) 'twoFunctionTypes'
+				return noClosureParamOffer
+			end 'twoFunctionTypes'
+
+			offeredAlias = aliasName
+		end 'eachCandidate'
+
+		if offeredAlias.isEmpty() 'noFunctionTypedSlot'
+			return noClosureParamOffer
+		end 'noFunctionTypedSlot'
+
+		match self.signatures.functionAliasInAnyFile(offeredAlias) 'alias'
+			declared(alias) then return self.offeredClosureParamTypes(alias, args: args, receiverArgs: receiverArgs)
+			undeclared then return noClosureParamOffer
+		end 'alias'
+	end 'closureParamOfferAt'
+
+	// ⭐ **A METHOD'S SLOT NAMES ITS DECLARING BODY'S OWN NESTED ALIAS FIRST** — `parseTypeReference`'s in-body
+	// rule, read from the callee's qualifier because the cursor is not in that body. An `extension Iterable` is
+	// folded once per conformer and each fold files its `ElementTransform` under `<Conformer>.ElementTransform`;
+	// the bare key holds whichever fold ran last.
+	function functionAliasKeyFor(aliasName ByteArray, callee ByteArray) returns ByteArray
+		let declaringType = match splitQualifiedName(callee) 'callee'
+			parts(prefix, _) gives prefix
+			notQualified gives EmptySourceText
+		end 'callee'
+
+		if declaringType.isEmpty() 'aFreeFunction'
+			return aliasName
+		end 'aFreeFunction'
+
+		let nested = joinQualifiedName(declaringType, member: aliasName)
+		return nested if self.signatures.isFunctionAliasInAnyFile(nested) else aliasName
+	end 'functionAliasKeyFor'
+
+	// The offer itself: one type per parameter of `alias`, each rebuilt into this file's interner, repaired from the
+	// alias's declaring file and fixed through the receiver. A parameter type still naming a type parameter this
+	// body does not declare — bare, or as a type argument (`Array with T`) — would type the closure against a
+	// binding nothing here supplies, so it withholds.
+	function offeredClosureParamTypes(alias FunctionTypeAlias, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+		var paramTypes = MaxonTypeArray.create()
+
+		for param in alias.paramTypes 'eachParam'
+			let stored = maxonTypeOfStoredAliasParam(param, typeNames: self.artifact.typeNames)
+			let offered = self.slotTypeThroughCallReceiver(self.repairSweptType(stored, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs)
+
+			if self.namesTypeParameterOutOfScope(offered) 'anUnboundTypeParameter'
+				return noClosureParamOffer
+			end 'anUnboundTypeParameter'
+
+			paramTypes.push(offered)
+		end 'eachParam'
+
+		return ClosureParamOffer.offered(paramTypes)
+	end 'offeredClosureParamTypes'
+
+	// A slot declared in a shared generic body, read through this call's receiver when it has one.
+	function slotTypeThroughCallReceiver(declared MaxonType, args ValueIdArray, receiverArgs ParamCount) returns MaxonType
+		if receiverArgs == 0 'noReceiver'
+			return declared
+		end 'noReceiver'
+
+		let receiver = try args.get(0) otherwise panic("slotTypeThroughCallReceiver: a call with a prepended receiver holds it at argument 0")
+		return self.slotTypeThroughReceiver(receiver, declared: declared)
+	end 'slotTypeThroughCallReceiver'
+
+	// Does `t` name, at any depth of its type arguments, a type parameter the enclosing declaration does not
+	// declare? The walk is finite because `TypeCycleCheck` has refused a type that owns itself (E4014).
+	function namesTypeParameterOutOfScope(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+
+		if tag == ValueTypeTag.typeParameter 'aTypeParameter'
+			return not self.typeParameterIsInScope(typeParamIdOf(t))
+		end 'aTypeParameter'
+
+		if tag != ValueTypeTag.genericInstance 'aLeaf'
+			return false
+		end 'aLeaf'
+
+		let id = genericInstanceIdOf(t)
+
+		for position in 0 upto self.signatures.genericInstanceArgCount(id) 'eachTypeArgument'
+			if self.namesTypeParameterOutOfScope(self.signatures.substitutedInstanceArg(id, position: position)) 'unboundInside'
+				return true
+			end 'unboundInside'
+		end 'eachTypeArgument'
+
+		return false
+	end 'namesTypeParameterOutOfScope'
+
+	// Does the enclosing declaration's `uses` list mint `token`? The identity `parseTypeReference` gives a bare
+	// type parameter is `typeParamTokenFor(enclosingType, name)`, so this asks that of each name.
+	function typeParameterIsInScope(token TypeParamId) returns bool
+		for name in self.enclosingTypeParams 'eachTypeParam'
+			if typeParamTokenFor(self.enclosingType, paramName: name) == token 'mintedHere'
+				return true
+			end 'mintedHere'
+		end 'eachTypeParam'
+
+		return false
+	end 'typeParameterIsInScope'
+
 	// The two columns of one request, written together — the ONE writer, so a position can never be left
 	// standing beside an instance some earlier slot named.
 	function stateArrayLiteralTargetAt(slot DeclaredArrayInstance, tokenIndex TokenIndex)
@@ -70808,7 +70589,7 @@ export type Parser
 	// The tag rule itself is `columnValueTagMatches`, whose header carries the measured reason "is this an int?"
 	// is `tagIsIntegral` and not `== ValueTypeTag.integer`.
 	//
-	// ⭐⭐ **THE COLUMN TYPE IS RESOLVED FIRST, AND THE COMPARISON IS `elementTypePreserved` — NOT THE BARE TAG
+	// ⭐⭐ **THE COLUMN TYPE IS RESOLVED FIRST, AND THE COMPARISON IS `columnValueMatches` — NOT THE BARE TAG
 	// RULE — BECAUSE A `Map`'s VALUE COLUMN MAY NOW CARRY A NOMINAL IDENTITY.** Both halves were forced by the
 	// same widening (the one-word slot gate, now `requireListElementType`), and each is a wrong answer without the other:
 	//
@@ -70819,10 +70600,9 @@ export type Parser
 	//     the declaration names. It is exactly the omission that once made an `Array with <function alias>`
 	//     element "stay `named`, i.e. an int".
 	//   • **IDENTITY**: an enum column and an int column are BOTH integral to the tag rule, so `["a": Kind.X,
-	//     "b": 5]` would store a bare 5 where a `match` later reads a case — the ordinal-against-a-match crash
-	//     `declaredElementIdentity`'s header measures twice, one container over. `elementTypePreserved` is that
-	//     rule already stated once: an identity on EITHER side settles it, and only when neither has one does
-	//     the tag rule decide (which is what keeps a ranged-alias key admitted).
+	//     "b": 5]` would store a bare 5 where a `match` later reads a case. `columnValueMatches` is that rule
+	//     already stated once: an identity on EITHER side settles it, and only when neither has one does the
+	//     tag rule decide (which is what keeps a ranged-alias key admitted).
 	//
 	// ⚠ The identity is `declaredColumnIdentity`'s, which the two callers compose their SUBJECTS from, so the
 	// name a refusal prints and the name this comparison read are one string by construction.
@@ -70835,7 +70615,7 @@ export type Parser
 		let valueTag = self.tagOf(parsed)
 		let valueIdentity = self.aggregateNameOf(valueTag, nameId: self.valueNameId(parsed))
 
-		if not elementTypePreserved(declared, elementIdentity: self.declaredColumnIdentity(declaredType), otherTag: valueTag, otherIdentity: valueIdentity) 'mismatch'
+		if not columnValueMatches(declared, declaredIdentity: self.declaredColumnIdentity(declaredType), valueTag: valueTag, valueIdentity: valueIdentity) 'mismatch'
 			throw ParseError.unsupported("{columnSubject} — got a '{columnTypeName(valueTag, identity: valueIdentity)}' value", line: valueTok.line, column: valueTok.column)
 		end 'mismatch'
 
@@ -70848,15 +70628,13 @@ export type Parser
 
 	// ⭐⭐ **THE NOMINAL IDENTITY OF A COLUMN'S RESOLVED DECLARED TYPE — the ONE expression the three column
 	// doors share.** `parseSetMemberList` and `parseMapColumnValue` build the refusal's SUBJECT from it and
-	// `parseHashTableColumnArg` runs the `elementTypePreserved` COMPARISON with it, so "the name a refusal
+	// `parseHashTableColumnArg` runs the `columnValueMatches` COMPARISON with it, so "the name a refusal
 	// PRINTS" and "the name the check COMPARED" are one string BY CONSTRUCTION rather than by three copies of
 	// one expression agreeing. Spelled out at each site, changing one described a different program from the
 	// one refused, with no compile error anywhere to say so.
 	//
-	// ⚠ It is the ungated `aggregateNameOf` and DELIBERATELY not `declaredElementIdentity`, whose
-	// `tagMayNameAggregate` pre-gate withholds a `genericInstance`'s name — right for the `map`-transform door
-	// that one serves, wrong here, where a nested-container value column is admitted and two distinct
-	// instances share the tag.
+	// ⚠ It is the UNGATED `aggregateNameOf`: a nested-container value column is admitted, and two distinct
+	// instances share the `genericInstance` tag, so a gate withholding that tag's name would equate them.
 	function declaredColumnIdentity(declaredType MaxonType) returns ByteArray
 		return self.aggregateNameOf(maxonTypeTag(declaredType), nameId: typeNameIdOf(declaredType))
 	end 'declaredColumnIdentity'
@@ -80715,14 +80493,7 @@ export type Parser
 	end 'requireNoInterfaceClosureParam'
 
 	function parseClosureExpression(func IrFunction) returns ValueId throws ParseError
-		// ⭐ **TAKE the call position's parameter-type offer — read it AND clear it (see `closureParamHint`).**
-		// Clearing here is what scopes the offer to THIS literal: a closure nested inside this one's body sees
-		// `none`, so `xs.map(function(x) gives apply(function(y) gives y, to: x))` cannot silently type `y` as
-		// the OUTER container's element. The clear runs one line after the read, with nothing between that can
-		// throw, so the alias discipline the save block below states holds here too.
-		let paramTypeHint = self.closureParamHint
-		self.closureParamHint = ClosureParamTypeHint.none
-
+		let paramTypeOffer = self.takeClosureParamOfferAt(self.pos)
 		let functionTok = try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
 
@@ -80731,9 +80502,8 @@ export type Parser
 		// NOT among them and deliberately so: only a caller knows how many hidden slots its own ABI adds, so
 		// each asks `requireAbiParamCount` itself — see that routine's header.) `_` is
 		// a legal identifier the check accepts (the corpus's `function(_ Integer) gives …`). An UNTYPED
-		// parameter (`function(p) gives …`) is typed from `paramTypeHint` when the call position supplied one
-		// and refused with a positioned diagnostic when it did not — `parameterTypeOrHinted`, which is where
-		// the one position that supplies one is named.
+		// parameter (`function(p) gives …`) is typed from `paramTypeOffer` when the call argument supplied one
+		// and refused with a positioned diagnostic when it did not — `parameterTypeOrOffered`.
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		var paramRanges = SourceRangeArray.create()
@@ -80743,7 +80513,7 @@ export type Parser
 		// `parseFunctionParameters` and the same `bindParameters`, so neither needs separate treatment.
 		var paramSurfaces = DeclaredSurfaceArray.create()
 		var paramTypeStarts = TokenIndexColumn.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.closureLiteral, paramTypeHint: paramTypeHint)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.closureLiteral, paramTypeOffer: paramTypeOffer)
 		try self.consume(TokenKind.rightParen)
 
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
@@ -86789,6 +86559,7 @@ export type Parser
 				// value a later coercion could fix. `argIndex` is the SOURCE position, which is the alignment
 				// `OverloadedDecl.paramNames` carries — a prepended receiver fills no source parameter.
 				self.stateArrayLiteralTargetForArgument(callee, sourceIndex: argIndex, label: label, valueStart: valueStart)
+				let offersAClosure = self.stateClosureParamOfferForArgument(callee, sourceIndex: argIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs)
 
 				// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
 				// which is the one door every value expression comes through and therefore the one place that
@@ -86803,6 +86574,10 @@ export type Parser
 				// cell-resident) must not outlive this argument.
 				let handedTheCell = requestedTheCell and self.cellArgumentTokenIndex == NoCellArgumentRequest
 				self.cellArgumentTokenIndex = NoCellArgumentRequest
+
+				if offersAClosure 'anOfferMustNotOutliveItsArgument'
+					self.closureParamOffer = noClosureParamOffer
+				end 'anOfferMustNotOutliveItsArgument'
 
 				// ⭐⭐ **AN R-VALUE AT A BY-REFERENCE POSITION GETS A SCRATCH CELL** — a literal, an expression, a
 				// fresh call result, or a binding that is not cell-resident (a `let`, which `checkImmutableArgToMutatingParam`
