@@ -388,8 +388,10 @@ Four doors are still standing open rather than shut:
 - **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
   declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule
   below turns a bare invocation into a path build.
-- **Get a compiler to build it WITH:** put a released `maxon` binary at `.bootstrap/maxon.exe`, which
-  you run directly when the slot is empty. Maxon compiles Maxon, so there is no second
+- **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the latest release's binary at
+  `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **Re-run it after every
+  release:** the stdlib may call a `__Builtins` intrinsic once a published release has it, so an older
+  seed fails the first build with E3004. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```

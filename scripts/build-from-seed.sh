@@ -28,7 +28,7 @@ cd "$repo_root"
 seed="$(maxon_downloaded_path)"
 built="$(maxon_compiler_path)"
 
-[ -x "$seed" ] || { echo "build-from-seed.sh: no seed at $seed — put a released maxon binary there (the binary alone)" >&2; exit 1; }
+[ -x "$seed" ] || { echo "build-from-seed.sh: no seed at $seed — run scripts/fetch-seed.sh" >&2; exit 1; }
 
 "$seed" build maxon-bin -o maxon-bin/.maxon/maxon
 "$built" build maxon-bin

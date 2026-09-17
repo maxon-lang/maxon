@@ -16,8 +16,8 @@ esac
 # The compiler in <tree> — the one everything here runs. Gitignored; `maxon build` at the root makes it.
 maxon_compiler_path() { printf '%s/maxon-bin/.maxon/maxon%s' "${1:-.}" "$MAXON_EXE_EXT"; }
 
-# A released compiler, placed here by hand, used to build the tree when the slot above is empty. It is
-# a previous build of THIS compiler and not a second implementation.
+# A released compiler, placed here by scripts/fetch-seed.sh, used to build the tree when the slot above is
+# empty. It is a previous build of THIS compiler and not a second implementation.
 maxon_downloaded_path() { printf '%s/.bootstrap/maxon%s' "${1:-.}" "$MAXON_EXE_EXT"; }
 
 # ⛔ THE HOST'S `<arch>-<os>` TARGET KEY, DERIVED ONCE. Release archives, the vendored toolchain and

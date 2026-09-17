@@ -86,12 +86,14 @@ in this repo to fall back on — the published release is what seeds a build.
 
 ### Build and test
 
-[Install](https://maxon.dev/docs/getting-started/installation/) a release and copy its binary into `.bootstrap/` with
-`mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/` — the **binary alone**, not the release's
-directory, because the compiler resolves `stdlib/` and its sibling `runtime/` by walking up from its own
-executable and released ones left beside it would be compiled in place of this tree's.
+Seed the build with `scripts/fetch-seed.sh`, which downloads the latest release (it needs an authenticated
+`gh`) and puts its binary alone at `.bootstrap/maxon`. Only the binary: the compiler resolves `stdlib/` and
+its sibling `runtime/` by walking up from its own executable, and released ones left beside it would be
+compiled in place of this tree's. Run it again after each release — the tree may use builtins only a newer
+release has, and an out-of-date seed fails the first build.
 
 ```bash
+scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
 ./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon build maxon-bin      # afterwards, it rebuilds itself
 ./maxon-bin/.maxon/maxon spec-test

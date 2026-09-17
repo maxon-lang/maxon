@@ -179,7 +179,7 @@ When writing a source:
 The install commands and paths on this site are the ones `public/install.sh` and
 `public/install.ps1` implement: `~/.maxon/bin` and `~/.maxon/stdlib`, `MAXON_INSTALL`, and the
 options each script's usage lists. The build-from-source steps are the repository's own
-(`README.md`, `CONTRIBUTING.md`): seed `.bootstrap/` with an installed compiler, then
+(`README.md`, `CONTRIBUTING.md`): seed `.bootstrap/` with `scripts/fetch-seed.sh`, then
 `scripts/build-from-seed.sh`.
 
 When either changes, the pages to update are `src/install.ts` (the install commands, which the home

@@ -103,16 +103,18 @@ to fall back on — the published release is what seeds a build.
 - Git
 - Node.js 20+ (only needed to build the VS Code extension)
 
-**Seed the build.** [Install](#install) a release and copy its binary into `.bootstrap/`:
-`mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/`.
+**Seed the build.** `scripts/fetch-seed.sh` downloads the latest release (with an authenticated `gh`)
+and places its binary at `.bootstrap/maxon`. Run it again after each release: an out-of-date seed can
+fail the first build.
 
-> ⚠ The **binary alone**, not the unpacked archive. The compiler finds `stdlib/` by walking up from
-> its own executable, so a released `stdlib/` left beside it would be compiled instead of this
-> tree's — silently, and the build would succeed.
+> ⚠ The **binary alone**, not the unpacked archive — the script copies only the executable. The
+> compiler finds `stdlib/` by walking up from its own executable, so a released `stdlib/` left beside
+> it would be compiled instead of this tree's — silently, and the build would succeed.
 
 **Build and run**
 
 ```bash
+scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
 ./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon build maxon-bin      # afterwards, it rebuilds itself
 maxon-bin/.maxon/maxon run examples/basic.maxon    # compile if needed, then run it

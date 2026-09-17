@@ -194,6 +194,9 @@ shipped.
 merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next release's
 `--commits-since`.
 
+**Then refresh the local seed:** `scripts/fetch-seed.sh`. From here on `main` may call a `__Builtins`
+intrinsic this release introduced, which CI's seed already has and a stale `.bootstrap/` does not.
+
 ## What this skill may not do
 
 - **Never create credentials, accounts or tokens**, and never ask the user to paste a secret. Secrets
