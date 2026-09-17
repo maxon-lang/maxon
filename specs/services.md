@@ -11165,3 +11165,382 @@ end 'main'
 error E3137: <fragment>:28:3: `Surveyor.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Surveyor` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:33:17: the `spawn` that makes `Surveyor` a service
 ```
+
+<!-- test: services.a-spawn-factory-delegating-to-a-factory-that-stores-its-argument-starts-once -->
+A factory that hands its argument to another factory, which stores it, starts the service with the one
+owner of that argument: the temporary moved into `create`, `create` moved it into `prepare`, and nothing
+on the spawning side still names it when the state is walked.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Surveyor
+	var settings as Settings
+
+	static function prepare(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'prepare'
+
+	static function create(settings Settings) returns Self
+		return prepare(settings)
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * 2 if self.settings.doubled else n
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(Settings.create(true))
+	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
+	print("{total}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-message-argument-built-by-a-delegating-factory-crosses-once -->
+A message argument built by a factory that hands its own argument to another factory, which stores it, has
+one owner at the send: the temporary the outer call took is released before the argument's graph is walked.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Holder
+	export var settings as Settings
+
+	static function prepare(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'prepare'
+
+	static function create(settings Settings) returns Self
+		return prepare(settings)
+	end 'create'
+end 'Holder'
+
+type Keeper
+	var kept as Tally
+
+	static function create() returns Self
+		return Self{kept: 0}
+	end 'create'
+
+	export function keep(holder Holder) returns Tally
+		self.kept = self.kept + 1
+		return 42 if holder.settings.doubled else 0
+	end 'keep'
+end 'Keeper'
+
+function main() returns ExitCode
+	let keeper = spawn Keeper.create()
+	let total = try await keeper.keep(Holder.create(Settings.create(true))) otherwise panic("the keeper is running")
+	print("{total}\n")
+	keeper.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-spawn-factory-delegating-two-stored-arguments-through-try-starts-once -->
+The delegation may be a `try … otherwise panic(…)` and may store two arguments, one of them a literal: every
+temporary the spawn's factory call took is released before the state is walked.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+enum SetupError implements Error
+	refused
+end 'SetupError'
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Surveyor
+	var settings as Settings
+	var label as String
+
+	static function prepare(settings Settings, label String) returns Self throws SetupError
+		if label.isEmpty() 'noLabel'
+			throw SetupError.refused
+		end 'noLabel'
+
+		return Self{settings: settings, label: label}
+	end 'prepare'
+
+	static function create(settings Settings, label String) returns Self
+		return try prepare(settings, label: label) otherwise panic("prepare refused")
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * 2 if self.settings.doubled and self.label.byteLength() == 3 else n
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(Settings.create(true), label: "abc")
+	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
+	print("{total}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-spawn-factory-argument-read-off-a-temporary-starts-once -->
+A factory argument read out of a temporary's field keeps that temporary alive only for the read: the
+`Holder` the argument was borrowed from is released before the state is walked, so the `Settings` it held
+has the service as its one owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Holder
+	export var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+end 'Holder'
+
+type Surveyor
+	var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * 2 if self.settings.doubled else n
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(Holder.create(Settings.create(true)).settings)
+	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
+	print("{total}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-message-argument-built-from-a-temporarys-field-crosses-once -->
+A message argument built from a field read out of a temporary has one owner at the send: the temporary the
+field was borrowed from is released before the argument's graph is walked.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Holder
+	export var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+end 'Holder'
+
+type Keeper
+	var kept as Tally
+
+	static function create() returns Self
+		return Self{kept: 0}
+	end 'create'
+
+	export function keep(holder Holder) returns Tally
+		self.kept = self.kept + 1
+		return 42 if holder.settings.doubled else 0
+	end 'keep'
+end 'Keeper'
+
+function main() returns ExitCode
+	let keeper = spawn Keeper.create()
+	let total = try await keeper.keep(Holder.create(Holder.create(Settings.create(true)).settings)) otherwise panic("the keeper is running")
+	print("{total}\n")
+	keeper.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-send-inside-a-larger-expression-releases-only-what-its-arguments-built -->
+The release at a send reaches only what its own argument list built. A borrow read before the send keeps
+its temporary, a `try` fork inside the arguments hands its temporaries back before the release, and an
+interpolated argument crosses as the one owner of its record.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+enum SetupError implements Error
+	refused
+end 'SetupError'
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Namer
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Namer'
+
+type Holder
+	export var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+end 'Holder'
+
+type Keeper
+	var kept as Tally
+
+	static function create() returns Self
+		return Self{kept: 0}
+	end 'create'
+
+	export function keep(holder Holder, label String) returns Tally
+		self.kept = self.kept + 1
+		return 42 if holder.settings.doubled and label.byteLength() == 5 else 0
+	end 'keep'
+end 'Keeper'
+
+function parseSettings(text String) returns Settings throws SetupError
+	if text.byteLength() != 2 'unknown'
+		throw SetupError.refused
+	end 'unknown'
+
+	return Settings.create(true)
+end 'parseSettings'
+
+function main() returns ExitCode
+	let keeper = spawn Keeper.create()
+	let mark = Namer.create("ab").name.byteLength() as Tally
+	let total = try await keeper.keep(Holder.create(try parseSettings(Namer.create("on").name) otherwise panic("the settings parse")), label: "{Namer.create("ab").name}cde") otherwise panic("the keeper is running")
+	print("{mark} {total}\n")
+	keeper.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+2 42
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-spawn-as-a-call-argument-releases-only-what-its-factory-built -->
+A `spawn` written as one argument of a call releases what its factory's arguments built and nothing the
+call's other arguments build after it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Holder
+	export var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+end 'Holder'
+
+type Surveyor
+	var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * 2 if self.settings.doubled else n
+	end 'measure'
+end 'Surveyor'
+
+function measureWith(surveyor Surveyor.handle, extra Holder) returns Tally
+	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
+	surveyor.shutdown()
+	return total if extra.settings.doubled else total + 1
+end 'measureWith'
+
+function main() returns ExitCode
+	let total = measureWith(spawn Surveyor.create(Holder.create(Settings.create(true)).settings), extra: Holder.create(Holder.create(Settings.create(false)).settings))
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+43
+```
+```exitcode
+0
+```

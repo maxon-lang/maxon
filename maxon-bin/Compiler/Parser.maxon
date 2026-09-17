@@ -34403,9 +34403,7 @@ export type Parser
 			self.popMutableVar()
 		end 'drainVars'
 
-		while self.ownedBindings.count() > mark.ownedCount 'drainOwned'
-			_ = try self.ownedBindings.pop() otherwise panic("closeBlock: ownedBindings.pop failed above the mark {mark.ownedCount}")
-		end 'drainOwned'
+		self.ownedBindings.truncate(mark.ownedCount as ElementIndex)
 	end 'closeBlock'
 
 	// Push a `var` onto the mutable-binding stack, and onto the two structures that index it.
@@ -42453,6 +42451,41 @@ export type Parser
 		self.pendingTempDrops = kept
 	end 'removeFromPendingTemps'
 
+	// ⭐⭐ **RELEASE WHAT BUILDING A HAND-OFF'S VALUES LEFT BEHIND, BEFORE THE HAND-OFF WALKS THEIR GRAPHS.** A
+	// `spawn`'s state and a send's arguments are proved to have one owner by a run-time walk at the hand-off, and
+	// a record built on the way is an owner the walk counts: a temporary a factory stored through a second
+	// factory, or the temporary a field argument was borrowed out of (`giveTemporaryScopeLifetime` holds that one
+	// to the SCOPE's exit). Nothing reads either once the calls that took them have returned, so both are
+	// released here, where the statement's end or the scope's would leave them a second owner while the service
+	// runs. The handed-off values themselves stay pending: their doors move them.
+	function releaseHandOffBuildTemps(tempFloor TempDropMark, ownedFloor BindingMark, handedOff ValueIdArray, anchor Token)
+		var kept = ValueIdArray.create()
+		var released = ValueIdArray.create()
+
+		for (iter, pending) in self.pendingTempDrops.withIterator() 'each'
+			if iter.index() as TempDropMark < tempFloor or handedOff.contains(pending) 'stillOwed'
+				kept.push(pending)
+			end 'stillOwed' else 'deadAfterItsCall'
+				released.push(pending)
+			end 'deadAfterItsCall'
+		end 'each'
+
+		self.emitTempDrops(released, floor: WholeStatementTempFloor, anchor: anchor)
+		self.pendingTempDrops = kept
+
+		// A scope-lifetime record is the SOURCE of a borrow, never a handed-off value — releasing one of those would
+		// free what the transfer below still reads.
+		for i in ownedFloor upto self.ownedBindings.count() 'eachHeldForTheBuild'
+			let held = try self.ownedBindings.get(i) otherwise panic("releaseHandOffBuildTemps: ownedBindings.get OOB at {i} on a walk bounded by its own count")
+
+			if handedOff.contains(held.boundValue) 'handedOffIsHeld'
+				panic("releaseHandOffBuildTemps: handed-off v{held.boundValue} is held by the scope-lifetime binding `{String.from(held.name)}` enrolled while its hand-off was built")
+			end 'handedOffIsHeld'
+		end 'eachHeldForTheBuild'
+
+		self.dropArmScopedOwned(ownedFloor, exitBlock: self.currentBlock, anchor: anchor)
+	end 'releaseHandOffBuildTemps'
+
 	// Is `value` still an UNCONSUMED owned temporary — a value `trackOwnedTemp` enrolled and nothing has
 	// transferred to a binding yet? The two owned-value homes are disjoint by construction (a transfer to a
 	// binding `removeFromPendingTemps` first — `parseBinding`/`moveInPayload`), so a value in this list is
@@ -44090,9 +44123,7 @@ export type Parser
 	function drainPendingTemps(floor TempDropMark, anchor Token)
 		self.emitTempDrops(self.pendingTempDrops, floor: floor, anchor: anchor)
 
-		while self.pendingTempDrops.count() > floor 'forget'
-			_ = try self.pendingTempDrops.pop() otherwise panic("drainPendingTemps: pop above floor {floor} failed on a list of {self.pendingTempDrops.count()} — the loop pops strictly while the count exceeds the floor")
-		end 'forget'
+		self.pendingTempDrops.truncate(floor as ElementIndex)
 	end 'drainPendingTemps'
 
 	// ⭐⭐ **SUSPEND THE ENCLOSING EXPRESSION'S PENDING TEMPORARIES FOR THE DURATION OF A `try` HANDLER — the
@@ -44155,9 +44186,7 @@ export type Parser
 	// per temp: mid-stack removal desyncs every block and loop drop mark taken since, which is the reason
 	// `reassignBindingValue` gives for leaving a moved-from ghost in the list rather than deleting it.
 	function resumeForkTemps(forkTemps ValueIdArray, suspendedMark BindingMark)
-		while self.ownedBindings.count() > suspendedMark 'unenrol'
-			_ = try self.ownedBindings.pop() otherwise panic("resumeForkTemps: ownedBindings.pop above the suspension mark {suspendedMark} failed on a list of {self.ownedBindings.count()} — the loop pops strictly while the count exceeds the mark")
-		end 'unenrol'
+		self.ownedBindings.truncate(suspendedMark as ElementIndex)
 
 		if forkTemps.count() == 0 'nothingToHandBack'
 			return
@@ -44251,9 +44280,7 @@ export type Parser
 			i = i + 1
 		end 'collect'
 
-		while self.pendingTempDrops.count() > floor 'forget'
-			_ = try self.pendingTempDrops.pop() otherwise panic("takeCatchingForkTemps: pendingTempDrops.pop above floor {floor} failed on a list of {self.pendingTempDrops.count()} — the loop pops strictly while the count exceeds the floor")
-		end 'forget'
+		self.pendingTempDrops.truncate(floor as ElementIndex)
 
 		return carried
 	end 'takeCatchingForkTemps'
@@ -49891,9 +49918,7 @@ export type Parser
 			self.emitScopeDrops(exitBlock, floor: floor, anchor: anchor)
 		end 'leavesAlive'
 
-		while self.ownedBindings.count() > floor 'drain'
-			_ = try self.ownedBindings.pop() otherwise panic("dropArmScopedOwned: ownedBindings.pop failed above the floor {floor}")
-		end 'drain'
+		self.ownedBindings.truncate(floor as ElementIndex)
 	end 'dropArmScopedOwned'
 
 	// ⭐ **BEGIN A FRESH (non-fallthrough) MATCH ARM** — rewind every piece of per-path state the preceding
@@ -55480,6 +55505,8 @@ export type Parser
 		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT is
 		// this reader's. `notMinted` because both halves of the name are the author's own bytes;
 		// `inferInstanceOf` because a generic target's type arguments exist nowhere but this argument list.
+		let factoryTempFloor = self.pendingTempDrops.count()
+		let factoryOwnedFloor = self.ownedBindings.count()
 		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: typeTok.value, refuseUninferred: true)
 		let instance = self.serviceStateInstanceOf(state)
 
@@ -55490,6 +55517,7 @@ export type Parser
 			at then try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
 		end 'fixed'
 
+		self.releaseHandOffBuildTemps(factoryTempFloor, ownedFloor: factoryOwnedFloor, handedOff: singletonArgs(state), anchor: memberTok)
 		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
 	end 'parseSpawn'
 
@@ -66241,6 +66269,8 @@ export type Parser
 		// mutation summary — and a message writes a value this frame has given up, so there is nothing to blame.
 		var argImmutableNames = ByteArrayArray.create()
 		var argAnchors = TokenIndexArray.create()
+		let argumentTempFloor = self.pendingTempDrops.count()
+		let argumentOwnedFloor = self.ownedBindings.count()
 
 		// ORDINARY, unconditionally: a message is a declared method, so it always has parameter names to label
 		// with — no bare builtin can arrive through a handle.
@@ -66263,6 +66293,7 @@ export type Parser
 		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
+		self.releaseHandOffBuildTemps(argumentTempFloor, ownedFloor: argumentOwnedFloor, handedOff: slotValues, anchor: memberTok)
 		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, valueStarts: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, range: range)
 	end 'emitServiceSend'
