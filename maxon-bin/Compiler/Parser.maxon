@@ -320,15 +320,17 @@ export union ParseError implements Error
 	// NOT come through here — only reads reach `parseVariableReference`.
 	useAfterMove(name String, line LineNumber, column ColumnNumber)
 
-	// A promise read out of a container through a door that cannot NAME the slot it came from — a cursor's
-	// `current`/`peek`, a list node's `value()`. A promise is move-only (it owns a green thread, and a green
-	// thread has one owner), so the read is a move whose source must be emptied when it is consumed; a door
-	// that hands back an element without an index gives the move nowhere to finish. Renders as E3141.
+	// A promise read out of a holder through a door that cannot NAME the slot it came from — a list node's
+	// `value()`, a library member such as `last()` that keeps the element, a pair carrying a borrowed promise.
+	// A promise is move-only (it owns a green thread, and a green thread has one owner), so the read is a move
+	// whose source must be emptied when it is consumed; a door that hands back an element without its slot
+	// gives the move nowhere to finish. Renders as E3141.
 	// `door` names what was used and `cure` says what to do instead. ⚠ **THE CURE IS CARRIED, NOT ASSUMED.**
-	// There are four throw sites and they are about different things — a container read that names no slot, a
-	// corpus member that hands an element back without giving it up, a `return` that would carry a borrow out
-	// of its frame, and a `match` on a union this frame does not own. One baked-in cure meant a union payload
-	// was told to *"use `get(i)` … or move it out with `pop`"*, advice for a container it is not.
+	// The throw sites are about different things — a container read that names no slot, a corpus member that
+	// hands an element back without giving it up, a consume of a promise no frame owns, a `return` that would
+	// carry a borrow out of its frame, a `clone` of a record holding one, and a `match` on a union this frame
+	// does not own. One baked-in cure meant a union payload was told to *"use `get(i)` … or move it out with
+	// `pop`"*, advice for a container it is not.
 	promiseCannotBeBorrowed(door String, cure String, line LineNumber, column ColumnNumber)
 
 	// A NAME still spelling a green thread that `await` or `.cancel()` already handed back to the runtime —
@@ -2472,8 +2474,12 @@ type ForSourceFacts
 	// The storage name an element borrow is recorded against, or empty when the element is not borrowed.
 	export var elementBorrowSubject as ByteArray
 
+	// Does the destructure move a `WithIterIterator` pair's promise into its array slot? See
+	// `claimWithIteratorPromiseSlot`.
+	export var claimsWithIteratorPromise as bool
+
 	export static function create(limit ValueId, testAnchorIndex TokenIndex) returns ForSourceFacts
-		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText}
+		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText, claimsWithIteratorPromise: false}
 	end 'create'
 end 'ForSourceFacts'
 
@@ -4839,7 +4845,7 @@ let sharedEmptySizedContainerSelfCallees = ByteArrayArray.create()
 // a user function called `internNames` begins with `int` — it would be classified compiler-internal and
 // so skip arity validation and signature slotting. A miscompile, from a missing byte compare.
 // Does this qualified corpus callee (`Array.pop`) name a member that MOVES the element out of the
-// container? See `requireCorpusElementReadIsNotABorrowedPromise` for why the answer is closed rather than
+// container? See `settleCorpusPromiseRead` for why the answer is closed rather than
 // open-ended.
 function calleeIsAnElementMoveOut(callee ByteArray) returns bool
 	return qualifiedMemberIs(callee, member: ArrayPopMethod) or qualifiedMemberIs(callee, member: RemoveMethod) or qualifiedMemberIs(callee, member: ListRemoveFirstMethod) or qualifiedMemberIs(callee, member: ListRemoveLastMethod)
@@ -4953,6 +4959,34 @@ let OneArgumentIsJustTheContainer = 1
 // The slot `first()` reads. It names no index ARGUMENT, but it names a slot as surely as `get(0)` does, so
 // a promise read through it is a nameable move rather than a refusal — see `notePromiseElementRead`.
 let FirstElementIndex = 0 as ParsedInt
+
+// The slot a promise element was read out of: the record `__managed_vacate` empties and the index into it.
+type PromiseSlot
+	export let container as ValueId
+	export let index as ValueId
+
+	export static function create(container ValueId, index ValueId) returns Self
+		return Self{container: container, index: index}
+	end 'create'
+end 'PromiseSlot'
+
+// Which slot a promise element read names, if any.
+union PromiseSlotResolution
+	noSlot
+	slot(at PromiseSlot)
+end 'PromiseSlotResolution'
+
+// E3141's cures for a promise read that names no slot: one for an element handed back alone, one for an element
+// handed back inside a pair.
+let PromiseSlotReadCure = "Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`"
+let PromisePairReadCure = "A pair keeps no slot for the promise it carries: destructure an array's `withIterator()` pair in the loop header (`for (it, p) in a.withIterator()`), read the array with `get(i)`, or move the promise out with `pop`/`remove`"
+
+// `WithIterIterator.current()`'s `(Source, Element)` — the iterator, and the element it stands on.
+let WithIteratorSourcePosition = 0 as FieldIndex
+let WithIteratorElementPosition = 1 as FieldIndex
+
+// The library cursor whose `current()` pairs an iterator with its element (`stdlib/helpers/itertools/withIterator.maxon`).
+let WithIterIteratorTypeName = b"WithIterIterator"
 
 // ⭐ **A CELL HOLDS EXACTLY ONE VALUE, AT OFFSET 0 (PBR-2).** Named rather than spelled as a bare `0` at the
 // FIVE sites that address one, for the reason a global's read names its own: the offset field is not dead
@@ -13858,6 +13892,12 @@ export type Parser
 	// decide which call is "the" target — two deciders of one fact, free to disagree.
 	var tryTargetMustStayACall as bool
 
+	// ⭐ **SET ONLY AROUND A `for` LOOP'S OWN `current()` CALL ON A `WithIterIterator` OVER AN ARRAY OF
+	// PROMISES** — the loop's destructure moves the promise out of the pair into its array slot
+	// (`claimWithIteratorPromiseSlot`), so the corpus-call door may admit a pair it would otherwise refuse as a
+	// borrowed promise. The bracket holds one argument-free call, so no closure body is ever parsed under it.
+	var loopClaimsWithIteratorPromise as bool
+
 	// ⭐ **THE `(e)` BINDINGS CURRENTLY IN SCOPE THAT NAME A SYNTHESIZED ERROR UNION, innermost last.** A
 	// handler pushes one when it declares such a binding and pops it at its own `end`, so `match e` resolves
 	// the union by the name the source wrote — and by the VALUE that name is still bound to, which is what
@@ -15641,6 +15681,7 @@ export type Parser
 			tryBlocks: TryBlockContextArray.create(),
 			tryBlockRoutingSuppressed: false,
 			tryTargetMustStayACall: false,
+			loopClaimsWithIteratorPromise: false,
 			errorUnionBindings: ErrorUnionBindingArray.create(),
 			tryBindingName: EmptySourceText,
 			tryBindingMatched: false,
@@ -24710,13 +24751,11 @@ export type Parser
 	// function, generic-instance and tuple arms above them have declined.
 	//
 	// ⛔⛔ **`bits(n)` CANNOT BE ASKED BY KIND, AND OMITTING IT COST A WHOLE SIGNATURE.** `bits` is an ordinary
-	// IDENTIFIER (`byte`'s precedent), so a kind probe answers `identifier` and this returned `false` — the
-	// pre-pass published no range, `canonicalTupleElement` fell through to the qualified spelling, and
-	// `requireSeparatorFreeElementName` rejected the `.` in it. MEASURED on `stdlib/helpers/sort/pdqsort.maxon`'s
-	// `partition`, whose `(SortIndex, bool)` return lost its whole signature to `recordScannedSignature`'s
-	// tolerance the moment `SortIndex` was declared `bits(64)` — E9002 at every use, and ONLY on a walk that
-	// reaches `pdqsort.maxon` before its sibling declares the alias. That is `recordInnerAlias`'s own recorded
-	// hazard, re-entered through a form its reader did not know.
+	// IDENTIFIER (`byte`'s precedent), so a kind probe answers `identifier`. Without this arm the pre-pass
+	// publishes no range for a `bits(64)` `SortIndex`, and `canonicalTupleElement` keys
+	// `stdlib/helpers/sort/pdqsort.maxon`'s `(SortIndex, bool)` on the qualified spelling instead — ONLY on a
+	// walk that reaches `pdqsort.maxon` before its sibling declares the alias. That is `recordInnerAlias`'s own
+	// hazard, re-entered through a form its reader would not know.
 	function nestedAliasDeclaresARange(index TokenIndex) returns bool
 		return self.nestedAliasRhsBeginsWith(index, kind: TokenKind.int) or self.nestedAliasRhsBeginsWith(index, kind: TokenKind.float) or self.nestedAliasRhsDeclaresBits(index)
 	end 'nestedAliasDeclaresARange'
@@ -28738,6 +28777,7 @@ export type Parser
 		self.tryBlocks = TryBlockContextArray.create()
 		self.tryBlockRoutingSuppressed = false
 		self.tryTargetMustStayACall = false
+		self.loopClaimsWithIteratorPromise = false
 		self.matches = MatchContextArray.create()
 
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
@@ -30443,6 +30483,7 @@ export type Parser
 		self.tryBlocks = TryBlockContextArray.create()
 		self.tryBlockRoutingSuppressed = false
 		self.tryTargetMustStayACall = false
+		self.loopClaimsWithIteratorPromise = false
 		self.matches = MatchContextArray.create()
 		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
@@ -42448,17 +42489,24 @@ export type Parser
 		let slotIsAField = try self.promiseSlotIsAField.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot kind entry — the columns move in lockstep")
 
 		if slotIsAField 'aStructField'
-			let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
-			self.emitIndirectStore(container, offset: self.constOf(index) as ByteOffset, value: zero, storageType: MaxonType.integer, range: range)
+			self.emitEmptyPromiseField(container, offset: self.constOf(index) as ByteOffset, range: range)
 		end 'aStructField' else 'aContainerElement'
 			var args = ValueIdArray.create()
 			args.push(container)
 			args.push(index)
+			args.push(value)
 			_ = self.emitRuntimeCall(ManagedVacateName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'aContainerElement'
 
 		self.retireEveryPendingReadOfSlot(container, index: index)
 	end 'vacateConsumedPromiseSlot'
+
+	// A promise FIELD is emptied where it lives: the record's destructor null-guards the slot, so a zero is a
+	// field that owns no thread.
+	function emitEmptyPromiseField(box ValueId, offset ByteOffset, range SourceRange)
+		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+		self.emitIndirectStore(box, offset: offset, value: zero, storageType: MaxonType.integer, range: range)
+	end 'emitEmptyPromiseField'
 
 	// ⭐⭐ **EMPTYING A SLOT RETIRES EVERY PENDING READ OF IT, NOT JUST THE ONE BEING CONSUMED.** A slot can be
 	// read twice before either read is used — `let a = try s.get(0)…; let b = try s.get(0)…` — and both values
@@ -42466,13 +42514,11 @@ export type Parser
 	// value carries neither an ownership mark nor a slot, so `requireConsumedPromiseIsOwned` refuses it with
 	// the reason rather than reclaiming a thread that is already gone.
 	//
-	// ⛔ MEASURED before this: `(await a) + (await b)` over one slot exited **75** — two reclaims of one
-	// thread. Found at review; no committed case reads one slot twice.
-	//
 	// ⚠ **THE INDEX IS MATCHED BY CONSTANT WHERE ONE IS KNOWN, NOT BY `ValueId`.** Two source-level `0`s mint
-	// two different literal values, so identity alone would call them different slots and see nothing. Where
-	// an index is not a known constant the identity test is all there is, which is why a NON-constant repeat
-	// read (`s.get(i)` twice) is left to the run-time null-handle guard rather than claimed here.
+	// two different literal values, so identity alone would call them different slots and see nothing.
+	// ⛔ **THIS PROVES ONLY THE SAME-SLOT CASE, SO IT CANNOT BE THE WHOLE GUARD.** A run-time index, a cursor's
+	// position and a buffer loaded out of a cursor are fresh values at every read, so two reads of one slot
+	// through them look like two slots here; `__managed_vacate` checks the occupant at run time for those.
 	function retireEveryPendingReadOfSlot(container ValueId, index ValueId)
 		for candidate in 0 upto self.promiseSlotContainer.count() 'eachValue'
 			let other = candidate as ValueId
@@ -45047,14 +45093,56 @@ export type Parser
 	//
 	// ⚠ It takes six arguments and that is the honest count: this is a self-contained step of the parse
 	// (*"bind one loop variable per tuple element"*) and each argument is a fact only the caller holds.
-	function declareDestructuredLoopVariables(func IrFunction, nameToks TokenArray, loopValue ValueId, patternTok Token, forTok Token, bodyEndIndex TokenIndex) throws ParseError
+	function declareDestructuredLoopVariables(func IrFunction, nameToks TokenArray, loopValue ValueId, claimsWithIteratorPromise bool, patternTok Token, forTok Token, bodyEndIndex TokenIndex) throws ParseError
 		let layout = try self.requireDestructurableTuple(loopValue, nameToks: nameToks, keywordTok: forTok, patternSubject: ForPatternSubject, sourceNoun: ForPatternSourceNoun, needsClause: ForPatternNeedsClause)
 
 		for i in 0 upto nameToks.count() 'eachName'
 			let nameTok = try nameToks.get(i) otherwise panic("declareDestructuredLoopVariables: nameToks.get OOB at {i} below count {nameToks.count()}")
-			try self.declareLoopVariable(func, nameTok: nameTok, value: self.emitFieldLoad(loopValue, layout: layout, index: i, range: SourceRange.between(patternTok, last: nameTok)), bodyEndIndex: bodyEndIndex)
+			let range = SourceRange.between(patternTok, last: nameTok)
+			let value = self.emitFieldLoad(loopValue, layout: layout, index: i, range: range)
+
+			if claimsWithIteratorPromise and i == WithIteratorElementPosition 'thePairsPromise'
+				self.claimWithIteratorPromiseSlot(value, pair: loopValue, layout: layout, range: range)
+			end 'thePairsPromise'
+
+			try self.declareLoopVariable(func, nameTok: nameTok, value: value, bodyEndIndex: bodyEndIndex)
 		end 'eachName'
 	end 'declareDestructuredLoopVariables'
+
+	// ⭐⭐ **A `WithIterIterator` PAIR'S PROMISE IS THE ARRAY'S, SO THE DESTRUCTURE MOVES IT BACK THERE.**
+	// `WithIterIterator.current()` builds `(source, source.current())`, which puts the element in the pair
+	// while the array still holds it — two holders of a thread that admits one. The pair's field is emptied
+	// here, so the pair's destructor reclaims nothing, and the bound value names the array slot the iterator
+	// stands on, so it is exactly the borrow `for p in promises` binds: an await empties the array's slot, and
+	// a promise never consumed is reclaimed once, when the array drops.
+	function claimWithIteratorPromiseSlot(promise ValueId, pair ValueId, layout StructLayout, range SourceRange)
+		let iterator = self.emitFieldLoad(pair, layout: layout, index: WithIteratorSourcePosition, range: range)
+		self.emitEmptyPromiseField(pair, offset: layout.offsetOfField(WithIteratorElementPosition), range: range)
+		let slot = try self.emitIteratorCursorSlot(iterator, args: singletonArgs(iterator), range: range) otherwise panic("claimWithIteratorPromiseSlot: `pairsAnArrayIteratorWithAPromise` admitted this pair because its iterator holds a cursor")
+		self.recordConsumablePromiseSlot(promise, container: slot.container, index: slot.index, isField: false)
+	end 'claimWithIteratorPromiseSlot'
+
+	// Is `cursor` the library `WithIterIterator` pairing an ARRAY iterator with a promise element?
+	function pairsAnArrayIteratorWithAPromise(cursor ValueId) returns bool
+		if self.tagOf(cursor) != ValueTypeTag.genericInstance 'notAnInstance'
+			return false
+		end 'notAnInstance'
+
+		let gid = self.valueInstanceId(cursor)
+
+		if not self.signatures.genericInstanceBaseName(gid).equals(WithIterIteratorTypeName) or not self.signatures.genericInstanceHasBaseLayout(gid) 'notThePairing'
+			return false
+		end 'notThePairing'
+
+		// An author's own `WithIterIterator` shadows the library's under this name and promises nothing about
+		// what its pair holds.
+		if not isStdlibModuleDirectory(self.signatures.moduleDirectoryOf(self.signatures.baseLayoutOf(gid).declFilePath)) 'notTheLibrarys'
+			return false
+		end 'notTheLibrarys'
+
+		let source = self.signatures.substitutedInstanceArg(gid, position: WithIteratorSourcePosition)
+		return self.signatures.instanceArgIsAGreenThreadHandle(gid, position: WithIteratorElementPosition) and maxonTypeTag(source) == ValueTypeTag.genericInstance and not self.signatures.managedCursorFieldsOf(genericInstanceIdOf(source)).isEmpty()
+	end 'pairsAnArrayIteratorWithAPromise'
 
 	// ⭐ **THE ELEMENT IS A BORROW** (`emitContainerElementAccessor`, `borrowed`) — the array keeps
 	// ownership and its own `__managed_decref` walk destroys it, exactly as `get`/`first`/`last`
@@ -45542,7 +45630,11 @@ export type Parser
 		// silent no-op on the scalar case, which is why the call is unconditional rather than gated on a
 		// managed-return test that would be a second opinion about what the call minted.
 		if methodSurfaceExists(src.cursorSurface) 'readCursorElement'
+			src.claimsWithIteratorPromise = not self.patternNamesOneWholeElement(nameToks) and self.pairsAnArrayIteratorWithAPromise(source)
+			let savedClaim = self.loopClaimsWithIteratorPromise
+			self.loopClaimsWithIteratorPromise = src.claimsWithIteratorPromise
 			loopValue = try self.emitReceiverProtocolCall(src.cursorSurface, methodName: CurrentMethodName, anchor: patternTok, resultUsed: true)
+			self.loopClaimsWithIteratorPromise = savedClaim
 			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
 		end 'readCursorElement'
 
@@ -45564,7 +45656,7 @@ export type Parser
 		if self.patternNamesOneWholeElement(nameToks) 'bindTheWholeElement'
 			try self.declareLoopVariable(func, nameTok: self.soleLoopVariableName(nameToks), value: loopValue, bodyEndIndex: bodyEndIndex)
 		end 'bindTheWholeElement' else 'bindEachDestructuredName'
-			try self.declareDestructuredLoopVariables(func, nameToks: nameToks, loopValue: loopValue, patternTok: patternTok, forTok: forTok, bodyEndIndex: bodyEndIndex)
+			try self.declareDestructuredLoopVariables(func, nameToks: nameToks, loopValue: loopValue, claimsWithIteratorPromise: src.claimsWithIteratorPromise, patternTok: patternTok, forTok: forTok, bodyEndIndex: bodyEndIndex)
 		end 'bindEachDestructuredName'
 
 		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
@@ -58822,10 +58914,7 @@ export type Parser
 	// sweep can tell this failure (which the real parse does not re-raise) from a malformed return type
 	// (which it does). This is THE one minter of it.
 	function tupleElementError(rejection TupleElementRejection, anchor Token) returns ParseError
-		return match rejection 'why'
-			unsupportedTag(position, tagName) gives ParseError.tupleElementRejected("a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither a generic type parameter (whose concrete type the shared body does not know) nor an unresolved type can key one", line: anchor.line, column: anchor.column)
-			separatorInElementName(position, elementName) gives ParseError.tupleElementRejected("a tuple whose element {position} is named '{elementName}': a tuple type's name joins its elements with '{TupleElementSeparator}', so an element whose own name holds that character would make two different tuples spell one name", line: anchor.line, column: anchor.column)
-		end 'why'
+		return ParseError.tupleElementRejected(tupleElementRejectionSentence(rejection), line: anchor.line, column: anchor.column)
 	end 'tupleElementError'
 
 	// ⭐⭐ **EVERY CHARACTER LITERAL IS A `Character`, AND AN INTEGER-EXPECTING POSITION COERCES IT TO ITS
@@ -73955,15 +74044,6 @@ export type Parser
 		// the provenance table, because unlike the buffer it does not share a `GenericInstanceId` with anything.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryCreateCursorMethod) 'createCursor'
 			try self.consumeEmptyArgList()
-
-			// ⛔⛔ **NO CURSOR OVER A CONTAINER OF PROMISES** (`W217`). A promise is move-only: reading one out
-			// of a container starts a move that is finished by EMPTYING the slot it came from, and a cursor's
-			// `current`/`peek` hand back an element without naming an index — there is nothing to empty. Refused
-			// HERE, at the mint, rather than at the read, because this is the door that still holds the SOURCE
-			// container's instance: a cursor accessor is dispatched on the CURSOR's own instance, so by then
-			// the element type the rule is about is no longer in hand (measured — a refusal written at the read
-			// answered `false` for its own subject and let `c.current()` through to exit 75).
-			try self.requireNoCursorOverGreenThreadElements(giid, methodTok: methodTok)
 			let cursor = self.emitOwnedRuntimeResult(ManagedCursorCreateName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid) as TypeNameId, range: range)
 
 			// ⭐⭐ **A CURSOR IS A STANDING BORROW OF ITS SOURCE, AND E3070 IS WHERE THAT IS ENFORCED.** ⚖ USER
@@ -74674,55 +74754,72 @@ export type Parser
 	//     there is no slot to vacate later and the caller owns the thread outright. It is enrolled exactly as
 	//     a spawn is, which is what makes `let p = try s.pop() …` drop its thread at scope exit instead of
 	//     leaking it (measured before this: exit 101, the popped promise owned by NOBODY).
-	//   • A **NAMEABLE READ** (`get(i)`, `first()`, `for … in`) — the slot is recorded, and vacated when the
-	//     read is consumed.
-	//   • A read that **CANNOT NAME ITS SLOT** (a cursor's `current`/`peek`, a list node's `value()`) —
-	//     REFUSED. Its container argument is the CURSOR or the NODE, not the array, so there is no index to
-	//     record and nothing to empty; letting it through would leave the element walk reclaiming a thread the
-	//     await already reclaimed. This is the one door where the refusal is the feature: before the element
-	//     stamp existed the same program merely LEAKED, and a leak quietly becoming a double free is not a
-	//     trade this compiler may make.
+	//   • A **NAMEABLE READ** (`get(i)`, `first()`, `for … in`, an array cursor's `current()`/`peek(n)`) — the
+	//     slot is recorded, and vacated when the read is consumed. A cursor's slot is taken AT THE READ, off
+	//     the cursor's own buffer and position, so a navigation between the read and the await cannot move it.
+	//   • A read that **CANNOT NAME ITS SLOT** (a list node's `value()`) — REFUSED. A list has no index to
+	//     record, so nothing could be emptied, and letting it through would leave the element walk reclaiming
+	//     a thread the await already reclaimed.
 	//
-	// ⚠ `first()` carries no index ARGUMENT and still names a slot — slot 0 — so it mints the literal rather
-	// than being refused alongside the cursor. The distinction is "can this read name its slot", not "was an
-	// index written".
-	// Which slot a promise element read names, resolved BEFORE the accessor is emitted — see the call site
-	// for why the order is load-bearing. `container` itself is the "no slot" answer, the same NOT-SET
-	// convention the columns use: a read that is not a promise, or that MOVED the element out, has no slot to
-	// vacate later.
-	function promiseElementSlotOf(callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, reference ContainerElementReference, range SourceRange) returns ValueId
-		if not self.signatures.containerElementIsAGreenThreadHandle(giid) 'notAPromiseElement'
-			return container
-		end 'notAPromiseElement'
+	// ⚠ `first()` carries no index ARGUMENT and still names a slot — slot 0. The distinction is "can this read
+	// name its slot", not "was an index written".
+	//
+	// Resolved BEFORE the accessor is emitted — see the call site for why the order is load-bearing.
+	function promiseElementSlotOf(callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, reference ContainerElementReference, range SourceRange) returns PromiseSlotResolution
+		if not self.signatures.containerElementIsAGreenThreadHandle(giid) or self.containerReadMovesTheElementOut(reference) 'noSlotToVacateLater'
+			return PromiseSlotResolution.noSlot
+		end 'noSlotToVacateLater'
 
-		if self.containerReadMovesTheElementOut(reference) 'movedOut'
-			return container
-		end 'movedOut'
+		if callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorPeekName) 'aCursorRead'
+			return PromiseSlotResolution.slot(self.emitArrayCursorSlot(container, args: args, range: range))
+		end 'aCursorRead'
 
-		if not self.calleeNamesAnElementSlot(callee) 'cannotNameItsSlot'
-			return container
+		if not (callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedFirstName)) 'cannotNameItsSlot'
+			return PromiseSlotResolution.noSlot
 		end 'cannotNameItsSlot'
 
 		if args.count() > OneArgumentIsJustTheContainer 'carriesAnIndexArgument'
-			return try args.get(1) otherwise panic("promiseElementSlotOf: args.get OOB at 1 — the count was just tested")
+			return PromiseSlotResolution.slot(PromiseSlot.create(container, index: try args.get(1) otherwise panic("promiseElementSlotOf: args.get OOB at 1 — the count was just tested")))
 		end 'carriesAnIndexArgument'
 
-		return self.emitLiteral(FirstElementIndex, valueType: MaxonType.integer, range: range)
+		return PromiseSlotResolution.slot(PromiseSlot.create(container, index: self.emitLiteral(FirstElementIndex, valueType: MaxonType.integer, range: range)))
 	end 'promiseElementSlotOf'
 
+	// ⭐ **THE SLOT A READ THROUGH AN ARRAY CURSOR NAMES: its buffer and its position, both read NOW.** The
+	// cursor holds its source retained, and `Array with T` is one record with its `__ManagedMemory`, so the
+	// source is the record `__managed_vacate` empties. `args` is the read's own argument list — a `peek`'s
+	// second argument is how far ahead of the position it reads.
+	function emitArrayCursorSlot(cursor ValueId, args ValueIdArray, range SourceRange) returns PromiseSlot
+		let buffer = self.emitIndirectLoad(MaxonType.integer, box: cursor, offset: CursorSourceOffset, storageType: MaxonType.integer, range: range)
+		let position = self.emitRuntimeCall(ManagedCursorIndexName, args: singletonArgs(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+
+		if args.count() > OneArgumentIsJustTheContainer 'readsAhead'
+			let ahead = try args.get(1) otherwise panic("emitArrayCursorSlot: args.get OOB at 1 — the count was just tested")
+			return PromiseSlot.create(buffer, index: self.emitMachineWordAdd(position, rhs: ahead, range: range))
+		end 'readsAhead'
+
+		return PromiseSlot.create(buffer, index: position)
+	end 'emitArrayCursorSlot'
+
+	// The array-cursor slot of a library ITERATOR record (`ArrayIterator`), through the cursor it holds.
+	// Throws when the record holds none, which is every iterator that is not over an array.
+	function emitIteratorCursorSlot(iterator ValueId, args ValueIdArray, range SourceRange) returns PromiseSlot throws ArrayError
+		let gid = self.valueInstanceId(iterator)
+		let cursorField = try self.signatures.managedCursorFieldsOf(gid).get(0)
+		let cursor = self.emitFieldLoad(iterator, layout: self.signatures.baseLayoutOf(gid), index: cursorField, range: range)
+		return self.emitArrayCursorSlot(cursor, args: args, range: range)
+	end 'emitIteratorCursorSlot'
+
 	// Record what `promiseElementSlotOf` resolved, now that the read's value exists — and refuse the read
-	// outright when it produced a promise no slot can be named for.
+	// outright when it produced a promise no slot was named for.
 	//
-	// ⛔⛔ **THE REFUSAL IS DECIDED ON THE RESULT VALUE'S TYPE, NOT ON THE CONTAINER'S `giid`, AND THAT IS A
-	// MEASURED CORRECTION.** A CURSOR's accessor is handed `recv.nameId` — the cursor's own instance, not the
-	// array's — so `containerElementIsAGreenThreadHandle(giid)` answers `false` for exactly the door this
-	// rule exists to refuse, and the first draft of it compiled `c.current()` on a promise array and ran it to
-	// **exit 75**. The value that came back is a promise whoever was asked about it, so asking IT is the
-	// question that cannot be dodged by which instance a door happened to pass.
+	// ⛔ **THE REFUSAL IS DECIDED ON THE RESULT VALUE'S TYPE, NOT ON THE CONTAINER'S `giid`.** The value that
+	// came back is a promise whoever was asked about it, so a door that passed an instance answering `false`
+	// is refused rather than let through to reclaim a thread twice.
 	//
 	// ⚠ Throwing AFTER the accessor call is emitted is safe where emitting is not: a throw appends no op, so
 	// it cannot steal the last-op slot `parseTryCallTarget`'s rewrite depends on.
-	function notePromiseElementRead(value ValueId, container ValueId, slot ValueId, callee ByteArray, reference ContainerElementReference, range SourceRange) throws ParseError
+	function notePromiseElementRead(value ValueId, slot PromiseSlotResolution, callee ByteArray, reference ContainerElementReference, range SourceRange) throws ParseError
 		if not self.valueIsPromise(value) 'notAPromiseElement'
 			return
 		end 'notAPromiseElement'
@@ -74733,39 +74830,28 @@ export type Parser
 			return
 		end 'movedOut'
 
-		if not self.calleeNamesAnElementSlot(callee) 'cannotNameItsSlot'
-			throw ParseError.promiseCannotBeBorrowed(String.from(self.calleeMemberNoun(callee)), cure: "Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`", line: range.line, column: range.column)
-		end 'cannotNameItsSlot'
-
-		self.recordConsumablePromiseSlot(value, container: container, index: slot, isField: false)
+		match slot 'resolved'
+			noSlot then throw ParseError.promiseCannotBeBorrowed(String.from(self.calleeMemberNoun(callee)), cure: PromiseSlotReadCure, line: range.line, column: range.column)
+			slot(at) then self.recordConsumablePromiseSlot(value, container: at.container, index: at.index, isField: false)
+		end 'resolved'
 	end 'notePromiseElementRead'
-
-	// Does this accessor hand the element over for good? `movedOut` is the container's own statement that it
-	// has stopped naming the element — the same fact `pop`/`remove` publish.
-	// Does this accessor's argument list name the SLOT the element came out of? `get`/`get_unchecked` carry
-	// the index as their second argument, and `first` names slot 0 by construction. A cursor's accessors and
-	// a list node's take the CURSOR or the NODE as their subject and name no index into the container at all,
-	// which is the whole of why they are refused for a promise.
-	function calleeNamesAnElementSlot(callee ByteArray) returns bool
-		return callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedFirstName)
-	end 'calleeNamesAnElementSlot'
 
 	// The SOURCE spelling of the member a runtime callee serves — a diagnostic must name what the AUTHOR
 	// wrote, never the `__managed_*` entry the compiler emitted for it.
 	function calleeMemberNoun(callee ByteArray) returns ByteArray
-		if callee.equals(ManagedCursorCurrentName) 'current'
-			return b"current"
-		end 'current'
-
-		if callee.equals(ManagedCursorPeekName) 'peek'
-			return b"peek"
-		end 'peek'
-
 		if callee.equals(ListNodeValueName) 'nodeValue'
 			return b"value"
 		end 'nodeValue'
 
-		panic("calleeMemberNoun: '{String.from(callee)}' is not one of the element accessors that cannot name its slot — every caller reaches here past `calleeNamesAnElementSlot`")
+		if callee.equals(ManagedCursorCurrentName) 'current'
+			return CursorCurrentMethod
+		end 'current'
+
+		if callee.equals(ManagedCursorPeekName) 'peek'
+			return CursorPeekMethod
+		end 'peek'
+
+		panic("calleeMemberNoun: '{String.from(callee)}' is not an element accessor a promise read can be refused at")
 	end 'calleeMemberNoun'
 
 	function containerReadMovesTheElementOut(reference ContainerElementReference) returns bool
@@ -74775,15 +74861,6 @@ export type Parser
 			retained gives false
 		end 'reference'
 	end 'containerReadMovesTheElementOut'
-
-	// See the `createCursor` arm for why this is asked at the MINT and not at the read.
-	function requireNoCursorOverGreenThreadElements(giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.containerElementIsAGreenThreadHandle(giid) 'notAPromiseElement'
-			return
-		end 'notAPromiseElement'
-
-		throw ParseError.promiseCannotBeBorrowed(String.from(b"cursor"), cure: "A cursor's `current`/`peek` name no index, so nothing can be emptied when the promise is consumed. Walk it with `for … in`, or index it with `get(i)`", line: methodTok.line, column: methodTok.column)
-	end 'requireNoCursorOverGreenThreadElements'
 
 	function containerElementOwnsNothing(giid GenericInstanceId) returns bool
 		return not self.signatures.containerElementIsManaged(giid) and not self.signatures.containerElementIsOpaque(giid)
@@ -74932,7 +75009,7 @@ export type Parser
 			// carries its own note about. Resolving here leaves the accessor call last, always.
 			let promiseSlot = self.promiseElementSlotOf(callee, container: container, args: args, giid: giid, reference: reference, range: range)
 			let slotValue = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
-			try self.notePromiseElementRead(slotValue, container: container, slot: promiseSlot, callee: callee, reference: reference, range: range)
+			try self.notePromiseElementRead(slotValue, slot: promiseSlot, callee: callee, reference: reference, range: range)
 
 			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The shared element
 			// load ZERO-EXTENDS — one compiled byte loop, strided by the record's runtime `element_size@24`,
@@ -80527,6 +80604,7 @@ export type Parser
 		self.tryBlocks = TryBlockContextArray.create()
 		self.tryBlockRoutingSuppressed = false
 		self.tryTargetMustStayACall = false
+		self.loopClaimsWithIteratorPromise = false
 		self.matches = MatchContextArray.create()
 
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
@@ -87220,65 +87298,96 @@ export type Parser
 			undeclared gives MaxonReturnType.void
 		end 'again'
 
-		try self.requireCorpusElementReadIsNotABorrowedPromise(callee, receiver: receiver, returnType: declaredReturn, anchor: anchor)
+		try self.settleCorpusPromiseRead(result, callee: callee, args: args, returnType: declaredReturn, anchor: anchor)
 		return self.retypeOpaqueReturn(result, receiver: receiver, returnType: declaredReturn)
 	end 'retypeOpaqueMethodResult'
 
-	// ⭐ **A CORPUS MEMBER MAY HAND A PROMISE ELEMENT OVER ONLY IF IT STOPPED HOLDING IT.**
+	// ⭐ **A CORPUS MEMBER MAY HAND A PROMISE ELEMENT OVER ONLY IF IT STOPPED HOLDING IT, OR NAMES THE SLOT IT
+	// STILL HOLDS IT IN.**
 	//
 	// A promise has one owner. `pop`/`remove`/`removeFirst`/`removeLast` take the element OUT — the container
-	// no longer names it, so the caller owns it outright and `enrolOwnedCallTemp` adopts it. Every other
-	// member that yields an element (`last`, `first`, `cursor`, and a user generic's own accessor) leaves the
-	// container still holding it, which for a refcounted element is fine — the read RETAINS — and for a green
-	// thread is impossible: there is no second reference to take.
+	// no longer names it, so the caller owns it outright and `enrolOwnedCallTemp` adopts it. An array
+	// iterator's `current()`/`peek(n)` leave it in the array at a slot the iterator's cursor names, so the read
+	// records that slot and the consume empties it, exactly as `get(i)` does. Every other member that yields
+	// an element (`last`, a user generic's own accessor, a `List` iterator's `current`) leaves the container
+	// holding it with no slot to name, which for a refcounted element is fine — the read RETAINS — and for a
+	// green thread is impossible: there is no second reference to take.
 	//
-	// ⛔ **MEASURED: `try s.last() …` then `await` was exit 7 before the element stamp and exit 75 after it**,
-	// because the await reclaimed the thread and the array's element walk reclaimed it again. That is a leak
-	// becoming a DOUBLE FREE, which is the one direction this change may not trade in — hence a refusal here
-	// rather than a note.
+	// ⛔ **`try s.last() …` then `await` runs to exit 75 unrefused**, because the await reclaims the thread and
+	// the array's element walk reclaims it again — hence a refusal here rather than a note.
 	//
-	// ⚠ **THE ROSTER IS OF COMPILER-OWNED MOVE-OUT DOORS, NOT OF SPELLINGS AUTHORS MAY INVENT.** These four
-	// names are the buffer surface's own, already constants in `SignatureIndex`, and a member NOT on it is
-	// refused rather than assumed safe — so a user generic's `take()` is refused (conservative) instead of
-	// silently double-freeing (unsound). The safe direction is the closed one.
-	// ⭐ **DOES THIS RETURN TYPE PUT A GREEN THREAD IN THE CALLER'S HANDS?** Two shapes, and the second is not
-	// an afterthought: a member may hand back the promise ITSELF (`last()` → `Element`), or a VIEW that will
-	// hand one back later (`cursor()` → an `ArrayCursor` over promise elements, `slice()` → another array of
-	// them). Both put a second holder on a thread that admits exactly one, and a rule written for only the
-	// first reads `false` for `cursor()` — measured, with the cursor case going green-by-omission the moment
-	// the condition was narrowed to the element shape alone.
-	function typeHandsBackAGreenThread(t MaxonType) returns bool
-		if self.signatures.typeIsAGreenThreadHandle(t, from: self.artifact.typeNames) 'isOneItself'
-			return true
-		end 'isOneItself'
+	// ⚠ **THE ROSTERS ARE OF LIBRARY DOORS, NOT OF SPELLINGS AUTHORS MAY INVENT.** A member on neither the
+	// move-out list nor the array-cursor one is refused rather than assumed safe — so a user generic's
+	// `take()` is refused (conservative) instead of silently double-freeing (unsound). The array-cursor arm
+	// trusts that a `current()`/`peek(n)` on a record holding a `__ManagedMemoryCursor` reads the element that
+	// cursor stands on; a record whose read comes from anywhere else names a slot not holding that thread, and
+	// `__managed_vacate`'s occupant check aborts at the consume rather than emptying it.
+	//
+	// ⚠ The cursor slot's ops are emitted HERE, before the call op, so the call stays the last op a `try`
+	// rewrite looks for (`try it.peek(1)`); the position they read is the one the call reads.
+	function settleCorpusPromiseRead(result ValueId, callee ByteArray, args ValueIdArray, returnType MaxonReturnType, anchor Token) throws ParseError
+		let receiver = try args.get(0) otherwise panic("settleCorpusPromiseRead: a method call's argument list holds its receiver")
 
-		if maxonTypeTag(t) != ValueTypeTag.genericInstance 'notAView'
-			return false
-		end 'notAView'
-
-		return self.signatures.containerElementIsAGreenThreadHandle(genericInstanceIdOf(t))
-	end 'typeHandsBackAGreenThread'
-
-	function requireCorpusElementReadIsNotABorrowedPromise(callee ByteArray, receiver ValueId, returnType MaxonReturnType, anchor Token) throws ParseError
 		// ⚠ **GATED ON WHAT THE MEMBER RETURNS, NOT ON THE RECEIVER ALONE.** The rule is about handing an
 		// ELEMENT over; a member of the same container that returns something else — `count()`, `push()`,
-		// `clear()` — is untouched by it. Keyed on the receiver alone this would have refused every member of
-		// an `Array with Promise`, which is a ban on using the container rather than a rule about borrowing.
+		// `clear()` — is untouched by it.
 		let declared = match returnType 'r'
 			value(inner) gives inner
 			void gives MaxonType.integer
 		end 'r'
 
-		if not self.typeHandsBackAGreenThread(self.slotTypeThroughReceiver(receiver, declared: declared)) 'doesNotYieldAPromise'
-			return
-		end 'doesNotYieldAPromise'
+		let handedBack = self.slotTypeThroughReceiver(receiver, declared: declared)
 
-		if calleeIsAnElementMoveOut(callee) 'movesItOut'
+		if not self.typeHandsBackAGreenThread(handedBack) or calleeIsAnElementMoveOut(callee) 'nothingBorrowed'
 			return
-		end 'movesItOut'
+		end 'nothingBorrowed'
 
-		throw ParseError.promiseCannotBeBorrowed(String.from(unqualifiedMemberName(callee)), cure: "Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`", line: anchor.line, column: anchor.column)
-	end 'requireCorpusElementReadIsNotABorrowedPromise'
+		if self.signatures.typeIsAGreenThreadHandle(handedBack, from: self.artifact.typeNames) and (qualifiedMemberIs(callee, member: CursorCurrentMethod) or qualifiedMemberIs(callee, member: CursorPeekMethod)) 'aCursorRead'
+			if let slot = try self.emitIteratorCursorSlot(receiver, args: args, range: SourceRange.ofToken(anchor)) 'overAnArray'
+				self.recordConsumablePromiseSlot(result, container: slot.container, index: slot.index, isField: false)
+				return
+			end 'overAnArray'
+		end 'aCursorRead'
+
+		if self.loopClaimsWithIteratorPromise 'theLoopDestructuresThePair'
+			return
+		end 'theLoopDestructuresThePair'
+
+		let cure = PromisePairReadCure if tagIsStructRef(maxonTypeTag(handedBack)) else PromiseSlotReadCure
+		throw ParseError.promiseCannotBeBorrowed(String.from(unqualifiedMemberName(callee)), cure: cure, line: anchor.line, column: anchor.column)
+	end 'settleCorpusPromiseRead'
+
+	// ⭐ **DOES THIS RETURN TYPE PUT A GREEN THREAD IN THE CALLER'S HANDS?** Three shapes: the promise ITSELF
+	// (`last()` → `Element`), a TUPLE carrying one (`WithIterIterator.current()` → `(Source, Element)`), or a
+	// VIEW that will hand one back later (`slice()` → another array of them). Each puts a second holder on a
+	// thread that admits exactly one.
+	//
+	// ⚠ **AN ARRAY ITERATOR IS NOT SUCH A VIEW**: every read through it names its slot (`settleCorpusPromiseRead`),
+	// so `cursor()` and `createIterator()` hand back nothing a consume cannot account for.
+	function typeHandsBackAGreenThread(t MaxonType) returns bool
+		if self.signatures.typeIsAGreenThreadHandle(t, from: self.artifact.typeNames) 'isOneItself'
+			return true
+		end 'isOneItself'
+
+		let tag = maxonTypeTag(t)
+
+		if tagIsStructRef(tag) 'aStructRef'
+			let name = self.internedName(typeNameIdOf(t))
+			return isTupleTypeName(name) and self.signatures.tupleCarriesAGreenThreadHandle(self.signatures.canonicalTupleName(name))
+		end 'aStructRef'
+
+		if tag != ValueTypeTag.genericInstance 'notAView'
+			return false
+		end 'notAView'
+
+		let gid = genericInstanceIdOf(t)
+
+		if not self.signatures.containerElementIsAGreenThreadHandle(gid) 'viewsNoPromise'
+			return false
+		end 'viewsNoPromise'
+
+		return self.signatures.managedCursorFieldsOf(gid).isEmpty()
+	end 'typeHandsBackAGreenThread'
 
 	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns OpaqueWordReading
 		match returnType 'r'
@@ -89437,7 +89546,14 @@ export type Parser
 		// call's result names no value to rebuild a type from), and `enrolOwnedCallTemp` is reached by every
 		// call, statement-position void ones included. Measured as a compiler panic across the whole
 		// `async-await` spec the moment the promise arm went in ahead of it.
+		//
+		// ⚠ A result that names the array slot it was read from (`settleCorpusPromiseRead`) is that slot's
+		// borrow, not a hand-over, and adopting it would reclaim the thread the array still holds.
 		if self.tagOf(result) != ValueTypeTag.void and self.valueIsPromise(result) 'adoptsAGreenThread'
+			if self.promiseValueCarriesAContainerSlot(result) 'aSlotBorrow'
+				return
+			end 'aSlotBorrow'
+
 			self.markValuePromise(result)
 			self.pendingTempDrops.push(result)
 			return

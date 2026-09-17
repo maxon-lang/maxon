@@ -7566,16 +7566,15 @@ let TupleTypeNamePrefix = b"__Tuple"
 // the second would silently BECOME the first: one layout, two element lists, and a drop cascade taken from
 // whichever registered last. `.` is outside the alphabet the lexer admits inside an identifier.
 //
-// ⭐ **THE RULE IS TOTAL: NO element token may hold the separator.** A nested tuple is the one element that
-// could ask for an exemption — its own name holds separators — on the argument that the leading arity makes
-// the flattened list self-delimiting (`((i,i),i,i)` against `((i,i,i),i)`). It needs none: a nested element
-// is a single `.`-free token (`tupleElementTokenFor`), so splitting the join on `.` recovers the element
-// list outright and `requireSeparatorFreeElementName` has no case to exempt.
+// ⭐ **THE RULE IS TOTAL: NO element token holds the separator.** An element whose own spelling does — a
+// nested tuple's name, a dotted companion type, an instance rendering one inline — is cited by a single
+// `.`-free token (`tupleElementTokenFor`) instead, so splitting the join on `.` recovers the element list
+// outright; leaning on the leading arity to make a flattened list self-delimiting would not.
 //
 // ⚠ Deliberately its own constant rather than `IrInterface`'s `WitnessLabelSeparator` or the parser's
 // `MethodNameSeparator`, for the reason the first of those states at length: three joins whose admissible
 // sets differ are three facts, and one constant would couple them so a change to any moved the others.
-export let TupleElementSeparator = "."
+let TupleElementSeparator = "."
 
 // The positional field name of tuple element `indexDigits` — `_0`, `_1`, … THE one speller, shared by the
 // layout builder here and the parser's `.N` → field-name rewrite (`Parser.consumeMemberNameToken`), so the
@@ -7594,14 +7593,14 @@ end 'tupleFieldName'
 
 // `__Tuple<N>` — the head BOTH tuple-name builders start from: the mangled NAME (which appends its
 // elements, `ProgramSignatures.tupleTypeNameOf`) and the ELEMENT TOKEN (read back off a built name by
-// `tupleTypeNameHeadOf`, so that only ONE of the two ever spells it). One speller, so the two cannot come
+// `citedNameHeadOf`, so that only ONE of the two ever spells it). One speller, so the two cannot come
 // to disagree about how a tuple's arity is written — `instanceNameStem`'s arrangement, for its reason.
 function tupleTypeNameHead(arity FieldIndex) returns String
 	return "{String.from(TupleTypeNamePrefix)}{arity}"
 end 'tupleTypeNameHead'
 
-// The head READ BACK OFF an already-built tuple NAME — the very `tupleTypeNameHead` that name starts with.
-// `tupleElementTokenFor` needs it and holds only the name.
+// The head READ BACK OFF a cited name: for a tuple NAME the very `tupleTypeNameHead` it starts with, for a
+// separator-bearing element spelling its first segment. `tupleElementTokenFor` needs it and holds only the name.
 //
 // ⚠ **THE REASON IS NOT "ONE SPELLER" — `tupleTypeNameHead` IS ALREADY THAT, AND AN ARITY PARAMETER WOULD
 // CALL IT TOO (W14b review).** The reason is that an arity parameter is an input NOTHING TIES TO `name`: a
@@ -7610,15 +7609,16 @@ end 'tupleTypeNameHead'
 // rules exist to make unstateable. Read back, the head and the name's head are the same bytes by
 // construction, and the question cannot be asked wrong.
 //
-// The first separator always exists in a registered tuple name: a tuple has at least two elements (`()` and
-// `(x)` are both refused), so every name holds at least two of them — and a sweep key's `#<ordinal>` rides
-// at the END, behind every element, so it can never arrive in front of the head's terminator.
-function tupleTypeNameHeadOf(name ByteArray) returns ByteArray
-	let separator = try TupleElementSeparator.toByteArray().get(0) otherwise panic("tupleTypeNameHeadOf: `TupleElementSeparator` renders no byte, so nothing ends a tuple name's head")
+// The first separator always exists: a tuple has at least two elements (`()` and `(x)` are both refused), so
+// every tuple name holds at least two of them — and a sweep key's `#<ordinal>` rides at the END, behind every
+// element, so it can never arrive in front of the head's terminator. An element spelling is cited by token
+// only because it holds one.
+function citedNameHeadOf(name ByteArray) returns ByteArray
+	let separator = try TupleElementSeparator.toByteArray().get(0) otherwise panic("citedNameHeadOf: `TupleElementSeparator` renders no byte, so nothing ends a cited name's head")
 	var head = ByteArray.create()
 
 	for i in 0 upto name.count() 'eachByte'
-		let b = try name.get(i) otherwise panic("tupleTypeNameHeadOf: i < name.count() by the loop bound, but get({i}) failed")
+		let b = try name.get(i) otherwise panic("citedNameHeadOf: i < name.count() by the loop bound, but get({i}) failed")
 
 		if b == separator 'headEnds'
 			return head
@@ -7627,8 +7627,8 @@ function tupleTypeNameHeadOf(name ByteArray) returns ByteArray
 		head.push(b)
 	end 'eachByte'
 
-	panic("tupleTypeNameHeadOf: `{String.from(name)}` holds no `{TupleElementSeparator}`, so it is not a tuple name `tupleTypeNameOf` built — every one of those is a head followed by at least two joined elements")
-end 'tupleTypeNameHeadOf'
+	panic("citedNameHeadOf: `{String.from(name)}` holds no `{TupleElementSeparator}`, so it is neither a tuple name `tupleTypeNameOf` built nor an element spelling `tupleElementCitationOf` cites by token")
+end 'citedNameHeadOf'
 
 // ⭐⭐ **THE BOUNDED TOKEN ONE TUPLE'S NAME CITES ANOTHER BY, AND A PURE FUNCTION OF THE TUPLE'S OWN
 // NAME.**
@@ -7637,6 +7637,9 @@ end 'tupleTypeNameHeadOf'
 // whole name: that flattens a DAG of tuple types into a TREE. `typealias A_k = (A_{k-1}, int)` gives d
 // names of Θ(d) bytes, and `typealias A_k = (A_{k-1}, A_{k-1})` — a program whose SOURCE is linear —
 // doubles the name at every level.
+//
+// ⚠ **IT ALSO CITES AN ELEMENT WHOSE SPELLING HOLDS THE SEPARATOR** (`tupleElementCitationOf`) — there for
+// injectivity rather than for size, on the same digest, in the same owner ledger.
 //
 // ⛔ MEASURED both ways with `--metrics`, total allocated BYTES (exact and reproducible, unlike the CPU
 // column). The ladder DOUBLES, so a linear cost shows ×2 in the successive deltas:
@@ -7735,7 +7738,7 @@ end 'tupleTypeNameHeadOf'
 // not one, which is why that header's tuple exception is gone rather than merely narrowed.
 function tupleElementTokenFor(name ByteArray) returns ByteArray
 	let digest = mixBytes(Hasher.empty(), bytes: name)
-	return overloadRegistrationName(tupleTypeNameHeadOf(name), suffix: "{digest:x}".toByteArray())
+	return overloadRegistrationName(citedNameHeadOf(name), suffix: "{digest:x}".toByteArray())
 end 'tupleElementTokenFor'
 
 // Is `name` a synthesized tuple type's name? The prefix is inside the `__` reserved space `E2051` bars every
@@ -7792,21 +7795,33 @@ export let MinTupleArity = 2 as FieldIndex
 // Why a type cannot be a tuple ELEMENT — raised by `ProgramSignatures.internTupleType` and turned into a
 // positioned `E2015` by the parser, which is the only party holding a token to anchor it on.
 //
-// It is a THROW rather than a `panic` because every case is reachable from source: a `(T, int)` inside a
-// generic body, and a tuple built out of a value whose type the front end never resolved.
+// It is a THROW rather than a `panic` because it is reachable from source: a tuple built out of a value whose
+// type the front end never resolved.
 export union TupleElementRejection
-	// The element's type tag has no place in a tuple's identity — a `typeParameter` (the shared body has no
-	// concrete type to key the layout on, and the drop cascade would be built against a borrow), an
-	// `unresolved` (nothing to mangle), or a `void` (no value at all). See `requireTupleElementType`.
+	// The element's type tag has no place in a tuple's identity — an `unresolved` (nothing to mangle) or a
+	// `void` (no value at all). See `requireTupleElementType`.
 	unsupportedTag(position FieldIndex, tagName String)
-
-	// The element's canonical name holds the element SEPARATOR, so the join that spells the tuple's name
-	// would stop being injective (see `TupleElementSeparator`). Exactly one name form in the language can do
-	// this — a PER-INSTANCE qualified alias, `StrWrapper.Idx` — since the BASE-TEMPLATE form collapses to its
-	// underlying primitive in `canonicalTupleElement`, a NESTED TUPLE is cited by a separator-free token
-	// (`tupleElementTokenFor`) rather than by its own name, and every other spelling is a bare identifier.
-	separatorInElementName(position FieldIndex, elementName String)
 end 'TupleElementRejection'
+
+// What a rejection says — the one sentence both the parser's positioned E2015 and the index's own invariant
+// panic render.
+export function tupleElementRejectionSentence(rejection TupleElementRejection) returns String
+	return match rejection 'why'
+		unsupportedTag(position, tagName) gives "a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither an unresolved type nor `void` can key one"
+	end 'why'
+end 'tupleElementRejectionSentence'
+
+// How a tuple's name cites one canonical element — `ProgramSignatures.tupleElementCitationOf` decides it once
+// for the reader that renders the name and the writer that records the token ledger.
+union TupleElementCitation
+	// A nested tuple, cited by the token its registered layout owns.
+	nestedTuple(name ByteArray)
+
+	// A spelling holding `TupleElementSeparator`, cited by its digest token.
+	separatorBearing(spelling ByteArray)
+
+	asSpelled(spelling String)
+end 'TupleElementCitation'
 
 // The name id `id` denotes in the interner it was MINTED against — `ProgramSignatures.nameOfId`'s twin for the
 // direction that reads a FOREIGN table (`adoptTypeFrom`). A miss is an invariant break, not a case: every id
@@ -8176,6 +8191,9 @@ typealias TupleElementTokenMap = Map with (ByteArray, ByteArray)
 // for a related reason: a question you cannot ask of a map in the direction it is keyed is not a question
 // you may answer by walking it.
 typealias TupleElementTokenOwnerMap = Map with (ByteArray, ByteArray)
+
+// The fields of an iterator record that hold a managed-memory cursor — see `ProgramSignatures.managedCursorFieldsOf`.
+export typealias CursorFieldIndexArray = Array with FieldIndex
 
 // The NAMES every top-level MANAGED binding in the program is declared under — `let` and `var` alike
 // (P1.7a / P1.7 slice 2a) — the filter `Parser.managedTopLevelReceiverAt` asks before it will build a
@@ -10053,9 +10071,10 @@ export type ProgramSignatures
 	// program with no tuples.
 	var tupleElementTokens as TupleElementTokenMap
 
-	// ⭐ The reverse of the above: every minted token ⇒ its one owning tuple name (W14b), the half that makes
-	// a digest collision a DETECTED event. `recordTupleElementToken` writes both in one act, so a divergence
-	// between them stops the compile rather than handing two layouts one citation.
+	// ⭐ Every minted token ⇒ its one owner, the half that makes a digest collision a DETECTED event: a tuple
+	// name (`recordTupleElementToken` writes it and the map above in one act, so a divergence between them
+	// stops the compile rather than handing two layouts one citation) or a separator-bearing element spelling
+	// (`recordSeparatorBearingToken`, which has no forward memo).
 	var tupleElementTokenOwners as TupleElementTokenOwnerMap
 
 	// ⭐⭐ **EVERY TYPE-PARAMETER TOKEN ⇒ THE `(declaring type, parameter, position)` THAT MINTED IT (W14)** —
@@ -14537,12 +14556,11 @@ export type ProgramSignatures
 	// order-independent, which is what `parseTypeReference` needs to spell `named("Array.SortIndex")`. It
 	// settles nothing about what that name MEANS, and `canonicalTupleElement` — which collapses an inner
 	// ranged alias to its underlying primitive so a tuple's identity is keyed on RESOLVED types — asks exactly
-	// that, of a registry only the fold fills. ⛔ **MEASURED: `stdlib/helpers/sort/pdqsort.maxon`'s
-	// `partition`, whose return type is `(SortIndex, bool)` and whose `SortIndex` is declared by a SIBLING
-	// `extension Array` in another file, lost its whole signature on every directory walk that reached
-	// `pdqsort.maxon` first** — the element canonicalized to `Array.SortIndex`, `requireSeparatorFreeElementName`
-	// rejected the `.`, and `recordScannedSignature`'s tolerance dropped the method. 39 cases then met
-	// `E2015 … `Array` member 'partition'` at the CALL, 138 lines from a declaration that was plainly there.
+	// that, of a registry only the fold fills. ⛔ **`stdlib/helpers/sort/pdqsort.maxon`'s `partition` returns
+	// `(SortIndex, bool)`, and its `SortIndex` is declared by a SIBLING `extension Array` in another file** — so
+	// without this registry a walk reaching `pdqsort.maxon` first keys that tuple on the unresolved
+	// `Array.SortIndex` rather than on its range, a different type from the one every other reader resolves,
+	// decided by directory order.
 	//
 	// ⛔⛔ **AND IT MAY NOT BE WRITTEN INTO `innerAliases`, WHICH IS WHAT THE FIRST CURE DID.** The pre-pass
 	// runs before `extensionConformerVerdict` can be taken, so it publishes for EVERY conformer including one
@@ -21291,30 +21309,11 @@ export type ProgramSignatures
 			end 'tolerantSweep'
 
 			try requireTupleElementType(adopted, position: i)
-			let canonical = self.canonicalTupleElement(adopted, slotScopeFilePath: slotScopeFilePath)
-			try self.requireSeparatorFreeElementName(canonical, position: i)
-			interned.push(canonical)
+			interned.push(self.canonicalTupleElement(adopted, slotScopeFilePath: slotScopeFilePath))
 		end 'eachElement'
 
 		return self.registerTupleLayout(interned, declFilePath: slotScopeFilePath)
 	end 'internTupleType'
-
-	// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT** — `witnessTableLabel`'s
-	// discipline, asked where it is spent rather than argued above it. EVERY canonical element renders to a
-	// token holding no separator, so splitting the join on `.` recovers the element list and two distinct
-	// element lists cannot spell one name.
-	//
-	// ⚠ **THERE IS NO NESTED-TUPLE EXEMPTION, AND ITS ABSENCE IS THE POINT.** Admitting a nested tuple with
-	// its whole separator-bearing name, self-delimiting by the arity in front of it, is the same
-	// inlining that makes a DAG of tuple types cost like a tree. It renders as a `.`-free
-	// `tupleElementTokenFor` instead, so the rule is every element and not "every element but one".
-	function requireSeparatorFreeElementName(element MaxonType, position FieldIndex) throws TupleElementRejection
-		let rendered = self.tupleElementName(element)
-
-		if rendered.contains(TupleElementSeparator) 'separatorInName'
-			throw TupleElementRejection.separatorInElementName(position, elementName: rendered)
-		end 'separatorInName'
-	end 'requireSeparatorFreeElementName'
 
 	// Register the layout for an already-interned, already-canonical element list and answer its name.
 	// Idempotent — a second mint of the same tuple type is a `contains` hit that builds nothing.
@@ -21333,8 +21332,36 @@ export type ProgramSignatures
 
 		self.structTypes.upsert(name, value: tupleStructLayout(name, elements: elements, declFilePath: declFilePath))
 		self.recordTupleElementToken(name)
+		self.recordSeparatorBearingElementTokens(elements)
 		return name
 	end 'registerTupleLayout'
+
+	// The ledger half of a separator-bearing element's citation: `tupleElementName` derives the token and
+	// never writes, so the collision check lives at the one mutation site a tuple type has. One spelling cited
+	// by many tuples is recorded once and re-asked harmlessly; only a DIFFERENT owner of the same token stops.
+	function recordSeparatorBearingElementTokens(elements MaxonTypeArray)
+		for element in elements 'eachElement'
+			match self.tupleElementCitationOf(element) 'citation'
+				nestedTuple or
+					asSpelled then break 'citation'
+				separatorBearing(spelling) then self.recordSeparatorBearingToken(spelling)
+			end 'citation'
+		end 'eachElement'
+	end 'recordSeparatorBearingElementTokens'
+
+	function recordSeparatorBearingToken(spelling ByteArray)
+		let token = tupleElementTokenFor(spelling)
+
+		if let owner = try self.tupleElementTokenOwners.get(token) 'tokenAlreadyOwned'
+			if owner.equals(spelling) 'thisSpellingsOwnToken'
+				return
+			end 'thisSpellingsOwnToken'
+
+			panic("ProgramSignatures.recordSeparatorBearingToken: the element token `{String.from(token)}` already cites `{String.from(owner)}` and the element spelling `{String.from(spelling)}` digests to it too. That is a genuine 64-bit digest collision, and two tuples over the two would spell one name. See `tupleElementTokenFor` for the width this rests on")
+		end 'tokenAlreadyOwned'
+
+		self.tupleElementTokenOwners.upsert(token, value: spelling)
+	end 'recordSeparatorBearingToken'
 
 	// ⭐⭐ **THE INJECTIVITY LEDGER — where the digest's one assumption stops being assumed (W14b).** The token
 	// itself is computed, not allocated: see `tupleElementTokenFor` for what it is, why it is bounded, why it
@@ -21362,7 +21389,7 @@ export type ProgramSignatures
 		let token = tupleElementTokenFor(name)
 
 		if let owner = try self.tupleElementTokenOwners.get(token) 'tokenAlreadyOwned'
-			panic("ProgramSignatures.recordTupleElementToken: the element token `{String.from(token)}` already cites `{String.from(owner)}` and registering `{String.from(name)}` would give the same token a second owner. If the two names DIFFER this is a genuine 64-bit digest collision between two distinct tuple types, and one of them would be cited by a name the other owns. If they are the SAME name the maps have diverged, because `registerTupleLayout` returns early for a name `structTypes` already holds. Either way two layouts would share one citation, which is the non-injective join `TupleElementSeparator` exists to bar")
+			panic("ProgramSignatures.recordTupleElementToken: the element token `{String.from(token)}` already cites `{String.from(owner)}` and registering `{String.from(name)}` would give the same token a second owner. If the two names DIFFER this is a genuine 64-bit digest collision (with another tuple type, or with a separator-bearing element spelling), and one of them would be cited by a name the other owns. If they are the SAME name the maps have diverged, because `registerTupleLayout` returns early for a name `structTypes` already holds. Either way two layouts would share one citation, which is the non-injective join `TupleElementSeparator` exists to bar")
 		end 'tokenAlreadyOwned'
 
 		self.tupleElementTokens.upsert(name, value: token)
@@ -21373,15 +21400,13 @@ export type ProgramSignatures
 	// is registered at all (the panic W9 wrote, kept in substance), and that the token leads back to the very
 	// name it is filed under.
 	//
-	// ⚠ **THE SECOND PROBE IS AN ASSERTION, NOT A SECOND COLLISION DETECTOR — THIS HEADER CLAIMED OTHERWISE
-	// AND IT WAS FALSE (W14b review).** It read that the probe "catches a collision at the read too, which is
-	// what a memo alone could not give". There is nothing left to catch: `recordTupleElementToken` panics
-	// BEFORE it writes either map when a token is already owned, and those two `upsert`s are the ONLY writers
-	// of either map in the compiler, so `tupleElementTokens[n] = t` implies `tupleElementTokenOwners[t] = n`
-	// by construction and both arms below are unreachable on every program, legal or not. They are kept for
-	// what an assertion is for: the day a SECOND writer of either map appears, this fails loudly at the next
-	// citation instead of handing one type a name another type owns. Do not cite them as the reason the
-	// digest is injective — `recordTupleElementToken` is that reason, and it is one function away.
+	// ⚠ **THE SECOND PROBE IS AN ASSERTION, NOT A SECOND COLLISION DETECTOR.** The owners map has two writers
+	// and both refuse a token another owner holds BEFORE writing: `recordTupleElementToken` refuses any prior
+	// owner, and `recordSeparatorBearingToken` any owner other than its own spelling — which no tuple name can
+	// be, since a tuple is cited as `nestedTuple` and never as a spelling. So `tupleElementTokens[n] = t`
+	// implies `tupleElementTokenOwners[t] = n` by construction and both arms below are unreachable on every
+	// program. They fail loudly at the next citation if a third writer breaks that. Do not cite them as the
+	// reason the digest is injective — the two writers are.
 	function tupleElementTokenOf(name ByteArray) returns ByteArray
 		let token = try self.tupleElementTokens.get(name) otherwise panic("ProgramSignatures.tupleElementTokenOf: the nested tuple `{String.from(name)}` has no element token — every tuple `structRef` in the compiler names a layout `registerTupleLayout` minted, and that is where its token is recorded with it")
 		let owner = try self.tupleElementTokenOwners.get(token) otherwise panic("ProgramSignatures.tupleElementTokenOf: the element token `{String.from(token)}` filed under `{String.from(name)}` has no owner — `recordTupleElementToken` writes both maps in one act, so this is a divergence between them")
@@ -21541,23 +21566,39 @@ export type ProgramSignatures
 	// pointer) and WRONG for an identity: `(UnaryOp, int)` and `(BinaryOp, int)` would spell one name, and a
 	// value of one would then be accepted where the other is declared. A function type carries its governing
 	// alias NAME, so that is what rides here.
+	//
+	// ⭐ **A SPELLING THAT HOLDS THE SEPARATOR IS CITED BY ITS TOKEN TOO, SO THE JOIN IS INJECTIVE FOR EVERY
+	// ELEMENT.** Companion types are registered under dotted names (`Calc.handle`, `Calc.divide.errors`,
+	// `Shape.unionCases`), and a generic instance renders its arguments inline (`Promise_int_Calc.divide.errors`),
+	// so a legal element can hold `.`. Its digest token holds none, and its head is the spelling's first
+	// segment rather than a `__Tuple<N>`, so it cannot be mistaken for a nested tuple's citation.
 	function tupleElementName(element MaxonType) returns String
+		return match self.tupleElementCitationOf(element) 'citation'
+			nestedTuple(name) gives String.from(self.tupleElementTokenOf(name))
+			separatorBearing(spelling) gives String.from(tupleElementTokenFor(spelling))
+			asSpelled(spelling) gives spelling
+		end 'citation'
+	end 'tupleElementName'
+
+	function tupleElementCitationOf(element MaxonType) returns TupleElementCitation
 		let tag = maxonTypeTag(element)
 
 		if tagIsStructRef(tag) 'aStructRef'
 			let name = self.nameOfId(typeNameIdOf(element))
 
 			if isTupleTypeName(name) 'nestedTuple'
-				return String.from(self.tupleElementTokenOf(name))
+				return TupleElementCitation.nestedTuple(name)
 			end 'nestedTuple'
 		end 'aStructRef'
 
-		if tag == ValueTypeTag.function 'functionAlias'
-			return String.from(self.nameOfId(typeNameIdOf(element)))
-		end 'functionAlias'
+		let spelling = String.from(self.nameOfId(typeNameIdOf(element))) if tag == ValueTypeTag.function else self.mangleTypeArg(element)
 
-		return self.mangleTypeArg(element)
-	end 'tupleElementName'
+		if spelling.contains(TupleElementSeparator) 'holdsTheSeparator'
+			return TupleElementCitation.separatorBearing(spelling.toByteArray())
+		end 'holdsTheSeparator'
+
+		return TupleElementCitation.asSpelled(spelling)
+	end 'tupleElementCitationOf'
 
 	// ⭐ **THE CANONICAL FORM OF ONE TUPLE ELEMENT — what a tuple's IDENTITY is keyed on.**
 	//
@@ -21566,9 +21607,8 @@ export type ProgramSignatures
 	// alias becomes `function`, a generic-instance alias becomes `genericInstance`, a ranged float alias
 	// becomes `float`. Then a ranged INT alias collapses through `canonicalizeRangedAlias` (which
 	// `declaredSlotType` deliberately leaves alone, because a `named` int alias carries its range and
-	// signedness for the shift rule), and an INNER ranged alias (`Wrapper.Idx`) collapses the same way — the
-	// only name form in the language that can hold the element separator, so resolving it is what keeps the
-	// join injective rather than merely usually-injective.
+	// signedness for the shift rule), and an INNER ranged alias (`Wrapper.Idx`) collapses the same way, so
+	// `(Wrapper.Idx, int)` and `(int, int)` are one tuple exactly as `(Integer, int)` and `(int, int)` are.
 	//
 	// A `named` denoting a declared `type` is re-tagged `structRef` by `declaredSlotType` itself, so the
 	// tuple's field type routes to the struct's own drop — and, the re-tag happening THERE rather than at the
@@ -23112,6 +23152,11 @@ export type ProgramSignatures
 	export function containerElementIsAGreenThreadHandle(id GenericInstanceId) returns bool
 		return self.typeIsAGreenThreadHandle(self.containerElementType(id), from: self.typeNames)
 	end 'containerElementIsAGreenThreadHandle'
+
+	// Is instance `id`'s type argument at `position` a green-thread handle?
+	export function instanceArgIsAGreenThreadHandle(id GenericInstanceId, position TypeParamPosition) returns bool
+		return self.typeIsAGreenThreadHandle(self.substitutedInstanceArg(id, position: position), from: self.typeNames)
+	end 'instanceArgIsAGreenThreadHandle'
 
 	// Is a SINGLE-ELEMENT container's element an OPAQUE TYPE PARAMETER (P1.7 slice 3a)? The instance-keyed
 	// spelling of `slotTypeIsOpaque` above, which carries the reason — a `Map`'s VALUE column asks the same
@@ -27761,10 +27806,30 @@ export type ProgramSignatures
 	// The `StructLayout` of instance `id`'s base struct. Precondition: `genericInstanceHasBaseLayout(id)` —
 	// an instance is interned for ANY base a `with` names, declared or not, so the caller opens the walk with
 	// that gate. See its header for the two ways a base has no layout and why they are one stop condition.
-	function baseLayoutOf(id GenericInstanceId) returns StructLayout
+	export function baseLayoutOf(id GenericInstanceId) returns StructLayout
 		let baseName = self.genericInstanceBaseName(id)
 		return try self.structTypes.get(baseName) otherwise panic("ProgramSignatures.baseLayoutOf: generic instance {id}'s base struct '{String.from(baseName)}' has no declared layout — every field walk opens with genericInstanceHasBaseLayout")
 	end 'baseLayoutOf'
+
+	// The fields of instance `id`'s record that hold a `__ManagedMemoryCursor` — what makes a record an ARRAY
+	// iterator, whose position is an index into one buffer.
+	export function managedCursorFieldsOf(id GenericInstanceId) returns CursorFieldIndexArray
+		var fields = CursorFieldIndexArray.create()
+
+		if not self.genericInstanceHasBaseLayout(id) 'noFieldsToHoldOne'
+			return fields
+		end 'noFieldsToHoldOne'
+
+		for index in 0 upto self.baseLayoutOf(id).fieldTypes.count() 'eachField'
+			let fieldType = self.substituteInstanceFieldType(id, index: index)
+
+			if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance and self.genericInstanceBaseName(genericInstanceIdOf(fieldType)).equals(ManagedMemoryCursorBuiltinBaseName) 'aCursorField'
+				fields.push(index)
+			end 'aCursorField'
+		end 'eachField'
+
+		return fields
+	end 'managedCursorFieldsOf'
 
 	// ⭐ **THE SUBSCRIPT AN OPAQUE `typeParameter` TYPE STANDS FOR — the ONE door from a type-parameter TOKEN to
 	// an instance-argument INDEX (W14).** Every instance query below is subscripted by a POSITION in the
@@ -28081,33 +28146,12 @@ export type ProgramSignatures
 			return tupleName
 		end 'noElementMoved'
 
-		// ⛔⛔ **THE PANIC HERE READ "…which its declaration view already passed", AND THAT PREMISE IS FALSE
-		// (W232).** The declaration view of an iterator's `(Iterator, Element)` is two type PARAMETERS; what
-		// it passed says nothing whatever about what the INSTANCE view holds once `Element` becomes a real
-		// type. It now names WHICH refusal it hit and on which element, because "it was refused" without the
-		// reason is what made the live instance of this take a day to place.
-		//
-		// ⚠⚠ **AND THAT LIVE INSTANCE IS STILL OPEN — `W232` — SO THIS IS A DIAGNOSED ABORT, NOT AN
-		// IMPOSSIBLE ONE.** `for (iter, h) in handles.withIterator()` over an `Array with <T>.handle`
-		// substitutes `Element := <T>.handle`, whose companion is registered under `"{T}.handle"`
-		// (`Project.serviceHandleCompanionName`) — dot included, because that is how the author spells the
-		// type. `requireSeparatorFreeElementName` then refuses it CORRECTLY, and a correct refusal reached by
-		// a legal program lands here as a compiler abort.
-		//
-		// ⛔ **`canonicalTupleElement`'s STATED INVARIANT IS THE THING THAT BROKE, AND IT IS STILL WRITTEN
-		// AS IF TRUE:** *"an inner ranged alias … the only name form in the language that can hold the
-		// element separator"*. Services falsified it. Two cures are open and neither is this rung's: cite such
-		// a name by a separator-free token the way a NESTED TUPLE is cited, or give the handle companion a
-		// separator-free registered name and keep `<T>.handle` as the surface spelling only. ⚠ **The first
-		// was attempted and REVERTED**: recording the token lazily from inside `tupleElementName` put a
-		// mutation inside a query the interning path calls while it is still deciding what to intern, and it
-		// HUNG the compiler — past seven minutes and climbing in memory against a normal ~35 s. A pure digest
-		// avoids that mutation but changes tuple IDENTITY, which is a `L-types` decision with its own golden
-		// blast radius. Whoever takes it: build the probe first
-		// (`temp/hf/it1.maxon`'s shape — spawn a service, push the handle, `for (iter, h) in
-		// a.withIterator()`), and TIME the self-compile, because the failure mode of the obvious fix is a
-		// hang rather than a wrong answer.
-		return try self.internTupleType(substituted, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list, which its declaration view already passed")
+		// ⚠ **A REFUSAL HERE IS AN INVARIANT BREAK AND NOT A USER ERROR.** Substitution replaces type parameters
+		// with the concrete types an instance already interned, and `requireTupleElementType` refuses only an
+		// unresolved or void element — neither of which an instance's arguments can be.
+		return try self.internTupleType(substituted, from: self.typeNames, slotScopeFilePath: layout.declFilePath) otherwise (rejection) 'refused'
+			panic("ProgramSignatures.substituteTupleThroughInstance: the instance view of `{String.from(tupleName)}` was refused as a tuple element list: {tupleElementRejectionSentence(rejection)}")
+		end 'refused'
 	end 'substituteTupleThroughInstance'
 
 	// ⭐⭐ **THE INSTANCE VIEW OF A DECLARATION-VIEW TYPE, TUPLE INCLUDED — the ONE home of the name/id split
@@ -30755,6 +30799,24 @@ export type ProgramSignatures
 
 		return self.declaredNameIsAGreenThreadHandle(self.denotedAggregateName(foreignNameOf(from, id: typeNameIdOf(fieldType))))
 	end 'typeIsAGreenThreadHandle'
+
+	// Does a value of the tuple `name` carry a promise in some element, at any nesting depth? A tuple that does
+	// hands a green thread over exactly as the promise itself would.
+	export function tupleCarriesAGreenThreadHandle(name ByteArray) returns bool
+		let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.tupleCarriesAGreenThreadHandle: `{String.from(name)}` is not registered — every tuple `structRef` names a layout `internTupleType` registered")
+
+		for element in layout.fieldTypes 'eachElement'
+			if self.typeIsAGreenThreadHandle(element, from: self.typeNames) 'aPromise'
+				return true
+			end 'aPromise'
+
+			if tagIsStructRef(maxonTypeTag(element)) and isTupleTypeName(self.nameOfId(typeNameIdOf(element))) and self.tupleCarriesAGreenThreadHandle(self.nameOfId(typeNameIdOf(element))) 'aNestedTupleCarriesOne'
+				return true
+			end 'aNestedTupleCarriesOne'
+		end 'eachElement'
+
+		return false
+	end 'tupleCarriesAGreenThreadHandle'
 
 	// The NAME half, mirroring `declaredNameIsManaged`'s two promise exemptions exactly — a canonical mint
 	// (`Promise_Integer`) and a `genericAlias` (`IntPromise`). It is the same two arms read in the POSITIVE

@@ -1,0 +1,277 @@
+// Test: withIterator.a-loop-that-breaks-before-awaiting-drops-every-promise-once
+typealias Tally = int(0 to u64.max)
+typealias TallyPromise = Promise with Tally
+typealias TallyPromiseArray = Array with TallyPromise
+
+function slowTally(n Tally) returns Tally
+	sleep(1)
+	return n
+end 'slowTally'
+
+function main() returns ExitCode
+	var promises = TallyPromiseArray.create()
+	promises.push(async slowTally(1))
+	promises.push(async slowTally(2))
+	var total = 0
+
+	for (position, promise) in promises.withIterator() 'each'
+		if position.index() == 1 'second'
+			break
+		end 'second'
+
+		total = total + (await promise)
+	end 'each'
+
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_trace_counter@56 = i64 0
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 8192
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __sched_preempt_ext_lock@424 = i64 0
+  __sched_preempt_context@432 = i64 0
+  __slab_arena_list@440 = i64 0
+  __slab_arena_map_l1@448 = i64 0
+  __slab_state@456 = i64 0
+  __mrt_console_probe_stdin@464 = i8 0
+  __mrt_console_probe_stdout@465 = i8 0
+  __mrt_console_probe_stderr@466 = i8 0
+}
+
+func @slowTally {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#1:
+    x64.movRegImm32 rcx, 1
+  __rc_ok#5:
+    x64.callDirect __gt_sleep
+  __il_cont:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at withIterator.a-loop-that-breaks-before-awaiting-drops-every-promise-once.test:6: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 1
+    x64.leaRegFunc rcx, [rip + slowTally]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 2
+    x64.leaRegFunc rcx, [rip + slowTally]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.withIterator
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, forempty
+  critsplit:
+    x64.movRegReg rcx, r12
+    x64.jmp forhdr
+  each:
+    x64.leaRegRdata r12, [rip + __layout_WithIterIterator_ArrayIterator_TallyPromise_TallyPromise]
+    x64.leaRegRdata rax, [rip + __witness_ArrayIterator_TallyPromise.Iterator]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callMem [rax + 24]
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __retain_type_param
+    x64.storeBaseDispReg.word64 [r15 + 0], r8
+    x64.storeBaseDispReg.word64 [r15 + 8], r14
+  __il_cont#13:
+    x64.loadRegBaseDisp.word64 r12, [r15 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r15 + 8]
+    x64.storeSlotReg slot2, rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 8], rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r13, [rcx + 0]
+    x64.callDirect __managed_cursor_index
+    x64.movRegReg r14, r8
+  __il_body#15:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callDirect __managed_cursor_index
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#17
+  __il_cont#12:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, ifcont
+  second:
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct___Tuple2.ArrayIterator_TallyPromise.Promise_Tally
+    x64.jmp forexit
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_vacate
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __gt_await
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegReg r12, rax, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct___Tuple2.ArrayIterator_TallyPromise.Promise_Tally
+  forstep:
+    x64.leaRegRdata rdx, [rip + __witness_ArrayIterator_TallyPromise.Iterator]
+    x64.movRegReg rcx, rbx
+    x64.callDirect WithIterIterator.advance
+    x64.movRegReg rax, r10
+    x64.movRegReg rcx, r12
+  forhdr:
+    x64.storeSlotReg slot1, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, each
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_WithIterIterator_ArrayIterator_TallyPromise_TallyPromise
+    x64.loadRegSlot rbx, slot1
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg rbx, r12
+  forjoin:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#10
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic#10
+  __rc_ok:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at Array.maxon:476: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at withIterator.a-loop-that-breaks-before-awaiting-drops-every-promise-once.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

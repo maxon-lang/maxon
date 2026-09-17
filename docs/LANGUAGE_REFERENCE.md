@@ -3937,6 +3937,15 @@ end 'main'
 finished and returns its index. It consumes nothing: every promise, the winner included, is still awaited
 (or dropped) afterwards. An already-finished promise is returned without parking.
 
+**Reading a promise out of an array.** A promise has one owner, so reading one out of the array that holds it
+borrows the array's slot: awaiting or cancelling the read empties that slot, and a read never consumed stays the
+array's and is dropped with it. `get(i)`, `first()`, `for p in array`, an array iterator's `current()` and
+`peek(n)`, and a destructured `for (iter, p) in array.withIterator()` all name their slot. A read that cannot
+name one is **E3141**: `last()`, a list's elements, a `Map`'s values, and a `withIterator()` pair bound whole.
+`pop` and `remove` move the promise out, and the caller owns it outright. Two reads of one slot hold one
+promise, so only one of them may be consumed; consuming the second is **E3141** where the compiler can see both
+name the slot, and otherwise aborts the program with exit code **118**.
+
 ### Cancellation and Dropped Promises
 
 `promise.cancel()` consumes a promise without waiting for it. A promise that is never awaited is dropped
@@ -4731,6 +4740,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | integer overflow | wraps around (two's complement), with no error |
 | an allocation never released | exit code **101** |
 | a green thread neither awaited nor dropped | exit code **75** |
+| a promise consumed through a second read of one array slot | exit code **118** |
 | deadlock | exit code **92** |
 
 `maxon run` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).

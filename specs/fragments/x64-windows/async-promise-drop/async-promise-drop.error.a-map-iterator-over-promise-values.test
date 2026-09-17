@@ -1,0 +1,22 @@
+// Test: async-promise-drop.error.a-map-iterator-over-promise-values
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseMap = Map with (String, IntPromise)
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var m = IntPromiseMap.create()
+	m.upsert("a", value: async plain(9))
+	var total = 0
+	for (_, v) in m 'each'
+		total = total + (await v)
+	end 'each'
+	return total as ExitCode
+end 'main'
+---
+CompilerError:
+error E3141: <fragment>:15:6: a promise cannot be borrowed through 'current': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`

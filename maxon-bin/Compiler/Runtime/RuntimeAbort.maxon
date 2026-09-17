@@ -36,7 +36,7 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 118.** 76, 80 and 108 are vacant and stay so:
+// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 119.** 76, 80 and 108 are vacant and stay so:
 // reserving a vacated number would be this space defending against a claimant that no longer exists — the
 // very thing the paragraph above rejects.
 export enum RuntimeAbort
@@ -427,6 +427,12 @@ export enum RuntimeAbort
 	// two collects marking one pipe word, has no answer, so it stops here, as two readers on one socket stop at
 	// `netpollDoubleWait`.
 	subpCollectSlotReleased = 117
+
+	// `__managed_vacate`: a promise read out of a container slot is consumed, and the slot no longer holds it —
+	// another read of the same slot was consumed first. Two reads the compiler cannot prove name one slot (a
+	// run-time index, two cursors, `get(i)` beside a cursor) each hold the thread; consuming the second would
+	// reclaim a thread already reclaimed.
+	promiseSlotConsumedTwice = 118
 
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a

@@ -407,8 +407,8 @@ export let ManagedGetUncheckedName = b"__managed_get_unchecked"
 export let ManagedSetName = b"__managed_set"
 
 // ⭐⭐ **EMPTY A SLOT WITHOUT DESTROYING WHAT WAS IN IT — the write half of a MOVE OUT of a container**
-// (`W217`). `__managed_vacate(arr, index)` stores a zero over slot `index` and does nothing else: no bounds
-// throw, no COW detach, no occupant destroy.
+// (`W217`). `__managed_vacate(arr, index, read)` stores a zero over slot `index`: no bounds throw, no COW
+// detach, no occupant destroy.
 //
 // ⛔ **NEITHER SETTER CAN STAND IN, AND THAT IS THE WHOLE REASON THIS EXISTS.** `__managed_set` and
 // `__managed_mem_set` both DESTROY the occupant they overwrite (`emitElementStoreAndOkReturn`) — correct
@@ -422,7 +422,13 @@ export let ManagedSetName = b"__managed_set"
 //
 // ⚠ **THE INDEX IS A PRECONDITION, NOT A CHECK.** Every emitter is `Parser.vacateConsumedPromiseSlot`, which
 // fires only on a slot a read in the SAME frame resolved and held live, so an out-of-range index here is a
-// compiler bug and a runtime throw would only hide it. That is why this returns void and cannot fail.
+// compiler bug and a runtime throw would only hide it. That is why this returns void and cannot throw.
+//
+// ⛔ **THE OCCUPANT IS CHECKED: a slot no longer holding `read` aborts (`RuntimeAbort.promiseSlotConsumedTwice`).**
+// Two reads of one slot hold one thread, and the parser retires the second only where it can prove the two
+// name one slot (one container value, one constant index). A run-time index or a cursor's position proves
+// nothing, so the first consume empties the slot and the second finds a zero where its thread was. A `read`
+// that is itself zero was taken from an already-emptied slot and names no thread either.
 export let ManagedVacateName = b"__managed_vacate"
 
 export let ManagedCountName = b"__managed_count"
@@ -722,11 +728,11 @@ export let ManagedCursorDecrefName = b"__managed_cursor_decref"
 // The two slots, and the box they sit in. ⚠ `position@8` is never written at creation: `__mm_alloc` zeroes
 // its payload and a fresh cursor starts at 0, the same contract `__managed_create` relies on for
 // `element_destroy@40`.
-// ⚠ Both offsets are file-private and the SIZE is not: the slots are read only by the builders below, while
-// `ProgramSignatures.genericInstanceBoxSize` has to answer how big a cursor's box is. That is the same split
-// `MemoryInvalidByteRangeFlag` was de-exported to restore — a keyword with no cross-file caller is a claim
-// nothing checks.
-let CursorSourceOffset = 0 as ByteOffset
+// ⚠ The POSITION offset is file-private: only the builders below read it, and the parser learns a position
+// through `__managed_cursor_index`. The SOURCE offset is exported because the parser names the buffer a
+// promise read through a cursor came out of (`Parser.emitArrayCursorSlot`), and the SIZE because
+// `ProgramSignatures.genericInstanceBoxSize` has to answer how big a cursor's box is.
+export let CursorSourceOffset = 0 as ByteOffset
 let CursorPositionOffset = 8 as ByteOffset
 export let CursorRecordBytes = 16 as ParsedInt
 
@@ -3810,32 +3816,43 @@ function buildManagedGetUnchecked(module StdModule)
 	module.functions.push(func)
 end 'buildManagedGetUnchecked'
 
+// See `ManagedVacateName` for the contract and for why neither setter can stand in.
+function buildManagedVacate(module StdModule)
+	var func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var consumedTwice = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
+	var empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let read = 2 as ValueId
+
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let elementSize = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: index, elementSize: elementSize, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let occupant = emitLoadField(module, block: entry, record: slot, offset: 0 as ByteOffset, ids: ids)
+	let occupantMoved = emitCmp(module, block: entry, a: occupant, b: read, pred: StdCmpPred.ne, ids: ids)
+	let readNamesNoThread = emitCmp(module, block: entry, a: read, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let alreadyConsumed = emitBin(module, block: entry, a: occupantMoved, b: readNamesNoThread, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(alreadyConsumed, thenBlockId: consumedTwice.id, elseBlockId: empty.id))
+
+	emitRuntimeAbort(module, func: func, block: consumedTwice, abort: RuntimeAbort.promiseSlotConsumedTwice, ids: ids)
+
+	module.appendOp(empty, op: StdOp.storeIndirect(slot, offset: 0, valueId: zero, valueType: StdType.i64))
+	module.setTerminator(empty, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildManagedVacate'
+
 // `__managed_set(arr, index, value) -> (_, flag)` — LENGTH-bounded element write (throws indexOutOfBounds).
 //
 // ⚠ **THE LENGTH BOUND IS `Array.set`'s CONTRACT AND MUST NOT BECOME THE BUFFER'S CAPACITY BOUND.** The two
 // surfaces sit on one record and this entry is the `Array` one; `__managed_mem_set` is the buffer's, and R4.6
 // exists because they were the same function. `specs/arrays.md` and the array corpus are written against
 // this bound.
-// See `ManagedVacateName` for the contract and for why neither setter can stand in.
-function buildManagedVacate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-
-	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let elementSize = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: index, elementSize: elementSize, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.appendOp(entry, op: StdOp.storeIndirect(slot, offset: 0, valueId: zero, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildManagedVacate'
-
 function buildManagedSet(module StdModule)
 	var func = IrFunction.createFromStd(ManagedSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(3)

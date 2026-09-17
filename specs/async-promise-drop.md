@@ -909,18 +909,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3141: <fragment>:14:17: a promise cannot be borrowed through 'last': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`
+error E3141: <fragment>:14:17: a promise cannot be borrowed through 'last': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
 ```
 
-<!-- test: async-promise-drop.error.a-cursor-over-a-container-of-promises -->
-A cursor's `current()`/`peek()` hand back an element without naming an index into the container, so a
-promise read through one has no slot to empty when it is consumed — and, unrefused, the `await` and the
-array's own element walk each reclaim the same green thread (measured: exit 75).
-
-⚠ **THE REFUSAL IS DECIDED ON THE VALUE THE READ PRODUCED, NOT ON THE CONTAINER IT WAS ASKED OF.** A cursor
-accessor is dispatched on the CURSOR's instance rather than the array's, so a rule keyed on the receiver's
-element type answers `false` about its own subject; an early draft did exactly that and let this program
-through. Asking what came BACK cannot be dodged that way.
+<!-- test: async-promise-drop.a-cursor-over-a-container-of-promises-names-its-slot -->
+A cursor over an array stands at an index, so a promise read through its `current()` has a slot exactly as
+one read through `get(i)` does: awaiting it empties that slot, and the array's own element walk has nothing
+left to reclaim.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -939,8 +934,8 @@ function main() returns ExitCode
 		return (await p) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3141: <fragment>:15:13: a promise cannot be borrowed through 'current': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, or `for … in`), or move it out with `pop`/`remove`
+```exitcode
+7
 ```
 
 <!-- test: async-promise-drop.a-move-out-hands-the-thread-over -->
@@ -1201,4 +1196,170 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: async-promise-drop.a-cursor-peek-over-a-container-of-promises-names-its-slot -->
+A cursor's `peek(n)` reads the slot `n` past where it stands, and that is the slot the read names: awaiting it
+empties slot 1, `get(0)` still names slot 0, and each thread is reclaimed exactly once. Returns 5 + 37.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var s = IntPromiseArray.create()
+	s.push(async plain(5))
+	s.push(async plain(37))
+	let c = try s.cursor() otherwise panic("has two")
+	let ahead = try c.peek(1) otherwise panic("has two")
+	let first = try s.get(0) otherwise panic("has two")
+	return ((await ahead) + (await first)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: async-promise-drop.error.a-whole-pair-from-withIterator-over-promises -->
+A `withIterator` pair bound WHOLE carries the promise its array still holds, and a pair can be passed anywhere,
+so no slot follows it. Only the destructuring spelling moves the promise back to its array slot; this one is
+refused where the pair is read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var s = IntPromiseArray.create()
+	s.push(async plain(7))
+	var total = 0
+	for pair in s.withIterator() 'each'
+		total = total + (await pair.1)
+	end 'each'
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:15:6: a promise cannot be borrowed through 'current': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A pair keeps no slot for the promise it carries: destructure an array's `withIterator()` pair in the loop header (`for (it, p) in a.withIterator()`), read the array with `get(i)`, or move the promise out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.error.a-map-iterator-over-promise-values -->
+A `Map`'s iterator hands each entry back as a `(key, value)` pair while the map keeps the value, and a map has
+no index a slot could name — so a promise value read through it is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseMap = Map with (String, IntPromise)
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var m = IntPromiseMap.create()
+	m.upsert("a", value: async plain(9))
+	var total = 0
+	for (_, v) in m 'each'
+		total = total + (await v)
+	end 'each'
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:15:6: a promise cannot be borrowed through 'current': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A pair keeps no slot for the promise it carries: destructure an array's `withIterator()` pair in the loop header (`for (it, p) in a.withIterator()`), read the array with `get(i)`, or move the promise out with `pop`/`remove`
+```
+
+<!-- test: async-promise-drop.a-cursor-read-twice-without-moving-aborts -->
+Two `current()` reads through a cursor that does not move between them name one slot, so both values name one
+green thread. The compiler cannot prove a cursor's position unchanged, so the first await empties the slot and
+the second finds it empty at run time and aborts with **118** (`RuntimeAbort.promiseSlotConsumedTwice`) rather
+than reclaiming the thread a second time.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var s = IntPromiseArray.create()
+	s.push(async plain(4))
+	let c = try s.cursor() otherwise panic("has one")
+	let a = c.current()
+	let b = c.current()
+	return ((await a) + (await b)) as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+
+<!-- test: async-promise-drop.a-get-and-a-cursor-read-of-one-slot-abort -->
+`get(0)` and a cursor standing at 0 name the same slot through two different doors, so the two reads name one
+green thread and the second await aborts with **118**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var s = IntPromiseArray.create()
+	s.push(async plain(4))
+	let a = try s.get(0) otherwise panic("has one")
+	let c = try s.cursor() otherwise panic("has one")
+	let b = c.current()
+	return ((await a) + (await b)) as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+
+<!-- test: async-promise-drop.a-get-read-twice-at-one-runtime-index-aborts -->
+Two `get(i)` reads whose index is one value at run time but two to the compiler name one slot, so the second
+await aborts with **118**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function zero() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 0
+end 'zero'
+
+function main() returns ExitCode
+	var s = IntPromiseArray.create()
+	s.push(async plain(4))
+	let a = try s.get(zero()) otherwise panic("has one")
+	let b = try s.get(zero()) otherwise panic("has one")
+	return ((await a) + (await b)) as ExitCode
+end 'main'
+```
+```exitcode
+118
 ```
