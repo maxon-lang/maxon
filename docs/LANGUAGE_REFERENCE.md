@@ -4046,7 +4046,12 @@ either side could write, because the two green threads may run at the same time 
 - A parameter type that cannot cross at all — a promise, a function value, a value held at an interface
   type — is **E3135**. A reply that is part of the service's own state is **E3137**; return a copy.
 - Before a send, the runtime also checks the value's whole object graph. If some nested record has a second
-  owner the compiler could not see, the program aborts with exit code **96** before anything is sent.
+  owner the compiler could not see, the program aborts with exit code **96** before anything is sent. A
+  reply is checked after the handler's locals and the message's arguments are released, so a reply built
+  from them crosses. A generic service's reply is checked at the type its `spawn` fixes: a `returns T`
+  message that hands back a container or a reference-holding record from the service's own state aborts
+  with **96**, and a reply whose graph holds a type the runtime cannot walk (a value held at an interface
+  type, an OS handle) is **E3138** at the `spawn`.
 
 **Module-level state.** A service handler — and anything it calls — may not read or write a module-level
 `var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.

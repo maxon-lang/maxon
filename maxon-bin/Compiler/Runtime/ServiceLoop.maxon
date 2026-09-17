@@ -251,7 +251,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	var armIds = BlockIdArray.create()
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildServiceArm(fn, signatures: signatures, typeName: typeName, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, range: range).id)
+		armIds.push(buildServiceArm(fn, project: project, signatures: signatures, typeName: typeName, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, range: range).id)
 	end 'eachVariant'
 
 	// ⚠ **THE DEFAULT IS THE EXIT, NOT AN ABORT, AND THAT IS A CHOICE ABOUT A CASE THAT CANNOT HAPPEN.** The
@@ -385,12 +385,12 @@ let ServiceAbandonBoxParam = 0 as ValueId
 
 // ⭐ **ONE DISPATCH ARM**, as `serviceArmAt` classifies it: the `__shutdown` pill stops the loop, and a
 // message runs its handler. The arm's ENTRY block is what it returns, because that is what the switch jumps to.
-function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
+function buildServiceArm(fn SynthesizedFunction, project Project, signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, range SourceRange) returns IrBlock
 	let arm = fn.openBlock(request.caseNameAt(caseIndex))
 
 	match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'dispatch'
 		shutdownPill then buildShutdownPillArm(fn, request: request, caseIndex: caseIndex, req: req, exit: exit, range: range)
-		message(callee) then buildMessageArm(fn, signatures: signatures, callee: callee, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, range: range)
+		message(callee) then buildMessageArm(fn, project: project, signatures: signatures, callee: callee, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, range: range)
 	end 'dispatch'
 
 	return arm
@@ -409,7 +409,7 @@ function buildShutdownPillArm(fn SynthesizedFunction, request EnumLayout, caseIn
 	fn.terminate(MaxonOp.branch(exit.id), range: range)
 end 'buildShutdownPillArm'
 
-function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, range SourceRange)
+function buildMessageArm(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, range SourceRange)
 	let payloads = request.payloadsAt(caseIndex)
 
 	// The declaration this variant was built from. Its `paramTypes` count is how many of the variant's
@@ -468,7 +468,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, c
 	// the drops release are the values `args` already holds.
 	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), range: range)
 
-	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, outcome: outcome, reply: reply, range: range)
+	emitServiceReplyCompletion(fn, project: project, signatures: signatures, callee: callee, returned: returned, outcome: outcome, reply: reply, range: range)
 
 	// ⛔⛔ **THE CURRENT BLOCK, NOT THE ARM'S ENTRY — THE TWO DIFFER FOR A THROWING HANDLER.** Its `tryCall`'s
 	// error edge is a diamond (`emitServiceReplyCompletion`), so the ops above landed in that diamond's MERGE and
@@ -563,16 +563,16 @@ end 'emitServiceHandlerCall'
 // `__gt_cell_complete` publishes `completed`, which is the instant the awaiter may resume on another M;
 // `buildMessageArm` states what that costs when a release comes after it, and why every one of them is
 // emitted above this call.
-function emitServiceReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, range SourceRange)
+function emitServiceReplyCompletion(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, range SourceRange)
 	match outcome 'o'
-		answered(result) then completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
-		routed(result, errorFlag) then emitRoutedReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, result: result, errorFlag: errorFlag, reply: reply, range: range)
+		answered(result) then publishAnsweredReply(fn, project: project, signatures: signatures, callee: callee, returned: returned, result: result, reply: reply, range: range)
+		routed(result, errorFlag) then emitRoutedReplyCompletion(fn, project: project, signatures: signatures, callee: callee, returned: returned, result: result, errorFlag: errorFlag, reply: reply, range: range)
 	end 'o'
 end 'emitServiceReplyCompletion'
 
 // The THROWING handler's two edges. Split from the arm above because a `match` arm is one statement and this
 // is a diamond.
-function emitRoutedReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, errorFlag ValueId, reply ServiceReplyTarget, range SourceRange)
+function emitRoutedReplyCompletion(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, errorFlag ValueId, reply ServiceReplyTarget, range SourceRange)
 	let threw = fn.emitCompare(errorFlag, rhs: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.ne, range: range)
 	var caught = fn.currentBlock()
 
@@ -587,7 +587,7 @@ function emitRoutedReplyCompletion(fn SynthesizedFunction, signatures ProgramSig
 	// `AsyncReleaser`'s header calls a wild free — so the VALUE word is written only on the edge that really
 	// produced one, and the thrown edge writes a 0 the releaser's null guard reads as "nothing was put here".
 	var answered = fn.openBlock(b"replyok")
-	completeServiceReply(fn, reply: reply, result: serviceReplyResultWord(fn, returned: returned, result: result, range: range), threw: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range), range: range)
+	publishAnsweredReply(fn, project: project, signatures: signatures, callee: callee, returned: returned, result: result, reply: reply, range: range)
 
 	let handled = fn.openBlock(b"handled")
 	fn.terminateBlock(caught, op: MaxonOp.condBranch(threw, thenBlockId: thrown.id, elseBlockId: answered.id), range: range)
@@ -606,15 +606,45 @@ function completeServiceReply(fn SynthesizedFunction, reply ServiceReplyTarget, 
 	end 'r'
 end 'completeServiceReply'
 
-// The VALUE word a reply carries: the handler's result, or a 0 for a message that returns nothing. A void
-// call names no value at all, so it cannot be passed as an argument — the literal is what says "there is
-// nothing here" in a word that must always be written.
-function serviceReplyResultWord(fn SynthesizedFunction, returned MaxonReturnType, result ValueId, range SourceRange) returns ValueId
-	return match returned 'r'
-		void gives fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range)
-		value gives result
+// The edge on which the handler really produced its value: the graph walk, then the completion. A void call
+// names no value at all, so its word is a literal 0 — "there is nothing here" in a word that must always be
+// written.
+function publishAnsweredReply(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, reply ServiceReplyTarget, range SourceRange)
+	let threw = fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range)
+
+	match returned 'r'
+		void then completeServiceReply(fn, reply: reply, result: fn.emitTypedLiteral(0, valueType: MaxonType.integer, range: range), threw: threw, range: range)
+		value(replyType) then publishReplyValue(fn, project: project, signatures: signatures, callee: callee, replyType: replyType, result: result, reply: reply, threw: threw, range: range)
 	end 'r'
-end 'serviceReplyResultWord'
+end 'publishAnsweredReply'
+
+// ⭐⭐ **THE REPLY'S GRAPH IS WALKED HERE, BETWEEN THE LAST RELEASE AND THE PUBLISH, AND NOWHERE EARLIER.**
+// A reply is MOVED to the awaiter, so every counted record it reaches must have one owner at the hand-off —
+// and until the handler's scope drops and `dropUnconsumedPayloads` have run, a local the reply was built
+// over and a message parameter it holds are still second owners that are about to let go. Walked at the
+// handler's `return`, a reply that crosses with one owner aborts; walked here, only a reply that really
+// shares a record with something that outlives the message does.
+//
+// ⚠ **A REFUSED GRAPH HERE MEANS THE PROGRAM IS ALREADY REFUSED** — at the handler's `return`
+// (`Parser.proveReplyCrossable`) for the type the body declares, and at the `spawn` for the type an
+// instantiation substitutes (`ServiceCompanions.instantiatedReplyGraphRefusal`), both through
+// `transferGraphProofOfShape`. The loop is still built for a service whose handler's file failed to parse, and
+// that diagnostic is the one the author must see.
+function publishReplyValue(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, replyType MaxonType, result ValueId, reply ServiceReplyTarget, threw ValueId, range SourceRange)
+	match replyGraphProof(signatures, replyType: replyType, declFilePath: signatures.recordedReturnDeclFileOf(callee)) 'graph'
+		closed then break 'graph'
+		provenBy(walk) then fn.emitPositionalCallDiscarding(walk, args: argsOf(result), range: range)
+		refused(noun) then requireReplyAlreadyRefused(project, callee: callee, noun: noun)
+	end 'graph'
+
+	completeServiceReply(fn, reply: reply, result: result, threw: threw, range: range)
+end 'publishReplyValue'
+
+function requireReplyAlreadyRefused(project Project, callee ByteArray, noun String)
+	if not projectHasErrors(project) 'refusedNowhere'
+		panic("publishReplyValue: the reply of `{String.from(callee)}` is {noun}, on a program with no error — `Parser.proveReplyCrossable` and the `spawn`'s roster refuse that graph")
+	end 'refusedNowhere'
+end 'requireReplyAlreadyRefused'
 
 // The handler's raw error flag, shifted onto the reply's fused dispatch line. A shift of 0 emits nothing,
 // which is what a first-member placement would give — but the handler is always the SECOND member here, so

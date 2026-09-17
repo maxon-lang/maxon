@@ -7619,7 +7619,7 @@ end 'shortCircuitLabel'
 // The transfer rule's third answer — how a value's GRAPH is proved sole before it crosses to another green
 // thread. A NOUN for the refusal rather than a bool, for the reason `untransferableParameterNoun` carries
 // one: the routine that decides is the one that can say why.
-union TransferGraphProof
+module union TransferGraphProof
 	// Nothing reachable from the value can carry a second owner — a scalar-only record, or a byte record
 	// whose slots hold BYTES. It crosses with no runtime proof at all, which is what keeps a `String`
 	// argument and a scalar-only record free of one.
@@ -7634,7 +7634,7 @@ end 'TransferGraphProof'
 
 // How a value crosses to another green thread. A MOVE hands over this frame's reference and poisons its
 // source; a LEND takes a second reference for the message and leaves the source readable, its graph shared.
-enum GreenThreadHandOff
+module enum GreenThreadHandOff
 	move
 	lend
 end 'GreenThreadHandOff'
@@ -7646,6 +7646,140 @@ function handOffWalk(handOff GreenThreadHandOff) returns CascadeAction
 		lend gives CascadeAction.shareWalk
 	end 'handOff'
 end 'handOffWalk'
+
+// What a crossing value IS, as far as the proof of its graph reads it. The parser reads it off a value's
+// columns at a send, a lend and a reply's `return` (`Parser.transferredShapeOf`); the service loop reads it
+// off the handler's substituted return type at the publish (`ServiceCompanions.replyGraphProof`). Both hand it
+// to `transferGraphProofOfShape`, so the refusal at the `return` and the walk at the publish are one decision.
+module union TransferredShape
+	// A scalar, a float, or a green-thread handle: nothing a count could be stepped on. The parser never
+	// produces it, because every door gates on `valueIsManagedHeap` first.
+	ownsNothing
+
+	// A `String` or `Character` record.
+	byteRecord
+
+	container(instance GenericInstanceId, subject String)
+	existential
+
+	// A struct box or a boxed union, by its declared name.
+	record(name ByteArray)
+
+	// A value whose layout cannot be read where it crosses. `noun` says why.
+	unreadable(noun String)
+end 'TransferredShape'
+
+// ⭐⭐⭐ **HOW WHAT A RECORD HOLDS IS WALKED BEFORE IT CROSSES — the transfer rule's THIRD question.**
+// Three answers, and the routine that DECIDES is the one that SAYS: nothing to walk, a runtime WALK, or a
+// NOUN naming the shape no walk can be built for (`untransferableParameterNoun`'s shape one tier down).
+//
+// ⛔⛔ **SOLENESS IS NOT TRANSITIVE, AND THE DOOR'S OWN QUESTIONS ONLY ASK ABOUT THE BOX.** A box a frame
+// solely owns can hold a payload it only CO-owns — `moveManagedValueInto`'s `borrowedManaged` arm stores by
+// `__mm_incref` rather than by move, a factory can take the reference in a frame the send cannot see
+// (`let alias = src` before `return Self{c: alias}`), and `cs.push(cell)` retains an element in `main` —
+// and no caller-side mark and no TYPE can tell `cs.push(cell)` from `cs.push(Cell.create())`. A cross to a
+// green thread is where that is FATAL rather than merely wrong: the second owner is left behind on this
+// thread stepping a count the other thread now steps too.
+//
+// ⇒ **SO THE GRAPH IS WALKED WHERE THE COUNTS ARE — AT RUN TIME, IMMEDIATELY BEFORE THE HAND-OFF.** A
+// move's `__sole_<T>` requires one owner of every counted record it reaches and DETACHES a shared
+// copy-on-write buffer, because a move is a write-like event; a lend's `__share_<T>` requires the same one
+// owner and MARKS every record it reaches shared (`MmRuntime.emitBoxWalkStep`). Either aborts on the
+// handing-over green thread, before the other can see the value, at a counted record with a second owner.
+//
+// ⚠ **WHAT A MOVE NEEDS NO WALK FOR, A LEND STILL WALKS.** A record holding no reference to a second
+// counted record MOVES unwalked — its root's one owner is the compile-time fact the move door already asked
+// — but a lend must mark that root, and a byte record's buffer, before the second green thread holds them.
+//
+// ⚠ **WHAT IS REFUSED IS WHAT NO WALK CAN BE BUILT FOR, NOT WHAT MIGHT BE SHARED** — an existential (a
+// witness table names a destructor and no walk), an opaque slot, a record no declaration here describes, and
+// any graph reaching a type with no per-type cascade. The gate and the strategy come from ONE call
+// (`ProgramSignatures.nameTransferWalkStrategy`), because a gate that admitted a type the synthesis cannot
+// route names a symbol no installer builds.
+module function transferGraphProofOfShape(signatures ProgramSignatures, shape TransferredShape, handOff GreenThreadHandOff, readerFilePath FilePath) returns TransferGraphProof
+	match shape 'shape'
+		ownsNothing then return TransferGraphProof.closed
+		byteRecord then return byteRecordTransferProof(handOff)
+		container(instance, subject) then return transferWalkProof(signatures.instanceTransferWalkStrategy(instance, action: handOffWalk(handOff)), subject: subject)
+		existential then return TransferGraphProof.refused(InterfaceParameterNoun)
+		record(name) then return recordTransferProof(signatures, name: name, handOff: handOff, readerFilePath: readerFilePath)
+		unreadable(noun) then return TransferGraphProof.refused(noun)
+	end 'shape'
+end 'transferGraphProofOfShape'
+
+// A byte record's slots hold a `.rdata` or heap BYTE BUFFER and a length — never a reference to a second
+// refcounted record — so a move needs no walk however it was built. This is what keeps a `String` message
+// argument crossing for free.
+function byteRecordTransferProof(handOff GreenThreadHandOff) returns TransferGraphProof
+	return match handOff 'handOff'
+		move gives TransferGraphProof.closed
+		lend gives TransferGraphProof.provenBy(byteRecordCascadeCallee(CascadeAction.shareWalk))
+	end 'handOff'
+end 'byteRecordTransferProof'
+
+function recordTransferProof(signatures ProgramSignatures, name ByteArray, handOff GreenThreadHandOff, readerFilePath FilePath) returns TransferGraphProof
+	// A boxed union's box is tagged `named` like a struct's can be, so the two split on which registry
+	// declares the name rather than on the tag.
+	if signatures.containsEnumFor(name, readerFilePath: readerFilePath) 'aUnionBox'
+		return aggregateTransferProof(signatures, name: name, handOff: handOff, holdsReferences: signatures.unionHasManagedPayload(name))
+	end 'aUnionBox'
+
+	if not signatures.containsStructFor(name, readerFilePath: readerFilePath) 'noSuchRecord'
+		return TransferGraphProof.refused("a managed value of `{String.from(name)}`, which no declaration this rule can read describes")
+	end 'noSuchRecord'
+
+	// ⚠ **`structHasManagedField` IS BLIND TO A SLOT STANDING AT A BARE TYPE PARAMETER**, and
+	// `Parser.valueIsCopyableTuple` records the freed-record measurement that blindness cost one door over. The
+	// same pairing is required here and for a strictly worse reason: there the miss is a bad copy, here it is a
+	// reference handed to a second green thread.
+	if recordRestsAnOpaqueSlot(signatures, name: name) 'anOpaqueSlot'
+		return TransferGraphProof.refused("a `type {String.from(name)}` with a slot standing at a bare type parameter, whose managed-ness the send cannot see")
+	end 'anOpaqueSlot'
+
+	return aggregateTransferProof(signatures, name: name, handOff: handOff, holdsReferences: signatures.structHasManagedField(name))
+end 'recordTransferProof'
+
+// The walk for a declared aggregate, or none for a MOVE of a record holding no reference to another counted
+// record. Split out because the union arm and the struct arm both reach it and neither may resolve the
+// strategy a second way.
+function aggregateTransferProof(signatures ProgramSignatures, name ByteArray, handOff GreenThreadHandOff, holdsReferences bool) returns TransferGraphProof
+	if handOff == GreenThreadHandOff.move and not holdsReferences 'movesUnwalked'
+		return TransferGraphProof.closed
+	end 'movesUnwalked'
+
+	return transferWalkProof(signatures.nameTransferWalkStrategy(name, action: handOffWalk(handOff)), subject: String.from(name))
+end 'aggregateTransferProof'
+
+// The index's paired gate-and-strategy read as a transfer's answer. `asElement: true` upstream means a
+// deep-cloneable type always resolves to a ONE-argument callee, so `managedElements` here is an invariant
+// break rather than a program.
+function transferWalkProof(strategy ManagedCascadeStrategy, subject String) returns TransferGraphProof
+	match strategy 'strategy'
+		direct(callee) then return TransferGraphProof.provenBy(callee)
+		managedElements then panic("transferWalkProof: a top-level transfer value resolved to a 2-argument `managedElements` strategy, where `asElement: true` mints the one-argument thunk (G18)")
+		unsupported then return TransferGraphProof.refused("a `{subject}` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance")
+	end 'strategy'
+end 'transferWalkProof'
+
+// ⭐ **THE ONE LOOKUP THE OPAQUE-SLOT QUESTIONS SHARE.** `recordOpaqueSlotDeclaration` panics for a name that
+// denotes no record, so the guard belongs with it rather than at each asker.
+function recordOpaqueSlotOwnerOf(signatures ProgramSignatures, name ByteArray) returns OpaqueSlotDeclaration
+	if not signatures.containsStructInAnyFile(name) 'namesNoRecord'
+		return OpaqueSlotDeclaration.none
+	end 'namesNoRecord'
+
+	return signatures.recordOpaqueSlotDeclaration(name)
+end 'recordOpaqueSlotOwnerOf'
+
+// Does `name` denote a record with a slot standing at a bare type parameter — ANY declaration's? The
+// type-level half of `Parser.recordRestsThisBodysOpaqueSlot`, for the callers that care only THAT such a slot
+// exists and not whose `uses` list it indexes into.
+function recordRestsAnOpaqueSlot(signatures ProgramSignatures, name ByteArray) returns bool
+	match recordOpaqueSlotOwnerOf(signatures, name: name) 'restsASlot'
+		none then return false
+		declaredBy then return true
+	end 'restsASlot'
+end 'recordRestsAnOpaqueSlot'
 
 // Where one message argument goes: the handler `<serviceType>.<message>` at its parameter `param`, handed over by
 // the send at `sendAt`.
@@ -34198,30 +34332,8 @@ export type Parser
 		// for a String argument), and the array's element was left pointing at a freed 58-byte record.** The
 		// rule this restores is the one this predicate's own header states — only a TRIVIAL-element tuple may
 		// be shallow-copied — over the one element kind the managed test is blind to.
-		return isTupleTypeName(name) and not self.signatures.structHasManagedField(name) and not self.recordRestsAnOpaqueSlot(name)
+		return isTupleTypeName(name) and not self.signatures.structHasManagedField(name) and not recordRestsAnOpaqueSlot(self.signatures, name: name)
 	end 'valueIsCopyableTuple'
-
-	// ⭐ **THE ONE LOOKUP THE TWO OPAQUE-SLOT QUESTIONS SHARE.** `recordOpaqueSlotDeclaration` panics for a
-	// name that denotes no record, so the guard belongs with it rather than at each asker — written twice it
-	// was two copies of one precondition, free to be dropped from one of them.
-	function recordOpaqueSlotOwnerOf(name ByteArray) returns OpaqueSlotDeclaration
-		if not self.signatures.containsStructInAnyFile(name) 'namesNoRecord'
-			return OpaqueSlotDeclaration.none
-		end 'namesNoRecord'
-
-		return self.signatures.recordOpaqueSlotDeclaration(name)
-	end 'recordOpaqueSlotOwnerOf'
-
-	// Does `name` denote a record with a slot standing at a bare type parameter — ANY declaration's? The
-	// type-level half of `recordRestsThisBodysOpaqueSlot`, for the callers that care only THAT such a slot
-	// exists and not whose `uses` list it indexes into. The two differ in exactly the line below and nothing
-	// else, which is why they read one lookup.
-	function recordRestsAnOpaqueSlot(name ByteArray) returns bool
-		match self.recordOpaqueSlotOwnerOf(name) 'restsASlot'
-			none then return false
-			declaredBy then return true
-		end 'restsASlot'
-	end 'recordRestsAnOpaqueSlot'
 
 	// A fresh record holding the same elements as `value` — the copy `valueIsCopyableTuple` licenses. It is
 	// `emitStructLiteral`'s box, filled from a load per element instead of from parsed values, so the
@@ -37445,14 +37557,15 @@ export type Parser
 	end 'requireServiceReplyDoesNotAliasState'
 
 	// ⭐⭐ **THE REPLY'S TWO QUESTIONS — `moveIntoGreenThread`'s, read from the other end.** The ROOT must be a
-	// value this frame minted; what the root POINTS AT is proved by the SAME runtime walk a send emits,
-	// through the same door, because soleness is not transitive and a container the handler mints in its own
-	// frame whose ELEMENTS are the service's state passes every static rule there is.
+	// value this frame minted; what the root POINTS AT must be a graph the runtime can walk, because soleness is
+	// not transitive and a container the handler mints in its own frame whose ELEMENTS are the service's state
+	// passes every static rule there is.
 	//
-	// ⚠ **THE WALK IS EMITTED AT THE `return`, WHICH IS AHEAD OF THE CELL.** `ServiceLoop`'s arm completes
-	// the reply cell after the handler returns, and `__gt_cell_complete` is the instant the awaiter may
-	// resume on another M — so proving the graph here is proving it while this green thread still holds it
-	// alone. The abort, when it fires, fires on the service's own green thread.
+	// ⛔ **THE WALK ITSELF IS NOT EMITTED HERE — `ServiceLoop.publishReplyValue` EMITS IT, AT THE PUBLISH.** A
+	// `return` still owes releases before the reply is handed over: this frame's scope drops, and the loop's
+	// drop of the request box's payloads. A local the reply was built over, or a message parameter it holds,
+	// is a second owner until then and none after, so a walk here would abort a reply that crosses with one
+	// owner. What stays here is the refusal of a graph no walk can be built for, which needs a position.
 	//
 	// ⚠ **THE BLAME NAMES THE REPLY**, so a refused GRAPH on this road does not describe itself as an
 	// argument of a send.
@@ -37461,7 +37574,11 @@ export type Parser
 			throw self.serviceReplyAliasesStateError(typeName, methodName: methodName, anchor: anchor)
 		end 'mayAliasState'
 
-		try self.proveTransferGraph(value, handOff: GreenThreadHandOff.move, blame: serviceReplyBlame(typeName, methodName: methodName), anchor: anchor)
+		match transferGraphProofOfShape(self.signatures, shape: self.transferredShapeOf(value), handOff: GreenThreadHandOff.move, readerFilePath: self.filePath) 'graph'
+			closed or
+				provenBy then break 'graph'
+			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: serviceReplyBlame(typeName, methodName: methodName), noun: noun, anchor: anchor)
+		end 'graph'
 	end 'proveReplyCrossable'
 
 	// The refusal, built where the `spawn` site is read so the arm above stays one statement. The note names
@@ -41700,7 +41817,7 @@ export type Parser
 	// halves of the gate above that are questions about the record rather than about the frame, asked together
 	// because either alone admits a record this body cannot release correctly.
 	function recordRestsThisBodysOpaqueSlot(name ByteArray) returns bool
-		match self.recordOpaqueSlotOwnerOf(name) 'restsASlot'
+		match recordOpaqueSlotOwnerOf(self.signatures, name: name) 'restsASlot'
 			none then return false
 			declaredBy(owner) then return owner.equals(self.enclosingType)
 		end 'restsASlot'
@@ -55379,6 +55496,10 @@ export type Parser
 			// A reply the cell cannot carry is neither of those: it is about what comes BACK, and it has its
 			// own code (E3140) so a corpus can pin each separately.
 			messageReplyIsNotCarriable then throw ParseError.serviceReplyNotCarriable(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+
+			// A reply graph no walk can be built for is the refusal the handler's `return` raises (E3138), asked
+			// here of the type the instantiation substitutes.
+			messageReplyGraphIsNotWalkable then throw ParseError.serviceArgumentNotUnique(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
 		end 'roster'
 	end 'requireServiceRosterIsDispatchable'
 
@@ -89010,8 +89131,8 @@ export type Parser
 	// wait token whose completer is scheduled on this one, the shape E3100's linear-await rule exists to prevent.
 	//
 	// ⚠ **IT REFUSES BEFORE IT EMITS.** A promotion and the soleness walk are the only things it emits, each only
-	// on the accepting path — `transferGraphProofOf` decides refuse-versus-walk in one answer — so a refused
-	// transfer leaves nothing behind. That is `emitBinOp`'s ordering rule, which every door that can throw
+	// on the accepting path — `transferGraphProofOfShape` decides refuse-versus-walk in one answer — so a
+	// refused transfer leaves nothing behind. That is `emitBinOp`'s ordering rule, which every door that can throw
 	// mid-expression keeps.
 	function moveIntoGreenThread(value ValueId, blame String, anchor Token) returns ValueId throws ParseError
 		if self.valueIsPromise(value) 'aWaitToken'
@@ -89039,8 +89160,8 @@ export type Parser
 		end 'aSecondOwnerMayExist'
 
 		// ⭐⭐⭐ **AND THE SAME QUESTION ABOUT WHAT THE RECORD HOLDS — the gate the two above cannot be.** Sole
-		// ownership of the BOX licenses nothing about the box's contents; see `transferGraphProofOf` for which
-		// shapes are proved at run time rather than refused.
+		// ownership of the BOX licenses nothing about the box's contents; see `transferGraphProofOfShape` for
+		// which shapes are proved at run time rather than refused.
 		try self.proveTransferGraph(value, handOff: GreenThreadHandOff.move, blame: blame, anchor: anchor)
 
 		// ⭐ **BOTH HALVES, UNCONDITIONALLY, AND EACH IS A NO-OP ON THE OTHER'S CASE.** A value is never in
@@ -89199,123 +89320,54 @@ export type Parser
 		return tagIsStructRef(self.tagOf(value)) and self.signatures.aggregateGraphIsWriteFree(self.internedName(self.valueNameId(value)))
 	end 'valueHoldsNothingWritable'
 
-	// ⭐⭐⭐ **HOW WHAT THIS RECORD HOLDS IS WALKED BEFORE IT CROSSES — the transfer rule's THIRD question.**
-	// Three answers, and the routine that DECIDES is the one that SAYS: nothing to walk, a runtime WALK, or a
-	// NOUN naming the shape no walk can be built for (`untransferableParameterNoun`'s shape one tier down).
-	//
-	// ⛔⛔ **SOLENESS IS NOT TRANSITIVE, AND THE DOOR'S OWN QUESTIONS ONLY ASK ABOUT THE BOX.** A box this frame
-	// solely owns can hold a payload it only CO-owns — `moveManagedValueInto`'s `borrowedManaged` arm stores by
-	// `__mm_incref` rather than by move, a factory can take the reference in a frame the send cannot see
-	// (`let alias = src` before `return Self{c: alias}`), and `cs.push(cell)` retains an element in `main` —
-	// and no caller-side mark and no TYPE can tell `cs.push(cell)` from `cs.push(Cell.create())`. A cross to a
-	// green thread is where that is FATAL rather than merely wrong: the second owner is left behind on this
-	// thread stepping a count the service now steps too.
-	//
-	// ⇒ **SO THE GRAPH IS WALKED WHERE THE COUNTS ARE — AT RUN TIME, IMMEDIATELY BEFORE THE HAND-OFF.** A
-	// move's `__sole_<T>` requires one owner of every counted record it reaches and DETACHES a shared
-	// copy-on-write buffer, because a move is a write-like event; a lend's `__share_<T>` requires the same one
-	// owner and MARKS every record it reaches shared (`MmRuntime.emitBoxWalkStep`). Either aborts on the
-	// sender's own green thread, before anything is enqueued, at a counted record with a second owner.
-	//
-	// ⚠ **WHAT A MOVE NEEDS NO WALK FOR, A LEND STILL WALKS.** A record holding no reference to a second
-	// counted record MOVES unwalked — its root's one owner is the compile-time fact the move door already asked
-	// — but a lend must mark that root, and a byte record's buffer, before the second green thread holds them.
-	//
-	// ⚠ **WHAT IS REFUSED IS WHAT NO WALK CAN BE BUILT FOR, NOT WHAT MIGHT BE SHARED** — an existential (a
-	// witness table names a destructor and no walk), an opaque type parameter (the send site cannot see its
-	// slots), a record no declaration here describes, and any graph reaching a type with no per-type cascade.
-	// The gate and the strategy come from ONE call (`ProgramSignatures.nameTransferWalkStrategy`), because a
-	// gate that admitted a type the synthesis cannot route names a symbol no installer builds.
-	function transferGraphProofOf(value ValueId, handOff GreenThreadHandOff) returns TransferGraphProof
+	// What `value` is to `transferGraphProofOfShape`, read off this parse's columns.
+	function transferredShapeOf(value ValueId) returns TransferredShape
 		let tag = self.tagOf(value)
 
-		// A byte record's slots hold a `.rdata` or heap BYTE BUFFER and a length — never a reference to a
-		// second refcounted record — so a move needs no walk however it was built. This is what keeps a
-		// `String` message argument crossing for free.
 		if tagIsByteRecord(tag) 'aByteRecord'
-			return match handOff 'handOff'
-				move gives TransferGraphProof.closed
-				lend gives TransferGraphProof.provenBy(byteRecordCascadeCallee(CascadeAction.shareWalk))
-			end 'handOff'
+			return TransferredShape.byteRecord
 		end 'aByteRecord'
 
 		if tag == ValueTypeTag.genericInstance 'aContainer'
-			return self.transferWalkProof(self.signatures.instanceTransferWalkStrategy(self.valueInstanceId(value), action: handOffWalk(handOff)), subject: self.valueDisplayTypeName(value))
+			return TransferredShape.container(self.valueInstanceId(value), subject: self.valueDisplayTypeName(value))
 		end 'aContainer'
 
 		if tag == ValueTypeTag.interfaceRef 'anExistential'
-			return TransferGraphProof.refused(InterfaceParameterNoun)
+			return TransferredShape.existential
 		end 'anExistential'
 
-		// Unreachable from either door today — a generic service is refused at the `spawn` and a
-		// type-parameter-typed message parameter with it — and it answers rather than falling through to the
-		// closed default for `untransferableParameterNoun`'s reason: "closed" is the wrong default for the one
-		// shape whose layout the send site cannot know.
+		// No door reaches this with a managed value today — a message parameter typed at a type parameter is
+		// refused at the `spawn`, and a `returns T` reply is not a managed value in its generic body — and it
+		// answers rather than falling through to a record for `untransferableParameterNoun`'s reason: the one
+		// shape whose layout the send site cannot know must not read as walkable.
 		if tag == ValueTypeTag.typeParameter 'opaque'
-			return TransferGraphProof.refused("an opaque type parameter, whose slots the send site cannot see")
+			return TransferredShape.unreadable("an opaque type parameter, whose slots the send site cannot see")
 		end 'opaque'
 
 		if not tagIsStructRef(tag) and tag != ValueTypeTag.named 'namesNoRecord'
-			return TransferGraphProof.refused("a managed value whose record carries no name here, so what it holds cannot be read")
+			return TransferredShape.unreadable("a managed value whose record carries no name here, so what it holds cannot be read")
 		end 'namesNoRecord'
 
-		let name = self.valueTypeName(value)
+		return TransferredShape.record(self.valueTypeName(value))
+	end 'transferredShapeOf'
 
-		// A boxed union: `emitEnumBox` tags its box `named`, so this arm and the struct arm below split on
-		// which registry declares the name rather than on the tag.
-		if self.signatures.containsEnumFor(name, readerFilePath: self.filePath) 'aUnionBox'
-			return self.aggregateTransferProof(name, handOff: handOff, holdsReferences: self.signatures.unionHasManagedPayload(name))
-		end 'aUnionBox'
-
-		if not self.signatures.containsStructFor(name, readerFilePath: self.filePath) 'noSuchRecord'
-			return TransferGraphProof.refused("a managed value of `{String.from(name)}`, which no declaration this rule can read describes")
-		end 'noSuchRecord'
-
-		// ⚠ **`structHasManagedField` IS BLIND TO A SLOT STANDING AT A BARE TYPE PARAMETER**, and
-		// `valueIsCopyableTuple` records the freed-record measurement that blindness cost one door over. The
-		// same pairing is required here and for a strictly worse reason: there the miss is a bad copy, here it
-		// is a reference handed to a second green thread.
-		if self.recordRestsAnOpaqueSlot(name) 'anOpaqueSlot'
-			return TransferGraphProof.refused("a `type {String.from(name)}` with a slot standing at a bare type parameter, whose managed-ness the send cannot see")
-		end 'anOpaqueSlot'
-
-		return self.aggregateTransferProof(name, handOff: handOff, holdsReferences: self.signatures.structHasManagedField(name))
-	end 'transferGraphProofOf'
-
-	// The walk for the aggregate a `structRef`/`named` value denotes, or none for a MOVE of a record holding no
-	// reference to another counted record. Split out because the union arm and the struct arm both reach it and
-	// neither may resolve the strategy a second way.
-	function aggregateTransferProof(name ByteArray, handOff GreenThreadHandOff, holdsReferences bool) returns TransferGraphProof
-		if handOff == GreenThreadHandOff.move and not holdsReferences 'movesUnwalked'
-			return TransferGraphProof.closed
-		end 'movesUnwalked'
-
-		return self.transferWalkProof(self.signatures.nameTransferWalkStrategy(name, action: handOffWalk(handOff)), subject: String.from(name))
-	end 'aggregateTransferProof'
-
-	// The index's paired gate-and-strategy read as this door's answer. `asElement: true` upstream means a
-	// deep-cloneable type always resolves to a ONE-argument callee, so `managedElements` here is an invariant
-	// break rather than a program.
-	function transferWalkProof(strategy ManagedCascadeStrategy, subject String) returns TransferGraphProof
-		match strategy 'strategy'
-			direct(callee) then return TransferGraphProof.provenBy(callee)
-			managedElements then panic("transferWalkProof: a top-level transfer value resolved to a 2-argument `managedElements` strategy, where `asElement: true` mints the one-argument thunk (G18)")
-			unsupported then return TransferGraphProof.refused("a `{subject}` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance")
-		end 'strategy'
-	end 'transferWalkProof'
-
-	// ⭐⭐ **WALK THE GRAPH, OR REFUSE IT** — the transfer rule's third question spent, shared by the SEND door,
-	// the LEND door and the REPLY door so no two of them can come to walk different things about one graph. It
-	// emits at most one call and it emits it only where nothing is thrown.
+	// ⭐⭐ **WALK THE GRAPH, OR REFUSE IT** — the transfer rule's third question spent, shared by the SEND door
+	// and the LEND door so the two cannot come to walk different things about one graph. It emits at most one
+	// call and it emits it only where nothing is thrown.
 	// ⚠ The walk returns nothing and takes no reference: what it establishes is a property of the graph, so the
 	// reference that crosses — this frame's own for a move, a fresh retain for a lend — is the caller's.
 	function proveTransferGraph(value ValueId, handOff GreenThreadHandOff, blame String, anchor Token) throws ParseError
-		match self.transferGraphProofOf(value, handOff: handOff) 'graph'
+		match transferGraphProofOfShape(self.signatures, shape: self.transferredShapeOf(value), handOff: handOff, readerFilePath: self.filePath) 'graph'
 			closed then break 'graph'
 			provenBy(callee) then _ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
-			refused(noun) then throw ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, source: self.transferredValueName(value), noun: noun), line: anchor.line, column: anchor.column)
+			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: blame, noun: noun, anchor: anchor)
 		end 'graph'
 	end 'proveTransferGraph'
+
+	// E3138 for a graph no per-type walk can be built for, at every door that refuses one.
+	function unwalkableTransferGraphError(value ValueId, blame String, noun String, anchor Token) returns ParseError
+		return ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, source: self.transferredValueName(value), noun: noun), line: anchor.line, column: anchor.column)
+	end 'unwalkableTransferGraphError'
 
 	// The source NAME a refused transfer should point the author at — the live owning binding's, or the empty
 	// name for a value no binding holds (a temporary, an element read, a field read). Split out because both

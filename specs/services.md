@@ -7694,3 +7694,184 @@ no answer
 ```exitcode
 1
 ```
+
+<!-- test: services.a-reply-built-from-a-local-var-crosses-once -->
+A message that fills a local `var` and returns a record built around it hands the caller the only owner of
+that record: the local was moved into the record, so nothing on the service's green thread still names it.
+```maxon
+typealias Flags = Array with bool
+typealias Tally = int(0 to 1000)
+
+type Cell
+	export var flags as Flags
+
+	static function create(flags Flags) returns Self
+		return Self{flags: flags}
+	end 'create'
+end 'Cell'
+
+type Worker
+	var calls as Tally
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function report() returns Cell
+		self.calls = self.calls + 1
+		var flags = Flags.create()
+		flags.push(false)
+		flags.push(true)
+		return Cell.create(flags)
+	end 'report'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let cell = try await worker.report() otherwise panic("the worker is running")
+	print("{cell.flags.count()}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-reply-built-over-a-message-parameter-crosses-once -->
+A reply may hold a message parameter: the request box releases its reference to the argument before the
+reply is handed to the caller, so the caller becomes the only owner of everything the reply reaches.
+```maxon
+typealias Flags = Array with bool
+typealias Tally = int(0 to 1000)
+
+type Cell
+	export var flags as Flags
+
+	static function create(flags Flags) returns Self
+		return Self{flags: flags}
+	end 'create'
+end 'Cell'
+
+type Worker
+	var calls as Tally
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function wrap(flags Flags) returns Cell
+		self.calls = self.calls + 1
+		return Cell.create(flags)
+	end 'wrap'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	var flags = Flags.create()
+	flags.push(true)
+	let cell = try await worker.wrap(flags) otherwise panic("the worker is running")
+	print("{cell.flags.count()}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+1
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-generic-reply-that-is-the-services-own-state-aborts -->
+A `returns T` message is judged at its declaration, where `T` is opaque and no rule can ask whether `self.item`
+is the service's own state. The reply's graph is still walked at the publish, at the type the instantiation
+fixes: with `T` an `Array with bool`, the array is named by the state AND by the reply, so the walk finds its
+second owner and the program aborts with exit **96** on the service's green thread before the caller can
+read it.
+```maxon
+typealias Flags = Array with bool
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	var flags = Flags.create()
+	flags.push(true)
+	let h = spawn Box.create(flags)
+	let got = try await h.peek() otherwise panic("the box is running")
+	print("{got.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+96
+```
+
+<!-- test: error.a-generic-reply-whose-instantiation-has-no-walk-is-refused -->
+A reply typed `Array with T` is fresh in the handler's generic body and walkable there. The instantiation makes
+its elements records holding a value at an interface type, which no per-type walk can prove sole — so the
+`spawn` that fixes `T` refuses it (E3138), rather than leaving a reply the loop cannot walk.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Holder
+	var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+type Maker uses T
+	typealias Items = Array with T
+	var made as Integer
+
+	static function create(seed T) returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function make() returns Items
+		self.made = self.made + 1
+		return Items.create()
+	end 'make'
+end 'Maker'
+
+function main() returns ExitCode
+	let h = spawn Maker.create(Holder.create(Square.create(2)))
+	let items = try await h.make() otherwise panic("the maker is running")
+	print("{items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:43:10: the reply of the message `Maker.make` is a `Array_Holder` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+```
