@@ -226,6 +226,7 @@ ragged.
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | E3019 widened to a callee's field write through its parameter, with the receiver exemption carried transitively (the record-write closure is now taken TWICE over one seed — unexempted for the `let`-global question, exempted for the `let`-binding one) and a union-typed parameter admitted as a mutable scrutinee. Allocations move by +25 to +85 per rung, FLAT across the doubling rather than growing — the fourth mask column is one array per compile, not per-program work; the 83 `let`→`var` and the five loop restructures change no allocation shape. | 4,727,459 | 7,079,224 | 11,779,630 | 21,183,852 | 40,010,640 | 77,758,555 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | /land #2 (the defect queue): end labels checked on every block, enum/union header checked, `from` through Set/List/Vector aliases and InitableFromArrayLiteral (the sweep now collects `<Name> from [` heads and interns a vector alias's element array), an inline `i64.min / -1` guard on signed `/` where neither the divisor excludes -1 nor the dividend excludes i64.min, sched debug-stream emitters (no code without --debugstream), float.hash fold, stdlib bound checks. Allocations vs the previous row: +15k at rung 0 rising to +578k at rung 5 (0.7%), the delta growing with the program — a per-program cost, linear (total allocs x1.94 at the top doubling). Not attributed per phase: no control binary was measured. | 4,904,945 | 7,269,643 | 11,995,937 | 21,451,810 | 40,382,009 | 78,336,733 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land B — front-end fan-out: freeze gap closed (B0), transfer walks carry a DAG with a visit table (B1), the per-file parse writes no shared index state and merge renumbers every generic-instance id (B2), a worker-safe parse path (B3), FrontEndPool lex/parse workers with per-worker index clones (B4), E3162, bare calls resolve to their one visible declaration. Allocations +2.2M at rung 0 rising to +13.1M at rung 5, GROWING with the program (≈+17% at rung 5): per-file artifacts own what they carry (ops and index records cloned where they enter an outcome), row-set answers, per-parse ParserAnchors. Every phase stays linear (top-rung ratio ≤ x1.99); frontEndPool x1.88. Self-compile wall 42.3–42.8 s (pre-B4) → 38.6–39.5 s, 3 of 3 interleaved. | 6,974,043 | 9,486,612 | 14,795,788 | 25,497,443 | 47,148,184 | 90,841,926 |
+| 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land C: checkUnusedExports credits a type name once per reader file (one (reader, name) key set replaces each walk's own visited set; each file's path text, module directory and library bit are taken once), and semanticCheck's provenance walk resolves each body's calls ONCE per body keyed by function index — the walk's passes and the edge staging read those rows instead of hashing the callee name — keeps store slots in a per-walk table keyed by the whole (address, offset) key, and files each body's parameter edges after every fixpoint trace so collectProvenanceParamEdges traces nothing and releases the log once it has read it. READ THE PHASE COLUMNS, not the totals: phase:checkUnusedExports allocations 737,593 -> 289,274 and bytes 46.8 MB -> 16.4 MB at rung 5, phase:semanticCheck allocations 2,079,893 -> 2,079,267 and bytes 166.7 MB -> 171.7 MB (the per-call call-site rows), control and change ladders measured in this session. Against the previous row the whole-compile totals read 90,841,926 -> 91,034,773 allocations and 11.283 GB -> 11.629 GB at rung 5, but two spec-only commits landed between the rows and a total varies run to run with the backend pool's distribution of functions — the control compiler itself measured 91,483,681 / 11.654 GB here. Every phase stays x1.9-2.0 per doubling. Self-compile, three interleaved pairs: semanticCheck 6.20-6.25 s -> 3.00-3.03 s, checkUnusedExports 4.76-4.79 s -> 0.57-0.59 s, output byte-identical. | 7,238,569 | 9,741,008 | 15,041,164 | 25,731,153 | 47,366,532 | 91,034,773 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -261,6 +262,7 @@ ragged.
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | E3019 widened to a callee's field write through its parameter, with the receiver exemption carried transitively (the record-write closure is now taken TWICE over one seed — unexempted for the `let`-global question, exempted for the `let`-binding one) and a union-typed parameter admitted as a mutable scrutinee. Allocations move by +25 to +85 per rung, FLAT across the doubling rather than growing — the fourth mask column is one array per compile, not per-program work; the 83 `let`→`var` and the five loop restructures change no allocation shape. | 505,992,128 | 820,590,327 | 1,470,594,080 | 2,764,173,194 | 5,364,304,214 | 10,497,405,864 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | /land #2 (the defect queue): end labels checked on every block, enum/union header checked, `from` through Set/List/Vector aliases and InitableFromArrayLiteral (the sweep now collects `<Name> from [` heads and interns a vector alias's element array), an inline `i64.min / -1` guard on signed `/` where neither the divisor excludes -1 nor the dividend excludes i64.min, sched debug-stream emitters (no code without --debugstream), float.hash fold, stdlib bound checks. Allocations vs the previous row: +15k at rung 0 rising to +578k at rung 5 (0.7%), the delta growing with the program — a per-program cost, linear (total allocs x1.94 at the top doubling). Not attributed per phase: no control binary was measured. | 522,612,351 | 840,285,031 | 1,490,967,357 | 2,796,369,729 | 5,414,004,993 | 10,637,084,114 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land B — front-end fan-out: freeze gap closed (B0), transfer walks carry a DAG with a visit table (B1), the per-file parse writes no shared index state and merge renumbers every generic-instance id (B2), a worker-safe parse path (B3), FrontEndPool lex/parse workers with per-worker index clones (B4), E3162, bare calls resolve to their one visible declaration. Allocations +2.2M at rung 0 rising to +13.1M at rung 5, GROWING with the program (≈+17% at rung 5): per-file artifacts own what they carry (ops and index records cloned where they enter an outcome), row-set answers, per-parse ParserAnchors. Every phase stays linear (top-rung ratio ≤ x1.99); frontEndPool x1.88. Self-compile wall 42.3–42.8 s (pre-B4) → 38.6–39.5 s, 3 of 3 interleaved. | 652,026,319 | 974,696,521 | 1,659,861,821 | 3,030,473,782 | 5,796,309,514 | 11,283,147,144 |
+| 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land C: checkUnusedExports credits a type name once per reader file (one (reader, name) key set replaces each walk's own visited set; each file's path text, module directory and library bit are taken once), and semanticCheck's provenance walk resolves each body's calls ONCE per body keyed by function index — the walk's passes and the edge staging read those rows instead of hashing the callee name — keeps store slots in a per-walk table keyed by the whole (address, offset) key, and files each body's parameter edges after every fixpoint trace so collectProvenanceParamEdges traces nothing and releases the log once it has read it. READ THE PHASE COLUMNS, not the totals: phase:checkUnusedExports allocations 737,593 -> 289,274 and bytes 46.8 MB -> 16.4 MB at rung 5, phase:semanticCheck allocations 2,079,893 -> 2,079,267 and bytes 166.7 MB -> 171.7 MB (the per-call call-site rows), control and change ladders measured in this session. Against the previous row the whole-compile totals read 90,841,926 -> 91,034,773 allocations and 11.283 GB -> 11.629 GB at rung 5, but two spec-only commits landed between the rows and a total varies run to run with the backend pool's distribution of functions — the control compiler itself measured 91,483,681 / 11.654 GB here. Every phase stays x1.9-2.0 per doubling. Self-compile, three interleaved pairs: semanticCheck 6.20-6.25 s -> 3.00-3.03 s, checkUnusedExports 4.76-4.79 s -> 0.57-0.59 s, output byte-identical. | 702,603,342 | 1,030,174,436 | 1,723,116,096 | 3,123,571,457 | 5,954,520,997 | 11,628,744,875 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -339,6 +341,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | E3019 widened to a callee's field write through its parameter, with the receiver exemption carried transitively (the record-write closure is now taken TWICE over one seed — unexempted for the `let`-global question, exempted for the `let`-binding one) and a union-typed parameter admitted as a mutable scrutinee. Allocations move by +25 to +85 per rung, FLAT across the doubling rather than growing — the fourth mask column is one array per compile, not per-program work; the 83 `let`→`var` and the five loop restructures change no allocation shape. | 2,626,165,560 | 3,751,044,600 | 5,743,866,820 | 10,674,987,740 | 22,125,737,120 | 47,007,130,500 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | /land #2 (the defect queue): end labels checked on every block, enum/union header checked, `from` through Set/List/Vector aliases and InitableFromArrayLiteral (the sweep now collects `<Name> from [` heads and interns a vector alias's element array), an inline `i64.min / -1` guard on signed `/` where neither the divisor excludes -1 nor the dividend excludes i64.min, sched debug-stream emitters (no code without --debugstream), float.hash fold, stdlib bound checks. Allocations vs the previous row: +15k at rung 0 rising to +578k at rung 5 (0.7%), the delta growing with the program — a per-program cost, linear (total allocs x1.94 at the top doubling). Not attributed per phase: no control binary was measured. | 2,563,288,075 | 3,594,794,006 | 6,378,141,359 | 10,875,885,479 | 19,716,857,297 | 38,400,918,722 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land B — front-end fan-out: freeze gap closed (B0), transfer walks carry a DAG with a visit table (B1), the per-file parse writes no shared index state and merge renumbers every generic-instance id (B2), a worker-safe parse path (B3), FrontEndPool lex/parse workers with per-worker index clones (B4), E3162, bare calls resolve to their one visible declaration. Allocations +2.2M at rung 0 rising to +13.1M at rung 5, GROWING with the program (≈+17% at rung 5): per-file artifacts own what they carry (ops and index records cloned where they enter an outcome), row-set answers, per-parse ParserAnchors. Every phase stays linear (top-rung ratio ≤ x1.99); frontEndPool x1.88. Self-compile wall 42.3–42.8 s (pre-B4) → 38.6–39.5 s, 3 of 3 interleaved. | 2,931,948,900 | 3,410,887,980 | 5,456,316,640 | 9,978,551,860 | 17,986,791,560 | 35,710,528,500 |
+| 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land C: checkUnusedExports credits a type name once per reader file (one (reader, name) key set replaces each walk's own visited set; each file's path text, module directory and library bit are taken once), and semanticCheck's provenance walk resolves each body's calls ONCE per body keyed by function index — the walk's passes and the edge staging read those rows instead of hashing the callee name — keeps store slots in a per-walk table keyed by the whole (address, offset) key, and files each body's parameter edges after every fixpoint trace so collectProvenanceParamEdges traces nothing and releases the log once it has read it. READ THE PHASE COLUMNS, not the totals: phase:checkUnusedExports allocations 737,593 -> 289,274 and bytes 46.8 MB -> 16.4 MB at rung 5, phase:semanticCheck allocations 2,079,893 -> 2,079,267 and bytes 166.7 MB -> 171.7 MB (the per-call call-site rows), control and change ladders measured in this session. Against the previous row the whole-compile totals read 90,841,926 -> 91,034,773 allocations and 11.283 GB -> 11.629 GB at rung 5, but two spec-only commits landed between the rows and a total varies run to run with the backend pool's distribution of functions — the control compiler itself measured 91,483,681 / 11.654 GB here. Every phase stays x1.9-2.0 per doubling. Self-compile, three interleaved pairs: semanticCheck 6.20-6.25 s -> 3.00-3.03 s, checkUnusedExports 4.76-4.79 s -> 0.57-0.59 s, output byte-identical. | 2,671,468,400 | 3,375,047,520 | 4,685,975,700 | 8,113,800,280 | 15,510,551,200 | 32,517,277,160 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -376,6 +379,87 @@ a single fitted number.
 The four earliest rows predate the automated log; their numbers are reconstructed from the diffs in
 git, so they are accurate but were not written by the tool. They also predate the exponent table,
 which is why it starts empty.
+
+**2026-09-17 — LAND C: `checkUnusedExports` AND `semanticCheck` STOPPED REPEATING WORK WHOSE ANSWER CANNOT
+CHANGE.** Host x64-windows, 8 cores / 16 logical. The control is the Land B compiler
+(`temp/landc-before/maxon.exe`, which reproduces itself byte for byte apart from its commit stamp); both
+compilers built the SAME final source, interleaved run by run in one session, `--metrics` per run.
+
+| run | before total | **after** total | before `semanticCheck` | **after** | before `checkUnusedExports` | **after** |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 36.26 s | **28.37 s** | 6.25 s | **3.03 s** | 4.78 s | **0.59 s** |
+| 2 | 36.29 s | **28.18 s** | 6.20 s | **3.02 s** | 4.76 s | **0.57 s** |
+| 3 | 36.46 s | **28.30 s** | 6.20 s | **3.00 s** | 4.79 s | **0.57 s** |
+
+**3 of 3 faster in both phases and in total.** All six self-builds are byte-identical, exe and `.mxdbg`.
+Allocations, per run and identical across runs: `checkUnusedExports` 14,391,156 / 893.9 MB → **1,033,104 /
+53.8 MB**; `semanticCheck` 6,080,004 / 534.3 MB → 6,080,123 / 576.8 MB — the +42.5 MB is the call-site rows
+below, one per call op.
+
+*Where each phase went, from `scripts/sample_profile.py` call chains aggregated under the phase:*
+
+- **`checkUnusedExports`: 97% was `collectReferences` re-walking a type's whole field and payload graph at
+  every mention** — every `Owner.member` callee, every parameter and return type — each walk with a fresh
+  visited set. What one walk credits is a function of the name and the reader FILE alone, and credits only
+  widen, so one `(reader, name)` key set per pass replaces the per-walk sets exactly
+  (`UnusedExportCheck.creditsTypeNameFirst`). Each file's path text, module directory and library bit are
+  taken once (`AuditedFile`), and a declaration already read from outside its subtree leaves `noteRead` at
+  once.
+- **`semanticCheck`, before (565 samples): `buildStorageProvenance` 43%, `collectProvenanceParamEdges` 16%,
+  `checkCalls` 16%, `checkStorageDoors` 13%, `checkServiceRules` 5%.** Inside every provenance walk,
+  `traceCall` resolved the callee BY NAME at every call of every pass of every trace — two index `contains`,
+  two `get`s, the labels against the parameter names, the runtime rosters' comparisons — and `slotOfThisWalk`
+  probed a program-lifetime `Map` every walk had filed into: ≈22% and ≈18% of the phase. Now a body's calls
+  are resolved on its first walk into rows keyed by function index and read by position (`CallSites`), by the
+  walk's passes and by the edge staging alike, and store slots live in a per-walk table keyed by the whole
+  `(address, offset)` key (`StoreSlotTable`). `collectProvenanceParamEdges` re-traced every body with a
+  record parameter after the fixpoint; the fixpoint's last trace of a body already read every settled
+  summary, so its edges and receiver writes are filed after every trace and that pass only assembles the
+  latest (`StagedParamEdges`).
+- **After (292 samples): `buildStorageProvenance` 45% (of which filing edges 7%), `checkCalls` 21%,
+  `checkStorageDoors` 11%, `checkServiceRules` 10%, `collectProvenanceParamEdges` 0.7%.** No single cost
+  centre left is 10% of the phase: `checkCalls` is six per-call checks, the largest (`checkSlottedCall` via
+  `immutableIdentityOf`'s binding trace) ≈7%; `checkStorageDoors` is the binding trace itself ≈8%.
+
+*The staged edge log is small, and compacting it costs more than it holds.* MEASURED on this compiler:
+3,543 identity rows and 59,230 record rows filed, of which 999 and 22,198 are live — ~2 MB, ~1.3 MB of it
+superseded by re-traces. Compacting the log read `phase:semanticCheck` at 6,082,057 allocations / 586.2 MB
+against 6,080,706 / 580.1 MB for keeping it whole; releasing it where
+`collectProvenanceParamEdges` has read it reads 6,080,388 / 576.8 MB, which is what ships.
+
+*A store-slot table keyed by the address alone is quadratic in a record's field count, and nothing in the
+corpus says so.* A body that reaches K fields through one address chains K slots on it and walks the chain
+per field. MEASURED on a generated program (one record literal of K record fields plus a method writing K
+fields through `self`), `phase:semanticCheck` CPU at K = 100 … 6,400: chained by address 29.7M 23.6M 56.5M
+78.3M 208M 601M 2,045M ticks (×2.89 ×3.40 over the last two doublings); keyed by the whole key 21.4M 27.4M
+38.6M 61.0M 73.6M 130M 266M (×1.77 ×2.04); the program-lifetime stamped `Map` it replaced 33.5M 32.4M 71.0M
+102M 144M 325M 564M. No spec case was added: the curve is what the reading is.
+
+*The ladder* (`scale-test`, 6 rungs, `--repeat=1`, control then change, same session):
+`phase:checkUnusedExports` allocations 60,876 … 737,593 → **18,711 … 289,274** (×1.47 ×1.64 ×1.78 ×1.87
+×1.93) and bytes 46.8 MB → 16.4 MB at rung 5; `phase:semanticCheck` allocations 100,264 … 2,079,893 →
+99,522 … 2,079,267 (×1.64 ×1.78 ×1.88 ×1.93 ×1.97) and bytes 166.7 MB → 171.7 MB. Linear before and after.
+⚠ **THE WHOLE-COMPILE TOTALS IN THE ROWS ABOVE MOVED MORE THAN THIS CHANGE DID**: against the Land B row,
+rung 5 allocations 90,841,926 → 91,034,773 and bytes 11.283 GB → 11.629 GB, but two spec-only commits landed
+between the two rows and a whole-compile total varies run to run with the backend pool's distribution of
+functions — the control compiler measured 91,483,681 / 11.654 GB on this session's own ladder. The PHASE
+columns are what this change moved.
+
+*The `semanticCheck` bimodality Land B recorded (6.7 vs 8.6 s, identical allocations) did not reproduce.*
+Land B's metrics files show its signature: in the slow runs thread CPU ticks rose in proportion to wall
+(ticks/ns 3.76–3.77 in both modes, so the thread was running, not descheduled), and ONLY `semanticCheck`
+moved — `checkUnusedExports`, `merge` and `regalloc` in the same runs were within noise — while all nine
+runs of the serial front end before B4 were fast. Here 0 of 18 `semanticCheck` samples of the control
+compiler showed that mode (4 plain probes, 8 profiled, 6 interleaved). Four runs were slower by 12–25% in
+`semanticCheck` AND `checkUnusedExports` at once, which is the machine; the three of them that were profiled
+split `semanticCheck` across its sub-steps in the fast runs' proportions.
+
+⚠ **A DEBT THIS PASS MEASURED AND DID NOT FIX: `Map.remove` and `Set.remove` LEAVE TOMBSTONES THAT NO LOAD
+FACTOR COUNTS.** `ensureCapacity` grows on `count` alone, and a probe stops only at an EMPTY slot, so a table
+under insert/remove churn loses its empty slots one at a time and every miss ends up probing the whole
+capacity. It is why the store-slot table above is a private chained table rather than a `Map` the walk clears
+by removing its own keys. The cure is to count tombstones in the load factor and rehash at the same capacity
+when they crowd it; that is a stdlib container change with its own gates, not this land's.
 
 **2026-09-16 — LAND B / B4 OPTIMIZATION PASS: THE PARALLEL FRONT END WAS SLOWER THAN THE SERIAL ONE IT
 REPLACED, AND THREE COSTS OUTSIDE THE PARSE WERE WHY.** No `scale-test` row: the subject is the self-compile's

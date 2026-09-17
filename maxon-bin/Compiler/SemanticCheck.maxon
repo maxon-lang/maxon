@@ -1881,20 +1881,20 @@ module type CallParamEdges
 		end 'nothingToAdd'
 
 		var edges = CallParamEdges.create()
-		edges.appendRowsOf(self)
-		edges.appendRowsOf(rows)
+		edges.appendRowsIn(self, firstRow: 0, stopRow: self.count())
+		edges.appendRowsIn(rows, firstRow: 0, stopRow: rows.count())
 		return edges
 	end 'widenedBy'
 
-	function appendRowsOf(other CallParamEdges)
-		for k in 0 upto other.count() 'eachRow'
-			let callee = try other.calleeIndices.get(k) otherwise panic("CallParamEdges.appendRowsOf: calleeIndices.get OOB at {k} inside count()")
-			let caller = try other.callerIndices.get(k) otherwise panic("CallParamEdges.appendRowsOf: callerIndices.get OOB at {k} — the four columns are parallel by construction")
-			let callerParam = try other.callerParams.get(k) otherwise panic("CallParamEdges.appendRowsOf: callerParams.get OOB at {k} — the four columns are parallel by construction")
-			let calleeParam = try other.calleeParams.get(k) otherwise panic("CallParamEdges.appendRowsOf: calleeParams.get OOB at {k} — the four columns are parallel by construction")
+	export function appendRowsIn(other CallParamEdges, firstRow CsrIndex, stopRow CsrIndex)
+		for k in firstRow upto stopRow 'eachRow'
+			let callee = try other.calleeIndices.get(k) otherwise panic("CallParamEdges.appendRowsIn: calleeIndices.get OOB at {k}")
+			let caller = try other.callerIndices.get(k) otherwise panic("CallParamEdges.appendRowsIn: callerIndices.get OOB at {k} — the four columns are parallel by construction")
+			let callerParam = try other.callerParams.get(k) otherwise panic("CallParamEdges.appendRowsIn: callerParams.get OOB at {k} — the four columns are parallel by construction")
+			let calleeParam = try other.calleeParams.get(k) otherwise panic("CallParamEdges.appendRowsIn: calleeParams.get OOB at {k} — the four columns are parallel by construction")
 			self.record(callee as FuncIndex, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
 		end 'eachRow'
-	end 'appendRowsOf'
+	end 'appendRowsIn'
 
 	// The CSR over the callee key space: `graph.neighbour(calleeIndex, k)` is the k-th EDGE ROW reaching that
 	// callee. The `to` column is the row number itself, which is what makes the other three columns readable
@@ -1954,7 +1954,7 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures F
 	var methodReceivers = BoolArray.create()
 
 	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
-	// (`ProvenanceTracer.seedReceiverWrites`), in every column that asks whether the record is written. One that
+	// (`ProvenanceTracer.stageParamEdges`), in every column that asks whether the record is written. One that
 	// may only lie WITHIN a parameter's record writes the graph the parameter denotes and not the parameter: it
 	// seeds the record column alone, since neither a `let` binding nor E3019's parameter column is written by a
 	// write within the record it names.

@@ -77,19 +77,106 @@ let NoRootChunk = 0 as RootChunk
 typealias StoreSlotKey = int(0 to u64.max)
 typealias StoreSlotKeyArray = Array with StoreSlotKey
 
-// ⭐ **ONE INDEX FOR EVERY WALK, EACH ENTRY STAMPED WITH THE WALK THAT FILED IT** — the walk in the high word, its
-// set in the low one — so a walk starts with none of the last walk's slots without a new map: an entry stamped
-// with another walk is none of this one's.
-typealias StampedStoreSlot = int(0 to u64.max)
-typealias StoreSlotIndex = Map with (StoreSlotKey, StampedStoreSlot)
-typealias StoreSlotWalk = int(0 to u32.max)
+typealias RootSetIdArray = Array with RootSetId
 
-let StoreSlotWalkShift = 32 as StampedStoreSlot
-let StoreSlotSetMask = u32.max as StampedStoreSlot
+// The end of a bucket's chain of filed slots (`StoreSlotTable`).
+let NoStoreSlotEntry = i64.max as ElementIndex
 
-// No slot of the walk being traced: a stamp no walk carries, and no set.
-let NoStampedStoreSlot = 0 as StampedStoreSlot
-let NoStoreSlotSet = i64.max as RootSetId
+// Two buckets per entry keeps the chains at about one hop. Both are powers of two, so a bucket is a mask.
+let StoreSlotBucketsPerEntry = 2 as ElementIndex
+let FirstStoreSlotBuckets = 16 as ElementIndex
+
+// The address value spread by an odd multiplier before the byte offset joins it: the fields of one record
+// share an address and differ only in the offset, so an unmixed key would file them all in one bucket.
+let StoreSlotAddressSpread = 131 as StoreSlotKey
+
+enum StoreSlotLookup implements Error
+	unfiled
+end 'StoreSlotLookup'
+
+// ⭐ **ONE WALK'S FIELD-EXACT SETS, BY THE WHOLE `(address, offset)` KEY.** A body reaches many fields
+// through one address, so chaining by ADDRESS alone walks every field's slot at every store and a record
+// literal of K fields costs K². MEASURED on one, `phase:semanticCheck` CPU per doubling of K at K = 1,600 →
+// 6,400: ×2.89 ×3.40 chained by address, ×1.77 ×2.04 keyed by the whole key. Reset empties only the buckets
+// this walk filled, so starting a walk costs the last walk's entries and never the table's size.
+type StoreSlotTable
+	var buckets as EntryIndexArray
+	var keys as StoreSlotKeyArray
+	var slots as RootSetIdArray
+	var nexts as EntryIndexArray
+
+	export static function create() returns StoreSlotTable
+		return Self{buckets: EntryIndexArray.create(), keys: StoreSlotKeyArray.create(), slots: RootSetIdArray.create(), nexts: EntryIndexArray.create()}
+	end 'create'
+
+	export function reset()
+		for entry in 0 upto self.keys.count() 'eachFiled'
+			let key = try self.keys.get(entry) otherwise panic("StoreSlotTable.reset: keys.get OOB at {entry}")
+			try self.buckets.set(self.bucketOf(key), value: NoStoreSlotEntry) otherwise panic("StoreSlotTable.reset: buckets.set OOB for a key this table filed")
+		end 'eachFiled'
+
+		self.keys.clear()
+		self.slots.clear()
+		self.nexts.clear()
+	end 'reset'
+
+	export function setAt(key StoreSlotKey) returns RootSetId throws StoreSlotLookup
+		var entry = self.headAt(key)
+
+		while entry != NoStoreSlotEntry 'eachFiled'
+			if (try self.keys.get(entry) otherwise panic("StoreSlotTable.setAt: keys.get OOB at {entry}")) == key 'filed'
+				return try self.slots.get(entry) otherwise panic("StoreSlotTable.setAt: slots.get OOB at {entry}")
+			end 'filed'
+
+			entry = try self.nexts.get(entry) otherwise panic("StoreSlotTable.setAt: nexts.get OOB at {entry}")
+		end 'eachFiled'
+
+		throw StoreSlotLookup.unfiled
+	end 'setAt'
+
+	export function file(key StoreSlotKey, slot RootSetId)
+		self.spreadOverMoreBuckets()
+		let entry = self.keys.count()
+		let head = self.headAt(key)
+		self.keys.push(key)
+		self.slots.push(slot)
+		self.nexts.push(head)
+		try self.buckets.set(self.bucketOf(key), value: entry) otherwise panic("StoreSlotTable.file: buckets.set OOB for a bucket this table just sized")
+	end 'file'
+
+	// Twice the buckets whenever the next entry would crowd them, re-linking what this walk has filed. The
+	// entry columns keep their order, so only the chains are rebuilt.
+	function spreadOverMoreBuckets()
+		if (self.keys.count() + 1) * StoreSlotBucketsPerEntry <= self.buckets.count() 'roomEnough'
+			return
+		end 'roomEnough'
+
+		let wider = FirstStoreSlotBuckets if self.buckets.count() == 0 else self.buckets.count() * 2
+		self.buckets.refill(wider, value: NoStoreSlotEntry)
+
+		for entry in 0 upto self.keys.count() 'eachFiled'
+			let key = try self.keys.get(entry) otherwise panic("StoreSlotTable.spreadOverMoreBuckets: keys.get OOB at {entry}")
+			let bucket = self.bucketOf(key)
+			let head = try self.buckets.get(bucket) otherwise panic("StoreSlotTable.spreadOverMoreBuckets: buckets.get OOB at {bucket}")
+			try self.nexts.set(entry, value: head) otherwise panic("StoreSlotTable.spreadOverMoreBuckets: nexts.set OOB at {entry}")
+			try self.buckets.set(bucket, value: entry) otherwise panic("StoreSlotTable.spreadOverMoreBuckets: buckets.set OOB at {bucket}")
+		end 'eachFiled'
+	end 'spreadOverMoreBuckets'
+
+	function headAt(key StoreSlotKey) returns ElementIndex
+		if self.buckets.count() == 0 'nothingFiled'
+			return NoStoreSlotEntry
+		end 'nothingFiled'
+
+		return try self.buckets.get(self.bucketOf(key)) otherwise panic("StoreSlotTable.headAt: buckets.get OOB for a masked bucket")
+	end 'headAt'
+
+	function bucketOf(key StoreSlotKey) returns ElementIndex
+		let mask = (self.buckets.count() - 1) as StoreSlotKey
+		let mixed = (storeSlotAddress(key) as StoreSlotKey) * StoreSlotAddressSpread + storeSlotOffset(key)
+		return (mixed and mask) as ElementIndex
+	end 'bucketOf'
+end 'StoreSlotTable'
 
 // Whether a `named` type holds a record, by its interned name — asked of every value of every walk — and
 // whether a container instance can, by its instance — asked of every operand of every call with no summary.
@@ -232,6 +319,7 @@ let NoPositionKey = i64.max as PositionKey
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
 
 let StoreSlotValueShift = 32 as StoreSlotKey
+let StoreSlotOffsetMask = u32.max as StoreSlotKey
 
 // A container mutator stores into its first operand, and an interior insertion's second operand is the node
 // it inserts beside, which it only reads (`RuntimeStoreShape`).
@@ -603,7 +691,8 @@ module function buildStorageProvenance(project Project, module MaxonModule, sign
 		end 'nothingToHandOn'
 
 		tracer.recordDependenciesOf(i)
-		tracer.traceParameters(func)
+		tracer.traceParameters(func, index: i)
+		tracer.stageParamEdges(func, index: i)
 
 		if tracer.widenSummary(i) 'grew'
 			worklist.push(i)
@@ -636,7 +725,9 @@ module function buildStorageProvenance(project Project, module MaxonModule, sign
 			end 'readsNothingNew'
 
 			try stale.set(callerIndex, value: false) otherwise panic("buildStorageProvenance: stale.set OOB at {callerIndex}")
-			tracer.traceParameters(try funcNames.functions.get(callerIndex) otherwise panic("buildStorageProvenance: functions.get OOB at caller {callerIndex}"))
+			let caller = try funcNames.functions.get(callerIndex) otherwise panic("buildStorageProvenance: functions.get OOB at caller {callerIndex}")
+			tracer.traceParameters(caller, index: callerIndex)
+			tracer.stageParamEdges(caller, index: callerIndex)
 
 			if not tracer.widenSummary(callerIndex) 'nothingGrew'
 				continue
@@ -666,6 +757,222 @@ function markCallersStale(callersByCallee CsrGraph, calleeIndex FuncIndex, throu
 	end 'eachCaller'
 end 'markCallersStale'
 
+// A run of rows filed for one function in a column every function appends to — the calls a walk resolves
+// and the parameter edges a trace files are both held that way, so the range bookkeeping and the one mark
+// for "nothing filed for this function yet" are written once.
+enum FunctionRowsLookup implements Error
+	unfiled
+end 'FunctionRowsLookup'
+
+let NoFiledRows = i64.max as ElementIndex
+
+type FunctionRows
+	var firstRows as EntryIndexArray
+	var stopRows as EntryIndexArray
+
+	export static function create(funcCount FuncIndex) returns FunctionRows
+		var firstRows = EntryIndexArray.create()
+		firstRows.refill(funcCount as ElementIndex, value: NoFiledRows)
+		var stopRows = EntryIndexArray.create()
+		stopRows.refill(funcCount as ElementIndex, value: NoFiledRows)
+		return Self{firstRows: firstRows, stopRows: stopRows}
+	end 'create'
+
+	// `funcIndex`'s rows are `[firstRow, stopRow)`. Filing again replaces the range, which is what a
+	// re-trace does.
+	export function file(funcIndex FuncIndex, firstRow ElementIndex, stopRow ElementIndex)
+		try self.firstRows.set(funcIndex, value: firstRow) otherwise panic("FunctionRows.file: function {funcIndex} is past the tracer's function count")
+		try self.stopRows.set(funcIndex, value: stopRow) otherwise panic("FunctionRows.file: function {funcIndex} is past the tracer's function count")
+	end 'file'
+
+	export function firstRowOf(funcIndex FuncIndex) returns ElementIndex throws FunctionRowsLookup
+		let first = try self.firstRows.get(funcIndex) otherwise panic("FunctionRows.firstRowOf: function {funcIndex} is past the tracer's function count")
+
+		if first == NoFiledRows 'nothingFiled'
+			throw FunctionRowsLookup.unfiled
+		end 'nothingFiled'
+
+		return first
+	end 'firstRowOf'
+
+	export function unfileEvery()
+		self.firstRows.refill(self.firstRows.count(), value: NoFiledRows)
+		self.stopRows.refill(self.stopRows.count(), value: NoFiledRows)
+	end 'unfileEvery'
+
+	export function stopRowOf(funcIndex FuncIndex) returns ElementIndex
+		let stop = try self.stopRows.get(funcIndex) otherwise panic("FunctionRows.stopRowOf: function {funcIndex} is past the tracer's function count")
+
+		if stop == NoFiledRows 'nothingFiled'
+			panic("FunctionRows.stopRowOf: nothing is filed for function {funcIndex} — a caller reads the first row before the stop")
+		end 'nothingFiled'
+
+		return stop
+	end 'stopRowOf'
+end 'FunctionRows'
+
+typealias RuntimeStoreShapeArray = Array with RuntimeStoreShape
+
+// ⭐ **EACH TRACED BODY'S CALLS AS A WALK READS THEM, RESOLVED ON THE BODY'S FIRST WALK AND KEYED BY ITS
+// FUNCTION INDEX.** A call's callee and labels do not change while the tracer lives, and a walk meets every
+// call of a body at every pass of every trace — and `stageParamEdges` meets them again — so answering by
+// name at each meeting (the function and signature indexes, the labels against the parameter names, the
+// runtime rosters' comparisons) pays many times over for one answer.
+//
+// A body's rows are its `FunctionRows` range, in the order every pass of a walk meets its calls. A row is
+// DESCRIBED when a summary answers for its callee (`calleeHasSummary`) and then names an entry of the
+// described columns; otherwise it names an entry of the runtime columns.
+type CallSites
+	export var ranges as FunctionRows
+	var described as BoolArray
+	var entries as EntryIndexArray
+
+	// A described callee's index and parameter count, and each argument's parameter position, from `argStarts`.
+	var callees as FuncIndexArray
+	var paramCounts as ParamCountArray
+	var argStarts as EntryIndexArray
+	var argPositions as ParamCountArray
+
+	// A callee no summary describes: where it may store what it was handed, and the runtime families it belongs to.
+	var shapes as RuntimeStoreShapeArray
+	var bookkeeping as BoolArray
+	var forksImages as BoolArray
+	var linksANewNode as BoolArray
+
+	export static function create(funcCount FuncIndex) returns CallSites
+		return Self{ranges: FunctionRows.create(funcCount), described: BoolArray.create(), entries: EntryIndexArray.create(), callees: FuncIndexArray.create(), paramCounts: ParamCountArray.create(), argStarts: EntryIndexArray.create(), argPositions: ParamCountArray.create(), shapes: RuntimeStoreShapeArray.create(), bookkeeping: BoolArray.create(), forksImages: BoolArray.create(), linksANewNode: BoolArray.create()}
+	end 'create'
+
+	export function nextRow() returns ElementIndex
+		return self.described.count()
+	end 'nextRow'
+
+	export function closeRows(funcIndex FuncIndex, firstRow ElementIndex)
+		self.ranges.file(funcIndex, firstRow: firstRow, stopRow: self.described.count())
+	end 'closeRows'
+
+	export function fileDescribedRow(calleeIndex FuncIndex, paramCount ParamCount, slottedArgs ParamCountArray)
+		self.described.push(true)
+		self.entries.push(self.callees.count())
+		self.callees.push(calleeIndex)
+		self.paramCounts.push(paramCount)
+		self.argStarts.push(self.argPositions.count())
+		self.argPositions.append(slottedArgs)
+	end 'fileDescribedRow'
+
+	export function fileRuntimeRow(shape RuntimeStoreShape, isBookkeeping bool, forksAnImage bool, linksANode bool)
+		self.described.push(false)
+		self.entries.push(self.shapes.count())
+		self.shapes.push(shape)
+		self.bookkeeping.push(isBookkeeping)
+		self.forksImages.push(forksAnImage)
+		self.linksANewNode.push(linksANode)
+	end 'fileRuntimeRow'
+
+	export function rowIsDescribed(row ElementIndex) returns bool
+		return try self.described.get(row) otherwise panic("CallSites.rowIsDescribed: described.get OOB at call-site row {row}")
+	end 'rowIsDescribed'
+
+	function entryAt(row ElementIndex) returns ElementIndex
+		return try self.entries.get(row) otherwise panic("CallSites.entryAt: entries.get OOB at call-site row {row}")
+	end 'entryAt'
+
+	export function calleeAt(row ElementIndex) returns FuncIndex
+		return try self.callees.get(self.entryAt(row)) otherwise panic("CallSites.calleeAt: callees.get OOB at described call-site row {row}")
+	end 'calleeAt'
+
+	export function paramCountAt(row ElementIndex) returns ParamCount
+		return try self.paramCounts.get(self.entryAt(row)) otherwise panic("CallSites.paramCountAt: paramCounts.get OOB at described call-site row {row}")
+	end 'paramCountAt'
+
+	export function argPositionAt(row ElementIndex, argIndex ParamCount) returns ParamCount
+		let at = (try self.argStarts.get(self.entryAt(row)) otherwise panic("CallSites.argPositionAt: argStarts.get OOB at described call-site row {row}")) + (argIndex as ElementIndex)
+		return try self.argPositions.get(at) otherwise panic("CallSites.argPositionAt: argPositions.get OOB at {at}")
+	end 'argPositionAt'
+
+	export function shapeAt(row ElementIndex) returns RuntimeStoreShape
+		return try self.shapes.get(self.entryAt(row)) otherwise panic("CallSites.shapeAt: shapes.get OOB at runtime call-site row {row}")
+	end 'shapeAt'
+
+	export function isBookkeepingAt(row ElementIndex) returns bool
+		return try self.bookkeeping.get(self.entryAt(row)) otherwise panic("CallSites.isBookkeepingAt: bookkeeping.get OOB at runtime call-site row {row}")
+	end 'isBookkeepingAt'
+
+	export function forksImagesAt(row ElementIndex) returns bool
+		return try self.forksImages.get(self.entryAt(row)) otherwise panic("CallSites.forksImagesAt: forksImages.get OOB at runtime call-site row {row}")
+	end 'forksImagesAt'
+
+	export function linksANewNodeAt(row ElementIndex) returns bool
+		return try self.linksANewNode.get(self.entryAt(row)) otherwise panic("CallSites.linksANewNodeAt: linksANewNode.get OOB at runtime call-site row {row}")
+	end 'linksANewNodeAt'
+end 'CallSites'
+
+// ⭐ **EACH BODY'S PARAMETER RECORD EDGES, AS ITS LAST PARAMETER TRACE REACHED THEM.** Filed after every
+// trace the fixpoint makes, so `collectProvenanceParamEdges` needs no trace of its own — see
+// `StagedParamEdges` for why the last one is the trace that pass wants.
+//
+// A re-trace appends its rows and leaves the ones it replaced in the log. MEASURED on this compiler: the log
+// ends at 3,543 identity rows and 59,230 record rows, of which 999 and 22,198 are live — ~2 MB, and ~1.3 MB
+// of that superseded. Compacting the log costs more than it holds (+1,351 allocations and +6.1 MB over a
+// whole compile), so the log is kept whole and RELEASED once that pass has read it.
+type StagedEdgeRows
+	export var rows as CallParamEdges
+	var ranges as FunctionRows
+
+	export static function create(funcCount FuncIndex) returns StagedEdgeRows
+		return Self{rows: CallParamEdges.create(), ranges: FunctionRows.create(funcCount)}
+	end 'create'
+
+	// `index`'s rows are those appended to the log since `start`, which replaces the range an earlier trace
+	// of the same body filed.
+	export function file(index FuncIndex, start CsrIndex)
+		self.ranges.file(index, firstRow: start as ElementIndex, stopRow: self.rows.count() as ElementIndex)
+	end 'file'
+
+	// The rows `index`'s last trace filed — none for a body no trace filed any for, which is every body
+	// with no record parameter.
+	export function appendRowsOf(index FuncIndex, into CallParamEdges)
+		let first = try self.ranges.firstRowOf(index) otherwise return
+		into.appendRowsIn(self.rows, firstRow: first as CsrIndex, stopRow: self.ranges.stopRowOf(index) as CsrIndex)
+	end 'appendRowsOf'
+
+	// The log is read once, so it is dropped there rather than held to the end of `semanticCheck`.
+	export function release()
+		self.rows = CallParamEdges.create()
+		self.ranges.unfileEvery()
+	end 'release'
+end 'StagedEdgeRows'
+
+// ⭐ **THE FIXPOINT'S LAST TRACE OF A BODY IS THE TRACE `collectProvenanceParamEdges` WANTS.** A body is
+// traced again whenever a summary it consults grows (`markCallersStale`), so its last trace read every
+// callee's settled summary — which is what that pass used to re-trace every body to obtain. Staging after
+// each trace costs one walk of the body's ops; re-tracing every body costs a fixpoint walk of each.
+//
+// A body with no record parameter is staged by no trace and reads back as empty here, which is the answer
+// that pass wants for it: the fixpoint's first pass traces every body that HAS one.
+type StagedParamEdges
+	export var alias as StagedEdgeRows
+	export var within as StagedEdgeRows
+	export var written as ParamPositionMaskArray
+	export var writtenWithin as ParamPositionMaskArray
+
+	export static function create(funcCount FuncIndex) returns StagedParamEdges
+		return Self{alias: StagedEdgeRows.create(funcCount), within: StagedEdgeRows.create(funcCount), written: emptySummaryColumn(funcCount), writtenWithin: emptySummaryColumn(funcCount)}
+	end 'create'
+
+	export function file(index FuncIndex, aliasStart CsrIndex, withinStart CsrIndex, receiverWritten ParamPositionMask, receiverWrittenWithin ParamPositionMask)
+		self.alias.file(index, start: aliasStart)
+		self.within.file(index, start: withinStart)
+		try self.written.set(index, value: receiverWritten) otherwise panic("StagedParamEdges.file: written.set OOB at function {index}")
+		try self.writtenWithin.set(index, value: receiverWrittenWithin) otherwise panic("StagedParamEdges.file: writtenWithin.set OOB at function {index}")
+	end 'file'
+
+	export function release()
+		self.alias.release()
+		self.within.release()
+	end 'release'
+end 'StagedParamEdges'
+
 // ⭐ **ONE FUNCTION'S PROVENANCE WALK, and the scratch it reuses across every function it walks.** Each value
 // holds one root set per `ProvenanceColumn`, one bit per root; a walk iterates the body until no set grows,
 // which a loop's back edge needs and a straight-line body settles in one extra pass.
@@ -682,6 +989,13 @@ module type ProvenanceTracer
 	var functionRefBodies as CallLandingBodies
 	var functionRefBodiesGathered as bool
 	var functionValueBodies as FunctionValueBodiesMemo
+	var callSites as CallSites
+	var stagedEdges as StagedParamEdges
+
+	// The walked body's first call-site row, the row its next call reads, and whether this walk is the one filing them.
+	var callSiteFirstRow as ElementIndex
+	var callSiteCursor as ElementIndex
+	var resolvingCallSites as bool
 	export var summary as ProvenanceSummary
 
 	// Value `v`'s set in column `c` is `c.ordinal * setsPerColumn + v`, one per value; a store slot's set
@@ -692,9 +1006,8 @@ module type ProvenanceTracer
 
 	// What each `(address, offset)` was handed, and what was stored inside the record a load of it yields
 	// (`deepSlots`, keyed by the load's own `(address, offset)`, which `loadOrigins` keeps per loaded value).
-	var storeSlots as StoreSlotIndex
-	var deepSlots as StoreSlotIndex
-	var storeSlotWalk as StoreSlotWalk
+	var storeSlots as StoreSlotTable
+	var deepSlots as StoreSlotTable
 	var loadOrigins as StoreSlotKeyArray
 	var hasLoadOrigin as BoolArray
 	var tracked as BoolArray
@@ -817,7 +1130,7 @@ module type ProvenanceTracer
 	var bindingsRootCount as RootRank
 
 	// The parameters receiver-writing calls write through values that may be or lie within their records
-	// (`seedReceiverWrites`).
+	// (`stageParamEdges`).
 	export var receiverWrites as ProvenanceReceiverWrites
 
 	// Every argument a call hands to a parameter its callee writes, by the function the call is in — in function
@@ -915,7 +1228,7 @@ module type ProvenanceTracer
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount FuncIndex) returns ProvenanceTracer
 		let noSites = ProvenanceSites.create(ProvenanceColumns.create())
-		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count() as RootSetId, setsPerColumn: 0, storeSlots: StoreSlotIndex.create(), deepSlots: StoreSlotIndex.create(), storeSlotWalk: 0, loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), notARootValue: BoolArray.create(), rootValues: ValueIdArray.create(), rootNames: ByteArrayArray.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: RootRankArray.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootIsImage: BoolArray.create(), rootIsImmutableRecord: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootBorrows: BoolArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: RootRankArray.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), askedBeforeToken: AskAboutEveryRoot, liveAfterToken: AskAboutEveryRoot, doorSkipsImages: false, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: signatures.recordKindsOfTypes(moduleLetTypesOf(project.managedGlobals)), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argPositions: ParamCountArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), calleeParamCount: 0, changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), recording: false, recordingCaller: 0, dependencyCallees: CsrColumn.create(), dependencyCallers: CsrColumn.create(), enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ByteArrayArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), refusedDoorRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: EmptySourceText, definingOps: OpIndexArray.create(), mergingBlocks: BlockIdArray.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepArray.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), pathSteps: AccessStepArray.create(), otherPathSteps: AccessStepArray.create(), fieldStored: ValueIdArray.create(), otherFieldStored: ValueIdArray.create(), handedPositions: ParamCountArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: HygieneIndexArray.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), indexedLabelledArguments: LabelledArgumentValues.create(), labelledArgumentRows: LabelledValueRowByPosition.create(), indexedFlowPointsOf: EmptySourceText, flowPoints: FlowPointByOp.create(), writeFreeGraphs: WriteFreeGraphMemo.create(), frozenRanks: RootRankArray.create(), frozenLends: LendSiteArray.create(), frozenReach: BoolArray.create(), frozenRebinds: RebindingArray.create(), frozenBlockCount: 0, frozenDoorValues: BoolArray.create(), handlerEscapes: HandlerEscapeMemo.create()}
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callSites: CallSites.create(funcCount), stagedEdges: StagedParamEdges.create(funcCount), callSiteFirstRow: 0, callSiteCursor: 0, resolvingCallSites: false, summary: ProvenanceSummary.create(funcCount), sets: RootSets.create(), columnCount: ProvenanceColumn.allCases.count() as RootSetId, setsPerColumn: 0, storeSlots: StoreSlotTable.create(), deepSlots: StoreSlotTable.create(), loadOrigins: StoreSlotKeyArray.create(), hasLoadOrigin: BoolArray.create(), tracked: BoolArray.create(), namedTypeHoldsARecord: NamedTypeRecordMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), notARootValue: BoolArray.create(), rootValues: ValueIdArray.create(), rootNames: ByteArrayArray.create(), rootRecordKinds: HeldRecordKindsArray.create(), recordKindsByAggregate: AggregateRecordKindsMemo.create(), recordKindsByInstance: InstanceRecordKindsMemo.create(), noRecordKinds: HeldRecordKinds.create(), anyRecordKinds: anyHeldRecordKinds(), rootRankOfValue: RootRankArray.create(), tracingImmutableBindings: false, writableRank: ParameterTraceWritableRank, isWritableValue: BoolArray.create(), rootIsModuleLet: BoolArray.create(), rootIsImage: BoolArray.create(), rootIsImmutableRecord: BoolArray.create(), rootAliasLastUse: TokenIndexArray.create(), rootBorrows: BoolArray.create(), rootAliased: BoolArray.create(), rootInfos: VarInfoArray.create(), rootDeclTokens: TokenIndexArray.create(), rootLiveUntil: TokenIndexArray.create(), rootSoleBase: BoolArray.create(), rootMovedAt: TokenIndexArray.create(), rootCaptured: BoolArray.create(), writableRankOfValue: RootRankArray.create(), firstWritableValueRank: 0, mutablePlaceWords: ParamPositionMaskArray.create(), parameterRankWords: ParamPositionMaskArray.create(), askedBeforeToken: AskAboutEveryRoot, liveAfterToken: AskAboutEveryRoot, doorSkipsImages: false, immutableGlobalLabels: signatures.immutableGlobalDataLabels(), moduleLetRecordKinds: signatures.recordKindsOfTypes(moduleLetTypesOf(project.managedGlobals)), escapedSet: 0, operands: ValueIdArray.create(), refusals: PendingRefusalArray.create(), argPositions: ParamCountArray.create(), argIdentityReach: ParamPositionMaskArray.create(), argWithinReach: ParamPositionMaskArray.create(), calleeParamCount: 0, changed: false, returnedShares: NoParamPositions, returnedIdentity: NoParamPositions, returnedHolds: NoParamPositions, returnedInside: NoParamPositions, returnedHoldsWithin: NoParamPositions, returnedPlacedWithin: NoParamPositions, returnedEscapes: NoParamPositions, returnedBinds: NoParamPositions, returnedModuleLets: NoParamPositions, moduleLetStorageReached: false, handedAModuleLetsRecord: BoolArray.create(), storedRow: ParamPositionMaskArray.create(), storedDeepRow: ParamPositionMaskArray.create(), recording: false, recordingCaller: 0, dependencyCallees: CsrColumn.create(), dependencyCallers: CsrColumn.create(), enteredIndex: 0, bindingsTraceValid: false, bindingsTraceIndex: 0, bindingsRootCount: 0, receiverWrites: ProvenanceReceiverWrites.create(funcCount), writtenArgFuncs: FuncIndexArray.create(), writtenArgValues: ValueIdArray.create(), writtenArgCalls: SourceRangeArray.create(), writtenArgParams: ByteArrayArray.create(), writtenArgJudged: BoolArray.create(), writtenArgsHere: EntryIndexArray.create(), refusedDoorRanks: 0, rootReadStarts: EntryIndexArray.create(), rootReads: TokenIndexArray.create(), tracedSites: noSites, noSites: noSites, refusedDoorValues: BoolArray.create(), indexedDefinitionsOf: EmptySourceText, definingOps: OpIndexArray.create(), mergingBlocks: BlockIdArray.create(), hopKinds: AccessHopKindArray.create(), hopBases: ValueIdArray.create(), hopSteps: AccessStepArray.create(), soleIncomings: ValueIdArray.create(), soleIncomingSeen: BoolArray.create(), pathSteps: AccessStepArray.create(), otherPathSteps: AccessStepArray.create(), fieldStored: ValueIdArray.create(), otherFieldStored: ValueIdArray.create(), handedPositions: ParamCountArray.create(), rootReadFill: EntryIndexArray.create(), reachWorklist: BlockIdArray.create(), reachVisited: BoolArray.create(), writtenArgCursor: 0, writtenRanks: 0, hygieneIndexed: false, hygieneFirstAtPosition: HygieneIndexByPosition.create(), hygieneNextAtPosition: HygieneIndexArray.create(), hygieneWithdrawn: BoolArray.create(), summaryRow: TracedSummaryRow.create(), blockIndex: BlockIndexById.create(), indexedCalls: CallTokenColumns.create(), callTokenIndex: TokenByPosition.create(), indexedLabelledArguments: LabelledArgumentValues.create(), labelledArgumentRows: LabelledValueRowByPosition.create(), indexedFlowPointsOf: EmptySourceText, flowPoints: FlowPointByOp.create(), writeFreeGraphs: WriteFreeGraphMemo.create(), frozenRanks: RootRankArray.create(), frozenLends: LendSiteArray.create(), frozenReach: BoolArray.create(), frozenRebinds: RebindingArray.create(), frozenBlockCount: 0, frozenDoorValues: BoolArray.create(), handlerEscapes: HandlerEscapeMemo.create()}
 	end 'create'
 
 	// The next trace records every callee it consults as a dependency of `caller`.
@@ -967,7 +1280,7 @@ module type ProvenanceTracer
 
 	// Roots are the parameters that hold a record, ranked by position — the summary's own bit order — and
 	// module `var` storage past them: a parameter stored into a `var` of this body has not left it.
-	function traceParameters(func IrFunction)
+	function traceParameters(func IrFunction, index FuncIndex)
 		self.bindingsTraceValid = false
 
 		if func.paramCount > RootBitIndexMask + 1 'moreParametersThanAMaskHolds'
@@ -991,7 +1304,7 @@ module type ProvenanceTracer
 		end 'eachParam'
 
 		self.markVarsOwn(func, sites: func.provenanceSites(self.noSites), into: self.isWritableValue)
-		self.walk(func, ir: self.module)
+		self.walk(func, index: index, ir: self.module)
 		self.gatherStores(func)
 	end 'traceParameters'
 
@@ -1032,7 +1345,7 @@ module type ProvenanceTracer
 	// storage. A value a `var` holds (`let u = t`, which moves `t`) is a binding made FROM that `var`, and a
 	// function value names no storage a write could reach, so neither is a root. Answers how many binding roots
 	// there are.
-	function traceImmutableBindings(func IrFunction) returns RootRank
+	function traceImmutableBindings(func IrFunction, index FuncIndex) returns RootRank
 		self.bindingsTraceValid = false
 		let sites = func.provenanceSites(self.noSites)
 		let bindings = sites.immutableBindings
@@ -1148,7 +1461,7 @@ module type ProvenanceTracer
 		end 'eachVarsOwn'
 
 		self.markVarsOwn(func, sites: sites, into: self.isWritableValue)
-		self.walk(func, ir: self.module)
+		self.walk(func, index: index, ir: self.module)
 		self.settleBindingRoots(func, bindingCount: bindingCount)
 		return bindingCount
 	end 'traceImmutableBindings'
@@ -1293,7 +1606,7 @@ module type ProvenanceTracer
 	// roots it has.
 	function bindingsTraceOf(func IrFunction, index FuncIndex) returns RootRank
 		if not self.bindingsTraceValid or self.bindingsTraceIndex != index 'traceThisFunction'
-			self.bindingsRootCount = self.traceImmutableBindings(func)
+			self.bindingsRootCount = self.traceImmutableBindings(func, index: index)
 			self.bindingsTraceValid = true
 			self.bindingsTraceIndex = index
 		end 'traceThisFunction'
@@ -1506,9 +1819,8 @@ module type ProvenanceTracer
 		self.setsPerColumn = valueCount as RootSetId
 		self.sets.reset(self.columnCount * self.setsPerColumn)
 		self.escapedSet = self.sets.addSet()
-
-		self.storeSlotWalk = self.storeSlotWalk + 1
-
+		self.storeSlots.reset()
+		self.deepSlots.reset()
 		self.hasLoadOrigin.refill(valueCount, value: false)
 		self.loadOrigins.refill(valueCount, value: 0)
 
@@ -1537,12 +1849,22 @@ module type ProvenanceTracer
 
 	// ⚠ The module is handed in rather than read off `self`, so a block borrowed out of it is not a borrow of
 	// the tracer the walk writes (E3070): the walk writes only its own scratch, never the module.
-	function walk(func IrFunction, ir MaxonModule)
+	function walk(func IrFunction, index FuncIndex, ir MaxonModule)
 		ir.refillBlockIndexById(func, into: self.blockIndex)
+
+		if let filed = try self.callSites.ranges.firstRowOf(index) 'callsAlreadyResolved'
+			self.resolvingCallSites = false
+			self.callSiteFirstRow = filed
+		end 'callsAlreadyResolved' else 'theFirstWalkOfThisBody'
+			self.resolvingCallSites = true
+			self.callSiteFirstRow = self.callSites.nextRow()
+		end 'theFirstWalkOfThisBody'
+
 		self.changed = true
 
 		while self.changed 'untilNothingGrows'
 			self.changed = false
+			self.callSiteCursor = self.callSiteFirstRow
 
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.walk: blockRef from func.blockRefs not in module.blocks")
@@ -1550,6 +1872,7 @@ module type ProvenanceTracer
 			end 'eachBlock'
 
 			self.carryClosureEnvironments(func)
+			self.finishCallSitePass(index)
 		end 'untilNothingGrows'
 
 		for blockRef in func.blockRefs 'eachReturningBlock'
@@ -1894,15 +2217,11 @@ module type ProvenanceTracer
 			try self.loadOrigins.set(result, value: key) otherwise panic("ProvenanceTracer.traceLoad: loadOrigins.set OOB at v{result}")
 		end 'whatTheRecordHolds'
 
-		let stored = self.slotOfThisWalk(self.storeSlots, key: key)
-
-		if stored != NoStoreSlotSet 'storedInto'
+		if let stored = try self.storeSlots.setAt(key) 'storedInto'
 			self.unionInto(self.setOf(ProvenanceColumn.identity, value: result), from: stored)
 		end 'storedInto'
 
-		let storedInside = self.slotOfThisWalk(self.deepSlots, key: key)
-
-		if storedInside != NoStoreSlotSet 'storedInsideIt'
+		if let storedInside = try self.deepSlots.setAt(key) 'storedInsideIt'
 			self.unionInto(self.setOf(ProvenanceColumn.holds, value: result), from: storedInside)
 		end 'storedInsideIt'
 	end 'traceLoad'
@@ -1914,8 +2233,8 @@ module type ProvenanceTracer
 		end 'storesNoRecord'
 
 		let key = storeSlotKey(addr, offset: offset)
-		self.unionInto(self.slotFor(key), from: self.setOf(ProvenanceColumn.identity, value: value))
-		self.unionContents(self.deepSlotFor(key), source: value)
+		self.unionInto(self.slotIn(self.storeSlots, key: key), from: self.setOf(ProvenanceColumn.identity, value: value))
+		self.unionContents(self.slotIn(self.deepSlots, key: key), source: value)
 		self.unionMask(ProvenanceColumn.storedHolds, to: addr, from: ProvenanceColumn.identity, source: value)
 		self.unionContents(self.setOf(ProvenanceColumn.deepHolds, value: addr), source: value)
 		self.unionOverlap(addr, value: value)
@@ -1944,7 +2263,7 @@ module type ProvenanceTracer
 		let loaded = try self.hasLoadOrigin.get(addr) otherwise panic("ProvenanceTracer.unionOverlap: hasLoadOrigin.get OOB at v{addr}")
 
 		if loaded 'aLoadedRecord'
-			let deep = self.deepSlotFor(try self.loadOrigins.get(addr) otherwise panic("ProvenanceTracer.unionOverlap: loadOrigins.get OOB at v{addr}"))
+			let deep = self.slotIn(self.deepSlots, key: try self.loadOrigins.get(addr) otherwise panic("ProvenanceTracer.unionOverlap: loadOrigins.get OOB at v{addr}"))
 			self.unionInto(deep, from: self.setOf(ProvenanceColumn.identity, value: value))
 			self.unionContents(deep, source: value)
 		end 'aLoadedRecord'
@@ -2051,12 +2370,14 @@ module type ProvenanceTracer
 	// another launders it exactly as one that hands it back does — `arr.push(p)` then `arr.get(0)`, a setter then
 	// a getter — so what the callee stores is applied before, and independently of, what it returns.
 	function traceCall(func IrFunction, op MaxonOp, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray)
-		if not self.calleeHasSummary(callee) 'noSummary'
-			let shape = runtimeCalleeStoreShape(callee)
+		let site = self.nextCallSite(callee, args: args, argLabels: argLabels)
+
+		if not self.callSites.rowIsDescribed(site) 'noSummary'
+			let shape = self.callSites.shapeAt(site)
 			self.storeConservatively(func, args: args, shape: shape)
 
-			if ownershipBookkeepingCallee(callee) 'theOperandsRecordOrACopy'
-				self.flowThroughBookkeeping(func, op: op, result: result, forksImages: forksImageData(callee))
+			if self.callSites.isBookkeepingAt(site) 'theOperandsRecordOrACopy'
+				self.flowThroughBookkeeping(func, op: op, result: result, forksImages: self.callSites.forksImagesAt(site))
 			end 'theOperandsRecordOrACopy' else 'anyRecordItReaches'
 				self.flowFromOperands(func, op: op, result: result)
 			end 'anyRecordItReaches'
@@ -2067,17 +2388,16 @@ module type ProvenanceTracer
 			// node the chain holds, as a reinsertion's is (`runtimeCalleeStoreShape`), and one the handle lies
 			// within the chain as (`flowFromOperands`). So a walk of the chain may reach the node a `let`
 			// handle names.
-			if linksANewNodeCallee(callee) and args.count() > 0 'theChainHoldsTheNode'
+			if self.callSites.linksANewNodeAt(site) and args.count() > 0 'theChainHoldsTheNode'
 				self.traceWholeStore(try args.get(0) otherwise panic("ProvenanceTracer.traceCall: an insertion has no receiver chain"), value: result, deep: false)
 			end 'theChainHoldsTheNode'
 
 			return
 		end 'noSummary'
 
-		let calleeIndex = try self.funcIndexByName.get(callee) otherwise panic("ProvenanceTracer.traceCall: '{String.from(callee)}' left the function index after `contains`")
-		let sig = try self.project.funcSignatures.get(callee) otherwise panic("ProvenanceTracer.traceCall: '{String.from(callee)}' left the signature registry after `contains`")
+		let calleeIndex = self.callSites.calleeAt(site)
 		self.noteDependency(calleeIndex)
-		self.slotNamedArgs(sig, args: args, argLabels: argLabels)
+		self.slotCallSiteArgs(site, argCount: args.count())
 		self.storeThroughSummary(calleeIndex, args: args)
 		self.bindThroughSummary(calleeIndex, args: args)
 
@@ -2206,6 +2526,63 @@ module type ProvenanceTracer
 			end 'eachReceiver'
 		end 'eachStored'
 	end 'storeThroughSummary'
+
+	// The call-site row of the walked body's next call — see `CallSites`. Every pass of a walk and the staging
+	// run that follows a trace meet a body's calls in one order, so the cursor is what names the row.
+	function takeCallSite() returns ElementIndex
+		let site = self.callSiteCursor
+		self.callSiteCursor = site + 1
+		return site
+	end 'takeCallSite'
+
+	// The next call's row, resolving the callee when this walk is the body's first.
+	function nextCallSite(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray) returns ElementIndex
+		let site = self.takeCallSite()
+
+		if not self.resolvingCallSites 'filed'
+			return site
+		end 'filed'
+
+		if site != self.callSites.nextRow() 'outOfStep'
+			panic("ProvenanceTracer.nextCallSite: call {site} of a body being resolved is not the next row ({self.callSites.nextRow()})")
+		end 'outOfStep'
+
+		if self.calleeHasSummary(callee) 'described'
+			self.slotNamedArgs(try self.project.funcSignatures.get(callee) otherwise panic("ProvenanceTracer.nextCallSite: '{String.from(callee)}' left the signature registry after `contains`"), args: args, argLabels: argLabels)
+			self.callSites.fileDescribedRow(try self.funcIndexByName.get(callee) otherwise panic("ProvenanceTracer.nextCallSite: '{String.from(callee)}' left the function index after `contains`"), paramCount: self.calleeParamCount, slottedArgs: self.argPositions)
+			return site
+		end 'described'
+
+		self.callSites.fileRuntimeRow(runtimeCalleeStoreShape(callee), isBookkeeping: ownershipBookkeepingCallee(callee), forksAnImage: forksImageData(callee), linksANode: linksANewNodeCallee(callee))
+		return site
+	end 'nextCallSite'
+
+	// A pass files a resolving body's rows once it has met every call; every later reader must meet exactly as many.
+	function finishCallSitePass(funcIndex FuncIndex)
+		if self.resolvingCallSites 'filedThisPass'
+			self.callSites.closeRows(funcIndex, firstRow: self.callSiteFirstRow)
+			self.resolvingCallSites = false
+			return
+		end 'filedThisPass'
+
+		self.requireMetEveryCallSite(funcIndex)
+	end 'finishCallSitePass'
+
+	function requireMetEveryCallSite(funcIndex FuncIndex)
+		if self.callSiteCursor != self.callSites.ranges.stopRowOf(funcIndex) 'outOfStep'
+			panic("ProvenanceTracer.requireMetEveryCallSite: function {funcIndex} stopped at call-site row {self.callSiteCursor}, not the {self.callSites.ranges.stopRowOf(funcIndex)} its first walk filed")
+		end 'outOfStep'
+	end 'requireMetEveryCallSite'
+
+	// The argument positions a described call site resolved to, as `slotNamedArgs` leaves them.
+	function slotCallSiteArgs(row ElementIndex, argCount ParamCount)
+		self.argPositions.clear()
+		self.calleeParamCount = self.callSites.paramCountAt(row)
+
+		for i in 0 upto argCount 'eachArg'
+			self.argPositions.push(self.callSites.argPositionAt(row, argIndex: i))
+		end 'eachArg'
+	end 'slotCallSiteArgs'
 
 	// Each argument's parameter position, by its label.
 	function slotNamedArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray)
@@ -2527,7 +2904,7 @@ module type ProvenanceTracer
 	// ⭐ **A WRITE THROUGH A VALUE THAT MAY BE A PARAMETER'S RECORD IS A WRITE OF THAT PARAMETER.** `var x =
 	// pass(p)` then `x.append(…)` writes `p`, so the call handing `x` to a written position is an edge from
 	// `p` exactly as `grow(p)` is, and a container method writing `x` as its receiver writes `p` exactly as
-	// `p.push(9)` does (`seedReceiverWrites`). `collectCallParamEdges` records an argument that IS a parameter,
+	// `p.push(9)` does (`stageParamEdges`). `collectCallParamEdges` records an argument that IS a parameter,
 	// and the parser a receiver that is one; this adds every argument and receiver whose `identity` names one.
 	//
 	// ⚖ **AN ARGUMENT OR RECEIVER THAT MAY LIE WITHIN A PARAMETER'S RECORD WRITES THE RECORD RELATION ONLY.**
@@ -2538,34 +2915,31 @@ module type ProvenanceTracer
 	//
 	// Answers (the identity relation, the record relation), each `base` itself when it gained no row.
 	export function collectProvenanceParamEdges(base CallParamEdges, funcNames FunctionNameIndex) returns (CallParamEdges, CallParamEdges)
-		let ir = self.module
 		var aliasRows = CallParamEdges.create()
 		var withinRows = CallParamEdges.create()
 
 		for i in 0 upto funcNames.functions.count() 'eachFunc'
-			let func = try funcNames.functions.get(i) otherwise panic("collectProvenanceParamEdges: functions.get OOB at {i} below its own count")
-
-			if not self.anyParameterHoldsARecord(func) 'nothingOfItsOwnToWrite'
-				continue
-			end 'nothingOfItsOwnToWrite'
-
-			self.traceParameters(func)
-			self.seedReceiverWrites(func, index: i)
-
-			for blockRef in func.blockRefs 'eachBlock'
-				let block = try ir.blocks.get(blockRef) otherwise panic("collectProvenanceParamEdges: blockRef from func.blockRefs not in module.blocks")
-
-				for opIdx in block.opRefs 'eachOp'
-					self.addParameterRecordEdgesAt(func, op: try ir.ops.get(opIdx) otherwise panic("collectProvenanceParamEdges: opIdx {opIdx} not in module.ops"), callerIndex: i, aliasRows: aliasRows, withinRows: withinRows)
-				end 'eachOp'
-			end 'eachBlock'
+			_ = widenSummaryColumn(self.receiverWrites.identity, index: i, by: summaryMaskAt(self.stagedEdges.written, index: i))
+			_ = widenSummaryColumn(self.receiverWrites.within, index: i, by: summaryMaskAt(self.stagedEdges.writtenWithin, index: i))
+			self.stagedEdges.alias.appendRowsOf(i, into: aliasRows)
+			self.stagedEdges.within.appendRowsOf(i, into: withinRows)
 		end 'eachFunc'
 
+		self.stagedEdges.release()
 		let identityEdges = base.widenedBy(aliasRows)
 		return (identityEdges, identityEdges.widenedBy(withinRows))
 	end 'collectProvenanceParamEdges'
 
-	function seedReceiverWrites(func IrFunction, index FuncIndex)
+	// Files what the parameter trace just made of `func` reaches — see `StagedParamEdges`. It reads the call
+	// sites that trace's walk just filed, in the order the walk met them, so a callee is resolved once for both.
+	function stageParamEdges(func IrFunction, index FuncIndex)
+		if not self.anyParameterHoldsARecord(func) 'nothingOfItsOwnToWrite'
+			return
+		end 'nothingOfItsOwnToWrite'
+
+		let ir = self.module
+		let aliasStart = self.stagedEdges.alias.rows.count()
+		let withinStart = self.stagedEdges.within.rows.count()
 		var written = NoParamPositions
 		var writtenWithin = NoParamPositions
 
@@ -2574,9 +2948,19 @@ module type ProvenanceTracer
 			writtenWithin = writtenWithin or self.parametersReachedBy(func, arg: site.receiver, asksIdentity: false)
 		end 'eachWrite'
 
-		_ = widenSummaryColumn(self.receiverWrites.identity, index: index, by: written)
-		_ = widenSummaryColumn(self.receiverWrites.within, index: index, by: writtenWithin)
-	end 'seedReceiverWrites'
+		self.callSiteCursor = try self.callSites.ranges.firstRowOf(index) otherwise panic("ProvenanceTracer.stageParamEdges: '{String.from(func.name)}' was just traced, so its walk filed its calls")
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.stageParamEdges: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				self.addParameterRecordEdgesAt(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.stageParamEdges: opIdx {opIdx} not in module.ops"), callerIndex: index)
+			end 'eachOp'
+		end 'eachBlock'
+
+		self.requireMetEveryCallSite(index)
+		self.stagedEdges.file(index, aliasStart: aliasStart, withinStart: withinStart, receiverWritten: written, receiverWrittenWithin: writtenWithin)
+	end 'stageParamEdges'
 
 	// Fill `argIdentityReach` and `argWithinReach` for `args`, answering whether any argument reaches a parameter —
 	// the gate in front of every summary lookup, since almost no argument does.
@@ -2616,18 +3000,18 @@ module type ProvenanceTracer
 		return typed
 	end 'parametersReachedBy'
 
-	function addParameterRecordEdgesAt(func IrFunction, op MaxonOp, callerIndex FuncIndex, aliasRows CallParamEdges, withinRows CallParamEdges)
+	function addParameterRecordEdgesAt(func IrFunction, op MaxonOp, callerIndex FuncIndex)
 		match op 'op'
-			call(_, callee, args, argLabels, _, _, _, _) then self.addNamedCallRecordEdges(func, callee: callee, args: args, argLabels: argLabels, callerIndex: callerIndex, aliasRows: aliasRows, withinRows: withinRows)
-			tryCall(_, _, callee, args, argLabels, _, _, _, _) then self.addNamedCallRecordEdges(func, callee: callee, args: args, argLabels: argLabels, callerIndex: callerIndex, aliasRows: aliasRows, withinRows: withinRows)
-			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.addWitnessRecordEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex, aliasRows: aliasRows, withinRows: withinRows)
-			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.addWitnessRecordEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex, aliasRows: aliasRows, withinRows: withinRows)
+			call(_, _, args, _, _, _, _, _) then self.addNamedCallRecordEdges(func, args: args, callerIndex: callerIndex)
+			tryCall(_, _, _, args, _, _, _, _, _) then self.addNamedCallRecordEdges(func, args: args, callerIndex: callerIndex)
+			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.addWitnessRecordEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex)
+			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.addWitnessRecordEdges(func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, callerIndex: callerIndex)
 
 			// ⭐ **A SPAWN CARRIES THE ALIAS EDGE TOO, AND NEEDS IT MORE THAN A DIRECT CALL DOES**: the spawn takes
 			// its own reference to a managed argument (`Parser.transferAsyncSpawnArgs`), so the value standing at
 			// the op is that RETAIN and never the parameter's own — without this arm nothing relates the two and
 			// the target's writes stop at its own frame.
-			asyncCall(_, callee, args, argLabels, _, _, _) then self.addNamedCallRecordEdges(func, callee: callee, args: args, argLabels: argLabels, callerIndex: callerIndex, aliasRows: aliasRows, withinRows: withinRows)
+			asyncCall(_, _, args, _, _, _, _) then self.addNamedCallRecordEdges(func, args: args, callerIndex: callerIndex)
 
 			// An indirect call has no summary to carry an edge to, for `collectCallParamEdgesAt`'s reason, and a
 			// message hands its arguments to another green thread.
@@ -2666,38 +3050,43 @@ module type ProvenanceTracer
 		end 'op'
 	end 'addParameterRecordEdgesAt'
 
-	function addNamedCallRecordEdges(func IrFunction, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, callerIndex FuncIndex, aliasRows CallParamEdges, withinRows CallParamEdges)
-		if not self.argumentsReachAParameter(func, args: args) or not self.calleeHasSummary(callee) 'noEdgeToRecord'
+	function addNamedCallRecordEdges(func IrFunction, args ValueIdArray, callerIndex FuncIndex)
+		let site = self.takeCallSite()
+
+		if not self.callSites.rowIsDescribed(site) 'noSummaryToCarryAnEdge'
+			return
+		end 'noSummaryToCarryAnEdge'
+
+		if not self.argumentsReachAParameter(func, args: args) 'noEdgeToRecord'
 			return
 		end 'noEdgeToRecord'
 
-		let calleeIndex = try self.funcIndexByName.get(callee) otherwise panic("ProvenanceTracer.addNamedCallRecordEdges: '{String.from(callee)}' left the function index after `contains`")
-		let sig = try self.project.funcSignatures.get(callee) otherwise panic("ProvenanceTracer.addNamedCallRecordEdges: '{String.from(callee)}' left the signature registry after `contains`")
-		self.slotNamedArgs(sig, args: args, argLabels: argLabels)
+		let calleeIndex = self.callSites.calleeAt(site)
+		self.slotCallSiteArgs(site, argCount: args.count())
 
 		for i in 0 upto args.count() 'eachArg'
 			if self.argIsSlotted(i) 'slotted'
-				self.addArgumentRecordEdges(i, calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: self.argPositionAt(i), aliasRows: aliasRows, withinRows: withinRows)
+				self.addArgumentRecordEdges(i, calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: self.argPositionAt(i))
 			end 'slotted'
 		end 'eachArg'
 	end 'addNamedCallRecordEdges'
 
-	function addWitnessRecordEdges(func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, callerIndex FuncIndex, aliasRows CallParamEdges, withinRows CallParamEdges)
+	function addWitnessRecordEdges(func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, callerIndex FuncIndex)
 		if not self.argumentsReachAParameter(func, args: args) 'noEdgeToRecord'
 			return
 		end 'noEdgeToRecord'
 
 		for impl in self.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex).impls 'eachImpl'
 			for i in 0 upto args.count() 'eachArg'
-				self.addArgumentRecordEdges(i, calleeIndex: impl, callerIndex: callerIndex, calleeParam: i, aliasRows: aliasRows, withinRows: withinRows)
+				self.addArgumentRecordEdges(i, calleeIndex: impl, callerIndex: callerIndex, calleeParam: i)
 			end 'eachArg'
 		end 'eachImpl'
 	end 'addWitnessRecordEdges'
 
 	// Argument `argIndex`'s edges, off the reach `argumentsReachAParameter` recorded for it.
-	function addArgumentRecordEdges(argIndex ParamCount, calleeIndex FuncIndex, callerIndex FuncIndex, calleeParam ParamCount, aliasRows CallParamEdges, withinRows CallParamEdges)
-		recordAliasEdges(try self.argIdentityReach.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: identity reach OOB at argument {argIndex}"), calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: calleeParam, edges: aliasRows)
-		recordAliasEdges(try self.argWithinReach.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: within reach OOB at argument {argIndex}"), calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: calleeParam, edges: withinRows)
+	function addArgumentRecordEdges(argIndex ParamCount, calleeIndex FuncIndex, callerIndex FuncIndex, calleeParam ParamCount)
+		recordAliasEdges(try self.argIdentityReach.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: identity reach OOB at argument {argIndex}"), calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: calleeParam, edges: self.stagedEdges.alias.rows)
+		recordAliasEdges(try self.argWithinReach.get(argIndex) otherwise panic("ProvenanceTracer.addArgumentRecordEdges: within reach OOB at argument {argIndex}"), calleeIndex: calleeIndex, callerIndex: callerIndex, calleeParam: calleeParam, edges: self.stagedEdges.within.rows)
 	end 'addArgumentRecordEdges'
 
 	// ⭐⭐ **THE OWNERSHIP MODEL'S DOORS, WHERE THE PARSER COULD NOT DECIDE BY NAME.** A record is reachable through
@@ -2817,7 +3206,7 @@ module type ProvenanceTracer
 			end 'aVar'
 		end 'eachGlobal'
 
-		self.traceParameters(init)
+		self.traceParameters(init, index: initIndex)
 
 		for blockRef in init.blockRefs 'eachBlock'
 			let block = try self.module.blocks.get(blockRef) otherwise panic("ProvenanceTracer.checkVarInitializersTakeNoLetRecord: blockRef from `__module_init` not in module.blocks")
@@ -5228,49 +5617,16 @@ module type ProvenanceTracer
 		self.unionInto(self.setOf(column, value: to), from: self.setOf(from, value: source))
 	end 'unionMask'
 
-	// `key`'s set, minted empty on the first store into it.
-	function slotFor(key StoreSlotKey) returns RootSetId
-		let known = self.slotOfThisWalk(self.storeSlots, key: key)
-
-		if known != NoStoreSlotSet 'known'
+	// `key`'s set in `table`, minted empty on the first store into it.
+	function slotIn(table StoreSlotTable, key StoreSlotKey) returns RootSetId
+		if let known = try table.setAt(key) 'known'
 			return known
 		end 'known'
 
 		let slot = self.sets.addSet()
-		self.storeSlots.upsert(key, value: self.stampedWithThisWalk(slot))
+		table.file(key, slot: slot)
 		return slot
-	end 'slotFor'
-
-	function deepSlotFor(key StoreSlotKey) returns RootSetId
-		let known = self.slotOfThisWalk(self.deepSlots, key: key)
-
-		if known != NoStoreSlotSet 'known'
-			return known
-		end 'known'
-
-		let slot = self.sets.addSet()
-		self.deepSlots.upsert(key, value: self.stampedWithThisWalk(slot))
-		return slot
-	end 'deepSlotFor'
-
-	// `index`'s set for `key` in the walk being traced, or `NoStoreSlotSet`.
-	function slotOfThisWalk(index StoreSlotIndex, key StoreSlotKey) returns RootSetId
-		let stamped = try index.get(key) otherwise NoStampedStoreSlot
-
-		if (stamped shr StoreSlotWalkShift) != (self.storeSlotWalk as StampedStoreSlot) 'anotherWalks'
-			return NoStoreSlotSet
-		end 'anotherWalks'
-
-		return (stamped and StoreSlotSetMask) as RootSetId
-	end 'slotOfThisWalk'
-
-	function stampedWithThisWalk(slot RootSetId) returns StampedStoreSlot
-		if slot > (StoreSlotSetMask as RootSetId) 'pastTheLowWord'
-			panic("ProvenanceTracer.stampedWithThisWalk: set {slot} does not fit the low word of a stamped slot")
-		end 'pastTheLowWord'
-
-		return ((self.storeSlotWalk as StampedStoreSlot) shl StoreSlotWalkShift) or (slot as StampedStoreSlot)
-	end 'stampedWithThisWalk'
+	end 'slotIn'
 
 	function setBit(column ProvenanceColumn, value ValueId, rank RootRank)
 		self.sets.addRank(self.setOf(column, value: value), rank: rank)
@@ -5850,6 +6206,14 @@ end 'slotReadIsLoadOp'
 function storeSlotKey(addr ValueId, offset ByteOffset) returns StoreSlotKey
 	return ((addr as StoreSlotKey) shl StoreSlotValueShift) or (offset as StoreSlotKey)
 end 'storeSlotKey'
+
+function storeSlotAddress(key StoreSlotKey) returns ValueId
+	return (key shr StoreSlotValueShift) as ValueId
+end 'storeSlotAddress'
+
+function storeSlotOffset(key StoreSlotKey) returns StoreSlotKey
+	return key and StoreSlotOffsetMask
+end 'storeSlotOffset'
 
 function opDefinesAGlobalAddress(op MaxonOp) returns bool
 	return match op 'op'
