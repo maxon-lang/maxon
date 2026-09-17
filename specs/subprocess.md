@@ -773,23 +773,24 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// A child writing FAR more than one OS pipe buffer (65,536 bytes on macOS,
-	// ~4 KiB on Windows), on BOTH streams at once. 20,000 numbered lines is
-	// ~108 KB per stream. The child blocks in write() the moment the buffer
+	// ~4 KiB on Windows), on BOTH streams at once: 1,100 lines of 100 characters
+	// is over 110 KB per stream. The child blocks in write() the moment the buffer
 	// fills, so the parent has to be reading both streams WHILE it waits for the
 	// child to exit: a runtime that waits first and drains afterwards deadlocks
 	// here, and one that drains stdout to EOF before touching stderr deadlocks on
-	// whichever stream it left alone. Both were real (arm64-macOS reported the
-	// deadlock as the caller's timeout).
+	// whichever stream it left alone. The volume comes from long lines rather than
+	// many iterations because the suite runs below normal priority, where a shell
+	// loop of tens of thousands of iterations can starve past the run deadline.
 	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
-	argv.push("(for /L %i in (1,1,20000) do @echo %i) & (for /L %j in (1,1,20000) do @echo %j 1>&2)")
+	argv.push("(for /L %i in (1,1,1100) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789) & echo stdout-tail & (for /L %j in (1,1,1100) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 1>&2) & echo stderr-tail 1>&2")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
 	var argv = StringArray.create()
 	argv.push("-c")
-	argv.push("i=1; while [ $i -le 20000 ]; do echo $i; echo $i 1>&2; i=$((i+1)); done")
+	argv.push("i=1; while [ $i -le 1100 ]; do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789; echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 1>&2; i=$((i+1)); done; echo stdout-tail; echo stderr-tail 1>&2")
 	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
 	if not result.succeeded() 'check-success'
@@ -805,10 +806,10 @@ function main() returns ExitCode
 	end 'check-stderr-size'
 	// The LAST line, which only arrives if the capture ran to the child's exit
 	// rather than stopping at the first buffer.
-	if not result.stdout.contains("20000") 'check-stdout-tail'
+	if not result.stdout.contains("stdout-tail") 'check-stdout-tail'
 		return 6
 	end 'check-stdout-tail'
-	if not result.stderr.contains("20000") 'check-stderr-tail'
+	if not result.stderr.contains("stderr-tail") 'check-stderr-tail'
 		return 7
 	end 'check-stderr-tail'
 	return 0
