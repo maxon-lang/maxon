@@ -162,8 +162,38 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
+error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).
 note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
+```
+
+<!-- test: an-array-of-a-handle-holding-struct-compiles-when-nothing-copies-it -->
+The refusal above answers for a COPY. The same element in an array that is only pushed to, walked and counted
+is legal.
+```maxon
+type Holder
+	export var f as __ManagedFile
+	export static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Holder'
+typealias Holders = Array with Holder
+function main() returns ExitCode
+	var a = Holders.create()
+	print("{a.count()}\n")
+	a.push(Holder.create(try __ManagedFile.openRead(b"no-such-file.bin".managed) otherwise return 3))
+
+	for _ in a 'each'
+		print("walked\n")
+	end 'each'
+
+	return a.count() as ExitCode
+end 'main'
+```
+```stdout
+0
+```
+```exitcode
+3
 ```
 
 <!-- test: clone-of-an-array-of-lists-is-deep -->

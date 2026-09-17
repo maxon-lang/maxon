@@ -5435,7 +5435,7 @@ export union ManagedCascadeStrategy
 	managedElements(containerEntry ByteArray, elementEntry ByteArray)
 
 	// Not deep-cloneable by this rung's mechanism — a compiler-owned aggregate (`__ManagedFile`), a
-	// base-layout-less generic instance with no runtime copy of its own (a `Vector`), an existential, or a
+	// base-layout-less generic instance with no runtime copy of its own (a cursor), an existential, or a
 	// container whose element is not itself `direct` (an array of OS handles). The front end
 	// rejects such an element with a positioned E2015.
 	unsupported
@@ -5615,7 +5615,7 @@ end 'compilerOwnedAggregateOf'
 // element's own strategy comes back through the METHOD `containerElementCascadeStrategy` (which resolves the
 // element in the index's own interner), so this free function never has to reach the index's private `typeNames`.
 function instanceCascadeStrategy(signatures ProgramSignatures, id GenericInstanceId, asElement bool, action CascadeAction) returns ManagedCascadeStrategy
-	if signatures.isArrayInstance(id) 'theManagedRecord'
+	if signatures.isManagedBufferRecordInstance(id) 'theManagedRecord'
 		return elementRecordCascadeStrategy(signatures, id: id, entries: managedRecordCascadeEntries(action), asElement: asElement, action: action)
 	end 'theManagedRecord'
 
@@ -5641,11 +5641,9 @@ function instanceCascadeStrategy(signatures ProgramSignatures, id GenericInstanc
 		return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action))
 	end 'serviceHandle'
 
-	// ⛔ A base-layout-less instance with no runtime copy of its own (a `Vector`, a cursor) has no field list to
-	// cascade over either, so nothing synthesizes its cloner — `declaredInstanceSupportsDeepClone` refuses it at
-	// the SAME tier, which is what keeps this strategy from naming a symbol `installGenericInstanceCascades` never
-	// builds (the `__clone___ManagedFile` shape `managedNameCascadeStrategy`'s header records as a measured backend
-	// panic).
+	// ⛔ A base-layout-less instance with no runtime copy of its own (a cursor) has no field list to cascade over
+	// either, so nothing synthesizes its cloner — `declaredInstanceSupportsDeepClone` refuses it at the SAME tier,
+	// which is what keeps this strategy from naming a symbol `installGenericInstanceCascades` never builds.
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
 		return ManagedCascadeStrategy.unsupported
 	end 'noSynthesizedCloner'
@@ -23186,35 +23184,25 @@ export type ProgramSignatures
 		return self.isVectorBaseName(self.genericInstanceBaseName(id))
 	end 'isVectorInstance'
 
-	// ⭐⭐ **WHICH CONTAINERS' RECORD IS THE FUSED MANAGED ONE — i.e. is born through `__managed_create`
-	// (S2u).** `Parser.emitSizedContainerRecord` IS `emitArrayCreateOp` plus the `__managed_resize` that
-	// publishes the N slots, so a `Vector` reaches the opaque, descriptor-reading create by exactly the route
-	// an `Array` does. Its readers are `containerCreateCall`, which goes on to EMIT that very callee, and
-	// the descriptor family below, which is defined FROM it.
+	// Is instance `id`'s value the fused managed buffer record, born through `__managed_create`? A `Vector`'s
+	// record is an `Array`'s — the two differ in what may be done to them, not in how the bytes sit — so its
+	// create, size, drop, clone and transfer walks are the same entries for both.
 	//
-	// ⚠⚠ **IT WAS ALSO "the ONE family test the descriptor-need SEED and the descriptor-reading EMIT both
-	// read", AND SINCE W134 IT IS NOT — that is `opaqueInstanceCreateReadsTheDescriptor` below**, because a
-	// chain is born through `__list_create` and still reads the same descriptor word. The DISCIPLINE the two
-	// halves of that pairing owe each other is unchanged, and it is a compiler PANIC rather than a wrong
-	// answer when they part: **MEASURED**, the opaque refusal relaxed with the family still spelled
-	// `isArrayInstance`, `Holder.create()` writing `Slot.create()` reached *"appendOpaqueArrayCreate: opaque
-	// `Array.create()` in 'Holder.create' but the function carries no layout descriptor parameter"*. It is
-	// `opaqueContainerConstructionAt`'s own stated discipline, one axis over: that door already reads the SAME
-	// `containerElementIsOpaque` the emit branches on, and this is the other half of the same pairing.
-	export function instanceCreateBuildsTheManagedRecord(id GenericInstanceId) returns bool
+	// ⚠ The descriptor-need SEED and the descriptor-reading EMIT ask the WIDER family below, never this one: a
+	// family narrower at one side than the other is a compiler PANIC (`appendOpaqueArrayCreate: … the function
+	// carries no layout descriptor parameter`), not a wrong answer.
+	export function isManagedBufferRecordInstance(id GenericInstanceId) returns bool
 		return self.isArrayInstance(id) or self.isVectorInstance(id)
-	end 'instanceCreateBuildsTheManagedRecord'
+	end 'isManagedBufferRecordInstance'
 
 	// ⭐⭐ **WHICH CONTAINERS' `create` READS THE ENCLOSING LAYOUT DESCRIPTOR when its element is OPAQUE — the
 	// family the descriptor-need SEED (`Parser.opaqueContainerConstructionAt`) and the descriptor-reading EMIT
 	// (`LowerMaxonToStd.isOpaqueContainerCreateCall`) both read (W134).** It is a WIDER family than the one
-	// above, and the two must stay apart: `instanceCreateBuildsTheManagedRecord` names the containers born
-	// through `__managed_create` — which is what `containerCreateCall` goes on to EMIT — while a chain is born
-	// through `__list_create` and yet reads the very same `destroyFunc@40` word out of the very same descriptor.
-	// Fusing them would make one of the two sentences false; asking them separately at each door is what the
-	// header above records costing a compiler PANIC.
+	// above, and the two must stay apart: `isManagedBufferRecordInstance` names the containers born through
+	// `__managed_create` — which is what `containerCreateCall` goes on to EMIT — while a chain is born through
+	// `__list_create` and yet reads the very same `destroyFunc@40` word out of the very same descriptor.
 	export function opaqueInstanceCreateReadsTheDescriptor(id GenericInstanceId) returns bool
-		return self.instanceCreateBuildsTheManagedRecord(id) or self.isManagedListInstance(id)
+		return self.isManagedBufferRecordInstance(id) or self.isManagedListInstance(id)
 	end 'opaqueInstanceCreateReadsTheDescriptor'
 
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
@@ -24475,7 +24463,7 @@ export type ProgramSignatures
 	// descriptor at RUN TIME (`Parser.emitOpaqueContainerCreateOp` → `LowerMaxonToStd.appendOpaqueContainerCreate`),
 	// so whoever holds an opaque instance takes that road *before* asking for a stamp. This panic is what makes
 	// "the caller branched" a checked property of both producers rather than a convention one of them could
-	// drift out of — the same discipline `instanceCreateBuildsTheManagedRecord` states for the seed/emit pair.
+	// drift out of — the same discipline `isManagedBufferRecordInstance` states for the seed/emit pair.
 	//
 	// ⚠ The top-level asker cannot reach it TODAY for a structural reason worth writing down rather than
 	// relying on: a `.data` global is not inside a generic body, so no type parameter is in scope for its
@@ -24779,7 +24767,7 @@ export type ProgramSignatures
 			return ContainerCreateCall.create(ListCreateName, stamps: stamps, elementAdd: ContainerElementAdd.unsupported)
 		end 'managedList'
 
-		if not self.instanceCreateBuildsTheManagedRecord(id) 'notACreatableContainer'
+		if not self.isManagedBufferRecordInstance(id) 'notACreatableContainer'
 			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
@@ -24837,15 +24825,14 @@ export type ProgramSignatures
 		return managedFieldCascadeStrategy(self, typeNames: self.typeNames, fieldType: self.containerElementType(id), asElement: true, action: action)
 	end 'containerElementCascadeStrategy'
 
-	// ⭐ **IS THIS INSTANCE ONE OF THE TWO ELEMENT-BEARING RECORDS THIS COMPILER OWNS** — the managed buffer and
-	// the chain, whose copy and drop are a runtime WALK rather than a field cascade, and which therefore have no
-	// base layout for the declared-instance walks to read. Written once because three doors ask it and the
-	// negation is load-bearing at one of them: `instanceSupportsDeepClone` routes everything ELSE to the field
-	// walk, so a spelling that drifted here would send a record into a walk it has no fields for. It is
-	// deliberately NOT `opaqueInstanceCreateReadsTheDescriptor`, whose left half is about which containers are
-	// BORN through `__managed_create`; the header there records what fusing two such families cost.
+	// ⭐ **IS THIS INSTANCE AN ELEMENT-BEARING RECORD THIS COMPILER OWNS** — the managed buffer (an `Array` or a
+	// `Vector`) or the chain, whose copy and drop are a runtime WALK rather than a field cascade, and which
+	// therefore have no base layout for the declared-instance walks to read. The negation is load-bearing:
+	// `instanceGraphSupportsDeepClone` routes everything ELSE to the field walk, which refuses a layout-less
+	// instance. It is deliberately NOT `opaqueInstanceCreateReadsTheDescriptor`, which is about how a container
+	// is BORN, not about how its record is walked.
 	export function isElementBearingRecordInstance(id GenericInstanceId) returns bool
-		return self.isArrayInstance(id) or self.isManagedListInstance(id)
+		return self.isManagedBufferRecordInstance(id) or self.isManagedListInstance(id)
 	end 'isElementBearingRecordInstance'
 
 	// ⭐ **IS THIS INSTANCE A MANAGED-ELEMENT RECORD — the shape whose element cloner is the one-argument THUNK
@@ -26554,26 +26541,12 @@ export type ProgramSignatures
 	// the base struct's `sizeBytes` IS the instance's box size. This is the descriptor's `size@0` field, and
 	// the interner-owning door lowering computes it through.
 	export function genericInstanceBoxSize(id GenericInstanceId) returns ByteOffset
-		if self.isArrayInstance(id) 'array'
+		if self.isManagedBufferRecordInstance(id) 'managedBuffer'
 			return ManagedRecordBytes as ByteOffset
-		end 'array'
+		end 'managedBuffer'
 
-		// ⚠ A `Set` arm (the fixed 48-byte fused hash-table record) and a `Map` arm (the same record with a
-		// value column appended) stood here until W105, and a `List` arm (the fixed chain header) until W153.
-		// All three are declared generics now, so each one's box size is its own base `StructLayout`'s — the
-		// fall-through every declared generic takes. The chain header itself is still fixed and still has no
-		// base struct; it is reached under the `__ManagedList` arm below, which is the type that owns it.
-		// A `Vector` instance's box is an `Array`'s — the SAME fused record, because a fixed-size buffer and a
-		// growable one differ in what may be done to them and not in how the bytes sit (see
-		// `VectorBuiltinBaseName`). It is a separate arm and not a widened `isArrayInstance` because the two
-		// are separate TYPES; only their layouts coincide.
-		if self.isVectorInstance(id) 'vector'
-			return ManagedRecordBytes as ByteOffset
-		end 'vector'
-
-		// A `__ManagedList` instance's box IS a `List`'s — the same chain header, allocated by the same
-		// `__list_create` (see `ManagedListBuiltinBaseName`). A separate arm and not a widened
-		// `isListInstance` for the `Vector` arm's reason: two TYPES whose layouts coincide.
+		// A `__ManagedList` instance's box is the fixed chain header `__list_create` allocates (see
+		// `ManagedListBuiltinBaseName`); a declared `List`, `Set` or `Map` box is its base `StructLayout`'s.
 		if self.isManagedListInstance(id) 'managedList'
 			return ListRecordBytes as ByteOffset
 		end 'managedList'
@@ -29096,10 +29069,9 @@ export type ProgramSignatures
 	// `direct`-clonable element (String / struct / boxed union / trivial-element array — a byte-blit copies a
 	// TRIVIAL element correctly with no cloner at all). An instantiation whose argument is a MANAGED type
 	// NOTHING can deep-clone — a compiler-owned aggregate, an existential, or a base-struct-less generic
-	// instance with no runtime copy of its own (a `Vector`; a DECLARED generic's instance has its own
-	// `__clone_<mangled>` since W162, and a managed-element container its one-argument thunk since G18) — has
-	// no `copyFunc`,
-	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
+	// instance with no runtime copy of its own (a cursor; a DECLARED generic's instance has its own
+	// `__clone_<mangled>`, and a managed-element container its one-argument thunk) — has no `copyFunc`, so a
+	// copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
 	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
 	// is `instanceWithTypeArgKind`'s business and is described there once; what this gate adds is the KIND —
 	// each instance's argument at that parameter's position read through the SAME
@@ -29424,27 +29396,15 @@ export type ProgramSignatures
 			return GtPromiseDropName
 		end 'promise'
 
-		// An `Array` drops through `__managed_decref` — which frees its external element buffer (the one thing a
-		// generic `__mm_decref` cannot reach) and then the record, mirroring how a String drops through
-		// `__str_decref`. Its elements are trivial at this slice, so there is no element walk.
-		if self.isArrayInstance(id) 'array'
+		// The managed buffer record (an `Array` or a `Vector`) drops through `__managed_decref`, which frees its
+		// external element buffer — the one thing a generic `__mm_decref` cannot reach — and then the record.
+		if self.isManagedBufferRecordInstance(id) 'managedBuffer'
 			return ManagedDecrefName
-		end 'array'
+		end 'managedBuffer'
 
-		// ⚠ A `Set` arm (`__set_decref`) and a `Map` arm (`__map_decref`) stood here until W105, and a `List`
-		// arm (`__list_decref`) until W153. All three are declared generics now, so each drops through its own
-		// `__destruct_<mangled>` cascade, which releases the fields the declaration writes — for a `List` that
-		// is the one `chain` field, whose own drop is the `__ManagedList` arm below. The chain teardown that
-		// walks head→tail destroying each element through the stamped `element_drop@24` is therefore reached
-		// through the field rather than through the box, and it is the same single walk it always was.
-		// A `Vector` drops through `__managed_decref` — its record IS an `Array`'s (see `genericInstanceBoxSize`'s
-		// vector arm), so the buffer it must free and the record it must reclaim are the ones that entry knows.
-		if self.isVectorInstance(id) 'vector'
-			return ManagedDecrefName
-		end 'vector'
-
-		// A `__ManagedList` drops through `__list_decref` — its record IS a `List`'s and the nodes it links
-		// are the same nodes, so the teardown that knows them is the one that already exists.
+		// A `__ManagedList` drops through `__list_decref`, the teardown that walks its nodes. A declared `List`,
+		// `Set` or `Map` drops through its own `__destruct_<mangled>` cascade, which reaches the chain through its
+		// field.
 		if self.isManagedListInstance(id) 'managedList'
 			return ListDecrefName
 		end 'managedList'
@@ -31653,16 +31613,15 @@ export type ProgramSignatures
 	// is. That argument holds for every shape, which is why there is no `asElement` parameter on the gate —
 	// see `typeSupportsDeepClone`, which carries it.
 	//
-	// ⛔ **A BASE-LAYOUT-LESS INSTANCE IS REFUSED, AND IT IS THE SAME GATE THE DROP SIDE OPENS WITH.** A
-	// `Vector`/cursor instance has no base struct to read fields out of (`genericInstanceHasBaseLayout`), so
-	// nothing synthesizes a per-instance cloner for it and `instanceCascadeStrategy` answers `unsupported` at the
-	// same tier — a name the gate and the strategy disagreed about would admit a clone nobody can emit.
+	// ⛔ **A BASE-LAYOUT-LESS INSTANCE IS REFUSED, AND IT IS THE SAME GATE THE DROP SIDE OPENS WITH.** A cursor
+	// instance has no base struct to read fields out of (`genericInstanceHasBaseLayout`), so nothing synthesizes
+	// a per-instance cloner for it and `instanceCascadeStrategy` answers `unsupported` at the same tier — a name
+	// the gate and the strategy disagreed about would admit a clone nobody can emit.
 	//
-	// ⚠ **THE TWO ELEMENT-BEARING RECORDS NEVER REACH HERE, AND READING THEM AS "REFUSED" WAS THE W173 DEFECT.**
-	// Neither the managed buffer nor the chain has a base layout, and neither NEEDS one: their copy is a runtime
-	// WALK, not a field cascade, and the caller's own arms take both (`instanceSupportsDeepClone`). While only
-	// the buffer had an arm, every `Array with (List with Integer)` was refused for want of a field list its
-	// element does not have.
+	// ⚠ **THE ELEMENT-BEARING RECORDS NEVER REACH HERE.** The managed buffer (`Array`, `Vector`) and the chain
+	// have no base layout and need none: their copy is a runtime WALK, not a field cascade, and the caller's own
+	// arm takes them (`isElementBearingRecordInstance`). Read as "refused" here, a `Vector` field or payload
+	// would make its whole enclosing type uncopyable for want of a field list its record does not have.
 	//
 	// The cycle break is `cloneWalkMayDescendInto`'s, keyed by the MANGLED INSTANCE NAME in the same `visited`
 	// set the two NAME arms use — sound because the namespaces are disjoint BY CONSTRUCTION:

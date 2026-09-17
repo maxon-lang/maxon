@@ -66307,7 +66307,7 @@ export type Parser
 			return
 		end 'cloneable'
 
-		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which carries a payload this compiler cannot deep-clone: a `Vector` or any other generic instance with no base struct to cascade over, an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a value held at an interface type. String, struct, boxed-union, enum, `Array` and `List` payloads ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which carries a payload this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, a value held at an interface type, or a type that owns one of those. String, struct, boxed-union, enum, `Array`, `Vector`, `List` and declared-generic instance payloads ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireUnionCloneSupported'
 
 	// ⛔ **A UNION CARRYING A PROMISE IS NOT CLONEABLE, AND `aggregateSupportsDeepClone` CANNOT SEE IT** — that
@@ -66388,7 +66388,7 @@ export type Parser
 			return
 		end 'cloneable'
 
-		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Vector` field, or any other generic instance with no base struct to cascade over and no runtime copy of its own (each would need a per-instance cloner, and only a DECLARED generic's instance has one) — including one held INSIDE a struct field; an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all; a value held at an interface type; or a container holding containers that own managed elements (an `Array with (Array with String)`, a `List with (List with String)`). String, struct, boxed-union, enum, `Array`, `List` (managed elements included) and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all; a value held at an interface type; or a type that owns one of those, including one held INSIDE a struct field. String, struct, boxed-union, enum, `Array`, `Vector`, `List` (managed elements included) and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireStructCloneSupported'
 
 	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
@@ -75012,7 +75012,7 @@ export type Parser
 	// can hold only a SINGLE `(box) -> newBox` cloner (`__managed_*_opaque` branches on it: a byte-blit for a
 	// trivial element, a deep clone for a managed one). It REJECTS (E2015) only when SOME instantiation of the
 	// enclosing generic type substitutes a managed type nothing can deep-clone — an OS handle, a base-struct-less
-	// generic instance with no runtime copy of its own (a `Vector`), an existential, or a type that owns one of
+	// generic instance with no runtime copy of its own (a cursor), an existential, or a type that owns one of
 	// those — because such an element has no `copyFunc` and its copy would byte-blit a managed pointer and
 	// double-free it. The reject is per-INSTANTIATION (the shared body's element is opaque), so it enumerates the
 	// enclosing type's instances through `genericTypeFieldUncopyableInstantiation`, mirroring the concrete gate's
@@ -75044,7 +75044,7 @@ export type Parser
 			instance(offender) then self.blameLibraryRefusalOnInstantiation(offender)
 		end 'uncopyable'
 
-		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, a value held at an interface type, or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173, G18).", line: methodTok.line, column: methodTok.column)
 	end 'requireOpaqueArrayCopyable'
 
 	// ⭐⭐ **BLAME A LIBRARY-BODY REFUSAL ON THE INSTANTIATION THAT FORCED IT (BLAME).**
@@ -75752,9 +75752,9 @@ export type Parser
 	// / boxed union) now passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue`
 	// stamps the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call). What still
 	// REJECTS (E2015) is a managed element whose nested type NOTHING can clone: a base-struct-less
-	// generic instance with no runtime copy of its own (a `Vector` — W162 gave a DECLARED generic's
-	// instance its per-instance cloner, W173 gave the chain its runtime walk, and a layout-less one
-	// with neither still has none), an OS handle, or an existential.
+	// generic instance with no runtime copy of its own (a cursor — a DECLARED generic's instance has its
+	// per-instance cloner, and the managed buffer and the chain their runtime walks), an OS handle, or an
+	// existential.
 	//
 	// ⭐ **A CONTAINER WHOSE OWN ELEMENTS ARE MANAGED (an array-of-managed-arrays, a `List with String`) WAS ON
 	// THAT LIST UNTIL G18 AND IS NOT NOW.** Its copy is a 2-argument
@@ -75770,7 +75770,7 @@ export type Parser
 		end 'trivial'
 
 		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone — a `Vector` or other base-struct-less generic instance with no runtime copy, an OS handle, or a value held at an interface type. String / struct / boxed-union / declared-generic-instance / container elements, including nested String, struct, union, Array, chain and instance fields and a managed-element container of any depth, ARE supported.", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this compiler cannot deep-clone — an OS handle, or a value held at an interface type. String / struct / boxed-union / declared-generic-instance / container elements, including nested String, struct, union, Array, Vector, chain and instance fields and a managed-element container of any depth, ARE supported.", line: methodTok.line, column: methodTok.column)
 		end 'unsupportedNested'
 	end 'requireArrayElementCopyable'
 
@@ -86375,7 +86375,7 @@ export type Parser
 
 		let giid = self.valueNameId(value)
 
-		if not self.signatures.isArrayBaseName(self.signatures.genericInstanceBaseName(giid as GenericInstanceId)) 'notAnArray'
+		if not self.signatures.isArrayInstance(giid as GenericInstanceId) 'notAnArray'
 			return false
 		end 'notAnArray'
 

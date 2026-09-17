@@ -1969,3 +1969,184 @@ end 'main'
 ```exitcode
 33
 ```
+
+<!-- test: vector.an-array-element-may-hold-a-union-carrying-a-vector -->
+A record whose field is a union with a `Vector` payload is an ordinary array element: pushing it and
+reading it back copies nothing a `slice` would, so an array of such records is legal.
+```maxon
+typealias Flags = Vector with 4 bool
+typealias CellArray = Array with Cell
+
+union Content
+	empty
+	marked(flags Flags)
+end 'Content'
+
+type Cell
+	var content as Content
+
+	static function create(content Content) returns Self
+		return Self{content: content}
+	end 'create'
+
+	function firstFlag() returns bool
+		return match self.content 'kind'
+			empty gives false
+			marked(flags) gives try flags.get(0) otherwise false
+		end 'kind'
+	end 'firstFlag'
+end 'Cell'
+
+function main() returns ExitCode
+	var flags = Flags.create()
+	try flags.set(0, value: true) otherwise panic("index 0 is inside a 4-element vector")
+
+	var cells = CellArray.create()
+	cells.push(Cell.create(Content.marked(flags)))
+
+	for cell in cells 'each'
+		print("{cell.firstFlag()}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```stdout
+true
+```
+
+<!-- test: vector.a-slice-deep-copies-a-vector-held-in-a-field-and-in-a-union-payload -->
+A `Vector`'s record is an `Array`'s, so `slice` copies it like one: writing the original cells after the
+slice — replacing the union and setting a flag in the vector field — leaves the copies as they were.
+```maxon
+typealias Flags = Vector with 4 bool
+typealias CellArray = Array with Cell
+
+union Content
+	empty
+	marked(flags Flags)
+end 'Content'
+
+type Cell
+	var content as Content
+	var mask as Flags
+
+	static function create(content Content) returns Self
+		return Self{content: content, mask: Flags.create()}
+	end 'create'
+
+	function firstFlag() returns bool
+		return match self.content 'kind'
+			empty gives false
+			marked(flags) gives try flags.get(0) otherwise false
+		end 'kind'
+	end 'firstFlag'
+
+	function secondMaskBit() returns bool
+		return try self.mask.get(1) otherwise false
+	end 'secondMaskBit'
+
+	function overwrite()
+		self.content = Content.empty
+		try self.mask.set(1, value: true) otherwise panic("index 1 is inside a 4-element vector")
+	end 'overwrite'
+end 'Cell'
+
+function main() returns ExitCode
+	var flags = Flags.create()
+	try flags.set(0, value: true) otherwise panic("index 0 is inside a 4-element vector")
+
+	var cells = CellArray.create()
+	cells.push(Cell.create(Content.marked(flags)))
+	cells.push(Cell.create(Content.marked(flags)))
+
+	let copies = try cells.slice(0, endIndex: 2) otherwise return 1
+
+	for cell in cells 'overwriteOriginals'
+		cell.overwrite()
+	end 'overwriteOriginals'
+
+	for cell in cells 'eachOriginal'
+		print("original {cell.firstFlag()} {cell.secondMaskBit()}\n")
+	end 'eachOriginal'
+
+	for cell in copies 'eachCopy'
+		print("copy {cell.firstFlag()} {cell.secondMaskBit()}\n")
+	end 'eachCopy'
+
+	return 0
+end 'main'
+```
+```stdout
+original false true
+original false true
+copy true false
+copy true false
+```
+
+<!-- test: vector.a-record-holding-vectors-crosses-to-a-service-and-back -->
+A service boundary walks a `Vector` as it walks an `Array`: a record holding one in a field and one in a union
+payload crosses at the `spawn` and as a call argument, and a record the handler builds comes back as the reply.
+```maxon
+typealias Flags = Vector with 4 bool
+
+union Content
+	empty
+	marked(flags Flags)
+end 'Content'
+
+type Cell
+	export var content as Content
+	export var mask as Flags
+
+	export static function create(content Content, mask Flags) returns Self
+		return Self{content: content, mask: mask}
+	end 'create'
+
+	export function describe() returns String
+		let first = match self.content 'kind'
+			empty gives false
+			marked(flags) gives try flags.get(0) otherwise false
+		end 'kind'
+
+		let second = try self.mask.get(1) otherwise false
+		return "{first} {second}"
+	end 'describe'
+end 'Cell'
+
+type Svc
+	var held as Cell
+
+	static function create(held Cell) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function report(other Cell) returns Cell
+		print("held {self.held.describe()}\n")
+		print("argument {other.describe()}\n")
+		return Cell.create(Content.empty, mask: flagsOf(false, second: true))
+	end 'report'
+end 'Svc'
+
+function flagsOf(first bool, second bool) returns Flags
+	var flags = Flags.create()
+	try flags.set(0, value: first) otherwise panic("index 0 is inside a 4-element vector")
+	try flags.set(1, value: second) otherwise panic("index 1 is inside a 4-element vector")
+	return flags
+end 'flagsOf'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(Cell.create(Content.marked(flagsOf(true, second: false)), mask: Flags.create()))
+	let reply = try await h.report(Cell.create(Content.marked(flagsOf(true, second: false)), mask: flagsOf(false, second: true))) otherwise return 1
+	print("reply {reply.describe()}\n")
+	return 0
+end 'main'
+```
+```stdout
+held true false
+argument true true
+reply false true
+```
+```exitcode
+0
+```
