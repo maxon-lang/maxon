@@ -13611,6 +13611,58 @@ function markBoundHead(returnedHeads ByteArrayArray, bound BoolArray, returnedAt
 	end 'eachCandidate'
 end 'markBoundHead'
 
+typealias MemberHopCount = int(0 to u32.max)
+
+let HopsToCallOnAField = 2 as MemberHopCount
+
+// A name a `return` hands back, and what `Parser.everyReturnedLocalHoldsAFreshRecord`'s walk has learned of
+// it: whether its one binding has been met, and whether the walk is still inside that binding's scope.
+type ReturnedLocal
+	export let name as ByteArray
+	export var bound = false
+	export var inScope = false
+	var scopeDepth as BlockDepth = 0
+
+	export static function create(name ByteArray) returns ReturnedLocal
+		return Self{name: name}
+	end 'create'
+
+	export function bind(depth BlockDepth)
+		self.bound = true
+		self.scopeDepth = depth
+		self.inScope = true
+	end 'bind'
+
+	// The walk has left the block the binding was written in once its depth falls below the binding's own.
+	export function closeScopeAbove(depth BlockDepth)
+		if self.inScope and depth < self.scopeDepth 'leftTheBindingsBlock'
+			self.inScope = false
+		end 'leftTheBindingsBlock'
+	end 'closeScopeAbove'
+end 'ReturnedLocal'
+
+typealias ReturnedLocalArray = Array with ReturnedLocal
+
+// Keeps one entry per open `(`, `{` or `[`, true for a `[`.
+function trackGroupKindAt(kind TokenKind, openGroupIsBracket BoolArray)
+	if tokenKindOpensABracket(kind) 'opens'
+		openGroupIsBracket.push(kind == TokenKind.leftBracket)
+	end 'opens'
+
+	if tokenKindClosesABracket(kind) and openGroupIsBracket.count() > 0 'closes'
+		_ = try openGroupIsBracket.pop() otherwise panic("trackGroupKindAt: pop failed on a stack whose count was just read as non-zero")
+	end 'closes'
+end 'trackGroupKindAt'
+
+// A `name:` is a call's or a record literal's label only inside a `(` or a `{`.
+function innermostGroupSpellsLabels(openGroupIsBracket BoolArray) returns bool
+	if openGroupIsBracket.count() == 0 'noOpenGroup'
+		return false
+	end 'noOpenGroup'
+
+	return not (try openGroupIsBracket.get(openGroupIsBracket.count() - 1) otherwise panic("innermostGroupSpellsLabels: get failed on a stack whose count was just read as non-zero"))
+end 'innermostGroupSpellsLabels'
+
 // A forward whose target is looked up by a written name, with that name and its position on the parallel
 // columns `Parser.noForwardHeadIsBoundHere` filters — pushed together so the columns cannot desynchronize.
 function noteForwardResolvedByName(forwards FreshReturnForwardArray, forward FreshReturnForward, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn, headAt TokenIndex, head ByteArray)
@@ -17669,6 +17721,10 @@ export type Parser
 		var freshReturnForwards = FreshReturnForwardArray.create()
 		var forwardHeads = ByteArrayArray.create()
 		var forwardHeadsAt = TokenIndexColumn.create()
+
+		// The names a `return <name>` hands back, each proved fresh or not after the walk
+		// (`everyReturnedLocalHoldsAFreshRecord`), because its binding and every use can sit anywhere in the body.
+		var returnedLocals = ByteArrayArray.create()
 		var atStatementStart = false
 		var lastTopLevelStatement = bodyStart
 		var sawATopLevelStatement = false
@@ -17739,7 +17795,7 @@ export type Parser
 				// walk whose answer nothing reads — and the probe is not free: it scans a record literal's or a
 				// call's whole argument region looking for the match. A body returning something that is neither
 				// pays one token compare.
-				if everyReturnIsAFreshRecord and not self.noteFreshReturnShape((q + 1) as TokenIndex, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'notAFreshRecord'
+				if everyReturnIsAFreshRecord and not self.noteFreshReturnShape((q + 1) as TokenIndex, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, returnedLocals: returnedLocals) 'notAFreshRecord'
 					everyReturnIsAFreshRecord = false
 				end 'notAFreshRecord'
 			end 'returnStatement'
@@ -17924,19 +17980,20 @@ export type Parser
 			bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.leavesByThrowing))
 		end 'alwaysThrows'
 
-		// ⭐⭐ **SV1: EVERY `return` HANDS BACK A RECORD THIS BODY JUST BUILT.** Two conditions, and the second is
+		// ⭐⭐ **SV1: EVERY `return` HANDS BACK A RECORD THIS BODY JUST BUILT.** Three conditions, and the second is
 		// what stops the universal claim being vacuous:
 		//
 		//   • the walk reached the declaration's OWN `end`, so every `return` of this body was seen — the same
 		//     condition the two rules above open with, and for the identical reason: a scan that ran off the end
 		//     of a malformed body has not seen the statements it is about to make a claim over;
 		//   • the body SPELLS a `return`. A body with none states nothing, because "every return is fresh" is
-		//     trivially true of no returns at all and the caller would read it as a promise about a value.
+		//     trivially true of no returns at all and the caller would read it as a promise about a value;
+		//   • every local a `return` names was bound to a fresh record and never handed a second reference.
 		//
 		// ⚠ **`throws` IS NOT EXCLUDED, UNLIKE THE `panic` RULE ONE PARAGRAPH UP.** A body that may throw still
 		// hands back a fresh record on the path that returns one, and the caller adopting it is the only party
 		// that reaches this fact — the error edge carries no value for it to be wrong about.
-		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord 'returnsAFreshRecord'
+		if sawTheFunctionsOwnEnd and bodySpellsAReturn and everyReturnIsAFreshRecord and (returnedLocals.count() == 0 or self.everyReturnedLocalHoldsAFreshRecord(returnedLocals, bodyStart: bodyStart, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt)) 'returnsAFreshRecord'
 			// ⭐ **AN UNCONDITIONAL CLAIM ONLY WHEN NO RETURN FORWARDED.** With a forward in the list the body's
 			// freshness is the CALLEE's, and the entries below say so — one per forwarding return, closed
 			// whole-program by `ProgramSignatures.closeFreshReturnForwards`. Publishing both would be a claim and
@@ -18006,18 +18063,17 @@ export type Parser
 	//
 	//   `return <Name>{ … }`  — a struct literal, with the matching `}` the last token on the line.
 	//
-	// ⭐⭐ **WHY THAT SHAPE IS AIRTIGHT WHERE `return <name>` COULD NEVER BE.** A record literal written IN the
-	// return expression is allocated by this frame at that instant and handed over in the same expression:
-	// there is no statement between its construction and the hand-off, so no `push`, no field store, no closure
-	// capture and no consuming call can have taken a second reference to it. The caller adopting the `+1` is
-	// therefore that allocation's SOLE owner — which is exactly what a send has to know, and exactly what
+	// ⭐⭐ **WHY THAT SHAPE NEEDS NOTHING ELSE READ.** A record literal written IN the return expression is
+	// allocated by this frame at that instant and handed over in the same expression: there is no statement
+	// between its construction and the hand-off, so no `push`, no field store, no closure capture and no
+	// consuming call can have taken a second reference to it. The caller adopting the `+1` is therefore that
+	// allocation's SOLE owner — which is exactly what a send has to know, and exactly what
 	// `Parser.enrolOwnedCallTemp` records it cannot know in general (*"telling a fresh-box return from a
-	// co-owning one is a whole-program fact"*). This is that fact, for the one shape where the tokens carry it.
+	// co-owning one is a whole-program fact"*).
 	//
-	// ⚠ **`return s` IS DELIBERATELY NOT RECOGNISED EVEN WHERE `s` WAS A LITERAL TWO LINES UP.** The moment the
-	// record is bound to a name, statements can run between the construction and the return, and reading them is
-	// the whole-program aliasing analysis this compiler has deferred. The shape test is what keeps the claim
-	// derivable from tokens alone.
+	// ⭐⭐ **`return <local>` IS RECOGNISED PROVISIONALLY.** Statements can run between the construction and the
+	// return, so the name is only noted here and decided after the walk, over the whole body
+	// (`everyReturnedLocalHoldsAFreshRecord`).
 	//
 	// ⭐⭐ **`return <call>` IS RECOGNISED — AS A CONDITION, NOT A CLAIM.** The callee's own freshness decides
 	// it, which only the whole-program close knows (`ProgramSignatures.closeFreshReturnForwards`), so the call
@@ -18042,7 +18098,23 @@ export type Parser
 	// ⚠ It answers about ONE return; the caller ANDs it across every return in the body, so an unreadable
 	// shape costs the whole declaration its claim. That is this family's rule (*"every ambiguity resolves
 	// toward recording NOTHING"*) and here the wrong direction is a heap-corrupting move rather than a refusal.
-	function noteFreshReturnShape(valueStart TokenIndex, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn) returns bool
+	function noteFreshReturnShape(valueStart TokenIndex, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn, returnedLocals ByteArrayArray) returns bool
+		if self.kindAt(valueStart) == TokenKind.identifier and self.kindAt((valueStart + 1) as TokenIndex) == TokenKind.newline 'aReturnedName'
+			let name = self.tokenAt(valueStart).value
+
+			if not namesInclude(returnedLocals, name: name) 'firstReturnOfThisName'
+				returnedLocals.push(name)
+			end 'firstReturnOfThisName'
+
+			return true
+		end 'aReturnedName'
+
+		return self.noteFreshValueShape(valueStart, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt)
+	end 'noteFreshReturnShape'
+
+	// The shapes that are fresh where they are written — the record literal and the forwarding call above — asked
+	// of a `return`'s value and of the value a returned local is bound to.
+	function noteFreshValueShape(valueStart TokenIndex, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn) returns bool
 		let tryWrapped = self.kindAt(valueStart) == TokenKind.try
 		let callStart = (valueStart + 1) as TokenIndex if tryWrapped else valueStart
 
@@ -18092,7 +18164,122 @@ export type Parser
 
 		noteForwardResolvedByName(forwards, forward: FreshReturnForward.ofNamedType(head.value, name: name), forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, headAt: callStart, head: head.value)
 		return true
-	end 'noteFreshReturnShape'
+	end 'noteFreshValueShape'
+
+	// ⭐⭐⭐ **IS EVERY RETURNED LOCAL THE ONLY REFERENCE TO A RECORD THIS BODY BUILT?** One walk of the body for
+	// all of them. Each must be bound exactly once, by a `let <name> = …` or `var <name> = …` opening its line whose
+	// value is a fresh shape (`noteFreshValueShape`, so a forwarding call becomes a dependency like any other), and every
+	// other token spelling the name must be one this ADMIT-LIST names — anything else is a second reference or
+	// a use the list cannot vouch for, and costs the claim:
+	//
+	//   • `return <name>` inside the binding's scope;
+	//   • `<name>.f…` — a field read, or a store into the record's own field; a field's graph is proved at the
+	//     send by the run-time walk, and only the ROOT's soleness is claimed here;
+	//   • `<name>.f….m(…)` — a call whose receiver is a FIELD. `<name>.m(…)` is not admitted: an instance
+	//     method is handed the record itself and may keep it;
+	//   • a named-argument label or a record-literal field name that happens to spell it.
+	//
+	// So an argument, a bare read (`let b = <name>`), a reassignment, an interpolation of the whole record, a
+	// `for`/`match` binder, and any use outside the binding's scope all retract. A body holding a closure
+	// literal states nothing: a closure captures by reference, even from a field read.
+	function everyReturnedLocalHoldsAFreshRecord(returnedLocals ByteArrayArray, bodyStart TokenIndex, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn) returns bool
+		var locals = ReturnedLocalArray.create()
+
+		for name in returnedLocals 'eachName'
+			locals.push(ReturnedLocal.create(name))
+		end 'eachName'
+
+		var depth = 0 as BlockDepth
+		var openGroupIsBracket = BoolArray.create()
+		var q = bodyStart
+
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			let kind = self.kindAt(q)
+
+			if depth == 0 and self.closesBlockAt(q) 'bodyEnds'
+				break
+			end 'bodyEnds'
+
+			if kind == TokenKind.function 'aClosureLiteral'
+				return false
+			end 'aClosureLiteral'
+
+			if q > bodyStart and kind == TokenKind.identifier and self.kindAt((q - 1) as TokenIndex) != TokenKind.dot 'aNameThatIsNotAMember'
+				for local in locals 'eachLocal'
+					if local.name.equals(self.tokenAt(q).value) and not self.localMentionKeepsItFresh(q, local: local, depth: depth, labelsAreSpelledHere: innermostGroupSpellsLabels(openGroupIsBracket), forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondReference'
+						return false
+					end 'aSecondReference'
+				end 'eachLocal'
+			end 'aNameThatIsNotAMember'
+
+			trackGroupKindAt(kind, openGroupIsBracket: openGroupIsBracket)
+			let depthAfter = self.blockDepthAfter(q, depth: depth)
+
+			if depthAfter < depth 'aBlockClosed'
+				for local in locals 'eachScope'
+					local.closeScopeAbove(depthAfter)
+				end 'eachScope'
+			end 'aBlockClosed'
+
+			depth = depthAfter
+			q = q + 1
+		end 'walk'
+
+		for local in locals 'eachBinding'
+			if not local.bound 'neverBoundInThisBody'
+				return false
+			end 'neverBoundInThisBody'
+		end 'eachBinding'
+
+		return true
+	end 'everyReturnedLocalHoldsAFreshRecord'
+
+	// One token spelling a returned local's name, classified against `everyReturnedLocalHoldsAFreshRecord`'s
+	// admit-list. Its binding's value is judged where the binding is met, so a local bound to anything else — a
+	// scalar counter is the common case — ends the walk there.
+	function localMentionKeepsItFresh(at TokenIndex, local ReturnedLocal, depth BlockDepth, labelsAreSpelledHere bool, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn) returns bool
+		let before = self.kindAt((at - 1) as TokenIndex)
+		let after = self.kindAt((at + 1) as TokenIndex)
+
+		// Inside a `[` the same spelling is a map literal's KEY, which stores the record.
+		if labelsAreSpelledHere and after == TokenKind.colon and (before == TokenKind.comma or before == TokenKind.leftBrace or tokenKindIsSkippedLayout(before)) 'aLabelSpellingTheName'
+			return true
+		end 'aLabelSpellingTheName'
+
+		if (before == TokenKind.let or before == TokenKind.var) and after == TokenKind.equals 'itsBinding'
+			// A binding that does not open its line is a `match` arm's, scoped to that arm where the block depth
+			// would carry it across the sibling arms.
+			if local.bound or not tokenKindIsSkippedLayout(self.kindAt((at - 2) as TokenIndex)) or not self.noteFreshValueShape((at + 2) as TokenIndex, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'aSecondBindingOrNotAFreshValue'
+				return false
+			end 'aSecondBindingOrNotAFreshValue'
+
+			local.bind(depth)
+			return true
+		end 'itsBinding'
+
+		if not local.inScope 'aDifferentDeclarationOfTheName'
+			return false
+		end 'aDifferentDeclarationOfTheName'
+
+		if before == TokenKind.return and after == TokenKind.newline 'returnedWhole'
+			return true
+		end 'returnedWhole'
+
+		var memberHops = 0 as MemberHopCount
+		var chainEnd = (at + 1) as TokenIndex
+
+		while self.kindAt(chainEnd) == TokenKind.dot and tokenCanBeAName(self.tokenAt((chainEnd + 1) as TokenIndex)) 'eachHop'
+			memberHops = memberHops + 1
+			chainEnd = (chainEnd + 2) as TokenIndex
+		end 'eachHop'
+
+		if memberHops == 0 'usedWhole'
+			return false
+		end 'usedWhole'
+
+		// In `<name>.f.m(…)` the last hop is the method, so a receiver that is a field needs two.
+		return self.kindAt(chainEnd) != TokenKind.leftParen or memberHops >= HopsToCallOnAField
+	end 'localMentionKeepsItFresh'
 
 	// Does the call opening at `openParen` end the `return`? Its `)` ends the line, or — under `try` — is
 	// followed by `otherwise panic(…)` that does.
@@ -18231,11 +18418,11 @@ export type Parser
 		while self.kindAt(q) != TokenKind.eof 'scanForTheMatch'
 			let kind = self.kindAt(q)
 
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
+			if tokenKindOpensABracket(kind) 'opensGroup'
 				depth = depth + 1
 			end 'opensGroup'
 
-			if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesGroup'
+			if tokenKindClosesABracket(kind) 'closesGroup'
 				depth = depth - 1
 
 				if depth == 0 'theMatch'
@@ -18351,11 +18538,11 @@ export type Parser
 		while not self.sweptValueRegionEndsAt(q, regionEnd: regionEnd) and self.kindAt(q) != TokenKind.eof 'scanForElse'
 			let kind = self.kindAt(q)
 
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
+			if tokenKindOpensABracket(kind) 'opensGroup'
 				depth = depth + 1
 			end 'opensGroup'
 
-			if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesGroup'
+			if tokenKindClosesABracket(kind) 'closesGroup'
 				depth = depth - 1
 			end 'closesGroup'
 
@@ -19559,7 +19746,7 @@ export type Parser
 			// rescan is O(tokens) per paren and so quadratic in a body of nested calls, where the signal walk
 			// is O(tokens) for everything else it collects. `groupDepths` is empty for a body with no
 			// parenthesis at all, which is not the common case here but is the cheap one.
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'opensGroup'
+			if tokenKindOpensABracket(kind) 'opensGroup'
 				groupIsTuplePosition.push(kind == TokenKind.leftParen and not self.tokenEndsAPrimaryExpression((q - 1) as TokenIndex))
 			end 'opensGroup'
 
@@ -19567,7 +19754,7 @@ export type Parser
 				signals = maskWithSignal(signals, signal: ScanSignalBuildsRecord)
 			end 'topLevelCommaInAGrouping'
 
-			if (kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace) and not groupIsTuplePosition.isEmpty() 'closesGroup'
+			if tokenKindClosesABracket(kind) and not groupIsTuplePosition.isEmpty() 'closesGroup'
 				// A region may CLOSE more groups than it opens (a field default is the `=` to the end of its
 				// line), so an unmatched closer pops nothing rather than faulting.
 				_ = try groupIsTuplePosition.pop() otherwise panic("scanDescriptorSignalsIn: groupIsTuplePosition is non-empty by the guard and cannot pop")
@@ -19858,7 +20045,7 @@ export type Parser
 			return true
 		end 'plainName'
 
-		if kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace 'closesAValue'
+		if tokenKindClosesABracket(kind) 'closesAValue'
 			return true
 		end 'closesAValue'
 
@@ -21421,7 +21608,7 @@ export type Parser
 				return q
 			end 'malformed'
 
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace 'openGroup'
+			if tokenKindOpensABracket(kind) 'openGroup'
 				depth = depth + 1
 			end 'openGroup'
 
@@ -71859,11 +72046,11 @@ export type Parser
 		while i < self.tokens.count() 'scan'
 			let kind = self.kindAt(i)
 
-			if kind == TokenKind.leftBracket or kind == TokenKind.leftParen or kind == TokenKind.leftBrace 'opens'
+			if tokenKindOpensABracket(kind) 'opens'
 				depth = depth + 1
 			end 'opens'
 
-			if kind == TokenKind.rightBracket or kind == TokenKind.rightParen or kind == TokenKind.rightBrace 'closes'
+			if tokenKindClosesABracket(kind) 'closes'
 				depth = depth - 1
 
 				if depth == 0 'closesTheLiteral'
@@ -81793,7 +81980,7 @@ export type Parser
 		while i < self.tokens.count() 'eachToken'
 			let kind = self.kindAt(i)
 
-			if kind == TokenKind.leftBracket or kind == TokenKind.leftParen or kind == TokenKind.leftBrace 'opens'
+			if tokenKindOpensABracket(kind) 'opens'
 				depth = depth + 1
 			end 'opens'
 
@@ -81801,7 +81988,7 @@ export type Parser
 				return true
 			end 'theMapColon'
 
-			if kind == TokenKind.rightBracket or kind == TokenKind.rightParen or kind == TokenKind.rightBrace 'closes'
+			if tokenKindClosesABracket(kind) 'closes'
 				depth = depth - 1
 
 				if depth == 0 'closedWithoutAColon'

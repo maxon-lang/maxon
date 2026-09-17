@@ -6529,7 +6529,9 @@ was following the diagnostic's own advice.
 ⚠ **WHAT MAKES THE HOP SOUND IS THAT THE FORWARDING FRAME BINDS NOTHING.** `return f(…)` with the call
 ending the line has no statement between the callee's hand-off and its own, so the reference it passes on is
 the one it received and nobody else names it — the identical argument the record-literal criterion rests on,
-one frame out. A body that BINDS what it returns still states nothing, because statements can run in between.
+one frame out. A body that BINDS what it returns has statements between the construction and the hand-off,
+so it is fresh only when every use of the local is one that cannot take a second reference (the
+`a-reply-a-sibling-builds-in-a-local` cases at the end of this file).
 ```maxon
 type Store
 	var n as Integer
@@ -7874,4 +7876,432 @@ end 'main'
 ```
 ```maxoncstderr
 error E3138: <fragment>:43:10: the reply of the message `Maker.make` is a `Array_Holder` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+```
+
+<!-- test: services.a-reply-a-sibling-builds-in-a-local-is-fresh -->
+A sibling that builds its record in a local, fills it, and returns the local hands back a record nothing
+else names: the local is the only reference and the `return` moves it out.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+type Worker
+	var scale as Tally
+
+	static function create() returns Self
+		return Self{scale: 2}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let report = Report.create(n * self.scale)
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+
+<!-- test: services.a-reply-a-sibling-fills-in-a-var-is-fresh -->
+The same with a `var` the sibling fills before returning it — pushing into the record's own array field
+and assigning a scalar field keep the record the local's alone.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias LineArray = Array with String
+
+type Report
+	export var total as Tally
+	export var lines as LineArray
+
+	static function create() returns Self
+		return Self{total: 0, lines: LineArray.create()}
+	end 'create'
+end 'Report'
+
+type Worker
+	var scale as Tally
+
+	static function create() returns Self
+		return Self{scale: 2}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		var report = Report.create()
+		report.lines.push("scaled")
+		report.total = n * self.scale
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total} {report.lines.count()}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42 1
+```
+
+<!-- test: error.reply-a-sibling-builds-in-a-local-it-also-keeps-refused -->
+`summarize` builds its record in a local but pushes the local into the service's `history` before
+returning it, so the record has a second owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias ReportArray = Array with Report
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+type Worker
+	var history as ReportArray
+
+	static function create() returns Self
+		return Self{history: ReportArray.create()}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let report = Report.create(n * 2)
+		self.history.push(report)
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:21:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:32:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.spawn-factory-returning-a-local-a-function-stored-refused -->
+`create` builds its state in a local and hands it to `remember`, which keeps it in a module-level registry,
+so the state the `spawn` would move has a second owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias WorkerArray = Array with Worker
+
+var registry = WorkerArray.create()
+
+function remember(worker Worker)
+	registry.push(worker)
+end 'remember'
+
+type Worker
+	var scale as Tally
+
+	static function create(scale Tally) returns Self
+		let worker = Self{scale: scale}
+		remember(worker)
+		return worker
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * self.scale
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create(2)
+	let total = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{total} {registry.count()}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: error.reply-a-sibling-returns-a-local-another-local-aliases-refused -->
+`copy` names the same record as `report`, so returning `report` does not hand back the only reference.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+type Worker
+	var last as Tally
+
+	static function create() returns Self
+		return Self{last: 0}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let report = Report.create(n * 2)
+		let copy = report
+		self.last = copy.total
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:20:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:32:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.reply-a-sibling-returns-a-local-its-own-method-stored-refused -->
+`keepIn` is an instance method, so it is handed the record itself — and it pushes `self` into the service's
+`history`. A method called on the local may keep it, so the local is not fresh.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias ReportArray = Array with Report
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+
+	function keepIn(history ReportArray)
+		history.push(self)
+	end 'keepIn'
+end 'Report'
+
+type Worker
+	var history as ReportArray
+
+	static function create() returns Self
+		return Self{history: ReportArray.create()}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let report = Report.create(n * 2)
+		report.keepIn(self.history)
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:25:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:36:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.reply-a-sibling-returns-a-local-it-keys-a-map-with-refused -->
+`summarize` writes its local as a KEY of the map literal it stores in the service's `ranks`. After a `,` a key
+is spelled exactly like a named argument's label, but it stores the record, so the local is not fresh.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias ReportRanks = Map with (Report, Tally)
+
+type Report implements Hashable, Equatable
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+
+	export function hash() returns HashValue
+		return total
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return total == other.total
+	end 'equals'
+end 'Report'
+
+type Worker
+	var ranks as ReportRanks
+
+	static function create() returns Self
+		return Self{ranks: ReportRanks.create()}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let first = Report.create(n)
+		let report = Report.create(n * 2)
+		self.ranks = [first: 1, report: 2]
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:29:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:41:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.reply-a-sibling-returns-a-global-a-match-arm-local-shadows-refused -->
+The `let report` in the first arm is that arm's alone, so the `return report` in the `default` arm hands back
+the module-level `report` — a record the program still holds.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+let report = Report.create(7)
+
+type Worker
+	var scale as Tally
+
+	static function create() returns Self
+		return Self{scale: 2}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		match n 'pick'
+			0 then let report = Report.create(n)
+			default then return report
+		end 'pick'
+
+		return Report.create(n * self.scale)
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let got = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{got.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:22:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:36:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: services.a-reply-whose-local-shares-a-field-with-the-state-aborts -->
+A field read through the returned local is admitted: only the local's own record is proved at compile time.
+`summarize` stores `report.inner` in the service's `kept`, so the record below the reply has a second owner, and
+the walk at the publish aborts with exit **96** before the caller can read it.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+type Inner
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Report
+	export var inner as Inner
+
+	static function create(n Tally) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Report'
+
+type Worker
+	var kept as Inner
+
+	static function create() returns Self
+		return Self{kept: Inner.create(0)}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let report = Report.create(n)
+		self.kept = report.inner
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let got = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{got.inner.n}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```exitcode
+96
 ```

@@ -386,10 +386,10 @@ type HoverDocument
 		while index < total 'scan'
 			let tok = tokenAt(index)
 
-			if kindOpensABracket(tok.kind) 'opens'
+			if tokenKindOpensABracket(tok.kind) 'opens'
 				depth = depth + 1
 				atParameterStart = depth == 1
-			end 'opens' else if kindClosesABracket(tok.kind) 'closes'
+			end 'opens' else if tokenKindClosesABracket(tok.kind) 'closes'
 				depth = depth - 1
 
 				if depth == 0 'listEnds'
@@ -572,9 +572,9 @@ type HoverDocument
 				return declaredTypeAt(index + 1)
 			end 'returnClause'
 
-			if kindOpensABracket(kind) 'opens'
+			if tokenKindOpensABracket(kind) 'opens'
 				depth = depth + 1
-			end 'opens' else if kindClosesABracket(kind) and depth > 0 'closes'
+			end 'opens' else if tokenKindClosesABracket(kind) and depth > 0 'closes'
 				depth = depth - 1
 			end 'closes'
 
@@ -659,9 +659,9 @@ type HoverDocument
 		while index < total 'scan'
 			let kind = tokenAt(index).kind
 
-			if kindOpensABracket(kind) 'opens'
+			if tokenKindOpensABracket(kind) 'opens'
 				depth = depth + 1
-			end 'opens' else if kindClosesABracket(kind) 'closes'
+			end 'opens' else if tokenKindClosesABracket(kind) 'closes'
 				depth = depth - 1
 
 				if depth == 0 'groupEnds'
@@ -951,9 +951,9 @@ type HoverDocument
 				return lineContentEnd(tok.line)
 			end 'headEnds'
 
-			if kindOpensABracket(tok.kind) 'opens'
+			if tokenKindOpensABracket(tok.kind) 'opens'
 				depth = depth + 1
-			end 'opens' else if kindClosesABracket(tok.kind) and depth > 0 'closes'
+			end 'opens' else if tokenKindClosesABracket(tok.kind) and depth > 0 'closes'
 				depth = depth - 1
 			end 'closes'
 
@@ -978,9 +978,9 @@ type HoverDocument
 				break
 			end 'parameterEnds'
 
-			if kindOpensABracket(tok.kind) 'opens'
+			if tokenKindOpensABracket(tok.kind) 'opens'
 				depth = depth + 1
-			end 'opens' else if kindClosesABracket(tok.kind) and depth > 0 'closes'
+			end 'opens' else if tokenKindClosesABracket(tok.kind) and depth > 0 'closes'
 				depth = depth - 1
 			end 'closes'
 
@@ -1108,16 +1108,8 @@ end 'kindDeclaresAContainer'
 // enumeration of THOSE would admit every one it had not been taught yet. Enumerating what ends an
 // expression instead leaves every unfamiliar token meaning `unknown`.
 function kindEndsAnExpression(kind TokenKind) returns bool
-	return kind == TokenKind.newline or kind == TokenKind.comma or kind == TokenKind.eof or kindClosesABracket(kind)
+	return kind == TokenKind.newline or kind == TokenKind.comma or kind == TokenKind.eof or tokenKindClosesABracket(kind)
 end 'kindEndsAnExpression'
-
-function kindOpensABracket(kind TokenKind) returns bool
-	return kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace
-end 'kindOpensABracket'
-
-function kindClosesABracket(kind TokenKind) returns bool
-	return kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace
-end 'kindClosesABracket'
 
 // What may sit between a declaration and the `///` lines written for it: blank lines, and the doc lines
 // themselves.
