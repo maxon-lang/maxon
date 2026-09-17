@@ -3443,7 +3443,15 @@ end 'main'
 - When the block's calls throw one error type, `e` has that type and arms use bare case names. When they
   throw several, `e` is a combined error: arms name `ErrorType.case`, and a bare case name is accepted only
   when it is unique across the types (**E3085** otherwise). The match is exhaustive over every pair unless
-  it has a `default` arm.
+  it has a `default` arm. An arm may join cases with `or`, including cases of different types; an arm that
+  names more than one type binds no payloads (**E3129**).
+- When one of those types is a union with payloads, every path through the handler must match `e` exactly
+  once (**E3161**): not twice, not inside a loop the handler opens (its `while` condition included), and not
+  on only some paths — a `return`, `throw`, `break`, `continue` or propagated error before the match is
+  refused, as is a match on one branch of an `if`, on the right of `and`/`or`, or in an arm another arm falls
+  through into, where the other path continues without one.
+  Statements before the match are fine, and so is one match on each branch of an `if`/`else`. Match `e`
+  once and bind what the rest of the handler needs in its arms.
 - A call inside the block with its own `try … otherwise` handles its own error, which does not reach the
   block's handler. Nested try blocks compose the same way.
 

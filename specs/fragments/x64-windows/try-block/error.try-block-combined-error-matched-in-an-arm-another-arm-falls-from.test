@@ -1,0 +1,52 @@
+// Test: error.try-block-combined-error-matched-in-an-arm-another-arm-falls-from
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 or which == 2 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		match which 'w'
+			1 then said = match e 'k'
+				ErrA.bad(msg) gives msg
+				splat gives "splat"
+			end 'k' and fallthrough
+			default then said = "{said}!"
+		end 'w'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3161: <fragment>:38:4: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs

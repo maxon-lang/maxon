@@ -1,0 +1,50 @@
+// Test: error.try-block-combined-error-breaks-out-before-its-match
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function main() returns ExitCode
+	var said = ""
+
+	for which in 0 upto 3 'each'
+		try 'work'
+			let a = callA(which)
+			let b = callB()
+			said = "{said}{a + b};"
+		end 'work'
+		otherwise (e) 'h'
+			if which == 1 'stop'
+				break
+			end 'stop'
+
+			match e 'k'
+				ErrA.bad(msg) then said = "{said}{msg};"
+				splat then said = "{said}splat;"
+			end 'k'
+		end 'h'
+	end 'each'
+
+	print("{said}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3161: <fragment>:35:5: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: a path leaves the handler here without having matched it. Match 'e' once, and bind in its arms whatever the rest of the handler needs

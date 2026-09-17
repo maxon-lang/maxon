@@ -1544,3 +1544,1149 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:14:2: Mismatched end label: expected 'work', got 'job'
 ```
+
+<!-- test: try-block.or-arm-joins-cases-of-two-error-types -->
+An arm of a combined error's `match` joins cases with `or`, across error types as well as within one. `ErrA`
+is a union, so its error arrives as a box: the arm naming both types cannot keep it, and releases it on the
+path where `ErrA` is the error in flight — a leak exits 101, a double release faults.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(code Score)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+	crash
+end 'ErrB'
+
+function callA(fail bool) returns Score throws ErrA
+	if fail 'c'
+		throw ErrA.bad(50)
+	end 'c'
+
+	return 5
+end 'callA'
+
+function callB(fail bool) returns Score throws ErrB
+	if fail 'c'
+		throw ErrB.splat
+	end 'c'
+
+	return 6
+end 'callB'
+
+function classify(failA bool, failB bool) returns Score
+	var sum = 0
+
+	try 'work'
+		let a = callA(failA)
+		let b = callB(failB)
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad or
+				ErrB.splat then sum = 100
+			ErrA.worse or
+				crash then sum = 200
+		end 'k'
+	end 'h'
+
+	return sum
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(true, failB: false)}\n")
+	print("{classify(false, failB: true)}\n")
+	print("{classify(false, failB: false)}\n")
+	return 0
+end 'main'
+```
+```stdout
+100
+100
+11
+```
+```exitcode
+0
+```
+
+<!-- test: try-block.or-arm-within-one-union-member-binds-its-payload -->
+An arm whose alternatives all belong to one error type binds that type's payload by the ordinary `or`-arm rule:
+`worse` carries no slot 0, so on its path `code` reads the zero every box is filled with.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(code Score)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad(50)
+	end 'bad'
+
+	if which == 2 'worse'
+		throw ErrA.worse
+	end 'worse'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns Score
+	var sum = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad(code) or
+				ErrA.worse then sum = code + 1
+			splat then sum = 999
+		end 'k'
+	end 'h'
+
+	return sum
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+```
+```stdout
+51
+1
+```
+```exitcode
+0
+```
+
+<!-- test: error.try-block-or-arm-across-error-types-binds-a-payload -->
+An arm naming cases of two error types cannot bind a payload: `ErrB.splat` is an enum ordinal, not a box with a
+slot 0. The refusal names `code`, the binding that reads, rather than the `_` before it.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(note Score, code Score)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA() returns Score throws ErrA
+	throw ErrA.bad(50, code: 7)
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function main() returns ExitCode
+	var sum = 0
+
+	try 'work'
+		let a = callA()
+		let b = callB()
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad(_, code) or
+				ErrB.splat then sum = code
+		end 'k'
+	end 'h'
+
+	return sum
+end 'main'
+```
+```maxoncstderr
+error E3129: <fragment>:30:16: the payload binding 'code' cannot be honoured: this arm names cases of more than one error type, and its bindings read slots of one type's value, which a case of another type does not hold. Give each error type an arm of its own
+```
+
+<!-- test: try-block.fallthrough-between-arms-of-a-boxed-error-member -->
+`and fallthrough` between arms of a combined error's `match` releases a boxed member's error exactly once on
+every path: out of the arm that named it into an arm naming several types or into a `default throws`, and
+from an arm of another type into the arm that names it. A leak exits 101; a double release, or a release of
+an enum's ordinal as though it were a box, faults.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(code Score)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+	crash
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad(50)
+	end 'bad'
+
+	if which == 2 'worse'
+		throw ErrA.worse
+	end 'worse'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which == 3 'splat'
+		throw ErrB.splat
+	end 'splat'
+
+	if which == 4 'crash'
+		throw ErrB.crash
+	end 'crash'
+
+	return 6
+end 'callB'
+
+function intoSeveral(which Score) returns Score
+	var sum = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad then sum = 1 and fallthrough
+			ErrA.worse or
+				splat then sum = sum + 10
+			crash then sum = 500
+		end 'k'
+	end 'h'
+
+	return sum
+end 'intoSeveral'
+
+function intoBoxedArm(which Score) returns Score
+	var sum = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			splat then sum = 3 and fallthrough
+			ErrA.bad then sum = sum + 30
+			ErrA.worse or
+				crash then sum = 700
+		end 'k'
+	end 'h'
+
+	return sum
+end 'intoBoxedArm'
+
+enum Gave implements Error
+	up
+end 'Gave'
+
+function intoDefault(which Score) returns Score throws Gave
+	var sum = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad then sum = 4 and fallthrough
+			default throws Gave.up
+		end 'k'
+	end 'h'
+
+	return sum
+end 'intoDefault'
+
+function main() returns ExitCode
+	print("{intoSeveral(1)}\n")
+	print("{intoSeveral(2)}\n")
+	print("{intoSeveral(3)}\n")
+	print("{intoBoxedArm(3)}\n")
+	print("{intoBoxedArm(1)}\n")
+	print("{try intoDefault(1) otherwise 99}\n")
+	print("{try intoDefault(2) otherwise 98}\n")
+	print("{try intoDefault(4) otherwise 97}\n")
+	print("{try intoDefault(0) otherwise 96}\n")
+	return 0
+end 'main'
+```
+```stdout
+11
+10
+10
+33
+30
+99
+98
+97
+11
+```
+```exitcode
+0
+```
+
+<!-- test: error.try-block-combined-error-matched-again-inside-an-arm-naming-several-types -->
+A `match e` inside an arm of the `match e` that already ran is a second match on that path: the arm naming
+several error types released the box as it was entered, so the inner arm would read a released box.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	if which == 2 'worse'
+		throw ErrA.worse
+	end 'worse'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which == 3 'splat'
+		throw ErrB.splat
+	end 'splat'
+
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = "none"
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad or
+				ErrB.splat then said = match e 'inner'
+					ErrA.bad(msg) gives msg
+					ErrA.worse or
+						splat gives "other"
+				end 'inner'
+			ErrA.worse then said = "worse"
+		end 'k'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	print("{classify(3)}\n")
+	print("{classify(0)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:44:28: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: this path has already matched it. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-matched-again-inside-a-boxed-member-arm -->
+A second `match e` inside the arm that keeps one boxed error type's box is refused too, though that arm still
+holds the box: the inner match's arms release boxes of their own.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = "none"
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad then said = match e 'inner'
+					ErrA.bad(msg) gives "{msg}!"
+					default panic("not bad")
+				end 'inner'
+			ErrA.worse or
+				splat then said = "other"
+		end 'k'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(0)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:35:25: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: this path has already matched it. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: try-block.fallthrough-chain-through-a-boxed-members-payload-arm -->
+A chain of `and fallthrough` arms over a combined error, starting at an arm that moves a boxed member's `String`
+payload out, releases that box once on every path, and each later arm's own dispatch edge releases its own.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+	worse(note String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+	crash
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	if which == 2 'worse'
+		throw ErrA.worse("worse {which}")
+	end 'worse'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which == 3 'splat'
+		throw ErrB.splat
+	end 'splat'
+
+	if which == 4 'crash'
+		throw ErrB.crash
+	end 'crash'
+
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad(msg) then said = msg and fallthrough
+			splat then said = "{said}+splat" and fallthrough
+			ErrA.worse then said = "{said}+worse"
+			crash then said = "crash"
+		end 'k'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	print("{classify(3)}\n")
+	print("{classify(4)}\n")
+	print("{classify(0)}\n")
+	return 0
+end 'main'
+```
+```stdout
+bad 1+splat+worse
++worse
++splat+worse
+crash
+sum 11
+```
+```exitcode
+0
+```
+
+<!-- test: error.try-block-combined-error-matched-twice-in-sequence -->
+Two `match e` statements in sequence match one combined error twice on one path, and the first already
+released the box.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which == 3 'splat'
+		throw ErrB.splat
+	end 'splat'
+
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		match e 'first'
+			ErrA.bad(msg) then said = msg
+			splat then said = "splat"
+		end 'first'
+
+		match e 'second'
+			ErrA.bad(msg) then said = "{said}/{msg}"
+			splat then said = "{said}/splat"
+		end 'second'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(3)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:42:3: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: this path has already matched it. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-matched-on-one-path-only -->
+A combined error matched on only one path through its handler is never released on the other, so the join
+the two paths reach is refused.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 or which == 2 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which == 3 'splat'
+		throw ErrB.splat
+	end 'splat'
+
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = "quiet"
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		if which == 1 'loud'
+			match e 'k'
+				ErrA.bad(msg) then said = msg
+				splat then said = "splat"
+			end 'k'
+		end 'loud'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:37:3: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-matched-inside-a-loop -->
+A `match e` inside a loop the handler opened runs once per iteration — never, if the loop does not run, and
+again on a box the first iteration released if it runs twice.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score, tries Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		for _ in 0 upto tries 'again'
+			match e 'k'
+				ErrA.bad(msg) then said = "{said}{msg};"
+				splat then said = "{said}splat;"
+			end 'k'
+		end 'again'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1, tries: 2)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:34:4: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: this match is inside a loop the handler opened, which runs it zero times or more than once. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-returns-before-its-match -->
+A `return` that leaves the handler before its `match e` never releases a boxed error in flight.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score, quiet bool) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		if quiet 'early'
+			return "quiet"
+		end 'early'
+
+		match e 'k'
+			ErrA.bad(msg) then said = msg
+			splat then said = "splat"
+		end 'k'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1, quiet: true)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:34:4: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: a path leaves the handler here without having matched it. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-breaks-out-before-its-match -->
+A `break` out of a loop around the whole `try` leaves the handler too, and before its `match e` it never releases
+a boxed error in flight.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function main() returns ExitCode
+	var said = ""
+
+	for which in 0 upto 3 'each'
+		try 'work'
+			let a = callA(which)
+			let b = callB()
+			said = "{said}{a + b};"
+		end 'work'
+		otherwise (e) 'h'
+			if which == 1 'stop'
+				break
+			end 'stop'
+
+			match e 'k'
+				ErrA.bad(msg) then said = "{said}{msg};"
+				splat then said = "{said}splat;"
+			end 'k'
+		end 'h'
+	end 'each'
+
+	print("{said}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:35:5: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: a path leaves the handler here without having matched it. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: try-block.combined-error-matched-once-after-other-statements -->
+A handler over a combined error with a boxed member may do other work before its one `match e` — a nested
+`try` block, an `if` — and may match `e` on each arm of an `if`/`else`, which is one match per path. Every path
+releases the box exactly once: a leak exits 101, a double release faults.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+enum ErrC implements Error
+	late
+end 'ErrC'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 or which == 2 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB(which Score) returns Score throws ErrB
+	if which == 3 'splat'
+		throw ErrB.splat
+	end 'splat'
+
+	return 6
+end 'callB'
+
+function callC(which Score) returns Score throws ErrC
+	if which == 2 'late'
+		throw ErrC.late
+	end 'late'
+
+	return 7
+end 'callC'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB(which)
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		var extra = 0
+
+		try 'inner'
+			extra = callC(which)
+		end 'inner'
+		otherwise (f) 'innerHandler'
+			match f 'lateness'
+				late then extra = 1
+			end 'lateness'
+		end 'innerHandler'
+
+		if extra == 1 'loud'
+			match e 'k'
+				ErrA.bad(msg) then said = "{msg}!"
+				splat then said = "splat!"
+			end 'k'
+		end 'loud' else 'soft'
+			match e 'k2'
+				ErrA.bad(msg) then said = "{msg}+{extra}"
+				splat then said = "splat+{extra}"
+			end 'k2'
+		end 'soft'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	print("{classify(3)}\n")
+	print("{classify(0)}\n")
+	return 0
+end 'main'
+```
+```stdout
+bad 1+7
+bad 2!
+splat+7
+sum 11
+```
+```exitcode
+0
+```
+
+<!-- test: error.try-block-combined-error-matched-on-the-right-of-and -->
+A `match e` on the right of `and` runs only when the left is true, so the path that skips it leaves the handler
+without having matched `e`.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 or which == 2 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = "quiet"
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		let loud = which == 1 and match e 'k'
+			ErrA.bad gives true
+			splat gives false
+		end 'k'
+
+		said = "{loud}"
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:33:25: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-matched-in-a-while-condition -->
+A `match e` in a `while` condition runs on every trip, so a second trip matches a box the first released.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns Score
+	var trips = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		trips = a + b
+	end 'work'
+	otherwise (e) 'h'
+		while trips < 3 and match e 'k'
+			ErrA.bad(msg) gives msg.byteLength() > 0
+			splat gives false
+		end 'k' 'again'
+			trips = trips + 1
+		end 'again'
+	end 'h'
+
+	return trips
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:33:3: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: this match is inside a loop the handler opened, which runs it zero times or more than once. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-matched-between-two-calls-of-an-inner-try -->
+A `match e` between two throwing calls of a `try` block inside the handler is matched on the second call's
+error path and not on the first's, which reach the inner handler together.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+enum ErrC implements Error
+	boom
+end 'ErrC'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function callC(which Score) returns Score throws ErrC
+	if which == 1 'boom'
+		throw ErrC.boom
+	end 'boom'
+
+	return 7
+end 'callC'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		try 'inner'
+			let first = callC(which)
+			said = match e 'k'
+				ErrA.bad(msg) gives msg
+				splat gives "splat"
+			end 'k'
+			let second = callC(first)
+			said = "{said}{second}"
+		end 'inner'
+		otherwise (f) 'ih'
+			match f 'fk'
+				boom then said = "boom"
+			end 'fk'
+		end 'ih'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:45:3: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: error.try-block-combined-error-matched-in-an-arm-another-arm-falls-from -->
+An `and fallthrough` arm reached both from an arm that matched `e` and straight from the dispatch arrives with
+`e` matched on one edge and not on the other.
+```maxon
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 or which == 2 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		match which 'w'
+			1 then said = match e 'k'
+				ErrA.bad(msg) gives msg
+				splat gives "splat"
+			end 'k' and fallthrough
+			default then said = "{said}!"
+		end 'w'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3161: <fragment>:38:4: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```

@@ -706,6 +706,13 @@ export type VarInfo
 	// the incoming parameter value itself. That is the one cell this frame does not own and must not drop.
 	export var isCellBinding as bool
 
+	// ⭐ **AN OWNED ENTRY THAT OWNS NOTHING: THE PROMISE TO MATCH A COMBINED ERROR EXACTLY ONCE.** A handler whose
+	// caught error may be a boxed member's box leaves the release to the arm of the one `match e` that runs, so
+	// `e` rides the owned-binding stack for its move state alone: the match MOVES it, and a second match, a
+	// join whose paths disagree, or an exit that reaches it live is refused where a drop would be emitted
+	// (`Parser.consumeErrorMatchObligation`). Its `boundValue` is the caught flag, which no drop may touch.
+	export var isErrorMatchObligation as bool
+
 	// The brand this binding was DECLARED under — its initial value's brand for a local, the spelled
 	// parameter type's for a parameter — which every rebind is checked against and every merge phi wears.
 	export var brandId as TypeNameId
@@ -745,8 +752,8 @@ export type VarInfo
 	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
 	// and every binding starts with them clear. A constructor argument for one of them would be a way to
 	// start a binding already moved-from, which nothing means.
-	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, brandId TypeNameId = UnnamedTypeId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, brandId: brandId}
+	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
@@ -794,6 +801,12 @@ export type VarInfo
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo
 		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isPayloadBinding: true, payloadScrutBox: scrutBox, payloadSlotOffset: slotOffset, payloadStorage: storage)
 	end 'createPayloadBinding'
+
+	// The owned entry that holds a combined error's match obligation (`isErrorMatchObligation`) — named after the
+	// `(e)` binding it answers for, and bound to the caught flag.
+	export static function createErrorMatchObligation(name ByteArray, flag ValueId) returns VarInfo
+		return Self.make(name, varType: MaxonType.integer, mutable: false, boundValue: flag, isErrorMatchObligation: true)
+	end 'createErrorMatchObligation'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
 	// value `boundValue`. No stack slot is materialized (SSA substitution needs

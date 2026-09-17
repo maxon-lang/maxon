@@ -1449,10 +1449,15 @@ export enum ErrorCode
 	// the `walk` path, printing 0 where 7 was stored. The same hole existed one construct over for a
 	// single case's own list (`walk(x, x)`), so ONE check over the arm's finished binding list serves
 	// both doors.
+	// - a payload binding on an arm of a match over a combined error (a block-form `try`'s handler, an
+	// awaited service reply) that names cases of more than one error type: each type lays out its own
+	// value -- a union's is a box with its own slots, an enum's an ordinal with none -- so a slot of one
+	// is no slot of another.
 	// It is the `and fallthrough` rule one construct over
 	// (`Parser.rejectFallthroughIntoBindingArm`), which refuses a related hazard for a related reason: an
 	// arm body reached from a case that does not hold what its bindings destructure.
-	// The cure is to give the disagreeing case its own arm, or to rename the colliding binding.
+	// The cure is to give the disagreeing case, or each error type, its own arm, or to rename the colliding
+	// binding.
 	matchArmPayloadBindingConflict = "E3129"
 
 	// A payload-free `enum` declares a member named after a requirement of a conformance the COMPILER
@@ -1899,6 +1904,19 @@ export enum ErrorCode
 	// at the send and naming the escape; a handler that writes its parameter is E3019. Send a `.clone()`, or bind
 	// the value with `var` so the send moves it.
 	semanticLentGraphEscapes = "E3160"
+
+	// A handler over a combined error -- a block-form `try` whose calls throw several error types, at least one
+	// of them a union with payloads -- does not match its `(e)` exactly once on every path. Such an error may
+	// arrive as a heap box, and the box is released by the arm of the `match e` that runs, because only an arm
+	// knows which type is in flight. So a second `match e` on a path (in sequence, inside an arm, or inside a
+	// loop the handler opened, its `while` condition included) reads a released box, and a path that leaves
+	// the handler without a `match e` -- falling off its end, a `return`, `throw`, `break`, `continue` or
+	// propagated error before the match, or skipping a match on the right of `and`/`or` or in an arm another
+	// arm falls through into -- never releases it. The check is path-sensitive: a match on each arm of an
+	// `if`/`else` is one match per path, and statements before the single match are legal. A `panic` ends the
+	// program and owes nothing.
+	// The cure is to match `e` once and bind in its arms whatever the rest of the handler needs.
+	errorMatchNotExactlyOnce = "E3161"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

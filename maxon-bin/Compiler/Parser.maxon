@@ -1277,11 +1277,12 @@ export union ParseError implements Error
 	enumWrongBindingCount(caseName String, expected CaseIndex, got ElementIndex, line LineNumber, column ColumnNumber)
 
 	// **E3129** — a match arm whose payload binding cannot be honoured. `reason` carries the whole
-	// explanation and that shape's cure, because the four shapes refused share only their SUBJECT (this
-	// arm's bindings) and not their argument: two are about the arm's own binding list being a bijection
-	// (one name per slot, one slot per name) and two are about what a covered case holds in a bound slot.
-	// A single lead-in general enough to cover all four would say nothing, so `Queries` renders the name
-	// and defers. Positioned at the binding the author must rename, move or drop. See
+	// explanation and that shape's cure, because the shapes refused share only their SUBJECT (this arm's
+	// bindings) and not their argument: two are about the arm's own binding list being a bijection (one name
+	// per slot, one slot per name), two are about what a covered case holds in a bound slot, and one is an
+	// error-union arm naming several error types. A single lead-in general enough to cover them all would say
+	// nothing, so `Queries` renders the name and defers. Positioned at the binding the author must rename, move
+	// or drop. See
 	// `requireArmBindingsAreDistinct` and `requireOrArmPayloadSlotsAgree`.
 	matchArmPayloadBindingConflict(bindingName String, reason String, line LineNumber, column ColumnNumber)
 
@@ -1290,6 +1291,12 @@ export union ParseError implements Error
 	// so one that never discriminates has silently swallowed every error the body can raise; the
 	// single-call `otherwise` forms catch one call's error and owe no such proof.
 	tryBlockBindingNotMatched(bindingName String, line LineNumber, column ColumnNumber)
+
+	// **E3161** — a handler over a combined error with a boxed member whose `(e)` is not matched exactly once on
+	// every path: matched twice, matched inside a loop the handler opened, matched on some paths into a join and
+	// not others, or left unmatched by a path out of the handler. `reason` names which. Positioned at the second
+	// match, the looping match, the join or the exit.
+	errorMatchNotExactlyOnce(bindingName String, reason String, line LineNumber, column ColumnNumber)
 
 	// Two arms cover the same enum case — a bare name repeated, or a case covered by both a range and
 	// a later arm. Renders as **E2027**, positioned at the second (overlapping) arm.
@@ -10617,38 +10624,6 @@ function moveMarkPrefix(mark MoveMark, height BindingMark) returns MoveMark
 	return MoveMark.create(moved, values: values, consumes: mark.consumes, awaiting: awaiting, lent: lent)
 end 'moveMarkPrefix'
 
-// Do two marks record the SAME set of moved-from bindings? Only the `movedFrom` bits are compared — the
-// VALUES legitimately differ between two points in one body (a reassigned `var` holds a different SSA id)
-// and say nothing about who owes a drop.
-//
-// ⚠ **THE CONSUMED-THREAD HALF IS DELIBERATELY NOT COMPARED, AND IT COSTS NOTHING**: every consume that a
-// NAME can outlive also poisons that name's owning binding (`consumePromiseThread` marks it `movedFrom`),
-// so a disagreement about a nameable thread is already a disagreement about an owned binding and is caught
-// by the loop below. The only consume this misses is of a promise NO binding owns — an unbound
-// `await async f()` — which no later use can reach, because there is no name to reach it through.
-//
-// Its one use is a block-form `try`'s N throw edges (`recordRoutedEdge`): the shared handler is entered
-// with ONE ownership state, so every routed call must leave the outer bindings in the same one. Marks of
-// UNEQUAL height are a disagreement rather than a panic — both are prefixes at the same owned floor, so a
-// height difference would mean the floor itself moved, which the caller's refusal reports as the same
-// unreconcilable shape.
-function moveMarksAgree(a MoveMark, b MoveMark) returns bool
-	if a.moved.count() != b.moved.count() 'differentHeights'
-		return false
-	end 'differentHeights'
-
-	for i in 0 upto a.moved.count() 'each'
-		let am = try a.moved.get(i) otherwise panic("moveMarksAgree: a.moved.get OOB at {i}")
-		let bm = try b.moved.get(i) otherwise panic("moveMarksAgree: b.moved.get OOB at {i}, at the same height as a")
-
-		if am != bm 'disagrees'
-			return false
-		end 'disagrees'
-	end 'each'
-
-	return true
-end 'moveMarksAgree'
-
 // How a `try … otherwise …`'s error handler affects the merge (P1.4b). The success (`ok`) block always
 // carries the tryCall's `result`; the error block's shape is one of:
 //   • `value(v)`      — `otherwise <expr>` produced a fallback value; both edges merge into a result phi.
@@ -11592,27 +11567,93 @@ type ErrorUnionInfo
 	// ambiguity scan) and which member's rules an arm plays by.
 	export let caseMembers as TryBlockErrorMemberArray
 
+	// Each member once, in fused-line order — what a release that must cover every member in flight walks.
+	export let members as TryBlockErrorMemberArray
+
 	// The dispatch subject: the fused ordinal every routed edge computed, merged through the error block's
 	// last phi. `match e` reads THIS where an ordinary enum match reads `emitEnumTagOf(scrut)`.
 	export let fusedOrdinal as ValueId
 
-	export static function create(layout EnumLayout, caseMembers TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
-		return Self{layout: layout, caseMembers: caseMembers, fusedOrdinal: fusedOrdinal}
+	export static function create(layout EnumLayout, caseMembers TryBlockErrorMemberArray, members TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
+		return Self{layout: layout, caseMembers: caseMembers, members: members, fusedOrdinal: fusedOrdinal}
 	end 'create'
 end 'ErrorUnionInfo'
 
-// ⭐ **ONE RESOLVED ARM OF AN ERROR-UNION MATCH** — which member it named, and the payload bindings its
-// pattern declared. Returned as a pair because `parseMatchCommon` needs BOTH and neither is derivable from
-// the other: the member decides whose layout the payload plays by and whether the arm owes the box a
-// release, and the bindings are what the arm body declares at its head.
-type ErrorUnionArm
-	export let member as TryBlockErrorMember
+// What an enum arm's case names resolve against: a declared enum's own layout, or a synthesized error union,
+// whose names resolve per member and whose payloads play by the member's layout.
+union EnumArmTable
+	declared(layout EnumLayout)
+	errorUnion(info ErrorUnionInfo)
+end 'EnumArmTable'
+
+// ⭐ **ONE RESOLVED ENUM ARM** — its payload bindings, and for an error union the members its alternatives
+// name. `parseMatchCommon` needs both: the bindings are what the arm body declares at its head, and the
+// members decide whose layout those bindings play by and which boxes the arm owes a release.
+type EnumPatternArm
 	export let bindings as PayloadBindingArray
 
-	export static function create(member TryBlockErrorMember, bindings PayloadBindingArray) returns ErrorUnionArm
-		return Self{member: member, bindings: bindings}
+	// Each member once, in the order the alternatives first name it. Empty for a declared enum's arm.
+	export let members as TryBlockErrorMemberArray
+
+	// The layout the bindings were parsed against — `undeclared` exactly when the arm names several members,
+	// which `requireOrArmPayloadSlotsAgree` admits only for an arm that binds nothing.
+	export let payloadEnum as DeclaredEnum
+
+	export static function create(bindings PayloadBindingArray, members TryBlockErrorMemberArray, payloadEnum DeclaredEnum) returns EnumPatternArm
+		return Self{bindings: bindings, members: members, payloadEnum: payloadEnum}
 	end 'create'
-end 'ErrorUnionArm'
+
+	// A scalar match's arm: no bindings, no members, no payload layout.
+	export static function bindingNothing() returns EnumPatternArm
+		return Self{bindings: PayloadBindingArray.create(), members: TryBlockErrorMemberArray.create(), payloadEnum: DeclaredEnum.undeclared}
+	end 'bindingNothing'
+end 'EnumPatternArm'
+
+// The layout whose tags the dispatch plan holds.
+function enumArmDispatchLayout(table EnumArmTable) returns EnumLayout
+	return match table 't'
+		declared(layout) gives layout
+		errorUnion(info) gives info.layout
+	end 't'
+end 'enumArmDispatchLayout'
+
+// The layout an arm's payload bindings play by: the declared enum's own, or the one member an error-union
+// arm names.
+function armPayloadEnumOf(table EnumArmTable, members TryBlockErrorMemberArray) returns DeclaredEnum
+	match table 't'
+		declared(layout) then return DeclaredEnum.declared(layout)
+		errorUnion then break 't'
+	end 't'
+
+	if members.count() != 1 'severalMembers'
+		return DeclaredEnum.undeclared
+	end 'severalMembers'
+
+	let member = try members.get(0) otherwise panic("armPayloadEnumOf: members.get OOB at 0 after the count guard")
+	return DeclaredEnum.declared(member.layout)
+end 'armPayloadEnumOf'
+
+// Record `member` on an arm's list unless an earlier alternative already named it.
+function noteArmMember(members TryBlockErrorMemberArray, member TryBlockErrorMember)
+	for named in members 'eachNamed'
+		if named.name.equals(member.name) 'alreadyNamed'
+			return
+		end 'alreadyNamed'
+	end 'eachNamed'
+
+	members.push(member)
+end 'noteArmMember'
+
+// Is any of these members delivered as a heap box?
+function membersHoldABox(members TryBlockErrorMemberArray) returns bool
+	for member in members 'eachMember'
+		if member.isBoxed 'boxed'
+			return true
+		end 'boxed'
+	end 'eachMember'
+
+	return false
+end 'membersHoldABox'
 
 // Is this match's scrutinee a synthesized error union, and if so which — `DeclaredEnum`'s shape, for
 // `DeclaredEnum`'s reason: the absent state is structurally distinct from an empty one.
@@ -11657,6 +11698,37 @@ type ErrorUnionBinding
 end 'ErrorUnionBinding'
 
 typealias ErrorUnionBindingArray = Array with ErrorUnionBinding
+
+// Where the dispatch enters an error-union arm (`Parser.enterErrorUnionArm`): the block its edges target, the phi
+// args they carry, and the block the arm's body is parsed into.
+type ErrorUnionArmEntry
+	export let targetId as BlockId
+	export let args as ValueIdArray
+	export let bodyId as BlockId
+
+	export static function create(targetId BlockId, args ValueIdArray, bodyId BlockId) returns ErrorUnionArmEntry
+		return Self{targetId: targetId, args: args, bodyId: bodyId}
+	end 'create'
+end 'ErrorUnionArmEntry'
+
+// A broken match obligation held for the handler's end (`Parser.errorMatchRefusal`).
+union ErrorMatchRefusal
+	none
+	held(bindingName ByteArray, reason String, line LineNumber, column ColumnNumber)
+end 'ErrorMatchRefusal'
+
+// E3161's reason where two paths reach one point with a combined error matched on one and not the other.
+let ErrorMatchPathsDisagreeReason = "it is matched on some of the paths that join here and not on others"
+
+// The refusal for moving the owned binding `owned` out of the innermost loop — E3161 when it is a combined
+// error's match obligation, whose move is its match.
+function loopEscapingMoveRefusal(owned VarInfo, anchor Token) returns ParseError
+	if owned.isErrorMatchObligation 'aMatchObligation'
+		return ParseError.errorMatchNotExactlyOnce(String.from(owned.name), reason: "this match is inside a loop the handler opened, which runs it zero times or more than once", line: anchor.line, column: anchor.column)
+	end 'aMatchObligation'
+
+	return ParseError.unsupported(LoopEscapingMoveDetail, line: anchor.line, column: anchor.column)
+end 'loopEscapingMoveRefusal'
 
 // The synthesized layout's NAME. It is a diagnostic string and nothing else — no registry holds it, so it
 // cannot be a key and cannot collide (and `requireUnreservedName` bars the `__` space from user
@@ -13175,6 +13247,16 @@ end 'DispatchInterval'
 
 typealias DispatchIntervalArray = Array with DispatchInterval
 
+// Stamp every interval one arm contributed — `intervals[from…]` — with the block its dispatch edge enters and
+// the phi args that ride the edge. An or-arm or a split range reaches one arm through several intervals.
+function retargetArmIntervals(intervals DispatchIntervalArray, from ElementIndex, targetId BlockId, args ValueIdArray)
+	for k in from upto intervals.count() 'eachInterval'
+		var interval = try intervals.get(k) otherwise panic("retargetArmIntervals: intervals.get OOB at {k} on a range walked to the array's own count")
+		interval.targetBlockId = targetId
+		interval.edgeArgs = args
+	end 'eachInterval'
+end 'retargetArmIntervals'
+
 // The verdict of the density heuristic over `intervals[from, to)`: whether a jump table is worth it, and if
 // so its `bias` (the minimum lo — subtract it and slot `i` is biased value `i`) and its `span` (the slot
 // count, min..max inclusive). `isTable` false leaves the other two unread. Top-level (not nested in
@@ -13925,6 +14007,10 @@ export type Parser
 	// fused phi belonging to a DIFFERENT `IrFunction`. `tryBlocks` in this same neighbourhood is as easy to
 	// reset without restoring, so both halves are spelled here.
 	var errorUnionBindings as ErrorUnionBindingArray
+
+	// The first break of a combined error's match obligation found where nothing may throw — a drop site or a
+	// join — held until the handler's end refuses it (`requireNoHeldErrorMatchRefusal`).
+	var errorMatchRefusal as ErrorMatchRefusal
 
 	// ⭐ **THE BLOCK-FORM `(e)` BINDING THIS HANDLER MUST BE SEEN TO `match` ON, AND WHETHER IT HAS
 	// BEEN (E3084).** A block-form handler is reached by every routed edge, so a handler that never
@@ -15699,6 +15785,7 @@ export type Parser
 			tryTargetMustStayACall: false,
 			loopClaimsWithIteratorPromise: false,
 			errorUnionBindings: ErrorUnionBindingArray.create(),
+			errorMatchRefusal: ErrorMatchRefusal.none,
 			tryBindingName: EmptySourceText,
 			tryBindingMatched: false,
 			matches: MatchContextArray.create(),
@@ -38925,21 +39012,18 @@ export type Parser
 		return merged
 	end 'desugarTry'
 
-	// ⭐⭐ **RECONCILE A `try`'s TWO LIVE EDGES' MOVE STATE — the ok edge, which moved nothing since the fork,
-	// and the handler's, which may have.** A binding moved on one edge and live on the other is dropped on
-	// the live edge and marked uniformly moved past the merge, so the later scope-exit drop is correct on
-	// both paths. Shared by the two `desugarTry` finishes that HAVE two live edges (`finishValueTry`,
-	// `finishFellThroughTry`), because the reconciliation is the same three lines and the same reason at
-	// both, and the terminated finish has one edge and rewinds instead.
+	// ⭐⭐ **RECONCILE THE MOVE STATE OF A MERGE WITH TWO LIVE EDGES** — an `if`'s two branches, a `try`'s ok
+	// edge and handler, a short-circuit's skip edge and right-hand side. A binding moved on one edge and live on
+	// the other is dropped on the live edge and marked uniformly moved past the merge (`reconcileMovesAtMerge`).
 	//
-	// Called BEFORE the edges' branches are emitted: `reconcileMovesAtMerge` appends each decref to the
-	// edge block that owes it, and that has to land ahead of that block's jump to the continuation.
-	function reconcileTryMergeMoves(okBlock IrBlock, errEnd IrBlock, entryMoveMark MoveMark, errMoveMark MoveMark, tryTok Token)
+	// Called BEFORE the edges' branches are emitted: each decref is appended to the edge block that owes it, and
+	// has to land ahead of that block's jump to the continuation.
+	function reconcileMovesAtTwoEdgeMerge(a IrBlock, markA MoveMark, b IrBlock, markB MoveMark, anchor Token)
 		var moveEdges = ReachingMoveEdgeArray.create()
-		moveEdges.push(ReachingMoveEdge.create(okBlock, mark: entryMoveMark))
-		moveEdges.push(ReachingMoveEdge.create(errEnd, mark: errMoveMark))
-		self.reconcileMovesAtMerge(moveEdges, anchor: tryTok)
-	end 'reconcileTryMergeMoves'
+		moveEdges.push(ReachingMoveEdge.create(a, mark: markA))
+		moveEdges.push(ReachingMoveEdge.create(b, mark: markB))
+		self.reconcileMovesAtMerge(moveEdges, anchor: anchor)
+	end 'reconcileMovesAtTwoEdgeMerge'
 
 	// The error handler TERMINATED (propagate / return / break / continue / throw / panic): only the ok
 	// block reaches the continuation. Restore the carried vars AND the drop-gating move state to their
@@ -39111,7 +39195,7 @@ export type Parser
 
 		// A VALUE fallback is an expression, but an expression can still CONSUME (`otherwise takeIt(s)`), so
 		// the two edges are reconciled here for the same reason the fell-through form reconciles.
-		self.reconcileTryMergeMoves(okBlock, errEnd: errEnd, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
+		self.reconcileMovesAtTwoEdgeMerge(okBlock, markA: entryMoveMark, b: errEnd, markB: errMoveMark, anchor: tryTok)
 
 		var okArgs = ValueIdArray.create()
 		okArgs.push(result)
@@ -39183,8 +39267,8 @@ export type Parser
 
 		// A block handler is statements, so it can move an outer owned binding (`otherwise (e) 'h'
 		// consume(s) end 'h'`) where the ok edge left it live — reconciled across the two edges before
-		// either branches. See `reconcileTryMergeMoves`.
-		self.reconcileTryMergeMoves(okBlock, errEnd: errEnd, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
+		// either branches. See `reconcileMovesAtTwoEdgeMerge`.
+		self.reconcileMovesAtTwoEdgeMerge(okBlock, markA: entryMoveMark, b: errEnd, markB: errMoveMark, anchor: tryTok)
 
 		self.mergeAtContinuation(okBlock, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: entryVals, valsB: errVals)
 
@@ -39692,8 +39776,10 @@ export type Parser
 	// and giving it a member's `named` type would tell `emitDecref` to run that member's `__destruct_`
 	// over a number.
 	//
-	// ⭐ **SO THE BOX IS RELEASED PER ARM INSTEAD**, where the member IS known — `parseMatchCommon`'s
-	// per-arm `enrollCaughtBox`, plus `emitErrorUnionDefaultCleanup` for a `default` that names none.
+	// ⭐ **SO THE BOX IS RELEASED PER ARM INSTEAD**, where the members are known — `parseMatchCommon`'s
+	// `enrollCaughtBox` for an arm naming one member, `enterErrorUnionArm` for an arm naming several, a
+	// `default` and an arm an `and fallthrough` reaches — which is sound only because the handler matches `e`
+	// exactly once on every path (`consumeErrorMatchObligation`).
 	//
 	// The registration is what lets `match e` find the union by the name the author wrote; `parseOtherwiseBlock`
 	// pops it at the handler's `end`, so a nested handler's binding cannot be mistaken for this one.
@@ -39705,6 +39791,74 @@ export type Parser
 		_ = try self.scope.declareValueBinding(bindingName, varType: MaxonType.integer, mutable: false, value: flag, brandId: UnnamedTypeId) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
 		self.errorUnionBindings.push(ErrorUnionBinding.create(bindingName, flag: flag, info: info))
 	end 'declareErrorUnionBinding'
+
+	// ⛔⛔ **E3161 — A COMBINED ERROR THAT MAY BE A BOX IS MATCHED EXACTLY ONCE ON EVERY PATH THROUGH ITS HANDLER.**
+	// `e` owns nothing, and the box is released by the arm of the `match e` that runs; so a second match reads a
+	// released box and a path with no match never releases it. The rule rides the move machinery rather than the
+	// text: the handler enrols an owned entry that owns nothing (`VarInfo.isErrorMatchObligation`), the match
+	// MOVES it here, and the doors that already settle a move on every path settle this one — a join whose paths
+	// disagree (`reconcileMovesAtMerge`) and an exit that reaches it live (`emitScopeDrops`) hold a refusal where
+	// they would have emitted a drop. A loop the handler opened is refused as the move out of a loop is.
+	function consumeErrorMatchObligation(flag ValueId, matchTok Token) throws ParseError
+		for i in 0 upto self.ownedBindings.count() 'eachOwned'
+			var owned = try self.ownedBindings.get(i) otherwise panic("consumeErrorMatchObligation: ownedBindings.get OOB at {i} on a range walked to its own count")
+
+			if not owned.isErrorMatchObligation or owned.boundValue != flag 'anotherBinding'
+				continue
+			end 'anotherBinding'
+
+			if owned.movedFrom 'alreadyMatched'
+				throw ParseError.errorMatchNotExactlyOnce(String.from(owned.name), reason: "this path has already matched it", line: matchTok.line, column: matchTok.column)
+			end 'alreadyMatched'
+
+			if self.bindingIndexEscapesLoop(i as BindingMark) 'insideALoop'
+				throw loopEscapingMoveRefusal(owned, anchor: matchTok)
+			end 'insideALoop'
+
+			owned.movedFrom = true
+			return
+		end 'eachOwned'
+	end 'consumeErrorMatchObligation'
+
+	// Hold the first broken obligation found where nothing may throw; a later one on the same parse adds nothing.
+	function holdErrorMatchRefusal(bindingName ByteArray, reason String, anchor Token)
+		match self.errorMatchRefusal 'r'
+			none then self.errorMatchRefusal = ErrorMatchRefusal.held(bindingName, reason: reason, line: anchor.line, column: anchor.column)
+			held then return
+		end 'r'
+	end 'holdErrorMatchRefusal'
+
+	// An arm an `and fallthrough` reaches is entered twice: by the dispatch, in the match's entry move state, and
+	// by the fall-through edge, in the state of the arm it falls out of. A combined error matched on the second
+	// and not the first is a join whose paths disagree.
+	function holdErrorMatchRefusalAcrossFallthrough(entryMoveMark MoveMark, anchor Token)
+		let arrived = self.captureMoveMark()
+
+		for i in 0 upto entryMoveMark.moved.count() 'eachOwned'
+			if not self.movedBetweenMarks(entryMoveMark, after: arrived, index: i) 'settledAlike'
+				continue
+			end 'settledAlike'
+
+			let owned = try self.ownedBindings.get(i) otherwise panic("holdErrorMatchRefusalAcrossFallthrough: ownedBindings.get OOB at {i} — the entry mark holds one entry per owned binding")
+			let isObligation = owned.isErrorMatchObligation
+			let name = owned.name
+
+			if isObligation 'matchedOnOneEdge'
+				self.holdErrorMatchRefusal(name, reason: ErrorMatchPathsDisagreeReason, anchor: anchor)
+			end 'matchedOnOneEdge'
+		end 'eachOwned'
+	end 'holdErrorMatchRefusalAcrossFallthrough'
+
+	// Refuse the held broken obligation, if there is one — asked where a handler ends, the last door its paths reach.
+	function requireNoHeldErrorMatchRefusal() throws ParseError
+		let refusal = self.errorMatchRefusal
+		self.errorMatchRefusal = ErrorMatchRefusal.none
+
+		match refusal 'r'
+			none then return
+			held(bindingName, reason, line, column) then throw ParseError.errorMatchNotExactlyOnce(String.from(bindingName), reason: reason, line: line, column: column)
+		end 'r'
+	end 'requireNoHeldErrorMatchRefusal'
 
 	// ⛔⛔ **THE SYNTHESIZED ERROR UNION A MATCH SCRUTINEE NAMES — AND THE TEST IS THE BINDING'S IDENTITY,
 	// NOT ITS NAME.** The name is how the record is FOUND; what makes it the union is that the name still
@@ -39799,6 +39953,11 @@ export type Parser
 		self.scope.pushScope()
 
 		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
+		let caughtUnion = caughtErrorUnionMatch(form)
+
+		if binder.hasBinding and errorUnionIsSynthesized(caughtUnion) and membersHoldABox(requireErrorUnionInfo(caughtUnion).members) 'owesOneMatch'
+			self.ownedBindings.push(VarInfo.createErrorMatchObligation(binder.name, flag: flag))
+		end 'owesOneMatch'
 
 		// ⭐ **E3084's BRACKET.** A BLOCK-form handler is reached by every routed edge, so one that never
 		// `match`es on its binding has silently swallowed every error the body could raise; the single-call
@@ -39832,6 +39991,7 @@ export type Parser
 		// and drain it off the owned list either way, so the function-end drop never sees a handler binding.
 		// A no-op when the handler enrolled nothing (a scalar error, or none).
 		self.dropArmScopedOwned(ownedFloor, exitBlock: errEnd, anchor: labelTok)
+		try self.requireNoHeldErrorMatchRefusal()
 
 		if errEnd.isTerminated() 'terminated'
 			return TryHandler.terminated
@@ -40066,7 +40226,7 @@ export type Parser
 			end 'eachCase'
 		end 'eachMember'
 
-		return ErrorUnionInfo.create(layout, caseMembers: caseMembers, fusedOrdinal: fusedOrdinal)
+		return ErrorUnionInfo.create(layout, caseMembers: caseMembers, members: members, fusedOrdinal: fusedOrdinal)
 	end 'fusedErrorUnionInfo'
 
 	// ⭐⭐ **WHAT `(e)` BINDS FOR A SINGLE-CALL `try` — and the ONE target shape that is not a single enum
@@ -40342,14 +40502,17 @@ export type Parser
 		// ⚠ **A SYNTHESIZED UNION'S BOX IS RELEASED HERE FOR THE REASON A `default` ARM'S IS.** Over a union
 		// the binding owns nothing at all — the flag is an ordinal on some incoming edges and a box POINTER on
 		// others, so `declareErrorUnionBinding` gives it no type and no drop, and the box is released by
-		// whichever ARM names the member. A divergent handler names none, which is exactly a `default`'s
-		// position, so it reuses that routine rather than inventing a second release.
+		// whichever ARM the dispatch enters. A divergent handler names no member, so it releases whichever boxed
+		// member is in flight through the same `emitErrorUnionBoxReleases` a `default` arm reaches.
 		//
 		// ⛔ **IT RUNS BEFORE THE FORM PARSES, AND THAT IS ONLY SOUND BECAUSE THE BINDING IS REFUSED ABOVE.**
 		// The release `__destruct_`s the in-flight box; a binding readable AFTERWARDS would be naming a freed
 		// one. `rejectDivergentBindingOverErrorUnion` is what makes "readable afterwards" impossible — remove
 		// it and this ordering becomes a wrong VALUE, which is exactly what review measured.
-		self.currentBlock = self.emitErrorUnionDefaultCleanup(func, union: errorUnion, entry: self.currentBlock, flag: flag, anchor: binder.anchor)
+		if errorUnionIsSynthesized(errorUnion) 'releaseTheBoxInFlight'
+			let info = requireErrorUnionInfo(errorUnion)
+			self.currentBlock = self.emitErrorUnionBoxReleases(func, members: info.members, fused: info.fusedOrdinal, entry: self.currentBlock, flag: flag, anchor: binder.anchor)
+		end 'releaseTheBoxInFlight'
 
 		try self.parseDivergingTerminalForm(func, block: self.currentBlock)
 
@@ -40420,10 +40583,7 @@ export type Parser
 			// live on the other is dropped on the LIVE edge and marked uniformly moved past the merge, so the
 			// later scope-exit drop is right on both. Emitted BEFORE the phi edges and the branches, exactly as
 			// `finalizeIfElse` does it, so each decref lands in its own edge's block ahead of that block's jump.
-			var moveEdges = ReachingMoveEdgeArray.create()
-			moveEdges.push(ReachingMoveEdge.create(bodyEnd, mark: bodyMoveMark))
-			moveEdges.push(ReachingMoveEdge.create(errEnd, mark: handlerMoveMark))
-			self.reconcileMovesAtMerge(moveEdges, anchor: tryTok)
+			self.reconcileMovesAtTwoEdgeMerge(bodyEnd, markA: bodyMoveMark, b: errEnd, markB: handlerMoveMark, anchor: tryTok)
 
 			self.mergeAtContinuation(bodyEnd, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: bodyVals, valsB: handlerVals)
 			self.emitBranch(bodyEnd, targetId: cont.id)
@@ -40688,8 +40848,8 @@ export type Parser
 	// and the entry ownership are settled from one place whichever door produced the edge.
 	//
 	// The ownership half is settled by the FIRST routed edge and every later one must AGREE with it; a
-	// disagreement is RECORDED for `requireRoutableTryBlockBody` to refuse at the body's end, because this
-	// path cannot throw (see `routeBareThrowingCallToTryBlock`).
+	// disagreement is RECORDED — for `requireRoutableTryBlockBody` to refuse at the body's end, or as an
+	// enclosing handler's E3161 — because this path cannot throw (see `routeBareThrowingCallToTryBlock`).
 	function recordRoutedEdge(ctx TryBlockContext, clause ThrowsClause) returns TryBlockErrorMember
 		// The outer bindings' move state ON THIS EDGE. Truncated to the block's owned floor: the body's own
 		// bindings vary in number between routed calls and the landing pad releases them anyway, so only the
@@ -40700,13 +40860,47 @@ export type Parser
 			ctx.throwsClause = clause
 			ctx.edgeMoveMark = edgeMark
 		end 'firstRoutedEdge' else 'laterRoutedEdge'
-			if not moveMarksAgree(ctx.edgeMoveMark, b: edgeMark) 'movedBetweenEdges'
-				ctx.conflictingMoveEdge = true
-			end 'movedBetweenEdges'
+			self.recordRoutedEdgeMoveDisagreement(ctx, edgeMark: edgeMark)
 		end 'laterRoutedEdge'
 
 		return self.recordRoutedErrorType(ctx, clause: clause)
 	end 'recordRoutedEdge'
+
+	// Compare a later routed edge's outer move state with the first edge's, which the handler is parsed in. An
+	// outer binding moved between them is the body's refusal; an enclosing handler's combined error matched
+	// between them is that handler's E3161, since the two edges reach this block's handler together.
+	//
+	// Only the `movedFrom` bits are compared: the VALUES legitimately differ between two points in one body. The
+	// consumed threads need no comparison of their own — a consume a NAME can outlive also marks that name's
+	// owning binding moved (`consumePromiseThread`), and a promise no binding owns has no name a later use could
+	// reach it through.
+	function recordRoutedEdgeMoveDisagreement(ctx TryBlockContext, edgeMark MoveMark)
+		// Both marks are cut at the block's owned floor, so a height difference means the floor itself moved —
+		// the same unreconcilable shape the body's refusal reports.
+		if ctx.edgeMoveMark.moved.count() != edgeMark.moved.count() 'differentHeights'
+			ctx.conflictingMoveEdge = true
+			return
+		end 'differentHeights'
+
+		for i in 0 upto edgeMark.moved.count() 'eachOuter'
+			let movedOnFirst = try ctx.edgeMoveMark.moved.get(i) otherwise panic("recordRoutedEdgeMoveDisagreement: ctx.edgeMoveMark.moved.get OOB at {i} on a mark of the same height")
+			let movedHere = try edgeMark.moved.get(i) otherwise panic("recordRoutedEdgeMoveDisagreement: edgeMark.moved.get OOB at {i} on a range walked to its own count")
+
+			if movedOnFirst == movedHere 'agrees'
+				continue
+			end 'agrees'
+
+			let owned = try self.ownedBindings.get(i) otherwise panic("recordRoutedEdgeMoveDisagreement: ownedBindings.get OOB at {i} — the mark is cut below the live height")
+			let isObligation = owned.isErrorMatchObligation
+			let name = owned.name
+
+			if isObligation 'matchedBetweenEdges'
+				self.holdErrorMatchRefusal(name, reason: ErrorMatchPathsDisagreeReason, anchor: ctx.tryTok)
+			end 'matchedBetweenEdges' else 'movedBetweenEdges'
+				ctx.conflictingMoveEdge = true
+			end 'movedBetweenEdges'
+		end 'eachOuter'
+	end 'recordRoutedEdgeMoveDisagreement'
 
 	// ⭐⭐ **FIND OR ADD THIS ERROR TYPE AS A MEMBER OF THE BLOCK'S SYNTHESIZED UNION, AND FIX ITS SLICE
 	// OF THE FUSED DISPATCH LINE.** Deduped by NAME, in first-routed order. Instead of carrying the
@@ -41015,6 +41209,8 @@ export type Parser
 			// real shape: this loop caches `count()` and walks downward, so an emit that enrolled a binding
 			// would grow the array under a pointer into it. None of the four can dangle.
 			let bindingMovedFrom = binding.movedFrom
+			let bindingIsObligation = binding.isErrorMatchObligation
+			let bindingName = binding.name
 			let bindingIsCell = binding.isCellBinding
 			let bindingVarType = binding.varType
 			let bindingValue = binding.boundValue
@@ -41025,6 +41221,11 @@ export type Parser
 			// the list (removal would desync the block/loop drop marks), so the SKIP is what makes a
 			// moved-out value drop exactly once. This one guard serves every exit that funnels through
 			// here — `return`, a block fall-through, a `break`/`continue`.
+			if bindingIsObligation and not bindingMovedFrom 'leavesUnmatched'
+				self.holdErrorMatchRefusal(bindingName, reason: "a path leaves the handler here without having matched it", anchor: anchor)
+				continue
+			end 'leavesUnmatched'
+
 			if not bindingMovedFrom 'liveOwner'
 				// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS (PBR-2)** — the record it holds
 				// and the one-word box holding it. The occupant is LOADED rather than remembered, for
@@ -41292,7 +41493,13 @@ export type Parser
 				end 'liveHere'
 			end 'scan'
 
-			if anyMoved and anyLive 'mixed'
+			let joined = try self.ownedBindings.get(i) otherwise panic("reconcileMovesAtMerge: ownedBindings.get OOB at {i}")
+			let joinedIsObligation = joined.isErrorMatchObligation
+			let joinedName = joined.name
+
+			if anyMoved and anyLive and joinedIsObligation 'matchedOnSomePaths'
+				self.holdErrorMatchRefusal(joinedName, reason: ErrorMatchPathsDisagreeReason, anchor: anchor)
+			end 'matchedOnSomePaths' else if anyMoved and anyLive 'mixed'
 				let saved = self.currentBlock
 
 				for edge in edges 'dropLive'
@@ -42227,7 +42434,7 @@ export type Parser
 	// load-bearing half: a moved-from binding shares its stale `boundValue` with the binding it moved to,
 	// so a value has exactly one owner only once the flag is checked.
 	function isLiveOwnerOf(owned VarInfo, value ValueId) returns bool
-		return not owned.movedFrom and owned.boundValue == value
+		return not owned.movedFrom and not owned.isErrorMatchObligation and owned.boundValue == value
 	end 'isLiveOwnerOf'
 
 	// True iff the RHS just parsed — the tokens in `[startPos, self.pos)` — RESOLVES TO a bare reference
@@ -42710,14 +42917,15 @@ export type Parser
 			return
 		end 'noBindingOwnsIt'
 
-		if self.bindingIndexEscapesLoop(index) 'escapesLoop'
-			throw ParseError.unsupported(LoopEscapingMoveDetail, line: anchor.line, column: anchor.column)
-		end 'escapesLoop'
-
 		// A `var` bound from `.get(index)`, not a bare `for` element: a field write needs a mutable binding,
 		// and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue` idiom), so the flag is
 		// observed by every holder — `ownedBindings`, `Scope.vars`, any loop-phi list.
 		var owned = try self.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+
+		if self.bindingIndexEscapesLoop(index) 'escapesLoop'
+			throw loopEscapingMoveRefusal(owned, anchor: anchor)
+		end 'escapesLoop'
+
 		owned.movedFrom = true
 
 		// ⭐⭐ **E3077's COMPILER-ONLY DOOR: BEING MOVED OUT OF IS A USE OF MUTABILITY HERE, AND IN NEITHER
@@ -42787,6 +42995,20 @@ export type Parser
 		let innermost = try self.loops.get(self.loops.count() - 1) otherwise panic("bindingIndexEscapesLoop: loops.get failed on a non-empty stack")
 		return index < innermost.ownedFloor
 	end 'bindingIndexEscapesLoop'
+
+	// A `while` condition runs on every trip, so a binding declared before the loop that it moves escapes the loop
+	// exactly as a move in the body does — refused the same way. Asked once the condition is parsed, because
+	// the loop's context is pushed only after it.
+	function requireLoopConditionMovesNothing(before MoveMark, anchor Token) throws ParseError
+		let after = self.captureMoveMark()
+
+		for i in 0 upto before.moved.count() 'eachOwned'
+			if self.movedBetweenMarks(before, after: after, index: i) 'movedByTheCondition'
+				let owned = try self.ownedBindings.get(i) otherwise panic("requireLoopConditionMovesNothing: ownedBindings.get OOB at {i} — the mark holds one entry per owned binding")
+				throw loopEscapingMoveRefusal(owned, anchor: anchor)
+			end 'movedByTheCondition'
+		end 'eachOwned'
+	end 'requireLoopConditionMovesNothing'
 
 	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY**, which is what the `binding` door spends;
 	// the two HAND-OFF doors retain instead (`retainBorrowedByteRecord`). The
@@ -44676,15 +44898,12 @@ export type Parser
 		// The block this branch already mints for a conditional move is exactly the block the counter needs,
 		// and `reconcileMovesAtMerge` emits nothing when no binding is mixed — so an instrumented `if` with no
 		// conditional move pays one block, one branch and the counter, and nothing else.
-		if self.thenMovesLiveBinding(entryMoveMark, thenMoveMark: thenMoveMark) or self.coverageActive() 'falseEdgeDrop'
+		if self.movesALiveBinding(entryMoveMark, after: thenMoveMark) or self.coverageActive() 'falseEdgeDrop'
 			var falseBlock = self.newBlock(func, label: b"iffalse", line: ifTok.line)
 			self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: falseBlock.id, ifTok: ifTok)
 			self.mintElseArmPoint(falseBlock, funcName: func.name, ifTok: ifTok, elseTok: ifTok, written: false)
 
-			var edges = ReachingMoveEdgeArray.create()
-			edges.push(ReachingMoveEdge.create(falseBlock, mark: entryMoveMark))
-			edges.push(ReachingMoveEdge.create(thenEnd, mark: thenMoveMark))
-			self.reconcileMovesAtMerge(edges, anchor: ifTok)
+			self.reconcileMovesAtTwoEdgeMerge(falseBlock, markA: entryMoveMark, b: thenEnd, markB: thenMoveMark, anchor: ifTok)
 
 			self.mergeAtContinuation(falseBlock, predB: thenEnd, cont: cont, bindings: bindings, valsA: entryVals, valsB: thenVals)
 			self.emitBranch(falseBlock, targetId: cont.id)
@@ -44718,27 +44937,26 @@ export type Parser
 		self.mintCovPoint(block, funcName: funcName, flags: MxdbgCovFlagArmElse or MxdbgCovFlagArmImplicit, line: ifTok.line, col: ifTok.column, branchLine: ifTok.line, branchCol: ifTok.column)
 	end 'mintElseArmPoint'
 
-	// Does the then branch move an owned binding the ENTRY left live — the one shape an `if` with no `else`
-	// must place a drop on its false edge for (see `finalizeIfNoElse`)? The move flag is monotonic within a
-	// path, so a binding live at entry and moved after the then branch was moved BY that branch. A binding
-	// already moved before the `if` is moved on both edges (nothing to reconcile); a binding no branch
-	// touched is live on both.
-	function thenMovesLiveBinding(entryMoveMark MoveMark, thenMoveMark MoveMark) returns bool
-		var i = 0
+	// Was the owned binding at `index` live in `before` and moved in `after`? The move flag is monotonic within a
+	// path, so such a binding was moved BY the code parsed between the two marks.
+	function movedBetweenMarks(before MoveMark, after MoveMark, index ElementIndex) returns bool
+		let wasMoved = try before.moved.get(index) otherwise panic("movedBetweenMarks: before.moved.get OOB at {index}")
+		let isMoved = try after.moved.get(index) otherwise panic("movedBetweenMarks: after.moved.get OOB at {index}")
+		return isMoved and not wasMoved
+	end 'movedBetweenMarks'
 
-		while i < entryMoveMark.moved.count() 'scan'
-			let entryLive = not (try entryMoveMark.moved.get(i) otherwise panic("thenMovesLiveBinding: entryMoveMark.moved.get OOB at {i}"))
-			let thenMoved = try thenMoveMark.moved.get(i) otherwise panic("thenMovesLiveBinding: thenMoveMark.moved.get OOB at {i}")
-
-			if entryLive and thenMoved 'movedInThenOnly'
+	// Did the code between two marks move an owned binding live at the first — the shape a merge must place a
+	// drop on its other edge for (`finalizeIfNoElse`, `emitShortCircuit`)? A binding already moved at the first
+	// mark is moved on both edges, and one nothing touched is live on both.
+	function movesALiveBinding(before MoveMark, after MoveMark) returns bool
+		for i in 0 upto before.moved.count() 'scan'
+			if self.movedBetweenMarks(before, after: after, index: i) 'movedBetween'
 				return true
-			end 'movedInThenOnly'
-
-			i = i + 1
+			end 'movedBetween'
 		end 'scan'
 
 		return false
-	end 'thenMovesLiveBinding'
+	end 'movesALiveBinding'
 
 	// Finalize an `if`/`else`: the entry's condBranch targets the then and else blocks.
 	// The continuation is reachable only when a branch falls through; when BOTH return
@@ -44764,10 +44982,7 @@ export type Parser
 			// left live in the other is dropped on the live edge (both are real, unterminated blocks) and
 			// marked uniformly moved past the merge. Emitted BEFORE `mergeAtContinuation` records the phi
 			// edges and before the branches, so the decref lands in the branch's own body.
-			var edges = ReachingMoveEdgeArray.create()
-			edges.push(ReachingMoveEdge.create(thenEnd, mark: thenMoveMark))
-			edges.push(ReachingMoveEdge.create(elseEnd, mark: elseMoveMark))
-			self.reconcileMovesAtMerge(edges, anchor: ifTok)
+			self.reconcileMovesAtTwoEdgeMerge(thenEnd, markA: thenMoveMark, b: elseEnd, markB: elseMoveMark, anchor: ifTok)
 
 			self.mergeAtContinuation(thenEnd, predB: elseEnd, cont: cont, bindings: bindings, valsA: thenVals, valsB: elseVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
@@ -44960,6 +45175,12 @@ export type Parser
 		// loop's entry, so nothing about `continue` or the back edge changes.
 		let condTempFloor = self.pendingTempDrops.count()
 		let condOwnedFloor = self.ownedBindings.count()
+		var condEntryMoveMark = self.emptyMoveMark
+
+		if condOwnedFloor > 0 'bindingsToMove'
+			condEntryMoveMark = self.captureMoveMark()
+		end 'bindingsToMove'
+
 		let cond = try self.parseBoolCondition(func, block: header, kwTok: whileTok)
 		var condExit = self.currentBlock
 
@@ -44981,6 +45202,10 @@ export type Parser
 		// direction this rung's risk inverts to. The borrow cannot escape the condition (it is a `bool`), so
 		// releasing here is sound as well as necessary — the short-circuit rhs's argument, one construct out.
 		self.dropArmScopedOwned(condOwnedFloor, exitBlock: condExit, anchor: whileTok)
+
+		if condOwnedFloor > 0 'conditionMayMove'
+			try self.requireLoopConditionMovesNothing(condEntryMoveMark, anchor: whileTok)
+		end 'conditionMayMove'
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 		try self.requireNewlineAfterBlockLabel()
@@ -48851,6 +49076,12 @@ export type Parser
 		let errorUnion = self.errorUnionForScrutinee(scrutName)
 		let isErrorUnionMatch = errorUnionIsSynthesized(errorUnion)
 		let scrut = try self.parseExpression(func, block: block)
+
+		// Consumed before the arms and their entry move mark, so every arm's path carries the match.
+		if isErrorUnionMatch 'consumesTheMatchObligation'
+			try self.consumeErrorMatchObligation(scrut, matchTok: matchTok)
+		end 'consumesTheMatchObligation'
+
 		let scrutTag = self.tagOf(scrut)
 
 		// ⭐ **E3077's SCRUTINEE DOOR.** A `match` arm may WRITE a payload back into the scrutinee's box
@@ -49095,6 +49326,7 @@ export type Parser
 				var defaultBody = try self.artifact.module.getBlockByIdIn(func, id: defaultBodyId) otherwise panic("parseMatchCommon: the default body block {defaultBodyId} is not in its own function")
 
 				if prevFallthrough 'defaultIsFtTarget'
+					self.holdErrorMatchRefusalAcrossFallthrough(entryMoveMark, anchor: defTok)
 					let matchEdgeArgs = self.setupFallthroughTargetPhis(defaultBody, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 
 					if usePlan 'planDefaultArgs'
@@ -49113,17 +49345,19 @@ export type Parser
 					end 'priorArmConsumed'
 				end 'defaultFresh'
 
-				if usePlan 'planMissTarget'
+				// ⭐ **A `default` ON AN ERROR UNION MAY BE HOLDING A BOX NOTHING ELSE WILL RELEASE.** Every
+				// PATTERN arm releases the box of a member it names; a `default` names none, so it releases whichever
+				// boxed member is in flight (`enterErrorUnionArm`), after the fallthrough phis, which belong to the
+				// block the edges actually branch to.
+				if isErrorUnionMatch 'errorUnionDefaultEntry'
+					let info = requireErrorUnionInfo(errorUnion)
+					let entry = self.enterErrorUnionArm(func, members: info.members, fused: info.fusedOrdinal, fallenInto: prevFallthrough, body: defaultBody, edgeArgs: planMissArgs, flag: scrut, anchor: defTok)
+					planMissBlockId = entry.targetId
+					planMissArgs = entry.args.clone()
+					defaultBody = try self.artifact.module.getBlockByIdIn(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the default body block {entry.bodyId} is not in its own function")
+				end 'errorUnionDefaultEntry' else if usePlan 'planMissTarget'
 					planMissBlockId = defaultBody.id
 				end 'planMissTarget'
-
-				// ⭐ **A `default` ON AN ERROR UNION MAY BE HOLDING A BOX NOTHING ELSE WILL RELEASE.** Every
-				// PATTERN arm names its member, so a boxed one enrols the box and drops it (the arm's `enrollCaughtBox`);
-				// a `default` names none, and on the edges where a boxed member IS the error in flight the box
-				// would simply be abandoned. The cleanup runs first and the body is parsed into the block it
-				// leaves control in — so `defaultBody` is re-seated AFTER the miss target and the fallthrough
-				// phis, which both belong to the block the edges actually branch to.
-				defaultBody = self.emitErrorUnionDefaultCleanup(func, union: errorUnion, entry: defaultBody, flag: scrut, anchor: defTok)
 
 				// ⭐ **A `default` IS AN ARM THE USER WROTE**, including the `default throws` / `default panic`
 				// spellings, and its count answers "was the default ever reached". Minted after the reseat above,
@@ -49217,41 +49451,23 @@ export type Parser
 				// short-circuits, so `currentBlock` does not move; it matters only for the emitted-cond path.
 				self.currentBlock = currentTestBlock
 				var cond = 0 as ValueId
-				var payloadBindings = PayloadBindingArray.create()
 
-				// ⭐ **WHOSE LAYOUT THIS ARM'S PAYLOAD PLAYS BY.** For an ordinary enum match it is the
-				// scrutinee's own, as it always was. For an ERROR UNION it is the arm's MEMBER: the synthesized
-				// table carries no payload slots (it is a dispatch table — see `ErrorUnionInfo`), and a payload
-				// diagnostic must name the enum the author actually wrote rather than `__ErrorUnion`.
-				//
-				// ⚠ **IT STARTS `undeclared` RATHER THAN AS A SECOND NAME FOR `enumMatch`** — that binding would
-				// MOVE the match's scrutinee enum out of the arm loop (E2015). Every branch that produces payload
-				// bindings records the layout it produced them from, so `undeclared` here can only survive to the
-				// use below on an arm with NO bindings, where nothing reads it; `requireEnumLayout` is what says
-				// so, and it panics rather than guessing if that ever stops holding.
-				var armPayloadEnum = DeclaredEnum.undeclared
+				// ⭐ **WHOSE LAYOUT THIS ARM'S PAYLOAD PLAYS BY** is `arm.payloadEnum`. For an ordinary enum match it
+				// is the scrutinee's own. For an ERROR UNION it is the arm's MEMBER: the synthesized table carries no
+				// payload slots (it is a dispatch table — see `ErrorUnionInfo`), and a payload diagnostic must name
+				// the enum the author actually wrote rather than `__ErrorUnion`. A scalar arm binds nothing.
+				var arm = EnumPatternArm.bindingNothing()
 
-				// Does this arm's member deliver a heap BOX the ARM must release? Only an error union can, and
-				// `armMemberBoxType` is read only under this flag — the `hasBinding`/`bindingName` pairing this
-				// file uses wherever one fact governs the meaning of another.
+				// Does this arm keep its ONE member's heap BOX for its length? `armMemberBoxType` is read only under
+				// this flag. An arm naming SEVERAL members cannot keep a box — which member is in flight is known
+				// only per dispatch edge — so it releases whichever boxed one is in flight as it is entered
+				// (`enterErrorUnionArm`), as does an arm an `and fallthrough` reaches.
 				var armOwnsMemberBox = false
 				var armMemberBoxType = MaxonType.integer
 				let intervalMark = dispatchIntervals.count()
 
-				if isErrorUnionMatch 'errorUnionPattern'
-					let arm = try self.collectErrorUnionPatternInterval(requireErrorUnionInfo(errorUnion), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
-					armPayloadEnum = DeclaredEnum.declared(arm.member.layout)
-					armOwnsMemberBox = arm.member.isBoxed
-					armMemberBoxType = self.tryErrorEnumType(arm.member.clause)
-
-					if prevFallthrough 'ftTargetBindsUnion'
-						try self.rejectFallthroughIntoBindingArm(arm.bindings, layout: arm.member.layout, patternTok: patternTok)
-					end 'ftTargetBindsUnion'
-
-					payloadBindings = arm.bindings
-				end 'errorUnionPattern' else if isEnumMatch 'enumPattern'
-					let armLayout = requireEnumLayout(enumMatch)
-					payloadBindings = try self.collectEnumPatternIntervals(armLayout, covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals, intervalMark: intervalMark)
+				if isEnumMatch 'enumPattern'
+					arm = try self.collectEnumPatternIntervals(self.enumArmTable(enumMatch, errorUnion: errorUnion), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals, intervalMark: intervalMark)
 
 					// An `and fallthrough` edge reaches this arm's BODY from a different case, and this arm's
 					// bindings sit at the head of that body — so they would destructure a case the value does
@@ -49259,10 +49475,14 @@ export type Parser
 					// phi or edge is wired for the fallthrough. Only an enum pattern produces bindings, so a
 					// scalar match cannot reach it.
 					if prevFallthrough 'ftTargetBinds'
-						try self.rejectFallthroughIntoBindingArm(payloadBindings, layout: armLayout, patternTok: patternTok)
+						try self.rejectFallthroughIntoBindingArm(arm, patternTok: patternTok)
 					end 'ftTargetBinds'
 
-					armPayloadEnum = DeclaredEnum.declared(armLayout)
+					if arm.members.count() == 1 and not prevFallthrough 'oneMemberDispatchedOnly'
+						let member = try arm.members.get(0) otherwise panic("parseMatchCommon: an arm naming one member holds no member at index 0")
+						armOwnsMemberBox = member.isBoxed
+						armMemberBoxType = self.tryErrorEnumType(member.clause)
+					end 'oneMemberDispatchedOnly'
 				end 'enumPattern' else if usePlan 'scalarPlanPattern'
 					try self.collectScalarPatternIntervals(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
 				end 'scalarPlanPattern' else 'scalarChainPattern'
@@ -49272,6 +49492,7 @@ export type Parser
 				var matchEdgeArgs = ValueIdArray.create()
 
 				if prevFallthrough 'armIsFtTarget'
+					self.holdErrorMatchRefusalAcrossFallthrough(entryMoveMark, anchor: patternTok)
 					matchEdgeArgs = self.setupFallthroughTargetPhis(bodyBlock, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 				end 'armIsFtTarget' else 'armFresh'
 					if self.beginFreshArm(carried, entryVals: entryVals, entryMoveMark: entryMoveMark, scrut: scrut) 'priorArmConsumed'
@@ -49280,13 +49501,15 @@ export type Parser
 				end 'armFresh'
 
 				if usePlan 'planEdgeArgs'
-					// Stamp the carried-var phi args across every interval this arm contributed (an or-arm or a
-					// split range reaches one body through several intervals); the dispatch records the
-					// test→body edge with them. No `condBranch` here — the dispatch emits all of them later.
-					for k in intervalMark upto dispatchIntervals.count() 'stampArgs'
-						var interval = try dispatchIntervals.get(k) otherwise panic("parseMatchCommon: dispatchIntervals.get OOB at {k}")
-						interval.edgeArgs = matchEdgeArgs
-					end 'stampArgs'
+					// The dispatch records each test→arm edge from the stamped intervals. No `condBranch` here — the
+					// dispatch emits all of them later.
+					if isErrorUnionMatch and not armOwnsMemberBox 'errorUnionArmEntry'
+						let entry = self.enterErrorUnionArm(func, members: arm.members, fused: requireErrorUnionInfo(errorUnion).fusedOrdinal, fallenInto: prevFallthrough, body: bodyBlock, edgeArgs: matchEdgeArgs, flag: scrut, anchor: patternTok)
+						retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: entry.targetId, args: entry.args)
+						bodyBlock = try self.artifact.module.getBlockByIdIn(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the arm body block {entry.bodyId} is not in its own function")
+					end 'errorUnionArmEntry' else 'dispatchIntoBody'
+						retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: bodyBlock.id, args: matchEdgeArgs)
+					end 'dispatchIntoBody'
 				end 'planEdgeArgs' else 'chainEdge'
 					self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
 					self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTestId, ifTok: patternTok)
@@ -49317,12 +49540,12 @@ export type Parser
 					self.enrollCaughtBox(scrut, eType: armMemberBoxType, binding: VarInfo.createValueBinding(EmptySourceText, varType: armMemberBoxType, mutable: false, boundValue: scrut))
 				end 'boxedMemberArm'
 
-				let hasPayloadBindings = payloadBindings.count() > 0
+				let hasPayloadBindings = arm.bindings.count() > 0
 
 				if hasPayloadBindings 'openArmBindings'
 					self.currentBlock = bodyBlock
 					self.scope.pushScope()
-					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, scrutIsAParameter: scrutIsAParameter, layout: requireEnumLayout(armPayloadEnum))
+					let armMovedManaged = try self.declarePayloadBindings(arm.bindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, scrutIsAParameter: scrutIsAParameter, layout: requireEnumLayout(arm.payloadEnum))
 
 					if armMovedManaged 'consumed'
 						// The scrutinee is dead for the REST OF THIS ARM from here — its slot is nulled, so the
@@ -51268,23 +51491,46 @@ export type Parser
 	// derivations agreeing only because nothing pushes between them is not an invariant. If they diverged,
 	// E3129 would check cases the arm does not cover (or miss ones it does) while phi args landed on the
 	// wrong edges.
-	function collectEnumPatternIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, intervalMark ElementIndex) returns PayloadBindingArray throws ParseError
+	//
+	// ⭐ **A SYNTHESIZED ERROR UNION'S ARM IS PARSED HERE TOO** — only an alternative's resolution differs
+	// (`collectEnumPatternAlternative`), so the chain, the binding rules and the fold are one grammar for both.
+	function collectEnumPatternIntervals(table EnumArmTable, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, intervalMark ElementIndex) returns EnumPatternArm throws ParseError
 		var bindings = PayloadBindingArray.create()
-		try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings)
+		var members = TryBlockErrorMemberArray.create()
+		try self.collectEnumPatternAlternative(table, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings, members: members)
 
 		while self.at(TokenKind.or) 'orChain'
 			try self.consumeOrChainSeparator()
-			try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings)
+			try self.collectEnumPatternAlternative(table, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings, members: members)
 		end 'orChain'
+
+		let arm = EnumPatternArm.create(bindings, members: members, payloadEnum: armPayloadEnumOf(table, members: members))
 
 		// Both halves of E3129, in the order their answers depend on: whether the arm's bindings are a
 		// bijection is a fact about the arm ALONE, and settling it first means the agreement walk below never
 		// has to reason about which of two bindings of one slot it is talking about.
-		try self.requireArmBindingsAreDistinct(bindings)
-		try self.requireOrArmPayloadSlotsAgree(layout, bindings: bindings, into: into, intervalMark: intervalMark)
-		self.foldEnumCaseRun(layout, into: into, intervalMark: intervalMark, bindings: bindings, bodyBlockId: bodyBlockId)
-		return bindings
+		try self.requireArmBindingsAreDistinct(arm.bindings)
+		try self.requireOrArmPayloadSlotsAgree(arm, into: into, intervalMark: intervalMark)
+		self.foldEnumCaseRun(enumArmDispatchLayout(table), into: into, intervalMark: intervalMark, bindings: arm.bindings, bodyBlockId: bodyBlockId)
+		return arm
 	end 'collectEnumPatternIntervals'
+
+	// One alternative of an enum arm, resolved against its table.
+	function collectEnumPatternAlternative(table EnumArmTable, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, bindings PayloadBindingArray, members TryBlockErrorMemberArray) throws ParseError
+		match table 't'
+			declared(layout) then try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings)
+			errorUnion(info) then try self.collectErrorUnionPatternAtom(info, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings, members: members)
+		end 't'
+	end 'collectEnumPatternAlternative'
+
+	// The table an arm of this match resolves against. Asked only of an enum match.
+	function enumArmTable(enumMatch DeclaredEnum, errorUnion ErrorUnionMatch) returns EnumArmTable
+		if errorUnionIsSynthesized(errorUnion) 'anErrorUnion'
+			return EnumArmTable.errorUnion(requireErrorUnionInfo(errorUnion))
+		end 'anErrorUnion'
+
+		return EnumArmTable.declared(requireEnumLayout(enumMatch))
+	end 'enumArmTable'
 
 	// ⭐⭐ **AN ARM'S ALTERNATIVES BECOME ONE RANGE COMPARE WHERE THAT MEANS THE SAME SET.** Each
 	// alternative arrives as its own point interval, so a twenty-case arm would otherwise be twenty
@@ -51458,19 +51704,37 @@ export type Parser
 	//
 	// Vacuous for a single-case arm — `walk(dir)` covers only `walk`, which declares the slot it binds — so
 	// the rule is stated once for every enum arm rather than behind an "is this an or-chain" test.
-	function requireOrArmPayloadSlotsAgree(layout EnumLayout, bindings PayloadBindingArray, into DispatchIntervalArray, intervalMark ElementIndex) throws ParseError
-		if bindings.count() == 0 'bindsNothing'
+	//
+	// ⛔ **AN ERROR-UNION ARM NAMING SEVERAL MEMBERS BINDS NOTHING.** Each member lays out its own value — a
+	// union's is a box with its own slots, an enum's an ordinal with none — so a slot of one is no slot of
+	// another.
+	function requireOrArmPayloadSlotsAgree(arm EnumPatternArm, into DispatchIntervalArray, intervalMark ElementIndex) throws ParseError
+		if arm.bindings.count() == 0 'bindsNothing'
 			return
 		end 'bindsNothing'
 
+		if arm.members.count() > 1 'severalMembers'
+			// Anchored at a binding that reads: a `_` reads no slot, and every alternative that binds names at
+			// least one that does (E3081).
+			for binding in arm.bindings 'firstReading'
+				if not binding.isDiscard 'reads'
+					throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "this arm names cases of more than one error type, and its bindings read slots of one type's value, which a case of another type does not hold. Give each error type an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
+				end 'reads'
+			end 'firstReading'
+
+			panic("requireOrArmPayloadSlotsAgree: an arm with bindings holds no binding that reads — parseCasePayloadBindings refuses an all-discard list")
+		end 'severalMembers'
+
+		let layout = requireEnumLayout(arm.payloadEnum)
+
 		for ci in 0 upto layout.caseCount() 'eachCase'
-			if not self.armCoversCase(layout, index: ci, into: into, intervalMark: intervalMark) 'anotherArmsCase'
+			if not self.armCoversTag(self.armDispatchTagOf(arm, payloadLayout: layout, index: ci), into: into, intervalMark: intervalMark) 'anotherArmsCase'
 				continue
 			end 'anotherArmsCase'
 
 			let payloads = layout.payloadsAt(ci)
 
-			for binding in bindings 'eachBinding'
+			for binding in arm.bindings 'eachBinding'
 				// A `_` reads nothing, so no case has to hold anything for it.
 				if binding.isDiscard 'discarded'
 					continue
@@ -51481,16 +51745,26 @@ export type Parser
 		end 'eachCase'
 	end 'requireOrArmPayloadSlotsAgree'
 
-	// Does case `index` route to THIS arm — i.e. does its tag fall in one of the intervals the arm just
-	// contributed? Read off the interval plan rather than collected a second time as the atoms are parsed,
-	// because the plan IS the arm's coverage (a range alternative expands into it exactly as a bare case
-	// does), and a parallel case list would be that fact recorded twice. Tags are unique per case, so tag
-	// membership and case membership are the same question.
-	function armCoversCase(layout EnumLayout, index CaseIndex, into DispatchIntervalArray, intervalMark ElementIndex) returns bool
-		let tag = layout.tagOfIndex(index)
+	// The tag the dispatch plan holds for case `index` of the arm's payload layout: the case's own tag for a
+	// declared enum, shifted onto the fused line for an error union's one member.
+	function armDispatchTagOf(arm EnumPatternArm, payloadLayout EnumLayout, index CaseIndex) returns ParsedInt
+		let tag = payloadLayout.tagOfIndex(index)
 
+		if arm.members.count() == 0 'aDeclaredEnum'
+			return tag
+		end 'aDeclaredEnum'
+
+		let member = try arm.members.get(0) otherwise panic("armDispatchTagOf: members.get OOB at 0 after the count guard")
+		return fusedCaseTag(tag, offset: member.fusedTagOffset)
+	end 'armDispatchTagOf'
+
+	// Does this tag route to THIS arm — i.e. does it fall in one of the intervals the arm just contributed?
+	// Read off the interval plan rather than collected a second time as the atoms are parsed, because the
+	// plan IS the arm's coverage, and a parallel case list would be that fact recorded twice. Tags are unique
+	// per case, so tag membership and case membership are the same question.
+	function armCoversTag(tag ParsedInt, into DispatchIntervalArray, intervalMark ElementIndex) returns bool
 		for k in intervalMark upto into.count() 'eachInterval'
-			let interval = try into.get(k) otherwise panic("armCoversCase: intervals.get OOB at {k} on a range walked to the array's own count")
+			let interval = try into.get(k) otherwise panic("armCoversTag: intervals.get OOB at {k} on a range walked to the array's own count")
 
 			if tag >= interval.lo and tag <= interval.hi 'covered'
 				return true
@@ -51498,7 +51772,7 @@ export type Parser
 		end 'eachInterval'
 
 		return false
-	end 'armCoversCase'
+	end 'armCoversTag'
 
 	// One (covered case, binding) pair — the whole of E3129's rule, and both of its arms turn on the same
 	// question: what does THIS case put in the slot the binding reads?
@@ -51612,19 +51886,17 @@ export type Parser
 		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
 	end 'collectEnumPatternAtomIntervals'
 
-	// ⭐⭐ **ONE ARM OF A MATCH ON A SYNTHESIZED ERROR UNION.** The union path's twin of
-	// `collectEnumPatternAtomIntervals`, and it is a SEPARATE routine for one reason: an error-union arm names
-	// EXACTLY ONE `(member, case)` pair. It has no `or`-chain and no case RANGE — neither reference offers
-	// them either, and both would be meaningless here (a range over the fused line would span two enums'
-	// cases, which is not a thing an author can mean). What it does share is everything that matters: the
-	// coverage bitmap, the dispatch interval, the payload-binding parse and the arm machinery that follows.
+	// ⭐⭐ **ONE ALTERNATIVE OF AN ARM OF A MATCH ON A SYNTHESIZED ERROR UNION.** The union path's twin of
+	// `collectEnumPatternAtomIntervals`: one `(member, case)` pair, its payload bindings parsed against that
+	// member's layout, and the member recorded once on the arm's list. It has no case RANGE — a range over the
+	// fused line would span two enums' cases, which is not a thing an author can mean.
 	//
 	// ⭐ **BOTH SPELLINGS OF THE PATTERN, and the qualified one is why `resolveEnumArmCase` could not serve.**
 	// That routine REFUSES `Enum.case` (E3075: the scrutinee's enum is already known, so the bare name
 	// suffices) — which is exactly backwards here, where the qualifier is the only way to say which member's
 	// `notFound` is meant. So: `Member.case` resolves against that member, a bare `case` resolves across all
 	// members and is E3085 when two of them share the name.
-	function collectErrorUnionPatternInterval(info ErrorUnionInfo, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns ErrorUnionArm throws ParseError
+	function collectErrorUnionPatternAtom(info ErrorUnionInfo, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, bindings PayloadBindingArray, members TryBlockErrorMemberArray) throws ParseError
 		let firstTok = self.current()
 		let armStart = self.pos
 
@@ -51653,9 +51925,8 @@ export type Parser
 			index = try self.errorUnionBareCaseIndex(info, caseTok: caseTok)
 		end 'bare'
 
-		// A case RANGE here is refused for the ordinary enum's reason and for one of its own: a range over the
-		// FUSED line would span two enums' cases, which is not a thing an author can mean. Asked HERE rather
-		// than left to the arm separator, so the diagnostic names the range and not a missing `then`.
+		// Asked HERE rather than left to the arm separator, so the diagnostic names the range and not a missing
+		// `then`.
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'caseRange'
 			self.advance()
 
@@ -51666,10 +51937,8 @@ export type Parser
 			throw ParseError.matchEnumCaseRange(self.tokenTextFrom(armStart, endIndex: self.pos), line: firstTok.line, column: firstTok.column)
 		end 'caseRange'
 
-		let member = try info.caseMembers.get(index) otherwise panic("collectErrorUnionPatternInterval: caseMembers.get OOB at {index} — every resolver above returns an index into this column")
+		let member = try info.caseMembers.get(index) otherwise panic("collectErrorUnionPatternAtom: caseMembers.get OOB at {index} — every resolver above returns an index into this column")
 		let memberCaseIndex = member.layout.indexOfCase(info.layout.caseNameAt(index))
-
-		var bindings = PayloadBindingArray.create()
 
 		if self.at(TokenKind.leftParen) 'payloadBind'
 			// ⚠ **THE ARITY IS CHECKED BEFORE THE LIST IS PARSED, because E3035's ANCHOR is the case name
@@ -51678,20 +51947,18 @@ export type Parser
 			// goes through the SHARED parse, so the discard rule (E3081) and the binding records are the
 			// ordinary ones.
 			try self.requireErrorUnionBindingCount(member, caseIndex: memberCaseIndex, caseTok: caseTok)
-			bindings = try self.parseCasePayloadBindings(member.layout, caseIndex: memberCaseIndex, caseTok: caseTok)
+			let atomBindings = try self.parseCasePayloadBindings(member.layout, caseIndex: memberCaseIndex, caseTok: caseTok)
+
+			for binding in atomBindings 'appendEach'
+				bindings.push(binding)
+			end 'appendEach'
 		end 'payloadBind'
 
-		// The NAME half of E3129 (`requireArmBindingsAreDistinct`). An error-union arm names exactly one
-		// `(member, case)` pair and so has no or-chain and no slot to contest twice — but its list is minted
-		// by the same `parseCasePayloadBindings`, which never compared its own names, so `bad(x, x)` reached
-		// `Scope.install` here exactly as it did on the enum path. One rule, asked at both doors.
-		try self.requireArmBindingsAreDistinct(bindings)
-
+		noteArmMember(members, member: member)
 		try self.markEnumCovered(covered, index: index, layout: info.layout, patternTok: caseTok)
 		let tag = info.layout.tagOfIndex(index)
 		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
-		return ErrorUnionArm.create(member, bindings: bindings)
-	end 'collectErrorUnionPatternInterval'
+	end 'collectErrorUnionPatternAtom'
 
 	// `Member.case` — the fused index of that pair. Both halves are E3034 with their own sentences: a
 	// qualifier naming no member of THIS union, and a member that has no such case.
@@ -51774,53 +52041,57 @@ export type Parser
 		throw ParseError.enumWrongBindingCount("{String.from(member.name)}.{String.from(member.layout.caseNameAt(caseIndex))}", expected: declared, got: supplied, line: caseTok.line, column: caseTok.column)
 	end 'requireErrorUnionBindingCount'
 
-	// ⭐⭐ **RELEASE A BOXED MEMBER'S BOX ON THE PATH INTO A `default` ARM, WHICH NAMED NO MEMBER.** Returns
-	// the block the default's BODY should be parsed into — `entry` itself when there is nothing to clean, so
-	// the ordinary case adds no block at all.
+	// Release the box of whichever of `members` is in flight, for a handler that cannot know which one is — a
+	// `default`, a pattern arm naming several members, or a divergent `otherwise`. Returns the block control
+	// continues in.
 	//
-	// Every PATTERN arm releases the box through the member it named; a `default` reaches every
-	// uncovered case, boxed members' included, and would otherwise abandon it. The test is a RANGE
-	// over the fused line — a member owns a contiguous slice of it by construction
-	// (`recordRoutedErrorType`) — so one member costs two compares and a `__destruct_` call on the
+	// The test is a RANGE over the fused line — a member owns a contiguous slice of it by construction
+	// (`recordRoutedErrorType`) — so one boxed member costs two compares and a `__destruct_` call on the
 	// path where it is really in flight.
-	function emitErrorUnionDefaultCleanup(func IrFunction, union ErrorUnionMatch, entry IrBlock, flag ValueId, anchor Token) returns IrBlock
-		if not errorUnionIsSynthesized(union) 'notAnErrorUnion'
-			return entry
-		end 'notAnErrorUnion'
-
-		let info = requireErrorUnionInfo(union)
+	function emitErrorUnionBoxReleases(func IrFunction, members TryBlockErrorMemberArray, fused ValueId, entry IrBlock, flag ValueId, anchor Token) returns IrBlock
 		var current = entry
 
-		for m in 0 upto info.caseMembers.count() 'eachCase'
-			let member = try info.caseMembers.get(m) otherwise panic("emitErrorUnionDefaultCleanup: caseMembers.get OOB at {m} on a column walked to its own count")
-
-			// One test per BOXED MEMBER, not per case — the column repeats a member once per case it declares,
-			// so the first case of each is where its range is emitted and the rest are skipped.
-			if not member.isBoxed or not self.isFirstCaseOfMember(info, index: m) 'nothingToReleaseForThisCase'
+		for member in members 'eachMember'
+			if not member.isBoxed 'nothingToRelease'
 				continue
-			end 'nothingToReleaseForThisCase'
+			end 'nothingToRelease'
 
 			match self.fusedSpanOfMember(member) 'span'
-				noCases then panic("emitErrorUnionDefaultCleanup: a member with no cases contributes no fused case, so this walk cannot reach one")
-				spanning(low, high) then current = self.emitErrorUnionMemberRelease(func, member: member, low: low, high: high, entry: current, fused: info.fusedOrdinal, flag: flag, anchor: anchor)
+				// A member with no cases is never the error in flight.
+				noCases then continue
+				spanning(low, high) then current = self.emitErrorUnionMemberRelease(func, member: member, low: low, high: high, entry: current, fused: fused, flag: flag, anchor: anchor)
 			end 'span'
-		end 'eachCase'
+		end 'eachMember'
 
 		return current
-	end 'emitErrorUnionDefaultCleanup'
+	end 'emitErrorUnionBoxReleases'
 
-	// Is fused case `index` the FIRST case of its member — i.e. is this the position where that member's
-	// per-member work belongs? The column is grouped by member (`synthesizeErrorUnion` walks members
-	// outermost), so "the previous case has a different member" is the whole test.
-	function isFirstCaseOfMember(info ErrorUnionInfo, index CaseIndex) returns bool
-		if index == 0 'theVeryFirst'
-			return true
-		end 'theVeryFirst'
+	// ⭐⭐ **WHERE THE DISPATCH ENTERS AN ERROR-UNION ARM THAT DOES NOT KEEP A BOX, AND WHERE IT RELEASES ONE.**
+	// The one rule for a `default` and for a pattern arm: release whichever of `members` is in flight as the arm
+	// is entered. An arm reached by DISPATCH alone releases at the head of its body.
+	//
+	// ⚠ **AN `and fallthrough` ARRIVAL CARRIES NO BOX.** The arm the dispatch entered first has already released
+	// its own — at its head, or at its exit when it kept the box for its bindings — so an arm fallen into must
+	// neither release it again nor release a member it names when control came from another. Its releases sit in
+	// a block only the dispatch reaches, which continues into the shared body carrying the dispatch edge's phi
+	// args.
+	function enterErrorUnionArm(func IrFunction, members TryBlockErrorMemberArray, fused ValueId, fallenInto bool, body IrBlock, edgeArgs ValueIdArray, flag ValueId, anchor Token) returns ErrorUnionArmEntry
+		if not fallenInto 'dispatchedOnly'
+			let releasedBody = self.emitErrorUnionBoxReleases(func, members: members, fused: fused, entry: body, flag: flag, anchor: anchor)
+			return ErrorUnionArmEntry.create(body.id, args: edgeArgs, bodyId: releasedBody.id)
+		end 'dispatchedOnly'
 
-		let here = try info.caseMembers.get(index) otherwise panic("isFirstCaseOfMember: caseMembers.get OOB at {index}")
-		let before = try info.caseMembers.get(index - 1) otherwise panic("isFirstCaseOfMember: caseMembers.get OOB at {index - 1}")
-		return not here.name.equals(before.name)
-	end 'isFirstCaseOfMember'
+		if not membersHoldABox(members) 'nothingToRelease'
+			return ErrorUnionArmEntry.create(body.id, args: edgeArgs, bodyId: body.id)
+		end 'nothingToRelease'
+
+		var entry = self.newBlock(func, label: b"errunionentry", line: anchor.line)
+		let entryId = entry.id
+		var exit = self.emitErrorUnionBoxReleases(func, members: members, fused: fused, entry: entry, flag: flag, anchor: anchor)
+		self.recordBranchEdge(exit, targetId: body.id, argIds: edgeArgs)
+		self.emitBranch(exit, targetId: body.id)
+		return ErrorUnionArmEntry.create(entryId, args: ValueIdArray.create(), bodyId: body.id)
+	end 'enterErrorUnionArm'
 
 	// The slice of the fused dispatch line this member owns — its own tag span, shifted by its offset, which
 	// is the interval `recordRoutedErrorType` placed it in. Recomputed from the same two facts rather than
@@ -51828,7 +52099,7 @@ export type Parser
 	// before it accepted the member.
 	function fusedSpanOfMember(member TryBlockErrorMember) returns EnumTagSpan
 		match enumTagSpan(member.layout) 'span'
-			noCases then panic("fusedSpanOfMember: '{String.from(member.name)}' declares no cases, so no fused case column can name it and the default cleanup never asks about it")
+			noCases then return EnumTagSpan.noCases
 			spanning(low, high) then return EnumTagSpan.spanning(low + member.fusedTagOffset, high: high + member.fusedTagOffset)
 		end 'span'
 	end 'fusedSpanOfMember'
@@ -51864,31 +52135,22 @@ export type Parser
 	// ⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD** — an arrival from a case the arm never named, so the
 	// bindings at its head would destructure a case the value does not hold.
 	//
-	// ⚠⚠ **IT IS NO LONGER "a binding is meaningful only where EXACTLY ONE case matched" — E3129 MADE THAT
-	// FALSE**, and the replacement premise is what keeps this refusal unconditional. An `or`-arm now binds
-	// across several cases precisely because `requireOrArmPayloadSlotsAgree` can CHECK them: they are the
-	// arm's own alternatives, enumerated in its pattern. A fallthrough SOURCE is not in that set — the arm
-	// fallen into never named it — so the agreement was never asked, and the same check cannot simply be
-	// pointed at the predecessor either: it carries a hazard the or-arm shape does not, namely that the
-	// predecessor's arm may already have MOVED its payload out and NULLED the slot, which is a fact about
-	// EMITTED CODE on one incoming edge rather than about the layout both cases share.
+	// ⚠⚠ **AN `or`-ARM MAY BIND ACROSS SEVERAL CASES AND THIS REFUSAL IS STILL UNCONDITIONAL.** An or-arm's
+	// cases are its own alternatives, which `requireOrArmPayloadSlotsAgree` checks. A fallthrough SOURCE is
+	// not one of them, and that check cannot be pointed at it either: the predecessor's arm may already have
+	// MOVED its payload out and NULLED the slot, a fact about EMITTED CODE on one incoming edge rather than
+	// about the layout both cases share. Accepted, the arm reads a null (a SIGSEGV), another case's String
+	// pointer as an `int`, or the predecessor's scalar — whichever slot it happens to read.
 	//
-	// ⚠ What that costs depends only on which slot happens to be read, which is why it had to become a
-	// refusal rather than a note. All three MEASURED, before this check existed: a **SIGSEGV** (an
-	// owned arm MOVED its payload out and nulled the slot, and the arm fallen into bound the null and
-	// printed it); a silent **TYPE CONFUSION** (a borrowed arm leaves the slot intact, so an `int`
-	// binding in the arm fallen into reads the String POINTER the previous case put there); and a
-	// silently **WRONG NUMBER** (two scalar payloads at the same slot, so the successor re-reads its
-	// predecessor's value — no crash and no diagnostic).
-	//
-	// Nothing that ever worked is taken away by the refusal: every accepting reading produces garbage
-	// of its own. Positioned at the arm being fallen INTO, which is the arm that cannot bind. Falling
-	// OUT of a binding arm stays legal: those bindings were established by the case that actually
-	// matched, and they drop on the fallthrough edge like any other live exit.
-	function rejectFallthroughIntoBindingArm(bindings PayloadBindingArray, layout EnumLayout, patternTok Token) throws ParseError
-		if bindings.count() == 0 'bindsNothing'
+	// Positioned at the arm being fallen INTO, which is the arm that cannot bind. Falling OUT of a binding
+	// arm stays legal: those bindings were established by the case that actually matched, and they drop on
+	// the fallthrough edge like any other live exit.
+	function rejectFallthroughIntoBindingArm(arm EnumPatternArm, patternTok Token) throws ParseError
+		if arm.bindings.count() == 0 'bindsNothing'
 			return
 		end 'bindsNothing'
+
+		let layout = requireEnumLayout(arm.payloadEnum)
 
 		throw ParseError.unsupported("`and fallthrough` into the payload-binding arm '{String.from(patternTok.value)}' of `{layout.kindWord()} {String.from(layout.name)}` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body", line: patternTok.line, column: patternTok.column)
 	end 'rejectFallthroughIntoBindingArm'
@@ -54626,6 +54888,15 @@ export type Parser
 		// short-circuited past its definition — MEASURED as the allocator's `seedInUse: a use dominates its
 		// def`, the same complaint the pending-temp drain below was written for.
 		let rhsOwnedFloor = self.ownedBindings.count()
+
+		// The move state the SKIP edge carries: the rhs runs on one path only, so a binding it moves is still
+		// owned where it was skipped. Captured only where a binding could be moved at all.
+		var skippedMoveMark = self.emptyMoveMark
+
+		if rhsOwnedFloor > 0 'bindingsToMove'
+			skippedMoveMark = self.captureMoveMark()
+		end 'bindingsToMove'
+
 		let rhsValue = try self.parseBinary(func, minPrec: rhsMinPrec)
 
 		// NOT `rhsBlock`: the rhs may itself have short-circuited (`a or b or c`), leaving
@@ -54669,10 +54940,26 @@ export type Parser
 
 		var merge = self.newBlock(func, label: b"scmerge", line: opTok.line)
 		let result = self.mintPhi(merge, tag: resultTag, nameId: UnnamedTypeId)
+		var rhsMoveMark = self.emptyMoveMark
 
-		self.recordBranchEdge(entry, targetId: merge.id, argIds: singletonArgs(seed))
+		if rhsOwnedFloor > 0 'bindingsMayHaveMoved'
+			rhsMoveMark = self.captureMoveMark()
+		end 'bindingsMayHaveMoved'
+
+		// A binding the rhs moved is dropped on the skip edge, which then needs a block of its own: `entry` already
+		// dominates the rhs. A short-circuit that moves nothing keeps the direct edge — `finalizeIfNoElse`'s shape.
+		if self.movesALiveBinding(skippedMoveMark, after: rhsMoveMark) 'skipEdgeDrops'
+			var skip = self.newBlock(func, label: b"scskip", line: opTok.line)
+			self.reconcileMovesAtTwoEdgeMerge(skip, markA: skippedMoveMark, b: rhsEnd, markB: rhsMoveMark, anchor: opTok)
+			self.recordBranchEdge(skip, targetId: merge.id, argIds: singletonArgs(seed))
+			self.emitBranch(skip, targetId: merge.id)
+			self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhsId, mergeId: skip.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
+		end 'skipEdgeDrops' else 'directSkipEdge'
+			self.recordBranchEdge(entry, targetId: merge.id, argIds: singletonArgs(seed))
+			self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhsId, mergeId: merge.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
+		end 'directSkipEdge'
+
 		self.recordBranchEdge(rhsEnd, targetId: merge.id, argIds: singletonArgs(rhsValue))
-		self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhsId, mergeId: merge.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
 		self.emitBranch(rhsEnd, targetId: merge.id)
 
 		self.currentBlock = merge

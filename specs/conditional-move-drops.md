@@ -535,3 +535,48 @@ end 'main'
 ```stdout
 done
 ```
+
+### Value Moved on the Right of a Short-Circuit
+
+`a` is moved into `keep(a)` only when the left of `and` is true. Driven down both paths: where the left is
+false the right never runs, so `a` is still owned there and dropped once. A leak exits 101; a double release
+faults.
+
+<!-- test: short-circuit-rhs-move -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export var text as String
+
+	static function create(text String) returns Holder
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function keep(s String) returns bool
+	let h = Holder.create(s)
+	return h.text.byteLength() > 0
+end 'keep'
+
+function run(flag Integer) returns bool
+	var a = build(flag)
+	let kept = flag > 0 and keep(a)
+	return kept
+end 'run'
+
+function main() returns ExitCode
+	print("{run(0)} {run(1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false true
+```

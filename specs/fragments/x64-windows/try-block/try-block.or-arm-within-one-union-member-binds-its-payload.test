@@ -1,0 +1,332 @@
+// Test: try-block.or-arm-within-one-union-member-binds-its-payload
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(code Score)
+	worse
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad(50)
+	end 'bad'
+
+	if which == 2 'worse'
+		throw ErrA.worse
+	end 'worse'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function classify(which Score) returns Score
+	var sum = 0
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad(code) or
+				ErrA.worse then sum = code + 1
+			splat then sum = 999
+		end 'k'
+	end 'h'
+
+	return sum
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	print("{classify(2)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @callA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, ifcont#2
+  bad:
+    x64.movRegImm32 rbx, 50
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rax, r8
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.storeBaseDispReg.word64 [rax + 8], rbx
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc notEqual, ifcont#4
+  worse:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rax, r8
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 5
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:13: Range check failed: value outside typealias 'Score'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 6
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#12
+  __rc_chk#13:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic#12
+  __rc_ok#11:
+    x64.callDirect callA
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryblkok#2
+  tryblkthrow:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 0]
+    x64.movRegReg rcx, r10
+    x64.jmp tryblkerr
+  tryblkok#2:
+    x64.callDirect callB
+    x64.leaRegRegImm32 rax, r10, 1
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryblkok#4
+  critsplit:
+    x64.movRegReg rcx, r10
+  tryblkerr:
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg greaterEqual, rdx
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg lessEqual, rsi
+    x64.andRegReg rdx, rdx, rsi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, matchnext
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.leaRegRegImm32 rbx, rax, 1
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, rbx
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead
+  matcharm#6:
+    x64.movRegImm32 rax, 999
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp tryblkcont
+  matchdead:
+  tryblkok#4:
+    x64.leaRegRegReg r8, rbx, r8
+  tryblkcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#15
+  __rc_chk#16:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic#15
+  __rc_ok#14:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:29: Range check failed: value outside typealias 'Score'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#15:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at try-block.or-arm-within-one-union-member-binds-its-payload.test:45: Range check failed: value outside typealias 'Score'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rcx, 1
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot4
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rcx, 2
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot5
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

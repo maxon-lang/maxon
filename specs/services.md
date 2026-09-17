@@ -7642,3 +7642,55 @@ end 'main'
 ```stdout
 42
 ```
+
+<!-- test: services.an-or-arm-matches-a-reply-error-merged-with-stopped -->
+A reply's error is the message's own error set merged with `ServiceError.stopped`, and a `match` over it takes
+the same `or` arms a match over any error enum does.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+enum MathError implements Error
+	divideByZero
+end 'MathError'
+
+type Calc
+	var calls as Tally
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function divide(n Tally, by Tally) returns Tally throws MathError
+		self.calls = self.calls + 1
+
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+
+		return try (n / by) otherwise throw MathError.divideByZero
+	end 'divide'
+end 'Calc'
+
+function main() returns ExitCode
+	let calc = spawn Calc.create()
+
+	let value = try await calc.divide(10, by: 0) otherwise (e) 'failed'
+		match e 'why'
+			divideByZero or
+				stopped then print("no answer\n")
+		end 'why'
+
+		return 1
+	end 'failed'
+
+	print("{value}\n")
+	calc.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+no answer
+```
+```exitcode
+1
+```
