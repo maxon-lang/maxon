@@ -1,25 +1,20 @@
 // The three CPU-PARALLEL QUERIES a program reaches through `__Builtins.cpuCount()`,
 // `__Builtins.schedMaxActiveWorkers()` and `__Builtins.schedProcessorCount()`.
 //
-// ⭐⭐ **THEY ARE THREE QUESTIONS IN TWO BANDS, AND THE SPLIT IS WHAT DECIDES WHICH TARGETS MAY RUN THEM.**
-// One asks the MACHINE how parallel a run COULD be; the other two ask THIS COMPILER'S SCHEDULER how parallel
-// it was CONFIGURED to be and how parallel it actually GOT.
+// ⭐⭐ **THEY ARE THREE QUESTIONS WITH THREE COSTS.** One asks the MACHINE how parallel a run COULD be; the
+// other two ask THIS COMPILER'S SCHEDULER how parallel it was CONFIGURED to be and how parallel it actually
+// GOT.
 //
 //   • `__cpu_count` is an OS read, so it lowers only where a lane provides `HostFacility.cpuCount` and is
 //     refused at the call's own span everywhere else (E3104, keyed on the `__cpu_` band in
 //     `TargetFacilities.calleeHostFacility`).
-//   • `__sched_max_active_workers` and `__sched_processor_count` reach no OS at all: each is one `.data`
-//     load, which lowers on every target the compiler emits. Refusing either would be refusing a load.
-//
-// ⭐ **WHY THE SCHEDULER PAIR IS NOT `runtime/`'s GREEN-THREAD VOCABULARY.** A program may legitimately ask
-// how parallel it got having spawned nothing, so neither query may drag the scheduler in behind it. Neither
-// rides a `RuntimeUsage` bit: each word is laid out exactly where a function surviving dead-function
-// elimination names it (`SchedRuntime.schedRuntimeGlobals`) — so the question costs one word and never a
-// scheduler, and a query only a dead function asks costs nothing.
-//
-// ⚠ **NEITHER WORD IS SEEDED THE SAME WAY, AND THE ASYMMETRY IS THE TRUTH ABOUT AN UNINITIALIZED PROCESS.**
-// The worker mark is seeded to 1 because a program with no scheduler really does run on one M — its own;
-// the processor count is seeded to 0 because a scheduler that has not initialized has built no P.
+//   • `__sched_max_active_workers` is one `.data` load whose seed (1) is true of a program with no scheduler
+//     — it runs on one M, its own — so it takes no scheduler, rides no `RuntimeUsage` bit and lowers on
+//     every target. Its word is laid out where a function surviving dead-function elimination names it
+//     (`SchedRuntime.schedRuntimeGlobals`).
+//   • `__sched_processor_count` is one `.data` load too, but its seed (0) is true of no program: only
+//     `__sched_init_procs` resolves the count. Asking therefore installs the scheduler and is refused where
+//     there is none (`SchedRuntime.isSchedSubstrateQueryCallee`), so the answer is never the seed.
 //
 // ⚠ **THE WORKER MARK IS A MEASUREMENT AND THE PROCESSOR COUNT IS A RESOLUTION**, which is why a case about
 // `MAXON_MAX_PROCS` must assert the second. `__sched_worker_loop` raises the mark when a worker M enters, so

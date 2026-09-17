@@ -125,8 +125,9 @@ that there is more than one, and the per-case `unsupported-targets:` markers bel
 `schedMaxActiveWorkers` is refused NOWHERE, and for a reason of its own rather than by omission: its
 whole body is one `.data` load and a `ret`, which lowers on every target the compiler emits, and a load
 reaches no more OS than a constant return does. It therefore wears the
-`__sched_` band rather than `__cpu_`, because the two bands answer the question *"may this target
-run it"* differently and a prefix test can only give one answer per band.
+`__sched_` band rather than `__cpu_`, because the `__cpu_` band is refused by its prefix.
+`schedProcessorCount` shares the `__sched_` band and is refused on wasm by name, as a query that installs the
+scheduler.
 
 ⇒ The two `on-wasm` cases below are a PAIR and are half the proof each: the refusal case alone
 cannot tell a live gate from a compiler that refuses everything, and the acceptance case alone
@@ -473,20 +474,19 @@ address row names `__sched_num_procs` — the P array's length wearing this quer
 the pair a mix-up would swap, and a swapped body still compiles, still links and still answers a plausible
 number.
 
-⚠ It also pins the layout's half: a runtime word is laid out where a surviving body names it, so an image
-rendering this load must also carry `__sched_num_procs` in its `.data` section.
-
-⚠ **THE ANSWER IS 0 BECAUSE THIS PROGRAM SPAWNS NOTHING**, which is the word's `.data` seed and the truth
-about a scheduler that never initialized. What a resolved count looks like is `sched-default-procs.md`'s;
-asking that here would make this case depend on the machine it runs on.
+⚠ **THE ANSWER IS AT LEAST 1 ALTHOUGH THIS PROGRAM SPAWNS NOTHING**, because asking is a use of the
+scheduler: the query installs it, and `__gt_init` resolves the count before `main` runs. A 0 — the word's
+`.data` seed — would be a count read off a scheduler that never initialized, which is no answer at all.
+What a resolved count equals is `sched-default-procs.md`'s; asking that here would make this case depend
+on the machine it runs on.
 ```maxon
 function main() returns ExitCode
 	let first = __Builtins.schedProcessorCount()
 	let second = __Builtins.schedProcessorCount()
 	var score = 0
-	if first == 0 'noSchedulerResolvedNone'
+	if first >= 1 'resolvedBeforeMain'
 		score = score + 1
-	end 'noSchedulerResolvedNone'
+	end 'resolvedBeforeMain'
 	if second == first 'stable'
 		score = score + 1
 	end 'stable'
@@ -545,8 +545,9 @@ no span, no code, and it names a runtime emitter rather than the call the user w
 ⇒ The three per-P counter sums now sit in `TargetFacilities.calleeHostFacility` under
 `HostFacility.greenThreads`, exactly as `__gt_await_any` and a service's two ops already do, so the refusal
 lands on the call's own span. ⚠ **They are named individually and NOT by prefix** — one of the three is a
-`__slab_` entry, and `schedMaxActiveWorkers`/`schedProcessorCount` set no `usesGt` and **must keep working
-here**, which the sibling case `sched-max-active-workers-runs-on-wasm` in this file is what proves.
+`__slab_` entry, and `schedMaxActiveWorkers` sets no `usesGt` and **must keep working here**, which the
+sibling case `sched-max-active-workers-runs-on-wasm` in this file is what proves. `schedProcessorCount` is on
+the roster: its answer is the scheduler's resolution, so asking installs the scheduler.
 
 ⚠ **ONE PROGRAM NAMES EVERY MEMBER ON PURPOSE.** The band is a roster in the compiler
 (`SchedRuntime.isSchedSubstrateQueryCallee`), so the thing worth pinning is that every scheduler-state query
@@ -586,8 +587,9 @@ function main() returns ExitCode
 	let c12 = __Builtins.schedNetpollBlockCount()
 	let c13 = __Builtins.schedTimerScanStepCount()
 	let c14 = __Builtins.schedSyscallCount()
+	let c15 = __Builtins.schedProcessorCount()
 
-	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12 + c13 + c14) as ExitCode
+	return (c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7 + c8 + c9 + c10 + c11 + c12 + c13 + c14 + c15) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -606,4 +608,5 @@ error E3104: <fragment>:14:23: this construct lowers to the runtime entry '__sch
 error E3104: <fragment>:15:23: this construct lowers to the runtime entry '__sched_netpoll_block_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:16:23: this construct lowers to the runtime entry '__sched_timer_scan_step_count', which has no wasm32-wasi implementation
 error E3104: <fragment>:17:23: this construct lowers to the runtime entry '__sched_syscall_count', which has no wasm32-wasi implementation
+error E3104: <fragment>:18:23: this construct lowers to the runtime entry '__sched_processor_count', which has no wasm32-wasi implementation
 ```

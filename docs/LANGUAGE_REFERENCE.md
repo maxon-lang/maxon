@@ -4054,8 +4054,9 @@ APIs.
   cheap. A stack stops growing at 1 GiB; a recursion past it stops the program with `panic: stack overflow`.
 - **Parallelism.** By default the scheduler creates one processor per logical CPU. The environment
   variable `MAXON_MAX_PROCS=N` sets the count, clamped to between 1 and the CPU count; a value that is not a
-  positive number leaves the default. Services use the processors in parallel; an `async`-only program's
-  coroutines stay on the green thread that started them.
+  positive number leaves the default. `Runtime.processorCount()` answers the resolved count. Services use
+  the processors in parallel; an `async`-only program's coroutines stay on the green thread that started
+  them.
 - **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry and moved
   behind the other runnable work, so a CPU-bound loop cannot starve the rest of the program.
   `MAXON_PREEMPT=off` disables preemption; `on`, or unset, is the default, and any other value makes the

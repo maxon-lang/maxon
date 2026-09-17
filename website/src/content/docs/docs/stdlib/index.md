@@ -63,6 +63,7 @@ end 'main'
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
+| `SchedulerProcessorCount` | `int(1 to i64.max)` | Runtime |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
@@ -81,7 +82,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, `Runtime.yield` | E3104 |
+| `Clock`, `WallClock`, `sleep`, `Runtime.yield`, `Runtime.processorCount` | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |

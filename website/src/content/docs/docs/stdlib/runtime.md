@@ -57,8 +57,9 @@ Output: `true true`.
 | Method | Description |
 |--------|-------------|
 | `Runtime.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
+| `Runtime.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to i64.max)`): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets, clamped to between 1 and the machine's count. The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
 
-Refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
+Both are refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
 [LANGUAGE_REFERENCE.md](/docs/language/overview/).
 
 ```maxon

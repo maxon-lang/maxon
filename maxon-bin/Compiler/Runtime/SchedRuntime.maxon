@@ -1741,12 +1741,10 @@ export let SchedSweepDroppedName = b"__sched_sweep_dropped"
 // `__Builtins.schedStealCount()`. It is the only way a Maxon program can observe that work stealing
 // happened, which is what `scripts/multicore-stress/steal-torture.maxon` asserts on.
 //
-// ⚠ **IT IS BUILDER-BUILT Std HERE RATHER THAN TIER SOURCE BESIDE `__sched_max_active_workers`, AND THE
-// SPLIT IS THAT FAMILY'S OWN TEST APPLIED HONESTLY.** `runtime/CpuParallel.maxon` holds the queries whose
-// answer costs no scheduler — its `__sched_max_active_workers` is a `.data` load that is TRUE (1) for a
-// program with no scheduler at all. A steal count is not: it walks `__sched_procs`, which only `__sched_init_procs` builds, so the
-// question has no answer without the machinery. `RuntimeUsage.recordCallUsage` therefore routes it to
-// `usesGt` — asking it installs the scheduler, because asking it is a question ABOUT the scheduler.
+// ⚠ **ASKING IT INSTALLS THE SCHEDULER.** It walks `__sched_procs`, which only `__sched_init_procs` builds, so
+// the question has no answer without the machinery, and `RuntimeUsage.recordCallUsage` routes it to `usesGt`.
+// That is the opposite of `__sched_max_active_workers`, whose `.data` answer (1) is TRUE for a program with no
+// scheduler at all.
 export let SchedStealCountName = b"__sched_steal_count"
 
 // ⭐ `__sched_retake_count() -> i64` — the sum of every P's retake counter, and the floor of
@@ -1876,7 +1874,7 @@ let SchedArenaCarveName = b"__sched_arena_carve"
 // below takes every member.
 //
 // ⚠ **IT IS A NAME TEST AND NOT A PREFIX TEST**: the `__sched_` band also holds scheduler INTERNALS a program
-// never writes and the two cpu-parallel queries that take no scheduler (`CpuParallelRuntime`), and one
+// never writes and the cpu-parallel worker mark that takes no scheduler (`CpuParallelRuntime`), and one
 // member is a `__slab_` name, because the number it reports is the ALLOCATOR's (see
 // `SlabRuntime.SlabRemoteFreeCountName`).
 function isSchedPerProcSumCallee(callee ByteArray) returns bool
@@ -1884,9 +1882,8 @@ function isSchedPerProcSumCallee(callee ByteArray) returns bool
 end 'isSchedPerProcSumCallee'
 
 // ⭐⭐ **THE QUERIES ANSWERED FROM THE SCHEDULER'S OWN STATE — the roster that says "asking this question IS
-// asking for the scheduler".** The per-P sums, the idle-processor count, the per-machine wake count, the
-// record-carve count, the monitor's timer-start count and the running thread's stack size. Two facts follow, and BOTH are asked through here so
-// the membership is written down once:
+// asking for the scheduler".** Two facts follow, and BOTH are asked through here so the membership is written
+// down once:
 //
 //   • `RuntimeUsage.recordCallUsage` routes them to `recordGtUsage` — the state they read exists only once
 //     `__sched_init_procs` has built it, so the question installs the machinery it is about.
@@ -1894,7 +1891,7 @@ end 'isSchedPerProcSumCallee'
 //     the green-thread floor, so a lane without it must REFUSE the call at its own span (E3104) rather than
 //     reach an install that has no TLS slot to emit.
 export function isSchedSubstrateQueryCallee(callee ByteArray) returns bool
-	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedTimerStartCountName) or callee.equals(SchedGtStackBytesName) or callee.equals(SchedGlobalPushCountName) or callee.equals(SchedTimerScanStepCountName)
+	return isSchedPerProcSumCallee(callee) or callee.equals(SchedIdleProcessorCountName) or callee.equals(SchedParkWakeCountName) or callee.equals(SchedGtRecordsCarvedName) or callee.equals(SchedTimerStartCountName) or callee.equals(SchedGtStackBytesName) or callee.equals(SchedGlobalPushCountName) or callee.equals(SchedTimerScanStepCountName) or callee.equals(SchedProcessorCountName)
 end 'isSchedSubstrateQueryCallee'
 
 // ⭐⭐⭐ **`__sched_handoffp(p)` — "THIS PROCESSOR HAS BEEN TAKEN FROM A BLOCKED MACHINE; GIVE IT TO SOMEBODY
@@ -2297,8 +2294,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	end 'poller'
 
 	// `__sched_num_procs` is P machinery — the bound `__sched_steal_count` walks to — AND the whole answer
-	// `__Builtins.schedProcessorCount()` gives, which a program may ask having spawned nothing; being walked,
-	// it costs that program one word and no scheduler.
+	// `__Builtins.schedProcessorCount()` gives.
 	//
 	// ⚠ It is pushed HERE, between the array it measures and the teardown flag, because the layout order is
 	// the `.data` order: moving it would re-lay every green-thread program's section to say nothing new.

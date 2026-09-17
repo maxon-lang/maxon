@@ -1,10 +1,13 @@
 /// Green-thread runtime controls.
 /// @category System
+/// A processor count the scheduler resolved. A scheduler always has at least one processor, and the machine's
+/// logical processor count is the only ceiling.
+public typealias SchedulerProcessorCount = int(1 to i64.max)
+
 /// Controls over the green-thread runtime the program is already running on.
 ///
 /// `Runtime` is a namespace for runtime-level operations rather than a value: it has no fields and is never
-/// constructed, so every member is `static`. `yield` is the first; the type exists so the ones after it are
-/// additions rather than a rename.
+/// constructed, so every member is `static`.
 public type Runtime
 	/// Cooperatively reschedule the current green thread.
 	///
@@ -21,4 +24,14 @@ public type Runtime
 	public static function yield()
 		__Builtins.yield()
 	end 'yield'
+
+	/// The number of processors the green-thread scheduler runs services on: the machine's logical processor
+	/// count, or the count `MAXON_MAX_PROCS` sets, clamped to between 1 and the machine's count.
+	///
+	/// The scheduler resolves it once, before `main` runs, and asking is itself a use of the scheduler, so the
+	/// answer is the same before the first `spawn` as after it — the number to size a pool of services by.
+	/// `wasm32-wasi` has no green-thread scheduler, and a call there is refused at compile time (E3104).
+	public static function processorCount() returns SchedulerProcessorCount
+		return __Builtins.schedProcessorCount()
+	end 'processorCount'
 end 'Runtime'

@@ -250,10 +250,10 @@ emitted runtime lays out would otherwise be in reach of a tier body by NAME, whi
 anything else on this floor and wider than any family needs. A row per readable word keeps the roster closed
 by construction: an address row that does not exist cannot be spelled, and the lowering's exhaustive match
 means a row that exists names a LABEL. That the label is LAID OUT is a separate argument the family owes:
-the `.data` slot rides a `RuntimeUsage` bit the call site sets, and that same call site is the edge dead
-function elimination keeps the body alive for.
+the `.data` slot is laid out where a surviving body names it, and the call site the compiler emits for the
+`__Builtins` spelling is the edge dead function elimination keeps the body alive for.
 
-⚠ **THAT LAST ARGUMENT IS THE SCHEDULER PAIR'S AND NOT EVERY FAMILY'S.** The slab arena's two words
+⚠ **THAT LAST ARGUMENT IS THE CPU-PARALLEL QUERIES' AND NOT EVERY FAMILY'S.** The slab arena's two words
 (`slabArenaListAddr`, `slabArenaMapL1Addr`) are read by tier bodies whose callers are `StdOp.call` sites an
 INSTALLER mints, so there is no call site in any Maxon body to set a bit from. Their slot rides a DECLARED
 bit instead (`RuntimeUsage.closeSlabNeeds`), and what makes that sound is that the only minter of a call

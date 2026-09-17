@@ -121,8 +121,8 @@ each a chunk of index-derived integer work, and collects the eight partial sums 
 
 - **`procs=`** is `__Builtins.schedProcessorCount()` — a direct read of `__sched_num_procs`, the word the
   marker decides. It is not an inference and it is not a race: that word is written once at scheduler
-  bring-up and never again. A program that has started no scheduler reads **0** (MEASURED), the truthful
-  *"no P has been built"*, which is why the query costs one `.data` word and no green-thread runtime.
+  bring-up and never again. Asking installs the scheduler, so no program reads the word's `.data` seed of
+  **0** — `Runtime.processorCount()` is the public spelling of the same read (`runtime-processor-count.md`).
 - **`clamped=`** is `1` when the count the scheduler resolved is exactly `min(requested, cpuCount())` —
   the marker's contract stated as a comparison the program can make on ANY machine, from two independent
   readings: an OS call and a scheduler word. A bare `procs=4` would have been a claim about this box.
@@ -149,8 +149,8 @@ longer load-bearing against flakiness, and nothing here depends on how long the 
 ⚠ **NO CASE HERE CARRIES A LANE RESTRICTION.** A `spawn` runs on all four native lanes and is refused on
 wasm32-wasi by `SemanticCheck.requireTargetSupportsServiceEntry`; the last case's `cpuCount()` is an OS
 call refused there with E3104. Both refusals are REPORTED as counted SKIPs naming the case, so a marker
-would state what the run already says and hide the case while doing it. `schedProcessorCount()` imposes
-nothing: it is a `.data` load and lowers wherever the compiler emits.
+would state what the run already says and hide the case while doing it. `schedProcessorCount()` is refused
+there with E3104 too, as a query about a scheduler that lane does not have.
 
 ## Tests
 

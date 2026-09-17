@@ -1,14 +1,14 @@
 // The CPU-parallel family's COMPILER-SIDE VOCABULARY: the three entry-point names the parser emits calls to,
-// and the two band tests that decide what each call costs. The bodies are runtime source
-// (`runtime/CpuParallel.maxon`), so nothing here builds IR.
+// and the `__cpu_` band test. The bodies are runtime source (`runtime/CpuParallel.maxon`), so nothing here
+// builds IR.
 //
-// ⭐⭐ **THE FILE HOLDS TWO `__` BANDS RATHER THAN THE ONE ITS SINGLE SUBJECT WOULD SUGGEST, AND THE REASON
-// IS THE TARGET QUESTION.** `__cpu_count` asks the MACHINE and so lowers only where a lane provides the read;
-// `__sched_max_active_workers` and `__sched_processor_count` ask THIS COMPILER'S SCHEDULER and are each one
-// `.data` load, which every target the compiler emits can do. A band is a prefix test, and one prefix cannot
-// carry both answers. `ProcessRuntime`'s two entries share a prefix precisely because they AGREE on that
-// question and differ only in cost; these agree on cost — a handful of instructions apiece, no buffer, no
-// allocation, no scheduler — and differ on the target answer.
+// ⭐⭐ **THE FILE HOLDS TWO `__` BANDS BECAUSE ONLY ONE OF THEM IS GATED BY PREFIX.** `__cpu_count` asks the
+// MACHINE, so it lowers only where a lane provides the read and the `__cpu_` prefix is what refuses it
+// elsewhere. The two `__sched_` names ask THIS COMPILER'S SCHEDULER and answer the target question
+// differently, so they are gated by name: the worker mark's seed (1) is true of a program with no scheduler,
+// so it takes none and lowers on every target; the processor count is settled only by `__sched_init_procs`,
+// so asking installs the scheduler and is refused where there is none
+// (`SchedRuntime.isSchedSubstrateQueryCallee`).
 
 // The `__cpu_` prefix — the "does this program ask the MACHINE about itself?" test, and the one
 // `TargetFacilities.calleeHostFacility` reads for E3104. One entry point today; a prefix rather than a name

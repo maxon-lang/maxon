@@ -452,13 +452,11 @@ export type RuntimeUsage
 	// Its own bit: the entry point is one import call, one compare and two constant returns — no buffer, no
 	// allocation, no scheduler, so it declares NO transitive dependency.
 	//
-	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT**, and that is why its two scheduler band-mates
-	// (`__sched_max_active_workers`, `__sched_processor_count`) ride no bit rather than this one: it is the
-	// sole producer of `GetActiveProcessorCount`, whose whole OPTIONAL TRAILING BAND
+	// ⚠ **IT IS THE ONE BIT HERE THAT COSTS AN IMPORT**, and that is why its scheduler band-mates do not ride
+	// it: it is the sole producer of `GetActiveProcessorCount`, whose whole OPTIONAL TRAILING BAND
 	// (`PeWriter.isOptionalTrailingImport`) is emitted when it is set. Folded into one CPU-parallel bit, a
-	// program whose only question was how many worker Ms had run would have laid out seven imports and a
-	// second entry point to link against nothing. Each band-mate's `.data` word is laid out where a
-	// surviving body names it (`SchedRuntime.schedRuntimeGlobals`).
+	// program whose only question was how many worker Ms had run would lay out seven imports and a second
+	// entry point to link against nothing.
 	export var usesCpuCount as bool
 
 	// The program asks how much CPU TIME its own thread has consumed (`__Builtins.threadCpuTicks` ⇒
@@ -947,10 +945,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// compare, and touches neither the heap, the scheduler nor the leak gate. A PREFIX test because the E3104
 	// gate reads the same family test, so a second entry in that band is gated by construction.
 	//
-	// ⚠ **ITS TWO BAND-MATES SET NO BIT AT ALL.** `__sched_max_active_workers` and `__sched_processor_count`
-	// are each one `.data` load whose word is laid out where the surviving body names it
-	// (`SchedRuntime.schedRuntimeGlobals`, `DataReach.walked`), so a program that asks how parallel it was
-	// carries one word and no scheduler, and nothing here has to say so.
+	// ⚠ **ITS WORKER-MARK BAND-MATE SETS NO BIT AT ALL.** `__sched_max_active_workers` is one `.data` load
+	// whose word is laid out where the surviving body names it (`SchedRuntime.schedRuntimeGlobals`,
+	// `DataReach.walked`), so a program that asks how parallel it got carries one word and no scheduler.
+	// `__sched_processor_count` is a scheduler-state query, below.
 	if isCpuCountRuntimeCallee(callee) 'cpuCount'
 		usage.usesCpuCount = true
 	end 'cpuCount'
@@ -958,11 +956,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// ⭐⭐ **THE SCHEDULER-STATE QUERIES TAKE THE SCHEDULER, WHICH IS THE OPPOSITE OF THE WORKER MARK ABOVE —
 	// and the difference is what the questions actually need.** `__sched_max_active_workers` is a `.data` load
 	// whose answer (1) is TRUE for a program with no scheduler at all, so it must not drag one in. The per-P
-	// sums walk `__sched_procs` and the idle-processor count reads what `__sched_init_procs` counted: without
-	// the scheduler there is nothing to read, so asking the question IS asking for the machinery. None has a bit
-	// of its own, and none needs one — every body is installed inside `installSchedRuntime` behind `usesGt` like
-	// every other function there, and `DeadFunctionElimination` drops them from every program that never calls
-	// one, which is `__slab_scavenge`'s situation exactly (below).
+	// sums walk `__sched_procs`, and the idle-processor and processor counts read what `__sched_init_procs`
+	// counted, and the processor count's `.data` seed (0) is no count. Without the scheduler there is no
+	// answer, so asking the question IS asking for the machinery. None has a bit of its own,
+	// and none needs one: every body is either installed inside `installSchedRuntime` behind `usesGt` or is
+	// runtime source (`runtime/CpuParallel.maxon`'s processor count), and `DeadFunctionElimination` drops them
+	// from every program that never calls one, which is `__slab_scavenge`'s situation exactly (below).
 	//
 	// ⛔ **IT IS `recordGtUsage` AND NOT A BARE `usage.usesGt = true`**, because every producer of the
 	// scheduler must set `usesHeap` with it: `usesGt ⟹ usesHeap` is a premise the rest of the compiler reads

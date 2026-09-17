@@ -6118,13 +6118,13 @@ let SlabRemoteFreeCountArity = 0 as ParamCount
 // before making true; this reports what it was CONFIGURED to do, which no workload can move. (`cpuCount`
 // is the third of the family and asks a different party altogether — the MACHINE.)
 //
-// ⇒ **IT IS WHAT A CASE ABOUT THE `procs:` MARKER MUST ASSERT.** `specs/sched-default-procs.md` asserted
-// the worker-M mark instead and was flaky under a loaded suite for exactly that reason — the marker promises
-// processors, not workers.
+// ⇒ **IT IS WHAT A CASE ABOUT THE `procs:` MARKER MUST ASSERT.** The marker promises processors, not
+// workers, and the worker-M mark moves with the workload and the suite's load.
 //
 // ⚠ **NEITHER REFERENCE DECLARES IT**, like `schedStealCount` and unlike the two above it: the surface is
-// invented here on the argumentless-integer shape the family already has.
-// `CpuParallelRuntime.SchedProcessorCountName` owns what it costs; this file only routes the name.
+// invented here on the argumentless-integer shape the family already has. `stdlib/Runtime.maxon`'s
+// `Runtime.processorCount()` is its public spelling. `CpuParallelRuntime.SchedProcessorCountName` owns what
+// it costs; this file only routes the name.
 let BuiltinsSchedProcessorCountName = b"__Builtins.schedProcessorCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
@@ -84579,9 +84579,8 @@ export type Parser
 
 			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
 			// the outcome: how many Ps `MAXON_MAX_PROCS` resolved to. Same door again — an `int` answer, no
-			// arguments, nothing to own. What differs is not visible here and is not this file's: unlike the
-			// steal count it does NOT set `usesGt`, because one `.data` word is all it reads. See
-			// `CpuParallelRuntime.SchedProcessorCountName`.
+			// arguments, nothing to own — and, like the steal count, it sets `usesGt`, because only the
+			// scheduler's initialization resolves the count. See `CpuParallelRuntime.SchedProcessorCountName`.
 			if callee.equals(BuiltinsSchedProcessorCountName) 'schedProcessorCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSchedProcessorCountName, runtimeName: SchedProcessorCountName, arity: SchedProcessorCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'schedProcessorCount'

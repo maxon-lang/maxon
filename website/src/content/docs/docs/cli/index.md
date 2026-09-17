@@ -496,7 +496,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 
 | Variable | Effect |
 |----------|--------|
-| `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. |
+| `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. `Runtime.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
 `MAXON_DEBUGSTREAM` is set by `maxon monitor` to attach a `--debugstream` program to its ring. You do not
