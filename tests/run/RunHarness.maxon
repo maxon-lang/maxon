@@ -36,7 +36,19 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 // below, and the slot layout further down — so a rename in the driver is one file to follow it into, and
 // it goes red rather than quiet: a case cannot find its slot, or finds an entry it cannot classify.
 export let RunCommandName = "run"
-let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+
+// ⚠ **THE VARIABLE NAMING THE USER'S HOME DIRECTORY, RESPELLED HERE FOR THE REASON ABOVE**: this corpus
+// cannot read the driver's constants, and the driver reads a different one per host.
+#if os(Windows)
+	let HomeDirectoryVariable = "USERPROFILE"
+#else
+	let HomeDirectoryVariable = "HOME"
+#endif
+
+// Where the cache goes when nothing names a root: a directory of Maxon's own under the user's home.
+let MaxonUserDirName = ".maxon"
+let UserCacheDirName = "cache"
 
 // ⭐ **THE FIXTURE ROSTER.** `corpus.test.maxon` compares it against the directories actually on disk, so a
 // fixture nobody stages and a name no directory answers to are both red. Every case names its fixture
@@ -80,6 +92,10 @@ let StagedProgramFileName = "main.maxon"
 // can never reach the source walk the command under test performs.
 let StagedSourcesDirName = "program"
 let StagedCacheDirName = "cache"
+
+// A third, for the one case that hands the driver a HOME instead of a cache root. Under the same case
+// directory, so `stageCase` clears the previous run's files out of it too.
+let StagedHomeDirName = "home"
 
 // The layout the driver keeps its slots in, which is the whole of how a case finds one without respelling
 // the key rule: `<cache>/maxon/run/<one directory per program>`.
@@ -179,6 +195,19 @@ export function stagedMain(staged StagedCase) returns FilePath
 	return staged.sources.join("{StagedProgramFileName}")
 end 'stagedMain'
 
+// A home directory of the case's own, for a child that must derive its cache root from one. Called AFTER
+// `stageCase`, whose clearing walk reaches it: a build a previous run left there is exactly what a case
+// about where a build LANDS must not inherit.
+export function stagedHome(caseLabel String) returns FilePath
+	return stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}{PathSeparator}{StagedHomeDirName}")
+end 'stagedHome'
+
+// ⭐ **WHERE THE DRIVER KEEPS RUN BUILDS WHEN NOTHING NAMES A ROOT**: its own directory under the user's
+// home, and the `run` directory below that. Respelled here for the reason in the header.
+export function defaultRunCacheRoot(home FilePath) returns FilePath
+	return home.join(MaxonUserDirName).join(UserCacheDirName).join("{CacheCommandDirName}")
+end 'defaultRunCacheRoot'
+
 // Rewrite the staged program, replacing one piece of its text. What a cache case needs and nothing else
 // can express: an EDIT, made after a build, that the next run must notice.
 export function rewriteStagedMain(staged StagedCase, replacing String, becoming String)
@@ -205,20 +234,76 @@ export function runArguments(program FilePath) returns StringArray
 	return arguments
 end 'runArguments'
 
-// One child driver, run in the case's staging tree with its cache confined to that tree. A binary that is
-// not there and a spawn that never happened both stop a case running at all, so both panic naming what
-// was being asked for.
+// One child driver, run in the case's staging tree with its cache confined to that tree.
 export function spawnDriver(staged StagedCase, arguments StringArray, standardInput InputSource) returns CollectedOutput
+	return spawnDriverIn(staged, arguments: arguments, standardInput: standardInput, environment: Environment.inheritUpdating([CacheRootVariable: staged.cache.toString()]))
+end 'spawnDriver'
+
+// ⭐⭐ **ONE CHILD DRIVER THAT SEES NO CACHE OVERRIDE AT ALL, and a home directory of the case's own.** It
+// is the only way to ask where a build goes when nothing names a root, and it is why the environment below
+// is BUILT rather than updated.
+export function spawnDriverWithHome(staged StagedCase, arguments StringArray, home FilePath) returns CollectedOutput
+	return spawnDriverIn(staged, arguments: arguments, standardInput: InputSource.none, environment: environmentWithHome(home))
+end 'spawnDriverWithHome'
+
+// A binary that is not there and a spawn that never happened both stop a case running at all, so both
+// panic naming what was being asked for.
+function spawnDriverIn(staged StagedCase, arguments StringArray, standardInput InputSource, environment Environment) returns CollectedOutput
 	var config = Configuration.create(Executable.path(requireTestedCompiler()))
 	config.arguments = arguments
 	config.workingDirectory = staged.sources
 	config.standardInput = standardInput
-	config.environment = Environment.inheritUpdating([CacheRootVariable: staged.cache.toString()])
+	config.environment = environment
 
 	return try config.run() otherwise (e) 'spawnFailed'
 		panic("run tests: the gate could not run — could not spawn the driver ({e.displayReason()}). These cases pin what it does, and a run nothing observed is a claim.")
 	end 'spawnFailed'
-end 'spawnDriver'
+end 'spawnDriverIn'
+
+// ⛔ **`Environment.inheritUpdating` CANNOT REMOVE A VARIABLE**, so the whole environment is assembled
+// here: every inherited entry but the two this function decides, plus a home of the case's own.
+//
+// ⚠ Built from the INHERITED entries rather than from scratch — a child handed a bare environment can
+// fail to start on Windows for want of `SystemRoot`.
+//
+// ⛔ Windows folds a variable name case-insensitively and this map does not, so BOTH are dropped
+// case-insensitively there: an inherited `UserProfile` left beside the `USERPROFILE` set below reaches
+// the child as two spellings of one variable, and which of them the OS honours is not this harness's to
+// decide — it would be the developer's own home, and the case would measure the developer's cache.
+function environmentWithHome(home FilePath) returns Environment
+	let inherited = try Process.currentEnvironmentEntries() otherwise panic("run tests: the gate could not run — this process's environment could not be read, and a case about the DEFAULT cache root is about exactly what the driver finds in its own.")
+
+	var vars = EnvMap.create()
+
+	for entry in inherited 'eachEntry'
+		let name = Process.envEntryName(entry)
+
+		if thisHarnessDecides(name) 'itsOwn'
+			continue
+		end 'itsOwn'
+
+		vars.upsert(name, value: Process.envEntryValue(entry))
+	end 'eachEntry'
+
+	vars.upsert(HomeDirectoryVariable, value: home.toString())
+	return Environment.custom(vars)
+end 'environmentWithHome'
+
+// The cache override, which the child must not see at all, and the home directory it derives its cache
+// root from, which the case names.
+function thisHarnessDecides(name String) returns bool
+	return foldedVariable(name) == foldedVariable(CacheRootVariable) or foldedVariable(name) == foldedVariable(HomeDirectoryVariable)
+end 'thisHarnessDecides'
+
+function foldedVariable(name String) returns String
+	#if os(Windows)
+		let folded = name.toLower()
+	#else
+		let folded = name
+	#endif
+
+	return folded
+end 'foldedVariable'
 
 // The shape almost every case wants: `maxon run <program>`, with stdin closed.
 export function runProgram(staged StagedCase, program FilePath) returns CollectedOutput
@@ -364,9 +449,9 @@ end 'runCacheRoot'
 // Every directory under the run root that directly holds a file. Found at ANY depth, so no case has to
 // know how the driver groups its slots below that root.
 //
-// ⚠ **AN EMPTY DIRECTORY IS NOT A SLOT.** Staging clears files and cannot remove a directory — the standard
-// library has no directory removal — so a slot an earlier run used survives, empty, and holds nothing any
-// run could read.
+// ⚠ **AN EMPTY DIRECTORY IS NOT A SLOT.** Staging clears a case's files and leaves its directories — they
+// are re-created before a case uses them — so a slot an earlier run used survives, empty, and holds
+// nothing any run could read.
 function slotDirs(staged StagedCase) returns PathArray
 	let root = runCacheRoot(staged)
 
@@ -420,9 +505,7 @@ export function slotExecutables(staged StagedCase) returns PathArray
 
 	for dir in slotDirs(staged) 'eachSlot'
 		for entry in listing(dir) 'eachEntry'
-			let name = entry.filename()
-
-			if name.endsWith(SidecarSuffix) or name.endsWith(pendingBuildSuffix()) 'notAPublishedBuild'
+			if not isPublishedBuild(entry) 'notAPublishedBuild'
 				continue
 			end 'notAPublishedBuild'
 
@@ -432,6 +515,34 @@ export function slotExecutables(staged StagedCase) returns PathArray
 
 	return found
 end 'slotExecutables'
+
+// Whether a cache entry is a published build: neither the debug sidecar beside one nor a build still
+// being written. Derived by elimination for the reasons above, so no case has to know what the driver
+// calls a build.
+export function isPublishedBuild(entry FilePath) returns bool
+	let name = entry.filename()
+	return not name.endsWith(SidecarSuffix) and not name.endsWith(pendingBuildSuffix())
+end 'isPublishedBuild'
+
+// Every file below `dir`, at any depth. What a case asking WHERE a build landed needs: the layout under
+// the root it names is the driver's, and a case respelling it would pass on its own arithmetic.
+export function filesUnder(dir FilePath) returns PathArray
+	var found = PathArray.create()
+	collectFilesUnder(dir, into: found)
+
+	return found
+end 'filesUnder'
+
+function collectFilesUnder(dir FilePath, into PathArray)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			collectFilesUnder(entry, into: into)
+			continue
+		end 'aDirectory'
+
+		into.push(entry)
+	end 'eachEntry'
+end 'collectFilesUnder'
 
 // What an in-flight build's name ends in, which is how one is told from a published build: a published
 // name ends in the key's hex digits.

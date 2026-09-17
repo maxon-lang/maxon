@@ -510,8 +510,8 @@ parser that did not stop at the program would swallow `-o`'s neighbour, select `
 abort over a flag it does not implement; bland arguments would be green through all three.
 
 ⛔ **WHAT `concurrent` CANNOT SEE: THE CREATION OF THE SLOT DIRECTORY.** `stageCase` clears a case's cache
-of FILES and cannot remove the directories — the standard library has no directory removal — so a case's
-slot directory survives from its previous run and `Directory.create` short-circuits on it. Simultaneous
+of FILES and leaves its directories standing, so a case's slot directory survives from its previous run
+and `Directory.create` short-circuits on it. Simultaneous
 children racing to create one is therefore only reachable against a cache root that has never held this
 program's slot: `rm -rf` the root and launch several `maxon run` of one script by hand. MEASURED that way,
 six children reddened it about one attempt in three, with `could not create <slot>` on the loser's stderr —

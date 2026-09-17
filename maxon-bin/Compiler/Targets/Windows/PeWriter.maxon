@@ -248,24 +248,29 @@ export enum IatSlot
 	FindFirstFileA = IatSlotMeta{dll: ImportDll.kernel32}
 	FindClose = IatSlotMeta{dll: ImportDll.kernel32}
 
-	// ⭐ **THE FOUR DIRECTORY IMPORTS.** APPENDED AFTER `FindClose` so every existing slot INDEX (and
-	// hence every existing `iatCall` relocation) is unchanged; a reorder would silently repoint every prior
-	// import. All four are kernel32, so they extend that DLL's existing run and add no import DIRECTORY
-	// entry (see `ImportDll`).
+	// ⭐ **THE FIVE DIRECTORY IMPORTS**, all kernel32, so they extend that DLL's existing run and add no
+	// import DIRECTORY entry (see `ImportDll`). They sit above the OPTIONAL TRAILING BAND because every one
+	// of them is always emitted — see `isOptionalTrailingImport`, whose band must stay the last run of
+	// kernel32's slots.
 	//
 	// ⚠ **`FindNextFileA` SITS APART FROM `FindFirstFileA` AND `FindClose`.** Those two serve
 	// `stat`/`exists`, which open a search only to read ONE record and close it — neither ever iterates.
 	// Only a directory WALK needs this one.
 	//
-	// `CreateDirectoryA`/`GetCurrentDirectoryA` are `create()`/`currentPath()`. `GetFileAttributesA` answers
-	// `exists()`, which takes a bare DIRECTORY path rather than a search pattern — see the
-	// `osFileAttributes` op's own comment for why the "no second entry point" argument `FindFirstFileA`
-	// carries does not reach this case.
+	// `CreateDirectoryA`/`RemoveDirectoryA`/`GetCurrentDirectoryA` are `create()`/`delete()`/`currentPath()`.
+	// `GetFileAttributesA` answers `exists()`, which takes a bare DIRECTORY path rather than a search pattern
+	// — see the `osFileAttributes` op's own comment for why the "no second entry point" argument
+	// `FindFirstFileA` carries does not reach this case.
 	//
-	// ⚠ All four are the `A` variants for the reason `CreateFileA` above is, and inherit its stated
+	// ⚠ **`RemoveDirectoryA` AND NOT `DeleteFileA`.** Win32 splits removal by SUBJECT: `DeleteFileA` refuses
+	// a directory and `RemoveDirectoryA` refuses everything else, so neither entry point can stand in for the
+	// other.
+	//
+	// ⚠ All five are the `A` variants for the reason `CreateFileA` above is, and inherit its stated
 	// LIMITATION unchanged: a non-ASCII path is read in the system ANSI codepage.
 	FindNextFileA = IatSlotMeta{dll: ImportDll.kernel32}
 	CreateDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
+	RemoveDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
 	GetCurrentDirectoryA = IatSlotMeta{dll: ImportDll.kernel32}
 	GetFileAttributesA = IatSlotMeta{dll: ImportDll.kernel32}
 
@@ -797,6 +802,7 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			FindClose or
 			FindNextFileA or
 			CreateDirectoryA or
+			RemoveDirectoryA or
 			GetCurrentDirectoryA or
 			GetFileAttributesA or
 			GetCommandLineA or

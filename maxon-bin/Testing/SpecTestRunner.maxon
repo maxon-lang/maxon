@@ -1131,7 +1131,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	// so a host-keyed root would send arm64-linux IR into `fragments/arm64-macos/` and CLOBBER the
 	// host's committed tree — a cross run silently rewriting the goldens of a target it did not build
 	// for. The pool's `prepareSharedDirs` keys the shared root off the same effective target.
-	let exeExtension = executableExtension(effectiveTarget)
+	let exeExtension = executableExtension(effectiveTarget.os)
 	let fragmentDir = fragmentsRootDir(specDir, target: effectiveTarget).join(specName)
 
 	// mkdir -p, but ONLY for a target that has goldens. `recordFragmentAndCleanup` skips the fragment gate
@@ -4478,7 +4478,7 @@ end 'batchSubdirPath'
 // read-back all key their three capture files off the same word.
 //
 // ⚠ **IT IS `exePath`'s FILENAME AND NOT `test.name`, AND THAT IS THE POINT.** `prepareOneTest` is the
-// one place that knows what the build wrote — `<name>` plus `executableExtension(effectiveTarget)` —
+// one place that knows what the build wrote — `<name>` plus `executableExtension(effectiveTarget.os)` —
 // and a script that spelled `./<test.name>` would be a SECOND answer to that question, agreeing with
 // the first only for as long as this lane's extension stays EMPTY. Nothing would make them agree: the
 // day a batched lane has a suffix, the script names a file that does not exist and the whole spec

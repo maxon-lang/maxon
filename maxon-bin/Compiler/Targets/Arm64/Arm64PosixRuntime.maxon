@@ -198,14 +198,17 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 // ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
 // both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
 //
-// ⭐⭐ **`EWOULDBLOCK` IS THE ONE ARM WITH A LANE IN IT, AND IT IS THE ONE THE READER FORKS ON.** Linux
-// numbers it 11 and Darwin 35, so the caller supplies its own; every other row is the same on both. It answers
-// `ERROR_IO_PENDING` because that is what it MEANS — a non-blocking read that could not be served yet is an
-// operation still in flight, which is exactly the arm `__gt_subp_yield_read` parks on.
-export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt)
+// ⭐⭐ **`EWOULDBLOCK` AND `ENOTEMPTY` ARE THE TWO ARMS WITH A LANE IN THEM, AND THEY ARE THE ONES THE READER
+// FORKS ON.** Linux numbers them 11 and 39, Darwin 35 and 66, so the caller supplies its own pair; every
+// other row is the same on both. `EWOULDBLOCK` answers `ERROR_IO_PENDING` because that is what it MEANS — a
+// non-blocking read that could not be served yet is an operation still in flight, which is exactly the arm
+// `__gt_subp_yield_read` parks on. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which is what tells a
+// `Directory.delete` caller that the directory is occupied rather than missing.
+export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt, dirNotEmpty ParsedInt)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
+	let notEmpty = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
 	let answered = asm.newLabel()
@@ -213,6 +216,8 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noMoreFiles)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: wouldBlock as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: stillInFlight)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: dirNotEmpty as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notEmpty)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: notFound)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixErrnoNotADirectory as Imm32)
@@ -234,6 +239,10 @@ export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt)
 
 	asm.placeLabel(denied)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorAccessDenied as MachineWord)
+	arm64EmitBranchTo(asm, label: answered)
+
+	asm.placeLabel(notEmpty)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ErrorDirNotEmpty as MachineWord)
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(stillInFlight)

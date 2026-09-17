@@ -46,6 +46,39 @@ export let BuildCommandWord = "build"
 let VersionCommandWord = "version"
 export let OutputFlag = "-o"
 
+// The command that fills the cache, the command that empties it, and the variable naming the directory
+// the cache is kept under. Respelled here because this corpus is a separate program and cannot read the
+// driver's own constants.
+let RunCommandWord = "run"
+export let CacheCommandWord = "cache"
+export let CacheClearVerb = "clear"
+export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+
+// ⭐ **THE ONE DIRECTORY MAXON OWNS UNDER THE ROOT THAT VARIABLE NAMES.** Everything the cache holds sits
+// below it and nothing else in that root is Maxon's, so a case asks about THIS directory rather than
+// respelling the slot layout under it — and the caller's own root, which the cache may not touch, is the
+// directory above.
+export let CacheVendorDirName = "maxon"
+
+// ⚠ **THE OTHER VARIABLES THE DRIVER CONSULTS FOR A CACHE ROOT, RESPELLED FOR THE REASON ABOVE**, and it
+// reads a different set per host. `HomeDirectoryVariable` and `HostTempVariable` are exported because a
+// case fills the cache one of them names, or points two of them at one directory.
+#if os(Windows)
+	export let HomeDirectoryVariable = "USERPROFILE"
+	export let HostTempVariable = "TEMP"
+	let WindowsCacheRootVariable = "LOCALAPPDATA"
+#else
+	export let HomeDirectoryVariable = "HOME"
+	export let HostTempVariable = "TMPDIR"
+	let PosixLastResortTempDir = "/tmp"
+#endif
+
+// What the driver owns under a HOME directory: its own directory beside the `bin/` and `stdlib/` an
+// install puts there, rather than a `maxon` directory in a scratch area. The install directory is
+// exported because a clear must stop at the `cache` below it.
+export let MaxonUserDirName = ".maxon"
+let UserCacheDirName = "cache"
+
 // What the header's second line says, beneath the version line.
 export let EarlyPreviewWords = "early preview"
 
@@ -97,17 +130,16 @@ export let InstallScriptAddress = "maxon.dev/install"
 // The library root the compiler loads beside `stdlib/`, copied with it into an install-shaped stage.
 let RuntimeDirName = "runtime"
 
-// Where a case that must stage OUTSIDE the checkout goes, under the host's temp area, and the variables
-// that name that area. Respelled from the driver's run cache, which reads the same ones.
+// Where a case keeps the cache it is about, under its own staging directory, and the program it caches a
+// build of. The program is never inspected — only compiled, so that a build exists to be removed.
+let CaseCacheDirName = "cache"
+let CachedProgramFileName = "cached.maxon"
+let CachedProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+// Where a case that must stage OUTSIDE the checkout goes, under the host's temp area. The variable naming
+// that area is `HostTempVariable`, which the driver's cache reads too.
 let OutsideCheckoutStagingDirName = "maxon-tests-cli"
 let VendorDirName = "vendor"
-
-#if os(Windows)
-	let WindowsTempVariable = "TEMP"
-#else
-	let PosixTempVariable = "TMPDIR"
-	let PosixLastResortTempDir = "/tmp"
-#endif
 
 // A path component that climbs out of the directory it is joined under.
 let ParentComponent = ".."
@@ -133,7 +165,16 @@ let OptionPrefix = "-"
 // How a label lays out its spellings: alternatives are comma-separated, a flag taking a value names it
 // after `=`, and the description column starts after a gap of two spaces or more.
 let LabelAlternativeSeparator = ", "
-export let OptionValueSeparator = "="
+
+// Declared in both arms because its reader outside this file is itself x64-windows-only: exported
+// everywhere, it is an export with nothing to reference it on the other lanes, and E3092 refuses the
+// whole corpus there.
+#if os(Windows) and arch(x64)
+	export let OptionValueSeparator = "="
+#else
+	let OptionValueSeparator = "="
+#endif
+
 let DescriptionColumnGap = "  "
 
 // What a run of an option spelling is made of beside letters and digits; `OptionValueSeparator` may end one.
@@ -154,6 +195,28 @@ let LastAsciiByte = 127
 // A list of the words one listing showed, and how many of them a case is asking for.
 export typealias ListedWordArray = Array with String
 export typealias WordTally = int(0 to u32.max)
+export typealias PathArray = Array with FilePath
+
+// What a case's private directory for one candidate cache-root variable is called, named after the
+// variable so a child's environment can be read back off the tree it wrote into.
+let PrivateRootPrefix = "env-"
+
+// Reading a decimal count out of a report.
+let AsciiZero = 48 as Byte
+let AsciiNine = 57 as Byte
+let DecimalBase = 10
+
+// A report is one line per subject, and what a line says about its subject follows the path naming it.
+let ReportLineSeparator = "\n"
+let StateFollowsThePath = 1
+
+// A report a case meant to read something out of and could not. A sentence stating no count at all and one
+// naming none of the directories the case put a cache in are two different gaps, and a case reporting
+// either has to say which.
+export enum ReportReadingError implements Error
+	statesNoCount
+	namesNoSuchDirectory
+end 'ReportReadingError'
 
 // Spawn `binary` - this checkout's `maxon` unless a case staged a copy - with `arguments` in `environment`,
 // and collect everything it said.
@@ -245,7 +308,8 @@ end 'executableSuffix'
 //
 // `binaryIn` and `stdlibIn` name the directories holding the binary and `stdlib/`, relative to the case's
 // own staging directory, which `CaseDirItself` names. The previous run's files go first, so a rerun stages
-// the same tree; the standard library cannot remove a directory, so only files are cleared.
+// the same tree. Only the files go: a directory is re-created before a case uses it, and an empty one
+// holds nothing a compile could read.
 export function stageCompiler(caseDirName String, binaryIn String, stdlibIn String) returns FilePath
 	for component in [binaryIn, stdlibIn] 'eachSpelling'
 		requireStaysInStaging(component)
@@ -316,11 +380,239 @@ export function stageInstallOutsideCheckout(caseDirName String) returns FilePath
 	return staged
 end 'stageInstallOutsideCheckout'
 
+// The cache root a case hands the driver: a directory under the case's own staging directory, so nothing
+// here reads the developer's real cache or writes into it.
+export function cacheRootIn(dir FilePath) returns FilePath
+	let root = dir.join(CaseCacheDirName)
+
+	if not Directory.create(root) and not Directory.isDirectory(root) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {root.toString()}, the cache root a case points the driver at.")
+	end 'couldNotCreate'
+
+	return root
+end 'cacheRootIn'
+
+// ⭐ **WHERE THE DRIVER CACHES UNDER A HOME DIRECTORY.** Respelled here for the reason the variables above
+// are, and the whole of what a case needs to know about that candidate's layout.
+export function homeCacheRoot(home FilePath) returns FilePath
+	return home.join(MaxonUserDirName).join(UserCacheDirName)
+end 'homeCacheRoot'
+
+// ⭐⭐ **ONE DRIVER RUN WITH EVERY CANDIDATE CACHE ROOT INSIDE THE CASE'S OWN TREE.** `maxon cache clear`
+// sweeps every root this host names rather than only the one in use, so a child left looking at the
+// developer's home or temp area would have a case in this corpus delete the developer's own cache.
+// `naming` gives the variables the case is about; every other candidate gets a private directory apiece.
+//
+// ⭐ **EVERY ROOT THE DRIVER CONSULTS IS ONE A VARIABLE NAMES, WHICH IS WHAT MAKES THE CONFINEMENT
+// COMPLETE**: a child here can reach no cache directory outside the case's own tree, so no case can count
+// or remove anything of the developer's.
+export function runWithCacheRoots(arguments ListedWordArray, naming EnvMap, workingDirectory FilePath) returns CollectedOutput
+	return runDriver(arguments, environment: confinedCacheEnvironment(workingDirectory, naming: naming), workingDirectory: workingDirectory)
+end 'runWithCacheRoots'
+
+// One driver run whose cache is confined to `cacheRoot`.
+export function runWithCacheRoot(arguments ListedWordArray, cacheRoot FilePath, workingDirectory FilePath) returns CollectedOutput
+	var naming = EnvMap.create()
+	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
+
+	return runWithCacheRoots(arguments, naming: naming, workingDirectory: workingDirectory)
+end 'runWithCacheRoot'
+
+// ⛔ **`Environment.inheritUpdating` CANNOT REMOVE A VARIABLE**, so the whole environment is assembled
+// here — which is also what lets a case run a child that sees no cache override at all.
+//
+// ⚠ Built from the INHERITED entries rather than from scratch: a child handed a bare environment can fail
+// to start on Windows for want of `SystemRoot`.
+//
+// ⚠ Windows folds a variable name case-insensitively and this map does not, so a candidate is dropped
+// case-insensitively there: the real environment may spell one in any case.
+function confinedCacheEnvironment(dir FilePath, naming EnvMap) returns Environment
+	let inherited = try Process.currentEnvironmentEntries() otherwise panic("CliHarness: the gate could not run - this process's environment could not be read, and a child inheriting the developer's own cache roots would clear the developer's cache.")
+
+	var vars = EnvMap.create()
+
+	for entry in inherited 'eachEntry'
+		let name = Process.envEntryName(entry)
+
+		if namesACacheRoot(name) 'aCandidate'
+			continue
+		end 'aCandidate'
+
+		vars.upsert(name, value: Process.envEntryValue(entry))
+	end 'eachEntry'
+
+	for (variable, spelled) in naming 'eachNamed'
+		vars.upsert(variable, value: spelled)
+	end 'eachNamed'
+
+	for variable in confinableCacheVariables() 'eachVariable'
+		if vars.contains(variable) 'theCaseNamedIt'
+			continue
+		end 'theCaseNamedIt'
+
+		vars.upsert(variable, value: privateRootFor(dir, variable: variable).toString())
+	end 'eachVariable'
+
+	return Environment.custom(vars)
+end 'confinedCacheEnvironment'
+
+// ⭐ **THE CANDIDATES A CASE MAY POINT SOMEWHERE ELSE.** The override is not one of them: a case that
+// names nothing must reach a child that sees none, which is the only way to fill the cache a lower-ranked
+// candidate keeps.
+function confinableCacheVariables() returns ListedWordArray
+	#if os(Windows)
+		let variables = [HomeDirectoryVariable, WindowsCacheRootVariable, HostTempVariable]
+	#else
+		let variables = [HomeDirectoryVariable, HostTempVariable]
+	#endif
+
+	return variables
+end 'confinableCacheVariables'
+
+function namesACacheRoot(name String) returns bool
+	if foldedVariable(name) == foldedVariable(CacheRootVariable) 'theOverride'
+		return true
+	end 'theOverride'
+
+	for variable in confinableCacheVariables() 'eachVariable'
+		if foldedVariable(name) == foldedVariable(variable) 'theSame'
+			return true
+		end 'theSame'
+	end 'eachVariable'
+
+	return false
+end 'namesACacheRoot'
+
+function foldedVariable(name String) returns String
+	#if os(Windows)
+		let folded = name.toLower()
+	#else
+		let folded = name
+	#endif
+
+	return folded
+end 'foldedVariable'
+
+// A directory of the case's own for one candidate variable. Created, because a child handed a temp area
+// that is not there can fail at something other than the cache.
+function privateRootFor(dir FilePath, variable String) returns FilePath
+	let root = dir.join("{PrivateRootPrefix}{variable}")
+
+	if not Directory.create(root) and not Directory.isDirectory(root) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {root.toString()}, the directory {variable} names in a case's child.")
+	end 'couldNotCreate'
+
+	return root
+end 'privateRootFor'
+
+// ⭐ **A CACHE WITH A REAL BUILD IN IT, PUT THERE BY THE DRIVER.** Only the driver knows the layout it
+// publishes into, so a planted file would ask whether a clear can remove what the TEST put there — which
+// is not the question. A run that does not land a build stops the case rather than failing it.
+//
+// ⚠ **`program` NAMES THE SOURCE FILE, AND TWO NAMES ARE TWO BUILDS.** A slot is keyed on the program's
+// PATH, so publishing the same text twice under one name supersedes the first build rather than adding a
+// second; a case that needs more than one build in a root names a second file.
+export function publishCachedBuild(dir FilePath, cacheRoot FilePath, program String = CachedProgramFileName)
+	var naming = EnvMap.create()
+	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
+
+	publishCachedBuildUnder(dir, naming: naming, owned: cacheRoot.join(CacheVendorDirName), program: program)
+end 'publishCachedBuild'
+
+// The same build published under the cache a HOME directory names — the only way to fill a candidate the
+// override outranks, and what a clear must reach as well as the one in use.
+export function publishCachedBuildInHome(dir FilePath, home FilePath)
+	var naming = EnvMap.create()
+	naming.upsert(HomeDirectoryVariable, value: home.toString())
+
+	publishCachedBuildUnder(dir, naming: naming, owned: homeCacheRoot(home), program: CachedProgramFileName)
+end 'publishCachedBuildInHome'
+
+function publishCachedBuildUnder(dir FilePath, naming EnvMap, owned FilePath, program String)
+	let source = dir.join(program)
+	try File.writeText(source, content: CachedProgramSource) otherwise panic("CliHarness: the gate could not run - could not write {source.toString()}, the program a case caches a build of.")
+
+	let run = runWithCacheRoots([RunCommandWord, source.toString()], naming: naming, workingDirectory: dir)
+
+	if run.exitCode() != 0 'didNotRun'
+		panic("CliHarness: the gate could not run - `maxon {RunCommandWord}` did not compile the staged program, so there is no cached build to act on. It wrote to stdout: {run.stdout} and to stderr: {run.stderr}")
+	end 'didNotRun'
+
+	if not Directory.isDirectory(owned) 'nothingCached'
+		panic("CliHarness: the gate could not run - `maxon {RunCommandWord}` left nothing under {owned.toString()}, so a case about clearing the cache would be about an empty one.")
+	end 'nothingCached'
+end 'publishCachedBuildUnder'
+
+// Every file at any depth under `dir`, so a case can count what the driver published without respelling
+// the layout it published into.
+export function filesUnder(dir FilePath) returns PathArray
+	var found = PathArray.create()
+	collectFiles(dir, into: found)
+
+	return found
+end 'filesUnder'
+
+function collectFiles(dir FilePath, into PathArray)
+	let entries = try Directory.list(dir) otherwise return
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			collectFiles(entry, into: into)
+			continue
+		end 'aDirectory'
+
+		into.push(entry)
+	end 'eachEntry'
+end 'collectFiles'
+
+// ⭐ **WHAT A REPORT SAYS IT REMOVED, read as the first run of digits in it.** A case comparing the
+// clear's answer against what was on disk asks the number and never the wording around it.
+export function reportedTally(report String) returns AssertedInt throws ReportReadingError
+	var value = 0
+	var seen = false
+
+	for byte in report.bytes() 'eachByte'
+		if byte < AsciiZero or byte > AsciiNine 'notADigit'
+			if seen 'theNumberEnded'
+				break
+			end 'theNumberEnded'
+
+			continue
+		end 'notADigit'
+
+		value = value * DecimalBase + (byte as AssertedInt) - (AsciiZero as AssertedInt)
+		seen = true
+	end 'eachByte'
+
+	if not seen 'statesNoCount'
+		throw ReportReadingError.statesNoCount
+	end 'statesNoCount'
+
+	return value
+end 'reportedTally'
+
+// ⭐ **WHAT A REPORT SAYS ABOUT ONE DIRECTORY: the text after that directory's path, on the line naming
+// it.** A report with a line per root states several counts, and a case reading the whole of it would read
+// a neighbour's; a path of its own may hold digits, and reading from after it cannot pick one up.
+export function reportedStateOf(report String, directory FilePath) returns String throws ReportReadingError
+	let spelled = directory.toString()
+
+	for line in report.split(ReportLineSeparator) 'eachLine'
+		if not line.contains(spelled) 'namesAnother'
+			continue
+		end 'namesAnother'
+
+		return try line.split(spelled).get(StateFollowsThePath) otherwise throw ReportReadingError.namesNoSuchDirectory
+	end 'eachLine'
+
+	throw ReportReadingError.namesNoSuchDirectory
+end 'reportedStateOf'
+
 function hostTempDir() returns FilePath
 	#if os(Windows)
-		let spelled = try Process.environmentVariable(WindowsTempVariable) otherwise panic("CliHarness: the gate could not run - {WindowsTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("CliHarness: the gate could not run - {HostTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
 	#else
-		let spelled = try Process.environmentVariable(PosixTempVariable) otherwise PosixLastResortTempDir
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
 	#endif
 
 	return try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - the host temp area '{spelled}' is not a spellable path")
@@ -336,7 +628,16 @@ function requireNoVendorAbove(dir FilePath)
 			panic("CliHarness: the gate could not run - {vendor.toString()} sits above {dir.toString()}, which a case stages there precisely to have none of.")
 		end 'vendorFound'
 
-		level = try level.parent() otherwise break
+		let above = try level.parent() otherwise break
+
+		// ⚠ A top-level absolute path's parent is EMPTY under POSIX where Windows throws, and joining
+		// onto an empty path gives a RELATIVE one - which `isDirectory` resolves against the checkout,
+		// where `vendor/` does exist. The walk stops at the root rather than stepping past it.
+		if above.toString().isEmpty() 'reachedTheRoot'
+			break
+		end 'reachedTheRoot'
+
+		level = above
 	end 'eachLevel'
 end 'requireNoVendorAbove'
 
@@ -471,14 +772,26 @@ export function optionSpellingsIn(listing String) returns ListedWordArray
 	return spellings
 end 'optionSpellingsIn'
 
-export function optionSpellingOf(alternative String) returns String
+// Exported only where its outside reader is compiled, for `OptionValueSeparator`'s reason. The body is
+// one text, spelled once: `optionSpellingOf` below calls it on every lane.
+#if os(Windows) and arch(x64)
+	export function optionSpellingOf(alternative String) returns String
+		return spellingOfAlternative(alternative)
+	end 'optionSpellingOf'
+#else
+	function optionSpellingOf(alternative String) returns String
+		return spellingOfAlternative(alternative)
+	end 'optionSpellingOf'
+#endif
+
+function spellingOfAlternative(alternative String) returns String
 	if alternative.contains(OptionValueSeparator) 'takesAValue'
 		let name = try alternative.split(OptionValueSeparator).get(0) otherwise panic("CliHarness: a split of a string containing its separator has a first part")
 		return "{name}{OptionValueSeparator}"
 	end 'takesAValue'
 
 	return firstWordOf(alternative)
-end 'optionSpellingOf'
+end 'spellingOfAlternative'
 
 // ⭐ **THE UNITS AN OPTION IS SPELLED IN, READ OUT OF FREE TEXT**: maximal runs of letters, digits, `-` and
 // `_`, each carrying an `=` that directly follows it. Membership in this list is what "the text names

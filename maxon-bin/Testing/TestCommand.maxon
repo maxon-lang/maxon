@@ -78,7 +78,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return 1
 
-	quietTheBuildChatter(args)
+	_ = quietTheBuildChatter(args)
 
 	// ⚠ **THE SAME SPELLING REACHES DISCOVERY AND STAGING**, which is what `TestDispatcher
 	// .stageTestBuild` requires: both walk through `Compiler.collectMaxonSources`, so the paths they
@@ -319,7 +319,7 @@ function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, 
 	// A SIBLING of the staged tree, never inside it: the staged root is purged and rewritten on every
 	// run, and a binary living in the tree that gets walked is a file the next run would have to reason
 	// about.
-	let exePath = buildRoot.join("{TestBinaryStem}{executableExtension(target)}")
+	let exePath = buildRoot.join("{TestBinaryStem}{executableExtension(target.os)}")
 	let product = try compileToProduct(staged.buildTargets, target: target, outputOverride: exePath.toString(), runtimeIrNames: RuntimeFunctionNameArray.create(), entryFunction: MaxonTestEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, sourceSelection: SourceSelection.productionAndTests, stagedSourceOrigins: staged.stagedSourceOrigins) otherwise 'didNotCompile'
 		// SILENT about the cause: the pipeline already emitted every diagnostic through the one sink,
 		// and a sentence of our own here would be a second, vaguer report of the same failure.

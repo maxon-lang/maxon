@@ -39,22 +39,38 @@ let FormatNumberPart = 1
 
 typealias CacheFormatNumber = int(1 to u32.max)
 
+// ⭐⭐ **EVERY ROOT IS INSIDE A DIRECTORY ONLY ITS OWNER MAY WRITE, WHICH IS WHY A HOST NAMING NONE OF
+// THEM IS REFUSED BY NAME ON BOTH LANES.** A cache under a world-writable directory belongs to every user
+// of the host at once: two users' builds collide in it, and a local attacker can own the root — or plant a
+// directory symlink inside it — before its first use. So the whole roster is directories a variable this
+// process was GIVEN names, and a host naming none is told which one to set rather than sent to a directory
+// anybody can write.
 #if os(Windows)
-	// Windows has no directory every process may write to unasked, so these two ARE the answer and a host
-	// setting neither is refused by name rather than sent to an invented path.
+	// Where a Windows user's own files are, and the two host scratch areas that stand in when it names
+	// nothing.
+	let HomeDirectoryVariable = "USERPROFILE"
 	let WindowsCacheRootVariable = "LOCALAPPDATA"
 	let WindowsTempVariable = "TEMP"
 #else
+	let HomeDirectoryVariable = "HOME"
 	let PosixTempVariable = "TMPDIR"
-
-	// Every POSIX host has one, so there is a last resort needing no variable at all.
-	let PosixLastResortRoot = "/tmp"
 #endif
 
-// `<root>/maxon/run/<format>/<one directory per program>` — under a directory of this compiler's own, so a
-// shared temp area is not littered with slot names that say nothing about what put them there.
+// `<scratch area>/maxon/run/<format>/<one directory per program>` — under a directory of this compiler's
+// own, so a shared temp area is not littered with slot names that say nothing about what put them there.
 let CacheVendorDirName = "maxon"
 let CacheCommandDirName = "run"
+
+// ⭐ **`<home>/.maxon` IS THE INSTALL SCRIPT'S OWN DEFAULT INSTALL ROOT** (`website/public/install.sh`,
+// `install.ps1`), so under a home directory the cache sits beside the `bin/` and `stdlib/` it belongs to
+// rather than in a second directory of Maxon's elsewhere on the machine.
+let MaxonUserDirName = ".maxon"
+let UserCacheDirName = "cache"
+
+// How `cacheRootChain` spells the value of a variable, and what separates two places in it.
+let VariableOpenMark = "<"
+let VariableCloseMark = ">"
+let ChainSeparator = ", then "
 
 // What separates a build's name from the key that names it, and what an in-flight build carries before
 // its extension.
@@ -73,6 +89,11 @@ let PendingBuildMarker = ".tmp"
 // the collision it risks is a stale binary served for changed inputs, at a population no cache reaches.
 let CacheNameDigestBytes = 8
 
+// How many characters a key occupies once `hexDigest` has spelled it, and the digits it may be spelled in.
+// Lower case, because that is what a `{byte:02x}` field writes.
+let CacheKeyCharacters = CacheNameDigestBytes * 2
+let CacheKeyDigits = "0123456789abcdef"
+
 // A stem is for a READER and for the program's own `argv[0]`, so it is trimmed rather than dropped — a
 // name long enough to recognise costs a fraction of what spelling a whole digest does.
 let MaxSlotStemLength = 24
@@ -88,7 +109,8 @@ let ProgramFieldLabel = "program"
 let StdlibFieldLabel = "stdlib"
 let EntryFieldLabel = "entry"
 
-typealias CacheVariableArray = Array with String
+typealias CacheRootCandidateArray = Array with CacheRootCandidate
+export typealias CacheRootArray = Array with FilePath
 typealias ManifestFieldArray = Array with String
 typealias BuildNameArray = Array with String
 
@@ -133,7 +155,7 @@ module function locateRunSlot(program FilePath, isProject bool, target Target, e
 	let stem = try slotStem(program, isProject: isProject)
 	let formatsRoot = try runCacheRoot()
 	let dir = try slotDirectory(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
-	let binarySuffix = executableExtension(target)
+	let binarySuffix = executableExtension(target.os)
 	let built = "{stem}{SlotKeySeparator}{key}"
 
 	return RunSlot.create(dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{__Builtins.currentProcessId()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix, formatsRoot: formatsRoot)
@@ -204,9 +226,6 @@ end 'discardSupersededBuilds'
 //
 // ⛔ **ONLY THE DEPTH A FORMAT'S LAYOUT PUTS FILES AT IS SWEPT**, never a walk: a directory at any other
 // depth — a link planted in the cache included — is nothing a driver wrote, and a walk would follow it.
-//
-// ⚠ **THE FILES GO AND THEIR DIRECTORIES STAY.** The standard library has no directory removal, so a swept
-// slot remains as an empty directory, which costs a name and no bytes.
 function discardOlderCacheFormats(slot RunSlot)
 	let entries = try Directory.list(slot.formatsRoot) otherwise return
 	let nothingKept = BuildNameArray.create()
@@ -229,6 +248,8 @@ function discardOlderCacheFormats(slot RunSlot)
 		for olderSlot in slots 'eachOlderSlot'
 			discardSlotBuilds(olderSlot, binarySuffix: slot.binarySuffix, kept: nothingKept)
 		end 'eachOlderSlot'
+
+		try Directory.delete(entry) otherwise ignore
 	end 'eachEntry'
 end 'discardOlderCacheFormats'
 
@@ -248,6 +269,10 @@ end 'isOlderCacheFormatName'
 
 // A slot's files, but for `kept` and any build still being written. A non-directory `dir` lists nothing
 // and is left alone.
+//
+// ⭐ **THE EMPTIED DIRECTORY GOES WITH THEM**, or a slot costs a name for the life of the install, one per
+// program ever run. The removal is asked for unconditionally because `Directory.delete` refuses a
+// directory that still holds an entry, so a slot keeping its newest build declines it by itself.
 function discardSlotBuilds(dir FilePath, binarySuffix String, kept BuildNameArray)
 	let entries = try Directory.list(dir) otherwise return
 
@@ -264,7 +289,61 @@ function discardSlotBuilds(dir FilePath, binarySuffix String, kept BuildNameArra
 
 		discardQuietly(entry)
 	end 'eachEntry'
+
+	try Directory.delete(dir) otherwise ignore
 end 'discardSlotBuilds'
+
+// ⭐⭐ **WHAT A PUBLISHED BUILD IS, ASKED AS THE SHAPE ITS NAME HAS.** `locateRunSlot` names a build
+// `<stem>`, the separator, the key, the target's extension — and the key is exactly `CacheKeyCharacters`
+// hex digits, which is the mark the pending marker is chosen against. Asked positively because the root
+// holds more than builds: the MCP server stages a snippet SOURCE under it, and a test by elimination
+// counts that as a build. `export` because `maxon cache` counts them.
+//
+// ⚠ **EVERY TARGET'S EXECUTABLE EXTENSION IS TRIED**, because a build's name ends in the extension of the
+// target it was built FOR and one root holds the builds of every target this host compiled for.
+export function isPublishedBuildName(name String) returns bool
+	for os in Os.allCases 'eachOs'
+		let binarySuffix = executableExtension(os)
+
+		if name.endsWith(binarySuffix) and endsInSlotKey(name, binarySuffix: binarySuffix) 'aBuildForThatTarget'
+			return true
+		end 'aBuildForThatTarget'
+	end 'eachOs'
+
+	return false
+end 'isPublishedBuildName'
+
+// Whether a whole key and nothing else stands between the LAST separator and `binarySuffix`, which the
+// caller has already found at the end of the name. A stem may hold separators of its own, so the last one
+// is the only one a key can follow.
+//
+// A sidecar and a build still being written both fail on the same evidence: what stands there is `.mxdbg`
+// or the writer's process id, so the span is the wrong length and its characters are not all hex.
+function endsInSlotKey(name String, binarySuffix String) returns bool
+	let separator = try name.findLast(SlotKeySeparator) otherwise return false
+	let keyStarts = try name.indexAfter(separator) otherwise return false
+	let tail = name.slice(keyStarts, endIndex: name.endIndex())
+
+	if tail.count() != CacheKeyCharacters + binarySuffix.count() 'notAWholeKey'
+		return false
+	end 'notAWholeKey'
+
+	var digits = 0
+
+	for character in tail 'eachCharacter'
+		if digits >= CacheKeyCharacters 'pastTheKey'
+			break
+		end 'pastTheKey'
+
+		if not CacheKeyDigits.contains(character) 'notAKey'
+			return false
+		end 'notAKey'
+
+		digits = digits + 1
+	end 'eachCharacter'
+
+	return true
+end 'endsInSlotKey'
 
 // A build still being written, or its sidecar. The hit test cannot match one, and removing it costs its
 // writer the rename that publishes it.
@@ -300,64 +379,123 @@ end 'discardQuietly'
 // WHERE A SLOT LIVES
 // ============================================================================================
 
-// The cache roots this host consults, in order. The override comes first so a caller whose temp area is
-// unwritable — or a test that must not touch the developer's — can name another without this having to
-// guess.
-function cacheRootVariables() returns CacheVariableArray
-	var names = CacheVariableArray.create()
-	names.push(RunCacheRootVariable)
+// One place this host may keep Maxon's cache: a variable naming a directory, and the path under that
+// directory that is Maxon's own. A roster of variable NAMES alone could not express `<home>/.maxon/cache`,
+// which is nothing any variable holds.
+type CacheRootCandidate
+	export let variable as String
+	export let suffix as FilePath
+
+	static function create(variable String, suffix FilePath) returns CacheRootCandidate
+		return Self{variable: variable, suffix: suffix}
+	end 'create'
+end 'CacheRootCandidate'
+
+// The cache directories this host consults, in order. The override comes first so a caller whose home or
+// temp area is unwritable — or a test that must not touch the developer's cache — can name another without
+// this having to guess.
+//
+// ⭐ **THE USER'S OWN MAXON DIRECTORY OUTRANKS THE HOST'S SCRATCH AREA**, because the cache belongs beside
+// the install it was built by rather than in an area the host may sweep between two runs of one program.
+function cacheRootCandidates() returns CacheRootCandidateArray
+	let vendorDir = FilePath.empty().join(CacheVendorDirName)
+	let userCacheDir = FilePath.empty().join(MaxonUserDirName).join(UserCacheDirName)
+
+	var candidates = CacheRootCandidateArray.create()
+	candidates.push(CacheRootCandidate.create(RunCacheRootVariable, suffix: vendorDir))
 
 	#if os(Windows)
-		names.push(WindowsCacheRootVariable)
-		names.push(WindowsTempVariable)
+		candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
+		candidates.push(CacheRootCandidate.create(WindowsCacheRootVariable, suffix: vendorDir))
+		candidates.push(CacheRootCandidate.create(WindowsTempVariable, suffix: vendorDir))
 	#else
-		names.push(PosixTempVariable)
+		candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
+		candidates.push(CacheRootCandidate.create(PosixTempVariable, suffix: vendorDir))
 	#endif
 
-	return names
-end 'cacheRootVariables'
+	return candidates
+end 'cacheRootCandidates'
 
-// ⭐ THE HOST'S SCRATCH AREA, spelled once. The run cache keeps compiled programs under it and the
-// MCP server stages inline snippets under it; a second derivation of the variable list is a second
-// answer to "where may this host be written to?".
-export function hostCacheRoot() returns FilePath throws RunCacheError
-	for name in cacheRootVariables() 'eachVariable'
-		let spelled = try Process.environmentVariable(name) otherwise continue
+// ⭐⭐ **EVERY DIRECTORY THIS HOST COULD BE KEEPING A CACHE IN, in roster order and each named once.** Only
+// the first is in use, so a build published while a different variable ranked highest — a `TMPDIR` that has
+// since changed, a run made with `MAXON_RUN_CACHE_ROOT` set — sits under a root nothing consults again. It
+// is still Maxon's, and `maxon cache clear` is what reaches it, so the roster answers as a LIST rather than
+// as one winner.
+//
+// ⛔ **A DIRECTORY IS NAMED ONCE HOWEVER MANY VARIABLES POINT AT IT.** `TEMP` and `TMPDIR` routinely hold
+// one path and an override may be aimed at the home directory, and a caller acting per entry would act on
+// that directory twice.
+export function hostCacheRoots() returns CacheRootArray throws RunCacheError
+	var roots = CacheRootArray.create()
+
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		let spelled = try Process.environmentVariable(candidate.variable) otherwise continue
 
 		if spelled.isEmpty() 'namesNowhere'
 			continue
 		end 'namesNowhere'
 
-		return try FilePath.from(spelled) otherwise continue
-	end 'eachVariable'
+		let named = try FilePath.from(spelled) otherwise continue
+		noteRoot(roots, root: named.join(candidate.suffix))
+	end 'eachCandidate'
 
-	return try lastResortCacheRoot()
+	if roots.isEmpty() 'noneNamed'
+		throw RunCacheError.unavailable(noCacheRootMessage())
+	end 'noneNamed'
+
+	return roots
+end 'hostCacheRoots'
+
+// Windows folds a path's case and POSIX does not, which `FilePath.equals` answers for the host.
+function noteRoot(roots CacheRootArray, root FilePath)
+	for seen in roots 'eachSeen'
+		if seen.equals(root) 'alreadyNamed'
+			return
+		end 'alreadyNamed'
+	end 'eachSeen'
+
+	roots.push(root)
+end 'noteRoot'
+
+// ⭐ **THE DIRECTORY MAXON OWNS ON THIS HOST, spelled once.** The run cache keeps compiled programs under
+// it and the MCP server stages inline snippets under it, so everything below it is Maxon's and everything
+// beside it is somebody else's — which is what lets `maxon cache clear` know where to stop. A second
+// derivation of the roster is a second answer to that.
+export function hostCacheRoot() returns FilePath throws RunCacheError
+	let roots = try hostCacheRoots()
+	return try roots.get(0) otherwise panic("hostCacheRoot: an empty roster is refused by hostCacheRoots, so its first entry is there")
 end 'hostCacheRoot'
 
-function lastResortCacheRoot() returns FilePath throws RunCacheError
-	#if os(Windows)
-		throw RunCacheError.unavailable(noCacheRootMessage())
-	#else
-		return try FilePath.from(PosixLastResortRoot) otherwise throw RunCacheError.unavailable(noCacheRootMessage())
-	#endif
-end 'lastResortCacheRoot'
-
-// The refusal names the variables THIS host consults, read off the same list that consulted them: a
+// The refusal names the variables THIS host consults, read off the same roster that consulted them: a
 // sentence naming a variable nothing reads sends its reader to set something that changes nothing.
 function noCacheRootMessage() returns String
 	var named = ""
 
-	for name in cacheRootVariables() 'eachVariable'
-		named = name if named.isEmpty() else "{named}, {name}"
-	end 'eachVariable'
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		named = candidate.variable if named.isEmpty() else "{named}, {candidate.variable}"
+	end 'eachCandidate'
 
 	return "no directory to keep compiled programs in: none of {named} names one. Set {RunCacheRootVariable} to a writable directory."
 end 'noCacheRootMessage'
 
+// Where a reader is told to look for the cache, read off the same roster that decides it. `export`
+// because the command reference prints it, and a reference naming a place the code does not consult
+// sends its reader to the wrong directory.
+export function cacheRootChain() returns String
+	var chain = ""
+
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		let place = "{VariableOpenMark}{candidate.variable}{VariableCloseMark}{FilePath.separator()}{candidate.suffix.toString()}"
+		chain = place if chain.isEmpty() else "{chain}{ChainSeparator}{place}"
+	end 'eachCandidate'
+
+	return chain
+end 'cacheRootChain'
+
 // The directory every cache format keeps its own directory under.
 function runCacheRoot() returns FilePath throws RunCacheError
 	let root = try hostCacheRoot()
-	return root.join("{CacheVendorDirName}").join("{CacheCommandDirName}")
+	return root.join(CacheCommandDirName)
 end 'runCacheRoot'
 
 function cacheFormatName() returns String

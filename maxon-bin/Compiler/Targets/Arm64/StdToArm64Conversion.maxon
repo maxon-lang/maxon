@@ -670,6 +670,7 @@ export type StdToArm64Lowering
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes gives 0
 
@@ -1041,6 +1042,7 @@ export type StdToArm64Lowering
 			osFileFindClose(handleId) then self.emitHostChunkCall(dstRef, chunk: HostDirFindCloseName, args: argsOf(handleId))
 			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerHostChunkValue(resultId, args: twoArgs(handleId, second: findDataPtrId), chunk: HostDirFindNextName, dstRef: dstRef)
 			osDirCreate(resultId, pathPtrId) then self.lowerHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostDirCreateName, dstRef: dstRef)
+			osDirRemove(resultId, pathPtrId) then self.lowerHostChunkValue(resultId, args: argsOf(pathPtrId), chunk: HostDirRemoveName, dstRef: dstRef)
 
 			// ⚠ **THE OP'S FIELD ORDER IS NOT THE C ONE**, exactly as `lowerOsExecutablePath` records for its
 			// twin: the op reads `(result, bufLen, bufPtr)` and `getcwd` takes the BUFFER first.
@@ -1291,6 +1293,7 @@ export type StdToArm64Lowering
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes then panic("StdToArm64Lowering: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osPanicValue then panic("StdToArm64Lowering: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")

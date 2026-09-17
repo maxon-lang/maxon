@@ -180,8 +180,12 @@ export enum OsImportSlot
 	//
 	// `opendir`/`readdir`/`closedir` + `fnmatch` are `FindFirstFileA`'s emulation: Win32 takes a GLOB and
 	// POSIX takes a DIRECTORY, so the pattern is split at its last `/`, the prefix is opened and every entry
-	// is matched against the suffix. `unlink`, `rename`, `mkdir` and `getcwd` are the four path operations
-	// with a one-to-one Win32 twin.
+	// is matched against the suffix. `unlink`, `rename`, `mkdir`, `rmdir` and `getcwd` are the five path
+	// operations with a one-to-one Win32 twin.
+	//
+	// ⚠ **`rmdir` IS A SLOT OF ITS OWN BECAUSE `unlink` REFUSES A DIRECTORY.** POSIX splits the removal by
+	// SUBJECT exactly as Win32 splits it between `DeleteFileA` and `RemoveDirectoryA`, so neither call can
+	// stand in for the other and neither entry point is reachable through the other's slot.
 	errnoLocation
 	open
 	creat
@@ -194,6 +198,7 @@ export enum OsImportSlot
 	unlink
 	rename
 	mkdir
+	rmdir
 	getcwd
 	opendir
 	readdir

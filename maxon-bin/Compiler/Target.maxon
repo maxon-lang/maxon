@@ -80,24 +80,26 @@ export function targetToString(t Target) returns String
 	return "{String.from(cpuCanonicalName(t.cpu))}-{String.from(osCanonicalName(t.os))}"
 end 'targetToString'
 
-export function executableExtension(t Target) returns String
-	return match t.os 'os'
+// Keyed on the OS alone, because the CPU never reaches the name: a caller holding an `Os` and no `Target`
+// — the cache, asking which of a build's names could be a target's — needs no target to invent.
+export function executableExtension(os Os) returns String
+	return match os 'os'
 		windows gives ".exe"
-		linux gives ""
-		macos gives ""
+		linux or
+			macos gives ""
 		wasi gives ".wasm"
 	end 'os'
 end 'executableExtension'
 
 // ⭐ **THE SUFFIX OF A BINARY THIS PROCESS CAN SPAWN — the HOST's, not a target's**, spelled once for
-// the whole tree. `SpecTestRunner` asks `executableExtension(effectiveTarget)` instead, the TARGET's
+// the whole tree. `SpecTestRunner` asks `executableExtension(effectiveTarget.os)` instead, the TARGET's
 // extension, which is a different question and the reason a cross-target build's exe is named
 // correctly.
 //
-// ⚠ **THE DISTINCTION IS THE WHOLE POINT, so the name says HOST out loud.** `executableExtension(t)`
-// answers "what will a build for `t` produce?"; this answers "what can I `runProcess`?". A harness
+// ⚠ **THE DISTINCTION IS THE WHOLE POINT, so the name says HOST out loud.** `executableExtension(os)`
+// answers "what will a build for that OS produce?"; this answers "what can I `runProcess`?". A harness
 // that cross-compiles reaches for the first and spawns through the second, and the day the two are
 // confused is the day a `x64-windows` cross-build on a POSIX host is looked for without its `.exe`.
 export function hostExecutableExtension() returns String
-	return executableExtension(detectHostTarget())
+	return executableExtension(detectHostTarget().os)
 end 'hostExecutableExtension'

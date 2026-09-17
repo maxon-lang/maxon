@@ -1157,6 +1157,7 @@ Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
 | `Directory.exists(path FilePath)` | `bool` | — | True when `path` is an existing directory. |
 | `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
 | `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
+| `Directory.delete(path FilePath)` | — | `DirectoryDeleteError` | Remove an empty directory. A directory that still holds an entry is refused, not emptied. |
 | `Directory.currentPath()` | `FilePath` | — | The working directory. |
 
 ```maxon
@@ -1166,6 +1167,20 @@ enum DirectoryListError implements Error
 	listFailed
 end 'DirectoryListError'
 ```
+
+```maxon
+enum DirectoryDeleteError implements Error
+	notFound
+	notEmpty
+	deleteFailed
+end 'DirectoryDeleteError'
+```
+
+| Error enum | Case | Thrown when |
+|------------|------|-------------|
+| `DirectoryDeleteError` | `notFound` | Nothing exists at `path` |
+| `DirectoryDeleteError` | `notEmpty` | The directory still holds an entry |
+| `DirectoryDeleteError` | `deleteFailed` | The removal fails for any other reason |
 
 ```maxon
 function main() returns ExitCode

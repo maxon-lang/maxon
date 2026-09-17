@@ -1086,16 +1086,16 @@ end 'arm64DarwinWin32BoolFromPosixStatus'
 // ==========================================================================
 
 // ⭐⭐ **`GetLastError()` ON THIS LANE: FETCH `*__error()` AND HAND IT TO THE SHARED TRANSLATOR.** The
-// MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s and has no lane in it — the five errno values it
-// tests are the same numbers on both POSIX lanes. What is Darwin's is only the FETCH: libc keeps errno in
-// thread-local storage reachable through `__error()`, where the Linux lane has no libc and reads the word its
-// own chunks stashed.
+// MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s; the two numbers the OSes disagree about are passed
+// in, and every other errno it tests is the same on both POSIX lanes. What is Darwin's beyond those is only
+// the FETCH: libc keeps errno in thread-local storage reachable through `__error()`, where the Linux lane has
+// no libc and reads the word its own chunks stashed.
 function buildArm64DarwinLastErrorChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
-	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrnoWouldBlock)
+	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrnoWouldBlock, dirNotEmpty: DarwinErrnoDirectoryNotEmpty)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64DarwinLastErrorChunk'
@@ -1221,8 +1221,9 @@ function buildArm64DarwinFileSizeChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinFileSizeChunk'
 
 // ==========================================================================
-// mrt_darwin_file_delete(x0 = pathPtr) -> x0 = BOOL
-// mrt_darwin_dir_create(x0 = pathPtr) -> x0 = BOOL
+// mrt_host_file_delete(x0 = pathPtr) -> x0 = BOOL
+// mrt_host_dir_create(x0 = pathPtr) -> x0 = BOOL
+// mrt_host_dir_remove(x0 = pathPtr) -> x0 = BOOL
 // ==========================================================================
 
 // `DeleteFileA` ⇒ `unlink`. Both take a path and answer a verdict; only the failure ENCODING differs, which
@@ -1248,6 +1249,18 @@ function buildArm64DarwinDirCreateChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostDirCreateName)
 end 'buildArm64DarwinDirCreateChunk'
+
+// `RemoveDirectoryA(path)` ⇒ `rmdir(path)`. It is the file delete's shape with a different import, because
+// POSIX splits the removal by SUBJECT the same way Win32 does — `unlink` refuses a directory and `rmdir`
+// refuses everything else — so the two chunks are one argument and one verdict apart.
+function buildArm64DarwinDirRemoveChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.rmdir)
+	arm64DarwinWin32BoolFromPosixStatus(asm)
+
+	return asm.finishFunction(HostDirRemoveName)
+end 'buildArm64DarwinDirRemoveChunk'
 
 // ==========================================================================
 // mrt_darwin_file_rename(x0 = oldPathPtr, x1 = newPathPtr) -> x0 = BOOL
@@ -2313,6 +2326,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 
 	if usage.usesManagedDirectory 'managedDirectory'
 		chunks.push(buildArm64DarwinDirCreateChunk())
+		chunks.push(buildArm64DarwinDirRemoveChunk())
 		chunks.push(buildArm64DarwinDirCurrentPathChunk())
 	end 'managedDirectory'
 

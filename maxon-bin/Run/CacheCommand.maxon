@@ -1,0 +1,459 @@
+// CacheCommand.maxon — `maxon cache`: what this compiler is keeping on the host, and `maxon cache clear`
+// to remove it.
+//
+// ⭐⭐ **THE BARE COMMAND IS AN ANSWER, NOT A REFUSAL.** "What is in my cache, and what would clearing it
+// give me back" is the question a caller has before they know whether to type the verb, and a command that
+// refused it would send them to `maxon help` to be told the cache exists and nowhere to be told what is in
+// it.
+//
+// ⭐⭐ **WHAT MAXON MAY REMOVE IS WHAT MAXON CREATED.** A candidate may name a directory that is already
+// somebody's — a build server's shared scratch area, a developer's own — so the clear reaches exactly the
+// directory the compiler makes and fills under each, and never the directory a caller named nor anything
+// beside it.
+//
+// ⭐⭐ **EVERY ROOT THE ROSTER RESOLVES IS SWEPT AND REPORTED, NOT ONLY THE ONE IN USE.** A build published
+// while another variable ranked highest — before a `TMPDIR` changed, or under an override one run set and
+// the next did not — sits where no later run looks, so a clear stopping at `hostCacheRoot()` would strand
+// it on disk for the life of the machine and a report stopping there would never show it.
+//
+// ⛔ **A REMOVAL THAT FAILED, OR A ROOT THAT COULD NOT BE READ, IS REPORTED AND THE COMMAND EXITS
+// NON-ZERO.** A cache still holding builds, reported as cleared, is the one answer a caller can neither
+// see nor act on; the walk goes on past a failure so the report names everything that stayed rather than
+// stopping at the first.
+//
+// ⚠ **THE STATISTICS GO TO STDOUT AND EVERY REFUSAL TO STDERR, THE `Usage:` LINE INCLUDED.** The report is
+// what the command was asked for and a script may read it; a usage line on stdout is read by that same
+// script as the command's answer rather than as its complaint.
+
+// The one verb. `export` because the command reference spells it in this command's argument list.
+export let CacheClearVerb = "clear"
+
+// The tail position the verb sits at.
+let VerbArgument = 0
+
+// What separates two directories in a sentence naming several.
+let RootSeparator = ", "
+
+// How many positionals the command reads: the verb, and nothing after it.
+let VerbIsTheOnlyPositional = 1
+
+// The report's shape: a heading, then one line per root in roster order, then a total when more than one
+// root holds something. A line per root keeps the roster's order visible and stays greppable.
+let RosterHeading = "Cache roots on this host:"
+let RootLineIndent = "  "
+let InUseMark = " (in use)"
+let EmptyRootState = "empty"
+let TotalLabel = "Total:"
+
+// `hostCacheRoots` answers in roster order and a run uses the first entry that resolved; the rest may
+// still hold builds nothing else will ever look for.
+let RootARunUses = 0
+
+// One root is what almost every machine has. Past it a stranded cache was found, and the reader is owed
+// the directories it is in and a total they cannot add up off the rows at a glance.
+let OneRoot = 1
+
+let BuildWord = "build"
+let FileWord = "file"
+let ByteWord = "byte"
+let KilobyteUnit = "KB"
+let MegabyteUnit = "MB"
+let GigabyteUnit = "GB"
+
+// A developer's cache runs past a gigabyte, and ten digits of bytes is a number nobody reads. The ladder
+// reaches GB so the largest cache a reader has is still four digits; below a kilobyte there is no unit
+// clearer than the bytes themselves.
+let BytesPerKilobyte = 1024
+let KilobytesPerMegabyte = 1024
+let MegabytesPerGigabyte = 1024
+
+// A count the cache states — files removed, builds held, bytes on disk. Nothing bounds any of them but the
+// filesystem.
+typealias CacheTally = int(0 to u64.max)
+
+// A size divided down into the unit it is reported in.
+typealias CacheSizeInUnits = float(f64.min to f64.max)
+
+typealias CacheEntryArray = Array with CacheEntry
+
+// ⭐ **THE FIRST THING THAT WENT WRONG, KEPT WHOLE.** A walk reporting the last one names an empty parent
+// directory whose real cause was a file several levels down. One record because a read and a removal fail
+// the same way and owe the reader the same sentence.
+type FirstFailure
+	export var reason as String
+
+	static function create() returns FirstFailure
+		return Self{reason: ""}
+	end 'create'
+
+	// Nothing to report leaves the record untouched, so a caller may hand over another record's reason
+	// without first asking whether there is one.
+	function note(what String)
+		if what.isEmpty() or not self.reason.isEmpty() 'nothingToRecord'
+			return
+		end 'nothingToRecord'
+
+		self.reason = what
+	end 'note'
+end 'FirstFailure'
+
+// One file or directory under a cache root.
+type CacheEntry
+	export let path as FilePath
+	export let isDirectory as bool
+
+	static function create(path FilePath, isDirectory bool) returns CacheEntry
+		return Self{path: path, isDirectory: isDirectory}
+	end 'create'
+end 'CacheEntry'
+
+// What one walk of one root found: its entries in the order a removal may act on them, and the first part
+// of it that could not be read.
+type CacheContents
+	export var entries as CacheEntryArray
+	export var failure as FirstFailure
+
+	static function create() returns CacheContents
+		return Self{entries: CacheEntryArray.create(), failure: FirstFailure.create()}
+	end 'create'
+end 'CacheContents'
+
+// What a root holds, and the first part of it that could not be read. Builds and bytes answer two different
+// questions — how many programs are cached, and how much disk clearing returns — and a reader acting on
+// either needs both.
+type CacheCensus
+	export var builds as CacheTally
+	export var bytes as CacheTally
+	export var failure as FirstFailure
+
+	static function create() returns CacheCensus
+		return Self{builds: 0, bytes: 0, failure: FirstFailure.create()}
+	end 'create'
+
+	function isEmpty() returns bool
+		return self.builds == 0 and self.bytes == 0
+	end 'isEmpty'
+
+	// The failure travels with the counts under the same first-failure-wins rule the rest of the file
+	// uses: a total merged from a census that could not be read is short by whatever went unmeasured, and
+	// a merge dropping the reason leaves that number reading exactly like an honest one.
+	function add(other CacheCensus)
+		self.builds = self.builds + other.builds
+		self.bytes = self.bytes + other.bytes
+		self.failure.note(other.failure.reason)
+	end 'add'
+end 'CacheCensus'
+
+// What a removal has done so far. A record because the walk spans every root, and both halves — how much
+// went, and the first thing that would not — belong to the clear rather than to one directory of it.
+type CacheRemoval
+	export var files as CacheTally
+	export var failure as FirstFailure
+
+	static function create() returns CacheRemoval
+		return Self{files: 0, failure: FirstFailure.create()}
+	end 'create'
+end 'CacheRemoval'
+
+/// `maxon cache [clear]`.
+export function runCache(args MaxonArgs) returns ExitCode
+	let stray = args.anyOption()
+
+	if not stray.isEmpty() 'refusedOption'
+		return refuseCache("{commandAsTyped()} takes no options, and was given {stray}")
+	end 'refusedOption'
+
+	let verb = try args.paths.get(VerbArgument) otherwise return reportCache()
+
+	if verb != CacheClearVerb 'unknownVerb'
+		return refuseCache("{commandAsTyped()} does not have the verb '{verb}'")
+	end 'unknownVerb'
+
+	if refusedPositionalBeyond(args, allowed: VerbIsTheOnlyPositional, usage: cacheUsageLine()) 'unexpectedArgument'
+		return OwnFailureExit
+	end 'unexpectedArgument'
+
+	return clearCache()
+end 'runCache'
+
+// ⭐⭐ **THE WHOLE ROSTER IS REPORTED, THE ROOTS HOLDING NOTHING INCLUDED.** A reader asking where the
+// cache is is owed the directories this host consults, in the order it consults them; omitting the empty
+// ones answers a narrower question and leaves the reader unable to tell an empty candidate from one this
+// host does not have at all.
+//
+// ⛔ **A ROOT THAT COULD NOT BE READ SAYS WHY AND COSTS THE EXIT CODE.** Counted as empty it would report a
+// cache of zero builds over a directory that may hold hundreds, which is the one answer a caller cannot act
+// on.
+function reportCache() returns ExitCode
+	let roots = try hostCacheRoots() otherwise (e) 'noCacheRoot'
+		reportCacheError(e, speaker: commandAsTyped())
+		return OwnFailureExit
+	end 'noCacheRoot'
+
+	var report = "{RosterHeading}\n"
+	var total = CacheCensus.create()
+	var holding = 0
+	var trouble = FirstFailure.create()
+
+	for (iter, root) in roots.withIterator() 'eachRoot'
+		let census = censusOf(readCacheTree(root))
+		let mark = InUseMark if iter.index() == RootARunUses else ""
+
+		trouble.note(census.failure.reason)
+		report.append("{RootLineIndent}{root.toString()}{mark}: {rootState(census)}\n")
+
+		if census.isEmpty() 'holdsNothing'
+			continue
+		end 'holdsNothing'
+
+		holding = holding + 1
+		total.add(census)
+	end 'eachRoot'
+
+	if holding > OneRoot 'severalHold'
+		report.append("{TotalLabel} {counted(total.builds, word: BuildWord)}, {inReadableUnits(total.bytes)}\n")
+	end 'severalHold'
+
+	print(report)
+
+	if not trouble.reason.isEmpty() 'somethingUnread'
+		printError("{commandAsTyped()}: {trouble.reason}\n")
+		return OwnFailureExit
+	end 'somethingUnread'
+
+	return 0
+end 'reportCache'
+
+// What one root's line says after its path: why it could not be read, else what it holds, else that it
+// holds nothing.
+function rootState(census CacheCensus) returns String
+	if not census.failure.reason.isEmpty() 'unreadable'
+		return census.failure.reason
+	end 'unreadable'
+
+	if census.isEmpty() 'holdsNothing'
+		return EmptyRootState
+	end 'holdsNothing'
+
+	return "{counted(census.builds, word: BuildWord)}, {inReadableUnits(census.bytes)}"
+end 'rootState'
+
+// ⭐ **A BUILD IS THE EXECUTABLE AND THE BYTES ARE EVERYTHING**, which is not the same walk read twice: a
+// reader counts builds to know what is cached, and clearing returns the sidecars too.
+//
+// ⛔ **A FILE WHOSE SIZE CANNOT BE READ IS NOTED RATHER THAN COUNTED AS ZERO.** A total short by an
+// unmeasured file is a number that reads exactly like an honest one.
+function censusOf(contents CacheContents) returns CacheCensus
+	var census = CacheCensus.create()
+	census.failure.note(contents.failure.reason)
+
+	for entry in contents.entries 'eachEntry'
+		if entry.isDirectory 'notAFile'
+			continue
+		end 'notAFile'
+
+		let info = try File.info(entry.path) otherwise 'unmeasurable'
+			census.failure.note("could not read {entry.path.toString()}")
+			continue
+		end 'unmeasurable'
+
+		census.bytes = census.bytes + (info.size as CacheTally)
+
+		if isPublishedBuildName(entry.path.filename()) 'aBuild'
+			census.builds = census.builds + 1
+		end 'aBuild'
+	end 'eachEntry'
+
+	return census
+end 'censusOf'
+
+function clearCache() returns ExitCode
+	let roots = try hostCacheRoots() otherwise (e) 'noCacheRoot'
+		reportCacheError(e, speaker: commandAsTyped())
+		return OwnFailureExit
+	end 'noCacheRoot'
+
+	var removal = CacheRemoval.create()
+	let swept = rootsHoldingACache(roots)
+
+	for root in swept 'eachCache'
+		removeContents(readCacheTree(root), removal: removal)
+	end 'eachCache'
+
+	if not removal.failure.reason.isEmpty() 'somethingStayed'
+		printError("{commandAsTyped()}: {removal.failure.reason}\n")
+		return OwnFailureExit
+	end 'somethingStayed'
+
+	print(clearReport(removal.files, swept: swept, considered: roots))
+	return 0
+end 'clearCache'
+
+// ⛔ **WHICH ROOTS HOLD A CACHE IS DECIDED BEFORE ANYTHING IS REMOVED.** A candidate nothing was ever
+// cached under is the ordinary state of every root but one, and what the report names has to be what the
+// clear FOUND — read after the walk, a root would be missing because the clear itself emptied it.
+function rootsHoldingACache(roots CacheRootArray) returns CacheRootArray
+	var holding = CacheRootArray.create()
+
+	for root in roots 'eachRoot'
+		if not Directory.isDirectory(root) 'nothingThere'
+			continue
+		end 'nothingThere'
+
+		holding.push(root)
+	end 'eachRoot'
+
+	return holding
+end 'rootsHoldingACache'
+
+// ⛔ **A ROOT IS NAMED ONLY WHERE IT HELD A CACHE.** Four candidates listed as cleared, three of which were
+// never there, reads as four caches this host was keeping. One root is what almost every machine has and
+// keeps the one-line shape; more than one means a stranded cache was found, and the reader is told which
+// directories it came out of.
+//
+// ⭐ **NOTHING ANYWHERE IS A SUCCESS**, the state a fresh machine is in and the state the second clear
+// finds — a non-zero there breaks every script that clears before doing something else — so the sentence
+// names the roots that were looked in rather than reporting a failure.
+function clearReport(files CacheTally, swept CacheRootArray, considered CacheRootArray) returns String
+	if swept.isEmpty() 'nothingAnywhere'
+		return "Nothing to remove: no cache under {listed(considered)}\n"
+	end 'nothingAnywhere'
+
+	if swept.count() == OneRoot 'oneRoot'
+		return "Removed {counted(files, word: FileWord)} from {listed(swept)}\n"
+	end 'oneRoot'
+
+	return "Removed {counted(files, word: FileWord)} from {swept.count()} caches: {listed(swept)}\n"
+end 'clearReport'
+
+function listed(roots CacheRootArray) returns String
+	var sentence = ""
+
+	for root in roots 'eachRoot'
+		sentence = root.toString() if sentence.isEmpty() else "{sentence}{RootSeparator}{root.toString()}"
+	end 'eachRoot'
+
+	return sentence
+end 'listed'
+
+// ⭐⭐ **ONE WALK ANSWERS BOTH QUESTIONS THIS COMMAND ASKS OF A ROOT.** What a clear will remove and what a
+// report counts are the same set of files; derived twice they would disagree the day the slot layout
+// changes, and the way they would disagree is a report about files a clear does not reach.
+//
+// A root that is not there holds nothing, which is not a failure: it is the state of every candidate but
+// one on almost every machine.
+function readCacheTree(root FilePath) returns CacheContents
+	var contents = CacheContents.create()
+
+	if not Directory.isDirectory(root) 'nothingThere'
+		return contents
+	end 'nothingThere'
+
+	collectCacheTree(root, into: contents)
+
+	return contents
+end 'readCacheTree'
+
+// A post-order walk: a directory can be removed only once nothing is left in it, so its entries are
+// collected before it is. Everything below a root the roster names is Maxon's own, which is what makes a
+// walk the right shape here where the cache's own sweeps are pinned to the depths its layout writes at.
+//
+// ⛔ **A DIRECTORY THAT COULD NOT BE READ IS NOT COLLECTED**, so nothing counts or removes a directory
+// whose contents are unknown.
+function collectCacheTree(dir FilePath, into CacheContents)
+	let entries = try Directory.list(dir) otherwise 'unreadable'
+		into.failure.note("could not read {dir.toString()}")
+		return
+	end 'unreadable'
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			collectCacheTree(entry, into: into)
+			continue
+		end 'aDirectory'
+
+		into.entries.push(CacheEntry.create(entry, isDirectory: false))
+	end 'eachEntry'
+
+	into.entries.push(CacheEntry.create(dir, isDirectory: true))
+end 'collectCacheTree'
+
+// The walk's entries removed in the order it collected them, which is what lets a directory go: it was
+// collected after everything inside it.
+function removeContents(contents CacheContents, removal CacheRemoval)
+	removal.failure.note(contents.failure.reason)
+
+	for entry in contents.entries 'eachEntry'
+		if entry.isDirectory 'aDirectory'
+			try Directory.delete(entry.path) otherwise (e) 'notRemoved'
+				removal.failure.note("could not remove {entry.path.toString()}: {deleteRefusal(e)}")
+			end 'notRemoved'
+
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry.path) otherwise 'notDeleted'
+			removal.failure.note("could not remove {entry.path.toString()}")
+			continue
+		end 'notDeleted'
+
+		removal.files = removal.files + 1
+	end 'eachEntry'
+end 'removeContents'
+
+function deleteRefusal(e DirectoryDeleteError) returns String
+	return match e 'why'
+		notFound gives "it is no longer there"
+		notEmpty gives "something in it could not be removed"
+		deleteFailed gives "the operating system refused"
+	end 'why'
+end 'deleteRefusal'
+
+// A count and the noun it counts, pluralized. Every sentence this command prints states one.
+function counted(count CacheTally, word String) returns String
+	return "{count} {word}" if count == 1 else "{count} {word}s"
+end 'counted'
+
+// What a reader gets back by clearing, in a unit they can act on.
+function inReadableUnits(bytes CacheTally) returns String
+	let megabyte = BytesPerKilobyte * KilobytesPerMegabyte
+	let gigabyte = megabyte * MegabytesPerGigabyte
+
+	if bytes < BytesPerKilobyte 'underAKilobyte'
+		return counted(bytes, word: ByteWord)
+	end 'underAKilobyte'
+
+	if bytes < megabyte 'underAMegabyte'
+		let kilobytes = inUnitsOf(bytes, unit: BytesPerKilobyte)
+		return "{kilobytes:.1} {KilobyteUnit}"
+	end 'underAMegabyte'
+
+	if bytes < gigabyte 'underAGigabyte'
+		let megabytes = inUnitsOf(bytes, unit: megabyte)
+		return "{megabytes:.1} {MegabyteUnit}"
+	end 'underAGigabyte'
+
+	let gigabytes = inUnitsOf(bytes, unit: gigabyte)
+	return "{gigabytes:.1} {GigabyteUnit}"
+end 'inReadableUnits'
+
+// The divisor is a unit's size in bytes, which the callers above pick from the three constants and none
+// is zero; the parameter's range cannot say so because those same constants bound the comparisons that
+// choose the unit.
+function inUnitsOf(bytes CacheTally, unit CacheTally) returns CacheSizeInUnits
+	return try ((bytes as CacheSizeInUnits) / (unit as CacheSizeInUnits)) otherwise panic("inUnitsOf: the unit is a kilobyte, a megabyte or a gigabyte, so the divisor cannot be zero")
+end 'inUnitsOf'
+
+function commandAsTyped() returns String
+	return "maxon {CacheCommandName}"
+end 'commandAsTyped'
+
+function cacheUsageLine() returns String
+	return "{commandAsTyped()} [{CacheClearVerb}]"
+end 'cacheUsageLine'
+
+function refuseCache(reason String) returns ExitCode
+	printError("error: {reason}\n")
+	printError("Usage: {cacheUsageLine()}\n")
+	return OwnFailureExit
+end 'refuseCache'

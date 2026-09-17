@@ -115,6 +115,16 @@ export let NulByte = 0 as ParsedInt
 // `errno` onto exactly this, and reads it from here rather than transcribing it.
 export let ErrorNoMoreFiles = 18 as ParsedInt
 
+// `ERROR_DIR_NOT_EMPTY` — what `RemoveDirectoryA` answers for a directory that still holds an entry, and the
+// one reading that makes `delete` refuse with `deleteNotEmpty` rather than with its catch-all. It is tested
+// AHEAD of the shared errno classification because 145 is none of the three codes that classification knows,
+// so without this test an occupied directory and a broken disk would arrive as one answer.
+//
+// ⚠ **EXPORTED FOR THE LANES THAT MUST *PRODUCE* IT.** POSIX reports the same refusal as `ENOTEMPTY`, which
+// the two OSes number differently (`LinuxErrnoDirectoryNotEmpty`, `DarwinErrnoDirectoryNotEmpty`), so each
+// lane's errno translator maps its own number onto this code rather than transcribing it.
+export let ErrorDirNotEmpty = 145 as ParsedInt
+
 // `INVALID_FILE_ATTRIBUTES` — what `GetFileAttributesA` answers for a path that names nothing. It is the
 // full DWORD, so it is compared against a DWORD-masked load rather than against -1.
 // ⚠ **EXPORTED FOR THE SAME REASON** — `GetFileAttributesA` answers it and a POSIX lane's `stat` failure
@@ -145,12 +155,12 @@ export let MaxPathBytes = 260 as ParsedInt
 export let PathGrowthShift = 1 as ParsedInt
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
-// `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the enum
-// DECLARED at `stdlib/Builtins.maxon:190` (A1s). `verifyManagedDirectoryOrdinals` below is what holds these
-// literals to that declaration.
+// `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the
+// `__ManagedDirectoryError` DECLARED in `stdlib/Builtins.maxon`. `verifyManagedDirectoryOrdinals` below is
+// what holds these literals to that declaration.
 //
-// ⚠ **THE SOURCE OF THESE NUMBERS IS `stdlib/Builtins.maxon:189-199`, NOT A COMMENT.** Omitting
-// `iteratorInvalid` from the count shifts every ordinal after it by one.
+// ⚠ **THE SOURCE OF THESE NUMBERS IS THAT DECLARATION, NOT A COMMENT.** Omitting `iteratorInvalid` from the
+// count shifts every ordinal after it by one.
 //
 // ⚠ `iteratorInvalid` (4) has no flag here because nothing throws it: it names "filename() on an exhausted
 // iterator", and `filename()` is non-throwing in the spec. The case is DECLARED (the
@@ -165,6 +175,8 @@ let ManagedDirectoryIteratorInvalidOrdinal = 4 as ParsedInt
 let ManagedDirectoryCreateFailedOrdinal = 5 as ParsedInt
 let ManagedDirectoryCurrentPathFailedOrdinal = 6 as ParsedInt
 let ManagedDirectoryClosedOrdinal = 7 as ParsedInt
+let ManagedDirectoryDeleteFailedOrdinal = 8 as ParsedInt
+let ManagedDirectoryDeleteNotEmptyOrdinal = 9 as ParsedInt
 let ManagedDirectoryNotFoundFlag = ManagedDirectoryNotFoundOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryAccessDeniedFlag = ManagedDirectoryAccessDeniedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryOpenSearchFailedFlag = ManagedDirectoryOpenSearchFailedOrdinal + ErrorFlagOrdinalBias
@@ -172,12 +184,14 @@ let ManagedDirectoryNextFailedFlag = ManagedDirectoryNextFailedOrdinal + ErrorFl
 let ManagedDirectoryCreateFailedFlag = ManagedDirectoryCreateFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryCurrentPathFailedFlag = ManagedDirectoryCurrentPathFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryClosedFlag = ManagedDirectoryClosedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryDeleteFailedFlag = ManagedDirectoryDeleteFailedOrdinal + ErrorFlagOrdinalBias
+let ManagedDirectoryDeleteNotEmptyFlag = ManagedDirectoryDeleteNotEmptyOrdinal + ErrorFlagOrdinalBias
 
 // The `__md_` prefix that identifies EVERY directory runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesManagedDirectory`, and the one `SemanticCheck` reads for E3104.
 let ManagedDirectoryRuntimePrefix = b"__md_"
 
-// ⭐ **THE EIGHT ENTRY POINTS.** Seven name a `__ManagedDirectory` method and `__md_destruct` is the
+// ⭐ **THE NINE ENTRY POINTS.** Eight name a `__ManagedDirectory` method and `__md_destruct` is the
 // compiler-INSERTED one: the drop a box takes when its
 // last owner goes away (`SignatureIndex.managedNameDropCallee`), which is the whole of the RAII half.
 export let ManagedDirectoryOpenSearchName = b"__md_open_search"
@@ -188,6 +202,7 @@ export let ManagedDirectoryDestructName = b"__md_destruct"
 export let ManagedDirectoryExistsName = b"__md_exists"
 export let ManagedDirectoryCreateName = b"__md_create"
 export let ManagedDirectoryCurrentPathName = b"__md_current_path"
+export let ManagedDirectoryDeleteName = b"__md_delete"
 
 // ⭐ **WHICH `__ManagedDirectory` CALLEES THROW** — the fourth composer behind `Parser.isThrowingRuntimeCallee`.
 // Held to the builders by the bidirectional drift guard in `installManagedDirectoryRuntime`, copied from
@@ -201,7 +216,7 @@ export function isThrowingManagedDirectoryRuntimeCallee(callee ByteArray) return
 	//   • `__md_exists` — `false` is a valid answer ("it is not a directory"), not a failure.
 	//   • `__md_filename` — the spec's "Instance Methods (non-throwing)". It reads a record the OPEN already
 	//     filled, so there is no call to fail.
-	return callee.equals(ManagedDirectoryOpenSearchName) or callee.equals(ManagedDirectoryNextName) or callee.equals(ManagedDirectoryCreateName) or callee.equals(ManagedDirectoryCurrentPathName)
+	return callee.equals(ManagedDirectoryOpenSearchName) or callee.equals(ManagedDirectoryNextName) or callee.equals(ManagedDirectoryCreateName) or callee.equals(ManagedDirectoryCurrentPathName) or callee.equals(ManagedDirectoryDeleteName)
 end 'isThrowingManagedDirectoryRuntimeCallee'
 
 // ⭐⭐ **WHAT THE USER ACTUALLY WROTE, FOR THE DIAGNOSTICS THAT QUOTE A CALLEE BACK AT THEM.**
@@ -213,15 +228,16 @@ end 'isThrowingManagedDirectoryRuntimeCallee'
 // ⚠ **IT IS A MAP ONTO THE PARSER'S OWN CONSTANTS, NOT A SECOND SPELLING.** Each arm answers with the very
 // `ManagedDirectory*Method` byte string `parseManagedDirectoryStaticCall`/`dispatchManagedDirectoryMethod`
 // dispatched on, so there is nothing here that can disagree with what the source is matched against.
-// It is asked only on the COLD path, and only for the four THROWING callees — the other four cannot reach
+// It is asked only on the COLD path, and only for the five THROWING callees — the other four cannot reach
 // either diagnostic at all, which is what the panic states rather than answers.
 //
-// ⚠⚠ **AS OF D11c IT HAS A SECOND READER, AND THE `create` ARM IS ITS ALONE (D11c review).** `Parser`'s E3059
-// asks this same map for a VALUELESS `try`, and `__md_create` is the family's one void throwing member — so
-// that arm has no E3057 case and E3059 is the only thing that can observe it. `specs/void-call-result.md`
-// pins it there rather than here, beside the other eight callees E3059 can reach, because the roster is
-// "throwing AND void" and that crosses every family. **MEASURED: with this arm answering `next`, the whole
-// suite read 2897/0 while an author who wrote `create` was told about `'next'`.**
+// ⚠⚠ **IT HAS A SECOND READER, AND THE `create` AND `delete` ARMS ARE ITS ALONE.** `Parser`'s E3059 asks this
+// same map for a VALUELESS `try`, and `__md_create`/`__md_delete` are the family's two void throwing members
+// — so those arms have no E3057 case and E3059 is the only thing that can observe them.
+// `specs/void-call-result.md` pins the roster there rather than here, beside every other callee E3059 can
+// reach, because the roster is "throwing AND void" and that crosses every family. An arm answering another
+// method's spelling is invisible to the whole suite and reaches a user as a diagnostic naming a call they
+// never wrote.
 export function managedDirectorySourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ManagedDirectoryOpenSearchName) 'openSearch'
 		return ManagedDirectoryOpenSearchMethod
@@ -238,6 +254,10 @@ export function managedDirectorySourceMethodName(callee ByteArray) returns ByteA
 	if callee.equals(ManagedDirectoryCurrentPathName) 'currentPath'
 		return ManagedDirectoryCurrentPathMethod
 	end 'currentPath'
+
+	if callee.equals(ManagedDirectoryDeleteName) 'delete'
+		return ManagedDirectoryDeleteMethod
+	end 'delete'
 
 	panic("managedDirectorySourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `__ManagedDirectory` callee — this map is asked ONLY behind `isThrowingManagedDirectoryRuntimeCallee`, so nothing else can reach an E3057 — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own `ManagedDirectory*Method` constant. `installManagedDirectoryRuntime`'s drift guard asks this for every throwing `__md_` builder it installs, so the second case fails at INSTALL and never in front of a user's missing `try`")
 end 'managedDirectorySourceMethodName'
@@ -732,6 +752,52 @@ function buildManagedDirectoryCreate(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryCreate'
 
+// `__md_delete(pathRec)` — VOID and throwing: `RemoveDirectoryA(path)`, removing an EMPTY directory.
+//
+// ⭐⭐ **THE OCCUPIED CASE IS CLASSIFIED HERE AND NOT IN THE SHARED errno MAPPING.** That mapping knows three
+// codes — not-found, path-not-found, denied — and a refusal to remove a directory that still holds an entry
+// is none of them, so it would arrive as this operation's catch-all and be indistinguishable from a disk
+// failure. `ERROR_DIR_NOT_EMPTY` is therefore tested FIRST, and only what it does not claim reaches the
+// shared three-way classification. That split is what gives a caller three tellable answers: the path is not
+// there, the directory is occupied, anything else.
+function buildManagedDirectoryDelete(module StdModule)
+	var func = IrFunction.createFromStd(ManagedDirectoryDeleteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var afterCopy = module.addBlock(func, label: b"mdterm", heat: BlockHeat.normal)
+	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
+	var occupied = module.addBlock(func, label: b"mdfull", heat: BlockHeat.normal)
+	var otherFailure = module.addBlock(func, label: b"mdrmerr", heat: BlockHeat.normal)
+	var ok = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let pathRec = 0 as ValueId
+
+	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
+	let verdict = ids.mint()
+	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.osDirRemove(verdict, pathPtrId: scratch))
+
+	// The last error is captured IMMEDIATELY after the call, for the ordering `__md_open_search` states.
+	let err = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.osLastError(err))
+	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
+	let falseConst = emitConst(module, block: afterCopy, value: Win32False, ids: ids)
+	let refused = emitCmp(module, block: afterCopy, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.condBranch(refused, thenBlockId: failed.id, elseBlockId: ok.id))
+
+	let notEmptyConst = emitConst(module, block: failed, value: ErrorDirNotEmpty, ids: ids)
+	let stillOccupied = emitCmp(module, block: failed, a: err, b: notEmptyConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(failed, op: StdOp.condBranch(stillOccupied, thenBlockId: occupied.id, elseBlockId: otherFailure.id))
+
+	emitErrorReturn(module, block: occupied, flag: ManagedDirectoryDeleteNotEmptyFlag, ids: ids)
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: otherFailure, err: err, fallbackFlag: ManagedDirectoryDeleteFailedFlag, ids: ids)
+	emitVoidOkReturn(module, block: ok, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedDirectoryDelete'
+
 // ⭐⭐ **`__md_current_path() -> (arrRec, flag)` — THE WORKING DIRECTORY, THROUGH A GROW-AND-RETRY LOOP.**
 //
 // The API's answer means three different things (see `MaxPathBytes`), so the body is: try `MAX_PATH`; if it
@@ -863,6 +929,8 @@ function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
 	directoryErrors.claim(ManagedDirectoryCreateFailedCaseName, ordinal: ManagedDirectoryCreateFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryCurrentPathFailedCaseName, ordinal: ManagedDirectoryCurrentPathFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryClosedCaseName, ordinal: ManagedDirectoryClosedOrdinal)
+	directoryErrors.claim(ManagedDirectoryDeleteFailedCaseName, ordinal: ManagedDirectoryDeleteFailedOrdinal)
+	directoryErrors.claim(ManagedDirectoryDeleteNotEmptyCaseName, ordinal: ManagedDirectoryDeleteNotEmptyOrdinal)
 	directoryErrors.requireTotal()
 end 'claimManagedDirectoryOrdinals'
 
@@ -878,6 +946,7 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 	buildManagedDirectoryDestruct(module)
 	buildManagedDirectoryExists(module)
 	buildManagedDirectoryCreate(module)
+	buildManagedDirectoryDelete(module)
 	buildManagedDirectoryCurrentPath(module)
 
 	for func in module.functions 'eachFunc'

@@ -40,9 +40,17 @@ export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
 // `PosixOpenReadOnly` and not Linux's to state a second time.
 export let LinuxOpenCreateTruncateFlags = 0x241
 
-// `unlinkat`'s flag word: 0 means "remove a FILE". (`AT_REMOVEDIR` is what would make it an `rmdir`, and
-// this op is `DeleteFileA`, which refuses a directory.)
+// `unlinkat`'s flag word: 0 means "remove a FILE". This op is `DeleteFileA`, which refuses a directory.
 export let LinuxUnlinkFileFlags = 0
+
+// ⭐ **`AT_REMOVEDIR` — THE ONE BIT THAT MAKES THE SAME `unlinkat` AN `rmdir`.** `RemoveDirectoryA` has no
+// file-removing spelling and `DeleteFileA` has no directory-removing one, so the two flag words above and
+// here are what keeps the single syscall answering for both Win32 entry points without either being able to
+// take the other's subject.
+//
+// ⚠ It is the ARCH-NEUTRAL value: `AT_REMOVEDIR` is 0x200 in the generic `asm-generic/fcntl.h` and AArch64
+// overrides none of the `AT_*` words.
+export let LinuxRemoveDirectoryFlags = 0x200
 
 // ⭐⭐ **`O_RDWR|O_CREAT|O_EXCL`, THE FLAG WORD THAT MAKES AN `openat` A SEGMENT CREATE.** `shm_open` is a
 // libc FUNCTION on Linux rather than a syscall — all it does is open a path under `/dev/shm` — so a
@@ -92,6 +100,11 @@ end 'linuxReadsEnvironment'
 // `asm/errno.h` is a bare include of it). It is what a search whose DIRECTORY PART does not fit the scratch
 // reports; see either lane's `…DirPrefixChunk` for why that is a refusal rather than a truncation.
 export let LinuxErrnoNameTooLong = 36
+
+// `ENOTEMPTY` — 39 here and 66 on Darwin, so like `ENAMETOOLONG` it is a per-OS number rather than a POSIX
+// fact, and the same 39 on both Linux arches for the same reason. It is what `rmdir` answers for a directory
+// that still holds an entry, and `mrt_host_last_error` maps it onto `ErrorDirNotEmpty`.
+export let LinuxErrnoDirectoryNotEmpty = 39
 
 // ⭐ **THE TWO A NON-BLOCKING SOCKET ANSWERS INSTEAD OF WAITING.** `EAGAIN` (which is `EWOULDBLOCK` on Linux —
 // one number, not two) is what a transfer answers with nothing to move, and `EINPROGRESS` is `connect`'s

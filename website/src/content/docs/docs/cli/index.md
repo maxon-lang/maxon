@@ -19,6 +19,7 @@ agents, and reads back what a program did.
 |---------|-------------|
 | `maxon <file>.maxon [args...]` | Run a Maxon file as a script: [`maxon run`](#maxon-run) without the command word |
 | `maxon build <file\|directory>...` | Compile a Maxon program to an executable |
+| `maxon cache [clear]` | Report what this compiler has cached on the host, or remove it |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
@@ -73,7 +74,7 @@ Each program gets a directory of its own in a cache, and its build is reused unt
 built from changes:
 
 ```text
-<root>/maxon/run/v<cache format>/<hash of the program's path and entry point>/
+<cache>/run/v<cache format>/<hash of the program's path and entry point>/
 ├── hello-<key>.exe         # the build, named after the key it was built under
 └── hello-<key>.exe.mxdbg   # its debug-info sidecar
 ```
@@ -89,8 +90,26 @@ built from changes:
 - **The path is resolved against the working directory but not canonicalized.** `x.maxon`, `./x.maxon`
   and `a/../x.maxon` get three cache slots. That costs an extra compile, never a wrong binary.
 
-`<root>` is `MAXON_RUN_CACHE_ROOT` when it is set, then `LOCALAPPDATA` and then `TEMP` on Windows, and
-`TMPDIR` and then `/tmp` elsewhere. On Windows, a host that sets none of them is refused by name.
+`<cache>` is the directory Maxon owns on this host. It is the first of these whose variable names a
+directory:
+
+| Windows | macOS and Linux |
+|---------|-----------------|
+| `<MAXON_RUN_CACHE_ROOT>\maxon` | `<MAXON_RUN_CACHE_ROOT>/maxon` |
+| `<USERPROFILE>\.maxon\cache` | `<HOME>/.maxon/cache` |
+| `<LOCALAPPDATA>\maxon` | `<TMPDIR>/maxon` |
+| `<TEMP>\maxon` | — |
+
+Your home directory comes before the host's temp area because `<home>/.maxon` is where the install
+script puts `bin/` and `stdlib/`: the cache sits beside the install it was built by, and survives a host
+that sweeps its temp area. **Every row is a directory a variable names, and a host that sets none of them
+is refused by name** rather than sent to an invented path — a cache under a world-writable directory such
+as `/tmp` would be shared with every other user of the machine.
+
+Everything under `<cache>` is Maxon's, and everything beside it is not — which is what
+[`maxon cache clear`](#maxon-cache) removes and what it leaves alone. A run uses the first row only;
+[`maxon cache`](#maxon-cache) reports every row and `clear` sweeps every row this host resolves, because a
+build published while another row ranked first is otherwise stranded where nothing looks again.
 
 ### Scripts and the shebang line
 
@@ -122,7 +141,7 @@ Windows has no shebang mechanism. Git Bash and WSL honour the line; `maxon hello
 | Code | Meaning |
 |------|---------|
 | the program's | Forwarded as-is, including the raw status of a child that terminated abnormally |
-| `1` | `run` could not start the program: no program named, no such file, a compile error (the diagnostics are printed and nothing runs), no writable cache root, or a build that could not be stored in the cache |
+| `1` | `run` could not start the program: no program named, no such file, a compile error (the diagnostics are printed and nothing runs), no directory to keep the cache in, or a build that could not be stored in it |
 
 A missing file is reported as `error: file not found: <path as typed>`, the same sentence `maxon build`
 prints.
@@ -174,6 +193,10 @@ A build prints the compiler's version and an early-preview warning to stdout, th
 `Compiled -> <path>` on success, and exits 0. Progress lines (`[CMP] INFO: Wrote … bytes of code to …`)
 go to stderr; `--log=error` silences them. A compile error prints its diagnostics to stderr and exits 1.
 
+A path-less build has one more line, between the two: whether it compiled the `build.maxon` runner or
+reused the cached one. That compile makes no progress lines of its own — see
+[The build manifest](/docs/cli/project-structure/#the-build-manifest).
+
 ```bash
 maxon build hello.maxon                       # → hello.exe on Windows, hello elsewhere
 maxon build src/ -o build/app                 # a whole directory, named output
@@ -215,6 +238,62 @@ the build stops:
 
 A `build.maxon` manifest can supply defines too; a `--define` on the command line wins over the
 manifest's.
+
+## `maxon cache`
+
+Reports what this compiler has cached on the host, and removes it.
+
+```bash
+maxon cache
+maxon cache clear
+```
+
+With **no verb it reports**, on stdout, and exits 0. One line per row of the table under
+[The run cache](#the-run-cache), in that order, whether or not the row holds anything — a reader asking
+where the cache is gets the whole roster:
+
+```
+Cache roots on this host:
+  C:\Users\you\.maxon\cache (in use): 1 build, 451.8 KB
+  C:\Users\you\AppData\Local\maxon: 3 builds, 929.7 KB
+  C:\Users\you\AppData\Local\Temp\maxon: empty
+Total: 4 builds, 1.3 MB
+```
+
+`(in use)` marks the row the next `run` or path-less `build` will fill; the others may still hold builds
+nothing looks for again. **A build is the executable** — the `.mxdbg` debug sidecar beside it is not one,
+and neither is a build still being written. The size is everything under the directory, **sidecars
+included**, because that is what `clear` gives back. The `Total:` line appears when more than one row
+holds something.
+
+A root that **cannot be read** says so on its own line and the command exits 1, rather than being counted
+as empty: a cache reported as holding nothing while it holds hundreds of builds is an answer you cannot
+act on.
+
+`clear` removes the compiled programs [`maxon run`](#maxon-run) and a path-less
+[`maxon build`](#maxon-build) keep, the directories holding them, the inline snippets the
+[MCP server](/docs/cli/mcp-server/) stages, and the Maxon directory above all of those. The next `run` or
+path-less `build` compiles from scratch and fills the cache again.
+
+It removes **only what Maxon created**. `MAXON_RUN_CACHE_ROOT` may name a directory that is already
+somebody's — a shared build area, or your own scratch directory — so the clear reaches only the Maxon
+directory a row of the table under [The run cache](#the-run-cache) names, and stops there. The directory
+you named, and everything else in it, is left exactly as it was.
+
+**It sweeps every row of that table, not just the one in use.** A run caches under the first row whose
+variable names a directory, so a build made before `MAXON_RUN_CACHE_ROOT` was set — or under a `TMPDIR`
+that has since changed — sits where nothing looks again, and only a clear that visits every row can
+still reach it. Two variables naming one directory are one cache, cleared once and counted once.
+
+- **A cache holding nothing is not an error.** A fresh machine and a second `clear` both find nothing;
+  both say so on stdout and exit 0.
+- **The report names more than one directory only when more than one held something.** One cache is the
+  ordinary case and gets a single line.
+- **A removal that fails is reported and exits 1**, naming the first file or directory that stayed. A
+  cache reported as cleared while it still holds builds is an answer you cannot act on. On Windows, a
+  build another process is executing cannot be removed.
+- `cache` takes no options. A word that is not `clear`, or an option, prints a `Usage:` line on
+  **stderr** and exits 1.
 
 ## `maxon fmt`
 
@@ -485,9 +564,11 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 
 | Variable | Read by | Effect |
 |----------|---------|--------|
-| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (manifest) | Root directory of the run cache |
-| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (manifest) on Windows | Run cache root when `MAXON_RUN_CACHE_ROOT` is unset |
-| `TMPDIR` (then `/tmp`) | `run`, `build` (manifest) elsewhere | Run cache root when `MAXON_RUN_CACHE_ROOT` is unset |
+| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (manifest), `cache` | Maxon caches under `<value>/maxon`. Consulted first |
+| `USERPROFILE` | `run`, `build` (manifest), `cache` on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset |
+| `HOME` | `run`, `build` (manifest), `cache` elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset |
+| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (manifest), `cache` on Windows | Last resort, under `<value>\maxon`, when neither of the two above names a directory |
+| `TMPDIR` | `run`, `build` (manifest), `cache` elsewhere | Last resort, under `<value>/maxon`, when neither of the two above names a directory |
 | `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
 | `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
 | `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |

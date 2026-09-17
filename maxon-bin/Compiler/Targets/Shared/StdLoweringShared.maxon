@@ -847,10 +847,11 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, abi CalleeAbiTab
 		osFileFindFirst(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileFindClose then break 'result'
 
-		// All four directory primitives answer in RAX with an integer — a Win32 BOOL, a character
-		// count or a `dwFileAttributes` mask — so all four define a GPR result.
+		// All five directory primitives answer in RAX with an integer — a Win32 BOOL, a character
+		// count or a `dwFileAttributes` mask — so all five define a GPR result.
 		osFileFindNext(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osDirCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osDirRemove(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osDirCurrentPath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osFileAttributes(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 
@@ -1419,6 +1420,7 @@ export type ScaledIndexFolds
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
 				osPanicValue or
@@ -1952,6 +1954,7 @@ export type CompareFusionCensus
 					osFileFindClose or
 					osFileFindNext or
 					osDirCreate or
+					osDirRemove or
 					osDirCurrentPath or
 					osFileAttributes then break 'term'
 
@@ -2344,6 +2347,7 @@ export type MemoryDestinationFolds
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes or
 				osPanicValue or

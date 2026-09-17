@@ -1864,16 +1864,16 @@ export union StdOp
 	// the same reason: a close that fails leaves a caller nothing to do.
 	osFileFindClose(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- the four primitives a DIRECTORY needs and a file does not ---
+	// --- the five primitives a DIRECTORY needs and a file does not ---
 	//
-	// All four carry `category: system`, placing them logically in the system band independent of this tail
-	// position, and all four need ⭐ `HostFacility.managedDirectory`: a lane that does not provide it
+	// All five carry `category: system`, placing them logically in the system band independent of this tail
+	// position, and all five need ⭐ `HostFacility.managedDirectory`: a lane that does not provide it
 	// refuses the call site with E3104 (`TargetFacilities.calleeHostFacility` →
 	// `SemanticCheck.reportTargetUnsupportedCallee`), so that lane's arm panics as a backstop for a compiler
 	// bug rather than stubbing an answer nothing checks.
 	//
 	// ⚠ **EVERY COMMENT BELOW NAMES THE ENTRY POINT THE LOWERING ACTUALLY EMITS**, the discipline the
-	// file-IO band above states: all four are the `A` variants, because a Maxon path is UTF-8 bytes.
+	// file-IO band above states: all five are the `A` variants, because a Maxon path is UTF-8 bytes.
 	//
 	// `osFileFindNext(result, handle, findDataPtr)` = `FindNextFileA(handle, findDataPtr)` — the Win32 BOOL
 	// in `result` and the next entry written over the caller's 320-byte `WIN32_FIND_DATAA`.
@@ -1888,6 +1888,14 @@ export union StdOp
 	// created). The `lpSecurityAttributes` NULL is the only argument the op does not carry, exactly as
 	// `osFileOpenRead` does not carry its five fixed `CreateFileA` constants.
 	osDirCreate(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osDirRemove(result, pathPtr)` = `RemoveDirectoryA(pathPtr)`, the BOOL in `result` (non-zero = removed).
+	//
+	// ⚠ **IT REMOVES AN EMPTY DIRECTORY AND NOTHING ELSE.** Every lane's call refuses a directory that still
+	// holds an entry, and the refusal is reported as an ordinary failure with a last-error code — so telling
+	// "not empty" from "not there" is the Std tier's classification (`ManagedDirectoryRuntime`) rather than
+	// this op's, exactly as `osFileFindNext`'s end-of-iteration is.
+	osDirRemove(resultId ValueId, pathPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osDirCurrentPath(result, bufLen, bufPtr)` = `GetCurrentDirectoryA(bufLen, bufPtr)`.
 	//
@@ -3039,6 +3047,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osFileFindFirst gives SyscallClass.blocking
 		osFileFindNext gives SyscallClass.blocking
 		osDirCreate gives SyscallClass.blocking
+		osDirRemove gives SyscallClass.blocking
 		osDirCurrentPath gives SyscallClass.blocking
 		osFileAttributes gives SyscallClass.blocking
 
@@ -3263,6 +3272,7 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or
@@ -3707,6 +3717,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or
@@ -3906,6 +3917,7 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or
@@ -4071,6 +4083,7 @@ module function classifyStoreOperands(op StdOp, store StdStoreOperands)
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or
@@ -4263,6 +4276,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or
@@ -4843,6 +4857,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osFileFindClose(handle) then referenced.insert(handle)
 		osFileFindNext(_, handle, findDataPtr) then insertUsePair(referenced, a: handle, b: findDataPtr)
 		osDirCreate(_, pathPtr) then referenced.insert(pathPtr)
+		osDirRemove(_, pathPtr) then referenced.insert(pathPtr)
 		osDirCurrentPath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
 		osFileAttributes(_, pathPtr) then referenced.insert(pathPtr)
 
@@ -5159,11 +5174,12 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osFileFindFirst(resultId, _, _) then def.recordOne(resultId)
 		osFileFindClose then def.recordNone()
 
-		// All four directory primitives answer in RAX and capture it: `FindNextFileA`/
-		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
-		// attribute mask. None has a void twin, so none takes `none`.
+		// All five directory primitives answer in RAX and capture it: `FindNextFileA`/
+		// `CreateDirectoryA`/`RemoveDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count,
+		// `GetFileAttributesA` an attribute mask. None has a void twin, so none takes `none`.
 		osFileFindNext(resultId, _, _) then def.recordOne(resultId)
 		osDirCreate(resultId, _) then def.recordOne(resultId)
+		osDirRemove(resultId, _) then def.recordOne(resultId)
 		osDirCurrentPath(resultId, _, _) then def.recordOne(resultId)
 		osFileAttributes(resultId, _) then def.recordOne(resultId)
 
@@ -5453,6 +5469,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osFileFindClose(handle) gives StdOp.osFileFindClose(remappedValue(handle, subst: subst))
 		osFileFindNext(resultId, handle, findDataPtr) gives StdOp.osFileFindNext(resultId, handleId: remappedValue(handle, subst: subst), findDataPtrId: remappedValue(findDataPtr, subst: subst))
 		osDirCreate(resultId, pathPtr) gives StdOp.osDirCreate(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
+		osDirRemove(resultId, pathPtr) gives StdOp.osDirRemove(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osDirCurrentPath(resultId, bufLen, bufPtr) gives StdOp.osDirCurrentPath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
 		osFileAttributes(resultId, pathPtr) gives StdOp.osFileAttributes(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 
@@ -5754,6 +5771,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osCommandLine or
@@ -6292,6 +6310,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or
@@ -6485,6 +6504,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osFileFindClose or
 			osFileFindNext or
 			osDirCreate or
+			osDirRemove or
 			osDirCurrentPath or
 			osFileAttributes or
 			osPanicValue or

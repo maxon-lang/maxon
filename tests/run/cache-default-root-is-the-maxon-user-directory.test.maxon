@@ -1,0 +1,35 @@
+// cache-default-root-is-the-maxon-user-directory.test.maxon — with nothing naming a cache root, a build
+// lands under the user's own Maxon directory, `<home>/.maxon/cache/run/`.
+//
+// ⭐⭐ **THE CHILD MUST SEE NO CACHE OVERRIDE AT ALL**, which every other case in this corpus sets and
+// which `Environment.inheritUpdating` cannot take away. An override left in place would make this case
+// pass about the override — the one thing it is not asking.
+//
+// ⭐ **THE `run` DIRECTORY EXISTING IS NOT ENOUGH.** Staging clears files and leaves directories, so an
+// earlier run's tree survives empty; only a published BUILD under it says this run put one there.
+
+let DefaultRootCaseLabel = "cache-default-root"
+
+test 'with nothing naming a cache root, a build lands under the user Maxon directory'
+	let staged = stageCase(DefaultRootCaseLabel, fixture: HelloFixtureName)
+	let home = stagedHome(DefaultRootCaseLabel)
+
+	let run = spawnDriverWithHome(staged, arguments: runArguments(stagedMain(staged)), home: home)
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "`maxon {RunCommandName}` did not run the program with no {CacheRootVariable} in its environment, so there is no build to find. {said}")
+
+	let runRoot = defaultRunCacheRoot(home)
+	try Expect.isTrue(Directory.isDirectory(runRoot), message: "a run with no {CacheRootVariable} in its environment left nothing at {runRoot.toString()}. With nothing naming a root the cache belongs to the user's own Maxon directory, not to the host's temp area. {said}")
+
+	var built = PathArray.create()
+
+	for file in filesUnder(runRoot) 'eachFile'
+		if isPublishedBuild(file) 'aBuild'
+			built.push(file)
+		end 'aBuild'
+	end 'eachFile'
+
+	try Expect.isFalse(built.count() == 0, message: "{runRoot.toString()} holds no published build, so the run compiled its program somewhere else and this directory is what an earlier run left standing. {said}")
+end 'with nothing naming a cache root, a build lands under the user Maxon directory'

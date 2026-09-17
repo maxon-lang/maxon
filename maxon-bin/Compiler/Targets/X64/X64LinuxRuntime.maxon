@@ -642,19 +642,25 @@ function x64LinuxEmitZeroSlots(asm X64RuntimeAsm, firstSlot StackSize, slotCount
 end 'x64LinuxEmitZeroSlots'
 
 // ⭐ **AN errno IN rax BECOMING THE Win32 CODE THE Std TIER CLASSIFIES** — the whole body of
-// `mrt_host_last_error` except for where the errno came FROM. The five errno values and the four Win32
-// codes are `Targets/Shared/PosixRuntime`'s and `ManagedFileRuntime`'s; only the branch shape is x64's.
+// `mrt_host_last_error` except for where the errno came FROM. The errno values and the Win32 codes are
+// `Targets/Shared/PosixRuntime`'s, `Targets/Shared/LinuxRuntime`'s and `ManagedFileRuntime`'s; only the
+// branch shape is x64's.
 //
 // ⚠ **THE MAPPING IS NOT THE IDENTITY AND CANNOT BE**, even though `ENOENT` and `ERROR_FILE_NOT_FOUND` are
 // both 2. ⚠ **A CLEARED errno ANSWERS `ERROR_NO_MORE_FILES`** — see `PosixErrnoCleared`.
 //
-// ⭐⭐ **`EWOULDBLOCK` ANSWERS `ERROR_IO_PENDING` BECAUSE THAT IS WHAT IT MEANS** — a non-blocking read that
-// could not be served yet is an operation still in flight, which is exactly the arm `__gt_subp_yield_read`
-// parks on rather than classifying as a fault.
+// ⭐⭐ **`EWOULDBLOCK` AND `ENOTEMPTY` ARE THE TWO ARMS WITH A LANE IN THEM, AND THEY ARE THE ONES THE
+// READER FORKS ON.** Linux numbers them 11 and 39 where Darwin has 35 and 66; this backend serves Linux
+// alone, so it reads that lane's pair outright where the arm64 twin takes both as parameters. `EWOULDBLOCK`
+// answers `ERROR_IO_PENDING` because that is what it MEANS — a non-blocking read that could not be served
+// yet is an operation still in flight, which is exactly the arm `__gt_subp_yield_read` parks on rather than
+// classifying as a fault. `ENOTEMPTY` answers `ERROR_DIR_NOT_EMPTY`, which is what tells a
+// `Directory.delete` caller that the directory is occupied rather than missing.
 function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
+	let notEmpty = asm.newLabel()
 	let noMoreFiles = asm.newLabel()
 	let stillInFlight = asm.newLabel()
 	let answered = asm.newLabel()
@@ -663,6 +669,8 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noMoreFiles)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrnoWouldBlock as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stillInFlight)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxErrnoDirectoryNotEmpty as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notEmpty)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNoSuchFileOrDirectory as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: notFound)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixErrnoNotADirectory as Imm32)
@@ -684,6 +692,10 @@ function x64LinuxEmitErrnoToWin32(asm X64RuntimeAsm)
 
 	asm.placeLabel(denied)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorAccessDenied as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(notEmpty)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: ErrorDirNotEmpty as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(stillInFlight)
@@ -1271,11 +1283,13 @@ end 'buildX64LinuxFileSizeChunk'
 // ==========================================================================
 // mrt_host_file_delete(rcx = pathPtr) -> rax = BOOL
 // mrt_host_dir_create(rcx = pathPtr) -> rax = BOOL
+// mrt_host_dir_remove(rcx = pathPtr) -> rax = BOOL
 // ==========================================================================
 
-// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)` and `CreateDirectoryA(path, NULL)` ⇒
-// `mkdirat(AT_FDCWD, path, 0777)`. ONE BUILDER: both take a path and a third word — a flag word that must
-// be zero for the unlink, a permission mask for the mkdir — and answer a verdict the same way.
+// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)`, `CreateDirectoryA(path, NULL)` ⇒
+// `mkdirat(AT_FDCWD, path, 0777)` and `RemoveDirectoryA(path)` ⇒
+// `unlinkat(AT_FDCWD, path, AT_REMOVEDIR)`. ONE BUILDER: each takes a path and a third word — a flag word
+// for the two unlinks, a permission mask for the mkdir — and answers a verdict the same way.
 //
 // The Win32 directory create carries no permissions at all (a new directory inherits its parent's ACL), so
 // the POSIX side hands the widest mask over and lets the process umask narrow it.
@@ -3988,6 +4002,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 
 	if usage.usesManagedDirectory 'managedDirectory'
 		chunks.push(buildX64LinuxPathOpChunk(HostDirCreateName, syscallNumber: X64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord))
+		chunks.push(buildX64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: X64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags))
 		chunks.push(buildX64LinuxDirCurrentPathChunk())
 	end 'managedDirectory'
 

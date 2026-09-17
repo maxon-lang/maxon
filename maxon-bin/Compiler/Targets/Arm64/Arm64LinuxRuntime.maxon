@@ -742,7 +742,7 @@ function buildArm64LinuxLastErrorChunk() returns FunctionCodeChunk
 
 	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x16, byteOffset: 0)
-	arm64EmitErrnoToWin32(asm, wouldBlock: LinuxErrnoWouldBlock)
+	arm64EmitErrnoToWin32(asm, wouldBlock: LinuxErrnoWouldBlock, dirNotEmpty: LinuxErrnoDirectoryNotEmpty)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64LinuxLastErrorChunk'
@@ -881,11 +881,13 @@ end 'buildArm64LinuxFileSizeChunk'
 // ==========================================================================
 // mrt_host_file_delete(x0 = pathPtr) -> x0 = BOOL
 // mrt_host_dir_create(x0 = pathPtr) -> x0 = BOOL
+// mrt_host_dir_remove(x0 = pathPtr) -> x0 = BOOL
 // ==========================================================================
 
-// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)` and `CreateDirectoryA(path, NULL)` ⇒
-// `mkdirat(AT_FDCWD, path, 0777)`. ONE BUILDER: both take a path and a third word — a flag word that must be
-// zero for the unlink, a permission mask for the mkdir — and answer a verdict the same way, so the only
+// `DeleteFileA` ⇒ `unlinkat(AT_FDCWD, path, 0)`, `CreateDirectoryA(path, NULL)` ⇒
+// `mkdirat(AT_FDCWD, path, 0777)` and `RemoveDirectoryA(path)` ⇒
+// `unlinkat(AT_FDCWD, path, AT_REMOVEDIR)`. ONE BUILDER: each takes a path and a third word — a flag word
+// for the two unlinks, a permission mask for the mkdir — and answers a verdict the same way, so the only
 // honest difference is a number and a syscall.
 //
 // The Win32 directory create carries no permissions at all (a new directory inherits its parent's ACL), so
@@ -3051,6 +3053,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 
 	if usage.usesManagedDirectory 'managedDirectory'
 		chunks.push(buildArm64LinuxPathOpChunk(HostDirCreateName, syscallNumber: Arm64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord))
+		chunks.push(buildArm64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags))
 		chunks.push(buildArm64LinuxDirCurrentPathChunk())
 	end 'managedDirectory'
 

@@ -1254,6 +1254,7 @@ export type StdToX64Lowering
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes gives 0
 
@@ -1582,9 +1583,10 @@ export type StdToX64Lowering
 			osFileFindFirst(resultId, pathPtrId, findDataPtrId) then self.lowerOsFileFindFirst(resultId, pathPtrId: pathPtrId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osFileFindClose(handleId) then self.lowerOsFileFindClose(handleId, dstBlock: dstBlock)
 
-			// The four directory primitives, routed the same way, each capturing its answer out of RAX.
+			// The five directory primitives, routed the same way, each capturing its answer out of RAX.
 			osFileFindNext(resultId, handleId, findDataPtrId) then self.lowerOsFileFindNext(resultId, handleId: handleId, findDataPtrId: findDataPtrId, dstBlock: dstBlock)
 			osDirCreate(resultId, pathPtrId) then self.lowerOsDirCreate(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
+			osDirRemove(resultId, pathPtrId) then self.lowerOsDirRemove(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osDirCurrentPath(resultId, bufLenId, bufPtrId) then self.lowerOsDirCurrentPath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
 			osFileAttributes(resultId, pathPtrId) then self.lowerOsFileAttributes(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			osPanicValue(messagePtrId) then self.lowerPanicValue(messagePtrId, dstBlock: dstBlock)
@@ -1718,6 +1720,7 @@ export type StdToX64Lowering
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes then panic("StdToX64Lowering: a file-IO op appeared as a block terminator (lowering bug — every one is a body op)")
 			osPanicValue then panic("StdToX64Lowering: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
@@ -4511,6 +4514,18 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsDirCreateWin64'
 
+	// ⭐ **`RemoveDirectoryA(path)`** — one register argument and the BOOL captured, which is
+	// `lowerOsFileDelete`'s shape rather than its `create` twin's: the removal takes no second argument, so
+	// there is no immediate to materialize and the shared one-argument call serves it.
+	function lowerOsDirRemove(resultId ValueId, pathPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.RemoveDirectoryA, arg0: pathPtrId, dstBlock: dstBlock)
+			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostDirRemoveName, args: argsOf(pathPtrId))
+		end 'route'
+
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsDirRemove'
+
 	// ⭐ **`GetCurrentDirectoryA(bufLen, bufPtr)`** — register-only, and note that the LENGTH is the
 	// first argument and the buffer the second, which is the reverse of every other path-taking import in
 	// this file. The three-way answer (0 / fits / required size) is classified in builder-built Std.
@@ -5415,6 +5430,7 @@ export type StdToX64Lowering
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes gives false
 
@@ -5685,6 +5701,7 @@ export type StdToX64Lowering
 				osFileFindClose or
 				osFileFindNext or
 				osDirCreate or
+				osDirRemove or
 				osDirCurrentPath or
 				osFileAttributes panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a file-IO op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPanicValue panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPanicValue`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

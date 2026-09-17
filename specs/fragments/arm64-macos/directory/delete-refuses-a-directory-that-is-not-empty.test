@@ -1,0 +1,226 @@
+// Test: delete-refuses-a-directory-that-is-not-empty
+function main() returns ExitCode
+	let dir = FilePath from "test_delete_nonempty_3e8d"
+	if not Directory.create(dir) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	let occupant = dir.join("occupant.txt")
+	try File.writeText(occupant, content: "x") otherwise return 2
+
+	var refused = false
+
+	try Directory.delete(dir) otherwise 'refusedNonEmpty'
+		refused = true
+	end 'refusedNonEmpty'
+
+	// Read before the cleanup below takes the directory away for real.
+	let survived = Directory.exists(dir)
+
+	try File.delete(occupant) otherwise ignore
+	try Directory.delete(dir) otherwise ignore
+
+	if not refused 'removedADirectoryHoldingAFile'
+		return 3
+	end 'removedADirectoryHoldingAFile'
+
+	if not survived 'removedWhatItRefused'
+		return 4
+	end 'removedWhatItRefused'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 2048
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __slab_arena_list@424 = i64 0
+  __slab_arena_map_l1@432 = i64 0
+  __slab_state@440 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_19  ; "test_delete_nonempty_3e8d"
+  __il_body#19:
+    arm64.bl FilePath.create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#21
+  __il_cont#18:
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.create
+    arm64.eor x0, x0, 1
+    arm64.cbz x0, ifcont#2
+  couldNotCreate:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#2:
+    arm64.leaRdata x1, __str_rec_20  ; "occupant.txt"
+    arm64.movRegReg x0, x19
+    arm64.bl FilePath.join
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x1, __str_rec_21  ; "x"
+  __il_body#23:
+    arm64.movImm x2, 0
+  __il_cont#22:
+    arm64.movRegReg x0, x20
+    arm64.bl File.writeText
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr#4:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryok:
+    arm64.movImm x21, 0
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.delete
+    arm64.cmp x9, 0
+    arm64.b.eq trycont#7
+  tryerr#6:
+    arm64.movImm x21, 1
+  trycont#7:
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.exists
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.bl File.delete
+    arm64.cmp x9, 0
+    arm64.b.ne trycont#10
+  trycont#10:
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.delete
+    arm64.cmp x9, 0
+    arm64.b.ne trycont#13
+  trycont#13:
+    arm64.eor x0, x21, 1
+    arm64.cbz x0, ifcont#15
+  removedADirectoryHoldingAFile:
+    arm64.movImm x21, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#15:
+    arm64.eor x0, x22, 1
+    arm64.cbz x0, ifcont#17
+  removedWhatItRefused:
+    arm64.movImm x21, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#17:
+    arm64.movImm x21, 42
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  tryerr#21:
+    arm64.leaRdata x0, __str_blob_30  ; "panic at FilePath.maxon:40: FilePath: invalid path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

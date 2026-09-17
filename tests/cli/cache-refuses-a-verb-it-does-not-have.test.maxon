@@ -1,0 +1,36 @@
+// cache-refuses-a-verb-it-does-not-have.test.maxon - `maxon cache <a word that is not a verb>`, and
+// `maxon cache` handed an option, both refuse with a `Usage:` line on stderr naming the verb the command
+// does have.
+//
+// ⭐ **A COMMAND THAT TAKES A VERB HAS TO NAME ITS VERBS WHEN IT REFUSES ONE.** A bare refusal sends its
+// reader to `maxon help` to find out what they were supposed to type, and a refusal on STDOUT is read by
+// a script as the command's answer rather than as its complaint.
+//
+// ⛔ **BARE `maxon cache` IS NOT HERE, BECAUSE IT IS AN ANSWER**: it reports what the cache holds
+// (`cache-reports-what-it-holds`). Only a word the command does not have, and an option it does not take,
+// are mistakes.
+
+let UnknownCacheVerb = "polish"
+
+// ⚠ **AN OPTION THE DRIVER IMPLEMENTS, WHICH IS THE ONE THAT NEEDS THE GATE.** An unknown flag is already
+// refused before any command runs; a flag some OTHER command reads would be consumed on its way past, and
+// `maxon --emit-ir cache` would report the cache as though the flag had meant something.
+let OptionAnotherCommandReads = "--emit-ir"
+
+test 'cache with a word that is not a verb and cache with an option both refuse, naming clear'
+	try expectCacheUsageRefusal([CacheCommandWord, UnknownCacheVerb])
+	try expectCacheUsageRefusal([OptionAnotherCommandReads, CacheCommandWord])
+end 'cache with a word that is not a verb and cache with an option both refuse, naming clear'
+
+function expectCacheUsageRefusal(arguments ListedWordArray) throws TestFailure
+	let typed = listed(arguments)
+	let run = runDriver(arguments)
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	try Expect.equal(run.exitCode() as AssertedInt, expected: 1, message: "`maxon {typed}` did not exit 1. A word the command does not have names nothing to do, and a flag it never reads is a command line only partly understood. {said}")
+
+	let usage = usageLinesIn(run.stderr)
+	try Expect.isFalse(usage.count() == 0, message: "`maxon {typed}` printed no `{UsageLinePrefix}` line on STDERR. A refusal says everything on stderr; a usage line on stdout is read by a script as the command's answer. {said}")
+
+	try Expect.contains(listed(usage), needle: CacheClearVerb, message: "the `{UsageLinePrefix}` line `maxon {typed}` printed does not name `{CacheClearVerb}`, the one verb the command has, so its reader still does not know what to type. {said}")
+end 'expectCacheUsageRefusal'

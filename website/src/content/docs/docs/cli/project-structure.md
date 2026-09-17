@@ -58,6 +58,18 @@ The manifest program is compiled **for the host**, whatever `--target` says, bec
 it. It is compiled on its own (the project's other files are not part of it) and kept in the
 [run cache](/docs/cli/#the-run-cache), never inside the project.
 
+That compile is **silent**, and says only which of the two things happened to it:
+
+```text
+Compiled the build runner (build.maxon)     # nothing in the cache matched, so it was compiled
+Used the cached build runner (build.maxon)  # the cache had it, and nothing was compiled
+```
+
+The line goes to stdout, ahead of the build's own report. The runner is scaffolding, so a reader gets
+one line about it rather than a second build's worth of output mixed into the answer they asked for —
+but **silenced is not silent**: a `build.maxon` that does not compile still prints its diagnostics, and
+`--log=` anywhere on the command line leaves the runner's compile as loud as any other.
+
 ### Describing a build
 
 The manifest describes its builds by calling `stdlib/Build.maxon`, which prints them as JSON on

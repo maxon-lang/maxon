@@ -43,14 +43,15 @@ export function runRun(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'nothingThere'
 
-	quietTheBuildChatter(args)
+	_ = quietTheBuildChatter(args)
 
 	return runProgram(program, isProject: isProject, arguments: programArguments(args.paths))
 end 'runRun'
 
 // The one sentence a cache failure reaches a reader through: the arm IS the fact and its payload is the
-// sentence, so there is nothing to decide here.
-function reportCacheError(e RunCacheError, speaker String)
+// sentence, so there is nothing to decide here. `module` so `CacheCommand` reports a cache it cannot
+// locate in the same words `run` and `build` do.
+module function reportCacheError(e RunCacheError, speaker String)
 	match e 'why'
 		unavailable(reason) then printError("{speaker}: {reason}\n")
 	end 'why'
@@ -74,9 +75,9 @@ function programArguments(paths SourcePathSpellingArray) returns StringArray
 end 'programArguments'
 
 function runProgram(program FilePath, isProject bool, arguments StringArray) returns ExitCode
-	let executable = try cachedBuild(program, isProject: isProject, target: detectHostTarget(), entryFunction: MainFunctionName, speaker: RunCommandName) otherwise return OwnFailureExit
+	let built = try cachedBuild(program, isProject: isProject, target: detectHostTarget(), entryFunction: MainFunctionName, speaker: RunCommandName) otherwise return OwnFailureExit
 
-	return spawnForwarding(Executable.path(executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, speaker: RunCommandName)
+	return spawnForwarding(Executable.path(built.executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, speaker: RunCommandName)
 end 'runProgram'
 
 // Why there is no cached build to run. Every cause has already been reported, in `speaker`'s words.
@@ -84,23 +85,37 @@ export enum CachedBuildError implements Error
 	notBuilt
 end 'CachedBuildError'
 
+// A build in the cache, and whether THIS call is what put it there. `maxon build` tells its reader which
+// of the two happened to the program that runs its manifest, and `maxon run` ignores it — its contract is
+// that the build says nothing at all.
+export type CachedProgram
+	export let executable as FilePath
+	export let compiled as bool
+
+	static function create(executable FilePath, compiled bool) returns CachedProgram
+		return Self{executable: executable, compiled: compiled}
+	end 'create'
+end 'CachedProgram'
+
 // The run cache's build of `program` from `entryFunction`: the one already published under these inputs'
 // key, or a fresh one compiled and published first. `maxon run` and a `build.maxon` manifest both come
 // through here, so neither writes a compiled program into the project it was run from.
 //
 // A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
 // to compare — a build under that name was made from these very inputs.
-export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String) returns FilePath throws CachedBuildError
+export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String) returns CachedProgram throws CachedBuildError
 	let slot = try locateRunSlot(program, isProject: isProject, target: target, entryFunction: entryFunction) otherwise (e) 'noCache'
 		reportCacheError(e, speaker: speaker)
 		throw CachedBuildError.notBuilt
 	end 'noCache'
 
-	if not File.exists(slot.executable) 'notCachedYet'
-		try fillSlot(program, slot: slot, target: target, entryFunction: entryFunction, speaker: speaker)
-	end 'notCachedYet'
+	if File.exists(slot.executable) 'alreadyCached'
+		return CachedProgram.create(slot.executable, compiled: false)
+	end 'alreadyCached'
 
-	return slot.executable
+	try fillSlot(program, slot: slot, target: target, entryFunction: entryFunction, speaker: speaker)
+
+	return CachedProgram.create(slot.executable, compiled: true)
 end 'cachedBuild'
 
 // Compile the program into its cache slot and publish it under the name its key gives it, having said why

@@ -67699,7 +67699,7 @@ export type Parser
 		return self.emitOwnedRuntimeResult(callee, args: singletonArgs(path), resultTag: ValueTypeTag.structRef, resultNameId: self.managedFileNameId(), range: range)
 	end 'parseManagedFileOpen'
 
-	// ⭐ **THE FOUR `__ManagedDirectory` STATICS — the complete surface.** A name outside it is REFUSED
+	// ⭐ **THE FIVE `__ManagedDirectory` STATICS — the complete surface.** A name outside it is REFUSED
 	// BY NAME here rather than left to fall through, exactly as `parseManagedFileStaticCall` argues:
 	// falling through would mangle `__ManagedDirectory.list` into a callee no file declares and
 	// surface as E3004 against a name the author did write.
@@ -67736,6 +67736,13 @@ export type Parser
 			return self.emitRuntimeCall(ManagedDirectoryCreateName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'create'
 
+		// `create`'s twin, and void for its reason: the removal either happened or threw, so there is no
+		// verdict left to answer with.
+		if methodTok.value.equals(ManagedDirectoryDeleteMethod) 'delete'
+			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
+			return self.emitRuntimeCall(ManagedDirectoryDeleteName, args: singletonArgs(path), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'delete'
+
 		// The one static with NO arguments, and the one that hands back memory: an owned `__ManagedMemory`
 		// the caller drops like any other array record.
 		if methodTok.value.equals(ManagedDirectoryCurrentPathMethod) 'currentPath'
@@ -67743,7 +67750,7 @@ export type Parser
 			return self.emitOwnedManagedMemoryResult(ManagedDirectoryCurrentPathName, args: ValueIdArray.create(), range: range)
 		end 'currentPath'
 
-		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these four: `openSearch`, `exists`, `create` and `currentPath`", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`{String.from(ManagedDirectoryTypeName)}` static '{String.from(methodTok.value)}' — the type has exactly these five: `openSearch`, `exists`, `create`, `delete` and `currentPath`", line: methodTok.line, column: methodTok.column)
 	end 'parseManagedDirectoryStaticCall'
 
 	// ⭐ **THE THREE `__ManagedDirectory` INSTANCE METHODS — `next`, `filename`, `close` (R4.3).** The cursor

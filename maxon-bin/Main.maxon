@@ -56,6 +56,9 @@ let DebugCommandName = "debug"
 // not be consumed on its way past nor abort the run before the child is spawned.
 let CoverageCommandName = "coverage"
 
+// `module` because `Run/CacheCommand.maxon` names the command in its own usage line and refusals.
+module let CacheCommandName = "cache"
+
 // Tail-stopping: `profile run <exe> <flags>` forwards everything after the executable to the child.
 let ProfileCommandName = "profile"
 
@@ -290,6 +293,7 @@ function main() returns ExitCode
 
 	return match args.command 'cmd'
 		build gives runBuild(args)
+		cache gives runCache(args)
 		coverage gives runCoverage(args)
 		debug gives runDebugCommand(args)
 		fmt gives runFmt(args)
@@ -434,12 +438,22 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 	//
 	// Kept in the run cache, never in the project: a path inside the project is written by every
 	// concurrent build of it, and which lock would apply is known only once the manifest has run.
-	let manifestProgram = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: ManifestEntryFunction, speaker: BuildSubcommandName) otherwise 'manifestNotBuilt'
+	//
+	// ⭐ **ONLY THIS COMPILE IS SILENCED, AND THE LEVEL GOES BACK BEFORE THE NEXT ONE.** The build the
+	// manifest goes on to describe is what the caller asked for, and its own report is their answer;
+	// the runner is scaffolding, so it owes them one line rather than a second build's worth of it.
+	let spoke = quietTheBuildChatter(args)
+
+	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: ManifestEntryFunction, speaker: BuildSubcommandName) otherwise 'manifestNotBuilt'
+		setLogLevel(spoke)
 		printError("error: {BuildManifestFileName} could not be built — the reason is above\n")
 		return ManifestRun.ran(1)
 	end 'manifestNotBuilt'
 
-	let run = try Subprocess.run(Executable.path(manifestProgram), arguments: StringArray.create()) otherwise 'manifestRunErr'
+	setLogLevel(spoke)
+	reportBuildRunner(runner.compiled)
+
+	let run = try Subprocess.run(Executable.path(runner.executable), arguments: StringArray.create()) otherwise 'manifestRunErr'
 		printError("error: {BuildManifestFileName} compiled but could not be run\n")
 		return ManifestRun.ran(1)
 	end 'manifestRunErr'
@@ -456,6 +470,14 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 
 	return buildFromManifestOutput(run.stdout, args: args, targetName: targetName)
 end 'runBuildManifest'
+
+// One line on stdout, ahead of the build's own report: which of the two things happened to the
+// program that describes the build. A reader waiting on a cold `build.maxon` compile is otherwise
+// told nothing at all.
+function reportBuildRunner(compiled bool)
+	let said = "Compiled the build runner" if compiled else "Used the cached build runner"
+	print("{said} ({BuildManifestFileName})\n")
+end 'reportBuildRunner'
 
 // A function rather than a reassignment, which would clone a `String` neither branch changes.
 function chosenOutput(fromManifest String, fromFlag String) returns String
@@ -1186,15 +1208,24 @@ end 'refusedPositionalBeyond'
 typealias PositionalCount = int(0 to 1)
 
 // A command's streams belong to its subject: at the default INFO level every compile announces the
-// bytes it wrote, which is noise on `test`'s fixture-compared stdout and on `run`'s program
-// streams. Silenced unless the caller asked for logging. `module` so `Testing/` and `Run/` share
-// one rule.
-module function quietTheBuildChatter(args MaxonArgs)
+// bytes it wrote, which is noise on `test`'s fixture-compared stdout, on `run`'s program streams,
+// and on the report a path-less `build` makes about the build it was actually asked for. Silenced
+// unless the caller asked for logging. `module` so `Testing/` and `Run/` share one rule.
+//
+// ⚠ **SILENCED IS NOT SILENT — the ERROR level is deliberately left speaking**, so a compile that
+// fails still says why.
+//
+// It answers the level it found, so a caller quieting ONE compile of several can put that level
+// back and let the rest be heard.
+module function quietTheBuildChatter(args MaxonArgs) returns LogLevel
+	let inForce = currentLogLevel()
+
 	if args.logOverridden 'theCallerAskedForLogging'
-		return
+		return inForce
 	end 'theCallerAskedForLogging'
 
 	setLogLevel(LogLevel.ERROR)
+	return inForce
 end 'quietTheBuildChatter'
 
 // What `run` and `upgrade` exit with when the failure is their own; otherwise they forward the
@@ -1365,6 +1396,7 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 	return match command 'whichCommand'
 		test gives NothingRanExitCode
 		build gives 1
+		cache gives 1
 		coverage gives 1
 		debug gives 1
 		fmt gives 1
@@ -1479,6 +1511,7 @@ end 'CommandReference'
 function commandReference(command MaxonCommand) returns CommandReference throws HelpReferenceError
 	return match command 'whichCommand'
 		build gives CommandReference.create(BuildSubcommandName, arguments: "<file|directory>...", summary: "Compile a Maxon program to an executable.", detail: "Several paths are compiled as ONE program, in the order given.", audience: CommandAudience.usingTheCompiler)
+		cache gives CommandReference.create(CacheCommandName, arguments: "[{CacheClearVerb}]", summary: "Report what this compiler has cached on the host, or remove it.", detail: "With no verb it reports, on stdout: a line per cache directory this host keeps, naming the one a run will use, how many builds it holds and how much disk. A build is the executable; the debug sidecar beside one is not a build, and its bytes are counted in the size because clearing gives them back. A directory that cannot be read says so and the command exits 1.{ParagraphSeparator}`{CacheClearVerb}` removes the compiled programs `{RunCommandName}` and a path-less `{BuildSubcommandName}` keep, the directories holding them, and the Maxon directory above those. It removes nothing else in a directory you named through {RunCacheRootVariable}, which Maxon does not own. Nothing to remove is an ordinary state and is reported as success.{ParagraphSeparator}The cache is the first of {cacheRootChain()} whose variable names a directory, and both the report and `{CacheClearVerb}` reach every one of them this host names, because a build published while a different one ranked first is stranded under it otherwise.", audience: CommandAudience.usingTheCompiler)
 		coverage gives CommandReference.create(CoverageCommandName, arguments: "<run|report> <exe>", summary: "Run a {CoverageFlag} binary and report line + branch coverage.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		debug gives CommandReference.create(DebugCommandName, arguments: "<subcommand> <exe>", summary: "Read back the `.mxdbg` debug-info sidecar beside a binary.", detail: "`--dump-info <exe>` prints the sidecar; `--symbolize <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
 		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `.maxon` files, skipping `build.maxon`, anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
@@ -1487,7 +1520,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		mcpServer gives CommandReference.create(McpServerCommandName, arguments: "[{DevFlag}]", summary: "Speak the Model Context Protocol over stdio.", detail: "JSON-RPC bodies over newline-delimited stdio, providing MCP tools for compiling, testing, inspecting, and formatting Maxon code. With {DevFlag}, also exposes compiler development tools.", audience: CommandAudience.usingTheCompiler)
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
-		run gives CommandReference.create(RunCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under a host cache area ({RunCacheRootVariable} first, then LOCALAPPDATA or TEMP on Windows and TMPDIR or /tmp elsewhere) and reused while the program's sources, the standard library and this compiler all still hash the same. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
+		run gives CommandReference.create(RunCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
@@ -1803,6 +1836,8 @@ end 'noCommandGiven'
 // ordinal or raw value.
 enum MaxonCommand
 	build
+
+	cache
 
 	coverage
 

@@ -108,17 +108,21 @@ end 'main'
 
 <!-- unsupported-targets: wasm32-wasi -->
 **`file-io.md`'s "Targets — the one statement of the FILESYSTEM gate"**: `Directory.list` / `exists` /
-`isDirectory` / `create` / `currentPath` lower to the runtime entries `__md_open_search`, `__md_exists`,
-`__md_create` and `__md_current_path`, and `list-filters-dot-entries` reaches `__mf_*` on top of those.
-None has an x64-linux or wasm32-wasi implementation at this rung — arm64-macOS gained one at MAC4 and
-arm64-Linux at L2, which is why the markers name both — `E3104`, raised by
-`SemanticCheck.requireTargetSupportsCallee`, not by the marker. MEASURED at the rung that first loaded
-`stdlib/Directory.maxon`: **9 of 9 cases refused on wasm32-wasi**, each naming its own entry. The reason
-is written down in `file-io.md` and not repeated here; what un-gates the REMAINING lanes is the same POSIX/WASI
-substrate that un-gates that file, plus its directory-enumeration twin — which on arm64-macOS meant
-emulating `FindFirstFileA`'s GLOB over `opendir`/`readdir`/`fnmatch`, because Win32 takes a pattern where
-POSIX takes a directory, and on arm64-Linux meant doing it again over `openat(O_DIRECTORY)`/`getdents64`
-with the wildcard match HAND-WRITTEN, because a raw static image links no `fnmatch` to call.
+`isDirectory` / `create` / `delete` / `currentPath` lower to the runtime entries `__md_open_search`,
+`__md_exists`, `__md_create`, `__md_delete` and `__md_current_path`, and `list-filters-dot-entries`
+reaches `__mf_*` on top of those. Every lane this compiler emits serves the family except wasm32-wasi,
+which is why the marker names that one alone; the refusal is `E3104`, raised by
+`SemanticCheck.requireTargetSupportsCallee`, not by the marker. **Every case in this file reaches one of
+those entries, so every one of them is refused on a lane without the family**, each naming its own entry.
+`__md_delete` removes an EMPTY directory and nothing else — `RemoveDirectoryA` on Windows, `rmdir` on
+Darwin and `unlinkat(AT_FDCWD, path, AT_REMOVEDIR)` on Linux — so a directory holding anything at all
+survives the call and the caller is told so. The reason
+wasm32-wasi has none of it is written down in `file-io.md` and not repeated here; what would un-gate it is
+the same WASI substrate that un-gates that file, plus its directory-enumeration twin — the one that cost
+the most on every lane, because Win32 takes a GLOB where POSIX takes a directory: arm64-macOS emulates
+`FindFirstFileA` over `opendir`/`readdir`/`fnmatch`, and both Linux lanes do it over
+`openat(O_DIRECTORY)`/`getdents64` with the wildcard match HAND-WRITTEN, a raw static image linking no
+`fnmatch` to call.
 
 ## Tests
 
@@ -293,6 +297,89 @@ function main() returns ExitCode
 		return 42
 	end 'ok'
 	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+### Removing a directory
+
+`Directory.delete` removes an EMPTY directory and throws for anything else — a directory holding a
+file, and a name nothing created. These three cases run with the working directory `temp/` and beside
+every other case in the suite, so each names a directory nothing else here could reach and takes it
+away again.
+
+<!-- test: delete-removes-an-empty-directory -->
+```maxon
+function main() returns ExitCode
+	let dir = FilePath from "test_delete_empty_a7c1"
+	if not Directory.create(dir) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try Directory.delete(dir) otherwise return 2
+
+	if Directory.exists(dir) 'stillThere'
+		return 3
+	end 'stillThere'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: delete-refuses-a-directory-that-is-not-empty -->
+```maxon
+function main() returns ExitCode
+	let dir = FilePath from "test_delete_nonempty_3e8d"
+	if not Directory.create(dir) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	let occupant = dir.join("occupant.txt")
+	try File.writeText(occupant, content: "x") otherwise return 2
+
+	var refused = false
+
+	try Directory.delete(dir) otherwise 'refusedNonEmpty'
+		refused = true
+	end 'refusedNonEmpty'
+
+	// Read before the cleanup below takes the directory away for real.
+	let survived = Directory.exists(dir)
+
+	try File.delete(occupant) otherwise ignore
+	try Directory.delete(dir) otherwise ignore
+
+	if not refused 'removedADirectoryHoldingAFile'
+		return 3
+	end 'removedADirectoryHoldingAFile'
+
+	if not survived 'removedWhatItRefused'
+		return 4
+	end 'removedWhatItRefused'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: delete-refuses-a-path-that-is-not-there -->
+```maxon
+function main() returns ExitCode
+	let missing = FilePath from "test_delete_absent_5b20"
+	if Directory.exists(missing) 'somethingIsThere'
+		return 1
+	end 'somethingIsThere'
+
+	try Directory.delete(missing) otherwise return 42
+
+	return 2
 end 'main'
 ```
 ```exitcode
