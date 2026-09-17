@@ -1,0 +1,92 @@
+---
+/**
+ * One step of the tour: the program's own lines on the left, the explanation on
+ * the right.
+ *
+ * The code is SLICED OUT OF THE SOURCE AT BUILD TIME, so an excerpt cannot drift
+ * from the file it quotes — and a range that no longer lands inside the file
+ * fails the build rather than printing something else.
+ */
+import { Code } from '@astrojs/starlight/components';
+import source from '../examples/msort.maxon?raw';
+
+interface Props {
+  /** First line of the excerpt, 1-based and inclusive, as the file numbers it. */
+  from: number;
+  /** Last line of the excerpt, inclusive. */
+  to: number;
+}
+
+const { from, to } = Astro.props;
+const lines = source.split('\n');
+
+if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to > lines.length || from > to) {
+  throw new Error(
+    `TourStep: msort.maxon has ${lines.length} lines, so ${from}-${to} is not a range inside it. ` +
+      'An edit to the example moved this excerpt; re-read the file and correct the range.',
+  );
+}
+
+const code = lines.slice(from - 1, to).join('\n');
+const label = from === to ? `msort.maxon:${from}` : `msort.maxon:${from}-${to}`;
+---
+
+<div class="tour-step">
+  <div class="tour-code">
+    <Code code={code} lang="maxon" title={label} />
+  </div>
+  <div class="tour-notes"><slot /></div>
+</div>
+
+<style is:global>
+  /*
+   * Two columns need more room than the 45rem a docs page gets. Only the pages
+   * that use this component load this rule, so the rest of the docs keep the
+   * measure that suits a page of prose.
+   */
+  @media (min-width: 87.5rem) {
+    :root {
+      --sl-content-width: 78rem;
+    }
+  }
+
+  .tour-step {
+    display: grid;
+    gap: 0.5rem;
+    align-items: start;
+    margin-block: 2.5rem;
+  }
+
+  /*
+   * Stacked below this width: a code column narrower than about 34rem wraps the
+   * lines this program actually has, and a wrapped line is worse than a scroll.
+   */
+  @media (min-width: 72rem) {
+    .tour-step {
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+      gap: 0 2rem;
+    }
+  }
+
+  .tour-step .tour-code {
+    min-width: 0;
+  }
+
+  .tour-step .tour-notes {
+    min-width: 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.7;
+  }
+
+  .tour-step .tour-notes > :first-child {
+    margin-top: 0;
+  }
+
+  .tour-step .tour-notes > * + * {
+    margin-top: 0.75rem;
+  }
+
+  .tour-step .tour-notes code {
+    font-size: 0.9em;
+  }
+</style>

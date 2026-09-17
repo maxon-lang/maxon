@@ -175,6 +175,7 @@ tests/
     binary-trees.test.maxon                 the published n=10 checks, exit 0
     fannkuch-redux.test.maxon               the published n=7 answer and the documented n=10 one, flip count as exit code
     maxgrep.test.maxon                      the flags, the two failing exit codes, argument order, a binary file and a skipped `.git`
+    msort.test.maxon                        byte order on the key, a stable sort, the flags, `--key=N`, `--jobs=N` and the failing exit code
     multifile.test.maxon                    the directory builds as one project and exits 5
     nbody.test.maxon                        the published n=1000 energies, exit 0
     spectral-norm.test.maxon                the published n=100 norm, exit 0

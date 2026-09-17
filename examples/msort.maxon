@@ -1,0 +1,716 @@
+typealias LineCount = int(0 to u64.max)
+typealias ChunkPosition = int(0 to u64.max)
+typealias FieldNumber = int(0 to 1024)
+typealias WorkerCount = int(1 to 256)
+typealias BytePosition = int(0 to u64.max)
+typealias SortNumber = int(i64.min to i64.max)
+
+typealias PathArray = Array with FilePath
+typealias LineArray = Array with String
+typealias RowArray = Array with Row
+typealias ChunkArray = Array with RowArray
+typealias ByteFold = function(Byte) returns Byte
+typealias RowComparator = function(Row, Row) returns Ordering
+typealias ReadPromise = Promise with (LineArray, ReadError)
+typealias ReadPromiseArray = Array with ReadPromise
+typealias SorterArray = Array with Sorter.handle
+typealias SortedPromise = Promise with (LineArray, ServiceError)
+typealias SortedPromiseArray = Array with SortedPromise
+
+let programPathArgument = 0
+let wholeLine = 0
+let firstField = 1
+let mostFields = 1024
+let fewestWorkers = 1
+let mostWorkers = 256
+let leastLinesPerWorker = 64
+let unparsedNumber = 0
+let nanosPerMillisecond = 1000000
+let keyOptionPrefix = "--key="
+let jobsOptionPrefix = "--jobs="
+let lineFeed = "\n"
+
+enum Blank
+	tab = 0x09
+	space = 0x20
+end 'Blank'
+
+enum Outcome
+	sorted = 0
+	troubled = 2
+end 'Outcome'
+
+enum Flag
+	numeric = "-n"
+	reverse = "-r"
+	unique = "-u"
+	foldCase = "-f"
+	stats = "--stats"
+	endOfFlags = "--"
+
+	function summary() returns String
+		return match self 'describe'
+			numeric gives "compare keys as whole numbers, not as text"
+			reverse gives "order from the greatest key down"
+			unique gives "print the first line of each run of equal keys"
+			foldCase gives "ignore ASCII letter case"
+			stats gives "report lines, workers and time on standard error"
+			endOfFlags gives "end the flags, so a FILE may start with -"
+		end 'describe'
+	end 'summary'
+end 'Flag'
+
+enum UsageError implements Error
+	unknownFlag
+	notANumber
+	invalidKey
+	invalidJobs
+	invalidPath
+
+	function message() returns String
+		return match self 'describe'
+			unknownFlag gives "unknown flag"
+			notANumber gives "an option that takes a number was given something else"
+			invalidKey gives "{keyOptionPrefix}N needs a field from {firstField} to {mostFields}"
+			invalidJobs gives "{jobsOptionPrefix}N needs a whole number from {fewestWorkers} to {mostWorkers}"
+			invalidPath gives "a FILE holds a character this system forbids in paths"
+		end 'describe'
+	end 'message'
+end 'UsageError'
+
+type Options
+	export var paths as PathArray = PathArray.create()
+	export var jobs as WorkerCount = fewestWorkers
+	export var field as FieldNumber = wholeLine
+	export var numeric = false
+	export var reverse = false
+	export var unique = false
+	export var foldCase = false
+	export var stats = false
+
+	static function parse(args StringArray) returns Options throws UsageError
+		var options = Self{jobs: availableWorkers()}
+		var flagsEnded = false
+
+		for (argument, text) in args.withIterator() 'eachArgument'
+			if argument.index() == programPathArgument 'programPath'
+				continue
+			end 'programPath'
+
+			if flagsEnded or not text.startsWith("-") 'aFileToSort'
+				options.paths.push(try FilePath.from(text) otherwise throw UsageError.invalidPath)
+			end 'aFileToSort' else if text.startsWith(keyOptionPrefix) 'keyOption'
+				options.field = try parseField(text)
+			end 'keyOption' else if text.startsWith(jobsOptionPrefix) 'jobsOption'
+				options.jobs = try parseJobs(text)
+			end 'jobsOption' else 'namedFlag'
+				let flag = try Flag.fromRawValue(text) otherwise throw UsageError.unknownFlag
+
+				match flag 'apply'
+					numeric then options.numeric = true
+					reverse then options.reverse = true
+					unique then options.unique = true
+					foldCase then options.foldCase = true
+					stats then options.stats = true
+					endOfFlags then flagsEnded = true
+				end 'apply'
+			end 'namedFlag'
+		end 'eachArgument'
+
+		return options
+	end 'parse'
+
+	static function optionNumber(argument String) returns SortNumber throws UsageError
+		var value = 0
+
+		try 'readNumber'
+			value = int.fromString(CommandLine.optionValue(argument))
+		end 'readNumber' otherwise throws UsageError.notANumber
+
+		return value
+	end 'optionNumber'
+
+	static function parseField(argument String) returns FieldNumber throws UsageError
+		let value = try optionNumber(argument)
+
+		if value < firstField or value > mostFields 'outOfRange'
+			throw UsageError.invalidKey
+		end 'outOfRange'
+
+		return value
+	end 'parseField'
+
+	static function parseJobs(argument String) returns WorkerCount throws UsageError
+		let value = try optionNumber(argument)
+
+		if value < fewestWorkers or value > mostWorkers 'outOfRange'
+			throw UsageError.invalidJobs
+		end 'outOfRange'
+
+		return value
+	end 'parseJobs'
+
+	static function availableWorkers() returns WorkerCount
+		let processors = Runtime.processorCount()
+		return mostWorkers if processors > mostWorkers else processors
+	end 'availableWorkers'
+
+	function workersFor(lines LineCount) returns WorkerCount
+		let affordable = lines / leastLinesPerWorker
+
+		if affordable <= fewestWorkers as LineCount 'tooFewLines'
+			return fewestWorkers
+		end 'tooFewLines'
+
+		if affordable >= self.jobs as LineCount 'enoughLines'
+			return self.jobs
+		end 'enoughLines'
+
+		return affordable as WorkerCount
+	end 'workersFor'
+
+	function sortSettings() returns SortSettings
+		return SortSettings.create(self.field, numeric: self.numeric, foldCase: self.foldCase, reverse: self.reverse)
+	end 'sortSettings'
+end 'Options'
+
+type SortSettings
+	export var field as FieldNumber
+	export var numeric as bool
+	export var foldCase as bool
+	export var reverse as bool
+
+	static function create(field FieldNumber, numeric bool, foldCase bool, reverse bool) returns Self
+		return Self{field: field, numeric: numeric, foldCase: foldCase, reverse: reverse}
+	end 'create'
+
+	function keyMaker() returns KeyMaker
+		if self.numeric 'numbers'
+			return KeyMaker.create(self.field, reader: NumberKey.create(unparsedNumber))
+		end 'numbers'
+
+		return KeyMaker.create(self.field, reader: TextKey.create(byteFold(self.foldCase)))
+	end 'keyMaker'
+
+	function comparator() returns RowComparator
+		if self.reverse 'descending'
+			return function(left Row, right Row) gives right.key.compare(left.key)
+		end 'descending'
+
+		return function(left Row, right Row) gives left.key.compare(right.key)
+	end 'comparator'
+end 'SortSettings'
+
+union SortKey
+	missing
+	number(value SortNumber)
+	text(value ByteArray)
+
+	function compare(other SortKey) returns Ordering
+		return match self 'thisKey'
+			missing gives missingAgainst(other)
+			number(value) gives numberAgainst(value, other: other)
+			text(value) gives textAgainst(value, other: other)
+		end 'thisKey'
+	end 'compare'
+end 'SortKey'
+
+function missingAgainst(other SortKey) returns Ordering
+	return match other 'otherKey'
+		missing gives Ordering.equalTo
+		number or
+			text gives Ordering.lessThan
+	end 'otherKey'
+end 'missingAgainst'
+
+function numberAgainst(value SortNumber, other SortKey) returns Ordering
+	return match other 'otherKey'
+		missing gives Ordering.greaterThan
+		number(otherValue) gives value.compare(otherValue)
+		text gives Ordering.lessThan
+	end 'otherKey'
+end 'numberAgainst'
+
+function textAgainst(value ByteArray, other SortKey) returns Ordering
+	return match other 'otherKey'
+		missing or
+			number gives Ordering.greaterThan
+		text(otherValue) gives compareBytes(value, right: otherValue)
+	end 'otherKey'
+end 'textAgainst'
+
+function compareBytes(left ByteArray, right ByteArray) returns Ordering
+	let shared = left.count() if left.count() < right.count() else right.count()
+
+	for position in 0 upto shared 'eachByte'
+		let leftByte = byteAt(left, position: position)
+		let rightByte = byteAt(right, position: position)
+
+		if leftByte != rightByte 'differs'
+			return leftByte.compare(rightByte)
+		end 'differs'
+	end 'eachByte'
+
+	return left.count().compare(right.count())
+end 'compareBytes'
+
+function byteAt(bytes ByteArray, position BytePosition) returns Byte
+	return try bytes.get(position) otherwise panic("byteAt: every caller checks the position against count()")
+end 'byteAt'
+
+extension int
+	function asciiLowered() returns Byte
+		return match self 'letterCase'
+			'A' to 'Z' gives self - 'A' + 'a'
+			default gives self
+		end 'letterCase'
+	end 'asciiLowered'
+end 'int'
+
+function byteFold(foldCase bool) returns ByteFold
+	if foldCase 'fold'
+		return function(b Byte) gives b.asciiLowered()
+	end 'fold'
+
+	return function(b Byte) gives b
+end 'byteFold'
+
+interface KeyReader
+	function read(text ByteArray) returns SortKey
+end 'KeyReader'
+
+type TextKey implements KeyReader
+	var fold as ByteFold
+
+	static function create(fold ByteFold) returns Self
+		return Self{fold: fold}
+	end 'create'
+
+	function read(text ByteArray) returns SortKey
+		var folded = ByteArray.create()
+		folded.reserve(text.count())
+
+		for b in text 'eachByte'
+			folded.push(self.fold(b))
+		end 'eachByte'
+
+		return SortKey.text(folded)
+	end 'read'
+end 'TextKey'
+
+type NumberKey implements KeyReader
+	var whenUnparsed as SortNumber
+
+	static function create(whenUnparsed SortNumber) returns Self
+		return Self{whenUnparsed: whenUnparsed}
+	end 'create'
+
+	function read(text ByteArray) returns SortKey
+		var first = 0
+
+		while first < text.count() and isBlank(byteAt(text, position: first)) 'skipBlanks'
+			first = first + 1
+		end 'skipBlanks'
+
+		var stop = first
+
+		if stop < text.count() and byteAt(text, position: stop) == '-' 'sign'
+			stop = stop + 1
+		end 'sign'
+
+		while stop < text.count() and isDigit(byteAt(text, position: stop)) 'eachDigit'
+			stop = stop + 1
+		end 'eachDigit'
+
+		let digits = try text.slice(first, endIndex: stop) otherwise panic("NumberKey.read: the leading number lies inside the text")
+
+		let parsed = try int.fromString(String.from(digits)) otherwise 'notANumber'
+			return SortKey.number(self.whenUnparsed)
+		end 'notANumber'
+
+		return SortKey.number(parsed as SortNumber)
+	end 'read'
+end 'NumberKey'
+
+type KeyMaker
+	var field as FieldNumber
+	var reader as KeyReader
+
+	static function create(field FieldNumber, reader KeyReader) returns Self
+		return Self{field: field, reader: reader}
+	end 'create'
+
+	function keyOf(line String) returns SortKey
+		let bytes = line.toByteArray()
+
+		if self.field == wholeLine 'everything'
+			return self.reader.read(bytes)
+		end 'everything'
+
+		let (first, stop, found) = fieldBounds(bytes, field: self.field)
+
+		if not found 'absent'
+			return SortKey.missing
+		end 'absent'
+
+		return self.reader.read(try bytes.slice(first, endIndex: stop) otherwise panic("keyOf: fieldBounds answers inside the line"))
+	end 'keyOf'
+end 'KeyMaker'
+
+function fieldBounds(bytes ByteArray, field FieldNumber) returns (BytePosition, BytePosition, bool)
+	var position = 0
+	var remaining = field
+
+	while remaining > 0 'eachField'
+		while position < bytes.count() and isBlank(byteAt(bytes, position: position)) 'skipBlanks'
+			position = position + 1
+		end 'skipBlanks'
+
+		if position == bytes.count() 'runOut'
+			return (position, position, false)
+		end 'runOut'
+
+		var stop = position
+
+		while stop < bytes.count() and not isBlank(byteAt(bytes, position: stop)) 'scanField'
+			stop = stop + 1
+		end 'scanField'
+
+		remaining = remaining - 1
+
+		if remaining == 0 'thisIsTheOne'
+			return (position, stop, true)
+		end 'thisIsTheOne'
+
+		position = stop
+	end 'eachField'
+
+	return (position, position, false)
+end 'fieldBounds'
+
+function isBlank(b Byte) returns bool
+	return b == Blank.space or b == Blank.tab
+end 'isBlank'
+
+function isDigit(b Byte) returns bool
+	return b >= '0' and b <= '9'
+end 'isDigit'
+
+type Row
+	export var key as SortKey
+	export var text as String
+
+	static function create(key SortKey, text String) returns Self
+		return Self{key: key, text: text}
+	end 'create'
+end 'Row'
+
+function rowsFrom(lines LineArray, maker KeyMaker) returns RowArray
+	var rows = RowArray.create()
+	rows.reserve(lines.count())
+
+	for line in lines 'eachLine'
+		rows.push(Row.create(maker.keyOf(line), text: line))
+	end 'eachLine'
+
+	return rows
+end 'rowsFrom'
+
+type Sorter
+	var maker as KeyMaker
+	var compare as RowComparator
+
+	static function create(settings SortSettings) returns Self
+		return Self{maker: settings.keyMaker(), compare: settings.comparator()}
+	end 'create'
+
+	export function sortLines(lines LineArray) returns LineArray
+		var rows = sortRows(lines)
+		var sorted = LineArray.create()
+		sorted.reserve(rows.count())
+
+		for row in rows 'eachRow'
+			sorted.push(row.text.clone())
+		end 'eachRow'
+
+		return sorted
+	end 'sortLines'
+
+	function sortRows(lines LineArray) returns RowArray
+		let rows = rowsFrom(lines, maker: self.maker)
+		return sortedRun(rows, first: 0, stop: rows.count(), compare: self.compare)
+	end 'sortRows'
+end 'Sorter'
+
+enum ReadError implements Error
+	unreadable
+end 'ReadError'
+
+function readLines(path FilePath) returns LineArray throws ReadError
+	let text = try File.readText(path) otherwise throw ReadError.unreadable
+	return splitLines(text)
+end 'readLines'
+
+function splitLines(text String) returns LineArray
+	var lines = text.split(lineFeed)
+
+	if lines.isEmpty() 'nothing'
+		return lines
+	end 'nothing'
+
+	let last = try lines.last() otherwise panic("splitLines: a non-empty array has a last element")
+
+	if last.isEmpty() 'trailingNewline'
+		lines.truncate(lines.count() - 1)
+	end 'trailingNewline'
+
+	return lines
+end 'splitLines'
+
+function standardInputLines() returns LineArray
+	var stdin = Console.stdin()
+	var lines = LineArray.create()
+
+	while true 'eachLine'
+		let line = try stdin.readLine() otherwise break
+		lines.push(line)
+	end 'eachLine'
+
+	return lines
+end 'standardInputLines'
+
+function readInput(options Options, summary RunSummary) returns LineArray
+	if options.paths.isEmpty() 'standardInput'
+		return standardInputLines()
+	end 'standardInput'
+
+	var reads = ReadPromiseArray.create()
+
+	for path in options.paths 'startReads'
+		reads.push(async readLines(path))
+	end 'startReads'
+
+	var lines = LineArray.create()
+
+	for (read, pending) in reads.withIterator() 'finishReads'
+		let fileLines = try await pending otherwise 'unreadable'
+			let path = try options.paths.get(read.index()) otherwise panic("readInput: one read per FILE")
+			printError("msort: {path}: cannot read\n")
+			summary.troubled = true
+			continue
+		end 'unreadable'
+
+		lines.append(fileLines)
+	end 'finishReads'
+
+	return lines
+end 'readInput'
+
+function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker, summary RunSummary) returns ChunkArray
+	var sorters = SorterArray.create()
+
+	for _ in 0 upto workers 'spawnWorkers'
+		sorters.push(spawn Sorter.create(settings.clone()))
+	end 'spawnWorkers'
+
+	var replies = SortedPromiseArray.create()
+	var first = 0
+
+	for slot in 0 upto workers 'sendChunks'
+		var sorter = try sorters.get(slot) otherwise panic("sortedChunks: one sorter per slot")
+		let remaining = (workers - slot) as WorkerCount
+		let share = (lines.count() - first) / remaining
+		let stop = first + share
+		var chunk = LineArray.create()
+		chunk.reserve(share as ElementIndex)
+
+		for position in first upto stop 'eachLine'
+			let line = try lines.get(position) otherwise panic("sortedChunks: every position lies inside the input")
+			chunk.push(line.clone())
+		end 'eachLine'
+
+		replies.push(sorter.sortLines(chunk))
+		first = stop
+	end 'sendChunks'
+
+	var chunks = ChunkArray.create()
+
+	for (received, reply) in replies.withIterator() 'receiveChunks'
+		let sorted = try await reply otherwise 'stopped'
+			printError("msort: worker {received.index()} stopped before it answered\n")
+			summary.troubled = true
+			continue
+		end 'stopped'
+
+		chunks.push(rowsFrom(sorted, maker: maker))
+	end 'receiveChunks'
+
+	for sorter in sorters 'shutDown'
+		sorter.shutdown()
+	end 'shutDown'
+
+	return chunks
+end 'sortedChunks'
+
+function rowAt(rows RowArray, position LineCount) returns Row
+	return try rows.get(position) otherwise panic("rowAt: every caller checks the position against count()")
+end 'rowAt'
+
+function sortedRun(rows RowArray, first LineCount, stop LineCount, compare RowComparator) returns RowArray
+	if stop - first > 1 'severalRows'
+		let middle = first + (stop - first) / 2
+		return mergedPair(sortedRun(rows, first: first, stop: middle, compare: compare), right: sortedRun(rows, first: middle, stop: stop, compare: compare), compare: compare)
+	end 'severalRows'
+
+	var run = RowArray.create()
+
+	if stop > first 'oneRow'
+		run.push(rowAt(rows, position: first))
+	end 'oneRow'
+
+	return run
+end 'sortedRun'
+
+function mergedPair(left RowArray, right RowArray, compare RowComparator) returns RowArray
+	var merged = RowArray.create()
+	merged.reserve(left.count() + right.count())
+	var nextLeft = 0
+	var nextRight = 0
+
+	while nextLeft < left.count() or nextRight < right.count() 'eachRow'
+		if nextRight == right.count() 'onlyLeftIsLeft'
+			merged.push(rowAt(left, position: nextLeft))
+			nextLeft = nextLeft + 1
+		end 'onlyLeftIsLeft' else if nextLeft == left.count() 'onlyRightIsLeft'
+			merged.push(rowAt(right, position: nextRight))
+			nextRight = nextRight + 1
+		end 'onlyRightIsLeft' else if compare(rowAt(right, position: nextRight), rowAt(left, position: nextLeft)) == Ordering.lessThan 'rightSortsLower'
+			merged.push(rowAt(right, position: nextRight))
+			nextRight = nextRight + 1
+		end 'rightSortsLower' else 'leftKeepsItsPlace'
+			merged.push(rowAt(left, position: nextLeft))
+			nextLeft = nextLeft + 1
+		end 'leftKeepsItsPlace'
+	end 'eachRow'
+
+	return merged
+end 'mergedPair'
+
+function chunkAt(chunks ChunkArray, position ChunkPosition) returns RowArray
+	return try chunks.get(position) otherwise panic("chunkAt: every caller checks the position against count()")
+end 'chunkAt'
+
+function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
+	var round = chunks
+
+	while round.count() > 1 'eachRound'
+		var joined = ChunkArray.create()
+		var slot = 0
+
+		while slot < round.count() 'eachPair'
+			let left = chunkAt(round, position: slot)
+
+			if slot + 1 == round.count() 'anOddOneOut'
+				joined.push(left)
+				break
+			end 'anOddOneOut'
+
+			joined.push(mergedPair(left, right: chunkAt(round, position: slot + 1), compare: compare))
+			slot = slot + 2
+		end 'eachPair'
+
+		round = joined
+	end 'eachRound'
+
+	if round.isEmpty() 'nothingToMerge'
+		return RowArray.create()
+	end 'nothingToMerge'
+
+	return chunkAt(round, position: 0)
+end 'mergeChunks'
+
+function sortedRows(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker, summary RunSummary) returns RowArray
+	if workers == fewestWorkers 'inProcess'
+		return Sorter.create(settings.clone()).sortRows(lines)
+	end 'inProcess'
+
+	return mergeChunks(sortedChunks(lines, settings: settings, workers: workers, maker: maker, summary: summary), compare: settings.comparator())
+end 'sortedRows'
+
+function withoutDuplicates(rows RowArray, compare RowComparator) returns RowArray
+	var kept = RowArray.create()
+
+	for row in rows 'eachRow'
+		if not kept.isEmpty() 'hasPrevious'
+			let previous = try kept.last() otherwise panic("withoutDuplicates: a non-empty array has a last element")
+
+			if compare(previous, row) == Ordering.equalTo 'sameKey'
+				continue
+			end 'sameKey'
+		end 'hasPrevious'
+
+		kept.push(row)
+	end 'eachRow'
+
+	return kept
+end 'withoutDuplicates'
+
+function printRows(rows RowArray)
+	var out = StringBuilder.create()
+
+	for row in rows 'eachRow'
+		out.append("{row.text}{lineFeed}")
+	end 'eachRow'
+
+	print(out.build())
+end 'printRows'
+
+type RunSummary
+	export var linesRead as LineCount = 0
+	export var workers as WorkerCount = fewestWorkers
+	export var troubled = false
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'RunSummary'
+
+function printUsage(problem UsageError)
+	printError("msort: {problem.message()}\n\n")
+	printError("usage: msort [flags] [FILE...]\n")
+	printError("Sorts the lines of every FILE together, or of standard input, and prints them in order.\n\n")
+
+	for flag in Flag.allCases 'eachFlag'
+		printError("  {flag.rawValue}\t{flag.summary()}\n")
+	end 'eachFlag'
+
+	printError("  {keyOptionPrefix}N\tcompare field N, counting from {firstField}; blanks separate fields\n")
+	printError("  {jobsOptionPrefix}N\tsort with N parallel workers, {fewestWorkers} to {mostWorkers}\n")
+end 'printUsage'
+
+function main() returns ExitCode
+	let startedAt = Clock.nowNanos()
+
+	let options = try Options.parse(CommandLine.args()) otherwise (problem) 'badUsage'
+		printUsage(problem)
+		return Outcome.troubled
+	end 'badUsage'
+
+	var summary = RunSummary.create()
+	let settings = options.sortSettings()
+	let maker = settings.keyMaker()
+	let compare = settings.comparator()
+	let lines = readInput(options, summary: summary)
+	summary.linesRead = lines.count()
+
+	summary.workers = options.workersFor(lines.count())
+	let sorted = sortedRows(lines, settings: settings, workers: summary.workers, maker: maker, summary: summary)
+	printRows(withoutDuplicates(sorted, compare: compare) if options.unique else sorted)
+
+	if options.stats 'stats'
+		let elapsed = Clock.elapsedNanos(startedAt) / nanosPerMillisecond
+		printError("lines read: {summary.linesRead}\nworkers: {summary.workers}\nelapsed ms: {elapsed}\n")
+	end 'stats'
+
+	return Outcome.troubled if summary.troubled else Outcome.sorted
+end 'main'

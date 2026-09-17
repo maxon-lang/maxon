@@ -1,0 +1,428 @@
+---
+title: "A tour: building sort"
+description: A guided read of examples/msort.maxon — a parallel line sorter in about 700 lines of Maxon, with the code on the left and what it teaches on the right.
+sidebar:
+  order: 4
+---
+
+import TourStep from '../../../../components/TourStep.astro';
+
+[Your first program](/docs/getting-started/first-program/) showed the language one feature at a time.
+This page reads a whole program instead: `examples/msort.maxon`, a working replacement for Unix
+`sort` that sorts its input across every processor on the machine.
+
+It is the file you can read on the [Examples](/examples/) page, unedited. Nothing in it is a toy: it
+parses a real command line, compares keys the way `sort` documents, reads its input files
+concurrently, sorts chunks of them on separate processors, and merges the results back into one
+ordered stream.
+
+**The program carries no comments.** That is deliberate — the code is meant to answer for itself, and
+a tour is where the *why* belongs. Read the left column top to bottom and you will have read the
+whole program; read the right column and you will have met most of the language.
+
+## What it does
+
+```
+msort [flags] [FILE...]
+```
+
+It reads the lines of every `FILE` — or of standard input when you name none — sorts them, and
+prints them.
+
+| Flag | Meaning |
+| --- | --- |
+| `-n` | compare keys as whole numbers, not as text |
+| `-r` | order from the greatest key down |
+| `-u` | print only the first line of each run of equal keys |
+| `-f` | ignore ASCII letter case |
+| `--key=N` | compare field `N` instead of the whole line; blanks separate fields |
+| `--jobs=N` | sort with `N` parallel workers |
+| `--stats` | report lines, workers and elapsed time on standard error |
+| `--` | end the flags, so a `FILE` may start with `-` |
+
+Keys compare byte by byte, and the sort is **stable**: lines with equal keys come out in the order
+they went in. It exits `0` normally and `2` when a flag is wrong or a file cannot be read.
+
+On a 12-processor Windows machine, sorting a 2,000,000-line, 50 MB file takes **10.3 s with one
+worker and 4.7 s with eight** — the same output, byte for byte, at every worker count.
+
+## Names before anything else
+
+<TourStep from={1} to={18}>
+The file opens with nothing but names, which is a habit the language rewards.
+
+The first group are **[ranged type aliases](/docs/language/ranged-typealiases/)**. A number in a type
+position states the values it may hold, and that range is part of the contract:
+`WorkerCount = int(1 to 256)` cannot hold `0`, so no code downstream has to wonder whether a worker
+count of zero is possible. `--jobs=0` is rejected once, where the option is parsed, and after that
+the type carries the guarantee — which is also what lets the division at line 522 be written without
+a divide-by-zero check.
+
+The rest are **container aliases**. Maxon's generic types are instantiated by naming them:
+`Array with FilePath` is an array of paths, `Promise with (LineArray, ReadError)` is the not-yet-answer
+of a coroutine, and `Array with Sorter.handle` is an array of handles to a service that does not
+exist yet. A generic type is instantiated *through* an alias, so every container in the program
+arrives wearing a domain name rather than its machinery. See
+[Collections](/docs/stdlib/collections/).
+
+`ByteFold` and `RowComparator` are **function types** — values that take arguments and give an
+answer. Both will be chosen once, from a flag, and passed around like any other value.
+</TourStep>
+
+<TourStep from={20} to={41}>
+Every literal that means something gets a name. `mostWorkers` is `256` in exactly one place, and
+`WorkerCount`'s range quotes it; `leastLinesPerWorker` is the judgement that a worker is not worth
+starting for fewer than 64 lines, written down where it can be argued with.
+
+A top-level `let` is readable from anywhere, including from inside a service running on another
+thread. A top-level `var` is not — that asymmetry is how the language keeps parallel code honest,
+and it is enforced, not advised (see [Variables](/docs/language/variables/)).
+
+**Enums can carry a value.** `Blank` names two byte constants so the scanner below can say
+`isBlank(b)` instead of comparing to `0x20`; `Outcome` gives the program's exit codes names, with
+`sorted` deliberately `0` and `troubled` deliberately `2`, matching what `sort` returns.
+</TourStep>
+
+<TourStep from={43} to={79}>
+Two more enums, and both do work.
+
+`Flag`'s raw values are the **strings a person types**. That is the whole flag table: the spelling,
+and — through `summary()` — the help text, in one place. Add a flag and the compiler makes you
+handle it at the one `match` that applies flags, and the usage message grows by itself.
+
+`UsageError` **implements `Error`**, which is all it takes to be throwable. An error in Maxon is an
+ordinary enum, not a class hierarchy and not a string: cheap to make, exhaustive to handle, and
+impossible to confuse with another kind of failure. See
+[Error handling](/docs/language/error-handling/).
+
+Both bodies are one `match` **expression**. `match self 'describe' … end 'describe'` produces a
+value rather than assigning one, each arm using `gives`. Every case is listed; there is no
+`default`, and if you add a case the compiler stops you here. The block label `'describe'` is
+required on `end`, which is what lets you nest these and still see what closed.
+
+Note the `{keyOptionPrefix}N` inside a string: **string interpolation** reads the same constants the
+parser does, so the message cannot drift from the rule.
+</TourStep>
+
+## Reading the command line
+
+<TourStep from={81} to={121}>
+`Options` is a plain record. Its fields carry **defaults**, so `Self{jobs: availableWorkers()}`
+builds a complete value while naming one field. `Self` is how a type refers to itself inside its own
+body; a record literal like that may only be written there, which keeps construction in the type's
+hands.
+
+`export` on a field means *readable outside this type*, not *public API* — it is visibility, and the
+rest of the program reads `options.paths` because of it.
+
+The argument loop is the language's control flow at full strength. `args.withIterator()` hands back
+both the position and the value. Each branch of the `if`/`else if` chain **names what it decides**
+(`'aFileToSort'`, `'keyOption'`, `'namedFlag'`), and that name is repeated on its `end` — so a chain
+this long stays readable and a mis-nested block is a compile error rather than a puzzle.
+
+`try FilePath.from(text) otherwise throw UsageError.invalidPath` is the everyday shape of error
+handling: a call that can fail, and, on the same line, what to do instead. `Flag.fromRawValue` turns
+a typed string back into a case and throws when nothing matches, so an unknown flag is caught by the
+enum rather than by a chain of comparisons.
+
+The `match flag 'apply'` at the end uses `then` instead of `gives` because the arms *do* something
+rather than produce something. It lists every case, and that is the check that stops a new flag
+being parsed and then silently ignored.
+</TourStep>
+
+<TourStep from={123} to={175}>
+Three small statics, and the reason there are three rather than one.
+
+`optionNumber` is the shared half: `CommandLine.optionValue("--jobs=8")` gives `"8"`, and
+`int.fromString` throws if it is not a number. This is the **block form** of `try` — a body, then
+`otherwise throws UsageError.notANumber`, which converts one error into another for the caller.
+
+`parseField` and `parseJobs` then differ only in their bounds and their complaint. Each returns a
+*narrower* type than it computed, and the compiler accepts that because the guard above proves the
+value is in range. That is [ranged types](/docs/language/ranged-typealiases/) doing the work a
+comment would otherwise do.
+
+`availableWorkers` calls **`Runtime.processorCount()`** — the number of processors the scheduler will
+actually use, which honours `MAXON_MAX_PROCS`. That is the default worker count; `--jobs=N` overrides
+it, and `workersFor` lowers it again when there are too few lines to be worth the threads.
+</TourStep>
+
+## What a key is
+
+<TourStep from={177} to={202}>
+`SortSettings` is the four answers that decide an ordering, and the two things you can build from
+them. Both `keyMaker()` and `comparator()` are decided **once**, before any line is read, rather than
+re-tested per comparison.
+
+`comparator()` returns a **closure** — a function written as a value. Neither of these two captures
+anything from around it; they differ only in which way round they hand their arguments to the same
+comparison, which is the whole of `-r`. A comparison that ran `if reverse` a few million times would
+be the same program, slower and less clear.
+
+The returned value's type is `RowComparator`, the alias from line 13. From here on, "how to order two
+rows" is a value the program passes around — to the sorter, to the merge, to the duplicate filter —
+and none of them knows or cares which of the two it is holding.
+</TourStep>
+
+<TourStep from={204} to={216}>
+**A [union](/docs/language/enums-unions/) is a value that is exactly one of several shapes, and
+carries different data in each.** A sort key is one of three things: a number, some bytes, or nothing
+at all — that last one for a line that has fewer fields than `--key` asked for.
+
+`match self` takes the union apart. `number(value)` both *tests* the shape and *binds* what it
+carries, in one move; `missing` has nothing to bind. There is no way to read `value` without having
+established which shape you have, which is the point of the construct.
+
+A union may carry methods, so `compare` sits with the data it compares rather than in a helper
+somewhere else.
+</TourStep>
+
+<TourStep from={218} to={240}>
+Three small functions that, between them, define a **total order over every pair of keys**:
+`missing` before `number` before `text`.
+
+Mixed kinds cannot actually arise — one run reads every key with the same reader — but writing the
+answer down is cheaper than arguing that they cannot, and it leaves no arm for a future change to
+fall through.
+
+That matters because Maxon does not allow a bare `default`. Each `match` names every case, and
+`number or` / `text gives …` folds two cases with one answer into one arm — each alternative on its
+own line, which is the grammar's way of keeping a long arm readable.
+</TourStep>
+
+<TourStep from={242} to={276}>
+`String` has no `<`. Ordering text means deciding what "before" means, and the language declines to
+guess, so a program that wants byte order says so: `compareBytes` walks both key arrays to the first
+difference, then falls back to length.
+
+`byteAt` exists because `Array.get` **throws** — indexing is a fallible operation, not an undefined
+one. Every caller here has already checked the position against `count()`, so the handler is
+`otherwise panic(…)` with the reason it cannot happen. A `panic` is a claim about the program; a
+`throw` is a claim about the input.
+
+`extension int` adds a method to a **primitive type** — `self` is the byte, and `'A' to 'Z'` is a
+range arm matching any byte in it. Extensions are how the language avoids free functions with names
+like `int_asciiLowered`.
+
+`byteFold` is the `-f` flag in its final form: pick one of two functions once, and let the rest of
+the program call it without a branch.
+</TourStep>
+
+<TourStep from={278} to={299}>
+**An [interface](/docs/language/composite-types/) is a set of methods a type can promise to have.**
+`KeyReader` has one: turn some bytes into a key.
+
+`TextKey` keeps the fold chosen above and applies it to every byte. The folded bytes *are* the key —
+computed once per line rather than on every comparison, which for `n log n` comparisons is the
+difference between a program you would use and one you would not.
+
+A value held at an interface type is a **fat pointer**: the value, plus a table of the methods its
+type promised. Calling through it is an indirect call, and the type on the other side is not known
+until run time — which is exactly what lets the same `KeyMaker` code serve both readers.
+</TourStep>
+
+<TourStep from={301} to={333}>
+The second reader. `-n` makes `msort` compare the **leading whole number** of the key, the way
+`sort -n` does: skip blanks, take an optional `-`, take digits, and stop.
+
+`try int.fromString(…) otherwise 'notANumber' … end` is the third shape of `try`: a handler **block**
+that can run several statements, and here simply returns a different answer. A key that holds no
+number at all counts as `whenUnparsed`, which the caller supplies rather than this type inventing —
+so the rule lives in one place and is visible from outside.
+
+`text.slice(first, endIndex: stop)` throws, like `get`, and again the caller has just computed both
+bounds, so it is a `panic` with its reason.
+</TourStep>
+
+<TourStep from={335} to={358}>
+`KeyMaker` puts the two halves together: **which** bytes of the line are the key, and **how** to read
+them. It holds `reader` at the interface type, so it never learns whether it has a `TextKey` or a
+`NumberKey`.
+
+`let (first, stop, found) = fieldBounds(…)` **destructures a tuple**. Maxon functions can return
+several values without a struct for the occasion, and the caller takes them apart by name at the
+binding.
+
+`found` is what produces `SortKey.missing`: a line with fewer fields than `--key` asked for has no
+key rather than an empty one, and the union arm says so.
+</TourStep>
+
+<TourStep from={360} to={397}>
+Field scanning, in the loop everyone writes once. `while` blocks carry labels like every other block,
+which is what keeps three nested loops legible.
+
+Both early returns hand back the same tuple shape, with `found` false — there is no sentinel index
+and no `-1`, because a function that cannot answer says so in the answer's type.
+
+`isBlank` and `isDigit` are one-line predicates over the byte constants named at the top. `'0'` and
+`'9'` are byte literals: a character in single quotes *is* a number here, which is why the
+comparison reads the way it does.
+</TourStep>
+
+## Rows, and the sort itself
+
+<TourStep from={399} to={417}>
+A `Row` is a line and its key. Building all of them up front — one key per line, instead of one per
+comparison — is the single decision that makes the program fast, and it is four lines long.
+
+`rows.reserve(lines.count())` asks for the memory once. `Array` grows by itself; saying how much you
+will need just avoids the copies.
+</TourStep>
+
+<TourStep from={419} to={443}>
+**This is the type that becomes a service, and it is an ordinary type.**
+
+`export` on a method means something sharper here than on a field: it marks the **message API** —
+what another thread may ask this type to do. `sortLines` is exported, so it can be sent; `sortRows`
+is not, so it is an ordinary method that only code holding the value itself can call. The program
+uses both: the parallel path sends `sortLines`, and the one-worker path calls `sortRows` directly on
+a plain `Sorter` that no thread ever hears about.
+
+The `.clone()` on line 433 is the ownership rule made visible. A reply crosses a thread boundary, so
+what it carries must be owned by nobody else — `rows` still holds those strings, so the reply gets
+copies. Maxon tracks that statically: without the clone, this program does not compile. See the
+[memory model](/docs/language/memory-model/).
+</TourStep>
+
+## Reading the input
+
+<TourStep from={445} to={480}>
+`File.readText` throws `FileReadError`; `readLines` turns that into its own `ReadError`, because the
+caller's concern is "this file could not be read", not which layer noticed.
+
+`splitLines` drops the empty piece a trailing newline leaves behind — the fencepost every line reader
+has to get right once.
+
+`standardInputLines` is the no-arguments path. `stdin.readLine()` throws at end of input, so
+`otherwise break` is the loop's exit condition: the failure *is* the terminator, and there is no flag
+to check and forget.
+</TourStep>
+
+<TourStep from={482} to={507}>
+**`async` starts a coroutine.** `async readLines(path)` returns immediately with a
+`Promise with (LineArray, ReadError)` — the answer, or the failure, later. Starting one per file lets
+the waiting overlap: while the operating system fetches the first file, the second request is already
+out.
+
+`try await pending` takes the answer back, and it is a `try` because the coroutine may have thrown.
+The handler names the file it could not read, marks the run troubled, and carries on with the rest —
+one bad path does not cost you the sort.
+
+The loop awaits **in argument order**, not completion order, which is why `msort a.txt b.txt` puts
+`a.txt`'s lines in the array first regardless of which file arrived first. Coroutines are for
+overlapping *waiting*; they do not use a second processor. That is what the next step is for. See
+[async](/docs/language/async/).
+</TourStep>
+
+## Using the processors
+
+<TourStep from={509} to={534}>
+**`spawn` turns a type into a service running on its own green thread**, scheduled across the
+machine's processors. `spawn Sorter.create(settings.clone())` runs the factory *over there* and hands
+back a `Sorter.handle`.
+
+Each worker therefore builds its own `KeyMaker` and its own comparator from the settings it was
+given. Nothing is shared: a service owns its state outright, which is what makes plain, unlocked
+reference counting safe inside it.
+
+Then the chunks. Each worker gets a **contiguous** slice — contiguous rather than every N-th line,
+because the merge below can only preserve the input order of equal keys if each worker's lines were
+already in order relative to each other.
+
+The chunk is built **at the send**, line by line, with `line.clone()`. Sending moves a value: the
+service becomes its owner and this frame gives up what it held. A chunk assembled from lines that
+`lines` still holds would have two owners on two threads, and the compiler refuses it — so the copy
+is written where it happens, rather than hidden inside a helper.
+
+`sorter.sortLines(chunk)` does not block. It posts the message and hands back a promise.
+</TourStep>
+
+<TourStep from={536} to={553}>
+The replies come back **in the order they were sent**, not the order the workers finished — which is
+what makes the output deterministic. The same input gives the same bytes at one worker or at
+sixty-four.
+
+`try await reply otherwise 'stopped'` handles the one failure a message always has: the service can
+be gone. `sortLines` declares no errors of its own, so `ServiceError` is the whole of what a reply
+can carry.
+
+Each reply is turned back into rows — the wire carries lines, so main re-reads their keys for the
+merge. Then every worker is shut down explicitly, because a service outlives the function that
+spawned it until someone says otherwise.
+</TourStep>
+
+<TourStep from={555} to={597}>
+The sort, and the reason the program contains one at all: `mergedPair` is used **twice**, at two
+different scales.
+
+`sortedRun` is a recursive merge sort over one worker's rows: split, sort each half, merge. A run of
+one row is already sorted, which is where it bottoms out.
+
+`mergedPair` walks two ordered runs and takes the lower head each time. The condition is written as
+*"take the right one only if it sorts strictly lower"* — so equal keys always take the left, and the
+sort comes out **stable**. Reversing that comparison would produce output that is still sorted and no
+longer reproducible.
+</TourStep>
+
+<TourStep from={599} to={638}>
+The cross-worker merge: the same `mergedPair`, applied in **rounds**. Twelve chunks become six, then
+three, then two, then one. Merging them one after another into a growing array would copy the early
+rows once per chunk; halving the list copies each row `log₂ k` times instead.
+
+`sortedRows` is where the two worlds meet. One worker means no threads at all: build a plain
+`Sorter`, call the method that was never exported, and return. More than one means spawn, send, await
+and merge. Same type, same code path through `KeyMaker` and the comparator — the only difference is
+who runs it.
+</TourStep>
+
+## Finishing
+
+<TourStep from={640} to={689}>
+`-u` is a pass over the sorted rows that keeps the first of each run of equal keys. It asks the same
+comparator the sort used, so "equal" means exactly what it meant a moment ago.
+
+`printRows` builds one string and prints it once. A `StringBuilder` appends without re-copying what
+it already holds, and `{row.text}` inside a string literal is interpolation again.
+
+`printUsage` walks `Flag.allCases` — the compiler generates it — so the help text cannot fall behind
+the enum. The two options that take a value are printed beside it, with their bounds read from the
+same constants that enforce them.
+</TourStep>
+
+<TourStep from={691} to={716}>
+`main` returns an `ExitCode`, and `Outcome.troubled` *is* one, because the enum's raw values are the
+exit codes.
+
+The whole program is here in twenty-five lines: parse, decide the ordering once, read, choose a
+worker count, sort, print. Everything above is what makes these lines mean something.
+
+`return Outcome.troubled if summary.troubled else Outcome.sorted` is an **`if` expression** — the
+conditional produces a value rather than choosing a statement. It is the same form as
+`mostWorkers if processors > mostWorkers else processors` back at line 155.
+</TourStep>
+
+## What this program does not show
+
+`msort` uses the parts of Maxon it needs, and no more. The rest of the language is here:
+
+- **Your own generics** — `type Stack with T`. The program instantiates library generics
+  (`Array with String`) but declares none. See [Composite types](/docs/language/composite-types/).
+- **Namespaces and multi-file projects** — this is one file. See
+  [Namespaces](/docs/language/namespaces/) and the [build system](/docs/language/build-system/).
+- **Tests** — `test 'name' … end`, run by `maxon test`. See [Testing](/docs/language/testing/).
+- **The rest of the standard library** — [JSON and binary data](/docs/stdlib/data/),
+  [HTTP and sockets](/docs/stdlib/network/), subprocesses and shared memory in
+  [I/O](/docs/stdlib/io/) and [Runtime](/docs/stdlib/runtime/).
+- **Pattern matching's wider forms** — see [Patterns and errors](/docs/language/patterns-and-errors/).
+
+## Run it yourself
+
+The source is on the [Examples](/examples/) page and in `examples/msort.maxon` in the repository.
+
+```
+maxon build examples/msort.maxon -o msort
+./msort --stats --jobs=4 some-big-file.txt > sorted.txt
+```
+
+`examples/maxgrep.maxon` on the same page is a second program of this size — a parallel recursive
+`grep` with its own regular-expression engine — if you want to see the same ideas used differently.

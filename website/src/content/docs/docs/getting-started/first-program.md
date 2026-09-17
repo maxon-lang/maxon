@@ -96,7 +96,7 @@ surrounding code.
 
 ## Where to go next
 
-- [A tour: building grep](/docs/getting-started/tour/) — the same ideas at full size, in a working
-  parallel `grep`: a regex engine, recursive directory walks, and a pool of spawned workers.
+- [A tour: building sort](/docs/getting-started/tour/) — the same ideas at full size, in a working
+  parallel `sort`: keys, coroutines that read the input files at once, and a pool of spawned workers.
 - [Language Reference](/docs/language/overview/) — the complete language, section by section.
 - [Examples](/examples/) — full, real programs you can compile.
