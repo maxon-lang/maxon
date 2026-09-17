@@ -1,6 +1,6 @@
 ---
 name: land
-description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, rebase on origin/main, then ONE gate battery (full suite + wasm lane + self-compile), commit and push. Main checkout, no worktree, no branch. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any compiler change — HOWEVER LARGE it turns out to be: the task is done AS ONE CHUNK, in ONE commit, with no slicing and no escalation out of this process. Invoke as `/land <what to do>`.
+description: Implement one self-contained change end to end and push it — decide the MINIMAL spec set and watch it go RED first, write the code, green the set on a filter, optimize, independent review, document it, rebase on origin/main, then ONE gate battery (full suite + wasm lane + self-compile), commit and push. Main checkout, no worktree, no branch. Use for a bug fix, a missing diagnostic, a small feature, a defect found by hand, or any compiler change — HOWEVER LARGE it turns out to be: the task is done AS ONE CHUNK, in ONE commit, with no slicing and no escalation out of this process. Invoke as `/land <what to do>`.
 ---
 
 # Land one change
@@ -44,7 +44,7 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 
 > ## ⛔⛔ ONE CHANGE, ONE CHUNK, ONE COMMIT. **DO NOT SLICE THE TASK.**
 >
-> **The task you were given is the unit.** It goes through §1–§8 **once**, whole, and reaches `main` as
+> **The task you were given is the unit.** It goes through §1–§9 **once**, whole, and reaches `main` as
 > **one commit**. ⛔ **No phases, no "part 1 of 3", no landing the reachable half and filing the rest,
 > no per-piece commit-and-push, no separate red/green cycle per piece.** A task cut into four is not
 > four small `/land`s; it is one `/land` done four times, badly.
@@ -55,7 +55,7 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 > unit of work; it is an unintegrated one that lands half-finished on `main`.
 >
 > **Three things go wrong, and the first is the one that made this process worth writing:**
-> - **The battery multiplies.** §7 is the expensive part and it runs ONCE precisely because the change
+> - **The battery multiplies.** §8 is the expensive part and it runs ONCE precisely because the change
 >   is one chunk. Four slices is four rebases, four full suites, four wasm lanes, four ~3-minute
 >   self-compiles and four reviews — **four times the gate cost**, for the same code.
 > - **`main` carries half a mechanism between slices**, and the next agent builds on it. An `export`
@@ -68,9 +68,9 @@ that answers wrong, a feature however large. There is no heavier sibling to esca
 > ✅ **What IS allowed — and it is most of the work — is delegating LABOUR.** Every step of this process
 > is handed to an agent (that is the next section), and several implementer agents may run at once on
 > **disjoint files**, or sequentially when the files overlap. **That is not slicing**: they share your
-> one tree, you integrate as their work arrives, and the whole thing goes through §3–§8 as a unit and
+> one tree, you integrate as their work arrives, and the whole thing goes through §3–§9 as a unit and
 > lands as one commit. **Cutting up the WORK is the method; cutting up the DELIVERABLE is the failure.**
-> Also fine: fixing a pre-existing red **you did not cause** in its own commit first (§7) — somebody
+> Also fine: fixing a pre-existing red **you did not cause** in its own commit first (§8) — somebody
 > else's defect, not a slice of your task.
 
 ## The shape — who does what
@@ -86,18 +86,21 @@ gates and the commit.** Agents do the reading and the typing.
 | **3** | Green the set — **on the FILTER, never the full suite** | same agent(s) · **you** integrate and confirm | keep going |
 | **4** | Optimization pass | the **`optimize`** skill, in a dispatched agent, on a trigger · **the ladder read is YOURS** | a ladder you cannot explain |
 | **5** | Independent review | the **`code-review`** skill, in a dispatched agent — never one that wrote the code | fix before the commit |
-| **6** | **Rebase** on `origin/main` | **you** | resolve by hand |
-| **7** | THE BATTERY, once: full suite · wasm lane · **self-compile** | **you** | **stop** |
-| **8** | Commit and push | **you** | a rejected push re-runs §7 |
+| **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a build that no longer compiles |
+| **7** | **Rebase** on `origin/main` | **you** | resolve by hand |
+| **8** | THE BATTERY, once: full suite · wasm lane · **self-compile** | **you** | **stop** |
+| **9** | Commit and push | **you** | a rejected push re-runs §8 |
 
-**Everything before §7 runs on one `--filter`.** That is what makes this lightweight — and it is only
+**Everything before §8 runs on one `--filter`.** That is what makes this lightweight — and it is only
 honest because §1's red was real. The filter is a *proxy* for the suite, and a proxy you never saw fail
 is a proxy for nothing.
 
-⚠ **Steps 4–7 do not reorder.** Optimize *before* review (an optimizer rewrites code and can introduce
+⚠ **Steps 4–8 do not reorder.** Optimize *before* review (an optimizer rewrites code and can introduce
 the very duplication the review exists to catch). Review *before* commit (a review after the commit is a
-bug report; before it, it is a gate). **Rebase before the battery** — a battery run on a tree you then
-rebase has tested something you are not pushing.
+bug report; before it, it is a gate). **Document AFTER the review** — comments are written once, against
+code that has stopped moving, and a documenter running earlier would comment code the review then
+rewrites. **Rebase before the battery** — a battery run on a tree you then rebase has tested something
+you are not pushing.
 
 ## Coordinating: what you delegate, what you keep, and what you never hand over
 
@@ -122,7 +125,7 @@ still runs**, because independence is not a size question.
 - **Reading the RED (§1) and confirming the GREEN (§3)** with your own filtered run.
 - **The `scale-test` ladder read and its `optimization-log.md` row (§4)** — attribution is only
   available now, and only to whoever knows what changed.
-- **The rebase (§6), the battery (§7), the commit and the push (§8).**
+- **The rebase (§7), the battery (§8), the commit and the push (§9).**
 
 ### ⛔ EACH GATE RUNS ONCE, AND THIS TABLE SAYS WHERE
 
@@ -131,11 +134,11 @@ five times per change and exactly one of those runs gates anything.
 
 | Work | Runs | Where | Everywhere else |
 |---|---|---|---|
-| **build** | **only when the binary is stale** | whoever last edited a compiled-in source | ⛔ **nobody builds a current binary** — see the box below |
+| **build** | **only when the binary is stale** | whoever last edited a compiled-in source — usually **§6's documenter**, which is the last editor | ⛔ **nobody builds a current binary** — see the box below |
 | **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
-| **full suite · wasm lane · self-compile** | **once** | **you, §7** | ⛔ **no agent runs any of these** — the reviewer finishes minutes before the battery, on the identical tree |
+| **full suite · wasm lane · self-compile** | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before the battery, on the identical tree, and runs no tests at all |
 | **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
-| **`git commit` / `git push` / `git rebase`** | **once** | **you, §6 and §8** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
+| **`git commit` / `git push` / `git rebase`** | **once** | **you, §7 and §9** | ⛔ **no agent commits, pushes, rebases, stashes or opens a worktree** |
 
 **When an agent suspects something it cannot cheaply confirm, it says so in its report** — a sentence
 feeding a gate that is going to run anyway beats a run nobody can attribute.
@@ -154,7 +157,8 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 >   when something it depended on has changed since.
 > - **Every edit comes before the expensive runs, never beside them.** An edit to a compiled-in source
 >   after a run started invalidates that run. So the battery starts only once no agent can still edit:
->   §5's review finishes first, and if it touched `maxon-bin/`, that is one rebuild, then the battery.
+>   **§6's documenter is the last editor**, and its verification is a build — so the battery's
+>   build-if-stale row is already satisfied when it arrives, and you do not pay for it twice.
 > - **A red you did not cause is re-run by FILTER** — the failing cases alone — never by re-running the
 >   whole suite.
 
@@ -177,7 +181,7 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
    lets the coordinator read your work instead of repeating it.
 
 ⛔ **Brief for DIAGNOSIS, never for COVERAGE.** "Enumerate every construct that could false-reject and
-prove each parses", "confirm no other spec regressed", "check nothing was left disabled" — the §7
+prove each parses", "confirm no other spec regressed", "check nothing was left disabled" — the §8
 battery and §1's count check already do all three, better, one step later. ⚠ **A specific instruction in
 your brief OUTRANKS the agent's own stop rule**: you cannot brief thoroughness in without briefing the
 stop out.
@@ -212,14 +216,14 @@ the user can redirect you cheaply. If the ask is ambiguous *in a way that change
 cheapest moment to ask.
 
 - ⚠ **`git status` must be CLEAN**, so the one commit holds this change and nothing left over from
-  another. (Goldens the suite touches along the way are not a concern — §7.)
+  another. (Goldens the suite touches along the way are not a concern — §8.)
 - **BUILD — IF, AND ONLY IF, THE BINARY IS STALE** (the check in the box under the gate table). The
   compiler binary is gitignored and nothing rebuilds it, so a stale one lies in *both* directions.
   `build` compiles `maxon-bin/` with the compiler already in the slot and renames the result into
   place, falling back to a released binary at `.bootstrap/maxon` when the slot is empty. A current
   binary is already what every red in §1 is read off: rebuilding it is minutes spent to learn nothing.
-- **No baseline suite run.** The §7 gate is `failed: 0`, not a delta from a remembered total, so there is
-  nothing to measure yet. (When §7 comes back red you therefore may not assume the red is yours — §7 says
+- **No baseline suite run.** The §8 gate is `failed: 0`, not a delta from a remembered total, so there is
+  nothing to measure yet. (When §8 comes back red you therefore may not assume the red is yours — §8 says
   how to attribute it.)
 
 ## 1. The MINIMAL spec set — and it goes RED before you write any code
@@ -267,8 +271,8 @@ That is a cost call, not a rule.)*
 command, option, MCP tool or `public` stdlib API, the doc-coverage gate that owns the surface
 (`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`) reads the
 built compiler or the tree's `stdlib/`, so it is green today and turns red only once the new surface exists.
-It is not in this set; it is acceptance, read in §2 after the code and in §7's battery. Every other
-user-visible change still owes its `docs/` source an edit (§2), which the gates cannot see.
+It is not in this set; it is acceptance, read in §8's battery after §6 has written the documentation.
+Every other user-visible change still owes its `docs/` source an edit (§6), which the gates cannot see.
 
 **Then SEE IT RED.** A spec is data — no rebuild needed to run one.
 
@@ -313,21 +317,27 @@ deliverable stays one chunk and one commit.)*
 **What the agents must be told, beyond the standard six:**
 
 - **Run `maxon-coder` before writing any Maxon.**
+- ⛔ **WRITE NO COMMENTS** — not a `//`, not a `///`, not the doc block above a registry case. The code
+  is still moving, so a comment written now is written and rewritten and mostly thrown away. **§6
+  authors every comment the change gets**, once, after the review. A reason worth keeping goes in the
+  agent's REPORT, which is what §6's brief is built from.
 - **They work in the MAIN checkout, so the `maxon` MCP tools need no `repoRoot`** — and they do not
   commit, do not `git add`, do not push, and leave every golden the runs touch exactly as it lies —
-  golden drift is not theirs to measure, investigate or worry about. You commit everything, once, at §8.
+  golden drift is not theirs to measure, investigate or worry about. You commit everything, once, at §9.
 - ⛔ **`/specs/**` is READ-ONLY — not one byte.** It is the canonical definition of the language; an edit
   there does not adjust a test, it redefines Maxon. Cases go in `specs/`,
   and a fix that would falsify another spec's committed expectation is a STOP-and-report, never an edit
   to that spec.
 - **Root causes, no workarounds** — and a defect is fixed whether or not it predates you (CLAUDE.md).
-- **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane runs in §7 and
+- **Cross-target consistency**: an x64 change needs its arm64 equivalent. The wasm lane runs in §8 and
   is not scalar-only — a float or `String` case failing there is a bug on that lane.
 - **A new diagnostic goes through the registry, which is HAND-AUTHORED and has NO generator**: add a
-  `//` doc comment and a `<caseName> = "EXXXX"` entry to `maxon-bin/Compiler/ErrorCodeRegistry.maxon`,
-  then write the code that emits it. **That comment IS the documentation surface** —
-  `Mcp/McpErrorCodes.maxon` re-parses the registry SOURCE at runtime to serve `lookup_error_code`, so a
-  case without one answers with nothing. Take the next free number in the band by reading the enum
+  `<caseName> = "EXXXX"` entry to `maxon-bin/Compiler/ErrorCodeRegistry.maxon`, then write the code that
+  emits it. ⛔ **Not its doc comment — that block IS a documentation surface**
+  (`Mcp/McpErrorCodes.maxon` re-parses the registry SOURCE at runtime to serve `lookup_error_code`, and
+  the generated Error Codes page is built from it), **so §6 writes it.** ⚠ `sync-docs.mjs` fails closed
+  on a case with no doc comment, so it is RED between here and §6 for a change that adds a diagnostic —
+  that is expected, and it is how §6 finds them. Take the next free number in the band by reading the enum
   (1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx emitter, 6xxx PE writer, 9xxx internal): a
   duplicate NAME does not compile, and a duplicate NUMBER is structural in neither direction and is
   caught only by `requireErrorCodesUnique()`, which runs as part of `spec-test`. Never write a bare
@@ -338,10 +348,10 @@ deliverable stays one chunk and one commit.)*
   `Runtime/RuntimeAbort.maxon` and six files under `specs/`. Follow the enum, not them.
 - **A mechanism that does not exist yet gets BUILT** — a builtin, a runtime slice, an opcode on every
   target. Size is never a reason to stop; see the two boxes at the top of this file.
-- **A user-visible change updates its documentation in this change** (`.claude/CLAUDE.md`, Documentation):
-  the `docs/` source `website/MAINTAINING.md`'s map names, a grep of `docs/` for every name the change
-  moved, then `node website/scripts/sync-docs.mjs` to regenerate the site pages, then the doc-coverage
-  gate §1 named. Never a hand edit to a generated page.
+- **Documentation is §6's, not theirs** — the `docs/` source, the site regeneration and the doc-coverage
+  gates all move there, in the same pass that writes the comments. What the implementer owes is the
+  report: **what the change made visible to a user**, in the terms `.claude/CLAUDE.md`'s Documentation
+  section uses, since that is the judgement it has the context to make.
 
 ⚠ **Whoever writes the code, §5's reviewer must not be them.**
 
@@ -351,10 +361,10 @@ deliverable stays one chunk and one commit.)*
 edit to a compiled-in source and at no other time — a stale binary reads green or red for the wrong
 reason, and a current one rebuilt reads exactly what it read before. **Then YOU read its last filtered
 run** — the log file it reported, with the binary current when it ran — and that is the only thing
-standing between an agent's report and §7. Re-run the filter yourself only when that evidence is
+standing between an agent's report and §8. Re-run the filter yourself only when that evidence is
 missing or something changed after it.
 
-- ⛔ **NOBODY runs the full suite in this loop — not you, not the agent.** It is §7's, once. A suite
+- ⛔ **NOBODY runs the full suite in this loop — not you, not the agent.** It is §8's, once. A suite
   run per iteration is the single largest piece of duplicated work these processes have ever paid for,
   and every agent's brief must say so.
 - ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
@@ -405,6 +415,9 @@ situation:
   standalone-only and it must skip them.
 - **There is no backlog file**, so anything it leaves for triage arrives in its REPORT and you decide it
   here.
+- ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
+  minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
+  your brief outranks the skill's rules.
 - ⛔ **Do NOT ask it to run the full suite, prove coverage, or establish correctness.** Your battery runs
   minutes later on the identical tree, and the suite is a far better false-reject detector than anything
   it can probe by hand — and it runs no sabotage and no hand probes at all: a finding that needs a run
@@ -418,7 +431,38 @@ situation:
   verdict — this project's history is full of agent findings that measurement refuted. Confirm before
   acting, and say so if you disagree.
 
-## 6. Rebase on `origin/main` — yours
+## 6. Document the change — the `documenter` skill, in a dispatched agent
+
+**Send a `general-purpose` agent and tell it to invoke the `documenter` skill.** It writes **every
+comment the change gets** — nobody before it wrote one — and updates the `docs/` source its surface
+owns, then regenerates the site pages.
+
+⭐ **This is the LAST step that edits the tree.** It runs after the review for one reason: **comments are
+written once, against code that has stopped moving.** A documenter before §5 would comment code the
+review then rewrites, which is the write-it-twice waste the no-comments rule exists to remove.
+
+**What the brief carries, beyond the standard eight:**
+
+- ⭐ **THE DIAGNOSIS — the change's *why*.** This is the most valuable thing in the brief and it exists
+  nowhere else: a why-only comment cannot be composed from a diff. Also the implementer's and
+  optimizer's reports, which hold the reasons behind an unobvious shape, a deliberate asymmetry and any
+  forked fast path.
+- **What the change made user-visible**, in `.claude/CLAUDE.md`'s terms — or that nothing is, which is
+  an answer it must state rather than skip.
+- ⛔ **It runs NO tests** — not the suite, not the wasm lane, not the doc-coverage gates. Its
+  verification is `mcp__maxon__build`, and §8's battery runs everything else minutes later on the same
+  tree. It regenerates the site pages but does not run `sync-docs.mjs --check`; that is §8's.
+- **It does not commit, `git add`, push, rebase or stash**, and it changes not one byte of code.
+
+⚠ **Read its report, do not re-derive it.** The line that matters is the count: comment lines added,
+rewritten, deleted, net. **A change that came back with a paragraph per declaration has failed the
+skill's own first rule** — the default is no comment, and most declarations end with none. Spot-check
+its list of facts it did NOT write, which is where a wrongly-dropped constraint would be.
+
+**Its build is the battery's build.** §8 rebuilds only if the binary is stale; §6 is the last editor and
+its verification is a build, so that row is already satisfied unless the rebase moves a source.
+
+## 7. Rebase on `origin/main` — yours
 
 **No agent rebases, stashes, commits or pushes.** Git state is the coordinator's, start to finish.
 
@@ -426,7 +470,7 @@ situation:
 git stash push -u -m land && git pull --rebase && git stash pop
 ```
 
-**Rebase FIRST, so §7 runs on the tree you will actually push.** Other agents land on `main` between and
+**Rebase FIRST, so §8 runs on the tree you will actually push.** Other agents land on `main` between and
 during changes; a battery run before the rebase measured a tree that no longer exists.
 
 - **A conflict is resolved BY HAND, hunk by hunk.** ⛔ Never `git checkout --ours/--theirs` a doc file to
@@ -435,17 +479,17 @@ during changes; a battery run before the rebase measured a tree that no longer e
 - **A stash must never outlive this step.** If the pop conflicts, resolve it now — work sitting in
   `git stash list` looks exactly like work that vanished.
 
-## 7. THE BATTERY — once, in this order, on the rebased tree — yours
+## 8. THE BATTERY — once, in this order, on the rebased tree — yours
 
 ⛔ **No agent runs any part of this.** Every brief says so; this is where that promise is kept.
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | **Only if stale** — the rebase or a review edit moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs |
+| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
 | **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin -o temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
-| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead |
+| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
 
@@ -473,9 +517,9 @@ before yours (CLAUDE.md). To attribute it: do the failures touch what you change
 cases alone, by filter** — never the whole suite for them. If that still does not settle it, **measure
 the control** on that same filter — `git stash -u`, re-run, `git stash pop`. ⚠ **A lane that
 did not RUN is not a red gate** (remote arm64 is outside this battery): that is a SKIP you report, never
-folded into the green — and §8's CI watch is where every lane you skipped is answered.
+folded into the green — and §9's CI watch is where every lane you skipped is answered.
 
-## 8. Commit and push
+## 9. Commit and push
 
 **ONE commit, on `main`** — this repo develops there; do not branch. The whole change lands together:
 the compiler source, the spec cases, **the documentation and the site pages it regenerates**, **every
@@ -492,7 +536,7 @@ git push origin main
 ```
 
 ⛔ **A REJECTED PUSH IS NOT A RETRY.** Someone landed while you were running, so the tree you tested is
-not the tree you would push: **rebase and RE-RUN §7** before pushing again.
+not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 
 > ### ⭐ THE PUSH IS NOT THE END OF THE GATE — WATCH CI SETTLE
 > ```bash

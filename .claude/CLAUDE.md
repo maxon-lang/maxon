@@ -27,6 +27,8 @@ about to build, gate or measure it and have not read `maxon-bin/CLAUDE.md` this 
 help text; a diagnostic; syntax or semantics; a `public` stdlib API; a runtime environment variable; target
 support; LSP, VS Code or MCP behaviour.
 
+- **The `documenter` skill is the step that does this**, on the finished diff just before the commit,
+  in the same pass that writes the change's comments. What follows is what it carries out.
 - **Edit the SOURCE, never the site.** `website/MAINTAINING.md`'s "what changed → which source" map names the
   `docs/*.md` file (or the error-code registry) that owns each surface.
 - **Then regenerate the site:** `node website/scripts/sync-docs.mjs`. The reference pages are generated from
@@ -63,9 +65,20 @@ Apply these standards when writing or reviewing any code:
 - **No magic values** — replace bare literal constants with named `static` constants that describe
   their meaning. Group a related set into a `static enum` rather than scattering them.
 
-### ⭐ COMMENTS — CONCISE, MINIMAL, "WHY" ONLY, PRESENT TENSE
+### ⛔⭐ COMMENTS — YOU WRITE NONE. THE `documenter` SKILL WRITES THEM ALL, JUST BEFORE THE COMMIT.
 
-Binding on every comment you write **and on every comment you touch**:
+**While you are writing code, write NO comments.** Not a `//`, not a `///` doc comment, not the doc
+block above an `ErrorCodeRegistry.maxon` case. **Code changes shape while a change is being written**,
+so a comment written before the code settles is written and rewritten several times and most of it
+never reaches the commit. Only the final shape is worth commenting, and it does not exist yet.
+
+**Every comment in this repository comes from one place: the `documenter` skill, run once on the
+finished diff, immediately before the commit.** It also updates the `docs/` source the change's surface
+owns and regenerates the site, so the Documentation section above is the same step.
+
+⚠ **Running last is not a licence to write more.** What it writes is **minimal and concise — the
+default is still no comment**, and most declarations end with none. The rules below bind it, and bind
+every comment anyone touches:
 
 - **Minimal and concise.** The default is **no comment**. Write one only where the code cannot carry
   the point by itself, and then in as few words as it takes. A comment per line, a banner over every

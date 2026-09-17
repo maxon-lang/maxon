@@ -130,6 +130,7 @@ const UNPUBLISHED_DOC_ROUTES = {
 const REWRITES = [
   [/`\.\/maxon-bin\/\.maxon\/maxon(\.exe)?`/g, '`maxon`'],
   [/`\.claude\/CLAUDE\.md` and `docs\/STYLE_GUIDE\.md#comments`/g, "the compiler repository's own style guide"],
+  [/the `documenter` skill/g, 'a dedicated documentation step'],
 ];
 
 const applyRewrites = (text) => REWRITES.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), text);

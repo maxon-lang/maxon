@@ -249,12 +249,19 @@ s.append(" {name}!")    // interpolation written directly into buffer
 // This is a comment
 ```
 
-Comments are **concise and minimal**: the default is no comment, and one earns its place only where
-the code cannot carry the point by itself. Comment the **why** — the constraint, the invariant, the
-reason a bound or an order is the correct one — never the **how**, which is the code. **Describe the
-code as it is now:** no "used to", no "changed from", no reference to a previous name or shape; git
-holds the history. **A comment you edit gets rewritten to conform**, not patched. See the Comments
-entry of the Code Quality checklist in the compiler repository's own style guide.
+⛔ **Write no comments while you write the code.** Code changes shape while a change is being written,
+so a comment written before the code settles is written and rewritten several times and most of that
+prose never survives to the commit. Only the final shape of the code is worth commenting, and it does
+not exist until the change is finished. **Every comment is added at the end, in one pass, by
+a dedicated documentation step.**
+
+⚠ **Writing them last is not a licence to write more.** Comments are **concise and minimal**: the
+default is no comment, and one earns its place only where the code cannot carry the point by itself.
+Comment the **why** — the constraint, the invariant, the reason a bound or an order is the correct one
+— never the **how**, which is the code. **Describe the code as it is now:** no "used to", no "changed
+from", no reference to a previous name or shape; git holds the history. **A comment you edit gets
+rewritten to conform**, not patched. See the Comments entry of the Code Quality checklist in
+the compiler repository's own style guide.
 
 ### 16. Blocks MUST NOT be empty (E3082)
 

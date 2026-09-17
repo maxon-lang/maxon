@@ -689,6 +689,12 @@ name and the doc text for every code, and it is AUTHORED — edit it directly.
 **To add a diagnostic:** take the next free number in the right band, add a case, write the code that
 emits it.
 
+⛔ **Not its doc comment.** That block is a documentation surface, not a code comment —
+`Mcp/McpErrorCodes.maxon` re-parses this file at runtime to serve `lookup_error_code`, and the site's
+Error Codes page is generated from it — so the `documenter` skill writes it, with every other comment
+the change gets, just before the commit. ⚠ `website/scripts/sync-docs.mjs` fails closed on a case with
+no doc comment, which is how it finds them.
+
 - **A duplicate NAME does not compile**, and `ErrorCode.Foo` does not compile unless the enum declares
   it — both are structural, so neither needs a checker.
 - **A duplicate NUMBER is neither**: two cases may carry one `"E3099"` and the program is well-formed.

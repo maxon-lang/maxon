@@ -196,9 +196,15 @@ end 'processLoop'
 
 ## Comments
 
+⛔ **Code is written with NO comments, and a single pass adds them at the end.** While a change is being
+written it keeps changing shape, so a comment written before the code settles is written and rewritten
+several times and most of it never reaches the commit. Every comment in this repository is authored by
+the `documenter` skill, run once on the finished diff immediately before the commit.
+
 The binding rules are the **Comments** entry of the Code Quality checklist in `.claude/CLAUDE.md`:
 **concise and minimal, "why" never "how", present state only (no history), and a comment you edit is
-rewritten to conform.** This section is the Maxon-specific form of them.
+rewritten to conform.** ⚠ Writing them last is not a licence to write more: **the default is still no
+comment**, and most declarations end with none. This section is the Maxon-specific form of the rules.
 
 ### The default is no comment
 
@@ -422,7 +428,8 @@ Key takeaways:
 - **Line Endings:** LF only
 - **Names:** camelCase for variables and functions
 - **Functions:** Single responsibility, clear names
-- **Comments:** Concise and minimal, why not how, present state only — no history
+- **Comments:** None while writing code — the `documenter` skill adds them on the finished diff, and
+  what it adds is concise and minimal, why not how, present state only — no history
 - **Whitespace:** Blank lines separate logical sections
 - **Formatting:** Use the VSCode formatter automatically
 - **Block Identifiers:** Always use descriptive identifiers with `end`

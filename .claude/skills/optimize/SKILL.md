@@ -8,8 +8,9 @@ description: Optimization pass over a change. HUNTS UNSCALABLE (SUPERLINEAR) ALG
 **Run BEFORE the code review, never after** — optimizing rewrites code and can introduce exactly the
 duplication the review exists to catch. That ordering is not a licence to leave a mess: **do not fork a
 fast path from a slow one, and do not inline a helper into three call sites.** If a specialized copy
-genuinely must exist, comment *why the two cannot be one* — otherwise the review will (correctly)
-collapse it.
+genuinely must exist, **state in your REPORT why the two cannot be one** — otherwise the review will
+(correctly) collapse it. ⛔ **Do not write that as a comment**: you write no comments, and the
+`documenter` skill turns a reason like this into one (a deliberate asymmetry) after the review.
 
 **Optimize code you did not write where you can.** When another process dispatched you here, that
 independence is already true and is part of why the step exists.

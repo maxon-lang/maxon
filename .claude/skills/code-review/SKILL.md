@@ -12,8 +12,8 @@ code, you are the wrong reviewer for it.
 ordering is deliberate: an optimizer rewrites code, so it can introduce exactly the duplication you
 exist to catch — a fast path forked from a slow one, a helper inlined at three call sites, a specialized
 copy of a general routine. **Review the optimizer's diff as carefully as the implementer's**, and treat
-a performance-motivated fork as duplication until proven otherwise (if it must exist, it needs a comment
-saying why the two cannot be one).
+a performance-motivated fork as duplication until proven otherwise — if it must exist, the optimizer
+owes a reason why the two cannot be one, and its absence is the finding.
 
 **Fix what you find even if it is pre-existing** — the goal is that quality improves continuously, and
 CLAUDE.md is explicit that you do not care whether an issue predates the change.
@@ -85,12 +85,10 @@ that look like at runtime?** If the answer is "a wrong answer, not a compile err
 **`.claude/CLAUDE.md`'s "Code Quality" section is the checklist and is already in your context — apply
 it to every changed file, do not restate it.** The three that get missed:
 
-- ⭐ **COMMENTS ARE A FIRST-CLASS TARGET, and excess commentary is a finding you DELETE.** Concise and
-  minimal (the default is none), **why** not **how**, **present state only** (⛔ no "used to", "changed
-  from", no old names — git holds that), and a comment you touch is rewritten to conform rather than
-  patched. This binds PRE-EXISTING comments in the files under review exactly as duplication does: a
-  restated signature, a banner over every section, a line-by-line narration, or a comment describing a
-  shape the code no longer has all come out.
+- ⛔ **COMMENTS ARE NOT YOUR CONCERN — YOU REVIEW THE CODE.** Do not judge, rewrite, delete or report
+  one, and do not count a missing comment as a finding. Code is written with none and the `documenter`
+  skill authors them all *after* this review, so the tree you are reading has few or none by design and
+  anything you wrote about them would be overwritten anyway. **This is a decision, not an omission.**
 - **Typed ranges as narrow as PROVABLY correct** — a wrong narrow bound is a runtime panic; wide is fine
   where there is no real bound.
 - **Cross-target consistency:** an x64 change needs its arm64 equivalent — **the CODE, which you review

@@ -74,10 +74,11 @@ cond ? a : b                   a if cond else b
 - **Union values CANNOT be compared with `==`** (E3066) — use `match`.
 - **Indentation uses tabs** (not spaces).
 - **Strings use `{expr}` interpolation** — there is NO string concatenation operator.
-- **Comments use `//`** (or `/* ... */` for block comments). **Concise and minimal — the default is NO
-  comment.** Explain the **why** (a constraint, an invariant, a non-obvious reason), never the **how**;
-  the code is the how. **Present state only — no history**: no "used to", "changed from", or old names;
-  git holds that. **A comment you edit is rewritten to conform, not patched.** (Code Quality checklist,
+- ⛔ **WRITE NO COMMENTS.** Not a `//`, not a `///` doc comment, not the doc block above an
+  `ErrorCodeRegistry.maxon` case. Code changes shape while a change is being written, so a comment
+  written now is written and rewritten and mostly thrown away. **The `documenter` skill writes every
+  comment in this repository, once, on the finished diff just before the commit** — and what it writes
+  is minimal and concise, so most declarations end with none. (Code Quality checklist,
   `.claude/CLAUDE.md`.)
 - **Blocks MUST NOT be empty** (E3082) — no comment-only blocks.
 - **Struct FIELDS use `as`**: `export var x as Coord`, not `export var x Coord` (E2010). Parameters and
