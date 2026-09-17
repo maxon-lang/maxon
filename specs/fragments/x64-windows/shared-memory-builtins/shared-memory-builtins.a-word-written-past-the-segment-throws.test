@@ -5,8 +5,9 @@ function main() returns ExitCode
 		segment.close()
 		return match e 'why'
 			outOfBounds gives 7
-			createFailed gives 4
-			mapFailed gives 4
+			createFailed or
+			mapFailed or
+			invalidName gives 4
 		end 'why'
 	end 'refused'
 
@@ -83,18 +84,17 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect SharedSegment.close
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, matchnext#9
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 r12, 2
+    x64.setccReg lessEqual, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matchnext
   matcharm#6:
     x64.movRegImm32 r12, 4
     x64.jmp matchcont
-  matchnext#9:
-    x64.cmpRegImm32 r12, 1
-    x64.jcc notEqual, matchnext#10
-  matcharm#7:
-    x64.movRegImm32 r12, 4
-    x64.jmp matchcont
-  matchnext#10:
-    x64.cmpRegImm32 r12, 2
+  matchnext:
+    x64.cmpRegImm32 r12, 3
     x64.jcc notEqual, matchdead
   matcharm#5:
     x64.movRegImm32 r12, 7

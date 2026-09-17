@@ -1,0 +1,21 @@
+// Test: error.mismatched-otherwise-end-label
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail() otherwise 'recover'
+		result = 42
+	end 'handler'
+	return result
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:16:2: Mismatched end label: expected 'recover', got 'handler'

@@ -108,17 +108,15 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_28]  ; "/bin/sleep"
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_29]  ; "/bin/sleep"
     x64.callDirect FilePath.from
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#1
   tryerr#2:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
-    x64.popReg r15
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -137,83 +135,62 @@ func @main {
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_29]  ; "30"
+    x64.leaRegRdata rcx, [rip + __str_rec_30]  ; "30"
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-  __il_body:
-    x64.callDirect __md_current_path
+    x64.callDirect Directory.currentPath
     x64.movRegReg r13, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#18
-  tryok#17:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_retain
-    x64.movRegReg rcx, r8
-    x64.callDirect String.init
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect FilePath.from
-    x64.movRegReg r15, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#20
-  tryok#19:
-    x64.movRegReg rcx, r14
-    x64.callDirect __str_decref
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-  __il_cont:
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
     x64.movRegImm32 r9, 200
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r15
+    x64.movRegReg rax, r13
     x64.callDirect Subprocess.run#Executable#struct#FilePath#DurationMs
     x64.movRegReg rax, r10
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, tryok#3
   tryerr#4:
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.jumpTable rcx, default=matchdead [[0]=matcharm#6, [1]=matcharm#7, [2]=matcharm#8, [3]=matcharm#5, [4]=matcharm#9] @__jumptable_255
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#6, [1]=matcharm#7, [2]=matcharm#8, [3]=matcharm#5, [4]=matcharm#9] @__jumptable_259
   matchdead:
   matcharm#6:
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
     x64.jmp matchcont
   matcharm#7:
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
     x64.jmp matchcont
   matcharm#8:
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
     x64.jmp matchcont
   matcharm#5:
-    x64.movRegImm32 r13, 1
+    x64.movRegImm32 r14, 1
     x64.jmp matchcont
   matcharm#9:
-    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
   matchcont:
     x64.movRegReg rcx, rax
     x64.callDirect __destruct_SubprocessError
-    x64.movRegReg rax, r13
+    x64.movRegReg rax, r14
     x64.jmp trycont
   tryok#3:
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_CollectedOutput
-    x64.movRegReg rax, r13
+    x64.movRegReg rax, r14
   trycont:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont
   check:
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r15
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_FilePath
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r15
+    x64.movRegReg r8, r14
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -221,40 +198,15 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 r13, 1
-    x64.movRegReg rcx, r15
+    x64.movRegImm32 r14, 1
+    x64.movRegReg rcx, r13
     x64.callDirect __destruct_FilePath
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Executable
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at Directory.maxon:72: Directory.currentPath: GetCurrentDirectory failed\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#20:
-    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at Directory.maxon:74: Directory.currentPath: invalid path\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r15
+    x64.movRegReg r8, r14
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

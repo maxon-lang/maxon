@@ -56,13 +56,21 @@ let NoSection = 0
 // How many bytes one `SegmentWord` occupies in the mapping.
 let SegmentWordBytes = 8
 
+// The longest name `create` publishes, and the three bytes no name may hold — see `requirePortableName`.
+let PortableSegmentNameBytes = 31
+let SlashByte = 0x2F
+let BackslashByte = 0x5C
+let NulByte = 0
+
 /// Why a section could not be opened or accessed. The two open arms are separate because the two host
 /// calls fail for different reasons and a caller can act on the difference: a create fails on a name
 /// collision with an incompatible section or on a size the system will not back, a map on address space.
+/// `invalidName` is a name some lane cannot publish, refused before any host call (see `create`).
 /// `outOfBounds` is an accessor whose bytes would reach past the end of the mapping.
 public union SharedMemoryError implements Error
 	createFailed
 	mapFailed
+	invalidName
 	outOfBounds
 end 'SharedMemoryError'
 
@@ -85,7 +93,11 @@ public type SharedSegment
 	var closed as bool
 
 	/// Create a NEW section of exactly `bytes` bytes, published under `name`, and map it into this process.
+	///
+	/// Throws `invalidName` for a name that is empty, longer than 31 bytes, or holds a `/`, a `\` or a NUL
+	/// byte — on every target, including one whose host would have accepted it.
 	public static function create(name String, bytes SegmentByteCount) returns SharedSegment throws SharedMemoryError
+		try requirePortableName(name)
 		let rawHandle = __Builtins.sharedMemoryCreate(name.cstr(), bytes)
 
 		if rawHandle == NoSection 'createFailed'
@@ -103,6 +115,22 @@ public type SharedSegment
 
 		return SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, closed: false}
 	end 'create'
+
+	// A name one lane cannot publish is refused on all of them, so a program that runs on one host does not
+	// fail on another with a `createFailed` that names no cause. The length is Darwin's `PSHMNAMLEN`, the
+	// smallest limit of the lanes; a `/` is a directory under `/dev/shm`, a `\` a Win32 object namespace, and
+	// a NUL would end the host's name short of the one `segmentName()` answers.
+	static function requirePortableName(name String) throws SharedMemoryError
+		if name.byteLength() == 0 or name.byteLength() > PortableSegmentNameBytes 'badLength'
+			throw SharedMemoryError.invalidName
+		end 'badLength'
+
+		for byte in name.bytes() 'eachByte'
+			if byte == SlashByte or byte == BackslashByte or byte == NulByte 'reserved'
+				throw SharedMemoryError.invalidName
+			end 'reserved'
+		end 'eachByte'
+	end 'requirePortableName'
 
 	/// The name this section is published under — what a second process maps it by.
 	public function segmentName() returns String

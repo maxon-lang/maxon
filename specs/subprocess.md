@@ -580,11 +580,13 @@ control=ran stdin=spawnFailed stdout=spawnFailed
 
 <!-- test: subprocess-a-relative-executable-resolves-against-the-working-directory -->
 <!-- unsupported-targets: wasm32-wasi -->
-⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS.** A POSIX
-child enters its working directory and then runs the path, so the OS resolves it there. `CreateProcessA`
-resolves a path before the child exists, against the PARENT's directory, so on Windows the library joins
-the path onto the working directory first. A file that is only in the parent's directory is
-`executableNotFound` everywhere.
+⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS.** Hosts
+disagree on whether a launch path is read before or after the child enters its directory —
+`CreateProcessA` and macOS 15's `posix_spawn` read it first, against the PARENT's directory — so the
+library launches the path joined onto the working directory made absolute, which reads the same either
+way. A file that is only in the parent's directory is `executableNotFound` everywhere, and a RELATIVE
+working directory is anchored once, to the parent's directory, rather than applied twice by a child that
+has already entered it.
 ```maxon
 function verdictOf(config Configuration) returns String
 	var verdict = "ran"
@@ -623,7 +625,9 @@ end 'runRelative'
 
 function main() returns ExitCode
 	let parentDir = Directory.currentPath()
-	let childDir = parentDir.join("maxon-spec-relative-child-cwd")
+	let childDirName = "maxon-spec-relative-child-cwd"
+	let childDir = parentDir.join(childDirName)
+	let relativeChildDir = try FilePath.from(childDirName) otherwise panic("a bare directory name is a well-formed path")
 	_ = Directory.create(childDir)
 
 	#if os(Windows)
@@ -637,7 +641,7 @@ function main() returns ExitCode
 	placeTool(parentDir, name: parentOnly)
 	placeTool(childDir, name: childOnly)
 
-	print("parent-cwd-only={runRelative(parentOnly, workingDirectory: childDir)} child-cwd-only={runRelative(childOnly, workingDirectory: childDir)}\n")
+	print("parent-cwd-only={runRelative(parentOnly, workingDirectory: childDir)} child-cwd-only={runRelative(childOnly, workingDirectory: childDir)} relative-directory={runRelative(childOnly, workingDirectory: relativeChildDir)}\n")
 
 	try File.delete(parentDir.join(parentOnly)) otherwise panic("the parent-side tool can be removed")
 	try File.delete(childDir.join(childOnly)) otherwise panic("the child-side tool can be removed")
@@ -648,7 +652,7 @@ end 'main'
 0
 ```
 ```stdout
-parent-cwd-only=executableNotFound child-cwd-only=ran
+parent-cwd-only=executableNotFound child-cwd-only=ran relative-directory=ran
 ```
 
 <!-- test: subprocess-a-missing-working-directory-is-spawn-failed -->

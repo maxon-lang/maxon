@@ -24,6 +24,13 @@ Every accessor is bounds-checked against the size the section was created with: 
 `writeWord` whose 8 bytes, or a `copyOut` whose `offset + byteCount`, would reach past the end throws
 `SharedMemoryError.outOfBounds`, so the three carry `throws SharedMemoryError` and are called with `try`.
 
+⛔ **A NAME IS HELD TO WHAT EVERY LANE CAN PUBLISH, ON EVERY LANE.** `create` throws
+`SharedMemoryError.invalidName` before any host call for a name that is empty, longer than 31 bytes, or
+holds a `/`, a `\` or a NUL byte. 31 bytes is Darwin's `PSHMNAMLEN`, the smallest limit of the lanes;
+a `/` is a directory separator under `/dev/shm`, a `\` names a Win32 object namespace, and a NUL ends
+the name the host sees short of the one `segmentName()` answers. Refusing only where a host would
+refuse would let a program that runs on Windows fail on macOS with a bare `createFailed`.
+
 ⚠ **A WORD IS ADDRESSED BY A BYTE OFFSET, NOT BY A WORD INDEX.** The ring's header and its records are
 laid out in bytes by a format neither side owns, so an accessor that silently scaled its argument
 would put every consumer's reads one stride away from the producer's writes — which is why
@@ -141,6 +148,45 @@ named=4
 0
 ```
 
+<!-- test: shared-memory-builtins.a-name-some-lane-cannot-publish-is-refused-on-every-lane -->
+⛔ **THE NAME RULE IS THE SAME ON EVERY LANE, WHATEVER THE HOST WOULD HAVE ACCEPTED.** A name of
+exactly 31 bytes is published; a 32-byte name, an empty one, and names holding `/`, `\` or a NUL are
+each refused with `invalidName` (7). Win32 alone publishes every one of them but the `\` name (5), and
+refuses that one as `createFailed` (3), so every refused line reads 7 only because the rule runs ahead of
+the host.
+```maxon
+function createOutcome(name String) returns ExitCode
+	var segment = try SharedSegment.create(name, bytes: 4096) otherwise (e) 'refused'
+		return match e 'why'
+			invalidName gives 7
+			createFailed gives 3
+			mapFailed or
+			outOfBounds gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	return 5 as ExitCode
+end 'createOutcome'
+
+function main() returns ExitCode
+	let atLimit = createOutcome("maxon-spec-shm-31-bytes-exactly")
+	let pastLimit = createOutcome("maxon-spec-shm-32-bytes-exactly!")
+	let empty = createOutcome("")
+	let slash = createOutcome("maxon-spec/shm")
+	let backslash = createOutcome("maxon-spec\\shm")
+	let nul = createOutcome("maxon-spec\0shm")
+	print("at-limit={atLimit} past-limit={pastLimit} empty={empty} slash={slash} backslash={backslash} nul={nul}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+at-limit=5 past-limit=7 empty=7 slash=7 backslash=7 nul=7
+```
+```exitcode
+0
+```
+
 <!-- test: shared-memory-builtins.a-word-read-past-the-segment-throws -->
 ⛔ **AN ACCESS THAT REACHES PAST THE SEGMENT THROWS `outOfBounds` INSTEAD OF READING WHATEVER LIES BEYOND
 IT.** A word is 8 bytes, so offset 4090 in a 4096-byte section starts inside the mapping and ends 2 bytes
@@ -152,8 +198,9 @@ function main() returns ExitCode
 		segment.close()
 		return match e 'why'
 			outOfBounds gives 7
-			createFailed gives 4
-			mapFailed gives 4
+			createFailed or
+			mapFailed or
+			invalidName gives 4
 		end 'why'
 	end 'refused'
 
@@ -176,8 +223,9 @@ function main() returns ExitCode
 		segment.close()
 		return match e 'why'
 			outOfBounds gives 7
-			createFailed gives 4
-			mapFailed gives 4
+			createFailed or
+			mapFailed or
+			invalidName gives 4
 		end 'why'
 	end 'refused'
 
@@ -194,13 +242,14 @@ end 'main'
 the offset alone is inside it.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-copy-out-past-end", bytes: 4096) otherwise return 3
+	var segment = try SharedSegment.create("maxon-spec-shm-copy-past-end", bytes: 4096) otherwise return 3
 	let octets = try segment.copyOut(4000, byteCount: 200) otherwise (e) 'refused'
 		segment.close()
 		return match e 'why'
 			outOfBounds gives 7
-			createFailed gives 4
-			mapFailed gives 4
+			createFailed or
+			mapFailed or
+			invalidName gives 4
 		end 'why'
 	end 'refused'
 

@@ -1568,11 +1568,14 @@ and touches nothing.
 union SharedMemoryError implements Error
 	createFailed
 	mapFailed
+	invalidName
 	outOfBounds
 end 'SharedMemoryError'
 ```
 
 `createFailed`: the name collides with an incompatible section, or the size cannot be backed.
+`invalidName`: the name is empty, longer than 31 bytes, or holds a `/`, a `\` or a NUL byte. The rule is the
+same on every target (31 bytes is macOS's limit), so a name that works on one host works on all of them.
 `mapFailed`: no address space for the view. `outOfBounds`: a `readWord`, `writeWord` or `copyOut` would
 reach past the end of the section.
 

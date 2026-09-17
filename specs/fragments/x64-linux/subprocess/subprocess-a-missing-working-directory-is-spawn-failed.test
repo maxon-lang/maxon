@@ -104,7 +104,7 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 120
+    x64.prologue 104
     x64.leaRegRdata rbx, [rip + __str_rec_35]  ; "sh"
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -133,51 +133,28 @@ func @main {
     x64.callDirect __managed_push
     x64.leaRegRdata rax, [rip + __str_rec_38]  ; "ran"
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot9, rax
-    x64.leaRegRegImm32 rcx, rax, 57
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegImm32 rcx, r14, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.storeSlotReg slot8, r14
-    x64.leaRegRegImm32 r15, r14, 56
-    x64.loadRegSlot rax, slot9
+    x64.storeSlotReg slot8, r8
+    x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot9
-    x64.leaRegRegReg rcx, r15, rax
-    x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], rax
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r14 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 24], rax
-  __il_body#12:
-    x64.callDirect __md_current_path
-    x64.movRegReg r13, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#14
-  tryok#13:
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_retain
-    x64.movRegReg rcx, r8
-    x64.callDirect String.init
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect FilePath.from
-    x64.movRegReg r15, r8
-    x64.storeSlotReg slot3, r15
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#16
-  tryok#15:
-    x64.movRegReg rcx, r14
-    x64.callDirect __str_decref
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-  __il_cont#11:
+    x64.leaRegRegReg rax, r15, r14
+    x64.loadRegSlot rax, slot8
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.storeBaseDispReg.word64 [rax + 8], r14
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.callDirect Directory.currentPath
+    x64.storeSlotReg slot3, r8
     x64.leaRegRdata rdx, [rip + __str_rec_39]  ; "maxon-spec-no-such-working-directory-xyzzy"
-    x64.movRegReg rcx, r15
+    x64.movRegReg rcx, r8
     x64.callDirect FilePath.join
     x64.storeSlotReg slot5, r8
     x64.movRegReg rcx, r12
@@ -186,8 +163,8 @@ func @main {
     x64.callDirect Subprocess.run#Executable#struct#FilePath
     x64.storeSlotReg slot7, r10
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
-  tryerr#2:
+    x64.jcc equal, tryok
+  tryerr:
     x64.loadRegBaseDisp.word64 rax, [r10 + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, matchnext#7
@@ -275,7 +252,7 @@ func @main {
     x64.callDirect __destruct_SubprocessError
     x64.jmp trycont
   matchdead:
-  tryok#1:
+  tryok:
     x64.movRegReg rcx, r8
     x64.callDirect __destruct_CollectedOutput
     x64.loadRegSlot rbx, slot8
@@ -316,10 +293,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-  __il_body#18:
+  __il_body:
     x64.loadRegSlot rcx, slot6
     x64.callDirect __write_stdout
-  __il_cont#17:
+  __il_cont:
     x64.loadRegSlot rcx, slot6
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -330,31 +307,7 @@ func @main {
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Executable
     x64.movRegReg r8, rbx
-    x64.epilogue 120
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#14:
-    x64.leaRegRdata rcx, [rip + __str_blob_55]  ; "panic at Directory.maxon:72: Directory.currentPath: GetCurrentDirectory failed\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 120
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#16:
-    x64.leaRegRdata rcx, [rip + __str_blob_56]  ; "panic at Directory.maxon:74: Directory.currentPath: invalid path\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 120
+    x64.epilogue 104
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

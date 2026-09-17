@@ -1,10 +1,10 @@
 // Test: shared-memory-builtins.distinct-offsets-hold-distinct-words
 function main() returns ExitCode
 	var segment = try SharedSegment.create("maxon-spec-shm-offsets", bytes: 4096) otherwise return 3
-	segment.writeWord(0, value: 11)
-	segment.writeWord(8, value: 22)
-	let first = segment.readWord(0)
-	let second = segment.readWord(8)
+	try segment.writeWord(0, value: 11) otherwise return 4
+	try segment.writeWord(8, value: 22) otherwise return 5
+	let first = try segment.readWord(0) otherwise return 6
+	let second = try segment.readWord(8) otherwise return 7
 	segment.close()
 	print("first={first} second={second}\n")
 	return 0 as ExitCode
@@ -58,8 +58,8 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
     arm64.cmp x9, 0
-    arm64.b.eq tryok
-  tryerr:
+    arm64.b.eq tryok#1
+  tryerr#2:
     arm64.movImm x0, 3
     arm64.loadRegSlot x19, slot4
     arm64.loadRegSlot x20, slot5
@@ -73,27 +73,106 @@ func @main {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryok:
+  tryok#1:
     arm64.movImm x1, 0
     arm64.movImm x2, 11
     arm64.movRegReg x0, x19
     arm64.bl SharedSegment.writeWord
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x20, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SharedSegment
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryok#3:
     arm64.movImm x1, 8
     arm64.movImm x2, 22
     arm64.movRegReg x0, x19
     arm64.bl SharedSegment.writeWord
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.movImm x20, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SharedSegment
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryok#5:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.bl SharedSegment.readWord
     arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#7
+  tryerr#8:
+    arm64.movImm x20, 6
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SharedSegment
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  tryok#7:
     arm64.movImm x1, 8
     arm64.movRegReg x0, x19
     arm64.bl SharedSegment.readWord
     arm64.movRegReg x21, x0
-  __il_body#5:
+    arm64.cmp x9, 0
+    arm64.b.eq __il_body#13
+  tryerr#10:
+    arm64.movImm x20, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SharedSegment
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.loadRegSlot x24, slot9
+    arm64.loadRegSlot x25, slot10
+    arm64.loadRegSlot x26, slot11
+    arm64.loadRegSlot x27, slot12
+    arm64.loadRegSlot x28, slot13
+    arm64.epilogue 128
+    arm64.ret
+  __il_body#13:
     arm64.loadRegBaseDisp.byte x0, [x19 + 32]
     arm64.eor x0, x0, 1
-    arm64.cbz x0, __il_cont#4
+    arm64.cbz x0, __il_cont#12
   stillOpen:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
@@ -107,7 +186,7 @@ func @main {
     arm64.bl __shm_close
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.byte [x19 + 32], x0
-  __il_cont#4:
+  __il_cont#12:
     arm64.leaRdata x0, __str_rec_5  ; "first="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -182,10 +261,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#8:
+  __il_body#16:
     arm64.loadRegSlot x0, slot2
     arm64.bl __write_stdout
-  __il_cont#3:
+  __il_cont#11:
     arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
     arm64.movImm x19, 0

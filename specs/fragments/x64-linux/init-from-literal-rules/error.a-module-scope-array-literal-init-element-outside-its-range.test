@@ -1,0 +1,29 @@
+// Test: error.a-module-scope-array-literal-init-element-outside-its-range
+typealias Digit = int(0 to 9)
+typealias DigitArray = Array with Digit
+typealias Number = int(0 to i64.max)
+
+type Digits implements InitableFromArrayLiteral with Digit
+	export var value as Number
+	export var length as Number
+
+	static function init(digits DigitArray) returns Self
+		var total = 0 as Number
+
+		for d in digits 'each'
+			total = total * 10 + d
+		end 'each'
+
+		return Self{value: total, length: digits.count()}
+	end 'init'
+end 'Digits'
+
+let unlucky = Digits from [4, 12]
+
+function main() returns ExitCode
+	print("{unlucky.value}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:21:31: Value 12 is outside the range of 'Digit' (int(0 to 9))

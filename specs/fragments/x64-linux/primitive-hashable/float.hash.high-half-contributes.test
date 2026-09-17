@@ -1,0 +1,30 @@
+// Test: float.hash.high-half-contributes
+function main() returns ExitCode
+	let small = 2.5
+	let large = 5.0
+	if small.hash() == 0 'lowHalfOnly'
+		return 1
+	end 'lowHalfOnly'
+	if small.hash() == large.hash() 'collide'
+		return 2
+	end 'collide'
+	if small.hash() != 1074003968 'pinnedSmall'
+		return 3
+	end 'pinnedSmall'
+	if large.hash() != 1075052544 'pinnedLarge'
+		return 4
+	end 'pinnedLarge'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,121 @@
+// Test: shared-memory-builtins.a-word-written-past-the-segment-throws
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-write-past-end", bytes: 4096) otherwise return 3
+	try segment.writeWord(4090, value: 1) otherwise (e) 'refused'
+		segment.close()
+		return match e 'why'
+			outOfBounds gives 7
+			createFailed or
+			mapFailed or
+			invalidName gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	return 5 as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1  ; "maxon-spec-shm-write-past-end"
+    arm64.movImm x19, 4096
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.add x0, x21, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 56
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x23, x21
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x21
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl SharedSegment.create
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  tryerr#2:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok#1:
+    arm64.movImm x1, 4090
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x19
+    arm64.bl SharedSegment.writeWord
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.sub x20, x9, 1
+    arm64.movRegReg x0, x19
+    arm64.bl SharedSegment.close
+    arm64.cmp x20, 0
+    arm64.cset x0, ge
+    arm64.cmp x20, 2
+    arm64.cset x1, le
+    arm64.and x0, x0, x1
+    arm64.cbz x0, matchnext
+  matcharm#6:
+    arm64.movImm x20, 4
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x20, 3
+    arm64.b.ne matchdead
+  matcharm#5:
+    arm64.movImm x20, 7
+  matchcont:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SharedSegment
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  matchdead:
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl SharedSegment.close
+    arm64.movImm x20, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SharedSegment
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

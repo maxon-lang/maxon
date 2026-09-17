@@ -591,17 +591,19 @@ function resolveExecutablePath(executable Executable, workingDirectory FilePath)
 	end 'r'
 end 'resolveExecutablePath'
 
-// ⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS.** A POSIX child
-// enters that directory before `execve` reads the path, so the OS already answers it there, and joining it
-// here would apply a relative directory twice. `CreateProcessA` reads the path before the child exists,
-// against the PARENT's directory, so Windows is handed it joined. An empty `workingDirectory` joins nothing.
+// ⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS, BY
+// CONSTRUCTION.** Whether the OS reads a launch path before or after the child enters its directory differs
+// between hosts — `CreateProcessA` and macOS 15's `posix_spawn` read it first, `execve` after — so the launch
+// path is made ABSOLUTE here and reads the same either way. The directory is anchored to the parent's own
+// first, because a relative directory joined onto a relative path would be applied twice by a child that
+// has already entered it. An empty `workingDirectory` is the parent's, which the OS already resolves against.
 function launchPathInWorkingDirectory(executablePath FilePath, workingDirectory FilePath) returns String
-	#if os(Windows)
-		return executablePath.resolve(workingDirectory).path
-	#else
-		_ = workingDirectory
+	if executablePath.isAbsolute() or workingDirectory.path.byteLength() == 0 'asGiven'
 		return executablePath.path
-	#endif
+	end 'asGiven'
+
+	let anchoredDirectory = workingDirectory.resolve(Directory.currentPath())
+	return executablePath.resolve(anchoredDirectory).path
 end 'launchPathInWorkingDirectory'
 
 // ⭐⭐ **WINDOWS AND POSIX RESOLVE A NAME DIFFERENTLY, AND THE DIFFERENCE IS WHERE THE SEARCH HAPPENS.**
