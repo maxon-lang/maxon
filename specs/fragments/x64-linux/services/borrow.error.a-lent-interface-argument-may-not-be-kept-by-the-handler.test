@@ -1,0 +1,44 @@
+// Test: borrow.error.a-lent-interface-argument-may-not-be-kept-by-the-handler
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareOf(side Tally) returns Shape
+	return Square.create(side)
+end 'squareOf'
+
+type Keeper
+	var last as Shape
+
+	static function create() returns Self
+		return Self{last: Square.create(1)}
+	end 'create'
+
+	export function keep(s Shape)
+		self.last = s
+	end 'keep'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = spawn Keeper.create()
+	let s = squareOf(2)
+	h.keep(s)
+	return s.area() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3160: <fragment>:39:9: `s` is lent to `Keeper.keep` here, so what it holds is frozen, but the handler's parameter `s` escapes at <fragment>:32:15: storing it in a field or payload would let it be written. Send a `.clone()` instead, or bind `s` with `var` so the send moves it

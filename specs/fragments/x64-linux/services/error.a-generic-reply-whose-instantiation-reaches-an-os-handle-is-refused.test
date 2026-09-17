@@ -1,0 +1,29 @@
+// Test: error.a-generic-reply-whose-instantiation-reaches-an-os-handle-is-refused
+typealias Integer = int(i64.min to i64.max)
+
+type Maker uses T
+	typealias Items = Array with T
+	var seen as Integer
+
+	static function create(seed T) returns Self
+		var first = Items.create()
+		first.push(seed)
+		return Self{seen: first.count()}
+	end 'create'
+
+	export function make() returns Items
+		self.seen = self.seen + 1
+		return Items.create()
+	end 'make'
+end 'Maker'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let h = spawn Maker.create(listener)
+	let items = try await h.make() otherwise panic("the maker is running")
+	print("{items.count()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:22:10: the reply of the message `Maker.make` is a `Array_TcpListener` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it

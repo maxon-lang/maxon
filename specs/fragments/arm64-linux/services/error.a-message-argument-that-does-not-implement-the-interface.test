@@ -1,0 +1,27 @@
+// Test: error.a-message-argument-that-does-not-implement-the-interface
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	h.measure(7 as Tally)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:12: argument type mismatch for 's' of the message 'measure': type 'Tally' does not implement interface 'Shape'

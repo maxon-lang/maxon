@@ -1,0 +1,40 @@
+// Test: error.a-reply-may-not-alias-an-interface-value-the-state-holds
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Surveyor
+	var shape as Shape
+
+	static function create(side Tally) returns Self
+		return Self{shape: Square.create(side)}
+	end 'create'
+
+	export function peek() returns Shape
+		return self.shape
+	end 'peek'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(3)
+	let shape = try await surveyor.peek() otherwise panic("the surveyor is running")
+	return shape.area() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:28:3: `Surveyor.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Surveyor` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:33:17: the `spawn` that makes `Surveyor` a service

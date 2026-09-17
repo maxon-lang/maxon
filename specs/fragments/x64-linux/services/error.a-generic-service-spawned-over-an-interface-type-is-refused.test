@@ -1,0 +1,45 @@
+// Test: error.a-generic-service-spawned-over-an-interface-type-is-refused
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareOf(side Tally) returns Shape
+	return Square.create(side)
+end 'squareOf'
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function size() returns Tally
+		return 1
+	end 'size'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(squareOf(2))
+	let n = try await h.size() otherwise panic("the box is running")
+	print("{n}\n")
+	h.shutdown()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:37:20: Unsupported: a type argument inferred from a factory argument declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a slot standing at a type parameter is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
