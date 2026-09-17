@@ -43,9 +43,10 @@ trims trailing zeros. **That formatter has a measured arithmetic defect**: it ro
 decimals but never carries into the integer part, so `1.9999999` prints `1.999999` rather than `2.0`, and
 `3.9999996` prints `3.999999`. The third line here is one of its victims — `Math.sin(1.5708)` is
 `0.9999999999932534`, and `0.999999` is what carry-loss makes of it, not what six decimals make of it.
-(The same defect is baked into `/specs/log.md` and five expectations in `/specs/log10.md`, where
-`log10(10)`, `log10(100)`, `log10(1000)` and `log10(10000)` — true values 1, 2, 3 and 4 — are written
-`0.999999`, `1.999999`, `2.999999` and `3.999999`.)
+(The same defect is baked into `/specs/log.md`, and into `/specs/log10.md`, which writes `log10(10)`,
+`log10(100)`, `log10(1000)` and `log10(10000)` — true values 1, 2, 3 and 4 — as `0.999999`, `1.999999`,
+`2.999999` and `3.999999`. This compiler's `Math.log10` is exact at every power of ten a double holds, so
+`specs/log10.md` expects `1.0`, `2.0`, `3.0` and `4.0`.)
 
 **USER RULING: The compiler prints the SHORTEST ROUND-TRIP representation** — the fewest digits that uniquely
 identify the double, as Python 3, JavaScript, Rust, Go, Swift, Java and .NET Core all do. That makes the

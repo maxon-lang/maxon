@@ -100,7 +100,8 @@ Output: `ping`.
 An HTTP/1.1 client over `TcpClient`. Every request is sent with `Connection: close` and the response is read
 until the server closes the connection.
 
-Limitations: plain HTTP only (no TLS), no chunked transfer decoding, no redirect following (a 3xx is
+Limitations: plain HTTP only (no TLS) — a URL whose scheme is anything but `http`, `https` included, throws
+`HttpError.unsupportedScheme` before any connection is attempted; no chunked transfer decoding, no redirect following (a 3xx is
 returned as is), and the whole response is held in memory. The URL's port defaults to 80.
 
 ### HttpClient
@@ -155,7 +156,7 @@ field.
 | Enum | Cases |
 |------|-------|
 | `HttpMethod` | `get`, `post`, `put`, `delete`, `head`, `patch` |
-| `HttpError` | `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse` |
+| `HttpError` | `invalidUrl`, `connectFailed`, `sendFailed`, `recvFailed`, `invalidResponse`, `unsupportedScheme` |
 | `StatusCode` | `ok` 200, `created` 201, `noContent` 204, `movedPermanently` 301, `found` 302, `notModified` 304, `badRequest` 400, `unauthorized` 401, `forbidden` 403, `notFound` 404, `methodNotAllowed` 405, `conflict` 409, `gone` 410, `internalServerError` 500, `notImplemented` 501, `badGateway` 502, `serviceUnavailable` 503 |
 
 ```maxon
@@ -211,7 +212,6 @@ Output: `200 OK hi yes`.
 | `invalidHost` | A malformed host, such as an unclosed IPv6 bracket |
 | `invalidPort` | A port that is not a number or exceeds 65535 |
 | `invalidEncoding` | Malformed percent-encoding, such as `%GG` |
-| `invalidPath` | Declared; no current operation raises it |
 | `relativeWithoutBase` | `resolve` was given a base with no scheme |
 | `fieldNotPresent` | An accessor was called for a component the URL does not have |
 

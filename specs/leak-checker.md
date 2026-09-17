@@ -9,21 +9,22 @@ category: memory
 
 ## Documentation
 
-The Maxon runtime tracks heap allocations and frees at program exit. When the program finishes, if any allocations were not freed, a diagnostic message is printed to stderr showing the number of leaked allocations.
+The Maxon runtime counts live heap allocations, and checks the count when the program finishes. The check is compiled into every program that uses the heap.
 
 This is a diagnostic tool for verifying that the compiler's automatic memory management is working correctly. Since Maxon manages memory automatically through reference counting and scope-based cleanup, leaks indicate a compiler bug rather than a user error.
 
-The leak checker runs after `main()` returns and before the process exits. It does not change the program's exit code.
+The leak checker runs after `main()` returns and before the process exits. A clean program keeps the exit code `main` returned.
 
-### Output Format
+### Reporting
 
-When leaks are detected, the following is printed to stderr:
+The checker prints nothing. It reports through the exit code, which REPLACES the one `main` returned:
 
-```text
-Leak detected: N allocation(s) not freed
-```
+| Exit code | Meaning |
+|-----------|---------|
+| `101` | The live heap allocation count is not zero — an allocation was never freed, or one was freed too often. |
+| `75` | The heap is clean, but the live green-thread count is not zero — a spawned green thread was neither awaited nor dropped, or was reclaimed twice. |
 
-When there are no leaks, nothing is printed.
+The two counts are checked separately and never summed, so a green-thread over-reclaim cannot cancel a heap under-release. When both are wrong, the heap's `101` is reported.
 
 ## Tests
 
@@ -106,7 +107,7 @@ Hello, World!
 
 <!-- test: no-leak.exit-code-preserved -->
 ### Exit code is preserved
-The leak checker should not change the program's exit code.
+A program that leaks nothing keeps the exit code `main` returned; only a leak replaces it.
 ```maxon
 function main() returns ExitCode
 	return 42
@@ -119,10 +120,9 @@ end 'main'
 <!-- test: no-leak.if-let-try-union-map -->
 ### `if let X = try map.get(K)` on union-valued maps
 Assigning to an outer `var` from a `match` destructuring of a value bound by
-`if let X = try map.get(K) 'L'` previously leaked the bound union and the
-extracted inner payload — the if-let block's scope-end cleanup wasn't running
-for X when control fell through the assignment. Surfaced by the self-hosted
-compiler's own method-call return-type lookup.
+`if let X = try map.get(K) 'L'` must release both the bound union and the
+extracted inner payload: the if-let block's scope-end cleanup runs for X even
+when control falls through the assignment.
 ```maxon
 typealias TypeNameId = int(0 to u64.max)
 typealias Integer = int(0 to 100)

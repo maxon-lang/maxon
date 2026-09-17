@@ -508,3 +508,18 @@ two=àáâãäå
 three=一丁丂七丄丅丆万丈三上下丌不与丏丐丑丒专且丕世丗丘丙业丛东丝丞丟丠両丢丣两严並丧丨丩个丫丬中丮丯丰丱串丳临丵丶丷丸丹为主丼丽举丿乀乁乂乃乄久乆乇么义乊之乌乍乎乏乐乑乒乓乔乕乖乗乘乙乚乛乜九乞也习乡乢乣乤乥书乧乨乩乪乫乬乭乮乯买乱乲乳乴乵乶乷乸乹乺乻乼乽乾乿亀亁亂亃亄亅了亇予争亊事二亍于亏亐云互亓五
 four=😀😁😂😃
 ```
+
+<!-- test: error.mismatched-for-end-label -->
+A label written after `end` must repeat the `for` loop's opening label.
+```maxon
+function main() returns ExitCode
+	var sum = 0
+	for i in 1 to 3 'each'
+		sum = sum + i
+	end 'every'
+	return sum
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:6:2: Mismatched end label: expected 'each', got 'every'
+```

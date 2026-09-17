@@ -11,7 +11,7 @@ import {
 } from 'vscode-languageclient/node';
 import { log, initLogger } from './logger';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
-import { registerTestController } from './testController';
+import { registerTestControllers } from './testController';
 
 interface ExtensionState {
 	client: LanguageClient;
@@ -41,7 +41,12 @@ interface ListProjectsResponse {
 }
 
 let lastClientState: State = State.Stopped;
-let lastProjects: ProjectInfo[] | undefined;
+type ProjectsView =
+	| { kind: 'loading'; }
+	| { kind: 'loaded'; projects: ProjectInfo[]; }
+	| { kind: 'unavailable'; reason: string; };
+
+let projectsView: ProjectsView = { kind: 'loading' };
 let projectRefreshTimer: NodeJS.Timeout | undefined;
 
 function buildTooltip(): vscode.MarkdownString {
@@ -58,17 +63,27 @@ function buildTooltip(): vscode.MarkdownString {
 	if (lastClientState !== State.Running) {
 		return md;
 	}
-	if (!lastProjects) {
-		md.appendMarkdown('_Loading projects…_');
-		return md;
+	switch (projectsView.kind) {
+		case 'loading':
+			md.appendMarkdown('_Loading projects…_');
+			return md;
+		case 'unavailable':
+			md.appendMarkdown('_Could not list the loaded projects:_ ');
+			md.appendText(projectsView.reason);
+			return md;
+		case 'loaded':
+			break;
+		default:
+			throw new Error(`buildTooltip: unhandled projects view ${JSON.stringify(projectsView)}`);
 	}
-	if (lastProjects.length === 0) {
+
+	if (projectsView.projects.length === 0) {
 		md.appendMarkdown('_No projects loaded_');
 		return md;
 	}
 
 	md.appendMarkdown('**Loaded projects**\n\n');
-	for (const p of lastProjects) {
+	for (const p of projectsView.projects) {
 		const kind = p.isSingleFile ? 'file' : 'project';
 		const fileText = p.fileCount === 1 ? '1 file' : `${p.fileCount} files`;
 		md.appendMarkdown(`- \`${p.rootPath}\` _(${kind}, ${fileText})_\n`);
@@ -98,16 +113,19 @@ function updateStatusBar() {
 async function refreshProjects() {
 	const client = state?.client;
 	if (!client || client.state !== State.Running) {
-		lastProjects = undefined;
+		projectsView = { kind: 'loading' };
 		updateStatusBar();
 		return;
 	}
 	try {
 		const response = await client.sendRequest<ListProjectsResponse>('maxon/listProjects', {});
-		lastProjects = response.projects ?? [];
+		if (!Array.isArray(response?.projects)) {
+			throw new Error(`the answer has no projects list: ${JSON.stringify(response)}`);
+		}
+		projectsView = { kind: 'loaded', projects: response.projects };
 	} catch (error) {
 		log(`maxon/listProjects failed: ${error}`);
-		lastProjects = [];
+		projectsView = { kind: 'unavailable', reason: error instanceof Error ? error.message : String(error) };
 	}
 	updateStatusBar();
 }
@@ -127,7 +145,7 @@ function subscribeToClientState(client: LanguageClient) {
 	stateSubscription = client.onDidChangeState((e) => {
 		lastClientState = e.newState;
 		if (e.newState !== State.Running) {
-			lastProjects = undefined;
+			projectsView = { kind: 'loading' };
 		}
 		updateStatusBar();
 		if (e.newState === State.Running) {
@@ -396,11 +414,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
 
-	// Register the spec-test controller first so it doesn't depend on LSP
-	// activation succeeding — early returns below would otherwise leave the
-	// Test Explorer empty.
+	// Registered before the compiler is looked for, so the Test Explorer lists tests even when no compiler is
+	// found and activation returns early; a run asks for the compiler when it starts.
 	try {
-		ctx.subscriptions.push(registerTestController());
+		ctx.subscriptions.push(registerTestControllers(() => state?.compilerExecutable));
 	} catch (error) {
 		log(`Failed to register test controller: ${error}`);
 	}
@@ -440,7 +457,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 				// Override options with Maxon-specific settings
 				const config = vscode.workspace.getConfiguration('maxon.formatting');
 				const insertSpaces = config.get<boolean>('insertSpaces', false);
-				const tabSize = config.get<number>('tabSize', 4);
+				const tabSize = config.get<number>('tabSize', 2);
 
 				const maxonOptions = {
 					...options,

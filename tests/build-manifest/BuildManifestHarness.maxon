@@ -59,6 +59,14 @@ export let DefineWithoutSeparatorFixtureName = "define-without-separator"
 export let SourceNotAStringFixtureName = "source-not-a-string"
 export let DefinesNotAListFixtureName = "defines-not-a-list"
 export let DefineNotAStringFixtureName = "define-not-a-string"
+export let VersionPastThePeFieldFixtureName = "version-past-the-pe-field"
+export let VersionPastTheMachOFieldFixtureName = "version-past-the-macho-field"
+export let VersionNotANumberFixtureName = "version-not-a-number"
+
+// The targets whose version fields bound a manifest `version`, pinned rather than inherited: the host's
+// own target may be one that stamps no version at all.
+export let PeTargetOption = "--target=x64-windows"
+export let MachOTargetOption = "--target=arm64-macos"
 
 // Where a project's build products live (`<project>/.maxon/`).
 let ProjectProductsDirName = ".maxon"
@@ -217,8 +225,22 @@ export function requireRefused(staged FilePath, options StringArray, exitCode As
 
 	try Expect.equal(build.exitCode() as AssertedInt, expected: exitCode, message: "`{what}` over the staged manifest exited {build.exitCode()} and must be refused with exit {exitCode}. It wrote to stdout: {build.stdout} and to stderr: {stderr}")
 	try Expect.contains(stderr, needle: wording, message: "`{what}` over the staged manifest was not refused for the reason under test. It wrote to stderr: {stderr}")
-	try Expect.isFalse(File.exists(builtExecutable(staged)), message: "`{what}` over the staged manifest was refused and still wrote an executable to {builtExecutable(staged).toString()}.")
+	try Expect.isEmpty(builtProductsIn(staged), message: "`{what}` over the staged manifest was refused and still wrote a product.")
 end 'requireRefused'
+
+// Every file in the staged project named for the manifest's output, whatever suffix a target gives it, named
+// for a report: a refusal over a pinned target writes no host-suffixed executable either way.
+function builtProductsIn(staged FilePath) returns String
+	var found = PathArray.create()
+
+	for entry in listing(staged) 'eachEntry'
+		if entry.filename().startsWith(BuiltStem) and not Directory.isDirectory(entry) 'aProduct'
+			found.push(entry)
+		end 'aProduct'
+	end 'eachEntry'
+
+	return listed(found)
+end 'builtProductsIn'
 
 function withoutFixtureSuffix(name String) returns String
 	if not name.endsWith(StoredFixtureSuffix) 'notStored'

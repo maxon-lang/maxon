@@ -1,0 +1,19 @@
+// One green thread spawned and awaited, so a `--debugstream` build has a scheduler transition to report.
+//
+// ⚠ The task sleeps: `async` on a body that never yields is refused.
+
+typealias ExitCode = int(0 to 255)
+typealias Answer = int(0 to 255)
+
+function answerLater(base Answer) returns Answer
+	sleep(1)
+	return base + 1
+end 'answerLater'
+
+function main() returns ExitCode
+	let pending = async answerLater(41)
+	let answer = await pending
+
+	print("answer {answer}\n")
+	return 0
+end 'main'

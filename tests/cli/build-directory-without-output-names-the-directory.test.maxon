@@ -1,0 +1,42 @@
+// build-directory-without-output-names-the-directory.test.maxon - `maxon build <dir>` with no `-o` names the
+// executable for the DIRECTORY, `<dir>/<dirname><ext>`, and never for whichever source the walk met first.
+//
+// Two sources whose names sort either side of the directory's, so neither walk order nor sorting can land
+// on the right name by accident. Staged outside the checkout: a build without `-o` inside it would take
+// the checkout's tree lock.
+
+let CaseDirName = "build-directory-without-output"
+let AppDirName = "app"
+let MainSourceStem = "zeta"
+let HelperSourceStem = "alpha"
+let SourceExtension = ".maxon"
+let MainSource = "function main() returns ExitCode\n\treturn helperAnswer()\nend 'main'\n"
+let HelperSource = "export function helperAnswer() returns ExitCode\n\treturn 0\nend 'helperAnswer'\n"
+
+test 'a directory built without -o is named for the directory'
+	let dir = freshOutsideCheckoutDir(CaseDirName)
+	let app = dir.join(AppDirName)
+
+	if not Directory.create(app) and not Directory.isDirectory(app) 'couldNotCreate'
+		panic("build-directory-without-output: the gate could not run - could not create {app.toString()}")
+	end 'couldNotCreate'
+
+	writeSource(app.join("{MainSourceStem}{SourceExtension}"), content: MainSource)
+	writeSource(app.join("{HelperSourceStem}{SourceExtension}"), content: HelperSource)
+
+	let build = runDriver([BuildCommandWord, AppDirName], workingDirectory: dir)
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a two-file directory did not build. {said}")
+
+	let named = app.join("{AppDirName}{executableSuffix()}")
+	try Expect.isTrue(File.exists(named), message: "`maxon build {AppDirName}` wrote no {named.toString()}. {said}")
+
+	for stem in [MainSourceStem, HelperSourceStem] 'eachSource'
+		let misnamed = app.join("{stem}{executableSuffix()}")
+		try Expect.isFalse(File.exists(misnamed), message: "`maxon build {AppDirName}` named its executable for a source file: {misnamed.toString()}. {said}")
+	end 'eachSource'
+end 'a directory built without -o is named for the directory'
+
+function writeSource(path FilePath, content String)
+	try File.writeText(path, content: content) otherwise panic("build-directory-without-output: the gate could not run - could not write {path.toString()}")
+end 'writeSource'

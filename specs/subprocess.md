@@ -457,25 +457,17 @@ end 'main'
 
 <!-- test: subprocess-not-found -->
 <!-- unsupported-targets: wasm32-wasi -->
-⭐ **A MISSING BINARY IS `executableNotFound` ON POSIX AND `spawnFailed` ON WINDOWS.** POSIX's spawn searches
-nothing, so a bare name the `PATH` walk misses is known not to exist before any spawn. Windows cannot know
-that from the walk — `CreateProcessA` searches further — and learns it only from the OS error code, which
-the stdlib cannot read while the seed predates `__Builtins.subprocessLastErrorCode`.
+⭐ **A MISSING BINARY IS `executableNotFound` ON EVERY OS.** POSIX's spawn searches nothing, so a bare name
+the `PATH` walk misses is known not to exist before any spawn. Windows cannot know that from the walk —
+`CreateProcessA` searches further — so it learns it from the OS error code the spawn leaves behind
+(`__Builtins.subprocessLastErrorCode`), and a file-not-found code is the same `executableNotFound` rather
+than a generic `spawnFailed`.
 ```maxon
 function main() returns ExitCode
 	let exe = Executable.name("definitely-not-a-real-binary-xyzzy")
 	var argv = StringArray.create()
 	var sawNotFound = false
 	try Subprocess.run(exe, arguments: argv) otherwise (e) 'handler'
-		#if os(Windows)
-		match e 'kind'
-			spawnFailed then sawNotFound = true
-			executableNotFound or
-				timeout or
-				ioFailed or
-				inputTooLarge then sawNotFound = false
-		end 'kind'
-		#else
 		match e 'kind'
 			executableNotFound then sawNotFound = true
 			spawnFailed or
@@ -483,7 +475,6 @@ function main() returns ExitCode
 				ioFailed or
 				inputTooLarge then sawNotFound = false
 		end 'kind'
-		#endif
 	end 'handler'
 	if sawNotFound 'check'
 		return 0
@@ -493,6 +484,212 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: subprocess-a-path-to-a-missing-file-is-not-found -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐ **`Executable.path` NAMING A FILE THAT DOES NOT EXIST IS `executableNotFound` TOO.** No search is
+involved — the path is taken as given — so the only evidence is the spawn's own failure, and the answer
+must not depend on which road reached it. The path is absolute, under the working directory, so no
+`PATH` entry can supply a file of that name.
+```maxon
+function main() returns ExitCode
+	let missing = Directory.currentPath().join("maxon-spec-no-such-executable-xyzzy")
+	if File.exists(missing) 'present'
+		return 2
+	end 'present'
+
+	var sawNotFound = false
+	try Subprocess.run(Executable.path(missing), arguments: StringArray.create()) otherwise (e) 'handler'
+		match e 'kind'
+			executableNotFound then sawNotFound = true
+			spawnFailed or
+				timeout or
+				ioFailed or
+				inputTooLarge then sawNotFound = false
+		end 'kind'
+	end 'handler'
+	if sawNotFound 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-missing-redirect-file-is-spawn-failed -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐ **A STANDARD STREAM THAT CANNOT BE OPENED IS `spawnFailed`, NOT `executableNotFound`, ON EVERY OS.** The
+spawn opens a `file` redirect before it launches anything, and a missing file fails with the same
+file-not-found code a missing executable does, so only the runtime can say which step failed. The
+executable here is one the spawn really finds — the control line proves it runs — and on Windows it is one
+`CreateProcessA` finds in the application's own directory, where the `PATH` walk never looks, so no check of
+the executable's file can stand in for the runtime's answer.
+```maxon
+function verdictOf(config Configuration) returns String
+	var verdict = "ran"
+	try config.run() otherwise (e) 'handler'
+		match e 'kind'
+			executableNotFound then verdict = "executableNotFound"
+			spawnFailed then verdict = "spawnFailed"
+			timeout or
+				ioFailed or
+				inputTooLarge then verdict = "other"
+		end 'kind'
+	end 'handler'
+	return verdict
+end 'verdictOf'
+
+function main() returns ExitCode
+	#if os(Windows)
+	let systemTool = try FilePath.from("C:\\Windows\\System32\\hostname.exe") otherwise panic("a literal path is well formed")
+	let appDir = try (try Process.executablePath() otherwise panic("the running program has a path")).parent() otherwise panic("an executable's path has a directory")
+	let tool = appDir.join("maxon-spec-app-dir-tool.exe")
+	let image = try File.readBinary(systemTool) otherwise panic("hostname.exe is readable")
+	try File.writeBinary(tool, content: image) otherwise panic("the application directory is writable")
+	let exe = Executable.name("maxon-spec-app-dir-tool")
+	#else
+	let exe = Executable.name("sh")
+	#endif
+
+	var control = Configuration.create(exe)
+	control.standardOutput = OutputDestination.discard
+
+	var missingStdin = Configuration.create(exe)
+	missingStdin.standardInput = InputSource.file(Directory.currentPath().join("maxon-spec-no-such-stdin-xyzzy.txt"))
+
+	var missingStdoutDir = Configuration.create(exe)
+	missingStdoutDir.standardOutput = OutputDestination.file(Directory.currentPath().join("maxon-spec-no-such-dir-xyzzy").join("out.txt"))
+
+	print("control={verdictOf(control)} stdin={verdictOf(missingStdin)} stdout={verdictOf(missingStdoutDir)}\n")
+
+	#if os(Windows)
+	try File.delete(tool) otherwise panic("the copied tool can be removed")
+	#endif
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+control=ran stdin=spawnFailed stdout=spawnFailed
+```
+
+<!-- test: subprocess-a-relative-executable-resolves-against-the-working-directory -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS.** A POSIX
+child enters its working directory and then runs the path, so the OS resolves it there. `CreateProcessA`
+resolves a path before the child exists, against the PARENT's directory, so on Windows the library joins
+the path onto the working directory first. A file that is only in the parent's directory is
+`executableNotFound` everywhere.
+```maxon
+function verdictOf(config Configuration) returns String
+	var verdict = "ran"
+	try config.run() otherwise (e) 'handler'
+		match e 'kind'
+			executableNotFound then verdict = "executableNotFound"
+			spawnFailed then verdict = "spawnFailed"
+			timeout or
+				ioFailed or
+				inputTooLarge then verdict = "other"
+		end 'kind'
+	end 'handler'
+	return verdict
+end 'verdictOf'
+
+function placeTool(dir FilePath, name String)
+	#if os(Windows)
+	let systemTool = try FilePath.from("C:\\Windows\\System32\\hostname.exe") otherwise panic("a literal path is well formed")
+	let image = try File.readBinary(systemTool) otherwise panic("hostname.exe is readable")
+	try File.writeBinary(dir.join(name), content: image) otherwise panic("the tool's directory is writable")
+	#else
+	try File.writeText(dir.join(name), content: "#!/bin/sh\nexit 0\n", mode: FilePermission.executable) otherwise panic("the tool's directory is writable")
+	#endif
+end 'placeTool'
+
+function runRelative(name String, workingDirectory FilePath) returns String
+	#if os(Windows)
+	let relative = try FilePath.from(".\\{name}") otherwise panic("a dot-relative file name is a well-formed path")
+	#else
+	let relative = try FilePath.from("./{name}") otherwise panic("a dot-relative file name is a well-formed path")
+	#endif
+	var config = Configuration.create(Executable.path(relative))
+	config.workingDirectory = workingDirectory
+	return verdictOf(config)
+end 'runRelative'
+
+function main() returns ExitCode
+	let parentDir = Directory.currentPath()
+	let childDir = parentDir.join("maxon-spec-relative-child-cwd")
+	_ = Directory.create(childDir)
+
+	#if os(Windows)
+	let parentOnly = "maxon-spec-parent-cwd-only-tool.exe"
+	let childOnly = "maxon-spec-child-cwd-only-tool.exe"
+	#else
+	let parentOnly = "maxon-spec-parent-cwd-only-tool"
+	let childOnly = "maxon-spec-child-cwd-only-tool"
+	#endif
+
+	placeTool(parentDir, name: parentOnly)
+	placeTool(childDir, name: childOnly)
+
+	print("parent-cwd-only={runRelative(parentOnly, workingDirectory: childDir)} child-cwd-only={runRelative(childOnly, workingDirectory: childDir)}\n")
+
+	try File.delete(parentDir.join(parentOnly)) otherwise panic("the parent-side tool can be removed")
+	try File.delete(childDir.join(childOnly)) otherwise panic("the child-side tool can be removed")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+parent-cwd-only=executableNotFound child-cwd-only=ran
+```
+
+<!-- test: subprocess-a-missing-working-directory-is-spawn-failed -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐ **A `workingDirectory` THAT DOES NOT EXIST IS `spawnFailed` ON EVERY OS, AND THE CHILD NEVER RUNS.** It
+fails with a not-found code on POSIX, so it too is a step only the runtime can tell apart from the launch.
+The executable is one every lane finds, so `executableNotFound` would be a wrong answer about it.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("exit 0")
+	#else
+	let exe = Executable.name("sh")
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("exit 0")
+	#endif
+
+	var verdict = "ran"
+	try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath().join("maxon-spec-no-such-working-directory-xyzzy")) otherwise (e) 'handler'
+		match e 'kind'
+			executableNotFound then verdict = "executableNotFound"
+			spawnFailed then verdict = "spawnFailed"
+			timeout or
+				ioFailed or
+				inputTooLarge then verdict = "other"
+		end 'kind'
+	end 'handler'
+
+	print("{verdict}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+spawnFailed
 ```
 
 <!-- test: subprocess-exit-code -->

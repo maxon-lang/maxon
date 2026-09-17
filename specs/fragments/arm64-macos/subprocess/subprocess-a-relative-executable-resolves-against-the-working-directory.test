@@ -1,0 +1,688 @@
+// Test: subprocess-a-relative-executable-resolves-against-the-working-directory
+function verdictOf(config Configuration) returns String
+	var verdict = "ran"
+	try config.run() otherwise (e) 'handler'
+		match e 'kind'
+			executableNotFound then verdict = "executableNotFound"
+			spawnFailed then verdict = "spawnFailed"
+			timeout or
+				ioFailed or
+				inputTooLarge then verdict = "other"
+		end 'kind'
+	end 'handler'
+	return verdict
+end 'verdictOf'
+
+function placeTool(dir FilePath, name String)
+	#if os(Windows)
+	let systemTool = try FilePath.from("C:\\Windows\\System32\\hostname.exe") otherwise panic("a literal path is well formed")
+	let image = try File.readBinary(systemTool) otherwise panic("hostname.exe is readable")
+	try File.writeBinary(dir.join(name), content: image) otherwise panic("the tool's directory is writable")
+	#else
+	try File.writeText(dir.join(name), content: "#!/bin/sh\nexit 0\n", mode: FilePermission.executable) otherwise panic("the tool's directory is writable")
+	#endif
+end 'placeTool'
+
+function runRelative(name String, workingDirectory FilePath) returns String
+	#if os(Windows)
+	let relative = try FilePath.from(".\\{name}") otherwise panic("a dot-relative file name is a well-formed path")
+	#else
+	let relative = try FilePath.from("./{name}") otherwise panic("a dot-relative file name is a well-formed path")
+	#endif
+	var config = Configuration.create(Executable.path(relative))
+	config.workingDirectory = workingDirectory
+	return verdictOf(config)
+end 'runRelative'
+
+function main() returns ExitCode
+	let parentDir = Directory.currentPath()
+	let childDir = parentDir.join("maxon-spec-relative-child-cwd")
+	_ = Directory.create(childDir)
+
+	#if os(Windows)
+	let parentOnly = "maxon-spec-parent-cwd-only-tool.exe"
+	let childOnly = "maxon-spec-child-cwd-only-tool.exe"
+	#else
+	let parentOnly = "maxon-spec-parent-cwd-only-tool"
+	let childOnly = "maxon-spec-child-cwd-only-tool"
+	#endif
+
+	placeTool(parentDir, name: parentOnly)
+	placeTool(childDir, name: childOnly)
+
+	print("parent-cwd-only={runRelative(parentOnly, workingDirectory: childDir)} child-cwd-only={runRelative(childOnly, workingDirectory: childDir)}\n")
+
+	try File.delete(parentDir.join(parentOnly)) otherwise panic("the parent-side tool can be removed")
+	try File.delete(childDir.join(childOnly)) otherwise panic("the child-side tool can be removed")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 2048
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __io_pipe_seq@424 = i64 0
+  __subp_table@432 = i64 0
+  __subp_last_error@440 = i64 0
+  __slab_arena_list@448 = i64 0
+  __slab_arena_map_l1@456 = i64 0
+  __slab_state@464 = i64 0
+}
+
+func @placeTool {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl FilePath.join
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_42  ; "#!/bin/sh\x0aexit 0\x0a"
+    arm64.movImm x2, 1
+    arm64.movRegReg x0, x19
+    arm64.bl File.writeText
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  tryerr:
+    arm64.leaRdata x0, __str_blob_43  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:22: the tool's directory is writable\x0a"
+    arm64.bl mrt_panic
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @runRelative {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movRegReg x19, x1
+    arm64.leaRdata x1, __str_rec_44  ; "./"
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x1 + 8]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.add x24, x21, x23
+    arm64.add x0, x24, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x26, x25, 56
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x26, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x20, x23
+    arm64.storeBaseDispReg.word64 [x25 + 0], x26
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl FilePath.from
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot0, x20
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+  tryok#1:
+    arm64.movRegReg x0, x25
+    arm64.bl __str_decref
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_own
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+  __il_body#16:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_93  ; ""
+    arm64.bl FilePath.from
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#18
+  tryok#17:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x23 + 8], x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x24 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x24 + 8], x0
+    arm64.movImm x25, 16777216
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x26 + 0], x0
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x25, 16777216
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x27 + 0], x0
+    arm64.storeBaseDispReg.word64 [x27 + 8], x25
+  __il_body#20:
+    arm64.movImm x25, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x28, x0
+    arm64.storeBaseDispReg.byte [x28 + 0], x25
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.byte [x28 + 8], x0
+  __il_cont#19:
+    arm64.movImm x0, 72
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x25 + 0], x21
+    arm64.storeBaseDispReg.word64 [x25 + 8], x20
+    arm64.storeBaseDispReg.word64 [x25 + 16], x22
+    arm64.storeBaseDispReg.word64 [x25 + 24], x23
+    arm64.storeBaseDispReg.word64 [x25 + 32], x24
+    arm64.storeBaseDispReg.word64 [x25 + 40], x26
+    arm64.storeBaseDispReg.word64 [x25 + 48], x27
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x25 + 56], x0
+    arm64.storeBaseDispReg.word64 [x25 + 64], x28
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Executable
+  __il_cont#15:
+    arm64.loadRegBaseDisp.word64 x20, [x25 + 16]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_own
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_FilePath
+    arm64.storeBaseDispReg.word64 [x25 + 16], x19
+  __il_body#4:
+    arm64.leaRdata x0, __str_rec_38  ; "ran"
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 56
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x25
+    arm64.bl Configuration.run
+    arm64.movRegReg x19, x9
+    arm64.cmp x19, 0
+    arm64.b.eq tryok#5
+  tryerr#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne matchnext#11
+  matcharm#7:
+    arm64.leaRdata x0, __str_rec_39  ; "executableNotFound"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.b matchcont
+  matchnext#11:
+    arm64.cmp x0, 1
+    arm64.b.ne matchnext#12
+  matcharm#8:
+    arm64.leaRdata x0, __str_rec_40  ; "spawnFailed"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+    arm64.b matchcont
+  matchnext#12:
+    arm64.cmp x0, 2
+    arm64.cset x1, ge
+    arm64.cmp x0, 4
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbz x0, matchdead
+  matcharm#9:
+    arm64.leaRdata x0, __str_rec_41  ; "other"
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 56
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_decref
+  matchcont:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_SubprocessError
+    arm64.b __il_cont#3
+  matchdead:
+  tryok#5:
+    arm64.bl __destruct_CollectedOutput
+    arm64.movRegReg x23, x21
+  __il_cont#3:
+    arm64.movRegReg x0, x25
+    arm64.bl __destruct_Configuration
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_45  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:30: a dot-relative file name is a well-formed path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryerr#18:
+    arm64.leaRdata x0, __str_blob_121  ; "panic at Subprocess.maxon:432: Configuration.create: empty path is the sentinel for 'inherit cwd'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 176
+    arm64.storeSlotReg slot18, x28
+    arm64.storeSlotReg slot17, x27
+    arm64.storeSlotReg slot16, x26
+    arm64.storeSlotReg slot15, x25
+    arm64.storeSlotReg slot14, x24
+    arm64.storeSlotReg slot13, x23
+    arm64.storeSlotReg slot12, x22
+    arm64.storeSlotReg slot11, x21
+    arm64.storeSlotReg slot10, x20
+    arm64.storeSlotReg slot9, x19
+  __il_body#7:
+    arm64.bl __md_current_path
+    arm64.movRegReg x19, x0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#9
+  tryok#8:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_retain
+    arm64.bl String.init
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x20
+    arm64.bl FilePath.from
+    arm64.movRegReg x21, x0
+    arm64.storeSlotReg slot3, x21
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#11
+  tryok#10:
+    arm64.movRegReg x0, x20
+    arm64.bl __str_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+  __il_cont#6:
+    arm64.leaRdata x1, __str_rec_46  ; "maxon-spec-relative-child-cwd"
+    arm64.movRegReg x0, x21
+    arm64.bl FilePath.join
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot1, x19
+    arm64.movRegReg x0, x19
+    arm64.bl Directory.create
+    arm64.leaRdata x20, __str_rec_47  ; "maxon-spec-parent-cwd-only-tool"
+    arm64.storeSlotReg slot2, x20
+    arm64.leaRdata x22, __str_rec_48  ; "maxon-spec-child-cwd-only-tool"
+    arm64.storeSlotReg slot0, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl placeTool
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl placeTool
+    arm64.leaRdata x0, __str_rec_49  ; "parent-cwd-only="
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl runRelative
+    arm64.storeSlotReg slot4, x0
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_50  ; " child-cwd-only="
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl runRelative
+    arm64.storeSlotReg slot5, x0
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.leaRdata x0, __str_rec_51  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot8, x0
+    arm64.add x1, x23, x24
+    arm64.add x1, x1, x26
+    arm64.add x1, x1, x22
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot6, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot7, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x21, x28, x23
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x20, x21, x24
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x20, x20, x26
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x19, x20, x22
+    arm64.loadRegSlot x2, slot8
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot8
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x0, slot7
+    arm64.storeBaseDispReg.word64 [x0 + 0], x28
+    arm64.loadRegSlot x1, slot6
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 24], x1
+  __il_body#12:
+    arm64.loadRegSlot x0, slot7
+    arm64.bl __write_stdout
+  __il_cont#5:
+    arm64.loadRegSlot x0, slot7
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot5
+    arm64.bl __str_decref
+    arm64.loadRegSlot x0, slot4
+    arm64.bl __str_decref
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegSlot x0, slot3
+    arm64.bl FilePath.join
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.delete
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+  tryok#1:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.loadRegSlot x1, slot0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl FilePath.join
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl File.delete
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+  tryok#3:
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_FilePath
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __destruct_FilePath
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryerr#9:
+    arm64.leaRdata x0, __str_blob_113  ; "panic at Directory.maxon:72: Directory.currentPath: GetCurrentDirectory failed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryerr#11:
+    arm64.leaRdata x0, __str_blob_114  ; "panic at Directory.maxon:74: Directory.currentPath: invalid path\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_52  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:55: the parent-side tool can be removed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+  tryerr#4:
+    arm64.leaRdata x0, __str_blob_53  ; "panic at subprocess-a-relative-executable-resolves-against-the-working-directory.test:56: the child-side tool can be removed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot9
+    arm64.loadRegSlot x20, slot10
+    arm64.loadRegSlot x21, slot11
+    arm64.loadRegSlot x22, slot12
+    arm64.loadRegSlot x23, slot13
+    arm64.loadRegSlot x24, slot14
+    arm64.loadRegSlot x25, slot15
+    arm64.loadRegSlot x26, slot16
+    arm64.loadRegSlot x27, slot17
+    arm64.loadRegSlot x28, slot18
+    arm64.epilogue 176
+    arm64.ret
+}

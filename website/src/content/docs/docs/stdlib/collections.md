@@ -46,7 +46,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `Array.create()` | `Array` | An empty array. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
 | `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. |
-| `Array.from(source Iterable)` | `Array` | Collect every element of an iterable. Called through an alias (`ScoreArray.from(range)`), this is currently rejected by the parser (E2010) because `from` is a keyword. |
+| `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
 | `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
 | `managed` | field | The array's raw storage, for `appendMemory` and library code. |
 
@@ -144,7 +144,7 @@ there was never filled.
 
 `ListIterator` implements `Iterator with Element`: `current()` and `advance()`.
 
-`ListError` (`empty`) is declared alongside `List`; the list's own methods throw `ArrayError`.
+The list's throwing methods throw `ArrayError`.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)

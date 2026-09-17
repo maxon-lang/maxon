@@ -1,512 +1,403 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { log } from './logger';
+import { isMaxonCheckout, registerSpecTestController } from './specTestController';
+import { appendRunOutput, childList, pipeLines } from './testItems';
 import {
-	parseSpecContent,
-	parseSpecDirectory,
-	SpecFile,
-	SpecTestMarker,
-	shouldIncludeForSelfHosted
-} from './specParser';
+	isIgnoredDirectory,
+	parseTestDeclarations,
+	parseTestRunDocument,
+	pathKey,
+	resultKey,
+	TestFileSuffix,
+	testFilterFor,
+	testKey,
+	TestProjectExitCode,
+	testProjectDirectory,
+	TestRunDocument,
+	TestVerdict,
+	verdictFor
+} from './unitTestModel';
 
-const isWindows = os.platform() === 'win32';
-const compilerBinaryName = isWindows ? 'maxon.exe' : 'maxon';
+// The compiler folds case when it recognises a test file, so the glob does too.
+const TEST_FILE_GLOB = '**/*.[tT][eE][sS][tT].maxon';
+const IGNORE_MARKER_GLOB = '**/.maxonignore';
 
-interface ProfileBinding {
-	profile: vscode.TestRunProfile;
-	binary: string;
-	cwd: string;
-	includes(spec: SpecFile): boolean;
+interface DeclaredTestItem {
+	file: string;
+	name: string;
 }
 
-// `spec-test` prints one verdict line per selected test on stdout — `PASS <spec>/<test>`,
-// `FAIL <spec>/<test>: <reason>`, `SKIP <spec>/<test>` or `NOTRUN <spec>/<test>` (`verdictLine` in
-// maxon-bin/Main.maxon) — then `<n> passed, <m> failed`. A failure's reason continues on the lines
-// after its verdict until the next verdict or the summary, and may be empty on the verdict line itself.
-const PASS_LINE_RE = /^PASS (\S+)$/;
-const FAIL_LINE_RE = /^FAIL (\S+):(?: (.*))?$/;
-const NOT_RUN_LINE_RE = /^(?:SKIP|NOTRUN) (\S+)$/;
-const SUMMARY_RE = /^\d+ passed, \d+ failed$/;
+/**
+ * The Test Explorer: every `test` declaration in the workspace's `*.test.maxon` files, run by the compiler the
+ * language server uses. The checkout's spec suite gets a controller of its own, only in the checkout.
+ *
+ * `compilerExecutable` is asked at run time, because the compiler is found (or installed) after activation
+ * registers this.
+ */
+export function registerTestControllers(compilerExecutable: () => string | undefined): vscode.Disposable {
+	const disposables: vscode.Disposable[] = [registerUnitTestController(compilerExecutable)];
 
-export function registerTestController(): vscode.Disposable {
-	const folders = vscode.workspace.workspaceFolders;
-	log(`Test controller activating; workspaceFolders: ${
-		folders ? folders.map(f => f.uri.fsPath).join(', ') : '(none)'
-	}`);
-	if (!folders || folders.length === 0) {
-		log('No workspace folder open — test controller not registered');
-		return new vscode.Disposable(() => { /* no-op */ });
-	}
-	const workspaceRoot = folders[0].uri.fsPath;
-	const specDir = path.join(workspaceRoot, 'specs');
-	const specDirExists = fs.existsSync(specDir);
-	log(`Looking for specs at ${specDir} (exists: ${specDirExists})`);
-
-	const controller = vscode.tests.createTestController('maxonSpecTests', 'Maxon Spec Tests');
-
-	if (!specDirExists) {
-		log('No specs/ directory; controller registered with empty tree');
+	for (const folder of vscode.workspace.workspaceFolders ?? []) {
+		if (isMaxonCheckout(folder.uri.fsPath)) {
+			log(`${folder.uri.fsPath} is the Maxon checkout; registering the spec suite`);
+			disposables.push(registerSpecTestController(folder.uri.fsPath));
+		}
 	}
 
-	const specItems = new Map<string, vscode.TestItem>();
-	const testItemById = new Map<string, vscode.TestItem>();
-	const specByName = new Map<string, SpecFile>();
+	return vscode.Disposable.from(...disposables);
+}
 
-	const compilerBinary = path.join(workspaceRoot, 'maxon-bin', '.maxon', compilerBinaryName);
+function registerUnitTestController(compilerExecutable: () => string | undefined): vscode.Disposable {
+	const controller = vscode.tests.createTestController('maxonTests', 'Maxon Tests');
+	const fileItems = new Map<string, vscode.TestItem>();
+	const declared = new Map<string, DeclaredTestItem>();
 
-	const binding: ProfileBinding = {
-		profile: controller.createRunProfile(
-			'Maxon Compiler',
-			vscode.TestRunProfileKind.Run,
-			(req, tok) => runHandler(req, tok, binding),
-			true
-		),
-		binary: compilerBinary,
-		cwd: workspaceRoot,
-		includes: shouldIncludeForSelfHosted
-	};
+	function syncFile(uri: vscode.Uri): void {
+		const file = uri.fsPath;
+		const folder = vscode.workspace.getWorkspaceFolder(uri);
 
-	// Sync a single spec's tree node and child test items. Returns the count of
-	// child tests so the caller can produce a discovery summary.
-	function syncSpec(spec: SpecFile): number {
-		specByName.set(spec.specName, spec);
-		const specUri = vscode.Uri.file(spec.filePath);
-
-		let specItem = specItems.get(spec.specName);
-		if (!specItem) {
-			specItem = controller.createTestItem(spec.specName, spec.specName, specUri);
-			controller.items.add(specItem);
-			specItems.set(spec.specName, specItem);
-		}
-		specItem.description = spec.feature;
-
-		const childIds = new Set<string>();
-		for (const test of spec.tests) {
-			const id = `${spec.specName}/${test.name}`;
-			childIds.add(id);
-			let item = testItemById.get(id);
-			if (!item) {
-				item = controller.createTestItem(id, test.name, specUri);
-				testItemById.set(id, item);
-				specItem.children.add(item);
-			}
-			item.range = markerRange(test);
-		}
-		for (const child of childList(specItem)) {
-			if (!childIds.has(child.id)) {
-				specItem.children.delete(child.id);
-				testItemById.delete(child.id);
-			}
-		}
-		return spec.tests.length;
-	}
-
-	function refreshFromDisk(): void {
-		const specs = parseSpecDirectory(specDir);
-		const seenSpecs = new Set<string>();
-		let testCount = 0;
-
-		for (const spec of specs) {
-			seenSpecs.add(spec.specName);
-			testCount += syncSpec(spec);
+		// `maxon test` never compiles a file beneath a `.maxonignore`, so it has no tests to show.
+		if (!folder || !path.basename(file).toLowerCase().endsWith(TestFileSuffix) || isIgnoredDirectory(path.dirname(file))) {
+			removeFile(uri);
+			return;
 		}
 
-		for (const [name, item] of [...specItems]) {
-			if (!seenSpecs.has(name)) {
-				controller.items.delete(item.id);
-				specItems.delete(name);
-				specByName.delete(name);
-			}
-		}
-		log(`Discovered ${testCount} spec test(s) across ${seenSpecs.size} spec file(s)`);
-	}
-
-	refreshFromDisk();
-	controller.refreshHandler = async () => { refreshFromDisk(); };
-
-	const watcher = vscode.workspace.createFileSystemWatcher(
-		new vscode.RelativePattern(specDir, '*.md')
-	);
-	watcher.onDidChange(uri => refreshSingle(uri));
-	watcher.onDidCreate(uri => refreshSingle(uri));
-	watcher.onDidDelete(uri => removeSingle(uri));
-
-	function refreshSingle(uri: vscode.Uri): void {
+		let content: string;
 		try {
-			const content = fs.readFileSync(uri.fsPath, 'utf8');
-			syncSpec(parseSpecContent(uri.fsPath, content));
+			content = fs.readFileSync(file, 'utf8');
 		} catch (err) {
-			log(`Failed to refresh ${uri.fsPath}: ${err}`);
+			log(`Could not read ${file}: ${err}`);
+			removeFile(uri);
+			return;
 		}
+
+		let fileItem = fileItems.get(pathKey(file));
+		if (!fileItem) {
+			fileItem = controller.createTestItem(uri.toString(), vscode.workspace.asRelativePath(uri, true), uri);
+			controller.items.add(fileItem);
+			fileItems.set(pathKey(file), fileItem);
+		}
+
+		const children: vscode.TestItem[] = [];
+		for (const test of parseTestDeclarations(content)) {
+			const id = testKey(file, test.name);
+			const item = fileItem.children.get(id) ?? controller.createTestItem(id, test.name, uri);
+			const position = new vscode.Position(test.line, test.column);
+			item.range = new vscode.Range(position, position);
+			declared.set(id, { file, name: test.name });
+			children.push(item);
+		}
+
+		const kept = new Set(children.map(child => child.id));
+		for (const stale of childList(fileItem)) {
+			if (!kept.has(stale.id)) declared.delete(stale.id);
+		}
+		fileItem.children.replace(children);
 	}
 
-	function removeSingle(uri: vscode.Uri): void {
-		const specName = path.basename(uri.fsPath, '.md');
-		const item = specItems.get(specName);
-		if (!item) return;
-		for (const child of childList(item)) testItemById.delete(child.id);
-		controller.items.delete(item.id);
-		specItems.delete(specName);
-		specByName.delete(specName);
+	function removeFile(uri: vscode.Uri): void {
+		const key = pathKey(uri.fsPath);
+		const fileItem = fileItems.get(key);
+		if (!fileItem) return;
+
+		for (const child of childList(fileItem)) declared.delete(child.id);
+		controller.items.delete(fileItem.id);
+		fileItems.delete(key);
 	}
 
-	async function runHandler(
-		request: vscode.TestRunRequest,
-		token: vscode.CancellationToken,
-		binding: ProfileBinding
-	): Promise<void> {
+	async function discoverAll(): Promise<void> {
+		const uris = await vscode.workspace.findFiles(TEST_FILE_GLOB);
+		const found = new Set(uris.map(uri => pathKey(uri.fsPath)));
+
+		for (const [key, item] of [...fileItems]) {
+			if (!found.has(key) && item.uri) removeFile(item.uri);
+		}
+		for (const uri of uris) syncFile(uri);
+
+		log(`Discovered ${declared.size} test(s) across ${fileItems.size} test file(s)`);
+	}
+
+	controller.refreshHandler = () => discoverAll();
+	discoverAll().catch(err => log(`Test discovery failed: ${err}`));
+
+	const testFileWatcher = vscode.workspace.createFileSystemWatcher(TEST_FILE_GLOB);
+	testFileWatcher.onDidCreate(syncFile);
+	testFileWatcher.onDidChange(syncFile);
+	testFileWatcher.onDidDelete(removeFile);
+
+	// A marker added or removed changes which test files any compile can see.
+	const ignoreMarkerWatcher = vscode.workspace.createFileSystemWatcher(IGNORE_MARKER_GLOB, false, true, false);
+	const rediscover = () => { discoverAll().catch(err => log(`Test discovery failed: ${err}`)); };
+	ignoreMarkerWatcher.onDidCreate(rediscover);
+	ignoreMarkerWatcher.onDidDelete(rediscover);
+
+	controller.createRunProfile(
+		'Run',
+		vscode.TestRunProfileKind.Run,
+		(request, token) => runTests(request, token),
+		true
+	);
+
+	async function runTests(request: vscode.TestRunRequest, token: vscode.CancellationToken): Promise<void> {
 		const run = controller.createTestRun(request);
 
-		if (!fs.existsSync(binding.binary)) {
-			const msg = `Compiler binary not found: ${binding.binary}`;
-			log(msg);
-			vscode.window.showErrorMessage(msg);
-			run.end();
-			return;
-		}
-
-		const requested = collectRequested(
-			request, controller, testItemById, specItems, specByName, binding
-		);
-		for (const item of requested.skipped) run.skipped(item);
-		if (requested.items.length === 0) {
-			run.end();
-			return;
-		}
-
-		for (const item of requested.items) run.enqueued(item);
-
-		const filters = buildFilters(requested, specByName, binding);
 		try {
-			for (const filter of filters) {
+			const requested = requestedTests(request);
+			if (requested.length === 0) return;
+
+			const compiler = compilerExecutable();
+			if (!compiler) {
+				const message = new vscode.TestMessage('No Maxon compiler was found. Set `maxon.serverPath` or install Maxon, then reload the window.');
+				for (const item of requested) run.errored(item, message);
+				return;
+			}
+
+			for (const item of requested) run.enqueued(item);
+
+			for (const project of groupByProject(requested)) {
 				if (token.isCancellationRequested) break;
-				await runWithFilter(binding, filter, requested, run, token);
+				await runProject(compiler, project, run, token);
 			}
 		} catch (err) {
 			log(`Test run failed: ${err}`);
+			run.appendOutput(`Test run failed: ${err}\r\n`);
 		} finally {
 			run.end();
 		}
 	}
 
-	return new vscode.Disposable(() => {
-		watcher.dispose();
-		controller.dispose();
-	});
-}
-
-function markerRange(test: SpecTestMarker): vscode.Range {
-	const pos = new vscode.Position(test.line, test.column);
-	return new vscode.Range(pos, pos);
-}
-
-function childList(item: vscode.TestItem): vscode.TestItem[] {
-	const out: vscode.TestItem[] = [];
-	item.children.forEach(c => out.push(c));
-	return out;
-}
-
-interface RequestedTests {
-	items: vscode.TestItem[];
-	itemById: Map<string, vscode.TestItem>;
-	bySpec: Map<string, { all: boolean; tests: vscode.TestItem[]; }>;
-	// Items whose spec is excluded by the active profile (e.g. `status: draft`).
-	// The runner won't see them, so we mark them skipped explicitly instead of
-	// leaving them unresolved.
-	skipped: vscode.TestItem[];
-}
-
-function collectRequested(
-	request: vscode.TestRunRequest,
-	controller: vscode.TestController,
-	testItemById: Map<string, vscode.TestItem>,
-	specItems: Map<string, vscode.TestItem>,
-	specByName: Map<string, SpecFile>,
-	binding: ProfileBinding
-): RequestedTests {
-	const exclude = new Set<string>();
-	for (const ex of request.exclude ?? []) exclude.add(ex.id);
-
-	const items: vscode.TestItem[] = [];
-	const itemById = new Map<string, vscode.TestItem>();
-	const skipped: vscode.TestItem[] = [];
-	const bySpec = new Map<string, { all: boolean; tests: vscode.TestItem[]; }>();
-
-	const seedItems: vscode.TestItem[] = [];
-	if (request.include) {
-		seedItems.push(...request.include);
-	} else {
-		controller.items.forEach(i => seedItems.push(i));
-	}
-
-	for (const seed of seedItems) {
-		if (exclude.has(seed.id)) continue;
-		if (specItems.has(seed.id)) {
-			// Whole-spec selection
-			const specName = seed.id;
-			const spec = specByName.get(specName);
-			const tests: vscode.TestItem[] = [];
-			seed.children.forEach(child => {
-				if (!exclude.has(child.id)) tests.push(child);
-			});
-			if (tests.length === 0) continue;
-			if (spec && !binding.includes(spec)) {
-				// Profile excludes this spec (e.g. `status: draft`) — the runner
-				// won't report on these tests, so mark them skipped here.
-				skipped.push(...tests);
-				continue;
-			}
-			items.push(...tests);
-			for (const t of tests) itemById.set(t.id, t);
-			bySpec.set(specName, { all: tests.length === seed.children.size, tests });
-		} else if (testItemById.has(seed.id)) {
-			const slash = seed.id.indexOf('/');
-			if (slash < 0) continue;
-			const specName = seed.id.slice(0, slash);
-			const spec = specByName.get(specName);
-			if (spec && !binding.includes(spec)) {
-				skipped.push(seed);
-				continue;
-			}
-			const entry = bySpec.get(specName) ?? { all: false, tests: [] };
-			entry.tests.push(seed);
-			bySpec.set(specName, entry);
-			items.push(seed);
-			itemById.set(seed.id, seed);
-		}
-	}
-
-	return { items, itemById, bySpec, skipped };
-}
-
-/**
- * Build the list of `--filter` values to pass. `null` in the list means
- * "no filter" — the runner walks every spec itself in a single shared
- * worker pool, which is dramatically faster than spawning per-spec.
- */
-function buildFilters(
-	requested: RequestedTests,
-	specByName: Map<string, SpecFile>,
-	binding: ProfileBinding
-): (string | null)[] {
-	// If we've requested whole-spec runs of every spec the profile would
-	// include, drop the filter and let the runner do its thing in one process.
-	let coversAllEligible = true;
-	let eligibleCount = 0;
-	for (const spec of specByName.values()) {
-		if (!binding.includes(spec)) continue;
-		eligibleCount++;
-		const entry = requested.bySpec.get(spec.specName);
-		if (!entry || !entry.all) {
-			coversAllEligible = false;
-			break;
-		}
-	}
-	if (coversAllEligible && eligibleCount > 0 && eligibleCount === requested.bySpec.size) {
-		return [null];
-	}
-
-	const out: (string | null)[] = [];
-	for (const [specName, entry] of requested.bySpec) {
-		if (entry.all) {
-			out.push(`${specName}/`);
+	function requestedTests(request: vscode.TestRunRequest): vscode.TestItem[] {
+		const excluded = new Set((request.exclude ?? []).map(item => item.id));
+		const seeds: vscode.TestItem[] = [];
+		if (request.include) {
+			seeds.push(...request.include);
 		} else {
-			for (const test of entry.tests) out.push(test.id);
+			controller.items.forEach(item => seeds.push(item));
+		}
+
+		const out = new Map<string, vscode.TestItem>();
+		for (const seed of seeds) {
+			if (excluded.has(seed.id)) continue;
+
+			if (declared.has(seed.id)) {
+				out.set(seed.id, seed);
+				continue;
+			}
+
+			for (const child of childList(seed)) {
+				if (!excluded.has(child.id)) out.set(child.id, child);
+			}
+		}
+		return [...out.values()];
+	}
+
+	interface ProjectRun {
+		projectDirectory: string;
+		workingDirectory: string;
+		tests: vscode.TestItem[];
+		filter: string | undefined;
+	}
+
+	function groupByProject(requested: vscode.TestItem[]): ProjectRun[] {
+		const projectOf = new Map<string, { projectDirectory: string; workingDirectory: string; }>();
+		const locate = (file: string) => {
+			const key = pathKey(file);
+			let located = projectOf.get(key);
+			if (!located) {
+				const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+				if (!folder) throw new Error(`${file} is in no workspace folder`);
+				located = {
+					projectDirectory: testProjectDirectory(file, folder.uri.fsPath),
+					workingDirectory: folder.uri.fsPath
+				};
+				projectOf.set(key, located);
+			}
+			return located;
+		};
+
+		const requestedIds = new Set(requested.map(item => item.id));
+		const groups = new Map<string, ProjectRun & { wholeProject: boolean; }>();
+
+		for (const item of requested) {
+			const test = declaredTest(item);
+			const located = locate(test.file);
+			const key = pathKey(located.projectDirectory);
+			let group = groups.get(key);
+			if (!group) {
+				group = { ...located, tests: [], filter: undefined, wholeProject: true };
+				groups.set(key, group);
+			}
+			group.tests.push(item);
+		}
+
+		// A project runs unfiltered only when every test discovered in it is requested.
+		for (const [id, test] of declared) {
+			if (requestedIds.has(id)) continue;
+			const group = groups.get(pathKey(locate(test.file).projectDirectory));
+			if (group) group.wholeProject = false;
+		}
+
+		return [...groups.values()].map(group => {
+			const wholeFiles: string[] = [];
+			const testNames: string[] = [];
+
+			for (const fileItem of fileItems.values()) {
+				const tests = childList(fileItem).filter(child => requestedIds.has(child.id));
+				if (tests.length === 0 || !group.tests.includes(tests[0])) continue;
+
+				if (tests.length === fileItem.children.size) {
+					wholeFiles.push(declaredTest(tests[0]).file);
+				} else {
+					testNames.push(...tests.map(child => declaredTest(child).name));
+				}
+			}
+
+			return {
+				projectDirectory: group.projectDirectory,
+				workingDirectory: group.workingDirectory,
+				tests: group.tests,
+				filter: testFilterFor({ wholeFiles, testNames }, group.workingDirectory, group.wholeProject)
+			};
+		});
+	}
+
+	function declaredTest(item: vscode.TestItem): DeclaredTestItem {
+		const test = declared.get(item.id);
+		if (!test) throw new Error(`The test item '${item.label}' is not a discovered test`);
+		return test;
+	}
+
+	async function runProject(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
+		const args = ['test', project.projectDirectory, '--json'];
+		if (project.filter !== undefined) args.push(`--filter=${project.filter}`);
+
+		log(`Running ${compiler} ${args.join(' ')} in ${project.workingDirectory}`);
+		run.appendOutput(`> ${compiler} ${args.join(' ')}\r\n`);
+		for (const item of project.tests) run.started(item);
+
+		const outcome = await runCompiler(compiler, args, project.workingDirectory, run, token);
+		if (token.isCancellationRequested) return;
+
+		if (outcome.kind === 'failedToStart') {
+			erroredAll(run, project.tests, `Could not run ${compiler}: ${outcome.error}`);
+			return;
+		}
+
+		if (outcome.code !== TestProjectExitCode.AllPassed && outcome.code !== TestProjectExitCode.TestsFailed) {
+			const said = outcome.stderr.trim() || outcome.stdout.trim();
+			erroredAll(run, project.tests, `maxon test could not run the tests (exit code ${outcome.code})${said ? `:\n${said}` : '.'}`);
+			return;
+		}
+
+		let document: TestRunDocument;
+		try {
+			document = parseTestRunDocument(outcome.stdout);
+		} catch (err) {
+			erroredAll(run, project.tests, `maxon test exited with code ${outcome.code} without a report this extension could read: ${err}\n${outcome.stdout.trim()}`);
+			return;
+		}
+
+		reportResults(document, project, run);
+	}
+
+	function reportResults(document: TestRunDocument, project: ProjectRun, run: vscode.TestRun): void {
+		const byKey = new Map(project.tests.map(item => {
+			const test = declaredTest(item);
+			return [testKey(test.file, test.name), item] as const;
+		}));
+		const reported = new Set<vscode.TestItem>();
+
+		for (const result of document.results) {
+			const item = byKey.get(resultKey(result, project.workingDirectory));
+			if (!item) continue;
+
+			reported.add(item);
+			const test = declaredTest(item);
+
+			if (result.output) {
+				run.appendOutput(result.output.replace(/\r?\n/g, '\r\n') + '\r\n', itemLocation(item), item);
+			}
+			applyVerdict(run, item, verdictFor(result, test.file, project.workingDirectory));
+		}
+
+		for (const item of project.tests) {
+			if (reported.has(item)) continue;
+
+			if (document.reason) {
+				run.errored(item, new vscode.TestMessage(`maxon test ran nothing: ${document.reason}`));
+			} else {
+				run.errored(item, new vscode.TestMessage('maxon test reported no result for this test. It compiles the files as saved on disk, so a test that is unsaved or was renamed is not among its results.'));
+			}
 		}
 	}
-	return out;
+
+	const disposables = [controller, testFileWatcher, ignoreMarkerWatcher];
+	return new vscode.Disposable(() => disposables.forEach(d => d.dispose()));
 }
 
-interface PendingFailure {
-	item: vscode.TestItem;
-	detail: string[];
+function itemLocation(item: vscode.TestItem): vscode.Location | undefined {
+	return item.uri && item.range ? new vscode.Location(item.uri, item.range) : undefined;
 }
 
-interface ActiveRun {
-	requested: RequestedTests;
-	run: vscode.TestRun;
-	// A failure is reported when the process closes, because its reason may continue on later lines.
-	pendingFailures: Map<string, PendingFailure>;
-	failureDetailFor?: string;
-	reported: Set<string>;
-	// Without the summary the runner stopped early, so a test it printed no verdict for was not excluded:
-	// it is unaccounted for.
-	sawSummary: boolean;
-}
-
-async function runWithFilter(
-	binding: ProfileBinding,
-	filter: string | null,
-	requested: RequestedTests,
-	run: vscode.TestRun,
-	token: vscode.CancellationToken
-): Promise<void> {
-	const args = ['spec-test'];
-	if (filter !== null) args.splice(1, 0, `--filter=${filter}`);
-	log(`Spawning ${binding.binary} ${args.join(' ')}`);
-	run.appendOutput(`> ${binding.binary} ${args.join(' ')}\r\n`);
-
-	let child: ChildProcessWithoutNullStreams;
-	try {
-		child = spawn(binding.binary, args, { cwd: binding.cwd });
-	} catch (err) {
-		log(`Failed to spawn: ${err}`);
-		failAllInScope(run, requested, filter, `Failed to spawn compiler: ${err}`);
+function applyVerdict(run: vscode.TestRun, item: vscode.TestItem, verdict: TestVerdict): void {
+	if (verdict.kind === 'passed') {
+		run.passed(item, verdict.durationMs);
 		return;
 	}
 
-	const cancelSub = token.onCancellationRequested(() => {
-		try { child.kill(); } catch { /* ignore */ }
-	});
+	const message = new vscode.TestMessage(verdict.message);
+	message.location = verdict.location
+		? new vscode.Location(vscode.Uri.file(verdict.location.file), new vscode.Position(verdict.location.line, 0))
+		: itemLocation(item);
 
-	const active: ActiveRun = {
-		requested,
-		run,
-		pendingFailures: new Map(),
-		reported: new Set(),
-		sawSummary: false
-	};
-
-	// Verdicts are on stdout only; stderr is shown, never parsed, so a note there cannot land inside a
-	// failure's reason.
-	pipeLines(child.stdout, makeVerdictLineHandler(active));
-	pipeLines(child.stderr, line => appendRunOutput(run, line));
-
-	await new Promise<void>(resolve => {
-		child.on('close', code => {
-			cancelSub.dispose();
-			flushPendingDetails(active);
-			if (code !== 0 && code !== null && !token.isCancellationRequested) {
-				run.appendOutput(`\r\nProcess exited with code ${code}\r\n`);
-			}
-			if (!token.isCancellationRequested) settleUnreportedInScope(active, filter, code);
-			resolve();
-		});
-		child.on('error', err => {
-			cancelSub.dispose();
-			log(`Process error: ${err}`);
-			failAllInScope(run, requested, filter, `Process error: ${err}`);
-			resolve();
-		});
-	});
-}
-
-function appendRunOutput(run: vscode.TestRun, line: string): void {
-	run.appendOutput(line.replace(/\r?\n?$/, '') + '\r\n');
-}
-
-function makeVerdictLineHandler(active: ActiveRun) {
-	const { requested, run } = active;
-	const verdictFor = (id: string): vscode.TestItem | undefined => {
-		active.failureDetailFor = undefined;
-		const item = requested.itemById.get(id);
-		if (item) active.reported.add(id);
-		return item;
-	};
-	return (line: string) => {
-		appendRunOutput(run, line);
-		const text = line.trimEnd();
-
-		const pass = PASS_LINE_RE.exec(text);
-		if (pass) {
-			const item = verdictFor(pass[1]);
-			if (item) run.passed(item);
-			return;
-		}
-
-		const fail = FAIL_LINE_RE.exec(text);
-		if (fail) {
-			const item = verdictFor(fail[1]);
-			if (item) {
-				active.pendingFailures.set(fail[1], { item, detail: fail[2] ? [fail[2]] : [] });
-				active.failureDetailFor = fail[1];
-			}
-			return;
-		}
-
-		const notRun = NOT_RUN_LINE_RE.exec(text);
-		if (notRun) {
-			const item = verdictFor(notRun[1]);
-			if (item) run.skipped(item);
-			return;
-		}
-
-		if (SUMMARY_RE.test(text)) {
-			active.failureDetailFor = undefined;
-			active.sawSummary = true;
-			return;
-		}
-
-		if (active.failureDetailFor && text.trim().length > 0) {
-			active.pendingFailures.get(active.failureDetailFor)?.detail.push(text);
-		}
-	};
-}
-
-function flushPendingDetails(active: ActiveRun) {
-	for (const [, pf] of active.pendingFailures) {
-		const message = new vscode.TestMessage(
-			pf.detail.length > 0 ? pf.detail.join('\n') : 'Test failed'
-		);
-		if (pf.item.uri && pf.item.range) {
-			message.location = new vscode.Location(pf.item.uri, pf.item.range);
-		}
-		active.run.failed(pf.item, message);
-	}
-	active.pendingFailures.clear();
-}
-
-function pipeLines(
-	stream: NodeJS.ReadableStream,
-	onLine: (line: string) => void
-): void {
-	let buffer = '';
-	stream.setEncoding('utf8');
-	stream.on('data', (chunk: string) => {
-		buffer += chunk;
-		let nl: number;
-		while ((nl = buffer.indexOf('\n')) !== -1) {
-			const line = buffer.slice(0, nl);
-			buffer = buffer.slice(nl + 1);
-			onLine(line);
-		}
-	});
-	stream.on('end', () => {
-		if (buffer.length > 0) onLine(buffer);
-	});
-}
-
-// A requested test with no verdict in a run that reached its summary was not selected — a marker excludes it
-// on this host — so it is skipped. In a run that never reached its summary it is errored.
-function settleUnreportedInScope(active: ActiveRun, filter: string | null, code: number | null): void {
-	for (const item of active.requested.items) {
-		if (!itemMatchesFilter(item, filter) || active.reported.has(item.id)) continue;
-
-		if (active.sawSummary) {
-			active.run.skipped(item);
-		} else {
-			active.run.errored(item, new vscode.TestMessage(`spec-test exited with code ${code} before reporting this test; its output is in the run log.`));
-		}
+	if (verdict.kind === 'failed') {
+		run.failed(item, message, verdict.durationMs);
+	} else {
+		run.errored(item, message, verdict.durationMs);
 	}
 }
 
-function failAllInScope(
+function erroredAll(run: vscode.TestRun, items: vscode.TestItem[], text: string): void {
+	const message = new vscode.TestMessage(text);
+	for (const item of items) run.errored(item, message);
+}
+
+type CompilerOutcome =
+	| { kind: 'exited'; code: number | null; stdout: string; stderr: string; }
+	| { kind: 'failedToStart'; error: string; };
+
+function runCompiler(
+	compiler: string,
+	args: string[],
+	cwd: string,
 	run: vscode.TestRun,
-	requested: RequestedTests,
-	filter: string | null,
-	message: string
-): void {
-	for (const item of requested.items) {
-		if (!itemMatchesFilter(item, filter)) continue;
-		run.errored(item, new vscode.TestMessage(message));
-	}
-}
+	token: vscode.CancellationToken
+): Promise<CompilerOutcome> {
+	return new Promise(resolve => {
+		const child = spawn(compiler, args, { cwd });
+		let stdout = '';
+		let stderr = '';
+		let settled = false;
+		const settle = (outcome: CompilerOutcome) => {
+			if (settled) return;
+			settled = true;
+			cancellation.dispose();
+			resolve(outcome);
+		};
 
-function itemMatchesFilter(item: vscode.TestItem, filter: string | null): boolean {
-	if (filter === null) return true;            // no-filter run: every requested item is in scope
-	if (filter.endsWith('/')) return item.id.startsWith(filter);
-	return item.id === filter;
+		const cancellation = token.onCancellationRequested(() => child.kill());
+
+		child.stdout.setEncoding('utf8');
+		child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+		pipeLines(child.stderr, line => {
+			stderr += line + '\n';
+			appendRunOutput(run, line);
+		});
+
+		child.on('error', err => settle({ kind: 'failedToStart', error: err.message }));
+		child.on('close', code => settle({ kind: 'exited', code, stdout, stderr }));
+	});
 }

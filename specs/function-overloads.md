@@ -16,38 +16,57 @@ Maxon supports function overloading — multiple functions with the same name bu
 When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
 
 ```text
-function process(value int) returns int
-  return value * 2
+typealias Integer = int(i64.min to i64.max)
+
+function process(value Integer) returns Integer
+	return value * 2
 end 'process'
 
-function process(value String) returns int
-  return value.count()
+function process(value String) returns Integer
+	return value.count()
 end 'process'
 
-process(42)        // calls process(value int)
+process(42)        // calls process(value Integer)
 process("hello")   // calls process(value String)
 ```
 
 #### Disambiguation by parameter names
 
-When overloads have different parameter names, the caller uses named arguments to select the correct overload:
+When overloads have the same parameter types but different names from the SECOND parameter on, the
+caller's argument labels select the overload:
 
 ```text
-function create(name String) returns String
-  return name
-end 'create'
+function slice(start Integer, endIndex Integer) returns Integer
+	return endIndex - start
+end 'slice'
 
-function create(label String) returns String
-  return label
-end 'create'
+function slice(start Integer, length Integer) returns Integer
+	return start + length
+end 'slice'
 
-create("foo")    // calls first overload
-create("bar")   // calls second overload
+slice(10, endIndex: 32)   // calls slice(start, endIndex)
+slice(10, length: 32)     // calls slice(start, length)
 ```
+
+The first argument is always positional — naming it is **E2052** — so its label can never select an
+overload.
 
 #### Ambiguous calls
 
-If the compiler cannot determine which overload to call based on argument types alone, it requires named arguments. Calling an ambiguous overload without named arguments is a compile error.
+A call that more than one overload matches is **E3007**, reported at the call and listing the candidates.
+In particular, overloads that differ only in the NAME of their first parameter can never be told apart:
+
+```text
+function create(name String) returns Integer
+	return name.count()
+end 'create'
+
+function create(label String) returns Integer
+	return label.count()
+end 'create'
+
+create("hello")   // E3007: Ambiguous overload for 'create'
+```
 
 #### Each overload carries its own parameter defaults
 

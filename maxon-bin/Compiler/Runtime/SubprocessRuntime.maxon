@@ -330,22 +330,8 @@ let SubpErrorPrefix = b"os error "
 // The widest decimal an i64 can render to, plus its terminator — the scratch `__int_to_string` writes into.
 let DecimalDigitsMax = 24 as ParsedInt
 
-// `ERROR_NOT_SUPPORTED` — what `subprocessLastErrorMessage()` reports for a request the runtime declines on
-// its own account rather than one the OS refused. Today that is exactly one request: a caller-built
-// environment block (see `buildSubpAttachedSpawn`).
-let ErrorNotSupported = 50 as ParsedInt
-
-// Publish a specific code as the last subprocess error. `GtRuntime.emitSubpRecordLastError` is the twin that
-// captures the OS's own; this one is for a refusal the compiler makes itself, where there is no OS answer to capture.
-function emitSubpStoreLastError(module StdModule, block IrBlock, ids ValueMinter, code ParsedInt)
-	let value = emitConst(module, block: block, value: code, ids: ids)
-	let slotAddr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(slotAddr, label: SubpLastErrorLabel))
-	emitStoreField(module, block: block, record: slotAddr, offset: 0, value: value)
-end 'emitSubpStoreLastError'
-
-// A fresh slab scratch record of `size` bytes, zero-filled by the allocator's contract. The one place the
-// three walks in this file allocate their state.
+// A fresh slab scratch record of `size` bytes, zero-filled by the allocator's contract. The one place this
+// file's walks allocate their state, and each walk gives it back on every road out of its function.
 function emitSubpScratch(module StdModule, block IrBlock, ids ValueMinter, size ParsedInt) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: size, ids: ids)
 	let rec = ids.mint()
@@ -517,15 +503,28 @@ function emitSubpShellVectorCall(module StdModule, block IrBlock, ids ValueMinte
 	return command
 end 'emitSubpShellVectorCall'
 
+// The command a `emitSubpCommandFromLine` call built is the caller's once the spawn has read it: nothing under
+// the command-line shape, where the line IS the command, and the one `__gt_subp_shell_command` region under
+// the vector shape. The line itself stays the caller's either way.
+export function emitSubpReleaseCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, command ValueId)
+	match shape 'shape'
+		commandLine then break 'shape'
+		argumentVector then emitSlabFree(module, block: block, ptr: command, ids: ids)
+	end 'shape'
+end 'emitSubpReleaseCommandFromLine'
+
 // The interpreter a command LINE is run through under the vector shape, and its "the next argument is the
-// command" flag. Written into a slab buffer byte by byte for `emitSubpNulDeviceName`'s stated reason: this
-// compiler has no `.rdata` producer reachable from a runtime builder.
+// command" flag. Written into the vector's own region byte by byte, because this compiler has no `.rdata`
+// producer reachable from a runtime builder.
 let ShellPathBytes = b"/bin/sh"
 let ShellCommandFlagBytes = b"-c"
 
 // ⭐ `__gt_subp_shell_command(linePtr) -> argv` — `{"/bin/sh", "-c", linePtr, NULL}`, four pointer slots.
 // Built ONLY under `SubprocessCommandShape.argumentVector`; under the other shape a command line needs no
 // conversion and `emitSubpCommandFromLine` emits nothing.
+//
+// ⭐ **ONE REGION: THE FOUR SLOTS, THEN THE TWO STRINGS THEY POINT AT**, so the caller gives the whole command
+// back with one `emitSubpReleaseCommandFromLine`.
 //
 // ⚠ The line is pointed AT, never copied: it is a slab buffer the caller owns for the length of the spawn,
 // which is exactly how long `posix_spawnp` reads it for.
@@ -537,17 +536,22 @@ function buildSubpShellCommand(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let linePtr = 0 as ValueId
 
-	let vecSize = emitConst(module, block: entry, value: (ShellArgvSlots * PointerFieldBytes) as ParsedInt, ids: ids)
+	let slotBytes = (ShellArgvSlots * PointerFieldBytes) as ByteOffset
+	let flagOffset = slotBytes + ((ShellPathBytes.count() + TrailingNulBytes) as ByteOffset)
+	let regionBytes = flagOffset + ((ShellCommandFlagBytes.count() + TrailingNulBytes) as ByteOffset)
+	let vecSize = emitConst(module, block: entry, value: regionBytes as ParsedInt, ids: ids)
 	let vec = ids.mint()
 	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
 
-	let shellPath = emitSubpLiteralCString(module, block: entry, ids: ids, bytes: ShellPathBytes)
+	emitStoreLiteralBytes(module, block: entry, base: vec, offset: slotBytes, text: ShellPathBytes, ids: ids)
+	let shellPath = emitFieldAddr(module, block: entry, record: vec, offset: slotBytes, ids: ids)
 	emitStoreField(module, block: entry, record: vec, offset: 0, value: shellPath)
-	let commandFlag = emitSubpLiteralCString(module, block: entry, ids: ids, bytes: ShellCommandFlagBytes)
+	emitStoreLiteralBytes(module, block: entry, base: vec, offset: flagOffset, text: ShellCommandFlagBytes, ids: ids)
+	let commandFlag = emitFieldAddr(module, block: entry, record: vec, offset: flagOffset, ids: ids)
 	emitStoreField(module, block: entry, record: vec, offset: PointerFieldBytes as ByteOffset, value: commandFlag)
 	emitStoreField(module, block: entry, record: vec, offset: (2 * PointerFieldBytes) as ByteOffset, value: linePtr)
 
-	// The terminating NULL is the slab's own zero — the allocation is sized for it above.
+	// The terminating NULL slot and both strings' terminators are the slab's own zeros.
 	module.setTerminator(entry, op: StdOp.ret(vec))
 
 	module.functions.push(func)
@@ -555,25 +559,6 @@ end 'buildSubpShellCommand'
 
 // `/bin/sh`, `-c`, the line, and the terminating NULL.
 let ShellArgvSlots = 4
-
-// ⭐ A fixed ASCII constant as NUL-terminated bytes in a fresh slab buffer — `emitSubpNulDeviceName`
-// generalised, which is what a second and third caller made it. The slab zeroes, so the terminator is the
-// allocator's and only the payload is stored.
-export function emitSubpLiteralCString(module StdModule, block IrBlock, ids ValueMinter, bytes ByteArray) returns ValueId
-	let sizeConst = emitConst(module, block: block, value: bytes.count() + TrailingNulBytes, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
-
-	var offset = 0 as ByteOffset
-
-	for ch in bytes 'each'
-		let value = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
-		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: offset, valueId: value, valueType: StdType.u8))
-		offset = offset + 1
-	end 'each'
-
-	return buf
-end 'emitSubpLiteralCString'
 
 // ⭐ `__gt_subp_argv_command(argvRec, argc) -> argv` under `SubprocessCommandShape.argumentVector` — the
 // blob turned into a NULL-terminated pointer vector, with NO quoting and NO copying.
@@ -650,6 +635,7 @@ function buildSubpArgvVector(module StdModule)
 	module.setTerminator(scanDone, op: StdOp.branch(argHdr.id))
 
 	let vecF = emitLoadField(module, block: finish, record: state, offset: AvVec, ids: ids)
+	emitSlabFree(module, block: finish, ptr: state, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(vecF))
 
 	module.functions.push(func)
@@ -766,6 +752,7 @@ function buildSubpEnvVector(module StdModule)
 	module.setTerminator(sizeVector, op: StdOp.branch(hdr.id))
 
 	let vecF = emitLoadField(module, block: finish, record: state, offset: EvVec, ids: ids)
+	emitSlabFree(module, block: finish, ptr: state, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(vecF))
 
 	module.functions.push(func)
@@ -943,6 +930,7 @@ function buildSubpArgvCmdline(module StdModule)
 	let lenF = emitLoadField(module, block: finish, record: state, offset: ClOutLen, ids: ids)
 	let zeroF = emitConst(module, block: finish, value: 0, ids: ids)
 	emitStoreByte(module, block: finish, base: outF, index: lenF, value: zeroF, ids: ids)
+	emitSlabFree(module, block: finish, ptr: state, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(outF))
 
 	module.functions.push(func)
@@ -1102,12 +1090,7 @@ function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
 	let errLimit = 12 as ValueId
 	let surfaceFlags = 13 as ValueId
 
-	let envPtr = emitSubpEnvPointer(module, func: func, ids: ids, entry: entry, build: build, env: env, envInherit: envInherit, shape: shape)
-
-	let cmdline = ids.mint()
-	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
-	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
-	emitStoreField(module, block: build, record: req, offset: SubpReqEnv, value: envPtr)
+	let req = emitSubpArgvRequest(module, func: func, ids: ids, entry: entry, build: build, argv: argv, argc: argc, env: env, envInherit: envInherit, shape: shape)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinKind)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinData, value: stdinData)
 	emitStoreField(module, block: build, record: req, offset: SubpReqOutKind, value: outKind)
@@ -1116,14 +1099,57 @@ function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
 	emitStoreField(module, block: build, record: req, offset: SubpReqErrKind, value: errKind)
 	emitStoreField(module, block: build, record: req, offset: SubpReqErrData, value: errData)
 	emitStoreField(module, block: build, record: req, offset: SubpReqErrLimit, value: errLimit)
-	emitSubpCreationFlags(module, block: build, ids: ids, surfaceFlags: surfaceFlags, req: req)
-	var afterCwd = emitSubpCwdOrNull(module, func: func, ids: ids, cur: build, cwd: cwd, req: req)
-	let handle = ids.mint()
-	module.appendOp(afterCwd, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
-	module.setTerminator(afterCwd, op: StdOp.ret(handle))
+	emitSubpSpawnAndAnswer(module, func: func, ids: ids, cur: build, req: req, surfaceFlags: surfaceFlags, cwd: cwd, shape: shape)
 
 	module.functions.push(func)
 end 'buildSubpAttachedSpawn'
+
+// A fresh request for the argument vector `argv`/`argc`, carrying the environment `env`/`envInherit` names.
+// Closes `entry` into `build`, where the request is filled.
+function emitSubpArgvRequest(module StdModule, func IrFunction, ids ValueMinter, entry IrBlock, build IrBlock, argv ValueId, argc ValueId, env ValueId, envInherit ValueId, shape SpawnEnvironmentShape) returns ValueId
+	let envPtr = emitSubpEnvPointer(module, func: func, ids: ids, entry: entry, build: build, env: env, envInherit: envInherit, shape: shape)
+	let cmdline = ids.mint()
+	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
+	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
+	emitStoreField(module, block: build, record: req, offset: SubpReqEnv, value: envPtr)
+	return req
+end 'emitSubpArgvRequest'
+
+// Give a request built by `emitSubpArgvRequest` its creation flags and working directory, hand it to the spawn
+// core and answer what the core answers. The request, its command and — where this lane converts one — its
+// environment vector are this entry's, and the core has finished reading all three whichever way it answered,
+// so they go back before the return.
+function emitSubpSpawnAndAnswer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, surfaceFlags ValueId, cwd ValueId, shape SpawnEnvironmentShape)
+	emitSubpCreationFlags(module, block: cur, ids: ids, surfaceFlags: surfaceFlags, req: req)
+	var spawn = emitSubpCwdOrNull(module, func: func, ids: ids, cur: cur, cwd: cwd, req: req)
+	let handle = ids.mint()
+	module.appendOp(spawn, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
+	let cmdline = emitLoadField(module, block: spawn, record: req, offset: SubpReqCmdline, ids: ids)
+	let envPtr = emitLoadField(module, block: spawn, record: req, offset: SubpReqEnv, ids: ids)
+	emitSlabFree(module, block: spawn, ptr: req, ids: ids)
+	emitSlabFree(module, block: spawn, ptr: cmdline, ids: ids)
+
+	var answer = match shape 'shape'
+		nulSeparatedBlock gives spawn
+		pointerVector gives emitSubpReleaseEnvVector(module, func: func, ids: ids, cur: spawn, envPtr: envPtr)
+	end 'shape'
+
+	module.setTerminator(answer, op: StdOp.ret(handle))
+end 'emitSubpSpawnAndAnswer'
+
+// The vector `__gt_subp_env_vector` built, when the caller asked for an environment of its own. An inheriting
+// spawn's pointer is NULL and names no region.
+function emitSubpReleaseEnvVector(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, envPtr ValueId) returns IrBlock
+	var release = module.addBlock(func, label: b"subpenvfree", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"subpenvfreed", heat: BlockHeat.normal)
+
+	let inherited = emitCmp(module, block: cur, a: envPtr, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(inherited, thenBlockId: cont.id, elseBlockId: release.id))
+
+	emitSlabFree(module, block: release, ptr: envPtr, ids: ids)
+	module.setTerminator(release, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpReleaseEnvVector'
 
 // Its own function for `emitSubpShellVectorCall`'s reason: a `gives` arm carries one expression, and a call
 // is three statements.
@@ -1195,22 +1221,13 @@ function buildSubpStreamSpawn(module StdModule, shape SpawnEnvironmentShape)
 	let env = 4 as ValueId
 	let envInherit = 5 as ValueId
 
-	let envPtr = emitSubpEnvPointer(module, func: func, ids: ids, entry: entry, build: build, env: env, envInherit: envInherit, shape: shape)
-
-	let cmdline = ids.mint()
-	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCommandName, args: twoArgs(argv, second: argc)))
-	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
-	emitStoreField(module, block: build, record: req, offset: SubpReqEnv, value: envPtr)
+	let req = emitSubpArgvRequest(module, func: func, ids: ids, entry: entry, build: build, argv: argv, argc: argc, env: env, envInherit: envInherit, shape: shape)
 	let stdinPipe = emitConst(module, block: build, value: SubpStdinHold, ids: ids)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinPipe)
 	let collect = emitConst(module, block: build, value: SubpOutCollect, ids: ids)
 	emitStoreField(module, block: build, record: req, offset: SubpReqOutKind, value: collect)
 	emitStoreField(module, block: build, record: req, offset: SubpReqErrKind, value: collect)
-	emitSubpCreationFlags(module, block: build, ids: ids, surfaceFlags: surfaceFlags, req: req)
-	var afterCwd = emitSubpCwdOrNull(module, func: func, ids: ids, cur: build, cwd: cwd, req: req)
-	let handle = ids.mint()
-	module.appendOp(afterCwd, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
-	module.setTerminator(afterCwd, op: StdOp.ret(handle))
+	emitSubpSpawnAndAnswer(module, func: func, ids: ids, cur: build, req: req, surfaceFlags: surfaceFlags, cwd: cwd, shape: shape)
 
 	module.functions.push(func)
 end 'buildSubpStreamSpawn'
@@ -1465,9 +1482,7 @@ function buildSubpPollExit(module StdModule)
 	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
 	let codePtr = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotBytesOut, ids: ids)
 	module.appendOp(exited, op: StdOp.osProcessExitCode(hProcessE, codePtrId: codePtr))
-	let raw = emitLoadField(module, block: exited, record: codePtr, offset: 0, ids: ids)
-	let mask = emitConst(module, block: exited, value: DwordMask, ids: ids)
-	let code = emitBin(module, block: exited, a: raw, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let code = emitLoadDword(module, block: exited, record: codePtr, offset: 0, ids: ids)
 	module.setTerminator(exited, op: StdOp.ret(code))
 
 	module.functions.push(func)
@@ -1672,6 +1687,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let errLenF = emitLoadField(module, block: reap, record: state, offset: WcErrLen, ids: ids)
 	emitStoreField(module, block: reap, record: result, offset: ResErrBuf, value: errBufF)
 	emitStoreField(module, block: reap, record: result, offset: ResErrLen, value: errLenF)
+	emitSlabFree(module, block: reap, ptr: state, ids: ids)
 	emitSubpCollectorFree(module, block: reap, slot: slotF, ids: ids)
 	module.setTerminator(reap, op: StdOp.ret(result))
 
@@ -2378,7 +2394,8 @@ end 'buildSubpResultRelease'
 // table). So `2` means the same thing wherever the program runs, and `SubpErrorPrefix` names the OS rather
 // than Win32.
 //
-// A code of 0 means "nothing has failed", and answers the empty buffer rather than `os error 0`.
+// It renders the low 32 bits only: a spawn's failed step rides above them (`GtRuntime.SpawnPreparationShift`).
+// A word of 0 means "nothing has failed", and answers the empty buffer rather than `os error 0`.
 function buildSubpLastError(module StdModule)
 	var func = IrFunction.createFromStd(SubpLastErrorName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2400,47 +2417,43 @@ function buildSubpLastError(module StdModule)
 	let emptyRecord = emitSubpEmptyManaged(module, block: noError, ids: ids)
 	module.setTerminator(noError, op: StdOp.ret(emptyRecord))
 
-	// render: `os error <n>` — the prefix is stored byte by byte at build time, the digits by the shared
-	// `__int_to_string`, which writes into a caller buffer and answers the length it wrote.
-	let digitsSize = emitConst(module, block: render, value: DecimalDigitsMax, ids: ids)
-	let digitsBuf = ids.mint()
-	module.appendOp(render, op: StdOp.call(digitsBuf, callee: SlabAllocName, args: argsOf(digitsSize)))
+	// render: `os error <n>` rendered whole into one scratch region — the prefix stored byte by byte at build
+	// time, the digits after it by the shared `__int_to_string`, which writes into a caller buffer and answers
+	// the length it wrote — then copied out once, and the scratch given back.
+	let prefixBytes = SubpErrorPrefix.count() as ByteOffset
+	let scratchSize = emitConst(module, block: render, value: SubpErrorPrefix.count() + DecimalDigitsMax, ids: ids)
+	let scratch = ids.mint()
+	module.appendOp(render, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSize)))
+	emitStoreLiteralBytes(module, block: render, base: scratch, offset: 0, text: SubpErrorPrefix, ids: ids)
 	let slotAddr2 = ids.mint()
 	module.appendOp(render, op: StdOp.globalAddr(slotAddr2, label: SubpLastErrorLabel))
-	let code2 = emitLoadField(module, block: render, record: slotAddr2, offset: 0, ids: ids)
+	let code2 = emitLoadDword(module, block: render, record: slotAddr2, offset: 0, ids: ids)
+	let digitsDest = emitFieldAddr(module, block: render, record: scratch, offset: prefixBytes, ids: ids)
 	let digitCount = ids.mint()
-	module.appendOp(render, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(code2, second: digitsBuf)))
-	let prefix = emitLiteralCString(module, block: render, ids: ids, text: SubpErrorPrefix)
+	module.appendOp(render, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(code2, second: digitsDest)))
 	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count(), ids: ids)
 	let total = emitBin(module, block: render, a: prefixLen, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
 
-	// The shared copy-out lays the PREFIX down and publishes `total` as the length; the digits are then
-	// copied into the tail it reserved. Publishing before the second copy is safe because the length is a
-	// header word the copy never touches — and it is what keeps the "publish the length" step in exactly one
-	// place, which is the whole reason `emitSubpOwnedByteCopy` exists.
 	let record = ids.mint()
-	var afterPrefix = emitSubpOwnedByteCopy(module, func: func, ids: ids, cur: render, record: record, srcBuf: prefix, srcLen: total)
-	let destBuf = emitLoadField(module, block: afterPrefix, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	let prefixLen2 = emitConst(module, block: afterPrefix, value: SubpErrorPrefix.count(), ids: ids)
-	let digitsDest = emitBin(module, block: afterPrefix, a: destBuf, b: prefixLen2, opcode: StdBinOpcode.add, ids: ids)
-	var afterDigits = emitForwardCopy(module, func: func, cur: afterPrefix, dest: digitsDest, src: digitsBuf, byteCount: digitCount, ids: ids)
-	module.setTerminator(afterDigits, op: StdOp.ret(record))
+	var copied = emitSubpOwnedByteCopy(module, func: func, ids: ids, cur: render, record: record, srcBuf: scratch, srcLen: total)
+	emitSlabFree(module, block: copied, ptr: scratch, ids: ids)
+	module.setTerminator(copied, op: StdOp.ret(record))
 
 	module.functions.push(func)
 end 'buildSubpLastError'
 
-// `__gt_subp_last_error_code() -> code` — the same slot `buildSubpLastError` renders, as the number.
+// `__gt_subp_last_error_code() -> word` — the same slot `buildSubpLastError` renders, whole.
 //
-// ⭐ **IT EXISTS SO A CALLER CAN TELL "NOT FOUND" FROM "COULD NOT START" WITHOUT PARSING A MESSAGE.** Every
-// lane stores one Win32-style code there — Windows its own `GetLastError`, the POSIX lanes `errno` mapped
-// onto the same table — so `ERROR_FILE_NOT_FOUND` means the same thing on all of them. MEASURED: spawning a
-// path that does not exist stores 2 on x64-windows and on x64-linux alike.
+// ⭐ **IT EXISTS SO A CALLER CAN TELL "NOT FOUND" FROM "COULD NOT START" WITHOUT PARSING A MESSAGE.** The low
+// 32 bits are one Win32-style code on every lane — Windows its own `GetLastError`, the POSIX lanes `errno`
+// mapped onto the same table — so `ERROR_FILE_NOT_FOUND` means the same thing on all of them. Above them is
+// the `GtRuntime.SpawnPreparation` step a spawn failed in, which is what separates a missing redirect file or
+// working directory from a missing executable when all three answer that code.
 //
-// ⛔ **THE STDLIB MAY NOT CALL IT UNTIL A RELEASE THAT HAS IT IS THE SEED.** The stdlib is compiled by
-// whatever compiler builds this tree, including a released seed, and a seed that predates this builtin
-// cannot compile a stdlib naming it — MEASURED: a compiler built before this builtin existed fails on the
-// call with E3004, before it has compiled `build.maxon`, so the tree cannot be bootstrapped at all. The
-// compiler therefore carries it for a release before the stdlib uses it.
+// `stdlib/Subprocess.maxon`'s `spawnFailure` reads both halves to tell `executableNotFound` from `spawnFailed`.
+// ⛔ **THE STDLIB CAN NAME IT ONLY BECAUSE EVERY PUBLISHED RELEASE CARRIES IT.** The stdlib is compiled by
+// whatever compiler builds this tree, including a released seed, and a seed without the builtin fails the
+// call with E3004 before it has compiled `build.maxon`.
 function buildSubpLastErrorCode(module StdModule)
 	var func = IrFunction.createFromStd(SubpLastErrorCodeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2465,13 +2478,32 @@ function emitSubpEmptyManaged(module StdModule, block IrBlock, ids ValueMinter) 
 	return record
 end 'emitSubpEmptyManaged'
 
+// The one byte `__gt_subp_env_entry`'s unreadable answer holds: a NUL, which no cstring entry can contain.
+// `stdlib/Process.maxon`'s `EnvironmentUnreadableByte` is the reader's half of the same statement.
+let SubpEnvUnreadableByte = 0 as ParsedInt
+
+// `__gt_subp_env_entry`'s answer when the host handed over no environment: an owned one-byte record holding
+// `SubpEnvUnreadableByte`.
+function emitSubpEnvUnreadable(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let record = ids.mint()
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let buffer = emitManagedByteBuffer(module, block: block, record: record, byteCount: one, ids: ids)
+	let firstByte = emitConst(module, block: block, value: 0, ids: ids)
+	let nul = emitConst(module, block: block, value: SubpEnvUnreadableByte, ids: ids)
+	emitStoreByte(module, block: block, base: buffer, index: firstByte, value: nul, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: ManagedRecordLengthOffset, value: one)
+	return record
+end 'emitSubpEnvUnreadable'
+
 // ⭐⭐ `__gt_subp_env_entry(index) -> ownedManagedMemory` — `__Builtins.osEnvironmentEntry(i)`: this process's
-// index-th `NAME=VALUE` environment entry, or an EMPTY record once the index is past the last one.
+// index-th `NAME=VALUE` environment entry, an EMPTY record once the index is past the last one, or the
+// one-NUL record `emitSubpEnvUnreadable` builds when the host handed over no environment at all.
 //
-// ⭐⭐ **AN EMPTY ANSWER IS "PAST THE END", AND NOTHING A REAL ENVIRONMENT HOLDS CAN IMITATE IT** — every entry
-// carries at least a name. That is what lets the walk in `stdlib/Subprocess.maxon` run from 0 until it stops,
-// with no count entry point beside this one: a count would be a second question asked of a snapshot this one
-// takes and releases, and the two could disagree.
+// ⭐⭐ **NEITHER NON-ENTRY ANSWER IS ONE A REAL ENVIRONMENT CAN IMITATE** — every entry carries at least a name,
+// and every entry is a NUL-terminated cstring, so no entry is empty and none holds a NUL. That is what lets
+// `Process.currentEnvironmentEntries` walk from 0 until it stops, and throw rather than stop when the host
+// failed, with no count entry point beside this one: a count would be a second question asked of a snapshot
+// this one takes and releases, and the two could disagree.
 //
 // ⭐ **THE SNAPSHOT IS TAKEN AND RELEASED PER CALL, WHICH IS O(n) PER ENTRY AND DELIBERATE.**
 // `GetEnvironmentStringsA` hands back a COPY the caller owns; holding one across the whole walk would mean a
@@ -2490,8 +2522,8 @@ end 'buildSubpEnvEntry'
 
 // ⭐ **THE POSIX BODY: `environ[index]`, and there is no walk at all.** A pointer vector is randomly
 // addressable, so the block-scan below — cursor, countdown, per-byte skip — has no counterpart here: the
-// index IS the subscript. Both "the host published no vector" and "the index is past the last entry" answer
-// the same EMPTY record, and they arrive at one block because they mean the same thing to the caller.
+// index IS the subscript. A NULL vector is `osEnvBlock`'s "the host could not answer", which a process that
+// has an environment never sees, so it answers the unreadable record rather than the past-the-end one.
 //
 // ⚠ **NOTHING IS RELEASED, AND THAT IS THE SHAPE'S OWN CONTRACT rather than a forgotten free**: `environ` is
 // the live table this process runs on, not a copy taken for us. See `EnvironmentSnapshotShape.pointerVector`.
@@ -2503,6 +2535,7 @@ function buildSubpEnvEntryFromVector(module StdModule)
 	var subscript = module.addBlock(func, label: b"subpenvat", heat: BlockHeat.normal)
 	var found = module.addBlock(func, label: b"subpenvfound", heat: BlockHeat.normal)
 	var noEntry = module.addBlock(func, label: b"subpenvnone", heat: BlockHeat.normal)
+	var noVector = module.addBlock(func, label: b"subpenvfail", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let index = 0 as ValueId
@@ -2511,7 +2544,10 @@ function buildSubpEnvEntryFromVector(module StdModule)
 	module.appendOp(entry, op: StdOp.osEnvBlock(vector))
 	let zeroVector = emitConst(module, block: entry, value: 0, ids: ids)
 	let hostSaidNothing = emitCmp(module, block: entry, a: vector, b: zeroVector, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(hostSaidNothing, thenBlockId: noEntry.id, elseBlockId: subscript.id))
+	module.setTerminator(entry, op: StdOp.condBranch(hostSaidNothing, thenBlockId: noVector.id, elseBlockId: subscript.id))
+
+	let unreadableRecord = emitSubpEnvUnreadable(module, block: noVector, ids: ids)
+	module.setTerminator(noVector, op: StdOp.ret(unreadableRecord))
 
 	let stride = emitConst(module, block: subscript, value: EnvPointerStride, ids: ids)
 	let displacement = emitBin(module, block: subscript, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
@@ -2560,8 +2596,9 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 	let hostSaidNothing = emitCmp(module, block: entry, a: block, b: zeroBlock, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(hostSaidNothing, thenBlockId: noBlock.id, elseBlockId: scan.id))
 
-	// There is no snapshot to release on this arm, which is the whole reason it is not `pastEnd`.
-	let noneRecord = emitSubpEmptyManaged(module, block: noBlock, ids: ids)
+	// `GetEnvironmentStringsA` failed, so there is no snapshot to release and no answer to give.
+	emitSlabFree(module, block: noBlock, ptr: state, ids: ids)
+	let noneRecord = emitSubpEnvUnreadable(module, block: noBlock, ids: ids)
 	module.setTerminator(noBlock, op: StdOp.ret(noneRecord))
 
 	// The cursor stands on the first byte of an entry, or on the block's own terminator.
@@ -2600,17 +2637,22 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 	let foundCursor = emitLoadField(module, block: found, record: state, offset: EnvCursor, ids: ids)
 	let record = ids.mint()
 	var afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, ids: ids)
-	let blockToFree = emitLoadField(module, block: afterCopy, record: state, offset: EnvBlock, ids: ids)
-	module.appendOp(afterCopy, op: StdOp.osEnvBlockFree(blockToFree))
+	emitSubpReleaseEnvSnapshot(module, block: afterCopy, state: state, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(record))
 
 	let endRecord = emitSubpEmptyManaged(module, block: pastEnd, ids: ids)
-	let endBlock = emitLoadField(module, block: pastEnd, record: state, offset: EnvBlock, ids: ids)
-	module.appendOp(pastEnd, op: StdOp.osEnvBlockFree(endBlock))
+	emitSubpReleaseEnvSnapshot(module, block: pastEnd, state: state, ids: ids)
 	module.setTerminator(pastEnd, op: StdOp.ret(endRecord))
 
 	module.functions.push(func)
 end 'buildSubpEnvEntryFromBlock'
+
+// The two things a block walk holds once its answer is built: the OS snapshot and the walk's own state.
+function emitSubpReleaseEnvSnapshot(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
+	let snapshot = emitLoadField(module, block: block, record: state, offset: EnvBlock, ids: ids)
+	module.appendOp(block, op: StdOp.osEnvBlockFree(snapshot))
+	emitSlabFree(module, block: block, ptr: state, ids: ids)
+end 'emitSubpReleaseEnvSnapshot'
 
 // ⭐⭐ `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`: the
 // `PATH` walk that turns a bare tool name into a path the spawn can launch. `shape` decides the separators,
@@ -2752,15 +2794,26 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	let candH = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
 	let hitRecord = ids.mint()
 	var hitBuilt = emitCStringToManaged(module, func: func, cur: hit, cstr: candH, record: hitRecord, ids: ids)
+	emitSubpReleasePathWalk(module, block: hitBuilt, state: state, ids: ids)
 	module.setTerminator(hitBuilt, op: StdOp.ret(hitRecord))
 
 	let nameM = emitLoadField(module, block: miss, record: state, offset: RpName, ids: ids)
 	let missRecord = ids.mint()
 	var missBuilt = emitCStringToManaged(module, func: func, cur: miss, cstr: nameM, record: missRecord, ids: ids)
+	emitSubpReleasePathWalk(module, block: missBuilt, state: state, ids: ids)
 	module.setTerminator(missBuilt, op: StdOp.ret(missRecord))
 
 	module.functions.push(func)
 end 'buildSubpResolvePath'
+
+// Everything the walk took once its answer is copied out: the three buffers its state names — each holds
+// exactly one region on every road that filled it — and the state itself. The name is the caller's.
+function emitSubpReleasePathWalk(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
+	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpCand, ids: ids), ids: ids)
+	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpPath, ids: ids), ids: ids)
+	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpExts, ids: ids), ids: ids)
+	emitSlabFree(module, block: block, ptr: state, ids: ids)
+end 'emitSubpReleasePathWalk'
 
 // The empty `PATH` fallback — a variable that is not set leaves nothing to walk, and the walk must still find
 // the synthetic head member. A one-byte NUL is what "no directories" looks like to `emitSubpMemberLength`.
@@ -2793,6 +2846,7 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	module.appendOp(cur, op: StdOp.call(firstBuf, callee: SlabAllocName, args: argsOf(firstSize)))
 	let written = ids.mint()
 	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: firstBuf, bufLenId: firstSize))
+	emitSlabFree(module, block: cur, ptr: nameBuf, ids: ids)
 	emitStoreField(module, block: cur, record: state, offset: outOffset, value: firstBuf)
 
 	// The three answers, classified in the order `emitFilledBufferVerdict` states: 0 is "unset", `< size` is
@@ -2806,15 +2860,19 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	let tooSmall = emitCmp(module, block: fits, a: written, b: firstSize2, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(fits, op: StdOp.condBranch(tooSmall, thenBlockId: retry.id, elseBlockId: cont.id))
 
-	// The size Win32 named INCLUDES the terminator, so it is exactly what to allocate.
+	// The size Win32 named INCLUDES the terminator, so it is exactly what to allocate. The first guess is
+	// replaced, so it goes back.
 	let nameBuf2 = emitLiteralCString(module, block: retry, ids: ids, text: varName)
 	let bigBuf = ids.mint()
 	module.appendOp(retry, op: StdOp.call(bigBuf, callee: SlabAllocName, args: argsOf(written)))
 	let written2 = ids.mint()
 	module.appendOp(retry, op: StdOp.osEnvRead(written2, namePtrId: nameBuf2, bufPtrId: bigBuf, bufLenId: written))
+	emitSlabFree(module, block: retry, ptr: nameBuf2, ids: ids)
+	emitSlabFree(module, block: retry, ptr: emitLoadField(module, block: retry, record: state, offset: outOffset, ids: ids), ids: ids)
 	emitStoreField(module, block: retry, record: state, offset: outOffset, value: bigBuf)
 	module.setTerminator(retry, op: StdOp.branch(cont.id))
 
+	emitSlabFree(module, block: useFallback, ptr: emitLoadField(module, block: useFallback, record: state, offset: outOffset, ids: ids), ids: ids)
 	let fallbackBuf = emitLiteralCString(module, block: useFallback, ids: ids, text: fallback)
 	emitStoreField(module, block: useFallback, record: state, offset: outOffset, value: fallbackBuf)
 	module.setTerminator(useFallback, op: StdOp.branch(cont.id))

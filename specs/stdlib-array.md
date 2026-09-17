@@ -565,6 +565,62 @@ end 'main'
 0
 ```
 
+<!-- test: every-growing-door-grows-by-one-policy -->
+`push`, `insert` and `growFilled` each raise the capacity one element at a time, and every one of them
+lands on the same capacities: doubling from a floor of 4 up to 256, then easing toward 1.25×. A door
+growing by a policy of its own prints a different ladder.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var pushed = IntArray.create()
+	var inserted = IntArray.create()
+	var filled = IntArray.create()
+	var pushLadder = ""
+	var insertLadder = ""
+	var fillLadder = ""
+	var lastPush = 0
+	var lastInsert = 0
+	var lastFill = 0
+
+	for i in 0 upto 1300 'grow'
+		pushed.push(i)
+		inserted.insert(0, value: i)
+		filled.growFilled(i + 1, value: i)
+
+		if pushed.capacity() != lastPush 'push'
+			lastPush = pushed.capacity()
+			pushLadder.append(" {pushed.capacity()}")
+		end 'push'
+
+		if inserted.capacity() != lastInsert 'insert'
+			lastInsert = inserted.capacity()
+			insertLadder.append(" {inserted.capacity()}")
+		end 'insert'
+
+		if filled.capacity() != lastFill 'fill'
+			lastFill = filled.capacity()
+			fillLadder.append(" {filled.capacity()}")
+		end 'fill'
+	end 'grow'
+
+	print("push:{pushLadder}\n")
+	print("insert:{insertLadder}\n")
+	print("growFilled:{fillLadder}\n")
+	return 0
+end 'main'
+```
+```stdout
+push: 4 8 16 32 64 128 256 512 832 1232 1732
+insert: 4 8 16 32 64 128 256 512 832 1232 1732
+growFilled: 4 8 16 32 64 128 256 512 832 1232 1732
+```
+```exitcode
+0
+```
+
 <!-- test: push-string-literals -->
 Push string literals into an array and retrieve them.
 

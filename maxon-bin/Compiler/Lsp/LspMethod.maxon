@@ -29,8 +29,8 @@
 //
 // ⛔ **A MAXON-ONLY REQUEST IS NOT AN `LspMethod` EITHER — it is an `LspExtensionMethod`.** Every
 // `LspMethod` is a `textDocument/*` request that names an open document and has a capability to advertise;
-// an extension request such as `maxon/generateIR` carries its own source and has no capability in LSP's
-// vocabulary, so it would falsify both halves of the seam above. It is routed beside the registry, never
+// an extension request such as `maxon/generateIR` or `maxon/listProjects` names no document and has no
+// capability in LSP's vocabulary, so it would falsify both halves of the seam above. It is routed beside the registry, never
 // advertised, and its answer is `LspServer.maxon`'s `answerExtension`.
 
 // Every LSP request this server routes. A method belongs here once it has a home; whether it has an
@@ -122,11 +122,13 @@ end 'lspMethodArea'
 // The requests the Maxon editor extension sends that LSP itself does not define.
 module enum LspExtensionMethod
 	generateIr
+	listProjects
 end 'LspExtensionMethod'
 
 module function lspExtensionMethodWireName(method LspExtensionMethod) returns String
 	return match method 'wireName'
 		generateIr gives "maxon/generateIR"
+		listProjects gives "maxon/listProjects"
 	end 'wireName'
 end 'lspExtensionMethodWireName'
 
@@ -199,7 +201,7 @@ module type LspAnswer
 	end 'nothing'
 end 'LspAnswer'
 
-// An extension request's outcome. An extension request compiles the source it carries, so unlike a
+// An extension request's outcome. `maxon/generateIR` compiles the source it carries, so unlike a
 // `textDocument/*` request it has no "nothing here" to fall back on when the library tiers are missing.
 module union LspExtensionOutcome
 	answered(answer LspAnswer)

@@ -28,7 +28,7 @@ end 'build'
 | `Build.target(name String, source String, output String, debugInfo bool = true, version String = "", defines StringArray = empty)` | `BuildConfig` | One named target, for a manifest with several. Prints nothing. |
 | `Build.buildTargets(targets BuildConfigArray)` | — | Describe several named targets. |
 | `Build.buildWithConfig(config BuildConfig)` | — | Describe one full `BuildConfig`, which may list several sources. |
-| `Build.emitBuildConfig(config BuildConfig)` | — | Print one configuration as a JSON object; `build`, `buildWithConfig` and `buildTargets` use it. |
+| `Build.emitBuildConfig(config BuildConfig)` | — | Print one configuration as a JSON object, every string JSON-escaped; `build`, `buildWithConfig` and `buildTargets` use it. |
 
 `output` omits the extension; the compiler adds `.exe` on Windows and `.wasm` for `wasm32-wasi`.
 `debugInfo` controls the `<output>.mxdbg` sidecar that `maxon debug` and `maxon profile` read, and
@@ -42,7 +42,7 @@ end 'build'
 | `output` | `String` | Where the executable goes, without an extension. |
 | `sources` | `StringArray` | Files and directories compiled as one program, in order. An empty list is refused. |
 | `debug_info` | `bool` | Write the `.mxdbg` sidecar. |
-| `version` | `String` | A dotted product version stamped into the binary (a `VS_VERSIONINFO` resource on Windows, `LC_SOURCE_VERSION` on macOS); empty means unversioned. |
+| `version` | `String` | A dotted product version stamped into the binary (a `VS_VERSIONINFO` resource on Windows, `LC_SOURCE_VERSION` on macOS); empty means unversioned. A component that is not a number, or that the target's version field cannot hold, refuses the build. |
 | `defines` | `StringArray` | `name=value` pairs, each replacing a top-level `String` constant's default, as `maxon build --define` does. |
 
 `BuildConfig.create(name String, output String, sources StringArray, debug_info bool, version String = "",

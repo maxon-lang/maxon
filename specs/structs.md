@@ -729,3 +729,25 @@ end 'main'
 ```maxoncstderr
 error E3019: <fragment>:12:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
 ```
+
+<!-- test: error.mismatched-type-end-label -->
+A label written after `end` must repeat the type's name.
+```maxon
+typealias Coord = int(0 to 100)
+
+type Point
+	export var x as Coord
+
+	export static function create(x Coord) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Pointer'
+
+function main() returns ExitCode
+	let p = Point.create(7)
+	return p.x
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:10:1: Mismatched end label: expected 'Point', got 'Pointer'
+```

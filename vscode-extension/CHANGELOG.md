@@ -2,6 +2,29 @@
 
 Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
 
+## 2026.9.4
+
+### Added
+
+- The Test Explorer lists the `test` declarations in your project's `*.test.maxon` files and runs them
+  with `maxon test`, using the compiler the language server uses. A failed assertion is shown at its own
+  line, and a test that crashed, timed out, leaked or did not run says so.
+
+### Changed
+
+- The spec-suite explorer appears only in the Maxon compiler checkout, as its own **Maxon Spec Suite**
+  controller.
+
+### Fixed
+
+- The status bar's project list says why it could not be read, instead of reporting that no projects are
+  loaded.
+
+### Removed
+
+- The `label.level0` to `label.level5` semantic token colours. The language server produces no such
+  tokens, so they coloured nothing; labels keep the grammar's colour.
+
 ## 2026.9.3
 
 ### Fixed

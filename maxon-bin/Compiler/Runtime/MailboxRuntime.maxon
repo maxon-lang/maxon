@@ -388,7 +388,7 @@ function buildMboxRecv(module StdModule)
 	// The envelope is freed OUTSIDE the lock: it is unreachable from the mailbox the instant `head` was
 	// re-pointed, so nothing else can be looking at it, and the slab's free has a lock of its own.
 	emitSchedLockLeave(module, block: popped, ids: ids)
-	module.appendOp(popped, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(head)))
+	emitSlabFree(module, block: popped, ptr: head, ids: ids)
 	module.setTerminator(popped, op: StdOp.ret(box))
 
 	// ⭐ **THE `closed` READ IS INSIDE THE SAME CRITICAL SECTION THE HEAD READ WAS**, which is what makes
@@ -531,7 +531,7 @@ function buildMboxHandleDropBox(module StdModule)
 	let wasLastRef = emitMboxWasLastOwner(module, block: releaseRef, prior: priorRefs, ids: ids)
 	module.setTerminator(releaseRef, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
-	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
+	emitSlabFree(module, block: freeMbox, ptr: mbox, ids: ids)
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
 	// The handle BOX itself is an ordinary managed record with a trivial destructor, so it goes back through
@@ -584,7 +584,7 @@ function buildMboxServiceExit(module StdModule)
 	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
-	module.appendOp(freeMbox, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(mbox)))
+	emitSlabFree(module, block: freeMbox, ptr: mbox, ids: ids)
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
 	// A service stopped by its LAST HANDLE DROP never received a pill, so the slot is the slab's zero and

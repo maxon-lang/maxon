@@ -116,10 +116,10 @@ end 'RunSlot'
 // The slot this program's build belongs in, and the name a build made from the current inputs carries
 // there.
 //
-// ⛔ **THE PATH SPELLING IS THE SLOT'S IDENTITY AND IS NOT CANONICALIZED.** `FilePath.normalize()` returns
-// its receiver and nothing folds `.` or `..`, so `./x.maxon` and `x.maxon` get two slots. That is the SAFE
-// direction — an extra compile, never a cached binary served for a different program — and a canonicalizer
-// written here would be a second answer to a question the filesystem owns.
+// ⛔ **THE PATH SPELLING IS THE SLOT'S IDENTITY AND IS NOT CANONICALIZED.** Nothing here folds `.` or `..`,
+// so `./x.maxon` and `x.maxon` get two slots. That is the SAFE direction — an extra compile, never a cached
+// binary served for a different program — because a lexical fold (`FilePath.normalize`) is not the
+// filesystem's answer: `link/..` folds to `.` while the directory it names is the link target's parent.
 //
 // ⚠ **THE STEM IS THERE FOR A READER AND FOR THE PROGRAM'S OWN `argv[0]`**, never for finding the build:
 // one slot directory holds one program's builds, so the key alone would locate them.
@@ -332,7 +332,7 @@ export function hostCacheRoot() returns FilePath throws RunCacheError
 	end 'eachVariable'
 
 	return try lastResortCacheRoot()
-end 'cacheRoot'
+end 'hostCacheRoot'
 
 function lastResortCacheRoot() returns FilePath throws RunCacheError
 	#if os(Windows)
@@ -526,8 +526,8 @@ function stdlibSources() returns MaxonSourcePathArray throws RunCacheError
 	let superseded = supersededRuntimeModulePath(stdlibDir)
 
 	var walked = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(stdlibDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
-	_ = try collectMaxonSources(runtimeDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {runtimeDir.toString()} for the sources the build cache key is computed over")
+	_ = try collectMaxonSources(stdlibDir, into: walked, selection: SourceSelection.libraryTier) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
+	_ = try collectMaxonSources(runtimeDir, into: walked, selection: SourceSelection.libraryTier) otherwise throw RunCacheError.unavailable("could not walk {runtimeDir.toString()} for the sources the build cache key is computed over")
 
 	var compiled = MaxonSourcePathArray.create()
 

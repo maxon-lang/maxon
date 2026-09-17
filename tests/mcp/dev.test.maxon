@@ -15,11 +15,6 @@ function thisCheckout() returns String
 	return Directory.currentPath().path
 end 'thisCheckout'
 
-// The same path, escaped for the hand-built JSON these cases send.
-function thisCheckoutJson() returns String
-	return jsonEscaped(thisCheckout())
-end 'thisCheckoutJson'
-
 test 'dev mcp-server advertises the eight user tools plus the three contributor tools'
 	let names = toolNames(listTools(true))
 	try Expect.equal(names.count() as AssertedInt, expected: 11, message: "dev mode must advertise exactly 11 tools")
@@ -70,14 +65,14 @@ end 'dev mcp-server refuses a repoRoot that is not a checkout'
 // `build` is the cheap one of the four: `run_spec_test` pays for a worker pool before it can answer
 // anything, and this case is about the echo rather than about a suite.
 test 'dev mcp-server echoes the repoRoot it acted in'
-	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"{thisCheckoutJson()}\",\"path\":\"no-such-source.maxon\"\}", devMode: true)
+	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
 	try Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
 	try Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
 end 'dev mcp-server echoes the repoRoot it acted in'
 
 test 'dev mcp-server names the tree in a refusal too'
-	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"{thisCheckoutJson()}\",\"from\":\"nowhere/at/all.exe\"\}", devMode: true)
+	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"from\":\"nowhere/at/all.exe\"\}", devMode: true)
 
 	try Expect.isTrue(toolCallIsError(doc))
 	try Expect.contains(toolCallText(doc), needle: "does not exist")

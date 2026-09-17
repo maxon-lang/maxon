@@ -706,6 +706,24 @@ end 'main'
 {  "name": "src",  "output": ".maxon/demo",  "sources": [    "src"  ],  "debug_info": true,  "version": "",  "defines": [  ]}
 ```
 
+<!-- test: stdlib-loading.build-config-escapes-strings -->
+⛔ **EVERY STRING THE CONFIG PRINTS IS JSON-ESCAPED.** A `"` in a target's name would otherwise close the
+JSON string early, and a Windows path's `\` would start an escape the compiler's JSON reader rejects or
+misreads — so the name comes out as `a\"b` and the source as `src\\app`, and the document stays the same
+one-line shape `build-config-from-stdlib` pins.
+```maxon
+function main() returns ExitCode
+	Build.buildWithConfig(Build.target("a\"b", source: "src\\app", output: ".maxon/demo"))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+{  "name": "a\"b",  "output": ".maxon/demo",  "sources": [    "src\\app"  ],  "debug_info": true,  "version": "",  "defines": [  ]}
+```
+
 <!-- test: stdlib-loading.ascii-classifiers-from-stdlib -->
 `stdlib/Ascii.maxon`'s six classifiers. It is the first stdlib module to reach user code whose bodies are `match` arms
 over **`Character` RANGE patterns** (`'0' to '9'`, `'a' to 'z' or 'A' to 'Z'`), which is the construct

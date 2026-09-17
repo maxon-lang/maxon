@@ -952,7 +952,9 @@ Arguments with default values may be omitted.
 ## 7 — Summary of Block Structure
 
 Every compound statement in Maxon requires a single-quoted label after
-the opening keyword and a matching label after `end`.
+the opening keyword and a matching label after `end`. A label written after `end` that is not the
+block's own label is E2008 (E2043 for a `match`); the parser also accepts an `end` with no label on
+every block except a `test`.
 
 ```
 if <cond> 'label'  ...  end 'label'

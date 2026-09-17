@@ -1,0 +1,19 @@
+// `dump_ir` answers the program's Target IR as text, and writes nothing beside the source: no executable
+// and no `.ir` file.
+
+let DumpIrDirName = "temp/mcp-dump-ir-answers-the-ir-text"
+let ProgramFileName = "main.maxon"
+let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+// How the Target IR printer opens a function (`TargetPrinter.FuncHeaderPrefix`), followed by the name.
+let MainFunctionHeader = "func @main"
+
+test 'dump_ir answers the IR of main, and writes nothing'
+	let program = stagedProgram(DumpIrDirName, fileName: ProgramFileName, source: WellFormedSource)
+	let answer = callTool("dump_ir", argumentsJson: pathArgument(program))
+	let text = toolCallText(answer)
+
+	try Expect.isFalse(toolCallIsError(answer), message: "`dump_ir` over a well-formed program was answered as an error: {text}")
+	try Expect.contains(text, needle: MainFunctionHeader, message: "`dump_ir` did not answer the IR of `main`: {text}")
+	try Expect.isEmpty(filesWrittenBeside(program, dir: try program.parent() otherwise panic("a staged program sits in a directory")), message: "`dump_ir` wrote files.")
+end 'dump_ir answers the IR of main, and writes nothing'

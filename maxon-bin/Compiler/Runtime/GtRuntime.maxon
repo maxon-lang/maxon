@@ -524,7 +524,7 @@ function gtSeedStackBytes(target Target) returns ParsedInt
 end 'gtSeedStackBytes'
 
 // ⭐⭐ **THE LARGEST STACK A GREEN THREAD MAY GROW TO — Go's `maxstacksize`, a gigabyte on 64-bit.**
-// `__gt_morestack` refuses a growth past it with `RuntimeAbort.greenThreadStackExhausted` BEFORE allocating: a
+// `__gt_morestack` refuses a growth past it with `panic: stack overflow` BEFORE allocating: a
 // program that recurses without bound is told so, rather than doubling until the address space is gone and
 // failing somewhere unrelated. Go's limit is decimal (10⁹) because it reads better in its message; stacks are
 // powers of two, so this binary gigabyte admits exactly the stacks Go's does, plus the one gigabyte-sized stack.
@@ -571,15 +571,12 @@ enum FaultFrameHome
 	// A POSIX handler registered with `SA_ONSTACK`: the kernel switches to the thread's alternate signal stack
 	// (`SignalStackInstallName`), so the faulting stack receives nothing.
 	signalStack
-
-	// No handler is installed (arm64-Linux), and a default disposition writes nothing to user stack.
-	noHandler
 end 'FaultFrameHome'
 
 function gtFaultFrameHome(target Target) returns FaultFrameHome
 	return match target.cpu 'cpu'
 		x64 gives x64FaultFrameHome(target.os)
-		arm64 gives FaultFrameHome.signalStack if arm64OsInstallsFaultHandler(target.os) else FaultFrameHome.noHandler
+		arm64 gives FaultFrameHome.signalStack
 		wasm32 panic("gtFaultFrameHome: wasm32-wasi has no green-thread stack — a WASI component takes a wasm trap, not a hardware fault. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
 	end 'cpu'
 end 'gtFaultFrameHome'
@@ -595,15 +592,12 @@ export function programInstallsPreemptSignal(target Target, usesGt bool) returns
 	return usesGt and targetPreemptDelivery(target) == PreemptDelivery.signal
 end 'programInstallsPreemptSignal'
 
-// ⭐⭐ **DOES EVERY THREAD OF THIS PROGRAM OWE ITSELF AN ALTERNATE SIGNAL STACK?** Two mechanisms want one and
-// either is enough: a fault handler registered `SA_ONSTACK`, and the preemption signal's handler, which is
-// registered the same way. Neither frame fits in a green thread's few kilobytes.
-//
-// ⚠ **IT IS NOT `gtFaultFrameHome(target) == signalStack`.** arm64-Linux installs no fault handler at all and
-// still needs the stack, because it is a lane that stops threads — but only when it has a sender, which is
-// why the second term is `programInstallsPreemptSignal` and not a bare target test.
-export function targetInstallsSignalStack(target Target, usesGt bool) returns bool
-	return gtFaultFrameHome(target) == FaultFrameHome.signalStack or programInstallsPreemptSignal(target, usesGt: usesGt)
+// ⭐⭐ **DOES EVERY THREAD OF THIS PROGRAM OWE ITSELF AN ALTERNATE SIGNAL STACK?** Every POSIX lane registers
+// its fault handler `SA_ONSTACK`, and a lane that stops threads by signal registers the preemption handler
+// the same way beside it, so the fault handler's answer covers both. Neither frame fits in a green thread's
+// few kilobytes.
+export function targetInstallsSignalStack(target Target) returns bool
+	return gtFaultFrameHome(target) == FaultFrameHome.signalStack
 end 'targetInstallsSignalStack'
 
 function x64FaultFrameHome(os Os) returns FaultFrameHome
@@ -621,8 +615,7 @@ end 'x64FaultFrameHome'
 function gtStackSystemBytes(target Target) returns ParsedInt
 	return match gtFaultFrameHome(target) 'home'
 		faultingStack gives GtWindowsExceptionDispatchBytes
-		signalStack or
-			noHandler gives 0
+		signalStack gives 0
 	end 'home'
 end 'gtStackSystemBytes'
 
@@ -854,8 +847,9 @@ export let WaitInfinite = 0xFFFFFFFF
 let StartupInfoSize = 0x68
 let StartupInfoCbOffset = 0
 
-// PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8 (dwProcessId@16, dwThreadId@20 are unused here).
-let ProcInfoSize = 0x18
+// PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8, dwProcessId@16, dwThreadId@20. The record a spawn is
+// handed is one word longer, for `SpawnFailedPreparationOffset`, which `CreateProcessA` never writes.
+let ProcInfoSize = 0x20
 export let ProcInfoHProcessOffset = 0
 export let ProcInfoHThreadOffset = 8
 
@@ -863,8 +857,33 @@ export let ProcInfoHThreadOffset = 8
 // and not `i64`: the `dwThreadId` beside it would otherwise ride in the high half of the answer.
 export let ProcInfoDwProcessIdOffset = 16
 
-// The low 32 bits of a machine word — how a DWORD is read out of an eight-byte load. See `dwProcessId`'s use.
-let DwordMask = 0xFFFFFFFF as ParsedInt
+// ⭐⭐ **WHICH STEP OF A SPAWN FAILED, WHEN IT WAS NOT THE LAUNCH.** A spawn opens its standard streams and, on
+// a POSIX lane, its working directory before it launches anything, and each of those fails with the same
+// not-found codes a missing executable does — so only the runtime can say which step a code belongs to, and
+// `stdlib/Subprocess.maxon`'s `SpawnPreparation` decodes these raw values to tell `executableNotFound` from
+// `spawnFailed`. `none` is every failure that is not a preparation step's, the launch's included.
+export enum SpawnPreparation
+	none = 0
+	standardStream = 1
+	workingDirectory = 2
+end 'SpawnPreparation'
+
+// Where a spawn chunk that failed before launching stores its `SpawnPreparation`: the word after
+// PROCESS_INFORMATION. A record the spawn fills is slab-zeroed, so a launch failure leaves `none` here.
+export let SpawnFailedPreparationOffset = 0x18
+
+// ⭐ **A LINUX CHILD THAT CANNOT LAUNCH REPORTS IN THE PARENT's OWN RECORD SHAPE.** The launch happens in a
+// cloned process, so what failed crosses back down the spawn's status pipe: the child writes these bytes of its
+// copy of the record in ONE write, and the parent reads them straight into its own — the `-errno` over
+// `dwProcessId`'s word, which the parent takes out before it fills that word, and the `SpawnPreparation` over
+// `SpawnFailedPreparationOffset`, where the launch failure already reads it. One write of fewer than
+// `PIPE_BUF` bytes arrives whole, so the parent's one read sees all of it or none.
+export let SpawnChildReportOffset = ProcInfoDwProcessIdOffset
+export let SpawnChildReportBytes = SpawnFailedPreparationOffset + (MachineWordBytes as ParsedInt) - SpawnChildReportOffset
+
+// The last-error word carries the OS code in its low 32 bits and the `SpawnPreparation` above them, so the code
+// a message renders is unchanged by the step it came from.
+let SpawnPreparationShift = 32
 
 // The 8-byte slab slot `GetExitCodeProcess` writes the child's DWORD exit code into; the runtime reads it back
 // with a full i64 load, so the high dword must be clean. `GetExitCodeProcess` writes only the low DWORD, so the
@@ -1228,10 +1247,9 @@ let GtIoParkName = b"__gt_io_park"
 // EMITTED unless the build asked for them, so there is no enabled-flag global and no per-spawn branch, and
 // an untraced program carries none of it. (The struct FIELD is not gated — see `GtOffTraceId`.)
 //
-// ⚠ **A YIELD IS NOT TRACED, AND THAT IS A DECISION RATHER THAN AN OMISSION.** `Runtime.yield()` /
-// `__gt_resched` emits nothing, so a yield storm is invisible to `--async-trace`. That IS a real debugging
-// hole and worth closing later. It is not closed here because no spec pins a yield tag, and inventing a
-// seventh tag beside the six that ARE pinned would land an untested spelling next to the tested ones.
+// ⚠ **A YIELD IS NOT TRACED HERE.** `Runtime.yield()` / `__gt_resched` prints no line, because no spec pins
+// a yield tag and a seventh spelling beside the six that ARE pinned would be an untested one. A yield storm
+// is visible to `maxon monitor --filter=sched` instead (`emitSchedEventOf`).
 let GtTraceEmitName = b"__gt_trace_emit"
 
 // `(tagPtr, tagLen, value, suffixPtr, suffixLen)` — the tag and suffix travel as pointer+length pairs because
@@ -2436,7 +2454,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, asyncTrace bool, tags 
 
 	match kind 'countedAndNamed'
 		coroutine or
-			greenThread then emitGtSpawnCountAndTraceId(module, block: seeded, gt: gt, asyncTrace: asyncTrace, tags: tags, ids: ids)
+			greenThread then seeded = emitGtSpawnCountAndTraceId(module, func: func, block: seeded, gt: gt, asyncTrace: asyncTrace, tags: tags, ids: ids)
 		mainThread then break 'countedAndNamed'
 	end 'countedAndNamed'
 
@@ -2467,14 +2485,15 @@ end 'emitGtStackRefused'
 // A promise-bearing spawn's two numbers: one green thread onto the live count, which `__gt_owner_done` lowers
 // by one per promise so a clean exit balances it to zero; and the trace id, pre-incremented off the dispenser
 // so ids run 1, 2, 3 in SPAWN order. The id is stored unconditionally — the FIELD is not gated, only the
-// trace CALL is (see `GtOffTraceId`).
-function emitGtSpawnCountAndTraceId(module StdModule, block IrBlock, gt ValueId, asyncTrace bool, tags GtTraceTags, ids ValueMinter)
+// trace CALL is (see `GtOffTraceId`). Returns the block to continue in, because the DebugStream event splits it.
+function emitGtSpawnCountAndTraceId(module StdModule, func IrFunction, block IrBlock, gt ValueId, asyncTrace bool, tags GtTraceTags, ids ValueMinter) returns IrBlock
 	let spawnCredit = emitConst(module, block: block, value: OneMore, ids: ids)
 	_ = emitGlobalAccumulate(module, block: block, label: GtLiveCountLabel, delta: spawnCredit, multiM: true, ids: ids)
 	let traceSeen = emitGlobalAccumulate(module, block: block, label: GtTraceCounterLabel, delta: spawnCredit, multiM: true, ids: ids)
 	let traceId = emitBin(module, block: block, a: traceSeen, b: spawnCredit, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(gt, offset: GtOffTraceId, valueId: traceId, valueType: StdType.i64))
 	emitGtTraceLine(module, block: block, traced: asyncTrace, tag: tags.spawn, gtId: traceId, suffix: GtTraceTag.absent(), ids: ids)
+	return emitSchedEventOf(module, func: func, block: block, eventType: DsEvSchedSpawn, gt: gt, ids: ids)
 end 'emitGtSpawnCountAndTraceId'
 
 // ⭐⭐⭐ **SEED A FRESH GREEN THREAD'S INITIAL CONTEXT-SWITCH FRAME — the ONE place the two ISAs disagree
@@ -3287,7 +3306,7 @@ function buildGtTimerAdd(module StdModule)
 	// The republished base is what every reader consults, so the old region is unreachable the instant the
 	// store above lands — and on the FIRST grow `oldBase` is a real `__gt_init` region, never null, because the
 	// store is allocated eagerly there rather than lazily here.
-	module.appendOp(copied, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(oldBase)))
+	emitSlabFree(module, block: copied, ptr: oldBase, ids: ids)
 	module.setTerminator(copied, op: StdOp.branch(doAdd.id))
 
 	let heapBase = emitLoadGlobalWord(module, block: doAdd, label: GtTimerHeapBaseLabel, ids: ids)
@@ -3815,6 +3834,7 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, asyncTrac
 		module.appendOp(entry, op: StdOp.cmp(alreadyDone, lhs: statusOnEntry, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	end 'readAwaitTraceState'
 
+	entry = emitSchedEventOf(module, func: func, block: entry, eventType: DsEvSchedAwait, gt: promise, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(check.id))
 
 	let status = emitGtLoadPublishedStatus(module, block: check, gt: promise, ids: ids)
@@ -4096,8 +4116,9 @@ end 'buildGtOwnerDone'
 //
 // ⇒ **A STARTED thread whose promise was renounced is therefore RUN TO COMPLETION, not abandoned in a
 // queue**, and the strand runner's hand-off reclaims it: a drop cancels a thread that has not STARTED, and
-// for one that has, it renounces the RESULT and lets the body finish. A thread PARKED on a store is
-// deregistered and freed by its dropper, which is a party that can do the cleanup, and
+// for one that has, it renounces the RESULT and lets the body finish. A started thread PARKED when its promise
+// is dropped is no exception: the drop expires its wait, or cancels the operation the kernel still serves, and
+// the thread is readied, runs to completion and is reclaimed by its runner (`buildGtPromiseDrop`).
 // `async-promise-drop.never-ran-drop-not-run` pins that a never-run thread's body never runs.
 function emitGtIsDropped(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
 	let teardown = emitLoadField(module, block: block, record: gt, offset: GtOffTeardown, ids: ids)
@@ -5264,8 +5285,10 @@ function buildGtSleep(module StdModule, asyncTrace bool, tags GtTraceTags)
 	// The trace pair BRACKETS the park, exactly as `__gt_io_park`'s does — same exit, different tag, and the
 	// tag is the only thing that tells a reader which kind of wait this green thread is in.
 	emitCurrentGtTraceLine(module, block: entry, traced: asyncTrace, tag: tags.sleepYield, ids: ids)
+	entry = emitCurrentGtSchedEvent(module, func: func, block: entry, eventType: DsEvSchedYield, ids: ids)
 	var resumed = emitGtParkOnDeadline(module, func: func, cur: entry, deadline: deadline, ids: ids)
 	emitCurrentGtTraceLine(module, block: resumed, traced: asyncTrace, tag: tags.sleepResume, ids: ids)
+	resumed = emitCurrentGtSchedEvent(module, func: func, block: resumed, eventType: DsEvSchedResume, ids: ids)
 	module.setTerminator(resumed, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -5995,6 +6018,33 @@ function emitCurrentGtTraceLine(module StdModule, block IrBlock, traced bool, ta
 	emitGtTraceLine(module, block: block, traced: traced, tag: tag, gtId: gtId, suffix: GtTraceTag.absent(), ids: ids)
 end 'emitCurrentGtTraceLine'
 
+// ⭐ **ONE DebugStream sched event about the green thread `gt`, carrying its trace id.** The sites are the
+// async trace's own — a spawn, an await, the two brackets of a sleep and of an I/O park — plus
+// `Runtime.yield()`, which the async trace does not report. A no-op unless this build carries the producer,
+// asked BEFORE the trace-id read so an untraced build's image is unchanged (see `emitMmEvent` for why the
+// gate cannot sit behind the argument). Returns the block to continue in, because the event splits it.
+//
+// ⚠ **`__gt_preempt` EMITS NONE**: its call tree rides the guard margin (`buildGtPreempt`), and a ring
+// write is a lock and a call deeper.
+function emitSchedEventOf(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, gt ValueId, ids ValueMinter) returns IrBlock
+	if not module.debugStream 'untracedBuild'
+		return block
+	end 'untracedBuild'
+
+	let traceId = emitLoadField(module, block: block, record: gt, offset: GtOffTraceId, ids: ids)
+	return emitSchedEvent(module, func: func, block: block, eventType: eventType, traceId: traceId, ids: ids)
+end 'emitSchedEventOf'
+
+// The same event about the CURRENT green thread, read at the point of the event for `emitCurrentGtTraceId`'s
+// reason: a park's two events sit either side of a context switch.
+function emitCurrentGtSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, ids ValueMinter) returns IrBlock
+	if not module.debugStream 'untracedBuild'
+		return block
+	end 'untracedBuild'
+
+	return emitSchedEventOf(module, func: func, block: block, eventType: eventType, gt: emitLoadCurrentGt(module, block: block, ids: ids), ids: ids)
+end 'emitCurrentGtSchedEvent'
+
 // `__gt_io_park(suffixPtr, suffixLen)` — the I/O yield point. See `GtIoParkName` for what it does and does not
 // promise, for why it parks rather than taking `__gt_resched`'s run-queue handoff, and for why the SUFFIX is a
 // pair of parameters in a traced build and no parameter at all in an untraced one.
@@ -6062,6 +6112,8 @@ function buildGtIoPark(module StdModule)
 		emitGtTraceLineOfSuffix(module, block: yielding, tag: tags.ioYield, gtId: traceIdBefore, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'yieldLine'
 
+	yielding = emitCurrentGtSchedEvent(module, func: func, block: yielding, eventType: DsEvIoYield, ids: ids)
+
 	var resumed = emitGtParkOnDeadline(module, func: func, cur: yielding, deadline: emitGtNowNs(module, block: yielding, ids: ids), ids: ids)
 
 	let traceIdAfter = emitCurrentGtTraceId(module, block: resumed, ids: ids)
@@ -6069,6 +6121,8 @@ function buildGtIoPark(module StdModule)
 	if traced 'resumeLine'
 		emitGtTraceLineOfSuffix(module, block: resumed, tag: tags.ioResume, gtId: traceIdAfter, suffixAddr: suffixAddr, suffixLen: suffixLen, ids: ids)
 	end 'resumeLine'
+
+	resumed = emitCurrentGtSchedEvent(module, func: func, block: resumed, eventType: DsEvIoResume, ids: ids)
 
 	module.setTerminator(resumed, op: StdOp.branch(doneBlock.id))
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -6153,7 +6207,9 @@ function buildGtResched(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
+	entry = emitCurrentGtSchedEvent(module, func: func, block: entry, eventType: DsEvSchedYield, ids: ids)
 	emitGtPark(module, ids: ids, cur: entry, kind: GtParkKindYield, arg: emitConst(module, block: entry, value: GtParkArgUnused, ids: ids), cont: doneBlock)
+	doneBlock = emitCurrentGtSchedEvent(module, func: func, block: doneBlock, eventType: DsEvSchedResume, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -6216,10 +6272,11 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	let cmdlineLen = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
 
-	// ⭐ **THE THREE PRE-SPAWN SCRATCH REGIONS, PER CALL.** STARTUPINFOA, PROCESS_INFORMATION and the
-	// MUTABLE NUL-terminated command line (CreateProcessA may write to `lpCommandLine`, and the `.rdata` String
-	// blob is neither writable nor NUL-terminated). All three are dead by `afterCopy`, which is where they are
-	// released — so nothing here survives the park, and two concurrent `__gt_process_run` calls share nothing.
+	// ⭐ **THE PRE-SPAWN SCRATCH REGIONS, PER CALL.** STARTUPINFOA, PROCESS_INFORMATION, the MUTABLE
+	// NUL-terminated command line (CreateProcessA may write to `lpCommandLine`, and the `.rdata` String blob is
+	// neither writable nor NUL-terminated) and, under the vector shape, the command built from it. All are dead
+	// by `afterCopy`, which is where they are released — so nothing here survives the park, and two concurrent
+	// `__gt_process_run` calls share nothing.
 	//
 	// ⭐ **AND NO RE-ZEROING STORES, BECAUSE A FRESH SLOT ARRIVES ZEROED.** `startup.cb` is the only
 	// field CreateProcessA reads that is not zero; `procInfo.hProcess` is the spawn-failure sentinel and must be
@@ -6273,14 +6330,14 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
 
 	// ⚠ **BOTH HANDLES COME OUT BEFORE THE RECORD GOES BACK, AND THAT IS WHY THE RELEASE IS HERE RATHER THAN
-	// ON EACH ARM.** CreateProcessA has read the STARTUPINFOA and the command line and written the
-	// PROCESS_INFORMATION, so all three regions are dead at this point on EVERY path below — the throw and the
+	// ON EACH ARM.** CreateProcessA has read the STARTUPINFOA and the command and written the
+	// PROCESS_INFORMATION, so every region is dead at this point on EVERY path below — the throw and the
 	// park alike. Freeing once, before the branch, is what keeps both arms from needing their own copy of it,
 	// and `hThread` is read here for the same reason (on the failure path it is the slot's zero, which that arm
 	// never looks at).
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(cmBuf)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(startupPtr)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(procInfoPtr)))
+	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command)
+	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
+	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	let spawnZeroConst = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.const(spawnZeroConst, value: 0, valueType: StdType.i64))
 	let spawnFailedCmp = ids.mint()
@@ -6335,7 +6392,7 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	module.appendOp(reapExit, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
 	let code = ids.mint()
 	module.appendOp(reapExit, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
-	module.appendOp(reapExit, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(codePtr)))
+	emitSlabFree(module, block: reapExit, ptr: codePtr, ids: ids)
 	module.appendOp(reapExit, op: StdOp.osCloseHandle(hProcess))
 
 	// A THROWING function's successful exit still writes BOTH registers — the child's exit code in the
@@ -6495,10 +6552,10 @@ end 'buildPipeName'
 // that works here, because a read YIELDS and two concurrent reads must not share scratch; without the
 // release, N reads would hold N × ~4.2 KB for the process lifetime. The regions split cleanly in two:
 //
-//   • SIX are dead inside straight-line code — the pipe name, the SECURITY_ATTRIBUTES, the two-handle
-//     out-param block, the command line, the STARTUPINFOA and the PROCESS_INFORMATION. Each is freed at the
-//     point its last reader finishes, BEFORE the branch that could throw the call away, so no arm carries a
-//     copy of the release.
+//   • The rest are dead inside straight-line code — the pipe name, the SECURITY_ATTRIBUTES, the two-handle
+//     out-param block, the command line (and the command a vector-shaped lane builds from it), the STARTUPINFOA
+//     and the PROCESS_INFORMATION. Each is freed at the point its last reader finishes, BEFORE the branch that
+//     could throw the call away, so no arm carries a copy of the release.
 //   • ONE survives the park — the read scratch, which the kernel is writing into while the green thread is
 //     suspended. It rides this frame and is freed after the yielding read returns, on the dropped road as
 //     well: a dropped reader is renounced rather than abandoned, so it comes back here to free it.
@@ -6520,16 +6577,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	buildPipeName(module, func: func, ids: ids, startBlock: entry, bufPtr: namePtr, cont: afterName)
 
 	// afterName: SECURITY_ATTRIBUTES (inheritable) for the child write end; the two out-handle slots; create the pipe.
-	let saSizeConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(saSizeConst, value: SecurityAttributesSize as ParsedInt, valueType: StdType.i64))
-	let saPtr = ids.mint()
-	module.appendOp(afterName, op: StdOp.call(saPtr, callee: SlabAllocName, args: argsOf(saSizeConst)))
-	let saLenConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(saLenConst, value: SecurityAttributesSize as ParsedInt, valueType: StdType.i64))
-	module.appendOp(afterName, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesNLengthOffset, valueId: saLenConst, valueType: StdType.i64))
-	let saInheritConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(saInheritConst, value: SecurityAttributesInheritable as ParsedInt, valueType: StdType.i64))
-	module.appendOp(afterName, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesBInheritOffset, valueId: saInheritConst, valueType: StdType.i64))
+	let saPtr = emitSubpSecurityAttributes(module, block: afterName, ids: ids)
 
 	let slotsSizeConst = ids.mint()
 	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: SubpPipeScratchBytes as ParsedInt, valueType: StdType.i64))
@@ -6542,9 +6590,8 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// The pipe exists and both ends are in registers, so the three regions that described it are dead: the
 	// name has been resolved to a kernel object, the SECURITY_ATTRIBUTES was read by the create, and the
 	// out-param block has been emptied.
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(namePtr)))
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(saPtr)))
-	module.appendOp(afterName, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(scratch)))
+	emitSubpFreePipeScratch(module, block: afterName, name: namePtr, scratch: scratch, ids: ids)
+	emitSlabFree(module, block: afterName, ptr: saPtr, ids: ids)
 
 	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
@@ -6596,13 +6643,13 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	let hThread = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
 
-	// CreateProcessA has read the command line and the STARTUPINFOA and written the PROCESS_INFORMATION, so
-	// all three are dead on BOTH arms below — released once, before the branch, exactly as
+	// CreateProcessA has read the command and the STARTUPINFOA and written the PROCESS_INFORMATION, so
+	// every region is dead on BOTH arms below — released once, before the branch, exactly as
 	// `__gt_process_run` does it. On the failure path `hThread` is the fresh slot's zero, which that arm never
 	// reads.
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(cmBuf)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(startupPtr)))
-	module.appendOp(afterCopy, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(procInfoPtr)))
+	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: probeCommand)
+	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
+	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	let spawnFailed = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailed, lhs: hProcess, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
@@ -6648,7 +6695,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 
 	// The read is over — the pipe is closed and the kernel is done with the buffer, so it goes back.
-	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(scratch)))
+	emitSlabFree(module, block: spawnOk, ptr: scratch, ids: ids)
 
 	// ⭐ **THE PROBE ANSWERS A COUNT, SO A FAILED READ IS 0 HERE.** `spawnReadLine(cmd)`'s whole contract is
 	// *"an environment error reads as EOF"*, and it has nowhere to carry the difference; the STREAMING API
@@ -6696,6 +6743,10 @@ end 'buildGtIoRead'
 // stream. stderr is read post-exit only in the harness, so it never multiplexes against a live stdout read.
 let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
+
+// `ERROR_TOO_MANY_OPEN_FILES` — the last error a spawn publishes when every one of the `SubpMaxHandles` slots is
+// live, a refusal no OS call made.
+let ErrorTooManyOpenFiles = 4 as ParsedInt
 let SubpSlotBytes = 192
 
 // A live handle is `generation * SubpHandleSlotSpan + slotIndex`: the index in the low bits, the slot's
@@ -6872,7 +6923,7 @@ export function subpRuntimeGlobals() returns DataSectionEntryArray
 	// ⚠ **THE ONE SLOT WHOSE *USEFULNESS* DEGRADES UNDER MULTI-M WHERE ITS SAFETY DOES NOT, AND THAT
 	// DISTINCTION IS THE WHOLE OF WHY IT IS CLASSIFIED RATHER THAN FIXED.** It is one aligned machine word
 	// written whole and read whole, so nothing tears and every value a reader can observe is a real Win32
-	// error code; what stops being exact is which failure "the LAST error" names, because two Ms failing at
+	// error code with the step it failed in; what stops being exact is which failure "the LAST error" names, because two Ms failing at
 	// once make one of them the loser. Its contract is already process-wide rather than per-caller
 	// (`__Builtins.subprocessLastErrorMessage()` names no operation), so no promise breaks — the message can
 	// simply be the other failure's. Making it exact needs per-GREEN-THREAD storage, since a green thread may
@@ -6891,12 +6942,30 @@ export let SubpLastErrorLabel = b"__subp_last_error"
 // last-error word (the shim's TIB writes do not touch the TEB's LastError), which is the same adjacency
 // `osLastError`'s own header states for the overlapped read.
 export function emitSubpRecordLastError(module StdModule, block IrBlock, ids ValueMinter)
+	emitSubpRecordSpawnError(module, block: block, preparation: emitConst(module, block: block, value: SpawnPreparation.none.rawValue, ids: ids), ids: ids)
+end 'emitSubpRecordLastError'
+
+// The same capture, with the `SpawnPreparation` step it failed in above the OS code (`SpawnPreparationShift`).
+function emitSubpRecordSpawnError(module StdModule, block IrBlock, preparation ValueId, ids ValueMinter)
 	let err = ids.mint()
 	module.appendOp(block, op: StdOp.osLastError(err))
+	let shift = emitConst(module, block: block, value: SpawnPreparationShift, ids: ids)
+	let step = emitBin(module, block: block, a: preparation, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let word = emitBin(module, block: block, a: err, b: step, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitSubpStoreLastErrorWord(module, block: block, word: word, ids: ids)
+end 'emitSubpRecordSpawnError'
+
+// Publish a code the runtime chose itself, for a refusal no OS call made. Without it the caller would read
+// whatever an earlier failure left in the word.
+function emitSubpStoreLastError(module StdModule, block IrBlock, code ParsedInt, ids ValueMinter)
+	emitSubpStoreLastErrorWord(module, block: block, word: emitConst(module, block: block, value: code, ids: ids), ids: ids)
+end 'emitSubpStoreLastError'
+
+function emitSubpStoreLastErrorWord(module StdModule, block IrBlock, word ValueId, ids ValueMinter)
 	let slotAddr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(slotAddr, label: SubpLastErrorLabel))
-	emitStoreField(module, block: block, record: slotAddr, offset: 0, value: err)
-end 'emitSubpRecordLastError'
+	emitStoreField(module, block: block, record: slotAddr, offset: 0, value: word)
+end 'emitSubpStoreLastErrorWord'
 
 // slot = __subp_table's region + slotIdx * SubpSlotBytes. `table` is the already-loaded region base; `slotIdx` is a
 // decoded index, never a caller's handle.
@@ -7279,6 +7348,12 @@ function emitSubpAllocPipeName(module StdModule, block IrBlock, ids ValueMinter)
 	return nameBuf
 end 'emitSubpAllocPipeName'
 
+// The two regions one pipe's creation reads, dead once both of its ends are out of the scratch.
+function emitSubpFreePipeScratch(module StdModule, block IrBlock, name ValueId, scratch ValueId, ids ValueMinter)
+	emitSlabFree(module, block: block, ptr: name, ids: ids)
+	emitSlabFree(module, block: block, ptr: scratch, ids: ids)
+end 'emitSubpFreePipeScratch'
+
 // Create ONE overlapped read pipe into `scratch`'s three words — the read end @0, the child's write end @8 —
 // and reach the returned block with both in place. Terminates `cur`.
 //
@@ -7308,7 +7383,7 @@ function emitSubpCreateReadPipe(module StdModule, func IrFunction, ids ValueMint
 end 'emitSubpCreateReadPipe'
 
 // Fill a fresh SECURITY_ATTRIBUTES (nLength + bInheritHandle=TRUE) into a slab region and return its pointer — the
-// inheritable SA every child-facing pipe end is created with, spelled once for the three pipes.
+// inheritable SA every child-facing pipe end is created with, spelled once for every spawn that creates a pipe.
 function emitSubpSecurityAttributes(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let saSizeConst = emitConst(module, block: block, value: SecurityAttributesSize as ParsedInt, ids: ids)
 	let saPtr = ids.mint()
@@ -7330,7 +7405,7 @@ end 'emitSubpSecurityAttributes'
 // contract would otherwise arrive as fourteen live values across a spawn that immediately spills them all.
 // Its fields are i64 because every one of them is a machine word: a buffer address, a `cstring`, a Win32
 // flag word or a kind discriminator.
-let SubpReqCmdline = 0 as ByteOffset  // a MUTABLE NUL-terminated command line; CreateProcessA writes to it
+export let SubpReqCmdline = 0 as ByteOffset  // a MUTABLE NUL-terminated command line; CreateProcessA writes to it
 export let SubpReqCwd = 8 as ByteOffset  // cstring, or 0 to inherit the parent's working directory
 export let SubpReqFlags = 16 as ByteOffset  // Win32 dwCreationFlags, already translated from the surface bitfield
 export let SubpReqStdinKind = 24 as ByteOffset
@@ -7510,6 +7585,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	module.setTerminator(slotNext, op: StdOp.branch(slotHdr.id))
 	slotNext.branchEdges.push(BranchEdge.create(slotHdr.id, argIds: argsOf(nextIdx)))
 
+	emitSubpStoreLastError(module, block: noSlot, code: ErrorTooManyOpenFiles, ids: ids)
 	module.setTerminator(noSlot, op: StdOp.ret(negOne))
 
 	// gotSlot: the slot is this spawn's, so its collect interlock starts free; then the inheritable
@@ -7520,16 +7596,24 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let childScratchSizeConst = emitConst(module, block: gotSlot, value: SubpChildScratchBytes as ParsedInt, ids: ids)
 	let childScratch = ids.mint()
 	module.appendOp(gotSlot, op: StdOp.call(childScratch, callee: SlabAllocName, args: argsOf(childScratchSizeConst)))
-	let nulName = emitSubpLiteralCString(module, block: gotSlot, ids: ids, bytes: subpNullDeviceName(commandShape))
+	let nulName = emitLiteralCString(module, block: gotSlot, ids: ids, text: subpNullDeviceName(commandShape))
 
-	// ⚠ **THE FAILURE EXIT IS CREATED BEFORE THE STDIO SETUP BECAUSE THE SETUP CAN REACH IT.** A `file` or
-	// `discard` stream opens a real file, and `CreateFileA` can fail; see `emitSubpNonPipeChildHandle`.
+	// ⚠ **THE FAILURE EXITS ARE CREATED BEFORE THE STDIO SETUP BECAUSE THE SETUP CAN REACH THEM.** A `file` or
+	// `discard` stream opens a real file, and `CreateFileA` can fail; see `emitSubpNonPipeChildHandle`. Its exit
+	// records the failure as the standard streams' so a missing redirect file is never read as a missing
+	// executable; both exits then share the cleanup.
+	var streamFail = module.addBlock(func, label: b"streamfail", heat: BlockHeat.normal)
+	var launchFail = module.addBlock(func, label: b"launchfail", heat: BlockHeat.normal)
 	var spawnFail = module.addBlock(func, label: b"spawnfail", heat: BlockHeat.normal)
 	var spawnOk = module.addBlock(func, label: b"spawnok", heat: BlockHeat.normal)
 
-	var afterStdin = emitSubpStdinSetup(module, func: func, ids: ids, cur: gotSlot, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, whenFailed: spawnFail)
-	var afterStdout = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdin, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqOutKind, dataOffset: SubpReqOutData, limitOffset: SubpReqOutLimit, streamBase: SubpStdoutBase, slotLimitOffset: SubpSlotOutLimit, childOffset: SubpChildStdoutWriteOff, ownedOffset: SubpOwnedStdoutOff, stdSelector: StdOutputHandleSelector, whenFailed: spawnFail)
-	var afterStderr = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdout, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqErrKind, dataOffset: SubpReqErrData, limitOffset: SubpReqErrLimit, streamBase: SubpStderrBase, slotLimitOffset: SubpSlotErrLimit, childOffset: SubpChildStderrWriteOff, ownedOffset: SubpOwnedStderrOff, stdSelector: StdErrorHandleSelector, whenFailed: spawnFail)
+	var afterStdin = emitSubpStdinSetup(module, func: func, ids: ids, cur: gotSlot, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, whenFailed: streamFail)
+	var afterStdout = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdin, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqOutKind, dataOffset: SubpReqOutData, limitOffset: SubpReqOutLimit, streamBase: SubpStdoutBase, slotLimitOffset: SubpSlotOutLimit, childOffset: SubpChildStdoutWriteOff, ownedOffset: SubpOwnedStdoutOff, stdSelector: StdOutputHandleSelector, whenFailed: streamFail)
+	var afterStderr = emitSubpOutputSetup(module, func: func, ids: ids, cur: afterStdout, req: req, table: table, slotIdx: slotIdx, saPtr: saPtr, childScratch: childScratch, nulName: nulName, kindOffset: SubpReqErrKind, dataOffset: SubpReqErrData, limitOffset: SubpReqErrLimit, streamBase: SubpStderrBase, slotLimitOffset: SubpSlotErrLimit, childOffset: SubpChildStderrWriteOff, ownedOffset: SubpOwnedStderrOff, stdSelector: StdErrorHandleSelector, whenFailed: streamFail)
+
+	let streamStep = emitConst(module, block: streamFail, value: SpawnPreparation.standardStream.rawValue, ids: ids)
+	emitSubpRecordSpawnError(module, block: streamFail, preparation: streamStep, ids: ids)
+	module.setTerminator(streamFail, op: StdOp.branch(spawnFail.id))
 
 	var detached = module.addBlock(func, label: b"detached", heat: BlockHeat.normal)
 	var attached = module.addBlock(func, label: b"attached", heat: BlockHeat.normal)
@@ -7560,13 +7644,23 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let hProcess = emitLoadField(module, block: afterStderr, record: procInfoPtr, offset: ProcInfoHProcessOffset, ids: ids)
 	let zeroA = emitConst(module, block: afterStderr, value: 0, ids: ids)
 	let spawnFailed = emitCmp(module, block: afterStderr, a: hProcess, b: zeroA, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterStderr, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
+	module.setTerminator(afterStderr, op: StdOp.condBranch(spawnFailed, thenBlockId: launchFail.id, elseBlockId: spawnOk.id))
 
-	// spawnFail: publish the OS's reason, close every handle this attempt opened (reloaded from the slot + the
-	// owned-child scratch) — the slot stays free — and answer -1.
-	emitSubpRecordLastError(module, block: spawnFail, ids: ids)
+	// launchFail: publish the OS's reason with the preparation step the spawn chunk reported, which is `none`
+	// unless a POSIX chunk failed before launching (`SpawnFailedPreparationOffset`). A missing working directory
+	// needs no step on Windows: `CreateProcessA` answers `ERROR_DIRECTORY` for it, a code no missing executable
+	// shares.
+	let launchStep = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: SpawnFailedPreparationOffset, ids: ids)
+	emitSubpRecordSpawnError(module, block: launchFail, preparation: launchStep, ids: ids)
+	emitSubpFreeLaunchRecords(module, block: launchFail, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
+	module.setTerminator(launchFail, op: StdOp.branch(spawnFail.id))
+
+	// spawnFail: close every handle this attempt opened (reloaded from the slot + the owned-child scratch) — the
+	// slot stays free — give back the setup's scratch, and answer -1. Both roads here have already published the
+	// last error, and nothing below writes it.
 	let slotF = emitSubpSlotAddr(module, block: spawnFail, ids: ids, table: table, slotIdx: slotIdx)
 	emitSubpCloseSlotHandles(module, block: spawnFail, ids: ids, slot: slotF, childScratch: childScratch)
+	emitSubpFreeSetupScratch(module, block: spawnFail, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
 
 	// ⭐ **AND GIVE THE CLAIM BACK.** The scan's CAS took this slot before any of the stdio setup ran, so this
 	// — the only way out of this function that produced no handle — is what returns it. Without it the table
@@ -7581,13 +7675,10 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	emitSubpCloseOwnedChildEnds(module, block: spawnOk, ids: ids, childScratch: childScratch)
 
-	// ⚠ **AN i64 LOAD AND A MASK, NOT A `u32` LOAD.** `dwProcessId` is a DWORD with `dwThreadId` packed
-	// immediately after it, and the compiler's memory-access forms stop at a byte for unsigned types
-	// (`StdLoweringShared.accessWidthFor` panics on `u32`), so the eight-byte read takes BOTH DWORDs and the
-	// mask is what discards the thread id sitting in the high half.
-	let pidPair = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoDwProcessIdOffset, ids: ids)
-	let dwordMask = emitConst(module, block: spawnOk, value: DwordMask, ids: ids)
-	let pid = emitBin(module, block: spawnOk, a: pidPair, b: dwordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	// The mask discards `dwThreadId`, which sits in the high half of the word the load reads.
+	let pid = emitLoadDword(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoDwProcessIdOffset, ids: ids)
+	emitSubpFreeLaunchRecords(module, block: spawnOk, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
+	emitSubpFreeSetupScratch(module, block: spawnOk, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotHProcess, value: hProcess)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotPid, value: pid)
@@ -7643,6 +7734,21 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	module.functions.push(func)
 end 'buildSubpSpawnCore'
+
+// The two records the launch reads and writes, dead once `hProcess`, `hThread`, the pid and the failed step
+// are out of them.
+function emitSubpFreeLaunchRecords(module StdModule, block IrBlock, startupPtr ValueId, procInfoPtr ValueId, ids ValueMinter)
+	emitSlabFree(module, block: block, ptr: startupPtr, ids: ids)
+	emitSlabFree(module, block: block, ptr: procInfoPtr, ids: ids)
+end 'emitSubpFreeLaunchRecords'
+
+// The three regions the stdio setup reads, dead once the launch has been attempted — the child-handle
+// scratch only after its owned ends are closed.
+function emitSubpFreeSetupScratch(module StdModule, block IrBlock, saPtr ValueId, childScratch ValueId, nulName ValueId, ids ValueMinter)
+	emitSlabFree(module, block: block, ptr: saPtr, ids: ids)
+	emitSlabFree(module, block: block, ptr: childScratch, ids: ids)
+	emitSlabFree(module, block: block, ptr: nulName, ids: ids)
+end 'emitSubpFreeSetupScratch'
 
 // `"NUL"` in a fresh slab buffer, as the NUL-terminated bytes `CreateFileA` reads. Three stores and a
 // slab-zeroed terminator — a four-byte `.rdata` blob would need a relocation and a symbol for what is three
@@ -7793,6 +7899,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: pipeMake, record: slotP, offset: SubpSlotStdinWrite, value: parentWrite)
 	let childRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
+	emitSubpFreePipeScratch(module, block: pipeMake, name: name, scratch: scratch, ids: ids)
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
 	pipeMake.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(childRead, second: childRead)))
 
@@ -7847,6 +7954,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	emitStoreField(module, block: pipeMake, record: streamP, offset: SubpStreamReadEnd, value: parentRead)
 	module.appendOp(pipeMake, op: StdOp.call(ids.mint(), callee: NetpollPipeOpenName, args: argsOf(parentRead)))
 	let childWrite = emitLoadField(module, block: pipeMake, record: scratch, offset: SubpPipeScratchSecondWord as ByteOffset, ids: ids)
+	emitSubpFreePipeScratch(module, block: pipeMake, name: name, scratch: scratch, ids: ids)
 	module.setTerminator(pipeMake, op: StdOp.branch(join.id))
 	pipeMake.branchEdges.push(BranchEdge.create(join.id, argIds: twoArgs(childWrite, second: childWrite)))
 
@@ -7926,6 +8034,11 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	emitStoreField(module, block: afterCopy, record: req, offset: SubpReqErrKind, value: collect)
 	let handle = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
+
+	// The core has read the request and the command whichever way it answered.
+	emitSlabFree(module, block: afterCopy, ptr: req, ids: ids)
+	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command)
+	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(handle))
 
 	module.functions.push(func)

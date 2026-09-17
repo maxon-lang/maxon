@@ -191,16 +191,16 @@ let X64LinuxSyscallKill = 62
 let X64LinuxSyscallPpoll = 271
 
 // The child's two optional pre-`execve` steps: its own SESSION for a `DETACHED_PROCESS`, and its working
-// directory for a non-NULL `lpCurrentDirectory`. Both are 157 and 49 on AArch64, which is why they carry the
-// arch prefix like every number above.
+// directory for a non-NULL `lpCurrentDirectory`, entered through the descriptor the parent opened. Both are 157
+// and 50 on AArch64, which is why they carry the arch prefix like every number above.
 let X64LinuxSyscallSetsid = 112
+let X64LinuxSyscallFchdir = 81
 
 // The scheduler's poller — `epoll` and the `eventfd` it breaks a wait through.
 let X64LinuxSyscallEpollCreate1 = 291
 let X64LinuxSyscallEventfd2 = 290
 let X64LinuxSyscallEpollCtl = 233
 let X64LinuxSyscallEpollWait = 232
-let X64LinuxSyscallChdir = 80
 
 // ⭐ **A CHILD AS A DESCRIPTOR** — `pidfd_open(pid, 0)`, whose answer polls readable once that child has
 // exited. The number is the SAME on both Linux CPUs: it was added to every architecture's table at once.
@@ -223,13 +223,13 @@ let X64LinuxSyscallFcntl = 72
 // `StdLoweringShared.PosixStdoutFd`/`StderrFd` — POSIX facts rather than x64-Linux ones, for the
 // reason the note below `X64LinuxSyscallRtSigaction` gives.
 
-// --- Linux fault runtime (the SIGFPE handler for a divide-by-zero) ---
+// --- Linux fault runtime (the SIGFPE, SIGSEGV and SIGBUS handler) ---
 //
-// The x64-linux twin of the Windows VEH fault handler (`X64Runtime.buildFaultThunkChunk`). On x86-64 an
-// `idiv` by zero raises #DE, which the kernel delivers as SIGFPE; a handler registered here catches it,
-// prints the panic diagnostic + symbolized backtrace, and `exit_group`s — so a divide-by-zero is a clean
-// `exit 1`, not a process killed by signal. See `X64Runtime.appendX64RuntimeChunks` (the linux arm) and
-// `BackendDispatch.prependLinuxEntryStub` (which calls `mrt_runtime_init` before `main`).
+// The x64-linux twin of the Windows VEH fault handler (`X64Runtime.buildFaultThunkChunk`). A handler
+// registered here catches the signal, prints the panic diagnostic + symbolized backtrace, and
+// `exit_group`s — so a fault is a clean `exit 1`, not a process killed by signal. See
+// `X64Runtime.appendX64RuntimeChunks` (the linux arm) and `BackendDispatch.prependLinuxEntryStub` (which
+// calls `mrt_runtime_init` before `main`).
 // These two are ROWS OF THE SAME x86-64 syscall table as `X64LinuxSyscall{Write,Mmap,ExitGroup}` above
 // and carry the arch prefix for the same reason — they are 134 and 139 on AArch64, so an arm64 fault
 // runtime would declare its own, and an unprefixed name here is a collision that silently miscompiles
@@ -3279,7 +3279,8 @@ end 'buildX64LinuxProcTerminateChunk'
 // ⭐⭐⭐ **THE STATUS PIPE IS WHAT MAKES `hProcess == 0` REACHABLE.** `posix_spawnp` reports a failed exec to
 // the CALLER; a hand-built fork cannot, because by then the failure is in another process. So a
 // `pipe2(O_CLOEXEC)` is opened before the clone and the parent READS it: a successful exec closes the child's
-// end and the read sees EOF, while a failed one writes the `-errno` down it. Without this the Std tier's own
+// end and the read sees EOF, while a failed one writes its `-errno` and the step it failed in down it
+// (`GtRuntime.SpawnChildReportOffset`). Without this the Std tier's own
 // spawn-failure test could never fire on this lane.
 //
 // ⚠ **A SECOND SPAWN CAN INTERLEAVE WITH THIS ONE, AND `O_CLOEXEC` IS WHAT MAKES THAT HARMLESS.** Both ends
@@ -3288,6 +3289,12 @@ end 'buildX64LinuxProcTerminateChunk'
 //
 // ⚠ **PATH RESOLUTION IS THE Std TIER'S AND IS NOT REDONE HERE.** `execve` takes a path where `posix_spawnp`
 // searches `PATH`, and that search already happened one tier up through `__gt_subp_resolve_path`.
+//
+// ⭐⭐ **THE WORKING DIRECTORY IS OPENED BY THE PARENT, BEFORE ANYTHING IS LAUNCHED.** A child's `chdir` fails
+// with the same `ENOENT` its `execve` does, so the parent could not tell a missing directory from a missing
+// executable. Opening it here makes that failure the parent's own, reported as
+// `SpawnPreparation.workingDirectory`; the child enters it with `fchdir` on the open descriptor, which names the
+// directory that was checked rather than looking the path up again.
 //
 // ⭐⭐ **THE `envp` A CALLER BUILT ARRIVES FINISHED, WHICH IS WHY THE CHILD PATH STAYS ALLOCATION-FREE.**
 // `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third argument is a POINTER VECTOR, and the
@@ -3307,12 +3314,18 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotStatusWord = 10 as StackSize
 	let SlotStatusCount = 11 as StackSize
 	let SlotEnv = 12 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(13)
+	let SlotCwdFd = 13 as StackSize
+	var asm = X64RuntimeAsm.beginFunction(14)
 
+	let cwdReady = asm.newLabel()
+	let cwdFailed = asm.newLabel()
+	let pipeFailed = asm.newLabel()
 	let piped = asm.newLabel()
 	let cloneFailed = asm.newLabel()
 	let spawnFailed = asm.newLabel()
 	let childPath = asm.newLabel()
+	let childFailed = asm.newLabel()
+	let cwdEnterFailed = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
 	let noSession = asm.newLabel()
@@ -3328,11 +3341,40 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: win64IncomingArgDisp(SpawnEnvironmentIncomingSlot), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotEnv), srcReg: X64Register.rax)
 
+	// The working directory, opened close-on-exec so no launched program inherits the descriptor. A NULL
+	// `lpCurrentDirectory` opens nothing.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rsi, src: X64Register.rsi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: cwdReady)
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: X64LinuxOpenDirectoryFlags or LinuxOpenCloseOnExec)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: cwdFailed)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCwdFd), srcReg: X64Register.rax)
+
+	asm.placeLabel(cwdReady)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusFds))
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxOpenCloseOnExec)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallPipe2)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: piped)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: pipeFailed)
+
+	// The working directory could not be opened: nothing was launched, and the record says which step failed.
+	asm.placeLabel(cwdFailed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnFailedPreparationOffset as Imm32, srcReg: X64Register.rdx)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
+
+	// The status pipe could not be made: give back the working directory's descriptor, carrying the reason
+	// across the close.
+	asm.placeLabel(pipeFailed)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax)
+	emitX64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
 
 	asm.placeLabel(piped)
@@ -3355,33 +3397,37 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: childPath)
 
-	// PARENT. Drop the write end so the read below can see EOF, then take the child's verdict.
+	// PARENT. Drop the write end so the read below can see EOF, then take the child's verdict. The child holds its
+	// own copy of the working directory's descriptor, so the parent's goes now.
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), srcReg: X64Register.rax)
+	emitX64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord))
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpillSlotBytes as MachineWord)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rsi, disp: SpawnChildReportOffset as Imm32)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnChildReportBytes as MachineWord)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallRead)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), srcReg: X64Register.rax)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusRead), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
 
 	// ⛔ **ONLY A POSITIVE COUNT MEANS THE CHILD SPOKE.** 0 is the EOF a successful `execve` produces through
-	// the close-on-exec pipe; a NEGATIVE is the read's own failure (`EINTR`), and treating either as a verdict
-	// would publish `SlotStatusWord` — which the child never wrote — as the spawn's errno.
+	// the close-on-exec pipe; a NEGATIVE is the read's own failure, and treating either as a verdict
+	// would publish a record word the child never wrote as the spawn's errno.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount), wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: spawned)
 
-	// The child could not exec. Reap it — it is already exiting, so this cannot block — publish the reason it
-	// sent, and answer the null handle that IS this op's failure report.
+	// The child could not launch. Reap it — it is already exiting, so this cannot block — publish the reason it
+	// sent, and answer the null handle that IS this op's failure report. The step it sent is already in place.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusCount))
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxReapUntilItExits)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixReapDiscardsRusage)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallWait4)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: SpawnChildReportOffset as Imm32, wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: spawnFailed)
 
 	// The clone itself failed: close both ends of a pipe no child will ever hold, then report as above. The
@@ -3392,6 +3438,7 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	emitX64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), wide: true)
 
 	// spawnFailed: rax holds the `-errno` of whichever call failed. Publish it where `mrt_host_last_error`
@@ -3429,12 +3476,17 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noSession)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallSetsid)
 
-	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of a `chdir`.
+	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of an `fchdir`. One that fails —
+	// a directory the parent could open but may not enter — is reported down the status pipe as the working
+	// directory's step, like a failed `execve` otherwise.
 	asm.placeLabel(noSession)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: inheritCwd)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallChdir)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotCwdFd), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallFchdir)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: cwdEnterFailed)
 
 	// `execve(argv[0], argv, envp)`. `envp` is the caller's own vector when it built one, and otherwise the
 	// vector the entry stub captured — which is what a NULL `lpEnvironment` means, the parent's environment,
@@ -3450,16 +3502,25 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: 0, wide: true)
 	asm.placeLabel(envChosen)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallExecve)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnPreparation.none.rawValue as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: childFailed)
 
-	// The exec failed. Send the parent the `-errno` the kernel just answered and stop.
+	asm.placeLabel(cwdEnterFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
+
+	// rax = the `-errno` the kernel just answered, rdx = the step it failed in: send the parent both as its
+	// record reads them (`SpawnChildReportOffset`) and stop.
 	//
 	// ⛔ **`exit` (60) AND NOT `exit_group` (231).** They are a whole process apart in meaning, and a child
 	// that shares nothing with its parent still shares that call's NAME with the one the entry stub uses to
 	// end the WHOLE program.
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord), srcReg: X64Register.rax)
+	asm.placeLabel(childFailed)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotProcInfo), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnChildReportOffset as Imm32, srcReg: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: SpawnFailedPreparationOffset as Imm32, srcReg: X64Register.rdx)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWrite), wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusWord))
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpillSlotBytes as MachineWord)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rcx, disp: SpawnChildReportOffset as Imm32)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SpawnChildReportBytes as MachineWord)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallWrite)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxExecFailedExitCode)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallExit)
@@ -3482,6 +3543,18 @@ end 'buildX64LinuxSpawnChunk'
 // different files and a bare 0 and 1 at two sites is the one fact that pair must agree on.
 export let SpawnProcInfoIncomingSlot = 0 as StackSize
 export let SpawnEnvironmentIncomingSlot = 1 as StackSize
+
+// Close the spawn's working-directory descriptor, when it opened one — the parent's half of the rule
+// `buildX64LinuxSpawnChunk`'s header states. Clobbers rax, rdi, and the syscall's rcx and r11.
+function emitX64LinuxCloseSpawnCwd(asm X64RuntimeAsm, cwdSlot StackSize, cwdFdSlot StackSize)
+	let noDescriptor = asm.newLabel()
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(cwdSlot), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noDescriptor)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(cwdFdSlot), wide: true)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	asm.placeLabel(noDescriptor)
+end 'emitX64LinuxCloseSpawnCwd'
 
 // `dup3(startup->handle, childDescriptor, 0)` — one of the three the child emits, and the whole of what
 // `posix_spawn_file_actions_adddup2` does on the Darwin lane. See `LinuxDup3NoFlags` for the zero, for why

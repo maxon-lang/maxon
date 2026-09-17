@@ -111,16 +111,16 @@ export function mcpToolRoster() returns McpToolSpecArray
 	tools.push(McpToolSpec.create("fmt", description: "Format Maxon source in place, or format an inline snippet and return it.", properties: fmtProps))
 
 	var checkProps = McpPropertyArray.create()
-	checkProps.push(str("path", description: "Path to the .maxon file to verify", required: true))
-	tools.push(McpToolSpec.create("check", description: "Check a Maxon source file for syntax and type errors using `maxon verify-warm-rebuild`.", properties: checkProps))
+	checkProps.push(str("path", description: "The .maxon file or directory to check, compiled as `maxon build` would compile it", required: true))
+	tools.push(McpToolSpec.create("check", description: "Check a Maxon program for errors without writing anything, answering the diagnostics `maxon build` would print.", properties: checkProps))
 
 	var lookupProps = McpPropertyArray.create()
 	lookupProps.push(McpProperty.create("code", jsonType: "string", description: "Error code to look up: 'E3014', '3014', 3014, or the registry case name 'semanticUnneededCast'", required: true, altType: "integer"))
 	tools.push(McpToolSpec.create("lookup_error_code", description: "Look up a Maxon compiler error code: its canonical registry name, compilation stage, and documentation.", properties: lookupProps))
 
 	var irProps = McpPropertyArray.create()
-	irProps.push(str("path", description: "Path to the .maxon source file", required: true))
-	tools.push(McpToolSpec.create("dump_ir", description: "Dump the compiler intermediate representation (IR) for a Maxon source file.", properties: irProps))
+	irProps.push(str("path", description: "The .maxon file or directory to compile, as `maxon build` would compile it", required: true))
+	tools.push(McpToolSpec.create("dump_ir", description: "Answer the Target IR a Maxon program compiles to for the host, the text `maxon build --emit-ir` writes, without writing anything.", properties: irProps))
 
 	tools.push(McpToolSpec.create("info", description: "Get Maxon compiler version, commit, executable path, and host target.", properties: McpPropertyArray.create()))
 
@@ -139,7 +139,7 @@ export function mcpToolRoster() returns McpToolSpecArray
 	scaleProps.push(whole("rungs", description: "How many rungs of the ladder to climb ({MinRungCount}-{MaxRungCount}, default {DefaultRungCount}). Each rung DOUBLES the program.", devOnly: true))
 	scaleProps.push(whole("repeat", description: "How many times each rung is compiled ({MinRepeatCount}-{MaxRepeatCount}, default {DefaultRepeatCount}). CPU takes minimum; memory cross-checks.", devOnly: true))
 	scaleProps.push(str("note", description: "Record this run in docs/optimization-log.md with this text as the reason.", devOnly: true))
-	scaleProps.push(str("emitCorpus", description: "Dump the generated corpus to this directory and compile nothing.", devOnly: true))
+	scaleProps.push(str("emitCorpus", description: "Write the generated corpus to this directory and compile nothing.", devOnly: true))
 	scaleProps.push(str("log", description: "Passed to --log=<value>.", devOnly: true))
 	scaleProps.push(repoRootProperty())
 	tools.push(McpToolSpec.create("run_scale_test", description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. It has no verdict — the RATIO between rungs is the reading.", properties: scaleProps, devOnly: true))

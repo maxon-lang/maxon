@@ -704,3 +704,45 @@ end 'main'
 ```stdout
 2.5 4.0 6.5
 ```
+
+<!-- test: error.mismatched-enum-end-label -->
+A label written after `end` must repeat the enum's name.
+```maxon
+enum Colour
+	red
+	green
+end 'Color'
+
+function main() returns ExitCode
+	let c = Colour.green
+	if c == Colour.green 'isGreen'
+		return 1
+	end 'isGreen'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:5:1: Mismatched end label: expected 'Colour', got 'Color'
+```
+
+<!-- test: error.a-word-after-the-enum-name-is-refused -->
+Nothing but an `implements` clause may follow the enum's name. A raw-value enum's backing type is
+inferred from its raw values, so a word there is not a declaration of it: it is refused, not read as a
+case.
+```maxon
+enum Colour int
+	red
+	green
+end 'Colour'
+
+function main() returns ExitCode
+	let c = Colour.green
+	if c == Colour.green 'isGreen'
+		return 1
+	end 'isGreen'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:2:13: unexpected token: 'int'
+```

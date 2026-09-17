@@ -1798,6 +1798,11 @@ let DarwinPipeNoFlags = 0
 // terminal exactly as Win32's flag intends.
 let DarwinSpawnSetSid = 0x400
 
+// `O_DIRECTORY|O_CLOEXEC` as Darwin numbers them — the flags a spawn's working directory is opened with, so the
+// open refuses a path that is not a directory and no launched program inherits the descriptor.
+let DarwinOpenDirectory = 0x100000
+let DarwinOpenCloseOnExec = 0x1000000
+
 // ==========================================================================
 // mrt_host_spawn(x0 = argv, x1 = cwd, x2 = creationFlags, x3 = startupInfo, x4 = processInformation,
 //                x5 = lpEnvironment)
@@ -1817,6 +1822,12 @@ let DarwinSpawnSetSid = 0x400
 // documented no-op the graph already closes it with), and `dwProcessId` is the pid. Making the graph read a
 // bare `pid_t` instead would have meant a second per-target spawn path for a record nothing outside this
 // family ever sees.
+//
+// ⭐⭐ **THE WORKING DIRECTORY IS OPENED BY THE PARENT, BEFORE ANYTHING IS LAUNCHED.** `posix_spawnp` reports a
+// failed `chdir` action with the same `ENOENT` a missing executable gets, so a directory the spawn itself
+// changed into could not be told from an executable it could not find. The open here is the parent's own
+// failure, reported as `SpawnPreparation.workingDirectory`, and the child enters the directory through
+// `posix_spawn_file_actions_addfchdir_np` on that descriptor rather than looking the path up again.
 //
 // ⚠ **`posix_spawnp` DOES NOT SET errno — IT RETURNS THE NUMBER** — so the failure arm publishes it through
 // `*__error()` itself. Without that, `emitSubpRecordLastError` would capture whatever an unrelated earlier
@@ -1838,12 +1849,15 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	let SlotEnviron = 8 as StackSize
 	let SlotStatus = 9 as StackSize
 	let SlotEnv = 10 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(11)
+	let SlotCwdFd = 11 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(12)
 
+	let cwdReady = asm.newLabel()
 	let inheritCwd = asm.newLabel()
 	let noSession = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
+	let noCwdToClose = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotArgv)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCwd)
@@ -1852,6 +1866,27 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotProcInfo)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
 
+	// The working directory first, before anything needs destroying: a NULL `lpCurrentDirectory` opens nothing.
+	// The RAW answer is kept for the file action, which reads only its low half; the narrowed copy is for the
+	// sign test alone.
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: cwdReady)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwd)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixOpenReadOnly or DarwinOpenDirectory or DarwinOpenCloseOnExec)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.open)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotCwdFd)
+	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: cwdReady)
+
+	// The open failed and set errno itself: nothing was launched, and the record says which step failed.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x4, base: Arm64Register.x1, byteOffset: SpawnFailedPreparationOffset as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitBranchTo(asm, label: published)
+
+	asm.placeLabel(cwdReady)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsInit)
 
@@ -1863,11 +1898,12 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	emitArm64DarwinChildDup2(asm, startupSlot: SlotStartup, actionsSlot: SlotFileActions, handleOffset: StartupInfoHStdOutputOffset as MachineWord, childDescriptor: PosixChildStdoutFd)
 	emitArm64DarwinChildDup2(asm, startupSlot: SlotStartup, actionsSlot: SlotFileActions, handleOffset: StartupInfoHStdErrorOffset as MachineWord, childDescriptor: PosixChildStderrFd)
 
-	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of a chdir action.
+	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of an fchdir action.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCwd)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: inheritCwd)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotCwdFd)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
-	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsAddchdirNp)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsAddfchdirNp)
 
 	asm.placeLabel(inheritCwd)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
@@ -1912,6 +1948,13 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrDestroy)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotFileActions)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnFileActionsDestroy)
+
+	// The child entered the directory before it exec'd, so the parent's descriptor goes whatever the verdict.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwd)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noCwdToClose)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwdFd)
+	arm64DarwinCallImport(asm, slot: OsImportSlot.close)
+	asm.placeLabel(noCwdToClose)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatus)
 	arm64PosixNarrowIntStatus(asm, reg: Arm64Register.x0)

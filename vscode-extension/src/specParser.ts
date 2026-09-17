@@ -72,15 +72,8 @@ export function parseSpecFile(filePath: string): SpecFile {
 	return parseSpecContent(filePath, content);
 }
 
-/**
- * Mirrors SpecParser.cs:38-47 — skip status: draft and status: selfhosted.
- * The self-hosted profile re-includes selfhosted specs at run time.
- */
-export function shouldIncludeForBootstrap(spec: SpecFile): boolean {
-	return spec.status !== 'draft' && spec.status !== 'selfhosted';
-}
-
-export function shouldIncludeForSelfHosted(spec: SpecFile): boolean {
+/** `spec-test` skips a `status: draft` spec (`Testing/SpecParser.maxon`) and runs every other. */
+export function specIsRunnable(spec: SpecFile): boolean {
 	return spec.status !== 'draft';
 }
 

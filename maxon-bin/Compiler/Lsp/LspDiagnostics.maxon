@@ -54,12 +54,6 @@ module function clearPublishedDiagnostics(uri String)
 	writeDiagnosticsNotification(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create())
 end 'clearPublishedDiagnostics'
 
-// What compiling a buffer produced. Either way `project.diagnostics` holds what the compile reported.
-module union LspBufferCompile
-	compiled(codeResult CodeResult)
-	refused
-end 'LspBufferCompile'
-
 // ⚖ **THESE STEPS ARE THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH THEM.** The compile
 // writes the project, and a method writing its own receiver is legal on a binding nothing may write from
 // outside; the same work spelled `publishCheckedDiagnostics(project: project)` hands that payload to a
@@ -70,9 +64,9 @@ extension Project
 	// drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
 	// full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
 	// bytes go instead; the ARRAY standing on the project is what a caller reports.
-	module function compileBufferCaptured() returns LspBufferCompile
+	module function compileBufferCaptured() returns CheckedCompile
 		beginDiagnosticCapture()
-		let outcome = compileBuffer(self)
+		let outcome = checkWithoutWriting(self)
 		_ = endDiagnosticCapture()
 		return outcome
 	end 'compileBufferCaptured'
@@ -98,15 +92,6 @@ extension Project
 		writeDiagnosticsNotification(uri, items: items, doc: doc)
 	end 'publishCheckedDiagnostics'
 end 'Project'
-
-// ⚠ **A REFUSED COMPILE IS THE NORMAL CASE HERE, NOT AN ERROR TO REPORT.** A buffer under edit usually
-// does not compile — `LspCompletion.maxon`'s header measures that every recovered fixture is refused
-// before it has a type at all — and `compileToCodeResult` reports and throws by design. What is wanted
-// is `project.diagnostics`, which the refusing and the succeeding path both leave standing.
-function compileBuffer(project Project) returns LspBufferCompile
-	let codeResult = try compileToCodeResult(project) otherwise return LspBufferCompile.refused
-	return LspBufferCompile.compiled(codeResult)
-end 'compileBuffer'
 
 // ⛔⛔ **A SINGLE-BUFFER COMPILE CANNOT HONESTLY PUBLISH A WHOLE-PROGRAM CLAIM.** "This program declares
 // no entry point" is a property of a PROGRAM; this server holds one FILE plus `stdlib/` and never the

@@ -539,21 +539,15 @@ end 'calleeHasHostFacility'
 // Read as *"target T provides facility F"*, and written by the backend that made it true. x64-windows is
 // the one FULL row — it provides every facility, so its block answers `true` without asking which.
 //
-// ⚠ **arm64-macOS IS THE FIRST LANE TO GROW THIS TABLE A SECOND COLUMN**, and each `true` in its row is a
-// landed family with real libSystem lowerings behind it (`StdToArm64Conversion`, `MachOWriter`'s import
-// slots). The rest stay `false` until their lowerings exist — see this file's header on why a premature
-// `true` is worse than a `false`.
+// ⚠ **THE THREE POSIX LANES — arm64-macOS, arm64-linux and x64-linux — PROVIDE EVERY FACILITY BUT
+// `processSampling`**, each `true` a landed family with real lowerings behind it: libSystem imports on
+// macOS, raw syscalls on the two static Linux images. `processSampling` stays `false` on all three because
+// sampling is `osHostSample` reading an x64 `CONTEXT`, a mechanism none of them has — see each row. A
+// premature `true` is worse than a `false`; this file's header says why.
 //
-// ⚠ **x64-LINUX HAS ITS OWN BLOCK, AND ONLY TWO ROWS OF IT ARE STILL `false`.** It is a raw-syscall static
-// image with no libc, so every family really is a fresh syscall table rather than a re-spelling of the macOS
-// work — but the table is x86-64's and the Win32-shaped half of each answer is shared with the arm64 POSIX
-// lanes, which is what made argv, the filesystem, the clocks, the green-thread floor and the child-process
-// band ports rather than rungs. What remains `false` there is the process PRIORITY and the SOCKETS, each for
-// the reason its own row records.
-//
-// ⚠ **wasm32-wasi's `false`s ARE PERMANENT FOR SOME OF THESE, AND THE TABLE DOES NOT SAY WHICH.** WASI has
-// no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock` there
-// are refusals of a different KIND from "not yet" — that distinction is carried by
+// ⚠ **wasm32-wasi PROVIDES ONLY `pageMemory` AND `hostMutex`, AND SOME OF ITS `false`s ARE PERMANENT.** WASI
+// has no process-spawn primitive and no per-thread CPU clock at all, so `subprocess` and `threadCpuClock`
+// there are refusals of a different KIND from "not yet" — that distinction is carried by
 // `SemanticCheck.targetCanHostSubprocess` and its E3074, which reads this table's subject and not its
 // answer. One table, two consumers, no second copy.
 export function targetProvidesFacility(target Target, facility HostFacility) returns bool

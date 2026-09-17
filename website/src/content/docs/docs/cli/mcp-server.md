@@ -62,9 +62,9 @@ implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `t
 listed below are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is
 refused the same way, as is an argument of the wrong JSON type.
 
-Tools that run the compiler answer with a JSON object holding `success`, the `command` that ran,
-`exitCode`, `stdout` and `stderr`. They act in the server's working directory, which is normally your
-project.
+Tools that run a compiler command answer with a JSON object holding `success`, the `command` that ran,
+`exitCode`, `stdout` and `stderr`; `check` and `dump_ir` compile inside the server and answer as described
+under each. Every tool acts in the server's working directory, which is normally your project.
 
 ## Standard tools
 
@@ -112,21 +112,25 @@ Formats Maxon source, as `maxon fmt` does.
 
 ### `check`
 
-Checks one source file for errors without producing an executable, by running
-`maxon verify-warm-rebuild` on it. Diagnostics come back in `stderr`.
+Compiles a program for the host, as `maxon build` would, and writes nothing: no executable and no
+sidecar. The answer's `success` says whether it compiled, and `diagnostics` holds what `maxon build` would
+have printed on stderr, one `error E…` line per problem. The compile runs inside the server process, not
+in a child `maxon`, so a compiler panic ends the server.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string, required | The `.maxon` file to check |
+| `path` | string, required | The `.maxon` file or directory to check |
 
 ### `dump_ir`
 
-Builds a source file with `--emit-ir`, which writes its Target IR to `<output>.ir` beside the executable.
-The answer's `stdout`/`stderr` name the file written; read the IR from that file.
+Compiles a program for the host, as `maxon build` would, and answers its Target IR in `ir`: the text
+`maxon build --emit-ir` writes. Nothing is written. `success` and `diagnostics` are as for `check`, and
+`ir` is empty when the compile fails. Like `check`, it compiles inside the server process, so a compiler
+panic ends the server.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string, required | The `.maxon` source file |
+| `path` | string, required | The `.maxon` file or directory to compile |
 
 ### `lookup_error_code`
 

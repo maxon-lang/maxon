@@ -513,7 +513,7 @@ function emitNetpollSourceReady(module StdModule, func IrFunction, cur IrBlock, 
 	let debt = ids.mint()
 	module.appendOp(cur, op: StdOp.call(debt, callee: NetpollPdWakeName, args: threeArgs(fd, second: ready.readReady, third: ready.writeReady)))
 	emitSchedWakeIfOwed(module, cur: cur, owed: debt, wake: payWake, cont: cont, ids: ids)
-end 'emitNetpollSocketReady'
+end 'emitNetpollSourceReady'
 
 // ⭐ **WHICH DIRECTIONS ONE ENTRY REPORTS**, as a pair of 0/1 values — the second fact an entry carries beside
 // its source, and the one the break arm never has to ask.
@@ -1134,7 +1134,7 @@ function buildNetpollPdAdopt(module StdModule)
 	// program that opens no socket must not pay for one.
 	let hadRegion = emitCmp(module, block: freeCheck, a: oldBase, b: emitConst(module, block: freeCheck, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(freeCheck, op: StdOp.condBranch(hadRegion, thenBlockId: freeOld.id, elseBlockId: haveSlot.id))
-	module.appendOp(freeOld, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(oldBase)))
+	emitSlabFree(module, block: freeOld, ptr: oldBase, ids: ids)
 	module.setTerminator(freeOld, op: StdOp.branch(haveSlot.id))
 
 	let slotAddr = emitNetpollPdSlotAddr(module, block: haveSlot, fd: fd, ids: ids)

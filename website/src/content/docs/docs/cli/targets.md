@@ -54,9 +54,11 @@ wasmtime run -S cli-exit-with-code=y app.wasm
 Without `-S cli-exit-with-code=y`, wasmtime refuses to start the component.
 
 Building a component needs two tools the compiler calls: `wasm-tools`, and the WASI WIT package. The
-compiler looks for them as `vendor/wasm-tools/` and `vendor/wasi-wit/` in the working directory or up to
-ten directories above it. A Maxon source checkout stages them with `scripts/fetch-vendor.sh`; an
-installed compiler does not include them.
+compiler looks for them as `vendor/wasm-tools/` and `vendor/wasi-wit/` in the working directory and the
+nine directories above it. A Maxon source checkout stages them with `scripts/fetch-vendor.sh`; an
+installed compiler does not include them. A build that cannot find one is refused with error E6005, naming
+what is missing and where it looked, before anything is compiled; a `wasm-tools` step that fails is refused
+with the same code and what the step printed.
 
 ## What each target supports
 
@@ -85,7 +87,7 @@ time**, at the call:
 
 ```text
 error E3104: app.maxon:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
-error E3074: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
+error E3074: app.maxon:5:17: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
 ```
 
 To keep one source for several targets, guard the unsupported part with `#if not os(Wasi)`.

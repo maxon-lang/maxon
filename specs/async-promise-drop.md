@@ -12,11 +12,14 @@ category: concurrency
 An `async` spawn's `Promise` is an **owned value**: it owns the green thread it names. `await p` **consumes**
 that thread (the runtime reclaims its struct at the await). A promise that reaches scope exit — or a re-arm —
 **without** being awaited is instead **DROPPED**: the compiler emits `__gt_promise_drop(p)`, which reclaims
-the green thread and **cancels** it. This is the ownership dual of the linear-await rule (E3100): `await` is
-the consuming move, and any path with no consuming await drops the thread exactly once.
+the green thread and renounces its result. This is the ownership dual of the linear-await rule (E3100):
+`await` is the consuming move, and any path with no consuming await drops the thread exactly once.
 
-Dropping is not an exit-time drain and not a fire-and-forget run: a never-scheduled thread's body **never
-runs**, and a parked thread's wait (a `sleep` timer, a `runProcess` child) is **cancelled** in place. Because
+Dropping is not an exit-time drain: a thread that has not STARTED is **cancelled** and its body **never
+runs**, while a thread that has started runs to completion and only its RESULT is renounced. A started
+thread parked on a wait (a `sleep` timer, a `runProcess` child) has that wait ended early — it is readied,
+resumes, unwinds its own frame, and its strand's runner reclaims it — because nothing can unwind a suspended
+frame from outside, and freeing its stack would strand every heap value its locals own. Because
 a green thread's struct and stack are slab/OS allocations invisible to the `__mm` heap leak gate, a spawned
 thread that is neither awaited nor dropped leaks silently — so the runtime keeps a `__gt_live_count` (one up
 per spawn, one down per await-reclaim AND per drop-reclaim) and the one OS-exit leak gate asserts it is zero.
@@ -26,7 +29,10 @@ A leak (or an over-reclaim) reports `RuntimeAbort.greenThreadLeak` (75), distinc
 was parked on a DIFFERENT await) has already had its stack freed, so only its struct is reclaimed; a `ready`
 (never-run) thread is renounced where it sits in its strand's queue, and whoever pops it reclaims it and frees
 its seed stack instead of running it; a `waiting` (parked) thread is taken off whatever would have woken it —
-its timer entry, or the poll descriptor a socket or a child made it a waiter on — and its stack freed.
+its timer entry, or the poll descriptor a socket or a child made it a waiter on — and READIED, so it resumes,
+runs its body out and is reclaimed by its runner like a queued thread. A Windows overlapped read the kernel is
+still serving is not taken off the poller: the drop cancels the operation with `CancelIoEx`, and the thread is
+readied by that operation's own completion.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** Dropping a promise reaps a green-thread struct and releases its stack through
@@ -144,17 +150,17 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-timer-drop-cancel -->
-A promise PARKED on a timer is dropped-cancelled at scope exit. `sleeper` sleeps 200 ms; `fast` completes
+A promise PARKED on a timer is dropped at scope exit. `sleeper` sleeps 200 ms; `fast` completes
 immediately. `await q` parks `main`, and its strand runs its other members FIFO: `sleeper` runs first and parks
 on its timer; `fast` then runs to completion, so `await q` returns 42 while `sleeper` is still parked — the peek
 adds `0`, where a completed thread would add `1`. Scope exit drops `s` — the `waiting` arm removes it from the
-timer store, frees its stack and reclaims its struct — with NO hang (the 200 ms timer is never waited on) and NO
-use-after-free (no timer fire ever touches the freed thread). The live count balances to zero.
+timer store and readies it, so its `sleep` ends early, it runs its body out and its runner reclaims it — with NO
+hang (the 200 ms deadline is never waited on) and NO use-after-free (no timer fire touches the reclaimed
+thread). The live count balances to zero.
 
 ⚠ **`s` MUST BE BOUND.** `_ = async sleeper()` discards the promise at its own statement, before `main` parks:
-`sleeper` never runs, never arms its timer, and the drop takes the QUEUED arm — and this case once read exactly
-that way while describing the `waiting` arm. **MEASURED at SV2, by a sabotage that should have turned it red
-and did not.**
+`sleeper` never runs, never arms its timer, and the drop takes the QUEUED arm — a program that exercises
+nothing the `waiting` arm does, and still exits 42.
 ```maxon
 
 function sleeper() returns Integer
@@ -182,9 +188,9 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: async-promise-drop.parked-timer-drop-through-a-rearm -->
 The same deregistration reached through the OTHER door that drops a promise: a RE-ARM rather than scope exit.
 `await q` parks `main`, so the strand runs `sleeper` up to its `sleep(200)` and parks it on the timer; only
-THEN does `p = async fast()` renounce it. The `waiting` arm removes it from the store, frees the stack a parked
-coroutine is suspended on and reclaims the struct — with no hang (the 200 ms deadline is never waited on) and
-no use-after-free.
+THEN does `p = async fast()` renounce it. The `waiting` arm removes it from the store and readies it, so it
+resumes on the stack it is suspended on, runs to completion and is reclaimed by its runner — with no hang (the
+200 ms deadline is never waited on) and no use-after-free.
 
 ⭐ Its own RED reading: point `__gt_promise_drop`'s park-kind refusal at `GtParkKindTimer` instead of
 `GtParkKindMailbox` and this exits **94** where it exits 42.
@@ -363,10 +369,9 @@ The same shape on the POSIX lane, where `/bin/sh -c "sleep 2"` is a child that r
 `await`. ⚠ Its sibling above spawns through `cmd /c`, which on this lane fails to exec and returns before
 anything can park — so this is the case that actually holds a coroutine parked on a child here.
 
-**MEASURED on x64-linux: exit 101 before a child park became a poll source, exit 42 now.** The `waiting` arm
-reached the child through the process store: it scanned the store, closed the child's handle, re-read the
-status as still `waiting` and took the `soleOwner` path, which frees the stack the suspended thread sits on.
-Every heap value that thread's locals owned — here the interpolated `String` — was stranded with it.
+A child park is a poll source on this lane too, so the `waiting` arm renounces the thread and it unwinds its
+own frame, releasing the interpolated `String`. A drop that freed the stack the suspended thread sits on would
+strand that `String`, and the leak gate would report **exit 101**.
 ```maxon
 
 function slowProc(tag Integer) returns Integer
@@ -394,12 +399,13 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-promise-drop.windows-parked-pipe-read-drop-reclaims-the-frames-heap -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⭐ **A PIPE READ IS THE PARK KIND THIS FILE HAD NO CASE FOR, AND IT STRANDS THE FRAME.** Its siblings
-above park on a CHILD, which is a poll source and renounces correctly. A streaming read parks on the
-overlapped read itself, and the drop's cancel arm frees the parked stack outright once the cancellation has
-drained — so every heap value that thread's locals owned goes with it. `reader` holds one interpolated
-`String` across the read, and the leak gate reports the strand as **exit 101**, an exit code no arithmetic
-in the program can produce.
+⭐ **A PIPE READ IS THE PARK KIND WHOSE WAIT THE RUNTIME CANNOT END ITSELF.** Its siblings above park on a
+CHILD, which is a poll source the drop takes the thread off. A streaming read parks on an overlapped read the
+kernel is still serving, so the drop cancels that operation with `CancelIoEx` and leaves the park standing:
+the cancelled operation's completion readies the thread, it answers a failed read, unwinds its own frame and
+its runner reclaims it. `reader` holds one interpolated `String` across the read; a drop that freed the parked
+stack instead would strand it, and the leak gate would report **exit 101**, an exit code no arithmetic in the
+program can produce.
 
 ⚠ **THE PROMISE MUST BE BOUND AND THE SLEEP IS WHAT PUTS THE DROP AFTER THE PARK.** `_ = async reader(h)`
 discards at its own statement, before the coroutine has run, and takes the never-ran arm instead. The

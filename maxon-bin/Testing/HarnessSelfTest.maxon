@@ -68,6 +68,12 @@ let NetworkGateCaseDir = "network"
 let NetworkGateSpecName = "network-gate"
 let NetworkGateTestName = "network-gate.live"
 
+// The runs-alone gate: `<gates root>/<this>/`, and the two lines its alone case prints — the only evidence
+// the gate reads, spelled here once for the fixture's reason `NetworkGateCaseDir` gives.
+let RunsAloneGateCaseDir = "runs-alone"
+let RunsAloneGateRanAfter = "ran-after-every-other-job"
+let RunsAloneGateRanBeside = "ran-beside-another-job"
+
 // ⭐ **THE SECOND GATE CASE — the orphaned-golden census.** `<gates root>/<this>/orphan-gate.md`, with a
 // `fragments/` tree this gate PLANTS and then removes. Named here for `NetworkGateCaseDir`'s reason: the
 // assertions below are about these exact files, and a gate that silently ran some other directory would
@@ -439,6 +445,29 @@ export function requireNetworkGateHolds(harnessExe FilePath, specDir FilePath)
 	let report = indentedList(broken, indent: BrokenHarnessFixtureIndent)
 	panic("HarnessSelfTest: the live-network gate FAILED {broken.count()} of its checks. It is what keeps a suite's verdict from depending on tcpbin.com and httpbin.org being up, and what keeps the cases it drops from vanishing silently.{report}")
 end 'requireNetworkGateHolds'
+
+// ⭐⭐ **PROVE AN `alone` CASE RUNS WITH NOTHING BESIDE IT.** `<!-- runs: alone -->` exists so a case whose
+// memory is set by a runtime limit does not run beside a full pool, and nothing about a green result says
+// whether it did: the case passes either way. The fixture's alone case prints whether the shared job beside
+// it had FINISHED when it ran, which is the order the pool promises (`SpecWorkerPool.runSpecPool`) — and a
+// pool that dispatched it as an ordinary job would start it while the shared job still holds its mark.
+//
+// Called ONCE by the suite's parent beside the other tree-level guards, and PANICS with what the run said.
+export function requireAloneCasesRunWithNothingBeside(harnessExe FilePath, specDir FilePath)
+	if isHarnessFixtureSubRun(specDir) 'thisIsAFixtureSubRun'
+		return
+	end 'thisIsAFixtureSubRun'
+
+	let proves = "a `runs: alone` case runs only once every other job has finished"
+	let caseDir = gateFixtureDir(RunsAloneGateCaseDir, proves: proves)
+	let said = everythingSaid(runGateFixture(harnessExe, caseDir: caseDir, includeNetwork: false, proves: proves))
+
+	if said.contains(RunsAloneGateRanAfter) and not said.contains(RunsAloneGateRanBeside) 'ranAfter'
+		return
+	end 'ranAfter'
+
+	panic("HarnessSelfTest: the runs-alone gate FAILED: its alone case did not report `{RunsAloneGateRanAfter}`, so an `alone` case can run beside another job and the memory it is kept apart for lands on a full pool. The run said:\n{said}")
+end 'requireAloneCasesRunWithNothingBeside'
 
 // ⭐ **WHERE ONE GATE'S FIXTURE LIVES, refused loudly when it is not there.** THREE gates ask this now,
 // and each had written the same five lines with only the "what is missing" sentence differing — one

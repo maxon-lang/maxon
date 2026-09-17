@@ -7,6 +7,7 @@ This directory contains tests for the Maxon Language Support VSCode extension.
 - `runTest.ts` - Entry point for running tests using @vscode/test-electron
 - `suite/index.ts` - Mocha test suite configuration and test file discovery
 - `suite/extension.test.ts` - Main extension tests
+- `unit/` - Tests of modules that do not import `vscode`, run under plain mocha by `npm run test:unit`
 
 ## Running Tests
 

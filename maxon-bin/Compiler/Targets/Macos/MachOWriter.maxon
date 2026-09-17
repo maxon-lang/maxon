@@ -274,7 +274,7 @@ function machoImportSymbol(slot OsImportSlot) returns String
 		posixSpawnp gives "_posix_spawnp"
 		posixSpawnFileActionsInit gives "_posix_spawn_file_actions_init"
 		posixSpawnFileActionsAdddup2 gives "_posix_spawn_file_actions_adddup2"
-		posixSpawnFileActionsAddchdirNp gives "_posix_spawn_file_actions_addchdir_np"
+		posixSpawnFileActionsAddfchdirNp gives "_posix_spawn_file_actions_addfchdir_np"
 		posixSpawnFileActionsDestroy gives "_posix_spawn_file_actions_destroy"
 		posixSpawnattrInit gives "_posix_spawnattr_init"
 		posixSpawnattrSetflags gives "_posix_spawnattr_setflags"
@@ -841,7 +841,37 @@ end 'machoUuid'
 
 // --- Main writer ---
 
-export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target, productVersion String)
+// LC_SOURCE_VERSION packs five components as a24.b10.c10.d10.e10.
+let MachOSourceVersionComponentCount = 5
+let MachOSourceVersionFirstMax = 16777215 as VersionComponent
+let MachOSourceVersionRestBits = 10
+let MachOSourceVersionRestMax = 1023 as VersionComponent
+
+export function machOSourceVersionLayout() returns VersionFieldLayout
+	var limits = VersionComponentArray.create()
+	limits.push(MachOSourceVersionFirstMax)
+
+	for _ in 1 upto MachOSourceVersionComponentCount 'eachLaterComponent'
+		limits.push(MachOSourceVersionRestMax)
+	end 'eachLaterComponent'
+
+	return VersionFieldLayout.create("a macOS LC_SOURCE_VERSION", limits: limits)
+end 'machOSourceVersionLayout'
+
+// Every component after the first is shifted in below the ones before it, so the first lands in the top
+// 24 bits. A component the version does not have reads 0.
+function machOSourceVersion(productVersion VersionComponentArray) returns MachineWord
+	var packed = 0 as MachineWord
+
+	for index in 0 upto MachOSourceVersionComponentCount 'eachComponent'
+		let component = try productVersion.get(index) otherwise 0
+		packed = (packed shl MachOSourceVersionRestBits) or (component as MachineWord)
+	end 'eachComponent'
+
+	return packed
+end 'machOSourceVersion'
+
+export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray)
 	if target.cpu != CpuArch.arm64 or target.os != Os.macos 'wrongTarget'
 		panic("writeMachO: the Mach-O writer emits arm64-macos only (got {targetToString(target)})")
 	end 'wrongTarget'
@@ -1074,17 +1104,11 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeDword(macho, value: 0)  // sdk
 	writeDword(macho, value: 0)  // ntools
 
-	// LC_SOURCE_VERSION — the version of the source this binary was built from, packed
-	// a24.b10.c10.d10.e10. Zero until something sets it, for `PeWriter.peVersionInfoFor`'s reason: the
-	// compiler knows its own version and nothing about the version of the program it is compiling.
-	// Packed a24.b10.c10.d10.e10, so the first three components occupy the high 44 bits. Only three are
-	// filled: a dotted version from a manifest is semver, and semver has three.
-	let vMajor = versionComponent(productVersion, index: 0) as MachineWord
-	let vMinor = versionComponent(productVersion, index: 1) as MachineWord
-	let vPatch = versionComponent(productVersion, index: 2) as MachineWord
+	// LC_SOURCE_VERSION — zero until the manifest's `version` sets it, for `PeWriter.peVersionInfoFor`'s
+	// reason: the compiler knows its own version and nothing about the program's.
 	writeDword(macho, value: LcSourceVersion)
 	writeDword(macho, value: SourceVersionCommandSize)
-	writeQword(macho, value: (vMajor shl 40) or (vMinor shl 30) or (vPatch shl 20))
+	writeQword(macho, value: machOSourceVersion(productVersion))
 
 	// LC_DYLD_CHAINED_FIXUPS.
 	writeDword(macho, value: LcDyldChainedFixups)

@@ -185,6 +185,14 @@ export union CompileError implements Error
 	// disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
 	noCommonRoot(first FilePath, other FilePath)
 
+	// A directory built without `-o` whose executable has no name to take: the directory is a filesystem
+	// root, and an executable is named for the directory it is built from.
+	unnamedDirectory(directory FilePath)
+
+	// An `-o` value no `FilePath` can be made of — a URL whose scheme is not `file`, or on Windows a character
+	// no filename may hold. Carries the spelling, because there is no path to name.
+	invalidOutputPath(spelling String)
+
 	// The compiler could not locate its `stdlib/` directory by walking up from its own
 	// executable (see StdlibSource.locateStdlibDir). Every compile loads stdlib source and every
 	// pass tells stdlib from user code by that directory, so a missing stdlib is a loud, hard
@@ -233,16 +241,11 @@ end 'reportPositionedWithNote'
 // at the SINK instead, and the bytes are computed ONCE for both destinations: byte identity holds by
 // CONSTRUCTION, not by two spellings happening to agree.
 //
-// ✅ **THE WHOLE SET ROUTES THROUGH IT, AND THE SECOND HALF LANDED WITH THE CALLER THAT NEEDED IT
-// (G20).** `Project.printDiagnostics` brings every `Diagnostic`; `Main.reportCompileError` brings the
-// SIX `CompileError` arms that never reach `project.diagnostics` at all — `fileNotFound`,
-// `directoryNotFound`, `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound`, `runtimeNotFound` — which it used to print to stderr
-// directly, past this sink. Until it did, a capture was exact for a REFUSED compile (the whole
-// `maxoncstderr` corpus, whose blocks are `Diagnostic.render()` output and nothing else) and EMPTY for
-// a build that died on a missing file. `SpecTestRunner.compileOneTest` calls `reportCompileError`
-// INSIDE its capture, so what it reads back is what a command line would have written for the same
-// build, whichever way the build failed. The set is written here, at the sink, because this is the one
-// place a reader can see all of it.
+// ✅ **THE WHOLE SET ROUTES THROUGH IT.** `Project.printDiagnostics` brings every `Diagnostic`;
+// `Main.reportCompileError` brings every `CompileError` arm other than `compileError`, none of which
+// reaches `project.diagnostics` at all. A caller that calls `reportCompileError` INSIDE its capture
+// (`SpecTestRunner.compileOneTest`) therefore reads back what a command line would have written for the
+// same build, whichever way the build failed.
 //
 // ⚠⚠ **THE LATCH IS MODULE-LEVEL, AND THAT IS EXACT ONLY BECAUSE A COMPILE IS SERIAL — AND THIS IS THE
 // ONE PLACE THAT ARGUMENT IS WRITTEN OUT.** Four module-level latches rest on it and this comment is

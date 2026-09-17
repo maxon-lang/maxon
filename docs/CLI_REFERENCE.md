@@ -118,7 +118,7 @@ Windows has no shebang mechanism. Git Bash and WSL honour the line; `maxon hello
 
 | Code | Meaning |
 |------|---------|
-| the program's | Forwarded as-is, including the raw status of a child that terminated abnormally (for example `3221225725` on Windows for a stack overflow) |
+| the program's | Forwarded as-is, including the raw status of a child that terminated abnormally |
 | `1` | `run` could not start the program: no program named, no such file, a compile error (the diagnostics are printed and nothing runs), no writable cache root, or a build that could not be stored in the cache |
 
 A missing file is reported as `error: file not found: <path as typed>`, the same sentence `maxon build`
@@ -141,8 +141,8 @@ maxon build [<target name>] [options]
 ```
 
 **Arguments.** One or more paths. **Several paths are compiled as one program, in the order given.** A
-directory contributes every `.maxon` file beneath it, except `build.maxon`, `*.test.maxon` files and
-subtrees marked with a `.maxonignore`. A file you name explicitly is compiled whatever a
+directory contributes every `.maxon` file beneath it, except `build.maxon` (in any letter case),
+`*.test.maxon` files and subtrees marked with a `.maxonignore`. A file you name explicitly is compiled whatever a
 `.maxonignore` above it says.
 
 **No path** runs the `build.maxon` manifest in the current directory, and a bare word that names one of
@@ -153,7 +153,7 @@ with no `build.maxon` prints a usage line and exits 1.
 
 | Option | Description |
 |--------|-------------|
-| `-o <path>`, `--output=<path>` | Output executable path. Without it the name is derived: a single-file build writes beside the source (`foo.maxon` → `foo.exe` on Windows); other builds take the first source file's base name. The target's executable extension is added unless the path already carries it. |
+| `-o <path>`, `--output=<path>` | Output executable path. Without it the name comes from the first path given: a file is built beside itself (`foo.maxon` → `foo.exe` on Windows), and a directory into itself under its own name (`app` → `app/app.exe`). The target's executable extension is added unless the path already carries it. A value that is not a path (a non-`file` URL, or on Windows a name holding `< > " \| ? *` or a control character) is refused with exit 1. |
 | `--target=<cpu>-<os>` | Compile for this target instead of the host: `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` or `wasm32-wasi`. See [Targets](#targets). |
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function is refused. |
@@ -222,7 +222,8 @@ maxon fmt [<file|directory>]
 ```
 
 With **no path it formats the whole working directory**. A named **file** is formatted whatever it is
-called. A **directory** is walked for `.maxon` files, skipping `build.maxon`, anything under a
+called. A **directory** is walked for `.maxon` files, skipping a project's `build.maxon` (in any letter case;
+the compiler's own `stdlib/` and `runtime/` hold no manifest, so their `Build.maxon` is formatted), anything under a
 `.maxonignore`, and any subdirectory that holds a `.git` (a nested clone or worktree), so a run never
 rewrites another repository's files.
 
@@ -574,7 +575,7 @@ reads from the JSON are:
 | `output` | string, required | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. |
 | `sources` | list of strings, required | The files and directories to compile, in order. An empty list is refused. |
 | `debug_info` | `true` or `false` | Whether to write the `.mxdbg` sidecar (default `true`). |
-| `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`. A component that is not a number from 0 to 65535 reads as 0. |
+| `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](#defines) on the command line. |
 
 A field that is present but malformed is **refused** rather than guessed at, naming the key, for
@@ -638,8 +639,9 @@ The marker means "do not sweep me into somebody else's program", not "this file 
 - Manifests conventionally write their outputs there (`output: ".maxon/myapp"`), and the compiler
   creates the output directory if it is missing.
 
-A plain `maxon build <directory>` without `-o` does not use `.maxon/`: it writes the executable beside
-the first source file it registers. Pass `-o` or use a manifest to choose the location.
+A plain `maxon build <directory>` without `-o` does not use `.maxon/`: it writes the executable into the
+directory, named for it (`maxon build app` writes `app/app.exe` on Windows). Pass `-o` or use a manifest to
+choose the location.
 
 ### The tree lock
 
@@ -704,7 +706,7 @@ Stack trace:
 Frames are listed innermost first, by function name only, down to the program's start (`mrt_start`).
 At most 100 frames are printed; a deeper chain
 ends with an `...additional frames elided...` line. A processor fault has no source position, for example
-`panic: integer divide by zero`, followed by the same stack trace.
+`panic: nil pointer or invalid memory access` or `panic: stack overflow`, followed by the same stack trace.
 
 ### The leak check
 
@@ -807,7 +809,7 @@ Everything after the executable is the program's command line and reaches it unt
 | Option | Description |
 |--------|-------------|
 | `--filter=mm` | Memory-manager events only: `mm_alloc`, `mm_free`, `mm_incref`, `mm_decref` and related |
-| `--filter=sched` | Scheduler events only. The current runtime emits none, so this filter prints no event lines. |
+| `--filter=sched` | Green-thread events only: `sched_spawn #N`, `sched_await #N` (the thread awaited), `sched_yield #N` and `sched_resume #N` (around `sleep` and `Runtime.yield()`), `io_yield #N` and `io_resume #N` (around a blocking I/O operation). `N` is the thread's number, the same one `--async-trace` prints. |
 | `--filter=log` | Only the events the program emitted through the `__DebugStream` builtin |
 
 With no `--filter`, every family is printed. An unrecognized value is refused with the usage line.
@@ -1014,8 +1016,8 @@ Install **Maxon** from the
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing `.maxon` files and provides syntax
-highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting and the Compiler
-Explorer.
+highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
+Explorer and a Test Explorer.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
 
@@ -1054,9 +1056,13 @@ the lowered Target IR, the same text `maxon build --emit-ir` writes, or the comp
 `Line <line>:<column>: <message>`. Nothing is written to disk. The source is treated as a whole program,
 so it needs a `main`.
 
-**Test Explorer.** In a Maxon source checkout, the extension lists the compiler's spec tests (from
-`specs/*.md`) in VS Code's Testing view and runs them with the checkout's own compiler
-(`maxon-bin/.maxon/maxon spec-test --filter=…`). It does not run a project's `maxon test` tests.
+**Test Explorer.** The **Maxon Tests** controller lists the `test` declarations in the workspace's
+`*.test.maxon` files, one node per file, and runs them with the compiler the extension found, one
+`maxon test <project> --json` per project the selection touches. A test file's project is the highest
+directory above it, never above the workspace folder, whose every level holds a `.maxon` source. When the
+workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
+tests in `specs/*.md` and runs them with the checkout's own compiler
+(`maxon-bin/.maxon/maxon spec-test --filter=…`).
 
 ### `maxon lsp-server`
 
@@ -1113,6 +1119,16 @@ Both params are required (otherwise `-32602`). The result:
 
 `ir` is the text `maxon build --emit-ir` writes, and is empty when the compile fails. `errors` lists
 every diagnostic with a **1-based** `line` and `column`.
+
+**`maxon/listProjects`** is a Maxon-specific request, not advertised in the capabilities, that lists the
+projects the server holds. It is what the VS Code status bar shows. It takes no params. Each open document
+is a project of its own, because each is analysed on its own:
+
+```json
+{ "projects": [ { "rootPath": "/home/me/app/main.maxon", "isSingleFile": true, "fileCount": 1 } ] }
+```
+
+`rootPath` is a filesystem path, not a URI, and the projects are listed in path order.
 
 ### Other editors
 
@@ -1171,9 +1187,11 @@ wasmtime run -S cli-exit-with-code=y app.wasm
 Without `-S cli-exit-with-code=y`, wasmtime refuses to start the component.
 
 Building a component needs two tools the compiler calls: `wasm-tools`, and the WASI WIT package. The
-compiler looks for them as `vendor/wasm-tools/` and `vendor/wasi-wit/` in the working directory or up to
-ten directories above it. A Maxon source checkout stages them with `scripts/fetch-vendor.sh`; an
-installed compiler does not include them.
+compiler looks for them as `vendor/wasm-tools/` and `vendor/wasi-wit/` in the working directory and the
+nine directories above it. A Maxon source checkout stages them with `scripts/fetch-vendor.sh`; an
+installed compiler does not include them. A build that cannot find one is refused with error E6005, naming
+what is missing and where it looked, before anything is compiled; a `wasm-tools` step that fails is refused
+with the same code and what the step printed.
 
 ### What each target supports
 
@@ -1202,7 +1220,7 @@ time**, at the call:
 
 ```text
 error E3104: app.maxon:3:2: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
-error E3074: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
+error E3074: app.maxon:5:17: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
 ```
 
 To keep one source for several targets, guard the unsupported part with `#if not os(Wasi)`.
@@ -1274,9 +1292,9 @@ implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `t
 listed below are exactly the ones that exist. A developer-mode argument sent to a standard-mode server is
 refused the same way, as is an argument of the wrong JSON type.
 
-Tools that run the compiler answer with a JSON object holding `success`, the `command` that ran,
-`exitCode`, `stdout` and `stderr`. They act in the server's working directory, which is normally your
-project.
+Tools that run a compiler command answer with a JSON object holding `success`, the `command` that ran,
+`exitCode`, `stdout` and `stderr`; `check` and `dump_ir` compile inside the server and answer as described
+under each. Every tool acts in the server's working directory, which is normally your project.
 
 ### Standard tools
 
@@ -1324,21 +1342,25 @@ Formats Maxon source, as `maxon fmt` does.
 
 #### `check`
 
-Checks one source file for errors without producing an executable, by running
-`maxon verify-warm-rebuild` on it. Diagnostics come back in `stderr`.
+Compiles a program for the host, as `maxon build` would, and writes nothing: no executable and no
+sidecar. The answer's `success` says whether it compiled, and `diagnostics` holds what `maxon build` would
+have printed on stderr, one `error E…` line per problem. The compile runs inside the server process, not
+in a child `maxon`, so a compiler panic ends the server.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string, required | The `.maxon` file to check |
+| `path` | string, required | The `.maxon` file or directory to check |
 
 #### `dump_ir`
 
-Builds a source file with `--emit-ir`, which writes its Target IR to `<output>.ir` beside the executable.
-The answer's `stdout`/`stderr` name the file written; read the IR from that file.
+Compiles a program for the host, as `maxon build` would, and answers its Target IR in `ir`: the text
+`maxon build --emit-ir` writes. Nothing is written. `success` and `diagnostics` are as for `check`, and
+`ir` is empty when the compile fails. Like `check`, it compiles inside the server process, so a compiler
+panic ends the server.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string, required | The `.maxon` source file |
+| `path` | string, required | The `.maxon` file or directory to compile |
 
 #### `lookup_error_code`
 

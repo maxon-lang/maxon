@@ -39,8 +39,9 @@ public type Build
 	/// single call: a caller naming a single directory should not have to build an array to say so,
 	/// which in a manifest means declaring an `Array with String` typealias to hold it.
 	/// source: the file or directory to compile. output: where the executable goes, extension omitted
-	/// (the compiler appends `.exe` on Windows and nothing elsewhere). debugInfo: whether the build writes
-	/// the `<output>.mxdbg` sidecar; `maxon build --no-debug-info` turns it off whatever this says.
+	/// (the compiler appends `.exe` on Windows, `.wasm` on wasm32-wasi and nothing elsewhere). debugInfo:
+	/// whether the build writes the `<output>.mxdbg` sidecar; `maxon build --no-debug-info` turns it off
+	/// whatever this says.
 	public static function build(source String, output String, debugInfo bool = true, version String = "", defines StringArray = StringArray.create())
 		var sources = StringArray.create()
 		sources.push(source)
@@ -84,11 +85,12 @@ public type Build
 		print("]")
 	end 'buildTargets'
 
-	/// Emit build configuration as JSON to stdout
+	/// Emit build configuration as JSON to stdout. Every string is JSON-escaped, so a `"` or a Windows `\`
+	/// in a name or path reaches the compiler's JSON reader intact.
 	public static function emitBuildConfig(config BuildConfig)
 		print("\{")
-		print("  \"name\": \"{config.name}\",")
-		print("  \"output\": \"{config.output}\",")
+		print("  \"name\": {Json.quote(config.name)},")
+		print("  \"output\": {Json.quote(config.output)},")
 		print("  \"sources\": [")
 
 		var i = 0
@@ -96,9 +98,9 @@ public type Build
 
 		for src in config.sources 'emit_sources'
 			if i < count - 1 'check_comma'
-				print("    \"{src}\",")
+				print("    {Json.quote(src)},")
 			end 'check_comma' else 'no_comma'
-				print("    \"{src}\"")
+				print("    {Json.quote(src)}")
 			end 'no_comma'
 
 			i = i + 1
@@ -112,7 +114,7 @@ public type Build
 			print("  \"debug_info\": false,")
 		end 'emit_debug_false'
 
-		print("  \"version\": \"{config.version}\",")
+		print("  \"version\": {Json.quote(config.version)},")
 		print("  \"defines\": [")
 
 		var d = 0
@@ -120,9 +122,9 @@ public type Build
 
 		for pair in config.defines 'emit_defines'
 			if d < defineCount - 1 'define_comma'
-				print("    \"{pair}\",")
+				print("    {Json.quote(pair)},")
 			end 'define_comma' else 'define_last'
-				print("    \"{pair}\"")
+				print("    {Json.quote(pair)}")
 			end 'define_last'
 
 			d = d + 1

@@ -312,3 +312,78 @@ end 'main'
 ```exitcode
 3
 ```
+
+## An error a `public` API throws is itself `public`
+
+A `public` function's `throws` clause is part of its surface: a caller that cannot name the error type
+cannot write a function that receives one, so it can only discard what went wrong. `JsonError`
+(`Json.parse`), `JsonAccessError` (the `JsonDoc` accessors) and `ConsoleError` (`Stdin.readLine`) are
+therefore `public` like the APIs that throw them.
+
+<!-- test: stdlib-error-enums-thrown-by-public-api-are-nameable -->
+Each error type is named in a PARAMETER position, which a binding inferred from `otherwise (e)` never
+does, so the case needs the name to be visible and not merely the value. `ConsoleError` is named without
+reading stdin, so the program compiles on every lane including the ones with no console substrate.
+```maxon
+function describeParse(e JsonError) returns String
+	return match e 'kind'
+		unexpectedEof gives "unexpectedEof"
+		unexpectedChar gives "unexpectedChar"
+		invalidEscape gives "invalidEscape"
+		invalidNumber gives "invalidNumber"
+		invalidSurrogate gives "invalidSurrogate"
+		trailingContent gives "trailingContent"
+	end 'kind'
+end 'describeParse'
+
+function describeAccess(e JsonAccessError) returns String
+	return match e 'kind'
+		wrongType gives "wrongType"
+		notObject gives "notObject"
+		notArray gives "notArray"
+		missingKey gives "missingKey"
+		outOfBounds gives "outOfBounds"
+	end 'kind'
+end 'describeAccess'
+
+function describeConsole(e ConsoleError) returns String
+	return match e 'kind'
+		endOfFile gives "endOfFile"
+	end 'kind'
+end 'describeConsole'
+
+function parseVerdict(text String) returns String
+	let doc = try Json.parse(text) otherwise (e) 'malformed'
+		return describeParse(e)
+	end 'malformed'
+
+	return "parsed a document rooted at {doc.root}"
+end 'parseVerdict'
+
+function accessVerdict(text String) returns String
+	let doc = try Json.parse(text) otherwise return "unparsed"
+	let value = try doc.getString(doc.root, key: "a") otherwise (e) 'wrongShape'
+		return describeAccess(e)
+	end 'wrongShape'
+
+	return "a is {value}"
+end 'accessVerdict'
+
+function main() returns ExitCode
+	let parsed = parseVerdict("\{")
+	let accessed = accessVerdict("\{\"a\": 1\}")
+	let consoled = describeConsole(ConsoleError.endOfFile)
+	print("parse: {parsed}\n")
+	print("access: {accessed}\n")
+	print("console: {consoled}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+parse: unexpectedEof
+access: wrongType
+console: endOfFile
+```

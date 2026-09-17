@@ -2,10 +2,11 @@
 // a `/` or `mod` desugars to when the compiler owes it a guard, the error enum the fallible four throw, and
 // the one ordinal they throw it as.
 //
-// ⚠ **"CHECKED" IS ABOUT THE GUARD, NOT ABOUT THROWING, and since A1x the family has a member that raises
-// nothing.** `idiv` faults for TWO reasons: a zero divisor (catchable — A1) and an unrepresentable quotient
-// (`i64.min / -1`). The second is fatal for `/` by design and IMPOSSIBLE for `mod`, whose remainder at that
-// divisor is simply `0` — so A1x's `__guarded_mod` is expanded exactly as its siblings are and is TOTAL.
+// ⚠ **"CHECKED" IS ABOUT THE GUARD, NOT ABOUT THROWING, and the family has a member that raises nothing.**
+// A signed divide has TWO hazards: a zero divisor (catchable) and an unrepresentable quotient
+// (`i64.min / -1`). The second panics for `/` (`Parser.emitQuotientOverflowGuard`) and is IMPOSSIBLE for
+// `mod`, whose remainder at that divisor is simply `0` — so `__guarded_mod` is expanded exactly as its
+// siblings are and is TOTAL.
 // `divisionKindThrows` is the one place that difference is decided.
 //
 // ⭐ **WHY A "RUNTIME" FILE THAT INSTALLS NO RUNTIME FUNCTION.** Every other throwing builtin family here
@@ -63,19 +64,19 @@ let CheckedModuloName = b"__checked_mod"
 let UnsignedCheckedDivideName = b"__checked_div_unsigned"
 let UnsignedCheckedModuloName = b"__checked_mod_unsigned"
 
-// ⭐⭐ **THE THIRD EXPANSION, AND THE ONLY ONE THAT THROWS NOTHING (A1x).** `idiv` raises `#DE` for TWO
-// unrelated reasons and A1 desugared only the first, so a `mod` whose divisor the compiler PROVED
-// non-zero — a literal, or a ranged type excluding 0 — still went out as a bare `idiv` and still died on
-// `i64.min mod -1`. **That case is TOTAL, not fallible**: `a mod -1` is `0` for every `a`, so there is
+// ⭐⭐ **THE THIRD EXPANSION, AND THE ONLY ONE THAT THROWS NOTHING.** A `mod` whose divisor the compiler
+// PROVED non-zero — a literal, or a ranged type excluding 0 — may still be `-1`, where x64's `idiv` raises
+// `#DE` on `i64.min mod -1`. **That case is TOTAL, not fallible**: `a mod -1` is `0` for every `a`, so there is
 // nothing for a `try` to catch and requiring one would be a lie about the operation. Hence a callee of
 // its own rather than a flag on `__checked_mod`: the throwing-ness of a division rides its NAME
 // (`isThrowingRuntimeCallee`), and this one must answer `false` there while still being EXPANDED rather
 // than called.
 //
-// ⚠ **`/` HAS NO COUNTERPART AND MUST NOT GROW ONE.** `i64.min / -1` has no representable quotient, so
-// there is no value a total `/` could return; `specs/division.md` documents that fault as
-// deliberate. The asymmetry is the whole reason the two operators part company here: `mod` tests only
-// its DIVISOR, `/` would have to test both operands and would still have nothing to answer.
+// ⚠ **`/` HAS NO COUNTERPART, BECAUSE ITS ANSWER AT THE PAIR IS A PANIC AND NOT A VALUE.** `i64.min / -1`
+// has no representable quotient, so there is nothing an expansion could return. `Parser.emitDivOrMod`
+// instead branches to `panic: integer overflow` ahead of either route (`emitQuotientOverflowGuard`), which
+// tests BOTH operands and is the same on every target — x64's `#DE`, arm64's silent `SDIV` and wasm's trap
+// never see the pair.
 let GuardedModuloName = b"__guarded_mod"
 
 // ⭐ **WHICH DIVISION A CHECKED-DIVISION CALLEE NAMES** — the one list, read three ways (the throwing
@@ -326,6 +327,11 @@ export let DivisorZeroPattern = 0 as ParsedInt
 // "the `u64.max` bound as it rides in a signed field"; this one means "the divisor that overflows". Two
 // facts, one bit pattern — and `rangeExcludesNegativeOne` has to tell them apart to be correct at all.
 export let OverflowingDivisorPattern = -1 as ParsedInt
+
+// The dividend of that pair. The parser's proof (`TypeRules.rangeExcludesIntMin`), the quotient guard's
+// comparand (`Parser.emitQuotientOverflowGuard`) and the folder's refusal read this one constant, for the
+// divisor's reason.
+export let OverflowingDividendPattern = i64.min as ParsedInt
 
 // ⭐ **THE ORDINAL DRIFT GUARD (7b), FOR THE FIFTH FAMILY.** The enum's case ORDER is this family's wire
 // format and `DivisionByZeroOrdinal` above is a transcription of it, so the two are asserted to agree on

@@ -405,7 +405,7 @@ export let SlabAllocName = b"__slab_alloc"
 // caller has to invent them, and the ZEROING is a build-time argument (`emitSlabAllocClass`'s `zeroed`), so
 // admitting a caller is an argument rather than a body.
 let SlabAllocRawName = b"__slab_alloc_raw"
-export let SlabFreeName = b"__slab_free"
+let SlabFreeName = b"__slab_free"
 
 let SlabRoundedSizeName = b"__slab_rounded_size"
 let SlabStateName = b"__slab_state_base"
@@ -2584,3 +2584,8 @@ function buildSlabFree(module StdModule, model MachineModel)
 
 	module.functions.push(func)
 end 'buildSlabFree'
+
+// Give one region back to `__slab_free`. `ptr` must be exactly what `__slab_alloc` answered, and never 0.
+export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
+end 'emitSlabFree'

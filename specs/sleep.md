@@ -156,8 +156,8 @@ and asserted by nothing: `/specs/http-client.md`'s `async-trace-interleave` is t
 names them, and it is `disabled-test:` there and here — it additionally needs a sync-worker I/O pool and
 runnext scheduling, neither of which this compiler has.
 
-The shape is `async-await.trace-yield`'s, one operation over: a spawn, the yield, the scheduler taking the
-worker, the resume, and the await observing an already-yielded promise.
+The shape is `async-await.trace-yield`'s, one operation over: a spawn, the yield, the resume, and the await
+observing an already-yielded promise.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -178,10 +178,6 @@ end 'main'
 ```stderr
 spawn #1
 sleep_yield #1
-worker_start #1
 sleep_resume #1
 await #1 [yield]
-worker_exit #1
-worker_start #2
-worker_exit #2
 ```

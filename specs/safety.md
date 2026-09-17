@@ -10,18 +10,26 @@ category: runtime
 
 When a Maxon program triggers a CPU fault — a nil pointer dereference — the runtime catches it
 through the platform's fault-handler mechanism, prints a clean diagnostic to stderr, and exits with
-status 1. Three lanes install one: a vectored exception handler on **x64-Windows**,
-`rt_sigaction(SIGFPE)` on **x64-Linux**, and `sigaction` for SIGSEGV/SIGBUS/SIGFPE with an alternate
-signal stack on **arm64-macOS**. **arm64-Linux installs none**, and a fault there is still an
-unhandled signal.
+status 1. Every native lane installs one: a vectored exception handler on **x64-Windows**, and a
+`SIGSEGV`/`SIGBUS`/`SIGFPE` handler running on an alternate signal stack on **x64-Linux**,
+**arm64-macOS** and **arm64-Linux**.
 
-⚠ **A STACK OVERFLOW IS NOT CONVERTED ON ANY LANE.** It needs a guard page the handler can run on,
-which is a different mechanism from the one that classifies an access violation — the fault path says
-so where it declines to add the arm.
+**A STACK OVERFLOW IS A PANIC.** A recursion that outgrows its thread's stack prints
+`panic: stack overflow`, the standard backtrace, and exits 1 on every native lane. On `wasm32-wasi` the
+engine owns the stack, so running out of it is wasmtime's own trap, like every other wasm fault. The
+handler needs stack of its own once the thread's is spent: Windows reserves it with
+`SetThreadStackGuarantee`, and a POSIX lane runs the handler on the thread's alternate signal stack. A
+POSIX handler tells an overflow from a bad address by where the fault landed — within 64 KiB of the
+stack pointer is the stack's own guard. A green thread's stack does not overflow this way: its prologue
+guard grows it first, up to 1 GiB, and a recursion that needs more stops there with the same panic, trace
+and exit code.
 
-⚠ **AND A FAULT ON A WORKER THREAD IS NOT FULLY COVERED.** An alternate signal stack is registered
-per THREAD and only the main thread gets one, so a fault on a green thread's own stack still depends
-on that stack being intact enough to run the handler on.
+A fault on a green thread is covered the same way: every OS thread registers its own alternate signal
+stack on the POSIX lanes, and on Windows every green thread's stack reserves room below its guard for
+the handler's frame.
+
+A backtrace holds at most 100 frames, the faulting function's own frame included; a deeper chain ends
+with `...additional frames elided...`.
 
 The fault-handler infrastructure does not yet support `recover()` — once a fault
 fires, the process always exits.
@@ -39,7 +47,7 @@ that never sees a wasm trap. The fault handler still classifies a stray `SIGFPE`
 happens to receive (e.g. a floating-point trap) to a divide-by-zero panic, but a
 correctly compiled integer divide never reaches it. The nil-pointer
 (`SIGSEGV`/`SIGBUS`) path traps identically on both architectures, so the
-`force-segfault` test runs on `arm64-macos` as well as `x64-windows`.
+`force-segfault` test runs on every native lane.
 
 Float `/` is fallible on the same terms. `x / 0.0` is `±inf` and `0.0 / 0.0` is `NaN` —
 representable values, but a division by zero is a logic error all the same, so it is
@@ -49,70 +57,36 @@ error, and a non-zero literal divisor is a bare divide. Only division is affecte
 `inf` or `NaN` from a NON-division source (overflow to `inf`, `inf - inf`, a domain error)
 is still produced silently. Float `mod` does not exist (`mod` is integer-only).
 
-⚠ **`INT_MIN / -1` IS STILL UNGUARDED, and the two halves of that sentence must not be
-reversed together by mistake.** `idiv` faults on it as well as on a zero divisor, and the
-`DivisionByZero` this rung adds is about the DIVISOR being zero and says nothing about
-the quotient being unrepresentable. So `i64.min / -1` still raises a hardware fault on
-x64 — a trap in a language that otherwise has none left here.
+**`i64.min / -1` PANICS `integer overflow`, ON EVERY TARGET.** `DivisionByZero` is about the
+DIVISOR being zero and says nothing about a quotient that does not fit: `i64.min / -1` is
+`i64.max + 1`, so `/` has no value to return and the program stops. It prints
+**`panic: integer overflow`**, the standard backtrace, and exits 1 — identically on x64-windows,
+x64-linux, arm64-macos, arm64-linux and wasm32-wasi. A `try (a / b) otherwise …` does not catch it:
+the `try` handles the zero divisor, and an overflow is not that error.
 
-⭐⭐ **THAT SENTENCE IS ABOUT `/` ONLY, AND IT USED TO BE READ AS COVERING `mod` — WHICH IS
-WHERE THE `mod` HALF WENT WRONG (A1x). `i64.min mod -1` IS `0`, ON EVERY TARGET.** The
-rationale above is *"the quotient is unrepresentable"*, and that is simply FALSE of the
-remainder: **`a mod -1` is `0` for EVERY `a`**, because truncated division gives
-`a - (-1)·trunc(a / -1) = a - a`. `mod` faulted only because x86 computes quotient and
-remainder in ONE `idiv`, so it inherited a `#DE` raised on account of a quotient it does not
-even read. Measured before the fix, all three doors into a `mod` and the same program: x64
-died `panic: integer overflow`, x64-linux died `panic: integer divide by zero`, and
-**wasm32-wasi already answered `0`** — a valid program's OBSERVABLE ANSWER differing by
-target, not merely its diagnostic. Maxon now answers `0` everywhere, with Go and Java.
+**`i64.min mod -1` IS `0`, ON EVERY TARGET.** The remainder has an answer where the quotient does
+not: `a mod -1` is `0` for EVERY `a`, because truncated division gives
+`a - (-1)·trunc(a / -1) = a - a`. So `mod` tests only its divisor, and `/` needs both operands. A
+divisor the compiler proves is neither `0` nor `-1` — a literal, or a ranged type excluding both —
+compiles to a bare divide with no guard, so the cost is paid only where the proof runs out. A `/` also
+needs none when its dividend's type or value rules `i64.min` out; otherwise its guard is one
+compare-and-branch ahead of the divide, in the dividing function, which is why the backtrace starts
+there.
 
-⭐ **SO `mod` TESTS ONLY ITS DIVISOR, AND `/` NEEDS BOTH OPERANDS — WHICH IS WHY THE TWO
-DIVERGE HERE AT ALL.** `a / -1` overflows for exactly one dividend (`i64.min`); `a mod -1`
-is `0` for all of them. A divisor the compiler proves is neither `0` nor `-1` — a literal, or
-a ranged type excluding both — still compiles to the bare `idiv` with no guard at all, so the
-cost is paid only where the proof runs out. **`/` is UNCHANGED: its quotient does not exist,
-so there is no value to return and the documented fault stands.**
-
-⚠ **AND `try (a mod b) otherwise …` IS NOW DEAD WEIGHT AT THIS BOUNDARY, NOT NEWLY WORKING.**
-A hardware fault was never catchable; the cure is that there is nothing to catch. The `try` is
-still REQUIRED when the divisor could be `0` (that error is real), but at `-1` the fallback
-never runs — a case written as though it fires is asserting the opposite of the rule.
-
-⭐ **THAT FAULT IS NOW DIAGNOSED, AND IT IS ITS OWN DIAGNOSTIC.** It arrives as
-`STATUS_INTEGER_OVERFLOW` (**0xC0000095**), a DIFFERENT exception code from the zero divisor's
-`STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094), and the Windows fault thunk used to convert
-0xC0000094 **and nothing else** — so the process died with no panic line, no backtrace and a raw
-0xC0000095 nobody could interpret (measured: **exit 127, stderr completely EMPTY**). It now
-classifies both, and an unrepresentable quotient prints **`panic: integer overflow`** plus the
-same symbolized backtrace and exit 1 a zero divisor gets — one fault, one spelling.
-
-⚠ **ONLY x64-WINDOWS CAN TELL THE TWO APART, and the limitation is the KERNEL's rather than this
-compiler's.** Linux delivers both as `SIGFPE`, and reports **`si_code = FPE_INTDIV` (1) for every
-`#DE`** — the overflow included, because the CPU does not tell the kernel which of the two `#DE`
-causes fired and `exc_divide_error` names `FPE_INTDIV` unconditionally. Measured, not assumed: the
-SIGFPE handler was instrumented to print the raw `si_code` and read `0x…0001` for BOTH programs
-below. There is nothing in the siginfo to branch on, so x64-linux keeps the one wording it can
-justify — `panic: integer divide by zero` and exit 1 — and the overflow case below is `x64-windows`
-only. **arm64 needs nothing**: AArch64 `SDIV` does not trap, `i64.min / -1` simply evaluates to
-`i64.min`, so there is no trap to classify. ⚠ That is a statement about the DIVIDE and no longer
-about the lane — arm64-macOS installs a fault handler for the nil-pointer path, and its SIGFPE arm
-exists only to give a stray floating-point trap a wording it can justify. **`wasm32-wasi` needs
-nothing either, for the opposite reason**: `i64.div_s` DOES trap on an unrepresentable quotient, but
-a wasm trap is not deliverable to guest code, so the module exits **3** under `wasmtime` with that
-runtime's own `wasm trap: integer overflow` and no Maxon fault handler is involved (measured).
+⚠ A `try (a mod b) otherwise …` is still REQUIRED when the divisor could be `0` (that error is
+real), but at `-1` the fallback never runs — there is nothing to catch, and a case written as though
+it fires asserts the opposite of the rule.
 
 ## Tests
 
-On x64-Windows the diagnostic also walks the faulting thread's saved-RBP chain and
-prints a symbolized stack trace after the panic line (frame 0 is the faulting
-instruction, resolved from the faulting RIP; the remaining frames are the callers).
-This mirrors the ordinary `mrt_panic` software-panic trace. The frame addresses
-themselves are non-deterministic (ASLR), so only the resolved function names are
-asserted. arm64-macOS walks the same chain: AArch64's `stp x29, x30` frame record holds the caller's frame
-pointer and the return address in the same two words x64's saved-RBP chain does — which is why one
-pair of offsets serves both walkers — and every arm64 function including a leaf gets a real frame
-record. ⚠ Its case still asserts only the panic line, because **nothing in this tree can execute
-it**: a Mach-O runs only on macOS, so on any other host that case is compiled and its golden compared
+The diagnostic also walks the faulting thread's saved frame-pointer chain and prints a symbolized stack
+trace after the panic line (frame 0 is the faulting instruction, resolved from the faulting PC; the
+remaining frames are the callers). This mirrors the ordinary `mrt_panic` software-panic trace. The frame
+addresses themselves are non-deterministic (ASLR), so only the resolved function names are asserted.
+arm64 walks the same chain as x64: AArch64's `stp x29, x30` frame record holds the caller's frame pointer
+and the return address in the same two words x64's saved-RBP chain does — which is why one pair of
+offsets serves both walkers — and every arm64 function including a leaf gets a real frame record. ⚠ A
+Mach-O runs only on macOS, so on any other host an arm64-macos case is compiled and its golden compared
 while the execution is skipped, and the runner reports it as NOT PASSED rather than counting it.
 
 <!-- test: divide-by-zero -->
@@ -795,11 +769,6 @@ given the declared type. A caller that breaks the type it declared used to get t
 standing in front of; it now gets the range panic, naming `BelowMinusOne` at the parameter that
 declared it. **One cure, two hazards** — the divide-by-zero premise and the `i64.min mod -1` premise
 were never two defects.
-
-`x64-linux` is excluded for its neighbours' measured reason: its kernel reports `FPE_INTDIV` for the
-`#DE` this case used to raise, so it printed the divide-by-zero wording. The exclusion is kept rather
-than re-derived: the case exists to pin the `mod` premise, and re-admitting a target is a measurement,
-not a guess.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BelowMinusOne = int(i64.min to -2)
@@ -1000,11 +969,7 @@ Stack trace:
 ```
 
 <!-- test: integer-overflow-fault-from-int-min-over-minus-one -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-#### `i64.min / -1` panics `integer overflow` — a different code, its own words
-
-`x64-linux` is excluded for a measured reason, not an unexamined one: its kernel reports
-`FPE_INTDIV` for this fault too, so there is nothing to classify on (see the Documentation above).
+#### `i64.min / -1` panics `integer overflow` — its own words, on every target
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1014,16 +979,15 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-// The divisor's range excludes 0, so this is the unguarded `idiv` again — the `DivisionByZero` a
-// possibly-zero divisor would have raised is about the DIVISOR, and says nothing about a quotient
-// that does not fit. `i64.min / -1` is `i64.max + 1`, so `idiv` raises `#DE` with a divisor of -1.
+// The divisor's range excludes 0, so no `DivisionByZero` is possible — that error is about the
+// DIVISOR, and says nothing about a quotient that does not fit. `i64.min / -1` is `i64.max + 1`.
 function divide(d NegativeOne) returns Integer
 	return (dividend / d) as Integer
 end 'divide'
 
 function main() returns ExitCode
 	dividend = ident(i64.min)
-	// Opaque, so the divide cannot be strength-reduced to a negation — which would not trap.
+	// Opaque, so the divide is not folded or rewritten as a negation.
 	let d = ident(-1)
 	return divide(d as NegativeOne) as ExitCode
 end 'main'
@@ -1041,19 +1005,14 @@ Stack trace:
 ```
 
 <!-- test: a-checked-divide-still-faults-at-int-min-over-minus-one -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
-#### ⭐ THE BOUNDARY OF THE `mod` RULE: a CHECKED `/` is still fatal here, deliberately (A1x)
+#### ⭐ THE BOUNDARY OF THE `mod` RULE: a CHECKED `/` is still fatal here, deliberately
 
-The case above reaches the fault through a bare `idiv`. This one reaches it through the **fallible**
-divide — the spelling that has a `try`, a divisor the compiler cannot prove non-zero, and a fallback
-sitting right there — and the fallback **still never runs**, because a `#DE` is not a throw. That is
-not an oversight left over from `mod`: **`i64.min / -1` has no representable quotient, so there is no
-value for a total `/` to return**, and A1x fixed `mod` precisely because its answer DOES exist. Pinned
-so the asymmetry is tested rather than inferred from prose — if a later rung makes `/` total too, this
-case is what it has to come and change.
-
-`x64-linux` is excluded for the same measured reason as its neighbour: its kernel reports `FPE_INTDIV`
-for this fault too, so the wording it prints is the divide-by-zero one.
+The case above reaches the overflow through a divisor proven non-zero. This one reaches it through the
+**fallible** divide — the spelling that has a `try`, a divisor the compiler cannot prove non-zero, and
+a fallback sitting right there — and the fallback **still never runs**, because an overflow is not a
+throw. **`i64.min / -1` has no representable quotient, so there is no value for a total `/` to
+return**, where `mod`'s answer DOES exist. Pinned so the asymmetry is tested rather than inferred from
+prose.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1121,8 +1080,266 @@ end 'main'
 error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (a / b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error
 ```
 
+<!-- test: unbounded-recursion-panics-with-stack-overflow -->
+<!-- unsupported-targets: wasm32-wasi -->
+### Unbounded recursion panics `stack overflow`
+A recursion with no base case outgrows its thread's stack. The program stops with the standard fault
+shape — the panic line, the innermost 100 frames and the elision line — and exits 1. `wasm32-wasi` is
+excluded because the engine owns that stack: running out of it is wasmtime's own trap.
+```maxon
+typealias Depth = int(0 to i64.max)
+
+function descend(depth Depth) returns Depth
+	return descend(depth + 1) + 1
+end 'descend'
+
+function main() returns ExitCode
+	let reached = descend(0)
+	print("{reached}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: stack overflow
+Stack trace:
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  ...additional frames elided...
+```
+
+<!-- test: unbounded-recursion-on-a-green-thread-panics-with-stack-overflow -->
+<!-- runs: alone -->
+### Unbounded recursion on a green thread panics `stack overflow` too
+The `sleep` runs the scheduler, which puts `main` on a green thread, whose stack grows on demand instead of
+faulting. Growth stops at 1 GiB, and the recursion that asks for more stops with the same line, trace and
+exit code as one that runs an OS thread's stack out — reported from the frame whose entry asked. The case
+grows a stack to that limit and the last growth holds both copies, so it runs with no other case beside it.
+```maxon
+typealias Depth = int(0 to i64.max)
+
+function descend(depth Depth) returns Depth
+	return descend(depth + 1) + 1
+end 'descend'
+
+function main() returns ExitCode
+	sleep(1)
+	let reached = descend(0)
+	print("{reached}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic: stack overflow
+Stack trace:
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  in descend
+  ...additional frames elided...
+```
+
 <!-- test: force-segfault -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: arm64-macos, wasm32-wasi -->
 ⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
 `mrt_fault_thunk` is a compiler BUG, so before `__Builtins.forceSegfault()` existed the whole thunk was code
 no suite could exercise: green everywhere, and unmeasured. The intrinsic lowers to
@@ -1185,12 +1402,10 @@ Stack trace:
 ```
 
 <!-- test: force-segfault-on-a-green-thread -->
-<!-- unsupported-targets: x64-linux, arm64-linux -->
 ### A fault on a green thread walks that thread's own stack
 The fault happens on a coroutine's stack while the handler runs elsewhere — Windows's vectored handler below
-the fault on that same stack, with the TIB describing it; Darwin's on the signal stack — and the walk is bounded
-by the green thread's own stack, ending at its trampoline. The two Linux lanes install no handler for an access
-violation, so there the fault ends the process unconverted.
+the fault on that same stack, with the TIB describing it; a POSIX lane's on the machine's signal stack — and the
+walk is bounded by the green thread's own stack, ending at its trampoline.
 ```maxon
 function faultOnAGreenThread() returns ExitCode
 	__Builtins.forceSegfault()

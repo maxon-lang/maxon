@@ -27,12 +27,17 @@ var x = 42
 var h = x.hash()    // returns 42
 
 var f = 3.14
-var fh = f.hash()   // returns bit pattern as int
+var fh = f.hash()   // both halves of the bit pattern, folded: 300063655
 ```
 
 **Notes:**
-- `0.0.hash()` and `(-0.0).hash()` return the same value
-- Integer hash is identity function
+- `int.hash()` is the low 32 bits of the value (`self and 0xFFFFFFFF`)
+- `float.hash()` folds the WHOLE 64-bit IEEE-754 pattern into 32 bits:
+  `(bits xor (bits shr 32)) and 0xFFFFFFFF`. Both halves contribute, so floats that differ only in the
+  high half — the sign, the exponent, the top of the mantissa — hash differently: `2.5` and `5.0` differ,
+  and so do `-3.14` and `3.14`
+- `0.0.hash()` and `(-0.0).hash()` both return `0`, because `0.0 == -0.0` and equal values must hash
+  alike
 
 ## equals(other)
 
@@ -178,7 +183,8 @@ end 'main'
 `float.hash()` returns a `HashValue` exactly as `int.hash()` does, so a hash of a hash is an ordinary
 chained dispatch that leaves the float domain after the first hop: the second `.hash()` dispatches
 `int.hash`, whose low-32 mask is the identity on a value already inside `HashValue`'s range. The pinned
-number is the low 32 bits of `3.14`'s IEEE-754 pattern `0x40091EB851EB851F`, i.e. `0x51EB851F`.
+number is `3.14`'s IEEE-754 pattern `0x40091EB851EB851F` folded: the low half `0x51EB851F` xor the high
+half `0x40091EB8` is `0x11E29BA7`, i.e. `300063655`.
 ```maxon
 function main() returns ExitCode
 	let f = 3.14
@@ -187,9 +193,38 @@ function main() returns ExitCode
 	if once != twice 'chainDiffers'
 		return 1
 	end 'chainDiffers'
-	if once != 1374389535 'pinned'
+	if once != 300063655 'pinned'
 		return 2
 	end 'pinned'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.hash.high-half-contributes -->
+⭐ **THE HIGH HALF OF THE BIT PATTERN REACHES THE HASH.** `2.5` is `0x4004000000000000` and `5.0` is
+`0x4014000000000000`: both low halves are ZERO, so a hash that kept only the low 32 bits answers `0` for
+both — and for every float whose mantissa fits in its top 20 bits, which is every small integer-valued
+or half-integer float a program is likely to key a map with. Folded, each hash is its high half:
+`0x40040000` = `1074003968` and `0x40140000` = `1075052544`.
+```maxon
+function main() returns ExitCode
+	let small = 2.5
+	let large = 5.0
+	if small.hash() == 0 'lowHalfOnly'
+		return 1
+	end 'lowHalfOnly'
+	if small.hash() == large.hash() 'collide'
+		return 2
+	end 'collide'
+	if small.hash() != 1074003968 'pinnedSmall'
+		return 3
+	end 'pinnedSmall'
+	if large.hash() != 1075052544 'pinnedLarge'
+		return 4
+	end 'pinnedLarge'
 	return 0
 end 'main'
 ```
@@ -216,18 +251,19 @@ end 'main'
 ```
 
 <!-- test: float.hash.negative -->
-⭐ **A NEGATIVE FLOAT HASHES TO ITS POSITIVE TWIN'S VALUE, and that is what the low-32 mask MEANS.**
-IEEE-754's sign is bit 63, so `-3.14` and `3.14` differ only in the half the mask discards. It is a
-collision, it is what both reference compilers compute, and it is legal: `Hashable` requires equal
-values to hash equal, never unequal values to hash differently.
+⭐ **A NEGATIVE FLOAT DOES NOT HASH TO ITS POSITIVE TWIN'S VALUE.** IEEE-754's sign is bit 63, in the
+high half, and the fold brings the high half down onto the low one: `-3.14` is `0xC0091EB851EB851F`,
+whose high half `0xC0091EB8` xor its low half `0x51EB851F` is `0x91E29BA7`, i.e. `2447547303` — `3.14`'s
+`300063655` plus `2^31`, the sign landing on bit 31. Whether `shr` fills the vacated word with the sign or
+with zeros does not move the answer, because the final mask discards that word.
 ```maxon
 function main() returns ExitCode
 	let pos = 3.14
 	let neg = -3.14
-	if neg.hash() != pos.hash() 'signMasked'
+	if neg.hash() == pos.hash() 'signLost'
 		return 1
-	end 'signMasked'
-	if neg.hash() != 1374389535 'pinned'
+	end 'signLost'
+	if neg.hash() != 2447547303 'pinned'
 		return 2
 	end 'pinned'
 	return 0
@@ -240,14 +276,16 @@ end 'main'
 <!-- test: float.hash.nan -->
 ⭐ **NaN IS DELIBERATELY NOT NORMALIZED — only `-0.0` is — and the reason is that `float.equals` is
 plain IEEE.** `NaN.equals(NaN)` is FALSE, so no two `equals`-equal values can differ in hash however a
-NaN hashes, and the `Hashable` contract is untouched. Both reference compilers leave it raw
-(`stdlib/PrimitiveExtensions.maxon` masks the bits and special-cases `-0.0` alone). This case pins the
-value so a later reader cannot "fix" the absence of a NaN branch: `inf - inf` yields a quiet NaN whose
-MANTISSA is empty, so its low 32 bits are zero — the same hash `±0.0` gets, which is again a collision
-and again legal. (What this case pins is that the low half is zero, not which NaN a target chose: a
-payload-carrying NaN would hash to its payload, and that would still be correct.) NaN is built by
-overflow rather than `0.0 / 0.0` for `primitive-comparable`'s reason: a literal zero divisor is a
-compile error.
+NaN hashes, and the `Hashable` contract is untouched. `stdlib/PrimitiveExtensions.maxon` folds the bits
+and special-cases `-0.0` alone, and this case pins the fold so a later reader cannot "fix" the absence of
+a NaN branch.
+
+`inf - inf` yields the platform's default quiet NaN, and the platforms disagree on its SIGN: x64 produces
+`0xFFF8000000000000`, arm64 `0x7FF8000000000000`, and wasm leaves the sign unspecified. The fold is
+therefore `0xFFF80000` on one lane and `0x7FF80000` on another, and only bits 0-30 are the same
+everywhere: `h and 0x7FFFFFFF` is `0x7FF80000` = `2146959360` on every lane — the all-ones exponent and
+the quiet bit, reaching the hash from the high half. NaN is built by overflow rather than `0.0 / 0.0` for
+`primitive-comparable`'s reason: a literal zero divisor is a compile error.
 ```maxon
 function main() returns ExitCode
 	let inf = 1.0e308 * 10.0
@@ -256,7 +294,7 @@ function main() returns ExitCode
 	if nan.equals(nan) 'ieeeEquals'
 		return 1
 	end 'ieeeEquals'
-	if h != 0 'pinned'
+	if (h and 0x7FFFFFFF) != 2146959360 'pinned'
 		return 2
 	end 'pinned'
 	return 0

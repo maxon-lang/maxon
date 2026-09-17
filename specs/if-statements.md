@@ -286,3 +286,34 @@ end 'main'
 ```maxoncstderr
 error E2001: specs/fragments/if-statements/if-statements.single-line-block-rejected.test:3:14: Expected newline after block label, got 'return'
 ```
+
+<!-- test: error.mismatched-if-end-label -->
+A label written after `end` must repeat the block's opening label.
+```maxon
+function main() returns ExitCode
+	let x = 1
+	if x > 0 'positive'
+		return 1
+	end 'negative'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:6:2: Mismatched end label: expected 'positive', got 'negative'
+```
+
+<!-- test: error.mismatched-else-end-label -->
+The `else` branch opens its own block, and its `end` repeats the `else` label, not the `if` label.
+```maxon
+function main() returns ExitCode
+	let x = 0
+	if x > 0 'positive'
+		return 1
+	end 'positive' else 'nonPositive'
+		return 2
+	end 'negative'
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:8:2: Mismatched end label: expected 'nonPositive', got 'negative'
+```

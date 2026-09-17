@@ -305,7 +305,7 @@ end 'TokenKind'
 //
 // ⚠ **IT IS NOT "where a statement ENDS", AND `statementEndsAt` MUST NOT BE ROUTED THROUGH IT.** That
 // question is about a `newline`'s MEANING (it terminates the statement), and a doc comment terminates
-// nothing — `requireNewlineAfterBlockLabel` and `requireSignatureLineEnd` demand a literal newline.
+// nothing — `requireNewlineAfterBlockLabel` and `requireDeclarationHeaderLineEnd` demand a literal newline.
 //
 // ⚠ It is ONE definition because the readers must agree or a construct means two things: the cursor
 // mover and its lookahead (`Parser.skipNewlines` / `indexPastNewlines`) decide what a program IS, and
@@ -1906,6 +1906,21 @@ end 'tokenize'
 export function isDigit(b Byte) returns bool
 	return b >= '0' and b <= '9'
 end 'isDigit'
+
+// A non-empty run of decimal digits and nothing else: no sign, no separator, no radix prefix.
+module function isDecimalNumeral(text String) returns bool
+	if text.isEmpty() 'empty'
+		return false
+	end 'empty'
+
+	for b in text.toByteArray() 'eachByte'
+		if not isDigit(b) 'notADigit'
+			return false
+		end 'notADigit'
+	end 'eachByte'
+
+	return true
+end 'isDecimalNumeral'
 
 // Valid identifier start: letter (A-Z, a-z) or underscore
 function isAlpha(b Byte) returns bool

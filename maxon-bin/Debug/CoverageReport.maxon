@@ -556,7 +556,7 @@ end 'sourceLines'
 function renderJson(report CovReport) returns String
 	let totals = summarize(report)
 	var out = "\{"
-	out.append("\"exe\":{jsonString(reportPathDisplay(report.exePath))},")
+	out.append("\"exe\":{Json.quote(reportPathDisplay(report.exePath))},")
 	out.append("\"runCompleted\":{jsonBool(report.runCompleted)},")
 	out.append(jsonTargetStatus(report.targetStatus))
 	out.append("\"linesCovered\":{totals.linesCovered},")
@@ -598,7 +598,7 @@ function jsonTargetStatus(status CovTargetStatus) returns String
 end 'jsonTargetStatus'
 
 function jsonFile(file CovFile) returns String
-	var out = "\{\"path\":{jsonString(reportPathDisplay(file.path))},\"lines\":["
+	var out = "\{\"path\":{Json.quote(reportPathDisplay(file.path))},\"lines\":["
 	var first = true
 
 	for line in file.lines 'eachLine'
@@ -616,7 +616,7 @@ end 'jsonFile'
 function jsonLine(line CovLine) returns String
 	let count = "" if line.state == CovLineState.eliminated else ",\"count\":{line.count}"
 
-	return "\{\"line\":{line.line},\"state\":{jsonString(stateName(line.state))}{count}\}"
+	return "\{\"line\":{line.line},\"state\":{Json.quote(stateName(line.state))}{count}\}"
 end 'jsonLine'
 
 function stateName(state CovLineState) returns String
@@ -628,7 +628,7 @@ function stateName(state CovLineState) returns String
 end 'stateName'
 
 function jsonBranch(branch CovBranch) returns String
-	var out = "\{\"file\":{jsonString(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":["
+	var out = "\{\"file\":{Json.quote(reportPathDisplay(branch.file))},\"line\":{branch.line},\"col\":{branch.column},\"arms\":["
 	var first = true
 
 	for arm in branch.arms 'eachArm'
@@ -649,53 +649,12 @@ function jsonArm(arm CovArm) returns String
 	let implicit = ",\"implicit\":true" if arm.isImplicit else ""
 	let outcome = ",\"state\":\"eliminated\"" if arm.eliminated else ",\"count\":{arm.count}"
 
-	return "\{\"kind\":{jsonString(arm.kind)},\"line\":{arm.line},\"col\":{arm.column}{implicit}{outcome}\}"
+	return "\{\"kind\":{Json.quote(arm.kind)},\"line\":{arm.line},\"col\":{arm.column}{implicit}{outcome}\}"
 end 'jsonArm'
 
 function jsonBool(value bool) returns String
 	return "true" if value else "false"
 end 'jsonBool'
-
-// A JSON string literal, quotes included. Only the three things JSON cannot carry raw are escaped: the
-// quote, the backslash, and the control range below space.
-function jsonString(text String) returns String
-	var out = "\""
-
-	for octet in text.bytes() 'eachByte'
-		out.append(jsonEscaped(octet))
-	end 'eachByte'
-
-	out.append("\"")
-
-	return out
-end 'jsonString'
-
-function jsonEscaped(octet Byte) returns String
-	if octet == JsonQuoteByte 'aQuote'
-		return "\\\""
-	end 'aQuote'
-
-	if octet == JsonBackslashByte 'aBackslash'
-		return "\\\\"
-	end 'aBackslash'
-
-	if octet < JsonFirstPrintableByte 'aControlCharacter'
-		return "\\u{octet:04x}"
-	end 'aControlCharacter'
-
-	return String.from(oneByte(octet))
-end 'jsonEscaped'
-
-function oneByte(octet Byte) returns ByteArray
-	var bytes = ByteArray.create()
-	bytes.push(octet)
-
-	return bytes
-end 'oneByte'
-
-let JsonQuoteByte = 34 as Byte
-let JsonBackslashByte = 92 as Byte
-let JsonFirstPrintableByte = 32 as Byte
 
 // ============================================================================================
 // LOADING, AND EVERY REFUSAL THAT REPLACES A REPORT

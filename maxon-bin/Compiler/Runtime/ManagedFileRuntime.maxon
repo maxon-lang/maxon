@@ -1078,13 +1078,8 @@ function buildManagedFileStat(module StdModule)
 end 'buildManagedFileStat'
 
 // One unsigned DWORD out of a record — see `DwordMask` for why it is a word load and a mask rather than a
-// 4-byte access.
-//
-// ⚠ **EXPORTED FOR THE SOCKET FAMILY, THE ONE OTHER CALLER THAT REALLY LOADS ONE.** The directory family
-// does not: `__md_exists` masks a value `GetFileAttributesA` returned in
-// a REGISTER, which is `DwordMask` and no load at all. `__ms_tcp_connect` reads `sin_addr` — a genuine
-// 4-byte FIELD inside a `sockaddr` the OS filled — so it needs exactly this pair, and a second copy would be
-// free to disagree about whether the mask or the load came first.
+// 4-byte access. Every family that loads a DWORD FIELD asks this one pair; a value an OS call answered in a
+// REGISTER (`__md_exists`'s attributes) needs only the mask.
 export function emitLoadDword(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let word = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
 	let mask = emitConst(module, block: block, value: DwordMask, ids: ids)

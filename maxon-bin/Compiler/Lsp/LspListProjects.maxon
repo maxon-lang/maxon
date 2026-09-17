@@ -1,0 +1,42 @@
+// `maxon/listProjects` — the VS Code status bar's request: the projects this server holds.
+//
+// ⭐ **EVERY OPEN DOCUMENT IS A PROJECT OF ONE FILE**, because that is what this server compiles: each
+// buffer on its own with the library tiers, rooted at the document (`LspDocumentProject.maxon`). A project
+// discovered on disk would be one the server never checks, and the status bar would describe a program the
+// diagnostics are not about.
+
+let ProjectsKey = "projects"
+let RootPathKey = "rootPath"
+let IsSingleFileKey = "isSingleFile"
+let FileCountKey = "fileCount"
+
+// The buffer itself; the library tiers are not the author's files.
+let DocumentProjectFileCount = 1
+
+module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExtensionOutcome
+	var roots = LspProjectRootArray.create()
+
+	for (uri, _) in documents 'eachDocument'
+		roots.push(lspDocumentPath(uri))
+	end 'eachDocument'
+
+	// The map's order is its hashing's; the answer's is the paths'.
+	roots.sort(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
+
+	var doc = JsonDoc.create()
+	var projects = JsonNodeIdArray.create()
+
+	for root in roots 'eachRoot'
+		var project = LspJsonObject.create(doc)
+		project.put(RootPathKey, value: JsonNode.stringNode(root.toString()))
+		project.put(IsSingleFileKey, value: JsonNode.boolNode(true))
+		project.put(FileCountKey, value: JsonNode.numberNode(DocumentProjectFileCount as JsonFloat))
+		projects.push(project.finish())
+	end 'eachRoot'
+
+	var result = LspJsonObject.create(doc)
+	result.putNode(ProjectsKey, value: doc.add(JsonNode.arrayNode(projects)))
+	return LspExtensionOutcome.answered(LspAnswer.of(doc, result: result.finish()))
+end 'listProjectsAnswer'
+
+typealias LspProjectRootArray = Array with FilePath

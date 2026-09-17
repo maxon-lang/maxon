@@ -4,6 +4,9 @@
 	let pathSeparator = "\\"
 	let pathSeparatorByte = 92
 	let otherSeparatorByte = 47
+
+	// ':' after a drive letter.
+	let DriveColonByte = 58
 #else
 	let pathSeparator = "/"
 	let pathSeparatorByte = 47
@@ -15,6 +18,12 @@ public enum FilePathError implements Error
 	notFileURL
 	noParent
 end 'FilePathError'
+
+// The two component spellings `normalize` folds.
+let CurrentDirectoryComponent = "."
+let ParentDirectoryComponent = ".."
+
+typealias PathComponentArray = Array with String
 
 // An offset into the path's own `String` bytes, so `String.BytePos`'s bound holds here too: one
 // `__ManagedMemory`, a signed machine word long.
@@ -251,49 +260,34 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	public function isAbsolute() returns bool
 		let len = path.byteLength()
+
+		// A leading separator: a POSIX root, and on Windows a UNC `\\server` or a drive-rooted `\path` too. The
+		// path's separators are normalized on construction, so only the native one can lead.
+		if len >= 1 and path.byteAtOrPanic(0) == pathSeparatorByte 'leadingSeparator'
+			return true
+		end 'leadingSeparator'
+
 		#if os(Windows)
-			// Drive letter: X:\ (e.g. C:\)
-			if len >= 3 'checkDrive'
-				let b0 = path.byteAtOrPanic(0)
-				let b1 = path.byteAtOrPanic(1)
-				let b2 = path.byteAtOrPanic(2)
-
-				// ':' = 58, '\' = 92 (path is normalized, so only native separator)
-				if b1 == 58 and b2 == 92 'hasDriveColon'
-					// a-z = 97-122, A-Z = 65-90
-					if (b0 >= 65 and b0 <= 90) or (b0 >= 97 and b0 <= 122) 'isDrive'
-						return true
-					end 'isDrive'
-				end 'hasDriveColon'
-			end 'checkDrive'
-
-			// UNC path: starts with \\
-			if len >= 2 'checkUNC'
-				let u0 = path.byteAtOrPanic(0)
-				let u1 = path.byteAtOrPanic(1)
-
-				if u0 == 92 and u1 == 92 'isUNC'
-					return true
-				end 'isUNC'
-			end 'checkUNC'
-
-			// Rooted path: starts with single backslash (e.g. \path — absolute to current drive)
-			if len >= 1 'checkRooted'
-				if path.byteAtOrPanic(0) == 92 'isRooted'
-					return true
-				end 'isRooted'
-			end 'checkRooted'
-		#else
-			// Unix: starts with /
-			if len >= 1 'checkSlash'
-				if path.byteAtOrPanic(0) == 47 'isAbsUnix'
-					return true
-				end 'isAbsUnix'
-			end 'checkSlash'
+			if hasDrivePrefix() and len >= 3 and path.byteAtOrPanic(2) == pathSeparatorByte 'driveRoot'
+				return true
+			end 'driveRoot'
 		#endif
 
 		return false
 	end 'isAbsolute'
+
+	#if os(Windows)
+		/// Does the path open with a drive letter and its colon (`C:`)?
+		function hasDrivePrefix() returns bool
+			if path.byteLength() < 2 'tooShort'
+				return false
+			end 'tooShort'
+
+			let letter = path.byteAtOrPanic(0)
+			let isLetter = (letter >= 'A' and letter <= 'Z') or (letter >= 'a' and letter <= 'z')
+			return isLetter and path.byteAtOrPanic(1) == DriveColonByte
+		end 'hasDrivePrefix'
+	#endif
 
 	public function isRelative() returns bool
 		return not isAbsolute()
@@ -493,10 +487,120 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return FilePath{path: "{parentStr}{name}{newExt}"}
 	end 'changeExtension'
 
-	/// Returns self (paths are normalized on construction).
+	/// The path folded lexically, without asking the filesystem: `.` components are removed, each `..`
+	/// cancels the component before it, repeated separators collapse and a trailing separator is dropped.
+	/// A `..` that would climb above an absolute path's root is dropped; one at the front of a relative
+	/// path is kept. A relative path that folds away entirely is `.`, and the empty path stays empty.
+	///
+	/// Lexical, so a `..` after a symbolic link cancels the link's name rather than stepping out of its target.
 	public function normalize() returns FilePath
-		return self
+		if path.isEmpty() 'emptyPath'
+			return self
+		end 'emptyPath'
+
+		let rootLength = rootByteLength()
+		let rooted = isAbsolute()
+		let rest = try path.addressableBytes().slice(rootLength, path.byteLength()) otherwise panic("FilePath.normalize: the root is a prefix of the path")
+		var kept = PathComponentArray.create()
+
+		for component in String.init(rest).split(pathSeparator) 'eachComponent'
+			if component.isEmpty() or component == CurrentDirectoryComponent 'noStep'
+				continue
+			end 'noStep'
+
+			if component == ParentDirectoryComponent 'climb'
+				if not kept.isEmpty() 'hasAPrevious'
+					let previous = try kept.last() otherwise panic("FilePath.normalize: a non-empty array has a last component")
+
+					if previous != ParentDirectoryComponent 'cancelsAName'
+						_ = try kept.pop() otherwise panic("FilePath.normalize: a non-empty array has a last component")
+						continue
+					end 'cancelsAName'
+				end 'hasAPrevious'
+
+				if rooted 'aboveTheRoot'
+					continue
+				end 'aboveTheRoot'
+			end 'climb'
+
+			kept.push(component)
+		end 'eachComponent'
+
+		var folded = ""
+		folded.append(rootSpelling(rootLength))
+
+		for (iter, component) in kept.withIterator() 'eachKept'
+			if iter.index() > 0 'notFirst'
+				folded.append(pathSeparator)
+			end 'notFirst'
+
+			folded.append(component)
+		end 'eachKept'
+
+		if kept.isEmpty() and not rooted 'foldedAway'
+			folded.append(CurrentDirectoryComponent)
+		end 'foldedAway'
+
+		return FilePath{path: folded}
 	end 'normalize'
+
+	/// How many leading bytes of the path are its root, which `normalize` keeps as it is: `/` (every leading
+	/// separator) on POSIX; on Windows `C:\`, a drive-relative `C:`, a UNC `\\server\share\` or a rooted `\`.
+	function rootByteLength() returns BytePos
+		let len = path.byteLength()
+		#if os(Windows)
+			if hasDrivePrefix() 'drive'
+				if len >= 3 and path.byteAtOrPanic(2) == pathSeparatorByte 'driveRoot'
+					return 3
+				end 'driveRoot'
+
+				return 2
+			end 'drive'
+
+			if len >= 2 and path.byteAtOrPanic(0) == pathSeparatorByte and path.byteAtOrPanic(1) == pathSeparatorByte 'unc'
+				let serverEnd = separatorAtOrEnd(2)
+
+				if serverEnd == len 'serverOnly'
+					return len
+				end 'serverOnly'
+
+				let shareEnd = separatorAtOrEnd(serverEnd + 1)
+				return len if shareEnd == len else shareEnd + 1
+			end 'unc'
+		#endif
+
+		var rootEnd = 0
+
+		while rootEnd < len and path.byteAtOrPanic(rootEnd) == pathSeparatorByte 'leadingSeparators'
+			rootEnd = rootEnd + 1
+		end 'leadingSeparators'
+
+		return rootEnd
+	end 'rootByteLength'
+
+	/// The root's text: every leading POSIX separator collapses to one, and any other root is kept as written.
+	function rootSpelling(rootLength BytePos) returns String
+		#if os(Windows)
+			let rootBytes = try path.addressableBytes().slice(0, rootLength) otherwise panic("FilePath.rootSpelling: the root is a prefix of the path")
+			return String.init(rootBytes)
+		#else
+			return "" if rootLength == 0 else pathSeparator
+		#endif
+	end 'rootSpelling'
+
+	#if os(Windows)
+		/// The offset of the first separator at or after `from`, or the path's length when there is none.
+		function separatorAtOrEnd(from BytePos) returns BytePos
+			let len = path.byteLength()
+			var at = from
+
+			while at < len and path.byteAtOrPanic(at) != pathSeparatorByte 'scan'
+				at = at + 1
+			end 'scan'
+
+			return at
+		end 'separatorAtOrEnd'
+	#endif
 
 	// --- Resolution ---
 

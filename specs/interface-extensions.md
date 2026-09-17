@@ -721,3 +721,39 @@ end 'main'
 ```exitcode
 75
 ```
+
+<!-- test: error.mismatched-extension-end-label -->
+A label written after `end` must repeat the name the extension opened with.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Countable
+	function value() returns Integer
+end 'Countable'
+
+extension Countable
+	function doubled() returns Integer
+		return value() * 2
+	end 'doubled'
+end 'Countables'
+
+type Cell implements Countable
+	let data as Integer
+
+	function value() returns Integer
+		return data
+	end 'value'
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
+end 'Cell'
+
+function main() returns ExitCode
+	let c = Cell.create(21)
+	return c.doubled()
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:12:1: Mismatched end label: expected 'Countable', got 'Countables'
+```

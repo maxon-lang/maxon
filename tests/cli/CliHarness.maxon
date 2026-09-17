@@ -3,7 +3,8 @@
 // printed that let these cases assert WITHOUT keeping a list of commands of their own.
 //
 // ⭐⭐ **WHAT THIS CORPUS PROVES: THE DRIVER'S OWN FACE — `maxon` with no arguments, `maxon help`, and
-// `maxon upgrade`, which answers from where the running binary sits.** Those are driver commands, so they
+// `maxon upgrade`, which answers from where the running binary sits, and what `maxon build` names, skips and
+// reports.** Those are driver commands, so they
 // are gated by spawning the compiler and asserting what it reports (`tests/README.md`), and they cannot be
 // gated in `specs/`: a spec case is a Maxon PROGRAM the harness compiles and runs, which can reach
 // `stdlib/` and nothing else.
@@ -93,6 +94,21 @@ export let CaseDirItself = ""
 // Where the install script is published, which every answer `upgrade` gives about it names.
 export let InstallScriptAddress = "maxon.dev/install"
 
+// The library root the compiler loads beside `stdlib/`, copied with it into an install-shaped stage.
+let RuntimeDirName = "runtime"
+
+// Where a case that must stage OUTSIDE the checkout goes, under the host's temp area, and the variables
+// that name that area. Respelled from the driver's run cache, which reads the same ones.
+let OutsideCheckoutStagingDirName = "maxon-tests-cli"
+let VendorDirName = "vendor"
+
+#if os(Windows)
+	let WindowsTempVariable = "TEMP"
+#else
+	let PosixTempVariable = "TMPDIR"
+	let PosixLastResortTempDir = "/tmp"
+#endif
+
 // A path component that climbs out of the directory it is joined under.
 let ParentComponent = ".."
 
@@ -141,7 +157,7 @@ export typealias WordTally = int(0 to u32.max)
 
 // Spawn `binary` - this checkout's `maxon` unless a case staged a copy - with `arguments` in `environment`,
 // and collect everything it said.
-export function runDriver(arguments ListedWordArray, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit) returns CollectedOutput
+export function runDriver(arguments ListedWordArray, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, workingDirectory FilePath = Directory.currentPath()) returns CollectedOutput
 	var argv = StringArray.create()
 
 	for argument in arguments 'eachArgument'
@@ -151,6 +167,7 @@ export function runDriver(arguments ListedWordArray, binary FilePath = testedCom
 	var config = Configuration.create(Executable.path(binary))
 	config.arguments = argv
 	config.environment = environment
+	config.workingDirectory = workingDirectory
 
 	return try config.run() otherwise (e) 'spawnFailed'
 		panic("CliHarness: the gate could not run - could not spawn {binary.toString()} ({e.displayReason()}). These cases pin what it prints, and a report nothing compares is a claim.")
@@ -212,7 +229,7 @@ function testedCompilerPath() returns FilePath
 	return binary
 end 'testedCompilerPath'
 
-function executableSuffix() returns String
+export function executableSuffix() returns String
 	#if os(Windows)
 		let suffix = ".exe"
 	#else
@@ -258,6 +275,106 @@ export function freshCaseDir(caseDirName String) returns FilePath
 	clearStagedFiles(dir)
 	return dir
 end 'freshCaseDir'
+
+// ⭐ **A CASE DIRECTORY OUTSIDE THE CHECKOUT**, under the host's temp area, for a child that must find
+// NOTHING the checkout holds above its working directory — `vendor/` above all, which the driver walks up
+// to from there. Refused loudly when that premise does not hold, because a `vendor/` above it would let
+// the case pass or fail about a toolchain it was built to be without.
+export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
+	requireStaysInStaging(caseDirName)
+
+	let root = hostTempDir().join(OutsideCheckoutStagingDirName)
+	let dir = root.join(caseDirName)
+
+	if not Directory.create(dir) and not Directory.isDirectory(dir) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {dir.toString()}, where a case stages outside the checkout.")
+	end 'couldNotCreate'
+
+	clearStagedFiles(dir)
+	requireNoVendorAbove(dir)
+	return dir
+end 'freshOutsideCheckoutDir'
+
+// **AN INSTALL-SHAPED COPY OF THE COMPILER UNDER TEST, OUTSIDE THE CHECKOUT**: `<dir>/bin/maxon` beside a
+// full `<dir>/stdlib/` and `<dir>/runtime/`, copied from the checkout, so it compiles real programs and
+// nothing it walks to — from its own image or from a working directory under `<dir>` — is the checkout.
+export function stageInstallOutsideCheckout(caseDirName String) returns FilePath
+	let dir = freshOutsideCheckoutDir(caseDirName)
+
+	for library in [StdlibDirName, RuntimeDirName] 'eachLibrary'
+		copyTree(checkoutDir(library), into: dir.join(library))
+	end 'eachLibrary'
+
+	let binDir = dir.join(ScriptInstallBinDirName)
+
+	if not Directory.create(binDir) and not Directory.isDirectory(binDir) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {binDir.toString()}.")
+	end 'couldNotCreate'
+
+	let staged = binDir.join("{CompilerBaseName}{executableSuffix()}")
+	copyFile(testedCompilerPath(), into: staged, mode: FilePermission.executable)
+	return staged
+end 'stageInstallOutsideCheckout'
+
+function hostTempDir() returns FilePath
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(WindowsTempVariable) otherwise panic("CliHarness: the gate could not run - {WindowsTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
+	#else
+		let spelled = try Process.environmentVariable(PosixTempVariable) otherwise PosixLastResortTempDir
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - the host temp area '{spelled}' is not a spellable path")
+end 'hostTempDir'
+
+function requireNoVendorAbove(dir FilePath)
+	var level = dir
+
+	while true 'eachLevel'
+		let vendor = level.join(VendorDirName)
+
+		if Directory.isDirectory(vendor) 'vendorFound'
+			panic("CliHarness: the gate could not run - {vendor.toString()} sits above {dir.toString()}, which a case stages there precisely to have none of.")
+		end 'vendorFound'
+
+		level = try level.parent() otherwise break
+	end 'eachLevel'
+end 'requireNoVendorAbove'
+
+// A directory of the checkout, from the checkout root.
+function checkoutDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - '{spelled}' is not a spellable path")
+	let resolved = path.resolve(Directory.currentPath())
+
+	if not Directory.isDirectory(resolved) 'notThere'
+		panic("CliHarness: the gate could not run - there is no {resolved.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	end 'notThere'
+
+	return resolved
+end 'checkoutDir'
+
+function copyTree(from FilePath, into FilePath)
+	if not Directory.create(into) and not Directory.isDirectory(into) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {into.toString()}.")
+	end 'couldNotCreate'
+
+	let entries = try Directory.list(from) otherwise panic("CliHarness: the gate could not run - could not list {from.toString()}")
+
+	for entry in entries 'eachEntry'
+		let destination = into.join(entry.filename())
+
+		if Directory.isDirectory(entry) 'aDirectory'
+			copyTree(entry, into: destination)
+			continue
+		end 'aDirectory'
+
+		copyFile(entry, into: destination, mode: FilePermission.normal)
+	end 'eachEntry'
+end 'copyTree'
+
+function copyFile(from FilePath, into FilePath, mode FilePermission)
+	let bytes = try File.readBinary(from) otherwise panic("CliHarness: the gate could not run - could not read {from.toString()} to copy it.")
+	try File.writeBinary(into, content: bytes, mode: mode) otherwise panic("CliHarness: the gate could not run - could not write the copy at {into.toString()}.")
+end 'copyFile'
 
 function requireStaysInStaging(component String)
 	if component.contains(ParentComponent) 'climbsOut'

@@ -19,7 +19,6 @@ let CommentPrefix = "//"
 typealias CodeDigit = int(0 to 9)
 
 export let AsciiZeroByte = 0x30 as Byte
-let AsciiNineByte = 0x39 as Byte
 
 // What the caller asked for. A number-shaped `code` names a NUMBER; anything else is taken as a case
 // name, so a caller holding the generated member does not have to find its digits first.
@@ -37,33 +36,15 @@ type RegistryEntry
 	end 'create'
 end 'RegistryEntry'
 
-export function isAsciiDigit(b Byte) returns bool
-	return b >= AsciiZeroByte and b <= AsciiNineByte
-end 'isAsciiDigit'
-
-function isAllDigits(s String) returns bool
-	if s.isEmpty() 'empty'
-		return false
-	end 'empty'
-
-	for b in s.bytes() 'each'
-		if not isAsciiDigit(b) 'notADigit'
-			return false
-		end 'notADigit'
-	end 'each'
-
-	return true
-end 'isAllDigits'
-
 // `E3014`, `e3014` and `3014` all name the same code; a case name does not.
 function normalizeKey(raw String) returns LookupKey
-	if isAllDigits(raw) 'bareDigits'
+	if isDecimalNumeral(raw) 'bareDigits'
 		return LookupKey.codeNumber("E{raw}")
 	end 'bareDigits'
 
 	let upper = raw.toUpper()
 
-	if upper.startsWith("E") and isAllDigits(sliceBytes(upper.toByteArray(), from: 1, until: upper.byteLength())) 'prefixed'
+	if upper.startsWith("E") and isDecimalNumeral(sliceBytes(upper.toByteArray(), from: 1, until: upper.byteLength())) 'prefixed'
 		return LookupKey.codeNumber(upper)
 	end 'prefixed'
 
@@ -96,7 +77,7 @@ function stageForCode(code String) returns String throws McpError
 	let bytes = code.toByteArray()
 	let digitByte = try bytes.get(1) otherwise throw McpError.notFound
 
-	if not isAsciiDigit(digitByte) 'notADigit'
+	if not isDigit(digitByte) 'notADigit'
 		throw McpError.notFound
 	end 'notADigit'
 

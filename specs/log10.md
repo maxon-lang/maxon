@@ -38,20 +38,10 @@ var b = Math.log10(a)     // 1.0 (10^1 = 10)
 
 ## Tests
 
-⚠ **EVERY `stdout` BLOCK IN THIS FILE IS RETRACTED TO SHORTEST ROUND-TRIP, for the reason
-`specs/sin.md` sets out at length.** The compiler prints the shortest round-trip representation by user
-ruling; `/specs` used a fixed-6-decimal printer.
-
-⭐ **BUT FOUR OF THESE ARE NOT MERE RE-RENDERINGS — THEY ARE THE CARRY-LOSS DEFECT ITSELF, AND THIS FILE
-IS ITS WORST VICTIM.** That printer rounds the fraction to six decimals and never carries into
-the integer part. `log10(100.0)` is `1.9999999999999996`, which a *correct* six-decimal printer renders
-`2.0` — so `1.999999` was never a faithful rendering of that double under any correct formatter. Same for
-`log10(1000.0)` (`2.999999`), `log10(10.0)` (`0.999999`) and `log10(10000.0)` (`3.999999`), whose true
-values are 3, 1 and 4. Those four are exactly why the shortest-round-trip ruling exists: a value that is
-not 2 can no longer print as though it were, and a value that IS 2 can no longer print as `1.999999`.
-
-The remaining two (`log10(2.0)` → `0.30103`, and the int-promotion case, which repeats `log10(100.0)`)
-are ordinary re-renderings.
+⭐ **`log10` IS EXACT AT EXACT POWERS OF TEN.** For `k` in `0..22` — every power of ten a double
+represents exactly — `Math.log10(10^k)` is exactly `k`, so `log10(100.0)` prints `2.0`, never the
+`1.9999999999999996` that dividing `log` by ln 10 rounds to. `log10.powers-of-ten-are-exact` walks the
+whole range; the single-value cases below pin how those answers print.
 
 <!-- test: log10.basic -->
 ```maxon
@@ -65,7 +55,7 @@ end 'main'
 0
 ```
 ```stdout
-1.9999999999999996
+2.0
 ```
 
 <!-- test: log10.one-thousand -->
@@ -80,7 +70,7 @@ end 'main'
 0
 ```
 ```stdout
-2.9999999999999996
+3.0
 ```
 
 <!-- test: log10.ten -->
@@ -95,7 +85,7 @@ end 'main'
 0
 ```
 ```stdout
-0.9999999999999998
+1.0
 ```
 
 <!-- test: log10.one -->
@@ -140,7 +130,7 @@ end 'main'
 0
 ```
 ```stdout
-1.9999999999999996
+2.0
 ```
 
 <!-- test: log10.large-value -->
@@ -155,7 +145,47 @@ end 'main'
 0
 ```
 ```stdout
-3.999999999999999
+4.0
+```
+
+<!-- test: log10.powers-of-ten-are-exact -->
+⭐⭐ **EVERY EXACTLY-REPRESENTABLE POWER OF TEN, NOT A SAMPLE OF THEM.** `1e0` through `1e22` are the
+powers of ten a double holds exactly (`10^23` is not), so for each one there is exactly one right answer
+and it is an integer. They are written as literals rather than computed, so no `pow` rounding can stand
+between the input and the power it names. Each way of missing has its own exit: 1 above `k`, 2 below
+it, 3 neither (a NaN), 4 a table that lost an entry.
+```maxon
+function main() returns ExitCode
+	let powers = [1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1.0e6, 1.0e7, 1.0e8, 1.0e9, 1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15, 1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22]
+	if powers.count() != 23 'everyPower'
+		return 4
+	end 'everyPower'
+
+	for (iter, power) in powers.withIterator() 'eachPower'
+		let k = iter.index() as Real
+		let answer = Math.log10(power)
+
+		if answer > k 'above'
+			print("log10(1e{iter.index()}) = {answer}\n")
+			return 1
+		end 'above'
+
+		if answer < k 'below'
+			print("log10(1e{iter.index()}) = {answer}\n")
+			return 2
+		end 'below'
+
+		if answer != k 'unordered'
+			print("log10(1e{iter.index()}) = {answer}\n")
+			return 3
+		end 'unordered'
+	end 'eachPower'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
 
 ⭐⭐ **compiler-authored, and THIS FILE'S NOTES NEEDED NO RETRACTION ON THE NON-POSITIVE BEHAVIOUR — which
@@ -166,19 +196,8 @@ every non-positive input, exactly as `log.md` and `log2.md` admitted in their ow
 **become true with this change**. On that question the code was wrong about the prose, and for once
 the spec is the party that does not have to move.
 
-⚠ **THAT IS A CLAIM ABOUT TWO SENTENCES AND NOT ABOUT THIS FILE.** The file DID need the
-shortest-round-trip retraction above, and the Notes are still wrong about something else: *"`log10(10.0)`
-returns `1.0`"* four lines up, and the Example's `// 2.0 (10^2 = 100)`, `// 3.0 (10^3 = 1000)` and
-`// 1.0 (10^1 = 10)`, are contradicted by this file's own goldens — `0.9999999999999998`,
-`1.9999999999999996`, `2.9999999999999996`. **Read those four as the MATHEMATICAL values this
-implementation approximates, not as what it returns.** They were wrong before the change and they are
-wrong after it; the ruling never touched them, and nothing in this file should be read as saying its
-prose came out clean.
-
-`log10` is also the one of the three that grew **no guard at all**: it is `log` divided by ln 10, a
-finite non-zero constant, and IEEE 754 division carries both special answers through untouched
-(`-inf / ln10` is `-inf`, `nan / ln10` is `nan`). The values below are inherited, not restated — which
-is why they cannot drift from `log`'s.
+The special answers are `log`'s: a zero of either sign is `-inf` and a negative input is `nan`, so
+`log.md`, `log2.md` and this file agree on every input outside the positive reals.
 
 <!-- test: log10.non-positive-is-ieee -->
 ```maxon
@@ -199,10 +218,7 @@ end 'main'
 nan
 ```
 
-⭐ **compiler-authored, and INHERITED like the three above it.** `log10` grew no `+inf` guard either, for
-the same reason it grew no non-positive one: `+inf / ln10` is `+inf`. The value below is `log`'s answer
-divided by a finite non-zero constant, so it cannot drift from `log.md`'s `positive-infinity` case —
-there is nothing here for it to drift from.
+`+inf` is `+inf`, as `log.md`'s `positive-infinity` case answers for `log`.
 
 <!-- test: log10.positive-infinity -->
 ```maxon

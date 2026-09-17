@@ -1,0 +1,41 @@
+// wasm-build-without-tools-is-an-error-not-a-panic.test.maxon - a wasm32-wasi build that cannot find the
+// `wasm-tools` it wraps the core module with is an ordinary error: exit 1, a message naming what is missing,
+// and no panic.
+//
+// ⛔ **THE COMPILER AND ITS WORKING DIRECTORY ARE BOTH OUTSIDE THE CHECKOUT**, because the checkout holds
+// `vendor/` and the driver walks up to it. An install-shaped copy is used rather than this checkout's
+// binary, so a lookup anchored at the compiler's own image finds no `vendor/` either.
+
+let CaseDirName = "wasm-build-without-tools"
+let WorkDirName = "work"
+let SourceFileName = "main.maxon"
+let OutputStem = "main"
+let WasmExtension = ".wasm"
+let WasmTargetOption = "--target=wasm32-wasi"
+let Source = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+let MissingToolWording = "wasm-tools"
+let PanicWording = "panic"
+
+test 'a wasm build without wasm-tools is an error, not a panic'
+	let binary = stageInstallOutsideCheckout(CaseDirName)
+	let binDir = try binary.parent() otherwise panic("wasm-build-without-tools: the staged compiler sits in a directory")
+	let installDir = try binDir.parent() otherwise panic("wasm-build-without-tools: the staged bin directory sits in the install")
+	let work = installDir.join(WorkDirName)
+
+	if not Directory.create(work) and not Directory.isDirectory(work) 'couldNotCreate'
+		panic("wasm-build-without-tools: the gate could not run - could not create {work.toString()}")
+	end 'couldNotCreate'
+
+	let sourcePath = work.join(SourceFileName)
+	try File.writeText(sourcePath, content: Source) otherwise panic("wasm-build-without-tools: the gate could not run - could not write {sourcePath.toString()}")
+
+	let output = work.join(OutputStem)
+	let build = runDriver([BuildCommandWord, sourcePath.toString(), OutputFlag, output.toString(), WasmTargetOption], binary: binary, workingDirectory: work)
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try Expect.equal(build.exitCode() as AssertedInt, expected: 1, message: "a wasm build with no `wasm-tools` anywhere exited {build.exitCode()}, where an ordinary error exits 1. {said}")
+	try Expect.contains(build.stderr, needle: MissingToolWording, message: "a wasm build with no `wasm-tools` did not name what is missing. {said}")
+	try Expect.isFalse(build.stderr.toLower().contains(PanicWording), message: "a wasm build with no `wasm-tools` panicked; a missing tool is the environment, not a compiler fault. {said}")
+	try Expect.isFalse(File.exists(work.join("{OutputStem}{WasmExtension}")), message: "a wasm build with no `wasm-tools` still wrote a module. {said}")
+end 'a wasm build without wasm-tools is an error, not a panic'

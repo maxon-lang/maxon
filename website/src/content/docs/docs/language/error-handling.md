@@ -100,7 +100,10 @@ Stack trace:
 ```
 
 The trace lists the call chain innermost first, up to 100 frames. The runtime raises the same kind of panic
-for a failed [range check](/docs/language/ranged-typealiases/#range-checks) and a negative shift count.
+for a failed [range check](/docs/language/ranged-typealiases/#range-checks), a negative shift count and `i64.min / -1`
+(`panic: integer overflow`). A recursion that outgrows its thread's stack stops with
+`panic: stack overflow` and the same trace on every native target; on `wasm32-wasi` it is the engine's own
+trap.
 
 Use `panic` for invariant violations and unreachable paths; use `throw` for conditions a caller should
 handle.

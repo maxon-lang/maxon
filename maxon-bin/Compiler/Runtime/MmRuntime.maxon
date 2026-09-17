@@ -1104,25 +1104,28 @@ end 'emitFieldAccumulate'
 
 // ⭐ **A NUL-TERMINATED C STRING IN A FRESH SLAB REGION — the shape every Win32 `A` entry point takes.**
 // One `__slab_alloc` of `len + 1`, one `u8` store per byte, and the terminator is the allocator's own zero
-// (the `+ 1` is what reserves the byte for it).
+// (the `+ 1` is what reserves the byte for it). The region is the caller's, and a caller that runs more than
+// once per process gives it back.
 //
-// ⚠ **IT WAS `SubprocessRuntime.emitSubpLiteralCString` AND MOVED HERE (G1), because it acquired a second
-// caller.** The scheduler reads `MAXON_MAX_PROCS` through the same `GetEnvironmentVariableA` the PATH walk
-// does, and "a literal as a C string" is a property of the Std tier and of Win32's ABI, not of subprocess
-// spawning. It joins the other single-op emit helpers here for `emitConstReturn`'s stated reason.
+// It lives here rather than with any one runtime family because "a literal as a C string" is a property of
+// the Std tier and of Win32's ABI: the scheduler, the poller and the subprocess runner all spell one.
 export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: text.count() + 1, ids: ids)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
-
-	for k in 0 upto text.count() 'each'
-		let ch = try text.get(k) otherwise panic("emitLiteralCString: text.get OOB at {k}")
-		let byteConst = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
-		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: k as ByteOffset, valueId: byteConst, valueType: StdType.u8))
-	end 'each'
-
+	emitStoreLiteralBytes(module, block: block, base: buf, offset: 0, text: text, ids: ids)
 	return buf
 end 'emitLiteralCString'
+
+// `text` stored byte by byte at `base + offset`. No terminator is written: every caller stores into a
+// zeroed region sized one byte past the text.
+export function emitStoreLiteralBytes(module StdModule, block IrBlock, base ValueId, offset ByteOffset, text ByteArray, ids ValueMinter)
+	for k in 0 upto text.count() 'each'
+		let ch = try text.get(k) otherwise panic("emitStoreLiteralBytes: text.get OOB at {k}")
+		let byteConst = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
+		module.appendOp(block, op: StdOp.storeIndirect(base, offset: offset + (k as ByteOffset), valueId: byteConst, valueType: StdType.u8))
+	end 'each'
+end 'emitStoreLiteralBytes'
 
 // ⭐ **A `.data` MACHINE WORD, LOADED / STORED — the two-op pair, stated once.** `globalAddr` is
 // `isPure: true` and freely rematerializable, so a caller that does both around one word pays nothing for
@@ -2343,7 +2346,7 @@ function buildMmFree(module StdModule, model MachineModel)
 	// answered, which is what `__slab_free` requires (it threads the free list through the SLOT's first
 	// word, so an interior pointer would corrupt the slot it landed in and then be handed out as a base).
 	let slot = emitBoxAllocationBase(module, block: entry, headerBase: header, ids: ids)
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(slot)))
+	emitSlabFree(module, block: entry, ptr: slot, ids: ids)
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)

@@ -321,47 +321,44 @@ Stack trace:
 ```
 
 <!-- test: a-hardware-fault-inside-a-spliced-body-names-the-callee -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
 ⭐ **A FAULT HAS NO PANIC BLOCK TO TAG — ONLY AN ADDRESS.** `specs/safety.md`'s
-`integer-overflow-fault-from-int-min-over-minus-one`, with the dividing function given a store loop
-so it is no leaf and called exactly once, so it is spliced. `i64.min / -1` raises `#DE` from an
-`idiv` that now sits in `main`'s code; the fault handler has nothing but the faulting address, and the
-range record covering it is what names `divide`. The stderr is the neighbouring case's, frame for frame.
+`divide-by-zero-fault-through-a-resized-array-slot`, with the dividing function given a store loop
+so it is no leaf and called exactly once, so it is spliced. The zero a `resize` exposed reaches a bare
+`idiv` that now sits in `main`'s code and raises `#DE`; the fault handler has nothing but the faulting
+address, and the range record covering it is what names `divide`.
 
-`x64-linux` is excluded for that case's measured reason: its kernel reports `FPE_INTDIV` for this
-fault too, so the wording it prints is the divide-by-zero one.
+The arm64 lanes and wasm32-wasi are excluded for that case's reason: their divide does not raise a fault
+the handler converts.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias NegativeOne = int(-1 to -1)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
 
-function ident(v Integer) returns Integer
-	return v
-end 'ident'
-
-function divide(scratch IntArray, d NegativeOne) returns Integer
+function divide(scratch IntArray) returns Integer
 	for i in 0 upto scratch.count() 'fill'
 		try scratch.set(i, value: i) otherwise panic("divide: i < scratch.count()")
 	end 'fill'
 
-	return (dividend / d) as Integer
+	var xs = NonZeroArray.create()
+	xs.resize(1)
+	let d = try xs.get(0) otherwise 1
+	return 100 / d
 end 'divide'
 
 function main() returns ExitCode
-	dividend = ident(i64.min)
-	let d = ident(-1)
 	var scratch = IntArray.create()
 	scratch.resize(4)
-	return divide(scratch, d: d as NegativeOne) as ExitCode
+	return divide(scratch) as ExitCode
 end 'main'
-var dividend = 0
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic: integer overflow
+panic: integer divide by zero
 Stack trace:
   in divide
   in main

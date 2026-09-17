@@ -1,0 +1,108 @@
+// A manifest's dotted `version`, checked against the version field of the format it is stamped into.
+//
+// ⭐ **CHECKED ONCE, BY THE DRIVER, BEFORE THE BUILD.** A writer is handed only components its format's
+// field holds, so no writer decides what a malformed or oversized component means — stamping one as 0, or
+// letting it overflow into its neighbour, would put a version in the binary that the author never wrote.
+
+let VersionSeparator = "."
+let DecimalBase = 10
+
+// The widest component any format here holds: Mach-O's 24-bit first field.
+export typealias VersionComponent = int(0 to 16777215)
+export typealias VersionComponentArray = Array with VersionComponent
+
+// How many components a version has, or where one sits in it (counted from 1, as a reader counts).
+export typealias VersionComponentCount = int(0 to u64.max)
+
+// A component's value while its digits are read. One digit past any field's limit still fits, and reading
+// stops there.
+typealias VersionNumeral = int(0 to u32.max)
+
+// One format's version field: its name as a reader knows it, and the largest value each component holds,
+// in order. The number of limits is the number of components the field has.
+export type VersionFieldLayout
+	export let name as String
+	export let limits as VersionComponentArray
+
+	export static function create(name String, limits VersionComponentArray) returns VersionFieldLayout
+		return Self{name: name, limits: limits}
+	end 'create'
+end 'VersionFieldLayout'
+
+// Where a target's binary carries a product version. A Linux ELF and a wasm component carry none.
+union VersionStampSite
+	field(layout VersionFieldLayout)
+	noField
+end 'VersionStampSite'
+
+function versionStampSiteOf(target Target) returns VersionStampSite
+	return match target.os 'os'
+		windows gives VersionStampSite.field(peVersionFieldLayout())
+		macos gives VersionStampSite.field(machOSourceVersionLayout())
+		linux or
+			wasi gives VersionStampSite.noField
+	end 'os'
+end 'versionStampSiteOf'
+
+export union ProductVersionError implements Error
+	notANumber(component String)
+	doesNotFit(component String, position VersionComponentCount, limit VersionComponent, fieldName String)
+	tooManyComponents(count VersionComponentCount, held VersionComponentCount, fieldName String)
+end 'ProductVersionError'
+
+// The components `dotted` stamps into `target`'s binary: none for an unversioned build or a format with no
+// version field. A component that is not a number is refused on every target, because it is not a version
+// whether or not this target stamps one.
+export function productVersionFor(dotted String, target Target) returns VersionComponentArray throws ProductVersionError
+	if dotted.isEmpty() 'unversioned'
+		return VersionComponentArray.create()
+	end 'unversioned'
+
+	let components = dotted.split(VersionSeparator)
+
+	for component in components 'eachComponent'
+		if not isDecimalNumeral(component) 'notANumber'
+			throw ProductVersionError.notANumber(component)
+		end 'notANumber'
+	end 'eachComponent'
+
+	return match versionStampSiteOf(target) 'site'
+		field(layout) gives try componentsFitting(components, layout: layout)
+		noField gives VersionComponentArray.create()
+	end 'site'
+end 'productVersionFor'
+
+// The completion of `ProductVersionError`'s sentence "build.maxon's `version` …".
+export function productVersionProblem(error ProductVersionError) returns String
+	return match error 'problem'
+		notANumber(component) gives "component `{component}` is not a number"
+		doesNotFit(component, position, limit, fieldName) gives "component `{component}` does not fit {fieldName}, whose component {position} holds 0 to {limit}"
+		tooManyComponents(count, held, fieldName) gives "has {count} components, and {fieldName} holds {held}"
+	end 'problem'
+end 'productVersionProblem'
+
+// Every component is a decimal numeral by now.
+function componentsFitting(components StringArray, layout VersionFieldLayout) returns VersionComponentArray throws ProductVersionError
+	if components.count() > layout.limits.count() 'tooMany'
+		throw ProductVersionError.tooManyComponents(components.count() as VersionComponentCount, held: layout.limits.count() as VersionComponentCount, fieldName: layout.name)
+	end 'tooMany'
+
+	var fitted = VersionComponentArray.create()
+
+	for (iter, component) in components.withIterator() 'eachComponent'
+		let limit = try layout.limits.get(iter.index()) otherwise panic("componentsFitting: a component past the field's last was refused above")
+		var value = 0 as VersionNumeral
+
+		for b in component.toByteArray() 'eachDigit'
+			value = value * DecimalBase + ((b - '0') as VersionNumeral)
+
+			if value > (limit as VersionNumeral) 'overflows'
+				throw ProductVersionError.doesNotFit(component, position: (iter.index() + 1) as VersionComponentCount, limit: limit, fieldName: layout.name)
+			end 'overflows'
+		end 'eachDigit'
+
+		fitted.push(value as VersionComponent)
+	end 'eachComponent'
+
+	return fitted
+end 'componentsFitting'

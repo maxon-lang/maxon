@@ -115,7 +115,9 @@ export let Arm64LinuxSigactionFlags = 0x18000004
 // ⭐⭐ **WHERE A SIGNAL HANDLER FINDS THE INTERRUPTED REGISTERS.** `ucontext_t.uc_mcontext` is an INLINE
 // `struct sigcontext` here rather than a pointer (which is what Darwin has), so these are offsets into the
 // ucontext the handler is handed. MEASURED by a C probe on this lane: `uc_mcontext` 176, `regs[0]` 184,
-// `regs[30]` 424, `sp` 432, `pc` 440, `pstate` 448, `sizeof(ucontext_t)` 4560.
+// `regs[30]` 424, `sp` 432, `pc` 440, `pstate` 448, `sizeof(ucontext_t)` 4560. The frame pointer is
+// `regs[29]`, one word below `regs[30]`.
+export let Arm64LinuxUcontextOffFp = 416 as MachineWord
 export let Arm64LinuxUcontextOffLr = 424 as MachineWord
 export let Arm64LinuxUcontextOffSp = 432 as MachineWord
 export let Arm64LinuxUcontextOffPc = 440 as MachineWord
@@ -222,7 +224,7 @@ let Arm64LinuxSyscallSetsid = 157
 let Arm64LinuxSyscallClone = 220
 let Arm64LinuxSyscallExecve = 221
 let Arm64LinuxSyscallWait4 = 260
-let Arm64LinuxSyscallChdir = 49
+let Arm64LinuxSyscallFchdir = 50
 
 // --- The SOCKET band's syscalls ---
 //
@@ -2397,7 +2399,7 @@ end 'buildArm64LinuxEnvReadChunk'
 // CONTRACT.** `posix_spawnp` reports a failed exec to the CALLER; a hand-built fork cannot, because by the
 // time `execve` fails the failure is in another process. So a `pipe2(O_CLOEXEC)` is opened before the clone
 // and the parent READS it: a successful exec closes the child's end and the read sees EOF, while a failed one
-// writes the `-errno` down it. Without this the Std tier's own spawn-failure test — a zero `hProcess`, which
+// writes its `-errno` and the step it failed in down it (`GtRuntime.SpawnChildReportOffset`). Without this the Std tier's own spawn-failure test — a zero `hProcess`, which
 // `Subprocess.run` turns into `SubprocessError.spawnFailed` — could never fire on this lane, and a
 // `Subprocess.run(Executable.path("/nope"))` that throws on the other two targets would answer 127 here.
 //
@@ -2409,6 +2411,11 @@ end 'buildArm64LinuxEnvReadChunk'
 // worker-M `clone` puts two Ms inside this chunk at once: BOTH ends of the status pipe are `O_CLOEXEC`, so
 // a concurrent child's own `execve` drops its inherited copy and the reading parent still sees EOF. A
 // runtime chunk parks no green thread, so neither M's sequence is interrupted midway.
+//
+// ⭐⭐ **THE WORKING DIRECTORY IS OPENED BY THE PARENT, BEFORE ANYTHING IS LAUNCHED** — the x86-64 lane's rule
+// (`X64LinuxRuntime.buildX64LinuxSpawnChunk`), for its reason: a child's `chdir` fails with the same `ENOENT`
+// its `execve` does, so only a failure the parent meets itself can be reported as
+// `SpawnPreparation.workingDirectory`.
 //
 // ⚠ **PATH RESOLUTION IS THE Std TIER's AND IS NOT REDONE HERE.** `execve` takes a path where
 // `posix_spawnp` searches `PATH`, and that search already happened one tier up: `Executable.name(n)` goes
@@ -2442,12 +2449,17 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotStatusWord = 10 as StackSize
 	let SlotStatusCount = 11 as StackSize
 	let SlotEnv = 12 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(13)
+	let SlotCwdFd = 13 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(14)
 
+	let cwdReady = asm.newLabel()
+	let cwdFailed = asm.newLabel()
+	let pipeFailed = asm.newLabel()
 	let piped = asm.newLabel()
 	let cloneFailed = asm.newLabel()
 	let spawnFailed = asm.newLabel()
 	let childPath = asm.newLabel()
+	let childFailed = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
 
@@ -2458,11 +2470,38 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotProcInfo)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x5, slot: SlotEnv)
 
+	// The working directory, opened close-on-exec so no launched program inherits the descriptor. A NULL
+	// `lpCurrentDirectory` opens nothing.
+	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: cwdReady)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: Arm64LinuxOpenDirectoryFlags or LinuxOpenCloseOnExec)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
+	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: cwdFailed)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotCwdFd)
+
+	asm.placeLabel(cwdReady)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotStatusFds)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxOpenCloseOnExec)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPipe2)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: piped)
+	arm64EmitBranchTo(asm, label: pipeFailed)
+
+	// The working directory could not be opened: nothing was launched, and the record says which step failed.
+	asm.placeLabel(cwdFailed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: SpawnFailedPreparationOffset as MachineWord)
+	arm64EmitBranchTo(asm, label: spawnFailed)
+
+	// The status pipe could not be made: give back the working directory's descriptor, carrying the reason
+	// across the close.
+	asm.placeLabel(pipeFailed)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWord)
+	emitArm64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWord)
 	arm64EmitBranchTo(asm, label: spawnFailed)
 
 	asm.placeLabel(piped)
@@ -2482,28 +2521,37 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: cloneFailed)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: childPath)
 
-	// PARENT. Drop the write end so the read below can see EOF, then take the child's verdict.
+	// PARENT. Drop the write end so the read below can see EOF, then take the child's verdict. The child holds its
+	// own copy of the working directory's descriptor, so the parent's goes now.
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
+	emitArm64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWrite)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusRead)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatusWord)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpillSlotBytes as MachineWord)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: SpawnChildReportOffset as Imm32)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpawnChildReportBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRead)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusCount)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusRead)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusCount)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: spawned)
 
-	// The child could not exec. Reap it — it is already exiting, so this cannot block — publish the reason it
-	// sent, and answer the null handle that IS this op's failure report.
+	// ⛔ **ONLY A POSITIVE COUNT MEANS THE CHILD SPOKE.** 0 is the EOF a successful `execve` produces through
+	// the close-on-exec pipe; a NEGATIVE is the read's own failure, and treating either as a verdict
+	// would publish a record word the child never wrote as the spawn's errno.
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusCount)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: spawned)
+
+	// The child could not launch. Reap it — it is already exiting, so this cannot block — publish the reason it
+	// sent, and answer the null handle that IS this op's failure report. The step it sent is already in place.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatusFds)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxReapUntilItExits)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixReapDiscardsRusage)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallWait4)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWord)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: SpawnChildReportOffset as MachineWord)
 	arm64EmitBranchTo(asm, label: spawnFailed)
 
 	// The clone itself failed: close both ends of a pipe no child will ever hold, then report as above. The
@@ -2514,6 +2562,7 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWrite)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
+	emitArm64LinuxCloseSpawnCwd(asm, cwdSlot: SlotCwd, cwdFdSlot: SlotCwdFd)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWord)
 
 	// spawnFailed: x0 holds the `-errno` of whichever call failed. Publish it where `mrt_host_last_error`
@@ -2552,12 +2601,18 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: noSession)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallSetsid)
 
-	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of a `chdir`.
+	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of an `fchdir`. One that fails —
+	// a directory the parent could open but may not enter — is reported down the status pipe as the working
+	// directory's step, like a failed `execve` otherwise.
 	let inheritCwd = asm.newLabel()
+	let cwdEnterFailed = asm.newLabel()
 	asm.placeLabel(noSession)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwd)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: inheritCwd)
-	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallChdir)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwdFd)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallFchdir)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: cwdEnterFailed)
 
 	// `execve(argv[0], argv, envp)`. `envp` is the caller's own vector when it built one, and otherwise the
 	// vector the entry stub captured — which is what a NULL `lpEnvironment` means, the parent's environment,
@@ -2573,16 +2628,25 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x16, byteOffset: 0)
 	asm.placeLabel(envChosen)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallExecve)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpawnPreparation.none.rawValue as MachineWord)
+	arm64EmitBranchTo(asm, label: childFailed)
 
-	// The exec failed. Send the parent the `-errno` the kernel just answered and stop.
+	asm.placeLabel(cwdEnterFailed)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpawnPreparation.workingDirectory.rawValue as MachineWord)
+
+	// x0 = the `-errno` the kernel just answered, x2 = the step it failed in: send the parent both as its record
+	// reads them (`SpawnChildReportOffset`) and stop.
 	//
 	// ⛔ **`exit` (93) AND NOT `exit_group` (94).** They are one call apart in the table and a world apart in
 	// meaning: `exit_group` ends every thread of the process, and a child that shares nothing with its parent
 	// still shares that call's NAME with the one the entry stub uses to end the WHOLE program.
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWord)
+	asm.placeLabel(childFailed)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotProcInfo)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: SpawnChildReportOffset as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: SpawnFailedPreparationOffset as MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotStatusWrite)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStatusWord)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpillSlotBytes as MachineWord)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: SpawnChildReportOffset as Imm32)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: SpawnChildReportBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallWrite)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxExecFailedExitCode)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallExit)
@@ -2599,6 +2663,17 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(HostSpawnName)
 end 'buildArm64LinuxSpawnChunk'
+
+// Close the spawn's working-directory descriptor, when it opened one — the parent's half of the rule
+// `buildArm64LinuxSpawnChunk`'s header states. Clobbers x0.
+function emitArm64LinuxCloseSpawnCwd(asm Arm64RuntimeAsm, cwdSlot StackSize, cwdFdSlot StackSize)
+	let noDescriptor = asm.newLabel()
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: cwdSlot)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noDescriptor)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: cwdFdSlot)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
+	asm.placeLabel(noDescriptor)
+end 'emitArm64LinuxCloseSpawnCwd'
 
 // `dup3(startup->handle, childDescriptor, 0)` — one of the three the child above emits, and the whole of what
 // `posix_spawn_file_actions_adddup2` does on the Darwin lane. See `LinuxDup3NoFlags` for the zero, for why

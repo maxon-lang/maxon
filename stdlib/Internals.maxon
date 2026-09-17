@@ -4044,8 +4044,7 @@ function __managed_mem_grow(self MachineWord, newCap BufferCoordinate) returns M
 	// Buffer bytes for the new capacity — packed-aware via the shared helper. A
 	// sub-byte-packed element_size (< 0) would otherwise size `newCap * (negative)`
 	// wrong and every later packed write past byte 0 would corrupt the heap; this
-	// grow is on the insert/append path for a mutated packed array (via
-	// `ensureCapacity`). Same formula as create / cow_check / slice.
+	// grow is on the path of a mutated packed array. Same formula as create / cow_check / slice.
 	let newSize = __managed_mem_buffer_byte_len(newCap, elemSize: elemSize)
 	let oldBuf = __Internals.loadIndirect(self)
 	let newBuf = __Internals.mmRealloc(oldBuf, newSize: newSize)
@@ -4320,92 +4319,6 @@ function __managed_mem_shift_left(self MachineWord, idx BufferCoordinate, count 
 
 	return 0
 end '__managed_mem_shift_left'
-
-// append(self, other) — grow self if needed so capacity >= self.length +
-// other.length, then memcpy other's first (other.length * elemSize) bytes
-// onto the end of self.buffer. Element-size compatibility is the caller's
-// responsibility (we use self.element_size for byte arithmetic on both
-// sides). Non-throwing.
-function __managed_mem_append(self MachineWord, other MachineWord) returns MachineWord
-	let selfLen = __Internals.loadIndirect(self + MM_OFFSET_LENGTH)
-	let otherLen = __Internals.loadIndirect(other + MM_OFFSET_LENGTH)
-	let newLength = selfLen + otherLen
-	let capacity = __Internals.loadIndirect(self + MM_OFFSET_CAPACITY)
-
-	if capacity < newLength 'doGrow'
-		// Geometric growth: request max(newLength, capacity*2) so a series
-		// of `append` calls runs in amortized O(1) per element. Without
-		// this, every append reallocates the full buffer at exactly the
-		// new length — turning loops like `for x in items: s.append(x)`
-		// into O(N²). Start at 8 elements when growing from empty so a
-		// few-element accumulation doesn't bounce-grow.
-		var requested = newLength
-		let doubled = capacity * 2
-
-		if doubled > requested 'preferDoubled'
-			requested = doubled
-		end 'preferDoubled'
-
-		if requested < 8 'atLeast8'
-			requested = 8
-		end 'atLeast8'
-
-		// grow throws invalidCapacity, but requested > capacity here so the
-		// throw path is unreachable. We discard the tuple result; the error
-		// wire is also discarded because no try/otherwise surrounds the call.
-		_ = try __managed_mem_grow(self, newCap: requested) otherwise 0
-	end 'doGrow'
-
-	let elemSize = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_SIZE)
-	let selfBuf = __Internals.loadIndirect(self)
-	let otherBuf = __Internals.loadIndirect(other)
-
-	// element_size < 0 is the sub-byte-packed sentinel: the byte-scaled memcpy below
-	// does not apply, so copy `other`'s otherLen fields onto self's end one field at a
-	// time (self field selfLen+j <- other field j). The grow above (packed-aware)
-	// already sized self's buffer for newLength fields. Sub-byte-packed elements are
-	// primitives (never managed pointers), so the managed-element retain/stamp path
-	// does not apply.
-	if __managed_mem_is_packed(elemSize) 'packed'
-		var j = 0
-
-		while j < otherLen 'copyBits'
-			let bit = __managed_mem_read_packed(otherBuf, idx: j, elemSize: elemSize)
-			__managed_mem_write_packed(selfBuf, idx: selfLen + j, elemSize: elemSize, value: bit)
-			j = j + 1
-		end 'copyBits'
-
-		__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: newLength)
-		return 0
-	end 'packed'
-
-	let dst = selfBuf + selfLen * elemSize
-	let nBytes = otherLen * elemSize
-	__Internals.memcpy(dst, src: otherBuf, size: nBytes)
-
-	// Managed-element append SHARES the copied elements with `other`: take +1 on
-	// each copied slot (released once by each record's teardown walk) and
-	// propagate the element_destroy stamp onto a destination that doesn't carry
-	// it yet (an `Array.create()`-fresh accumulator) so the destination's walk
-	// actually fires. Either record may carry the stamp — read both. Without
-	// this, freeing the source array freed the appended elements out from under
-	// the destination (the append-managed-elements source-freed UAF).
-	let selfDestroy = __Internals.loadIndirect(self + MM_OFFSET_ELEMENT_DESTROY)
-	let otherDestroy = __Internals.loadIndirect(other + MM_OFFSET_ELEMENT_DESTROY)
-	var elementDestroy = selfDestroy
-
-	if elementDestroy == 0 'inheritStamp'
-		elementDestroy = otherDestroy
-		__Internals.storeIndirect(self + MM_OFFSET_ELEMENT_DESTROY, value: elementDestroy)
-	end 'inheritStamp'
-
-	if elementDestroy != 0 'managedElems'
-		__managed_mem_retain_range(dst, count: otherLen, elemSize: elemSize)
-	end 'managedElems'
-
-	__Internals.storeIndirect(self + MM_OFFSET_LENGTH, value: newLength)
-	return 0
-end '__managed_mem_append'
 
 // slice(self, start, end) — allocate a fresh root __ManagedMemory header
 // plus a fresh buffer sized for (end - start) elements, copy the slice's

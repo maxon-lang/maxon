@@ -7,6 +7,7 @@ public enum HttpError implements Error
 	sendFailed
 	recvFailed
 	invalidResponse
+	unsupportedScheme
 end 'HttpError'
 
 /// HTTP request methods
@@ -154,12 +155,21 @@ public type HttpResponse
 	end 'header'
 end 'HttpResponse'
 
+// The one scheme this client speaks. `URL.parse` lowercases a scheme, so the comparison is exact.
+let HttpScheme = "http"
+
 /// Stateless HTTP/1.1 client. All methods are static.
 /// HTTP only (no TLS). Uses Connection: close for simple response reading.
 public type HttpClient
 	/// Send an HTTP request and return the response.
 	public static function send(request HttpRequest) returns HttpResponse throws HttpError
 		let url = request.url()
+
+		// There is no TLS here, so an `https` request sent as plaintext would leak what it meant to protect.
+		if url.scheme() != HttpScheme 'notPlainHttp'
+			throw HttpError.unsupportedScheme
+		end 'notPlainHttp'
+
 		let host = try url.host() otherwise 'noHost'
 			throw HttpError.invalidUrl
 		end 'noHost'
@@ -179,11 +189,6 @@ public type HttpClient
 			throw HttpError.sendFailed
 		end 'sendFail'
 
-		#if testing(true)
-			// to ensure test output is deterministic we sleep briefly to allow the server to send the full response before we start receiving. In production this is not needed and would just add unnecessary latency.
-			sleep(100)
-		#endif
-
 		// Receive the response until the server closes the connection.
 		//
 		// `connectionClosed` is the ONLY clean end of the body — the server signalling it has sent
@@ -193,11 +198,6 @@ public type HttpClient
 		// handed to the parser as if it were whole. A throttling or failing server — exactly what a
 		// busy test suite provokes — then produces a garbage response instead of an error the caller
 		// can see.
-		//
-		// The chunks accumulate into a `StringBuilder`, never into a `String`: a `String` owns exactly
-		// the bytes it holds, so appending a chunk to one reallocates and recopies the whole response
-		// received so far (see String.maxon). A 1 MB body arriving in 4 KB chunks would copy half a
-		// gigabyte.
 		var responseData = StringBuilder.create()
 		var receiving = true
 

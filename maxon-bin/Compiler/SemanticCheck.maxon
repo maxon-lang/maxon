@@ -5434,13 +5434,11 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 		// rather than a missing one — and the day a stdlib module wraps `__Builtins.runProcess`, this test becomes
 		// `is this entry a process spawn?` rather than `is it in the subprocess band?`.
 		//
-		// ⚠ **THE MESSAGE CARRIES NO SPAN, AND THAT IS THE PINNED WIRE FORMAT RATHER THAN AN OVERSIGHT.**
-		// `specs/subprocess-unsupported.md`'s `maxoncstderr` block is the language definition for this
-		// diagnostic and holds one bare line, so it renders through the `line == 0` arm of
-		// `Diagnostic.render` — the arm E3001/E3002 use. The CHECK still fires per user call site, which
-		// is what the spec's sentence above requires; only the rendering has no anchor to print.
+		// It is positioned at the call exactly as E3104 is, because it fires once per user call site and a
+		// program with several has to be told which one each report is about.
 		if isSubprocessRuntimeCallee(entry) and not targetCanHostSubprocess(project.target) 'noProcessSpawnPrimitive'
-			reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi)."))
+			let callRange = project.opRanges.get(opIndex)
+			reportPositioned(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 			return
 		end 'noProcessSpawnPrimitive'
 

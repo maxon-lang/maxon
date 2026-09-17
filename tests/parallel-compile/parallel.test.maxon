@@ -88,6 +88,8 @@ let CarriageReturn = "\r"
 let LineFeed = "\n"
 let PortablePathSeparator = "/"
 let StagingTreeToken = "<TREE>"
+let ElapsedOpener = " (compiled in "
+let ElapsedToken = "<ELAPSED>"
 
 // A processor count as the scheduler resolves one. Its floor is carried in by a guard rather than by the
 // runtime's clamp, which nothing here proves.
@@ -276,13 +278,35 @@ end 'declaredFunctionCount'
 // COMPARING TWO RUNS
 // ============================================================================================
 
-// A run's stderr as two runs are compared: CR folded, separators folded, and the staging path replaced
-// by `<TREE>` so a message that names the source stays readable in a failure report.
+// A run's stderr as two runs are compared: CR folded, separators folded, the staging path replaced by
+// `<TREE>` so a message that names the source stays readable in a failure report, and the build's
+// wall-clock figure replaced by `<ELAPSED>` — it is the one line two identical compiles may not agree on.
 export function normalizedStderr(run CollectedOutput, staged FilePath) returns String
 	let folded = run.stderr.replace(CarriageReturn, with: "").replace(FilePath.separator(), with: PortablePathSeparator)
 	let tree = staged.toString().replace(FilePath.separator(), with: PortablePathSeparator)
+	let lines = folded.replace(tree, with: StagingTreeToken).split(LineFeed)
 
-	return folded.replace(tree, with: StagingTreeToken)
+	var normalized = ""
+	var first = true
+
+	for line in lines 'eachLine'
+		if not first 'separated'
+			normalized.append(LineFeed)
+		end 'separated'
+
+		first = false
+
+		if line.contains(ElapsedOpener) 'timed'
+			let pieces = line.split(ElapsedOpener)
+			let beforeElapsed = try pieces.get(0) otherwise panic("a line holding the opener splits into at least one piece")
+
+			normalized.append("{beforeElapsed}{ElapsedOpener}{ElapsedToken})")
+		end 'timed' else 'untimed'
+			normalized.append(line)
+		end 'untimed'
+	end 'eachLine'
+
+	return normalized
 end 'normalizedStderr'
 
 // Two emitted executables, byte for byte. The count is asked first and asked to be non-zero: two empty

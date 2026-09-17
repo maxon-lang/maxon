@@ -31,7 +31,7 @@ typealias JsonFloat = float(f64.min to f64.max)
 typealias IndentDepth = int(0 to u64.max)
 
 /// Errors emitted by `Json.parse`.
-enum JsonError implements Error
+public enum JsonError implements Error
 	unexpectedChar
 	unexpectedEof
 	invalidEscape
@@ -41,7 +41,7 @@ enum JsonError implements Error
 end 'JsonError'
 
 /// Errors emitted by typed accessors.
-enum JsonAccessError implements Error
+public enum JsonAccessError implements Error
 	notObject
 	notArray
 	missingKey
@@ -117,8 +117,7 @@ typealias JsonNodeArray = Array with JsonNode
 // key/child arrays for `JsonNode.objectNode(...)`.
 public typealias StringArray = Array with String
 
-/// Owns the parsed JSON tree. Cheap to pass by reference; clone via `clone()`
-/// if independent mutation is needed.
+/// Owns the parsed JSON tree. Passed and assigned by reference, so every holder shares one tree.
 // Field/method visibility in Maxon is type-scoped, not file-scoped. The
 // emitter functions (`writeNode` etc.) and the parser (`JsonParser`) live
 // outside `JsonDoc` but need to read `root`/`nodes` and call `get`/`add` —
@@ -248,6 +247,14 @@ public type Json
 		writeNode(doc, id: doc.root, out: out)
 		return String.from(out)
 	end 'stringify'
+
+	/// `text` as one JSON string value: quoted, with `"`, `\` and every control byte escaped — the
+	/// spelling `stringify` gives a string node, for output written without building a `JsonDoc`.
+	public static function quote(text String) returns String
+		var out = ByteArray.create()
+		writeJsonString(text, out: out)
+		return String.from(out)
+	end 'quote'
 
 	/// Serialize the subtree rooted at `root` to indented RFC 8259 output (two
 	/// spaces per level). Same value rules as `stringify` — only the whitespace

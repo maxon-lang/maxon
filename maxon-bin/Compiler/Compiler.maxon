@@ -36,7 +36,7 @@
 //
 // A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
 // `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, productVersion String = "", defines DefineArray = DefineArray.create()) returns FilePath throws CompileError
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns FilePath throws CompileError
 	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, productVersion: productVersion, defines: defines)
 
 	if emitIr 'emitIr'
@@ -113,7 +113,7 @@ end 'CompileProduct'
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
 // `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion String = "", defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -159,7 +159,7 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion String, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
@@ -185,9 +185,16 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
 	// header is about.
 	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
-	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
+	let outputPath = try resolveOutputPath(project, inputPaths: inputPaths, outputOverride: outputOverride)
 	recordCoverageDataPath(project, outputPath: outputPath)
 	try ensureOutputDirectory(project, outputPath: outputPath)
+
+	// Before the pipeline, so a missing tool refuses the build without compiling it first.
+	let writerTools = try locateExecutableWriterTools(project.target) otherwise (e) 'writerToolsMissing'
+		reportDiagnostic(project, diagnostic: wasmComponentDiagnostic(e))
+		try refuseCompile(project)
+	end 'writerToolsMissing'
+
 	let rebuildsItself = outputIsRunningImage(outputPath)
 
 	if not rebuildsItself 'discardAheadOfThePipeline'
@@ -206,7 +213,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	end 'vacateForTheWrite'
 
 	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
-	writeExecutable(codeResult, target: project.target, outputPath: outputPath, productVersion: project.productVersion)
+	try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: outputPath, tools: writerTools, rebuildsItself: rebuildsItself)
 
 	// ⭐⭐ **AN INSTRUMENTED IMAGE IS PUBLISHED TWICE, AND THE SECOND PASS IS WHAT GIVES ITS `.mxcov` THE SAME
 	// BUILD-ID THE SIDECAR RECORDS.** The id is a plain fold of the `.text` a driver reads back OUT OF THE
@@ -220,7 +227,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// first byte for byte apart from those eight.
 	if project.coverage 'stampTheCounterImage'
 		stampCoverageImage(project, codeResult: codeResult)
-		writeExecutable(codeResult, target: project.target, outputPath: outputPath, productVersion: project.productVersion)
+		try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: outputPath, tools: writerTools, rebuildsItself: rebuildsItself)
 	end 'stampTheCounterImage'
 
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
@@ -282,7 +289,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// Read ONCE, for the three readers below — `--metrics`, the log line and the product. It is one
 	// fact about this build, and three calls are three places a later change could make it two.
-	let codeBytes = codeResult.code.count()
+	let codeBytes = codeResult.emittedCodeBytes()
 
 	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
 	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
@@ -550,6 +557,21 @@ end 'ensureOutputDirectory'
 // exact reading of whether the writer produced a file. It exists because the four backend writers
 // report a failed `File.writeBinary` by LOGGING it and returning, which would otherwise leave `compile`
 // free to announce "Wrote N bytes" and exit 0 while nothing has been written.
+function writeExecutableOrRefuse(project Project, codeResult CodeResult, outputPath FilePath, tools ExecutableWriterTools, rebuildsItself bool) throws CompileError
+	try writeExecutable(codeResult, target: project.target, outputPath: outputPath, productVersion: project.productVersion, tools: tools) otherwise (e) 'writeFailed'
+		if rebuildsItself 'putTheCompilerBack'
+			restoreVacatedImage(outputPath)
+		end 'putTheCompilerBack'
+
+		reportDiagnostic(project, diagnostic: wasmComponentDiagnostic(e))
+		try refuseCompile(project)
+	end 'writeFailed'
+end 'writeExecutableOrRefuse'
+
+function wasmComponentDiagnostic(error WasmComponentError) returns Diagnostic
+	return Diagnostic.create(ErrorCode.binaryWasmComponentNotProduced, message: wasmComponentProblem(error))
+end 'wasmComponentDiagnostic'
+
 function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
 	if File.exists(outputPath) 'written'
 		return
@@ -570,6 +592,20 @@ function refuseCompile(project Project) throws CompileError
 	printDiagnostics(project)
 	throw CompileError.compileError
 end 'refuseCompile'
+
+// What a compile that writes nothing produced. Either way `project.diagnostics` holds what it reported.
+module union CheckedCompile
+	compiled(codeResult CodeResult)
+	refused
+end 'CheckedCompile'
+
+// ⚠ **A REFUSED COMPILE IS AN ANSWER HERE, NOT A FAILURE TO PROPAGATE.** The callers are an editor's buffer
+// under edit and a tool asked to check a file, both of which want what was wrong; `compileToCodeResult`
+// reports and throws by design, and both of its paths leave `project.diagnostics` standing.
+module function checkWithoutWriting(project Project) returns CheckedCompile
+	let codeResult = try compileToCodeResult(project) otherwise return CheckedCompile.refused
+	return CheckedCompile.compiled(codeResult)
+end 'checkWithoutWriting'
 
 // The Target IR text of a finished compile: what `--emit-ir` writes and `maxon/generateIR` answers. What it
 // shows and withholds is stated at the render in `compileMeasured`.
@@ -629,9 +665,8 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 	project.stagedSourceOrigins = stagedSourceOrigins
 	try loadSourceFiles(project, paths: inputPaths, selection: sourceSelection)
 
-	// AFTER the user's own sources — so a directory build's output name still derives from a user
-	// file (not from a library module), and an empty user project still fails with `noSourceFiles`
-	// above rather than compiling only the library.
+	// AFTER the user's own sources, so an empty user project fails with `noSourceFiles` above rather than
+	// compiling only the library.
 	//
 	// ⚠ The RUNTIME tier's share of this is billed to its own phase from inside the loader, and
 	// `compileMeasured` subtracts that row from `load`'s so the two stay disjoint.
@@ -1817,10 +1852,10 @@ function loadSourceDirectory(project Project, dir FilePath, selection SourceSele
 end 'loadSourceDirectory'
 
 // ⭐ **WHAT COUNTS AS A MAXON SOURCE FILE UNDER A DIRECTORY — asked in ONE place.** Every `.maxon`
-// file beneath `dir`, subdirectories included, minus the build manifest (a project description, not
-// a compilation unit), minus every subtree a `.maxonignore` marker excludes, and — for an ordinary
-// build — minus every `*.test.maxon`. That last clause is the ONLY thing `selection` varies; see
-// `SourceSelection` for why it is a parameter rather than a second walk.
+// file beneath `dir`, subdirectories included, minus every subtree a `.maxonignore` marker excludes, and
+// minus what `selection` leaves out: a project's build manifests (a project description, not a
+// compilation unit) and, for an ordinary build, every `*.test.maxon`. See `SourceSelection` for why it is
+// a parameter rather than a second walk.
 //
 // ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
 // and the checkout's `stdlib/` (`loadLibrarySources`) — because that is ONE question, and two copies
@@ -1834,8 +1869,8 @@ end 'loadSourceDirectory'
 // `*.test.maxon`, which no `selection` here admits alongside a plain build root, and it prunes any
 // subdirectory holding a `.git`, which this walk must NOT do — pruning there would change which files
 // get COMPILED. What the
-// two DO share — `BuildManifestName`, `MaxonSourceExtension`, `holdsIgnoreMarker`, `isIgnoredDirectory`
-// — it reaches through those same names rather than respelling any of them.
+// two DO share — `isBuildManifestFileName`, `MaxonSourceExtension`, `holdsIgnoreMarker`,
+// `isIgnoredDirectory` — it reaches through those same names rather than respelling any of them.
 //
 // ⭐⭐ **THE `.maxonignore` RULE, IN FOUR FACTS:**
 //
@@ -1903,7 +1938,7 @@ function collectMaxonSourcesUnder(dir FilePath, into MaxonSourcePathArray, selec
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
 
-			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name) 'isSource'
+			if name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name) 'isSource'
 				into.push(entry)
 			end 'isSource'
 		end 'isFile'
@@ -1986,15 +2021,17 @@ end 'loadOneSourceFile'
 let PreviousImageSuffix = ".previous"
 let RetiredImageInfix = ".retired-"
 
-// The build manifest filename, the Maxon source extension, and the flag file that excludes a
-// directory. Named, not bare literals — all three are file-discovery contracts, so what a source file
-// is called, and what says a directory holds none, are stated once for the whole compiler. Every walk
-// this compiler makes over a source tree reads them from here: `collectMaxonSources` below (which
-// enumerates `stdlib/` as well as the user's own paths), and `Formatter.collectFormattableFiles`, which
-// is `maxon fmt`'s SEPARATE walk — it takes `*.test.maxon`, which a build does not, and prunes `.git`,
-// which a build must not, but it must leave the manifest alone and pick `.maxon` files by these same
-// two names, and a second spelling of either would be a file-discovery contract written down twice.
-module let BuildManifestName = "build.maxon"
+// What a build manifest and a Maxon source are called, and what says a directory holds none: file-discovery
+// contracts stated once for every walk over a source tree — `collectMaxonSources` below and `maxon fmt`'s
+// separate walk, `Formatter.collectFormattableFiles` — and the driver, which runs the manifest.
+export let BuildManifestFileName = "build.maxon"
+
+// Is a file of this name a project's build manifest? Case-insensitive, because on the filesystem most
+// checkouts live on `BUILD.maxon` IS `build.maxon`. A library tier holds no manifest and does not ask
+// (`SourceSelection.libraryTier`).
+module function isBuildManifestFileName(name String) returns bool
+	return equalsIgnoringAsciiCase(name.toByteArray(), b: BuildManifestFileName.toByteArray())
+end 'isBuildManifestFileName'
 
 // ⭐ **`export` BECAUSE WHAT A MAXON SOURCE IS CALLED IS NOT ONLY A COMPILER'S QUESTION.**
 // `Main.MaxonArgs.parse` reads a first argument ending in it as `maxon run`, which is how a
@@ -2037,6 +2074,11 @@ export enum SourceSelection
 	// The tests still have to be compiled WITH their project, because a `test` body calls the very
 	// declarations that project makes.
 	productionAndTests
+
+	// A library tier's own sources, `stdlib/` or `runtime/`. A library is not a project and holds no
+	// manifest, so no name there is one — `stdlib/Build.maxon` is the `Build` API, and the case-insensitive
+	// manifest match would otherwise drop it.
+	libraryTier
 end 'SourceSelection'
 
 // Does this walk want a file with this name? Every OTHER clause of "is this a source file" is asked at the
@@ -2044,8 +2086,9 @@ end 'SourceSelection'
 // asked here — through `isTestSourceName`, so neither answer restates the rule.
 function selectionAdmits(selection SourceSelection, name String) returns bool
 	return match selection 'selection'
-		productionOnly gives not isTestSourceName(name)
-		productionAndTests gives true
+		productionOnly gives not isTestSourceName(name) and not isBuildManifestFileName(name)
+		productionAndTests gives not isBuildManifestFileName(name)
+		libraryTier gives not isTestSourceName(name)
 	end 'selection'
 end 'selectionAdmits'
 
@@ -2195,20 +2238,13 @@ export typealias MaxonSourcePathSet = Set with FilePath
 // named here rather than spelled inline.
 let IrFileExtension = ".ir"
 
-// Resolve the output executable path: an explicit `-o` override wins; otherwise
-// the output is the input's base name with the platform executable extension
-// (single-file build → next to the source; every other shape — a directory, or
-// several paths at once — → the FIRST registered source file's base name, which
-// for a list is the first path the caller named). Deriving a directory build's name from a `build.maxon`
-// `build("...")` manifest grows at M2, when directory builds become the norm;
-// the M1 verification gate is a single-file build (`basic.maxon` → `basic.exe`).
+// The executable's path: `-o` when given, otherwise named for the FIRST PATH THE CALLER NAMED — a file is
+// built beside itself (`app.maxon` → `app.exe`), a directory into itself under its own name (`app` →
+// `app/app.exe`). Never for a file a directory walk found, whose order is the filesystem's.
 //
-// ⚠ An override that ALREADY carries the target's extension is used as it is. This appended it
-// unconditionally, so `-o stage2.exe` wrote `stage2.exe.exe` — measured 2026-08-25 while timing the
-// self-host chain, where the doubled name then had to be spelled back into every `cmp` and profile
-// command. The bare spelling (`-o stage2` → `stage2.exe`) is unchanged, and on a host whose extension
-// is empty the two spellings were always one.
-function resolveOutputPath(project Project, outputOverride String) returns FilePath throws CompileError
+// ⚠ An override that already carries the target's extension is used as it is, so `-o stage2.exe` and
+// `-o stage2` name one file rather than `stage2.exe.exe`.
+function resolveOutputPath(project Project, inputPaths MaxonSourcePathArray, outputOverride String) returns FilePath throws CompileError
 	let ext = executableExtension(project.target)
 
 	if not outputOverride.isEmpty() 'hasOverride'
@@ -2218,13 +2254,27 @@ function resolveOutputPath(project Project, outputOverride String) returns FileP
 			outputPath = outputOverride
 		end 'overrideCarriesExt'
 
-		return try FilePath.from(outputPath) otherwise panic("resolveOutputPath: invalid -o/--output path '{outputOverride}'")
+		return try FilePath.from(outputPath) otherwise throw CompileError.invalidOutputPath(outputOverride)
 	end 'hasOverride'
 
-	if File.exists(project.rootPath) 'singleFile'
-		return project.rootPath.changeExtension(ext)
-	end 'singleFile'
+	let named = try inputPaths.get(0) otherwise panic("resolveOutputPath: `loadProject` has already refused an empty path list")
 
-	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("resolveOutputPath: sourcePaths empty — loadSourceFiles should have thrown noSourceFiles")
-	return firstPath.changeExtension(ext)
+	if not Directory.isDirectory(named) 'aFile'
+		return named.changeExtension(ext)
+	end 'aFile'
+
+	return named.join("{try directoryNameOf(named)}{ext}")
 end 'resolveOutputPath'
+
+// The name a directory is known by: the last component of its spelling resolved against the working
+// directory and folded, so `.`, `..` and a trailing separator name the directory they lead to. A filesystem
+// root has no name.
+function directoryNameOf(dir FilePath) returns String throws CompileError
+	let name = dir.resolve(Directory.currentPath()).normalize().filename()
+
+	if name.isEmpty() 'aRoot'
+		throw CompileError.unnamedDirectory(dir)
+	end 'aRoot'
+
+	return name
+end 'directoryNameOf'

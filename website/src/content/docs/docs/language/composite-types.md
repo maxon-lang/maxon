@@ -358,9 +358,36 @@ end 'main'
 **E3005** (`Type 'Wrapper' does not conform to InitableFromStringLiteral`).
 
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
-`Map`, and `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
-`CharSet from ['a', 'e']`. (`InitableFromArrayLiteral` and `InitableFromDictionaryLiteral` declare that
-surface for the standard collections; `Alias from [...]` is not yet available for user types.)
+`Map`, and `Array`, `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
+`CharSet from ['a', 'e']`; the alias states the element type, and a `Vector` alias's literal must write
+exactly as many elements as the alias holds. A type that declares `implements InitableFromArrayLiteral with
+Element` takes `Type from [ ... ]`, which is `Type.init(value ElementArray)` over the literal:
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitArray = Array with Digit
+typealias Number = int(0 to i64.max)
+
+type Digits implements InitableFromArrayLiteral with Digit
+	export var value as Number
+
+	static function init(digits DigitArray) returns Self
+		var total = 0 as Number
+
+		for d in digits 'each'
+			total = total * 10 + d
+		end 'each'
+
+		return Self{value: total}
+	end 'init'
+end 'Digits'
+
+function main() returns ExitCode
+	let n = Digits from [4, 0, 7]
+	print("{n.value}\n")
+	return 0
+end 'main'
+```
 
 ### Generic Types
 

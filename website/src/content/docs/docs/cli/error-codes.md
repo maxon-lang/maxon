@@ -397,7 +397,7 @@ an `async f()` call targets a function that never yields (contains no await / I/
 
 ### E3074 — `semanticSubprocessUnsupportedTarget`
 
-A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively calling a maxon\_subprocess\_\* builtin). WASI has no process-spawn primitive, so subprocess cannot exist on that target -- rather than silently throwing 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call with `#if not os(Wasi)` to exclude it from the wasm build. Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.
+A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively calling a `__gt_subp_` runtime entry). WASI has no process-spawn primitive, so subprocess cannot exist on that target -- rather than silently throwing 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call with `#if not os(Wasi)` to exclude it from the wasm build. Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.
 
 ### E3075 — `matchQualifiedCaseName`
 
@@ -790,6 +790,10 @@ The backend reported no failure, yet nothing exists at the output path after the
 ### E6004 — `binaryOutputDirectoryNotCreated`
 
 The directory the output goes in does not exist and could not be created. The backend writes the FILE and does not create the path to it, so without this the build fails at the write and answers E6003 -- which names the missing OUTPUT and says the write failed, sending the reader to look for an IO fault that is not there. Every project whose output lives in a gitignored directory meets this on its first build in a fresh clone.
+
+### E6005 — `binaryWasmComponentNotProduced`
+
+A wasm32-wasi build could not turn its core module into a WASI Preview2 component. The compiler wraps the module with `wasm-tools` and the WASI WIT package, which it looks for as `vendor/wasm-tools/` and `vendor/wasi-wit/` in the working directory and the directories above it; a Maxon source checkout stages both with `scripts/fetch-vendor.sh`, and an installed compiler does not include them. A missing tool is refused before anything is compiled. The message names what is missing and where it was looked for, or which `wasm-tools` step failed and what it printed.
 
 ## Internal Compiler Diagnostic (E9xxx)
 

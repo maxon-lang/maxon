@@ -2727,8 +2727,8 @@ end 'arm64PrologueFrameBytes'
 // managed top-level `var`), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, runsRuntimeInit bool, os Os, entryFunction ByteArray)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, runsRuntimeInit: runsRuntimeInit, os: os, entryFunction: entryFunction))
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, os Os, entryFunction ByteArray)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, captureEnvp: captureEnvp, debugStream: debugStream, dumpCoverage: dumpCoverage, os: os, entryFunction: entryFunction))
 
 	// Directly behind the stub — the layout `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
@@ -3039,7 +3039,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// Its by-name calls read `Project.entryStubCalls`, the record the reachability roots and the inliner's
 	// census were built from, so the stub calls exactly what those kept alive.
 	let stub = project.entryStubCalls
-	appendArm64RuntimeChunks(chunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, runsRuntimeInit: arm64RunsRuntimeInit(target, usesGt: usage.usesGt), os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(chunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage) and target.os == Os.linux, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, os: target.os, entryFunction: project.entryFunctionName)
 
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier))

@@ -477,3 +477,18 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: error.mismatched-while-end-label -->
+A label written after `end` must repeat the loop's opening label.
+```maxon
+function main() returns ExitCode
+	var i = 0
+	while i < 3 'count'
+		i = i + 1
+	end 'loop'
+	return i
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:6:2: Mismatched end label: expected 'count', got 'loop'
+```

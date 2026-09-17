@@ -55,9 +55,11 @@ end 'countDown'
 ```
 
 A function's label is its name; a type's, enum's, union's, interface's or extension's label is the type's
-name; a test's label is its quoted name. Labels on `if`, `while`, `for`, `match` and `try` blocks are chosen by
-you and name the block for `break` and `continue`. Statements end at the end of the line; there are no
-semicolons and no braces around blocks.
+name; a test's label is its quoted name. Labels on `if`, `else`, `while`, `for`, `match`, `try` and `otherwise`
+blocks are chosen by you and name the block for `break` and `continue`. A label written after `end` must be
+the block's own label: anything else is **E2008** (`Mismatched end label: expected 'tick', got 'loop'`), and
+**E2043** for a `match`. Only a `test` must write it; on every other block the label after `end` may be
+omitted. Statements end at the end of the line; there are no semicolons and no braces around blocks.
 
 ### Conditional Compilation
 

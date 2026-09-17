@@ -534,12 +534,13 @@ end 'main'
 ```
 
 <!-- test: assign-constants-enum-to-backing -->
-A constants-enum where its numeric backing type is declared coerces to the raw backing value.
+A constants-enum with integer raw values coerces to its raw backing value. The backing type is inferred
+from the raw values; nothing after the enum's name declares it.
 ```maxon
 
 typealias Byte = int(0 to u8.max)
 
-enum JsonByte as Byte
+enum JsonByte
 	lBracket = 91
 	rBracket = 93
 end 'JsonByte'

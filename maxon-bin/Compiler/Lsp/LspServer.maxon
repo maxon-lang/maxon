@@ -18,7 +18,7 @@
 // FULL sync (`textDocumentSync` kind 1) — every `didChange` carries the whole document, so the store is
 // a replace-or-drop map with no patching to do. Incremental sync is a separate mechanism and no method
 // this server answers needs one.
-typealias LspDocumentTextMap = Map with (String, String)
+module typealias LspDocumentTextMap = Map with (String, String)
 
 // `textDocumentSync` kind 1 — the client sends whole documents.
 let FullTextDocumentSync = 1
@@ -163,7 +163,7 @@ type LspSession
 	function answerExtensionRequest(method LspExtensionMethod, id LspRequestId, doc JsonDoc)
 		let wireName = lspExtensionMethodWireName(method)
 
-		let outcome = try answerExtension(method, doc: doc) otherwise 'badParams'
+		let outcome = try answerExtension(method, doc: doc, documents: self.documents) otherwise 'badParams'
 			self.refuseParams(wireName, id: id)
 			return
 		end 'badParams'
@@ -303,11 +303,10 @@ function answerFor(request LspRequest) returns LspAnswer throws LspParamsError
 end 'answerFor'
 
 // The one place an extension request is handed to its handler, complete over `LspExtensionMethod`.
-function answerExtension(method LspExtensionMethod, doc JsonDoc) returns LspExtensionOutcome throws LspParamsError
-	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
-
+function answerExtension(method LspExtensionMethod, doc JsonDoc, documents LspDocumentTextMap) returns LspExtensionOutcome throws LspParamsError
 	return match method 'extension'
-		generateIr gives try generateIrAnswer(doc, params: params)
+		generateIr gives try generateIrAnswer(doc, params: try lspMember(doc, of: doc.root, key: JsonRpcParamsKey))
+		listProjects gives listProjectsAnswer(documents)
 	end 'extension'
 end 'answerExtension'
 

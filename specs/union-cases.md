@@ -415,3 +415,52 @@ end 'main'
 m m
 alpha 0 1
 ```
+
+<!-- test: error.mismatched-union-end-label -->
+A label written after `end` must repeat the union's name.
+```maxon
+typealias Coord = int(0 to 100)
+
+union Shape
+	circle(radius Coord)
+	empty
+end 'Shapes'
+
+function main() returns ExitCode
+	let s = Shape.circle(7)
+	var r = 0 as Coord
+	match s 'which'
+		circle(radius) then r = radius
+		empty then r = 0
+	end 'which'
+	return r
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:7:1: Mismatched end label: expected 'Shape', got 'Shapes'
+```
+
+<!-- test: error.a-word-after-the-union-name-is-refused -->
+Nothing but an `implements` clause may follow the union's name; a word there is refused, not read as a
+case.
+```maxon
+typealias Coord = int(0 to 100)
+
+union Shape int
+	circle(radius Coord)
+	empty
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.circle(7)
+	var r = 0 as Coord
+	match s 'which'
+		circle(radius) then r = radius
+		empty then r = 0
+	end 'which'
+	return r
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:4:13: unexpected token: 'int'
+```

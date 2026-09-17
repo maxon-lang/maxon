@@ -305,23 +305,12 @@ export enum RuntimeAbort
 	// the limit, which a `procs: 4` service program then crosses on its third machine.
 	schedulerThreadExhaustion = 97
 
-	// ⛔ `__gt_morestack`: a green thread's stack would have to grow past `GtRuntime.GtMaxStackBytes` for
-	// the frame asking to fit — Go's `newstack` and its `throw("stack overflow")` past `maxstacksize`
-	// (`vendor/go/src/runtime/stack.go`). It is a runaway recursion in the PROGRAM, refused BEFORE the
-	// allocation, because the alternative is doubling until the address space runs out and failing
-	// somewhere unrelated to the cause.
-	//
-	// It aborts by number rather than through `osPanic` because `mrt_panic` opens with the green-thread stack
-	// guard: the refusal runs on the machine's system stack while the exhausted thread is still current, so
-	// that guard compares this stack pointer with the thread's guard word and can call `__gt_morestack` again
-	// — the grower re-entered on the stack it stands on.
-	greenThreadStackExhausted = 98
-
 	// ⛔ `__gt_morestack` and `__gt_spawn`: the OS REFUSED the pages for a green thread's stack. Unguarded,
 	// the grower copies the old stack to `<refused base> + size` and the spawn seeds its first frame there —
-	// a write through a failed allocation. A separate code from `greenThreadStackExhausted` (98), this
-	// registry's founding rule: a program recursing past the ceiling and a machine out of memory under a
-	// legal stack are two different faults — Go reports them as `stack overflow` and `out of memory`.
+	// a write through a failed allocation. A program recursing past `GtRuntime.GtMaxStackBytes` is a different
+	// fault with a different answer — `panic: stack overflow`, the fault diagnostic every native lane gives an
+	// OS stack run out (`BacktraceFormat.GtStackOverflowName`) — as Go reports `stack overflow` and
+	// `out of memory` apart.
 	greenThreadStackAllocationFailed = 99
 
 	// ⛔ `__gt_run_main`: the main machine's scheduler loop returned for `main`'s completion, and `main`'s

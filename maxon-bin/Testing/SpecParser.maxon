@@ -204,9 +204,8 @@ let RetiredTargetsMarker = "<!-- targets:"
 // the mechanism as a property of the maths.
 let ArgsMarker = "<!-- Args:"
 
-// ⭐ **THE ONE VALUELESS MARKER — `<!-- AsyncTrace -->`.** It says a case asserts the green-thread TRACE, which
-// changes two things and neither is a value: the program is compiled with `--async-trace`, and both sides of
-// the stderr comparison are put through `normalizeAsyncTraceStderr` first.
+// ⭐ **THE ONE VALUELESS MARKER — `<!-- AsyncTrace -->`.** It says a case asserts the green-thread TRACE: the
+// program is compiled with `--async-trace`, and its stderr — where the trace goes — is compared like any other.
 //
 // ⚠ **IT CARRIES NO PAYLOAD, SO IT MUST NOT GO THROUGH `markerValue`.** That helper splits on
 // `MarkerNameSep` and answers "" for a bare marker — an empty answer being indistinguishable from a
@@ -394,6 +393,23 @@ let StdinMarker = "<!-- stdin:"
 // The two values `StdinMarker` recognizes, for `NetworkLiveValue`'s reason.
 let StdinHoldValue = "hold"
 let StdinDelayedValue = "delayed"
+
+// ⭐⭐ **WHETHER THIS CASE'S PROGRAM MAY RUN BESIDE ANOTHER CASE'S — `<!-- runs: alone -->`.** A program whose
+// peak memory is set by a runtime LIMIT rather than by what it computes — a green thread's stack grown to
+// `GtRuntime.GtMaxStackBytes`, whose last growth holds both copies — would otherwise land beside a full pool
+// of workers, each holding a compile, and fail for the machine's memory rather than for its own behaviour.
+// The pool runs a spec's `alone` cases as a job of their own, dispatched only once every other job has
+// finished, and dispatches nothing while it runs (`SpecWorkerPool.runSpecPool`).
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A DEFAULT** — `parseRunsValue`, which follows `parseNetworkValue`
+// exactly. And `alone` is the ONLY value: absence already says the case shares the pool.
+//
+// No marker token is a prefix of another — `markerOpeningAmong`'s rule, which keeps this check independent
+// of every other family's.
+let RunsMarker = "<!-- runs:"
+
+// The one value `RunsMarker` recognizes, for `NetworkLiveValue`'s reason.
+let RunsAloneValue = "alone"
 
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
@@ -903,6 +919,17 @@ export union SpecStdin
 	delayed
 end 'SpecStdin'
 
+// ⭐ **WHETHER A CASE SHARES THE POOL — see `RunsMarker` for why this is a per-case fact.** It is also the key a
+// spec's selection is split into jobs by (`SpecTestRunner.testsThatRun`), so the parent's plan and the
+// worker's run divide one spec by one rule.
+export enum SpecRuns
+	// No marker: the program runs while other jobs' programs run.
+	shared
+
+	// `<!-- runs: alone -->`: the program runs with no other job in flight.
+	alone
+end 'SpecRuns'
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -997,11 +1024,16 @@ export type SpecTest
 	// descriptor the child's fd 0 is — not what the run must produce.
 	export let stdin as SpecStdin
 
+	// Whether this case's program runs with no other job in flight (a `<!-- runs: alone -->` marker). Unlike
+	// `procs` it changes nothing about the spawn: it decides which JOB the case belongs to and when the pool
+	// dispatches that job.
+	export let runs as SpecRuns
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -1389,6 +1421,10 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// `closed` unless a `<!-- stdin: … -->` marker says otherwise — the literal answer for a case whose
 	// program is handed the null device, not a default standing in for an unread marker.
 	var stdin = SpecStdin.closed
+
+	// `shared` unless a `<!-- runs: … -->` marker says otherwise — the literal answer for a case whose program
+	// runs beside others, not a default standing in for an unread marker.
+	var runs = SpecRuns.shared
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -1507,6 +1543,15 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'stdinMarker'
+
+		// The pool sharing the author asked for, consumed identically to the markers above — including on a
+		// DISABLED case, so shelving such a case does not turn its marker into a refused line. The VALUE is
+		// refused rather than defaulted; see `parseRunsValue`.
+		if openingsCarry(openings, marker: RunsMarker) 'runsMarker'
+			runs = parseRunsValue(line, specPath: specPath, testName: name)
+			i = i + 1
+			continue
+		end 'runsMarker'
 
 		// ⛔⛔ **A COMMENT LINE NO ARM ABOVE CLAIMED IS REFUSED, NOT WALKED OVER.** Every comment line inside a
 		// case is a directive — the corpus carries no prose comment between a case's marker and the next —
@@ -1697,7 +1742,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 				pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 		end 'traceCaptureOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs))
 		return i
 	end 'rejected'
 
@@ -1712,7 +1757,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs))
 
 	return i
 end 'scanTestFromMarker'
@@ -2273,7 +2318,7 @@ end 'supportedTargetKeyList'
 function caseMarkerRoster() returns String
 	var quoted = StringArray.create()
 
-	for marker in [TestMarker, DisabledTestMarker, UnsupportedTargetsMarker, ArgsMarker, AsyncTraceMarker, DebugInfoMarker, MmTraceMarker, LogTraceMarker, NetworkMarker, ProcsMarker, PreemptMarker, StdinMarker] 'each'
+	for marker in [TestMarker, DisabledTestMarker, UnsupportedTargetsMarker, ArgsMarker, AsyncTraceMarker, DebugInfoMarker, MmTraceMarker, LogTraceMarker, NetworkMarker, ProcsMarker, PreemptMarker, StdinMarker, RunsMarker] 'each'
 		quoted.push("`{marker}`")
 	end 'each'
 
@@ -2353,6 +2398,21 @@ function parsePreemptValue(line String, specPath FilePath, testName String) retu
 
 	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{PreemptMarker} {value} -->`, and '{String.from(PreemptEnvOffValue)}' is the only value this marker takes. It becomes `{String.from(PreemptEnvName)}={String.from(PreemptEnvOffValue)}` in the environment of this case's program alone, so the monitor takes no processor from the thread holding it; absence already says the default, and an unrecognized value would quietly run the case under preemption and report its order as though the switch had been honoured")
 end 'parsePreemptValue'
+
+// Whether a `<!-- runs: … -->` marker takes the case out of the shared pool, read through the same `markerValue`
+// every other valued marker goes through.
+//
+// ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `shared`**, for `parseNetworkValue`'s reason exactly: a defaulted
+// value would run the case beside a full pool, which is the one condition the marker exists to keep it from.
+function parseRunsValue(line String, specPath FilePath, testName String) returns SpecRuns
+	let value = markerValue(line)
+
+	if value == RunsAloneValue 'alone'
+		return SpecRuns.alone
+	end 'alone'
+
+	panic("SpecParser: {specPath.toString()}: test '{testName}' carries `{RunsMarker} {value} -->`, and '{RunsAloneValue}' is the only value this marker takes. It runs the case's program with no other job in flight; absence already says the case shares the pool, and an unrecognized value would quietly run it beside every other worker")
+end 'parseRunsValue'
 
 // What a `<!-- stdin: … -->` marker asks the child's fd 0 to be, read through the same `markerValue`
 // every other valued marker goes through.

@@ -9,13 +9,15 @@ category: system
 
 ## Documentation
 
-The `Clock` type exposes two monotonic clocks. Both return a reading whose
-absolute value is platform-defined and only meaningful when two readings are
-subtracted; they differ in the hardware source they read, and therefore in
-resolution.
+The `Clock` type exposes one monotonic clock in two units. Both readings have an
+absolute value that is platform-defined and only meaningful when two readings are
+subtracted, and both come from the same source: the runtime's nanosecond clock,
+`QueryPerformanceCounter` scaled to nanoseconds on Windows,
+`clock_gettime(CLOCK_MONOTONIC)` on Linux and `clock_gettime(CLOCK_UPTIME_RAW)` on
+macOS. wasm32-wasi has no clock; a program that reads one is refused with **E3104**.
 
-`Clock.nowMs()` reads the platform's COARSE tick counter (`GetTickCount64` on
-Windows, `wasi:clocks/monotonic-clock.now` on WASI).
+`Clock.nowMs()` is that reading in whole milliseconds (nanoseconds divided by
+1,000,000).
 
 ```text
 let start = Clock.nowMs()
@@ -23,9 +25,7 @@ let start = Clock.nowMs()
 let elapsed = Clock.elapsedMs(start)  // milliseconds since `start`
 ```
 
-`Clock.nowNanos()` reads the platform's HIGH-RESOLUTION counter
-(`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on
-Linux/macOS, `wasi:clocks/monotonic-clock.now` on WASI) and reports nanoseconds.
+`Clock.nowNanos()` is the same reading in nanoseconds.
 
 ```text
 let start = Clock.nowNanos()
@@ -33,12 +33,10 @@ let start = Clock.nowNanos()
 let elapsed = Clock.elapsedNanos(start)  // nanoseconds since `start`
 ```
 
-Prefer `nowNanos()` for anything you intend to measure. `GetTickCount64`'s period
-is ~15.6 ms, so `nowMs()` cannot resolve a duration shorter than a scheduler
-tick: every reading is a multiple of the tick, and a sub-tick operation measures
-as either 0 ms or 16 ms depending on where the tick happened to fall. `nowMs()`
-remains the cheaper read and is the right choice for coarse timeouts and
-deadlines.
+Prefer `nowNanos()` for anything you intend to measure: `nowMs()` truncates to
+whole milliseconds, so a sub-millisecond operation measures as 0 ms or 1 ms
+depending on where the millisecond boundary fell. `nowMs()` is the right choice
+for timeouts and deadlines expressed in milliseconds.
 
 Note that `nowNanos()`'s UNIT is nanoseconds but its PERIOD is platform-defined —
 100 ns on a typical Windows machine, 1 ns elsewhere — so two back-to-back
@@ -55,7 +53,7 @@ protects against bugs).
 instruments.
 
 Every reading `Clock` gives you is monotonic: its absolute value is meaningless
-(milliseconds since boot, performance-counter ticks) and only the DIFFERENCE
+(time since a platform-defined origin such as boot) and only the DIFFERENCE
 between two readings means anything. That makes it exactly right for "how long
 did this take" and useless for "what is today's date" — no arithmetic turns an
 uptime into a calendar day.
@@ -83,9 +81,8 @@ offset is a policy decision the stdlib has no business guessing.
 
 <!-- test: clock.now-monotonic -->
 A monotonic clock never moves backwards: each successive reading is `>=` the
-previous one. The epoch is target-dependent (boot-relative on native targets,
-process-relative under WASI, where a fast-starting program's first reading can
-legitimately be 0), so only ordering is asserted, never a particular magnitude.
+previous one. The origin is platform-defined, so only ordering is asserted, never
+a particular magnitude.
 
 ```maxon
 function main() returns ExitCode
@@ -178,16 +175,15 @@ score=2
 ```
 
 <!-- test: clock.nanos-resolves-sub-millisecond -->
-The whole point of `nowNanos`: it must actually resolve durations shorter than the
-coarse clock's tick. This walks a tight loop, records the SMALLEST non-zero delta
+The whole point of `nowNanos`: it must actually resolve durations shorter than a
+millisecond. This walks a tight loop, records the SMALLEST non-zero delta
 between two successive readings — which is precisely the counter's period — and
 asserts it is under 1 ms.
 
 A clock backed by the Windows tick counter would fail this: `GetTickCount64`
 advances in ~15.6 ms steps, so its smallest observable non-zero delta is
-~15,600,000 ns. Passing therefore proves the reading comes from the performance
-counter and not from a coarse fallback — the regression this test exists to catch
-is exactly a silent downgrade to the tick source.
+~15,600,000 ns. Passing therefore proves the reading comes from a high-resolution
+counter and not from a coarse tick source.
 
 ```maxon
 function main() returns ExitCode
@@ -234,11 +230,10 @@ just doesn't get to the timer promptly — so a tight upper bound would be a fla
 assertion about the host, not about the compiler. The 10 s ceiling exists solely to
 catch a grossly mis-scaled counter, not to police wake latency.
 
-This test previously asserted a 5 ms lower bound, because `sleep(30)` genuinely
-returned after as little as ~17 ms: the scheduler computed its wake deadline from
-the COARSE ~15.6 ms tick (`GetTickCount64`), so the deadline could expire a full
-tick before the requested duration had actually elapsed. The deadline is now
-anchored to the monotonic nanosecond clock, so the real bound holds.
+The scheduler anchors a sleep's wake deadline to the monotonic nanosecond clock. A
+deadline computed from a coarse ~15.6 ms tick (`GetTickCount64`) could expire a full
+tick before the requested duration had elapsed, returning from `sleep(30)` after as
+little as ~17 ms.
 
 **The sleep is PHASE-SWEPT, and that is what gives this test teeth.** A tick-derived
 deadline only expires early when the call lands LATE within a tick — the deadline is
@@ -302,8 +297,8 @@ score=3
 whole test.
 
 The LOWER bound is what catches the regression this exists for: a wall clock
-silently wired to the monotonic source. `GetTickCount64` reports milliseconds
-since BOOT, so seconds-since-boot on any real machine is at most a few million —
+silently wired to the monotonic source. A monotonic reading counts from an origin
+such as BOOT, so seconds-since-boot on any real machine is at most a few million —
 a host would have to have been powered on continuously since 1970 to reach
 1735689600. Any monotonic source fails this by four orders of magnitude.
 

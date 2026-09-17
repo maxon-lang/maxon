@@ -1490,6 +1490,17 @@ export function rangeExcludesNegativeOne(low ParsedInt, high ParsedInt) returns 
 	return low > OverflowingDivisorPattern or high < OverflowingDivisorPattern
 end 'rangeExcludesNegativeOne'
 
+// ⭐ **CAN A VALUE OF THIS RANGE BE `i64.min`?** — the dividend's half of the signed quotient's overflow pair,
+// beside the divisor's. The unsigned-max-upper shape admits the `i64.min` BIT PATTERN as `2^63`, which a
+// signed divide reads as `i64.min`, so it answers `false` for `rangeExcludesNegativeOne`'s reason.
+export function rangeExcludesIntMin(low ParsedInt, high ParsedInt) returns bool
+	if rangeIsUnsignedMaxUpper(low, high: high) 'admitsTheIntMinPattern'
+		return false
+	end 'admitsTheIntMinPattern'
+
+	return low > OverflowingDividendPattern
+end 'rangeExcludesIntMin'
+
 // ⭐ THE SHIFT RULE — THE CANONICAL STATEMENT OF WHAT `shl`/`shr` MEAN IN THIS COMPILER, and the
 // only one. Four readers, and none of them restates it:
 //
@@ -2449,14 +2460,14 @@ function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns Fo
 		return foldUnsignedIntDivision(op, lhs: lhs, rhs: rhs)
 	end 'unsignedReading'
 
-	if op == MaxonBinOp.div and lhs == i64.min and rhs == OverflowingDivisorPattern 'unrepresentableQuotient'
+	if op == MaxonBinOp.div and lhs == OverflowingDividendPattern and rhs == OverflowingDivisorPattern 'unrepresentableQuotient'
 		return FoldedInt.notFoldable
 	end 'unrepresentableQuotient'
 
 	// The host `mod` below would trap on exactly the pair above, so the remainder's own answer at it is
 	// returned here rather than computed: `a mod -1` is `a - (-1)·trunc(a / -1)` = `a - a`, and the
 	// intermediate that does not fit is one the remainder never needed.
-	if lhs == i64.min and rhs == OverflowingDivisorPattern 'remainderAtTheOverflowPair'
+	if lhs == OverflowingDividendPattern and rhs == OverflowingDivisorPattern 'remainderAtTheOverflowPair'
 		return FoldedInt.folded(0)
 	end 'remainderAtTheOverflowPair'
 

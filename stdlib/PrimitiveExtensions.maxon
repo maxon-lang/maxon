@@ -1,7 +1,16 @@
+// `HashValue` is 32 bits wide, so every hash here ends by keeping the low 32 bits.
+let hashLow32Mask = 0xFFFFFFFF
+
+// How far `float.hash` shifts a bit pattern to bring its high half down onto its low half.
+let floatHashHalfShift = 32
+
+// `-0.0`'s IEEE-754 pattern: the sign bit alone.
+let floatNegativeZeroBits = i64.min
+
 /// Extension methods for primitive types implementing core interfaces.
 extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable
 	public function hash() returns HashValue
-		return self and 0xFFFFFFFF
+		return self and hashLow32Mask
 	end 'hash'
 
 	public function equals(other Self) returns bool
@@ -30,14 +39,17 @@ extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable
 end 'int'
 
 extension float implements Hashable, Equatable, Comparable, Stringable, Cloneable
+	// Folds the whole IEEE-754 pattern so the sign, the exponent and the top of the mantissa all reach the
+	// hash. `-0.0 == 0.0`, so `-0.0` must answer `+0.0`'s hash — and the fold would carry its sign bit down
+	// to bit 31. `BuiltinConformanceRuntime.buildFloatHash` is the compiler's twin of this body.
 	public function hash() returns HashValue
 		let bits = __Builtins.floatToBits(self)
 
-		if bits == -9223372036854775807 - 1 'negzero'
+		if bits == floatNegativeZeroBits 'negzero'
 			return 0
 		end 'negzero'
 
-		return bits and 0xFFFFFFFF
+		return (bits xor (bits shr floatHashHalfShift)) and hashLow32Mask
 	end 'hash'
 
 	public function equals(other Self) returns bool

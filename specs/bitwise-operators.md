@@ -145,16 +145,10 @@ let SHIFT = -1
 let c = a shl SHIFT   // E2054 — a named constant is a constant
 ```
 
-> ⚠ **The runtime panic is NOT YET IMPLEMENTED**: `emitGuardedShift` SATURATES a
-> run-time negative count instead of raising, and making it raise is the outstanding work.
-> ⚠ Its old companion citation is gone: `a / 0` no longer escapes as a raw hardware trap — A1 made
-> division FALLIBLE (a constant zero divisor is E3103, a possibly-zero one throws `DivisionByZero`),
-> so the two are no longer one blocker. (The retired `OPEN.md` this used to reference is also gone;
-> `maxon-bin/PLAN.md` owns what is outstanding.) Until the shift panic lands, a negative count that
-> only appears at run time is *defined* rather than *diagnosed*: the guard reads it as out-of-range, so
-> `x shl -1` is 0 and `x shr -1` is the sign. That is deterministic, and it is not the masked
-> `x shl 63` this rule exists to kill — it is simply not yet the panic Go requires. The case is
-> carried below as a `disabled-test`.
+A negative count that only appears at run time panics — `panic at <file>:<line>: negative shift count`,
+then the stack trace, exit 1 (`panic.md`), with the line of the shift.
+
+The check is `count < 0` and nothing wider: a count of 64 or more is legal and saturates, as below.
 
 A shift by a **runtime value** is legal and is guarded, not masked:
 
@@ -543,12 +537,6 @@ out-of-range saturation.
 ⚠ **THE GUARD IS `count < 0`, WHICH IS NARROWER THAN THE SATURATION'S "out of range".** A count of 64 or
 more is LEGAL and shifts every bit out — `4 shl 70` exits 0 — so the mask goes
 on serving that case and only this one aborts.
-
-⚠ Its old companion — `OPEN.md` #2, `a / 0` escaping as a raw `0xC0000094` hardware trap — is
-**CLOSED**, and by a different mechanism than a panic: A1 made division fallible in the TYPE system
-(E3103 for a constant zero divisor, a thrown `DivisionByZero` for a possibly-zero one), so there is no
-trap left to route. The two were never one blocker; only the retired `OPEN.md` entry made them look
-like one.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 

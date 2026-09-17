@@ -121,7 +121,7 @@ Windows has no shebang mechanism. Git Bash and WSL honour the line; `maxon hello
 
 | Code | Meaning |
 |------|---------|
-| the program's | Forwarded as-is, including the raw status of a child that terminated abnormally (for example `3221225725` on Windows for a stack overflow) |
+| the program's | Forwarded as-is, including the raw status of a child that terminated abnormally |
 | `1` | `run` could not start the program: no program named, no such file, a compile error (the diagnostics are printed and nothing runs), no writable cache root, or a build that could not be stored in the cache |
 
 A missing file is reported as `error: file not found: <path as typed>`, the same sentence `maxon build`
@@ -144,8 +144,8 @@ maxon build [<target name>] [options]
 ```
 
 **Arguments.** One or more paths. **Several paths are compiled as one program, in the order given.** A
-directory contributes every `.maxon` file beneath it, except `build.maxon`, `*.test.maxon` files and
-subtrees marked with a `.maxonignore`. A file you name explicitly is compiled whatever a
+directory contributes every `.maxon` file beneath it, except `build.maxon` (in any letter case),
+`*.test.maxon` files and subtrees marked with a `.maxonignore`. A file you name explicitly is compiled whatever a
 `.maxonignore` above it says.
 
 **No path** runs the `build.maxon` manifest in the current directory, and a bare word that names one of
@@ -156,7 +156,7 @@ with no `build.maxon` prints a usage line and exits 1.
 
 | Option | Description |
 |--------|-------------|
-| `-o <path>`, `--output=<path>` | Output executable path. Without it the name is derived: a single-file build writes beside the source (`foo.maxon` → `foo.exe` on Windows); other builds take the first source file's base name. The target's executable extension is added unless the path already carries it. |
+| `-o <path>`, `--output=<path>` | Output executable path. Without it the name comes from the first path given: a file is built beside itself (`foo.maxon` → `foo.exe` on Windows), and a directory into itself under its own name (`app` → `app/app.exe`). The target's executable extension is added unless the path already carries it. A value that is not a path (a non-`file` URL, or on Windows a name holding `< > " \| ? *` or a control character) is refused with exit 1. |
 | `--target=<cpu>-<os>` | Compile for this target instead of the host: `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` or `wasm32-wasi`. See [Targets](/docs/cli/targets/). |
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function is refused. |
@@ -225,7 +225,8 @@ maxon fmt [<file|directory>]
 ```
 
 With **no path it formats the whole working directory**. A named **file** is formatted whatever it is
-called. A **directory** is walked for `.maxon` files, skipping `build.maxon`, anything under a
+called. A **directory** is walked for `.maxon` files, skipping a project's `build.maxon` (in any letter case;
+the compiler's own `stdlib/` and `runtime/` hold no manifest, so their `Build.maxon` is formatted), anything under a
 `.maxonignore`, and any subdirectory that holds a `.git` (a nested clone or worktree), so a run never
 rewrites another repository's files.
 

@@ -348,19 +348,20 @@ let ArrayErrorIndexOutOfBoundsFlag = ArrayErrorIndexOutOfBoundsOrdinal + ErrorFl
 let ArrayErrorEmptySlotOrdinal = 1 as ParsedInt
 let ArrayErrorEmptySlotFlag = ArrayErrorEmptySlotOrdinal + ErrorFlagOrdinalBias
 
-// The growth policy — Go's `nextslicecap`, ported VERBATIM from `stdlib/Array.maxon:62-95`. Double below
-// `GrowthThreshold`, then ease toward 1.25× above it.
+// THE GROWTH POLICY — Go's `nextslicecap`, and the only one in the tree: every `Array` door that grows
+// (`push`, `append`, `insert`, `resize`, `growFilled`) and `String.append` reach it through `__managed_grow`.
+// `specs/stdlib-array.md`'s `every-growing-door-grows-by-one-policy` pins its ladder.
 //
-// ⚠ IT BENDS THE SCALE-TEST'S BYTE COLUMN, AND SAYING SO ONCE IS CHEAPER THAN THE NEXT AGENT HUNTING A
-// PHANTOM QUADRATIC (this comment is carried from stdlib/Array.maxon:14-55). Under plain doubling the
-// bytes a buffer allocates over its life are a FLAT 2·N whatever N is. Here the ratio `r` is a function
-// of the capacity — ×2.0 at the threshold, rising toward ×5 as it approaches 1.25× — so a phase whose
-// bytes are perfectly LINEAR in the program reads ABOVE ×2.00 per doubling while it climbs. The scale
-// ladder DOUBLES each rung, so buffers get bigger each rung and the multiple climbs each rung: a reading
-// of ×2.1 on a linear phase is the EXPECTED cost of this policy, NOT a new quadratic. It saturates (the
-// multiple stops at 5), so it is a TRANSIENT bend, not a superlinearity — but the ladder's six rungs sit
-// inside the transition. (Do NOT reintroduce the phantom `max(req+1, cap·2, 64)` doubling the stdlib
-// comment names: no such policy exists here.)
+// Double below `GrowthThreshold`, then ease toward 1.25× above it. Doubling re-copies a small buffer least;
+// once a buffer is big a 2× step holds up to a whole buffer of slack, which dominates peak footprint. The
+// ease is continuous: the ratio at capacity c is `1.25 + 0.75·GrowthThreshold/c`. That trades churn for
+// footprint — a buffer grown to N by ratio r allocates N·r/(r−1) over its life and holds at most r·N.
+//
+// ⚠ IT BENDS THE SCALE-TEST'S BYTE COLUMN. Under plain doubling the bytes a buffer allocates over its life
+// are a FLAT 2·N whatever N is. Here the ratio is a function of the capacity, so that multiple rises from
+// ×2.0 at the threshold toward ×5, and a phase whose bytes are LINEAR in the program reads ABOVE ×2.00 per
+// doubling while it climbs. A reading of ×2.1 on a linear phase is the EXPECTED cost of this policy, not a
+// quadratic; it saturates at 5, but the ladder's six rungs sit inside the transition.
 let GrowthThreshold = 256 as ParsedInt
 let MinimumCapacity = 4 as ParsedInt
 
@@ -3520,8 +3521,8 @@ function buildManagedCowDetach(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCowDetach'
 
-// `__managed_grown_cap(current, required) -> newCap` — the growth policy. Ported verbatim from
-// `stdlib/Array.maxon:grownCapacity`; see the `GrowthThreshold` note above for why it eases.
+// `__managed_grown_cap(current, required) -> newCap` — the growth policy; see the `GrowthThreshold` note
+// above for why it eases. An ask that outruns doubling is taken at face value with no slack.
 function buildManagedGrownCap(module StdModule)
 	var func = IrFunction.createFromStd(ManagedGrownCapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -3577,8 +3578,7 @@ function buildManagedGrownCap(module StdModule)
 	module.functions.push(func)
 end 'buildManagedGrownCap'
 
-// Terminate `block` with `ret max(value, MinimumCapacity)` — the `atLeastMinimum` floor, emitted at each
-// of `grownCapacity`'s two face-value returns so a small ask does not bounce up through 1→2→3.
+// Terminate `block` with `ret max(value, MinimumCapacity)`, so a small ask does not bounce up through 1→2→3.
 function emitAtLeastMinimumReturn(module StdModule, func IrFunction, block IrBlock, value ValueId, ids ValueMinter)
 	var retFloor = module.addBlock(func, label: b"retfloor", heat: BlockHeat.normal)
 	var retVal = module.addBlock(func, label: b"retval", heat: BlockHeat.normal)

@@ -324,6 +324,11 @@ export enum IatSlot
 	WriteConsoleW = IatSlotMeta{dll: ImportDll.kernel32}
 	MultiByteToWideChar = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐ **MANDATORY FOR `AddVectoredExceptionHandler`'s REASON**: `mrt_runtime_init` calls it in every binary,
+	// reserving the stack room the fault handler reports a stack overflow in. Above the optional band, for
+	// the console imports' reason.
+	SetThreadStackGuarantee = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// ⭐ **THE FOUR DEBUGSTREAM IMPORTS.** APPENDED AFTER `GetModuleFileNameA` for the reason
 	// every entry above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is
 	// unchanged — a reorder would silently repoint every prior import. kernel32 again, so they add no import
@@ -798,7 +803,8 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			GetModuleFileNameA or
 			GetConsoleMode or
 			WriteConsoleW or
-			MultiByteToWideChar gives false
+			MultiByteToWideChar or
+			SetThreadStackGuarantee gives false
 
 		// ⚠ **THE SOCKET SLOTS ANSWER `false` BECAUSE THEIR GATE IS A DIFFERENT ONE, NOT BECAUSE THEY ARE
 		// ALWAYS EMITTED.** This band decides membership WITHIN kernel32's run; `dllIsEmitted` decides
@@ -1378,26 +1384,23 @@ function peAsciiOrEmpty(text String) returns String
 	return text
 end 'peAsciiOrEmpty'
 
-// One component of a dotted version, or 0. ⚠ A MALFORMED VERSION IS NOT A BUILD FAILURE: the string
-// comes from a manifest a person wrote, and refusing to build over it would be a compiler refusing to
-// compile correct code because its metadata was untidy. A component that is not a number reads 0, and
-// the binary then plainly says so.
-export function versionComponent(dotted String, index ProductVersionIndex) returns VersionField
-	let parts = dotted.split(".")
+let PeVersionComponentCount = 4
+let PeVersionComponentMax = 65535 as VersionComponent
 
-	if index >= parts.count() 'absent'
-		return 0
-	end 'absent'
+export function peVersionFieldLayout() returns VersionFieldLayout
+	var limits = VersionComponentArray.create()
 
-	let text = try parts.get(index) otherwise ""
-	let value = try parseInt(text.toByteArray()) otherwise 0
+	for _ in 0 upto PeVersionComponentCount 'eachComponent'
+		limits.push(PeVersionComponentMax)
+	end 'eachComponent'
 
-	if value < 0 or value > 65535 'outOfRange'
-		return 0
-	end 'outOfRange'
+	return VersionFieldLayout.create("a Windows version resource", limits: limits)
+end 'peVersionFieldLayout'
 
-	return value as VersionField
-end 'versionComponent'
+// A component the version does not have reads 0, so `1.2` is stamped 1.2.0.0.
+function peVersionComponent(productVersion VersionComponentArray, index ProductVersionIndex) returns VersionField
+	return (try productVersion.get(index) otherwise 0) as VersionField
+end 'peVersionComponent'
 
 typealias ProductVersionIndex = int(0 to 3)
 
@@ -1410,11 +1413,11 @@ typealias ProductVersionIndex = int(0 to 3)
 // ⚠ THE PRODUCT NAME IS THE OUTPUT'S STEM, not the manifest's `name`: that field is whatever SELECTED
 // the build — a target name, or the source path, which is `.` for a project built from its own
 // directory.
-function peVersionInfoFor(outputPath FilePath, productVersion String) returns PeVersionInfo
+function peVersionInfoFor(outputPath FilePath, productVersion VersionComponentArray) returns PeVersionInfo
 	let stem = peAsciiOrEmpty(outputPath.stem())
 	let suffix = outputPath.fileExtension()
 
-	return PeVersionInfo.create(versionComponent(productVersion, index: 0), minor: versionComponent(productVersion, index: 1), patch: versionComponent(productVersion, index: 2), build: versionComponent(productVersion, index: 3), product: stem, originalFilename: "{stem}{suffix}", comments: peAsciiOrEmpty("Built with Maxon {CompilerVersion}"))
+	return PeVersionInfo.create(peVersionComponent(productVersion, index: 0), minor: peVersionComponent(productVersion, index: 1), patch: peVersionComponent(productVersion, index: 2), build: peVersionComponent(productVersion, index: 3), product: stem, originalFilename: "{stem}{suffix}", comments: peAsciiOrEmpty("Built with Maxon {CompilerVersion}"))
 end 'peVersionInfoFor'
 
 // --- VS_VERSIONINFO (RT_VERSION) ---
@@ -1738,7 +1741,7 @@ end 'buildRsrcSection'
 
 // --- Main PE writer ---
 
-export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion String)
+export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray)
 	var pe = ByteArray.create()
 	pe.reserve(4096)
 

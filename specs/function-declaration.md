@@ -187,3 +187,18 @@ end 'main'
 42
 ```
 
+
+<!-- test: error.mismatched-function-end-label -->
+A label written after `end` must repeat the function's name.
+```maxon
+function answer() returns ExitCode
+	return 7
+end 'question'
+
+function main() returns ExitCode
+	return answer()
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:4:1: Mismatched end label: expected 'answer', got 'question'
+```

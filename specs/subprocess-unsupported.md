@@ -19,7 +19,9 @@ The check fires only at user call sites into the public subprocess API
 (`Subprocess.run`, `Configuration.run`, `StreamingSubprocess.spawn`, etc.) and
 only when the compile target cannot host subprocess. On every native target
 the program compiles and runs normally; on wasm32-wasi the call is rejected at
-compile time rather than failing at run time with `spawnFailed`.
+compile time rather than failing at run time with `spawnFailed`. The diagnostic carries the
+`file:line:col` of the offending call, the same location an E3104 target refusal reports, so each
+refused call site is named.
 
 Guard a subprocess call with `#if not os(Wasi)` (compile it only on non-WASI
 targets) to provide a wasm-safe fallback.
@@ -48,5 +50,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3074: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
+error E3074: <fragment>:7:30: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
 ```

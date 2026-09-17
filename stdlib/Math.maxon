@@ -30,6 +30,9 @@ let mathPiQuarter = 0.7853981633974483
 let mathLn2 = 0.6931471805599453
 let mathLn10 = 2.302585092994046
 
+// 10^22 is the largest power of ten a double holds exactly; 10^23 is not.
+let mathLargestExactDecimalExponent = 22
+
 // tan(π/8) = √2 - 1 — the argument threshold of the fold in `atan`, where its exact value is
 // load-bearing rather than a tuning choice. Read that function before touching this line.
 //
@@ -342,8 +345,8 @@ public type Math
 	/// log(-0) as -inf exactly like log(+0), not as NaN. So the split here is `x == 0.0` (true of BOTH
 	/// zeros) against everything else, and never `x < 0.0` against `x == 0.0` at the door.
 	///
-	/// Shared by `log` and `log2`; `log10` does not call it because it inherits both answers through
-	/// its divide (-inf/ln10 is -inf, NaN/ln10 is NaN).
+	/// Shared by `log` and `log2`; `log10` inherits both answers through its divide of `log`
+	/// (-inf/ln10 is -inf, NaN/ln10 is NaN).
 	static function nonPositiveLogResult(x Real) returns Real
 		if x == 0.0 'zero'
 			return Math.negativeInfinity()
@@ -408,19 +411,33 @@ public type Math
 		return ln_y + n * mathLn2
 	end 'log'
 
-	/// Calculate base-10 logarithm of x
-	/// Uses the identity: log10(x) = log(x) / log(10)
+	/// Calculate base-10 logarithm of x. Exact at every power of ten a double holds exactly:
+	/// `log10(10^k)` is `k` for k in 0…22.
 	public static function log10(x Real) returns Real
-		// ⭐ NO non-positive guard, deliberately: this function is `log` divided by a finite non-zero
-		// constant, and IEEE 754 division carries both of `log`'s special answers through unchanged
-		// (-inf/ln10 is -inf, NaN/ln10 is NaN, +inf/ln10 is +inf). A guard here would be a second,
-		// independently maintained statement of a rule `log` already owns — which is exactly what the
-		// single ln 2 declaration at the top of this file exists to prevent. That applies to the
-		// ORDINARY cases too: an `x == 1.0` shortcut here would be the same duplication in miniature
-		// and would decide nothing — `log(1.0)` is exactly 0.0 and 0.0/ln10 is exactly 0.0.
-		// log10(x) = ln(x) / ln(10)
-		let ln_x = Math.log(x)
-		return ln_x / mathLn10
+		// Rounded twice, so an exact power can land an ULP off its integer (`log10(100.0)` would be
+		// 1.9999999999999996). The error is far under 0.5, so the nearest integer names the only power
+		// `x` can be, and the exact cases are recovered by comparing against that power.
+		let answer = Math.log(x) / mathLn10
+
+		// Every comparison with a NaN is false, so NaN and both infinities return `answer` unchanged.
+		if not (answer > -0.5 and answer < mathLargestExactDecimalExponent + 0.5) 'outsideExactPowers'
+			return answer
+		end 'outsideExactPowers'
+
+		let exponent = trunc(round(answer))
+
+		// Each product is a power of ten a double holds exactly, so no step rounds.
+		var power = 1.0
+
+		for _ in 0 upto exponent 'raise'
+			power = power * 10.0
+		end 'raise'
+
+		if x == power 'exactPower'
+			return exponent as Real
+		end 'exactPower'
+
+		return answer
 	end 'log10'
 
 	/// Calculate base-2 logarithm of x

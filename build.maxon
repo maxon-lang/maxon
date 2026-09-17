@@ -61,11 +61,11 @@ function gitOutput(args StringArray) returns String
 	return result.stdout.trim()
 end 'gitOutput'
 
-
 // What follows a prefix the caller has already confirmed is there. `split` rather than an index
 // because a `StringIndex` is a grapheme cursor, not an integer, and this needs neither.
 function afterPrefix(text String, prefix String) returns String
 	let parts = text.split(prefix)
+
 	if parts.count() < 2 'noTail'
 		return DevVersion
 	end 'noTail'
@@ -80,6 +80,7 @@ function releaseVersion() returns String
 	tagArgs.push("--exact-match")
 	tagArgs.push("--tags")
 	let tag = gitOutput(tagArgs)
+
 	if tag.startsWith(ReleaseTagPrefix) 'taggedRelease'
 		return afterPrefix(tag, prefix: ReleaseTagPrefix)
 	end 'taggedRelease'
@@ -89,6 +90,7 @@ function releaseVersion() returns String
 	branchArgs.push("--abbrev-ref")
 	branchArgs.push("HEAD")
 	let branch = gitOutput(branchArgs)
+
 	if branch.startsWith(ReleaseBranchPrefix) 'releaseBranch'
 		return afterPrefix(branch, prefix: ReleaseBranchPrefix)
 	end 'releaseBranch'
@@ -127,13 +129,15 @@ function versionDefines(version String) returns StringArray
 end 'versionDefines'
 
 export function build() returns ExitCode
-	// ⚠ A `dev` VERSION IS NOT A NUMBER AND STAMPS AS 0.0.0.0, which is the honest reading: a
-	// binary's numeric version fields exist for installers and upgrade rules, and an unreleased build
-	// has no place in that ordering. `--version` still reports the commit it was built from.
+	// ⚠ A `dev` BUILD IS UNVERSIONED IN THE BINARY, and stamps as 0.0.0.0: a binary's numeric version
+	// fields exist for installers and upgrade rules, and an unreleased build has no place in that ordering
+	// (`dev` is not a number, which a manifest `version` must be). `--version` still reports `dev` and the
+	// commit it was built from.
 	let version = releaseVersion()
+	let stampedVersion = "" if version == DevVersion else version
 
 	var targets = BuildConfigArray.create()
-	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon", version: version, defines: versionDefines(version)))
+	targets.push(Build.target("maxon-bin", source: "maxon-bin", output: "maxon-bin/.maxon/maxon", version: stampedVersion, defines: versionDefines(version)))
 	Build.buildTargets(targets)
 	return 0
 end 'build'

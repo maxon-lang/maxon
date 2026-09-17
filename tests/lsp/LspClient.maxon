@@ -103,6 +103,7 @@ public typealias LspRangeArray = Array with LspRange
 public typealias SemanticTokenValueArray = Array with SemanticTokenValue
 public typealias PublishedDiagnosticArray = Array with PublishedDiagnostic
 public typealias GenerateIrErrorArray = Array with GenerateIrError
+public typealias ProjectEntryArray = Array with ProjectEntry
 
 // A span of a document, flat rather than nested. LSP nests it as `{start: {…}, end: {…}}`, but `end` is
 // a Maxon keyword and cannot name a field — and the client contract already spells folding ranges and
@@ -337,6 +338,27 @@ public type GenerateIrResult
 		return Self{ir: ir, errors: errors}
 	end 'of'
 end 'GenerateIrResult'
+
+// One project `maxon/listProjects` reports: where it is rooted, whether that root is a lone file, and how
+// many source files it holds.
+public type ProjectEntry
+	public var rootPath as String
+	public var isSingleFile as bool
+	public var fileCount as JsonInteger
+
+	static function create(rootPath String, isSingleFile bool, fileCount JsonInteger) returns ProjectEntry
+		return Self{rootPath: rootPath, isSingleFile: isSingleFile, fileCount: fileCount}
+	end 'create'
+end 'ProjectEntry'
+
+// What `maxon/listProjects` answered: the projects the server holds.
+public type ListProjectsResult
+	public var projects as ProjectEntryArray
+
+	static function of(projects ProjectEntryArray) returns ListProjectsResult
+		return Self{projects: projects}
+	end 'of'
+end 'ListProjectsResult'
 
 // Whether a stashed publish for the asked-about uri was there to take.
 union StashedPublish
@@ -797,6 +819,24 @@ public type LspClient
 		return GenerateIrResult.of(try stringMember(replyDoc, of: result, key: IrKey), errors: errors)
 	end 'generateIr'
 
+	// The VS Code status bar's request: the projects the server holds, with no parameters of its own.
+	public function listProjects() returns ListProjectsResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodListProjects)
+		message.putNode(JsonRpcParamsKey, value: JsonObjectBuilder.create(doc).finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+		var projects = ProjectEntryArray.create()
+
+		for element in try elementsOf(replyDoc, id: try memberNode(replyDoc, of: result, key: ProjectsKey)) 'eachProject'
+			let rootPath = try stringMember(replyDoc, of: element, key: RootPathKey)
+			let isSingleFile = try boolMember(replyDoc, of: element, key: IsSingleFileKey)
+			projects.push(ProjectEntry.create(rootPath, isSingleFile: isSingleFile, fileCount: try integerMember(replyDoc, of: element, key: FileCountKey)))
+		end 'eachProject'
+
+		return ListProjectsResult.of(projects)
+	end 'listProjects'
+
 	// ----------------------------------------------------------------------------------------
 	// Request plumbing
 	// ----------------------------------------------------------------------------------------
@@ -1136,6 +1176,12 @@ function stringMember(doc JsonDoc, of JsonNodeId, key String) returns String thr
 	end 'notAString'
 end 'stringMember'
 
+function boolMember(doc JsonDoc, of JsonNodeId, key String) returns bool throws LspClientError
+	return try doc.getBool(of, key: key) otherwise 'notABool'
+		throw LspClientError.malformedResponse("a reply's '{key}' member is missing or is not true or false")
+	end 'notABool'
+end 'boolMember'
+
 function integerMember(doc JsonDoc, of JsonNodeId, key String) returns JsonInteger throws LspClientError
 	return try doc.getInt(of, key: key) otherwise 'notAnInteger'
 		throw LspClientError.malformedResponse("a reply's '{key}' member is missing or is not a number")
@@ -1381,6 +1427,7 @@ let MethodRename = "textDocument/rename"
 let MethodCodeAction = "textDocument/codeAction"
 let MethodSemanticTokensFull = "textDocument/semanticTokens/full"
 let MethodGenerateIr = "maxon/generateIR"
+let MethodListProjects = "maxon/listProjects"
 
 // JSON-RPC's reserved code for a method the server does not implement. `methodIsServed` tests for it
 // by NUMBER rather than by message text, because the sentence is a server's to word and the code is
@@ -1463,6 +1510,10 @@ let FilenameKey = "filename"
 let IrKey = "ir"
 let ErrorsKey = "errors"
 let ColumnKey = "column"
+let ProjectsKey = "projects"
+let RootPathKey = "rootPath"
+let IsSingleFileKey = "isSingleFile"
+let FileCountKey = "fileCount"
 
 // The header field this client reads, lowercased: LSP header names are case-insensitive.
 let ContentLengthHeaderName = "content-length"

@@ -22,20 +22,26 @@ The argument can be a string literal or an interpolated string (see `panic-inter
 ### Example
 
 ```text
-function processValue(x int) returns int
-    if x < 0 'negative'
-        panic("processValue: negative input not allowed")
-    end 'negative'
-    return x * 2
+typealias Quantity = int(i64.min to i64.max)
+
+function processValue(x Quantity) returns Quantity
+	if x < 0 'negative'
+		panic("processValue: negative input not allowed")
+	end 'negative'
+	return x * 2
 end 'processValue'
+
+function main() returns ExitCode
+	return processValue(-1)
+end 'main'
 ```
 
-Output when called with a negative value:
+Output, with the program saved as `example.maxon`:
 ```text
-panic at example.maxon:3: processValue: negative input not allowed
+panic at example.maxon:5: processValue: negative input not allowed
 Stack trace:
-  in example.processValue
-  in example.main
+  in processValue
+  in main
   in mrt_start
 ```
 
@@ -66,11 +72,9 @@ Stack trace:
 
 <!-- test: panic.message-decodes-escapes -->
 ### A panic message is read like every other string literal
-MEASURED 2026-08-26: `panic`'s two arms disagreed with each other. An INTERPOLATED message was
-decoded, a plain literal one kept the raw token slice — so `panic("a{x}b\n")` emitted a newline
-while `panic("a\nb")` emitted a backslash and an `n`. The compiler emitted the newline for both, so the two
-compilers printed different bytes for the same program. Both spellings of `panic` — the statement
-and the match arm — now read their message through the one door.
+A plain literal message decodes its escapes exactly as an interpolated one does, so `panic("a\nb")`
+prints a newline, not a backslash and an `n`. Both spellings of `panic` — the statement and the match
+arm — read their message through the one door.
 ```maxon
 function main() returns ExitCode
 	panic("first\nsecond")

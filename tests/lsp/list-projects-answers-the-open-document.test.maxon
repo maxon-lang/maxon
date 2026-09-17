@@ -1,0 +1,83 @@
+// list-projects-answers-the-open-document.test.maxon — `maxon/listProjects`, the VS Code status bar's request: a session holding one
+// open document answers one project, rooted at that document's file, as a single file holding at least it.
+//
+// The document is a real file under `temp/`, because a project is rooted on disk and the answer is a PATH
+// the status bar shows, not the URI the client sent.
+//
+// Release discipline — why every session is driven into a VALUE before anything is asserted — is stated
+// once, in `LspClient.maxon`'s hazard 1.
+
+let ListProjectsDirName = "temp/lsp/list-projects"
+let ListProjectsFileName = "main.maxon"
+let ListProjectsSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+// How the answer's path is compared: separators folded to `/`, and only the tail from the checkout root, so
+// a drive letter's case or a host's absolute prefix does not decide it.
+let ListProjectsPathTail = "temp/lsp/list-projects/main.maxon"
+let ListProjectsBackslash = "\\"
+let ListProjectsSlash = "/"
+let FileUriPrefix = "file://"
+
+union ListProjectsProbe
+	answered(result ListProjectsResult)
+	unanswered(reason String)
+end 'ListProjectsProbe'
+
+test 'listProjects answers the open document as a single-file project'
+	let file = stagedListProjectsFile()
+	let uri = fileUriOf(file)
+
+	var client = LspClient.start()
+	var probe = ListProjectsProbe.unanswered("the request ended without saying how")
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(uri, content: ListProjectsSource)
+		probe = ListProjectsProbe.answered(client.listProjects())
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(detail) then probe = ListProjectsProbe.unanswered("the framed stream broke — {detail}")
+			malformedResponse(detail) then probe = ListProjectsProbe.unanswered("a reply was not the `\{ projects: [\{ rootPath, isSingleFile, fileCount \}] \}` shape the VS Code extension reads — {detail}")
+			serverRefused(code, message) then probe = ListProjectsProbe.unanswered("`maxon/listProjects` was refused with JSON-RPC {code}: {message}. The VS Code extension sends it for its status bar.")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match probe 'probe'
+		answered(result) then try requireOneSingleFileProject(result, uri: uri)
+		unanswered(reason) then try Expect.fail(reason)
+	end 'probe'
+end 'listProjects answers the open document as a single-file project'
+
+function requireOneSingleFileProject(result ListProjectsResult, uri String) throws TestFailure
+	try Expect.equal(result.projects.count() as AssertedInt, expected: 1, message: "one open document ({uri}) was answered with {result.projects.count()} projects.")
+
+	let project = try result.projects.get(0) otherwise panic("list-projects: the count was just held to one")
+	let folded = project.rootPath.replace(ListProjectsBackslash, with: ListProjectsSlash)
+
+	try Expect.isFalse(project.rootPath.startsWith(FileUriPrefix), message: "the project's rootPath is a URI, and the status bar shows a path: {project.rootPath}")
+	try Expect.isTrue(folded.endsWith(ListProjectsPathTail), message: "the project's rootPath is not the open document's file ({uri}): {project.rootPath}")
+	try Expect.isTrue(project.isSingleFile, message: "a project rooted at one open file was not answered as a single file: {project.rootPath}")
+	try Expect.isTrue(project.fileCount >= 1, message: "a project rooted at one open file reported {project.fileCount} files.")
+end 'requireOneSingleFileProject'
+
+function stagedListProjectsFile() returns FilePath
+	let dir = try FilePath.from(ListProjectsDirName) otherwise panic("list-projects: '{ListProjectsDirName}' is not a spellable path")
+	let resolved = dir.resolve(Directory.currentPath())
+
+	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'couldNotCreate'
+		panic("list-projects: the test could not run — could not create {resolved.toString()}")
+	end 'couldNotCreate'
+
+	let file = resolved.join(ListProjectsFileName)
+	try File.writeText(file, content: ListProjectsSource) otherwise panic("list-projects: the test could not run — could not write {file.toString()}")
+	return file
+end 'stagedListProjectsFile'
+
+// `file:///C:/…` for a drive path, `file:///…` for a POSIX one.
+function fileUriOf(file FilePath) returns String
+	let slashed = file.toString().replace(ListProjectsBackslash, with: ListProjectsSlash)
+	return "{FileUriPrefix}{slashed}" if slashed.startsWith(ListProjectsSlash) else "{FileUriPrefix}{ListProjectsSlash}{slashed}"
+end 'fileUriOf'

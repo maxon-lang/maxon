@@ -4,18 +4,17 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 
 ## Features
 - Syntax highlighting for `.maxon` files using a TextMate grammar
-- **Test file support**: Full language support for `.test` fragment files (only the Maxon code portion)
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) from the compiler's own `maxon lsp-server`
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
-- **Code formatting**: Format your Maxon code with customizable indentation settings
+- **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to
-- **Spec Test Explorer**: Discover and run spec tests from `specs/*.md` in VS Code's Test Explorer, against the Maxon compiler
+- **Test Explorer**: Discover the `test` declarations in your `*.test.maxon` files and run them with `maxon test`
 
 The language features come from the Maxon compiler itself, which serves the Language Server
 Protocol (`maxon lsp-server`). This extension is its client.
 
 ## Requirements
-- Visual Studio Code 1.75.0 or later
+- Visual Studio Code 1.107.0 or later, or an editor built on it
 - The Maxon compiler. If the extension cannot find one it offers to install it, using the same
   one-line installer as the [installation page](https://maxon.dev/docs/getting-started/installation/).
 
@@ -39,9 +38,8 @@ The extension looks in this order:
 If none of those finds one, it offers **Install**, which runs the installer for your account, and
 **Locate…**, which lets you pick a compiler you already have.
 
-The language server runs from a copy of the compiler in the extension's storage, so a build is never
-blocked by the server holding the compiler open. A `stdlib` link beside the copy points at the
-original's standard library.
+The language server is the compiler it finds, run as `maxon lsp-server`. When that file is rebuilt
+the extension restarts the server, so it answers from the new compiler.
 
 ### From source (for working on the extension)
 1. Build the compiler in the repository root (see the repository README); the extension finds
@@ -64,7 +62,7 @@ npm run install-extension
 
 ## Usage
 - Open a `.maxon` file in VS Code. If the LSP server binary is available and runs correctly, you should get diagnostics, code completion, and basic navigation features.
-- Open a `.test` file (language test fragments) and get full LSP support for the Maxon code portion (before the `---` separator).
+- A `.test` file (a spec fragment in the Maxon checkout) is highlighted as Maxon and sent to the language server whole, exactly like a `.maxon` file; nothing in it is split off or skipped.
 - If you only want syntax highlighting, no LSP server is required.
 
 ## Development
@@ -91,37 +89,38 @@ cd vscode-extension
 npm test
 ```
 
+- `npm run test:unit` compiles the extension and runs the unit tests that need no VS Code instance
+  (`src/test/unit/`), such as how a `maxon test --json` report maps onto Test Explorer results.
+- `npm run test:grammar` checks the TextMate grammar against the snapshots in `test-fixtures/`.
+
 ## Code Formatting
 
-The extension provides automatic code formatting for Maxon files. You can format your code using:
+The extension has no formatter of its own. **Format Document** (**Shift+Alt+F**, or **Shift+Option+F** on
+Mac) sends `textDocument/formatting` to the language server, which re-prints the whole document with the
+compiler's formatter and answers with one edit replacing all of it — or with nothing when the document is
+already formatted.
 
-- **Right-click** in the editor and select "Format Document"
-- Press **Shift+Alt+F** (Windows/Linux) or **Shift+Option+F** (Mac)
-- Enable format-on-save in your settings
-
-### Formatting Configuration
-
-Configure formatting behavior in your VSCode settings:
+The extension sets `editor.formatOnSave` to `true` for Maxon files, so saving formats. Turn it off in your
+settings to format only on request:
 
 ```json
 {
-  "maxon.formatting.insertSpaces": false,   // Use tabs (default)
   "[maxon]": {
-    "editor.formatOnSave": true,           // Format on save (optional)
-    "editor.tabSize": 2,
-    "editor.insertSpaces": false
+    "editor.formatOnSave": false
   }
 }
 ```
 
-### What the formatter does:
-- Normalizes indentation based on block structure (function, if, while, for, struct)
-- Indents type field declarations inside `struct...end` blocks
-- Indents type literal fields inside `{...}` braces
-- Removes trailing whitespace
-- Collapses multiple consecutive blank lines into one
-- Ensures proper indentation of `end` statements and closing `}`
-- Converts line endings to LF (Unix-style)
+### Indentation
+
+Maxon indents with tabs. Two settings choose what the server is asked for:
+
+- `maxon.formatting.insertSpaces` (default `false`): indent with spaces instead.
+- `maxon.formatting.tabSize` (default `2`): how many spaces make one indent. The server reads it only
+  when `insertSpaces` is `true`; with tabs it is ignored.
+
+These settings replace the editor's own `editor.insertSpaces` and `editor.tabSize` for the formatting
+request.
 
 ## Compiler Explorer
 
@@ -136,63 +135,73 @@ The Compiler Explorer panel shows the Target IR the compiler lowers a program to
 
 Type or paste a whole program into the **Source** pane. The **Target IR** pane updates shortly after you stop typing. If the program does not compile, the pane lists each error with its line and column instead.
 
-## Spec Test Explorer
+## Test Explorer
 
-The extension contributes a `Maxon Spec Tests` test controller to VS Code's Test Explorer. Tests are discovered by parsing every markdown file under `specs/` in the workspace root: each `<!-- test: name -->` marker becomes a test item under a parent node named after the spec file (e.g. `arithmetic` → `addition`, `subtraction`, …). The controller activates as soon as the workspace contains a `specs/*.md` file, even if the language server fails to start.
+The extension contributes a **Maxon Tests** controller to VS Code's Test Explorer. It lists every
+`test '<name>'` declaration in the workspace's `*.test.maxon` files, one node per file with its tests
+beneath it, and runs them with [`maxon test`](https://maxon.dev/docs/cli/#maxon-test) — the same compiler
+the language server uses (see [Finding the compiler](#finding-the-compiler)). The tests are listed even
+when no compiler is found; running them then reports that none was.
 
-### Run profile
+### Discovery
 
-One run profile is registered:
+Test files are read from disk, and the tree follows them as they are created, saved and deleted. A file
+beneath a directory holding a `.maxonignore` is not listed, because no `maxon test` run compiles it. The
+refresh button in the Test Explorer re-reads every test file.
 
-- **Maxon Compiler** — runs `maxon-bin/.maxon/maxon.exe spec-test`.
+### Which project a test runs in
 
-If the compiler binary is missing the run is aborted with an error message — build it first (see the repo root `CLAUDE.md` for build commands).
+`maxon test <directory>` compiles every `.maxon` file beneath the directory, together with its tests, as
+one program. A test file's project is the highest directory reachable from the file's own directory
+through parent directories that each hold a `.maxon` source (a `build.maxon` manifest does not count),
+never above the workspace folder. So a `lib/math.test.maxon` in a project whose `main.maxon` is at the
+root runs from the root, and `tests/cli/help.test.maxon` runs from `tests/cli/` when `tests/` itself
+holds no source.
 
-Specs marked `status: draft` in their frontmatter are skipped; selected items belonging to a skipped spec are reported as `skipped` in the run.
+The compiler runs in the workspace folder, so a relative path inside a test means what it means in a
+terminal opened there.
 
-### Filtering
+### Running
 
-The controller passes `--filter` to the runner based on the selection:
+Each project the selection touches is one invocation:
 
-- Run all tests → no filter, single process (the runner walks every spec in its own worker pool, which is dramatically faster than spawning per-spec).
-- Run a whole spec → `--filter=<specName>/`.
-- Run individual tests → one `--filter=<specName>/<testName>` invocation per test.
-
-### Output parsing
-
-Test results are read from the runner's stdout, which carries one verdict line per selected test and then a summary:
-
-- `PASS <spec>/<test>`, `FAIL <spec>/<test>: <reason>`, `SKIP <spec>/<test>`, `NOTRUN <spec>/<test>`
-- `<n> passed, <m> failed`
-
-A `PASS` updates its test item live. A failure's reason — its `FAIL` line and the lines after it, up to the next verdict or the summary — is attached to the failure when the run ends. `SKIP`, `NOTRUN`, and a selected test the runner printed no verdict for are reported as skipped; if the runner stops before its summary, a test with no verdict is reported as errored instead. The runner's stderr is shown in the run output and not parsed.
-
-### Refresh
-
-The controller watches `specs/*.md` and re-syncs the corresponding tree node on change/create/delete. Use the Test Explorer's refresh button to force a full re-scan of the directory.
-
-## Customizing Colors
-
-The extension provides semantic highlighting for block identifiers (e.g., `'loop_label'`). These are colored based on their nesting depth to help visually distinguish nested blocks.
-
-You can customize these colors in your `settings.json`. To apply changes only to Maxon files:
-
-```json
-"editor.semanticTokenColorCustomizations": {
-    "[maxon]": {
-        "rules": {
-            "label.level0": "#FF0000", // Outermost blocks
-            "label.level1": "#00FF00",
-            "label.level2": "#0000FF",
-            "label.level3": "#FFFF00",
-            "label.level4": "#00FFFF",
-            "label.level5": "#FF00FF"  // Deeply nested blocks
-        }
-    }
-}
+```text
+maxon test <project> --json [--filter=<patterns>]
 ```
 
-The levels cycle every 6 depths (level 0, 1, 2, 3, 4, 5, 0, 1...).
+Running every test of a project passes no filter. Otherwise the filter names each file whose tests are
+all selected by its path, and each other selected test by its name. The compiler matches a pattern as a
+case-insensitive substring, so the run may include more tests than you selected; only the selected
+ones are reported.
+
+### Results
+
+`--json` prints one report, which the extension matches to the tree by file and test name:
+
+| `state` | Test Explorer |
+|---------|---------------|
+| `passed` | passed, with its duration |
+| `failed` | failed, with the assertion's output, located at the assertion's line |
+| `crashed`, `timedOut`, `leaked` | failed, saying which |
+| `didNotRun` | errored |
+
+A test that threw an error nothing caught names the error, and points at where it was thrown when that
+file exists. Anything a test printed goes to the run's output.
+
+When `maxon test` exits with code 2 it could not run at all — a compile error, most often — and every
+test in that project is errored with what it printed. A selected test missing from the report is errored
+too, with the report's reason when it ran nothing: the compiler reads saved files, so a test that is not
+saved yet is not in it.
+
+### The spec suite
+
+When the workspace folder is the Maxon compiler checkout — it holds both `specs/` and `maxon-bin/` — a
+second controller, **Maxon Spec Suite**, lists the `<!-- test: name -->` markers in `specs/*.md` under
+one node per spec, and runs them with the tree's own build, `maxon-bin/.maxon/maxon spec-test`. A run of
+every spec passes no filter; a whole spec runs as `--filter=<spec>/`, and each single test as
+`--filter=<spec>/<test>`. Specs marked `status: draft` are reported as skipped. Verdicts are read from the
+`PASS`, `FAIL`, `SKIP` and `NOTRUN` lines on stdout; a selected test with no verdict is skipped when the
+run reached its `<n> passed, <m> failed` summary, and errored when it did not.
 
 ## License
 

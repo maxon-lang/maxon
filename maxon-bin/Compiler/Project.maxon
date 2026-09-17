@@ -852,6 +852,7 @@ export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 
 // A list of the doors a binding waits on, by its place in the parser's `moveSiteLists`; the first is the empty one.
 module typealias MoveSiteListIndex = int(0 to u64.max)
+
 module let NoMoveSiteList = 0 as MoveSiteListIndex
 
 // `VarInfo.lentAt` of a binding no send has lent. Token 0 opens its file, and no send argument can: a send
@@ -7945,16 +7946,17 @@ export type Project
 	// must be able to take after a fault, for a fact the compiler already knows.
 	export var coverageDataPath as String
 
-	// ⭐ WHAT THE BUILD MANIFEST SAID THIS PROGRAM IS, for the binary's own metadata: a Windows
-	// `VS_VERSIONINFO` resource and a Mach-O `LC_SOURCE_VERSION`. Empty when nobody said — which is
-	// most programs, and is why the writers default to the output's own name and a zero version.
 	// ⭐ **WHAT `--define` SAID, FOR THE WHOLE COMPILE.** One set per `Project`, exactly as `target` is
 	// one per `Project`: `queryProgramSignatures` hands these to the index that folds every top-level
 	// constant, and its memo lives on `project.db` rather than in any process-wide store — so two
 	// compiles differing only in their defines cannot serve each other a folded value.
 	export var defines as DefineArray = DefineArray.create()
 
-	export var productVersion as String = ""
+	// ⭐ WHAT THE BUILD MANIFEST SAID THIS PROGRAM'S VERSION IS, for the binary's own metadata: a Windows
+	// `VS_VERSIONINFO` resource and a Mach-O `LC_SOURCE_VERSION`, already checked against this target's field
+	// (`productVersionFor`). Empty when nobody said, which is most programs, and the writers then stamp a zero
+	// version.
+	export var productVersion as VersionComponentArray = VersionComponentArray.create()
 
 	// Where each source file's block of counter slots begins in `covPoints` — the FILE-LOCAL id a
 	// `MaxonOp.covPoint` carries plus this file's base is the whole-program id. Written by `mergeArtifact`
@@ -8347,8 +8349,7 @@ end 'rootIsUnderRuntimeDirectory'
 // `reportPositioned`.
 //
 // ⛔ **BUT IT IS NOT EVERY LINE THIS COMPILER PRINTS, AND THE EXCEPTION CARRIES
-// PATHS.** The six `CompileError` arms — `fileNotFound`, `directoryNotFound`,
-// `noSourceFiles`, `readError`, `noCommonRoot`, `stdlibNotFound`, `runtimeNotFound` — never become
+// PATHS.** The `CompileError` arms other than `compileError` never become
 // a `Diagnostic` at all: `Main.reportCompileError` writes them straight to
 // `emitDiagnosticLine`, whose own header owns that argument. They therefore
 // bypass BOTH rules stated here, so a staged path in one of them is still

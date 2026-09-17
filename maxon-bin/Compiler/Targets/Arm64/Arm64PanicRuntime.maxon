@@ -276,11 +276,12 @@ function buildArm64PrintInlineFramesChunk(globalData GlobalDataTable) returns Fu
 end 'buildArm64PrintInlineFramesChunk'
 
 // ==========================================================================
-// mrt_panic_walk_frames(x0 = start_frame, x1 = stack_low)
+// mrt_panic_walk_frames(x0 = start_frame, x1 = stack_low, x2 = frame_budget)
 // ==========================================================================
 
-// Walk the saved-x29 chain from `start_frame`, printing up to `MaxBacktraceFrames` symbolized frames and
-// `ElidedFramesLine` if the chain goes on past them. A frame record is `[x29+0] = the caller's x29`,
+// Walk the saved-x29 chain from `start_frame`, printing up to `frame_budget` symbolized frames and
+// `ElidedFramesLine` if the chain goes on past them — x64's `buildWalkFramesChunk`, whose header states the
+// budget. A frame record is `[x29+0] = the caller's x29`,
 // `[x29+8] = the return address` — the same two words x64's saved-RBP chain holds, which is why one pair of
 // offsets serves both walkers.
 //
@@ -304,6 +305,8 @@ function buildArm64WalkFramesChunk(globalData GlobalDataTable, greenThreads bool
 	let elided = asm.newLabel()
 	let done = asm.newLabel()
 
+	// The budget first: `emitArm64WalkStackBounds` clobbers x2.
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotCounter)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFrame)
 	emitArm64WalkStackBounds(asm, greenThreads: greenThreads, os: os, lowSlot: SlotStackLow, ceilingSlot: SlotFrameCeiling)
 
@@ -313,8 +316,6 @@ function buildArm64WalkFramesChunk(globalData GlobalDataTable, greenThreads bool
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTextBase)
 	arm64EmitLeaRuntimeFuncAddr(asm, dest: Arm64Register.x3, funcName: SymbolTableName)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x3, slot: SlotSymtable)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: MaxBacktraceFrames)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCounter)
 
 	// UNSIGNED compares: a frame pointer is an address, and a corrupt one with bit 63 set must read as far
 	// above the stack rather than below it. The low bound is never zero, so it also ends the chain at the
@@ -412,8 +413,11 @@ end 'emitArm64WalkStackBounds'
 //
 // ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `arm64EmitPanicStackGuard`.
 function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, greenThreads bool, target Target) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
-	arm64EmitPanicStackGuard(asm, greenThreads: greenThreads, target: target)
+	var entry = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+	arm64EmitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, greenThreads: greenThreads, target: target)
+	var asm = Arm64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in x0.
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
@@ -421,9 +425,11 @@ function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, gre
 	// (2) The `Stack trace:` header.
 	arm64EmitPrintConstant(asm, globalData: globalData, bytes: BacktraceHeader)
 
-	// (3) Walk from this frame, which is also the lowest address the walk believes: x0 = x1 = x29.
+	// (3) Walk from this frame, which is also the lowest address the walk believes: x0 = x1 = x29, with the
+	// whole frame budget.
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x29)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x29)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MaxBacktraceFrames)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	// (4) The counters, on an instrumented build only.
@@ -437,15 +443,15 @@ end 'buildArm64PanicChunk'
 
 // ⭐⭐ **A PANIC CAN BE RAISED FROM ANY DEPTH OF UN-GUARDED RUNTIME FRAMES, SO IT MAKES ITS OWN ROOM** —
 // x64's `emitPanicStackGuard` carries the argument: the same prologue guard every guarded function runs,
-// projecting one margin for the diagnostic chain under `mrt_panic`, placed after the frame record, which the
-// grower rebases with every link above it. It never parks (`GtGuardSite.mrtPanic`). Only a green-thread program
-// has the scheduler words it reads.
-function arm64EmitPanicStackGuard(asm Arm64RuntimeAsm, greenThreads bool, target Target)
+// projecting one margin for the diagnostic chain under `mrt_panic`, placed before the frame record as x64's is
+// and for x64's reason. It never parks (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler
+// words it reads.
+function arm64EmitPanicStackGuard(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, greenThreads bool, target Target)
 	if not greenThreads 'noGreenThreads'
 		return
 	end 'noGreenThreads'
 
-	emitArm64GtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), site: GtGuardSite.mrtPanic, target: target)
+	emitArm64GtStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), site: GtGuardSite.mrtPanic, target: target)
 end 'arm64EmitPanicStackGuard'
 
 // ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`** — x64's

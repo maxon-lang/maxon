@@ -87,8 +87,8 @@ end 'handle'
 - **Float division** throws on a zero divisor too, including `-0.0`. `inf` and `NaN` produced any other way
   are ordinary IEEE values. There is no float `mod`.
 - `i64.min mod -1` is `0` on every target. `i64.min / -1` has no representable quotient, and a `try`
-  cannot catch it: on x64-windows the program stops with `panic: integer overflow`, on x64-linux with
-  `panic: integer divide by zero`, and on wasm32-wasi with a wasm trap. On arm64 the result is `i64.min`.
+  cannot catch it: on every target the program stops with `panic: integer overflow`, a stack trace and
+  exit code 1.
 
 ## Comparison Operators
 

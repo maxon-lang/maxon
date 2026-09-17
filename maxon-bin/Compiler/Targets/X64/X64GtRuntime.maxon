@@ -582,6 +582,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// outgoing reservation are one fact.
 		WriteConsoleW gives WriteConsoleStackArgWords  // 5: hConsoleOutput, lpBuffer, nNumberOfCharsToWrite, lpNumberOfCharsWritten, lpReserved
 		MultiByteToWideChar gives MultiByteToWideCharStackArgWords  // 6: CodePage, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar
+		SetThreadStackGuarantee gives 0  // 1: StackSizeInBytes
 
 		// Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
 		GetEnvironmentVariableA gives 0  // 3: lpName, lpBuffer, nSize
@@ -862,6 +863,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 
 		// ⚠ **NOT A SYSTEM CALL AT ALL** — a table walk in user-mode kernel32 over the caller's own bytes.
 		MultiByteToWideChar gives SyscallClass.schedulerBound
+
+		// Called once, from `mrt_runtime_init`, before any green thread exists.
+		SetThreadStackGuarantee gives SyscallClass.schedulerBound
 		GetEnvironmentVariableA gives SyscallClass.schedulerBound
 		GetEnvironmentStringsA gives SyscallClass.schedulerBound
 		FreeEnvironmentStringsA gives SyscallClass.schedulerBound
@@ -1401,8 +1405,8 @@ end 'emitGtFpArgumentSlots'
 // `__gt_morestack` — grow the current GT's stack to the first doubling that fits the requesting frame, move the
 // thread onto it (`__gt_stack_relocate`), store the stack marks of a grow (`GtStackMarksOfAGrow`), and `ret` onto
 // the new (larger) stack so the frame whose guard called us fits. All of it runs on the system stack (entered r10
-// = system-stack top), so the near-overflow GT stack never holds this frame. A growth past `GtMaxStackBytes` and a
-// refused allocation both end the process.
+// = system-stack top), so the near-overflow GT stack never holds this frame. A growth past `GtMaxStackBytes` ends the
+// process with `panic: stack overflow`, and a refused allocation with `RuntimeAbort.greenThreadStackAllocationFailed`.
 function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -1505,9 +1509,19 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	// stack-exhaustion abort can run into a thread the monitor has suspended inside `ExitProcess`, which
 	// hangs the process with nothing printed — the one deadlock the gate exists to prevent, reached by the
 	// one path that is already reporting a fatal error. The gate carries the shim itself, and off a green
-	// thread's own stack the shim takes its direct road anyway.
+	// thread's own stack the shim takes its direct road anyway. `mrt_gt_stack_overflow` exits the same way.
+	//
+	// ⭐ **A GROWTH PAST THE CEILING IS A STACK OVERFLOW, REPORTED FROM THE REQUESTING FRAME.** Every guard runs
+	// before its function's prologue, so the entry rsp holds the return into that function and the word above
+	// it the function's own return address, while rbp is still its caller's frame. Storing rbp over the first
+	// word makes the pair the frame record the prologue would have pushed; the process never returns there.
 	growLabels.place(GrowExhaustedLabel, value: code.count())
-	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord, usesGt: true, target: target)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rsp, disp: ferriedRspDisp, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, wide: true)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: FrameOffSavedFramePointer as Imm32, srcReg: X64Register.rbp)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtStackOverflowName)
 	growLabels.place(GrowRefusedLabel, value: code.count())
 	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: true, target: target)
 	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)

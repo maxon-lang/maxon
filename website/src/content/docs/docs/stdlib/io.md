@@ -112,7 +112,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `changeExtension(newExt String)` | `FilePath` | Replace or add an extension; include the dot (`".exe"`). |
 | `resolve(base FilePath)` | `FilePath` | A relative path joined onto `base`; an absolute path unchanged. |
 | `relativeTo(base FilePath)` | `FilePath` | The part after `base`. Throws `FilePathError.noParent` when the path is not inside `base`. |
-| `normalize()` | `FilePath` | Returns the path; it was normalized on construction. |
+| `normalize()` | `FilePath` | The path folded lexically, without asking the filesystem: `.` components removed, each `..` cancelling the component before it, repeated separators collapsed and a trailing one dropped. A `..` above an absolute path's root is dropped; a leading one in a relative path is kept. A relative path that folds away entirely is `.`. |
 | `toString()` | `String` | The path text. |
 
 ### Queries
@@ -274,8 +274,8 @@ and WASI, matching what each platform can report.
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `Process.executablePath()` | `FilePath` | `ProcessIntrospectionError.pathUnavailable` | Absolute path of the running executable. |
-| `Process.environmentVariable(name String)` | `String` | `ProcessIntrospectionError.variableUnset` | The variable's value. Names are case-insensitive on Windows (`Path` answers to `PATH`) and exact elsewhere. An unset variable throws; a variable set to `""` returns `""`. |
-| `Process.currentEnvironmentEntries()` | `StringArray` | — | Every `NAME=VALUE` entry, in the order the OS reports them. |
+| `Process.environmentVariable(name String)` | `String` | `ProcessIntrospectionError.variableUnset`, `.environmentUnreadable` | The variable's value. Names are case-insensitive on Windows (`Path` answers to `PATH`) and exact elsewhere. An unset variable throws; a variable set to `""` returns `""`. |
+| `Process.currentEnvironmentEntries()` | `StringArray` | `ProcessIntrospectionError.environmentUnreadable` | Every `NAME=VALUE` entry, in the order the OS reports them. Throws when the OS cannot hand the environment over, rather than answering a partial list. |
 | `Process.envEntryName(entry String)` | `String` | — | The text before the first `=` (searching from the second byte, so Windows' `=C:=C:\dir` entries keep their name). |
 | `Process.envEntryValue(entry String)` | `String` | — | The text after that `=`, or `""`. |
 | `EnvNameValueSeparator` | `Byte` | — | The separator byte, `=` (61). |
@@ -284,6 +284,7 @@ and WASI, matching what each platform can report.
 enum ProcessIntrospectionError implements Error
 	pathUnavailable
 	variableUnset
+	environmentUnreadable
 end 'ProcessIntrospectionError'
 ```
 
@@ -347,7 +348,8 @@ end 'Executable'
 ```
 
 `name` is looked up on `PATH` (with `PATHEXT` on Windows) when the child is spawned; `path` is used as
-given.
+given. A relative `path` is relative to the child's `workingDirectory` on every OS, and to the parent's
+working directory when none is set.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -451,8 +453,9 @@ union TerminationStatus
 end 'TerminationStatus'
 ```
 
-`exited` is a normal exit. `signalled` is a Unix signal, or on Windows an abnormal NTSTATUS exit such as an
-access violation. `isSuccess()` is true for `exited(0)`; `code()` returns the number either way.
+`exited` is how every child's end is reported: a child killed by a Unix signal exits with `128 + signal`, and
+a Windows child that ended abnormally exits with its NTSTATUS code. No target currently reports `signalled`. `isSuccess()` is true for `exited(0)`; `code()` returns
+the number either way.
 
 ### SubprocessError
 
@@ -465,6 +468,11 @@ union SubprocessError implements Error
 	inputTooLarge
 end 'SubprocessError'
 ```
+
+`executableNotFound` is thrown on every target when the executable does not exist: a bare name no search
+finds, or an `Executable.path` naming a missing file. `spawnFailed` is any other refusal to start the child —
+a `file` stream that cannot be opened and a `workingDirectory` that does not exist included, though either
+fails with a not-found code; its reason carries the OS error number (`os error 5`).
 
 `displayReason()` renders any case as one line, such as `timed out after 5000ms`.
 
@@ -545,13 +553,14 @@ refused at compile time elsewhere.
 |--------|---------|--------|-------------|
 | `SharedSegment.create(name String, bytes SegmentByteCount)` | `SharedSegment` | `SharedMemoryError` | Create a new section of exactly `bytes` bytes under `name` and map it. |
 | `segmentName()` | `String` | — | The name another process maps it by. |
-| `readWord(offset SegmentOffset)` | `SegmentWord` | — | The 64-bit word `offset` bytes in. |
-| `writeWord(offset SegmentOffset, value SegmentWord)` | — | — | Write a 64-bit word `offset` bytes in. |
-| `copyOut(offset SegmentOffset, byteCount SegmentByteCount)` | `ByteArray` | — | An independent copy of a byte range. |
+| `readWord(offset SegmentOffset)` | `SegmentWord` | `SharedMemoryError` | The 64-bit word `offset` bytes in. |
+| `writeWord(offset SegmentOffset, value SegmentWord)` | — | `SharedMemoryError` | Write a 64-bit word `offset` bytes in. |
+| `copyOut(offset SegmentOffset, byteCount SegmentByteCount)` | `ByteArray` | `SharedMemoryError` | An independent copy of a byte range. |
 | `close()` | — | — | Unmap, release the section and withdraw its name. Idempotent. |
 
-Offsets are in bytes, not words. Offsets and lengths are not checked against the section's size; keep them
-inside it.
+Offsets are in bytes, not words. Every access is checked against the section's size: a word (8 bytes) or a
+`copyOut` range (`offset + byteCount`) that would reach past the end throws `SharedMemoryError.outOfBounds`
+and touches nothing.
 
 | Type | Definition |
 |------|------------|
@@ -563,11 +572,13 @@ inside it.
 union SharedMemoryError implements Error
 	createFailed
 	mapFailed
+	outOfBounds
 end 'SharedMemoryError'
 ```
 
 `createFailed`: the name collides with an incompatible section, or the size cannot be backed.
-`mapFailed`: no address space for the view.
+`mapFailed`: no address space for the view. `outOfBounds`: a `readWord`, `writeWord` or `copyOut` would
+reach past the end of the section.
 
 Always `close()` a segment. A section stays alive while any view of it is mapped, and on Linux and macOS the
 name outlives the process until it is withdrawn or the machine restarts.
@@ -579,9 +590,9 @@ function main() returns ExitCode
 		return 1
 	end 'failed'
 
-	segment.writeWord(8, value: 42)
-	let word = segment.readWord(8)
-	let copied = segment.copyOut(8, byteCount: 8)
+	try segment.writeWord(8, value: 42) otherwise return 2
+	let word = try segment.readWord(8) otherwise return 2
+	let copied = try segment.copyOut(8, byteCount: 8) otherwise return 2
 	print("{segment.segmentName()} {word} {copied.count()}\n")
 	segment.close()
 	return 0

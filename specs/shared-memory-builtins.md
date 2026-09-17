@@ -20,6 +20,10 @@ this process; the mapping is torn down by `close()`. `readWord` / `writeWord` ad
 64-bit words at a byte offset, `copyOut` lifts a byte range out of it, and `segmentName()` answers the
 name the section is published under — the one a second process needs in order to map the same bytes.
 
+Every accessor is bounds-checked against the size the section was created with: a `readWord` or
+`writeWord` whose 8 bytes, or a `copyOut` whose `offset + byteCount`, would reach past the end throws
+`SharedMemoryError.outOfBounds`, so the three carry `throws SharedMemoryError` and are called with `try`.
+
 ⚠ **A WORD IS ADDRESSED BY A BYTE OFFSET, NOT BY A WORD INDEX.** The ring's header and its records are
 laid out in bytes by a format neither side owns, so an accessor that silently scaled its argument
 would put every consumer's reads one stride away from the producer's writes — which is why
@@ -45,8 +49,8 @@ before any layout question is asked.
 ```maxon
 function main() returns ExitCode
 	var segment = try SharedSegment.create("maxon-spec-shm-round-trip", bytes: 4096) otherwise return 3
-	segment.writeWord(0, value: 1234567)
-	let stored = segment.readWord(0)
+	try segment.writeWord(0, value: 1234567) otherwise return 4
+	let stored = try segment.readWord(0) otherwise return 5
 	segment.close()
 	print("stored={stored}\n")
 	return 0 as ExitCode
@@ -66,10 +70,10 @@ answer the SAME number twice — which a single round trip cannot see.
 ```maxon
 function main() returns ExitCode
 	var segment = try SharedSegment.create("maxon-spec-shm-offsets", bytes: 4096) otherwise return 3
-	segment.writeWord(0, value: 11)
-	segment.writeWord(8, value: 22)
-	let first = segment.readWord(0)
-	let second = segment.readWord(8)
+	try segment.writeWord(0, value: 11) otherwise return 4
+	try segment.writeWord(8, value: 22) otherwise return 5
+	let first = try segment.readWord(0) otherwise return 6
+	let second = try segment.readWord(8) otherwise return 7
 	segment.close()
 	print("first={first} second={second}\n")
 	return 0 as ExitCode
@@ -89,8 +93,8 @@ that landed at another offset, changes every one of them.
 ```maxon
 function main() returns ExitCode
 	var segment = try SharedSegment.create("maxon-spec-shm-copy-out", bytes: 4096) otherwise return 3
-	segment.writeWord(0, value: 258)
-	let octets = segment.copyOut(0, byteCount: 4)
+	try segment.writeWord(0, value: 258) otherwise return 8
+	let octets = try segment.copyOut(0, byteCount: 4) otherwise return 9
 	segment.close()
 	let b0 = try octets.get(0) otherwise return 4
 	let b1 = try octets.get(1) otherwise return 5
@@ -135,4 +139,76 @@ named=4
 ```
 ```exitcode
 0
+```
+
+<!-- test: shared-memory-builtins.a-word-read-past-the-segment-throws -->
+⛔ **AN ACCESS THAT REACHES PAST THE SEGMENT THROWS `outOfBounds` INSTEAD OF READING WHATEVER LIES BEYOND
+IT.** A word is 8 bytes, so offset 4090 in a 4096-byte section starts inside the mapping and ends 2 bytes
+past it. Exit 7 is reachable only through the `outOfBounds` arm; a read that succeeded returns 5.
+```maxon
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-read-past-end", bytes: 4096) otherwise return 3
+	let word = try segment.readWord(4090) otherwise (e) 'refused'
+		segment.close()
+		return match e 'why'
+			outOfBounds gives 7
+			createFailed gives 4
+			mapFailed gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	print("read {word} past the end\n")
+	return 5 as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: shared-memory-builtins.a-word-written-past-the-segment-throws -->
+The write twin of the read above: a store that straddles the end would overwrite memory the section
+does not own, so it is refused by the same bound before any byte moves.
+```maxon
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-write-past-end", bytes: 4096) otherwise return 3
+	try segment.writeWord(4090, value: 1) otherwise (e) 'refused'
+		segment.close()
+		return match e 'why'
+			outOfBounds gives 7
+			createFailed gives 4
+			mapFailed gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	return 5 as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: shared-memory-builtins.copy-out-past-the-segment-throws -->
+`copyOut`'s bound is `offset + byteCount`: 4000 + 200 ends 104 bytes past a 4096-byte section, although
+the offset alone is inside it.
+```maxon
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-copy-out-past-end", bytes: 4096) otherwise return 3
+	let octets = try segment.copyOut(4000, byteCount: 200) otherwise (e) 'refused'
+		segment.close()
+		return match e 'why'
+			outOfBounds gives 7
+			createFailed gives 4
+			mapFailed gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	print("copied {octets.count()} bytes past the end\n")
+	return 5 as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```

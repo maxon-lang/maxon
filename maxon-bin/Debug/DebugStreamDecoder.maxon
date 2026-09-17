@@ -196,16 +196,16 @@ module union DecoderError implements Error
 	end 'displayReason'
 end 'DecoderError'
 
-// `SharedMemoryError` carries no renderer of its own — it is two arms and no payload — so the sentence is
-// written here, where the refusal is.
+// `SharedMemoryError` carries no renderer of its own, so the sentence is written here, where the refusal is.
 //
 // ⛔ **IT NAMES THE CALL THAT ACTUALLY REFUSED, AND THE TWO HOSTS DO NOT MAKE THE SAME ONE.** The whole
 // value of this line is that a reader knows which manual page to open; a host lane reporting Win32's
 // spelling would send them to the wrong one.
 function sharedMemoryReason(reason SharedMemoryError) returns String
-	return match reason 'k'
-		createFailed gives "{SegmentCreateCallName} refused the section"
-		mapFailed gives "{SegmentMapCallName} refused the view"
+	match reason 'k'
+		createFailed then return "{SegmentCreateCallName} refused the section"
+		mapFailed then return "{SegmentMapCallName} refused the view"
+		outOfBounds then panic("DebugStreamDecoder.sharedMemoryReason: `segmentUnavailable` carries only what `SharedSegment.create` throws, and an accessor's `outOfBounds` is not among it")
 	end 'k'
 end 'sharedMemoryReason'
 
@@ -290,7 +290,7 @@ module type DebugStreamDecoder
 	/// gone by that sample, every store it will ever make is in the ring and the cursors read here are
 	/// FINAL. The other order lets a last event land after the check and be lost.
 	module function drain(producerExited bool) returns DrainOutcome
-		let writeCursor = segment.readWord(DsOffWriteCursor as SegmentOffset) as RingPosition
+		let writeCursor = segmentWordAt(segment, at: DsOffWriteCursor as SegmentOffset) as RingPosition
 
 		// Before a single entry is decoded: does the target even speak this schema? A mismatch is not a
 		// trace with a gap in it, it is a trace that is quietly and entirely fictional.
@@ -311,7 +311,7 @@ module type DebugStreamDecoder
 		// Published the instant the copy is taken: the span is the producer's again, and holding it back
 		// is how a producer starts DROPPING events into a ring the consumer has already read.
 		readCursor = committedEnd
-		segment.writeWord(DsOffReadCursor as SegmentOffset, value: readCursor as SegmentWord)
+		storeSegmentWord(segment, at: DsOffReadCursor as SegmentOffset, value: readCursor as SegmentWord)
 
 		return DrainOutcome.decoded(walkEntries(copy, byteCount: pending))
 	end 'drain'
@@ -332,7 +332,7 @@ module type DebugStreamDecoder
 		// `write_cursor` — so step over it and keep draining what is behind it, which may well be whole.
 		abandonedEntries = abandonedEntries + 1
 		readCursor = readCursor + (entrySizeOf(entryHeaderAt(readCursor), at: readCursor) as RingPosition)
-		segment.writeWord(DsOffReadCursor as SegmentOffset, value: readCursor as SegmentWord)
+		storeSegmentWord(segment, at: DsOffReadCursor as SegmentOffset, value: readCursor as SegmentWord)
 
 		return DrainOutcome.decoded(DecodedEventArray.create())
 	end 'stalledOutcome'
@@ -358,7 +358,7 @@ module type DebugStreamDecoder
 	// The packed header of the entry at `cursor`. An entry never straddles the end of the ring —
 	// `__ds_reserve` writes a padding entry rather than let one wrap — so this single read is contiguous.
 	function entryHeaderAt(cursor RingPosition) returns MachineWord
-		return segment.readWord(ringSlotOf(cursor)) as MachineWord
+		return segmentWordAt(segment, at: ringSlotOf(cursor)) as MachineWord
 	end 'entryHeaderAt'
 
 	// ⭐ The committed span, copied out of the ring in at most two pieces. The second exists because the
@@ -368,10 +368,10 @@ module type DebugStreamDecoder
 		let toEnd = (DsRingBytes - start) as SpanByteCount
 		let firstChunk = byteCount if byteCount < toEnd else toEnd
 
-		var copy = segment.copyOut(ringSlotOf(from), byteCount: firstChunk as SegmentByteCount)
+		var copy = copySegmentBytes(segment, at: ringSlotOf(from), byteCount: firstChunk as SegmentByteCount)
 
 		if firstChunk < byteCount 'wrapped'
-			copy.append(segment.copyOut(DsHeaderBytes as SegmentOffset, byteCount: (byteCount - firstChunk) as SegmentByteCount))
+			copy.append(copySegmentBytes(segment, at: DsHeaderBytes as SegmentOffset, byteCount: (byteCount - firstChunk) as SegmentByteCount))
 		end 'wrapped'
 
 		return copy
@@ -386,7 +386,7 @@ module type DebugStreamDecoder
 
 	// One of the producer's i64 header counters.
 	function headerCounterAt(offset ByteOffset) returns EventTally
-		return segment.readWord(offset as SegmentOffset) as EventTally
+		return segmentWordAt(segment, at: offset as SegmentOffset) as EventTally
 	end 'headerCounterAt'
 
 	// ⭐ Walk the private copy, which holds only COMMITTED entries — so every payload here is whole.
@@ -436,6 +436,25 @@ module type DebugStreamDecoder
 end 'DebugStreamDecoder'
 
 // ============================================================================
+// The segment: bounded access
+// ============================================================================
+
+// Every offset this file hands the segment is a header constant or a ring slot masked into the ring, and
+// the segment is created `DsSharedMemoryBytes` long, so an access the segment refuses is a layout defect
+// in this file rather than anything a traced child can cause.
+function segmentWordAt(segment SharedSegment, at SegmentOffset) returns SegmentWord
+	return try segment.readWord(at) otherwise panic("DebugStreamDecoder: the word at offset {at} lies outside the {DsSharedMemoryBytes}-byte segment")
+end 'segmentWordAt'
+
+function storeSegmentWord(segment SharedSegment, at SegmentOffset, value SegmentWord)
+	try segment.writeWord(at, value: value) otherwise panic("DebugStreamDecoder: the word at offset {at} lies outside the {DsSharedMemoryBytes}-byte segment")
+end 'storeSegmentWord'
+
+function copySegmentBytes(segment SharedSegment, at SegmentOffset, byteCount SegmentByteCount) returns ByteArray
+	return try segment.copyOut(at, byteCount: byteCount) otherwise panic("DebugStreamDecoder: {byteCount} bytes at offset {at} reach outside the {DsSharedMemoryBytes}-byte segment")
+end 'copySegmentBytes'
+
+// ============================================================================
 // The segment: naming and seeding
 // ============================================================================
 
@@ -458,24 +477,24 @@ end 'mintSegmentName'
 //
 // The order below is the reference's own, field for field.
 function seedHeader(segment SharedSegment)
-	segment.writeWord(DsOffMagic as SegmentOffset, value: DsMagic)
-	segment.writeWord(DsOffVersion as SegmentOffset, value: DsSchemaVersion)
-	segment.writeWord(DsOffBufferSize as SegmentOffset, value: DsRingBytes)
-	segment.writeWord(DsOffWriteCursor as SegmentOffset, value: 0)
-	segment.writeWord(DsOffReadCursor as SegmentOffset, value: 0)
-	segment.writeWord(DsOffFlags as SegmentOffset, value: 0)
-	segment.writeWord(DsOffProcessId as SegmentOffset, value: 0)
-	segment.writeWord(DsOffStartTimestamp as SegmentOffset, value: __Builtins.tickCountMs())
-	segment.writeWord(DsOffTotalEvents as SegmentOffset, value: 0)
-	segment.writeWord(DsOffDroppedEvents as SegmentOffset, value: 0)
-	segment.writeWord(DsOffTagTableOffset as SegmentOffset, value: DsSharedMemoryBytes - DsTagReserveBytes)
-	segment.writeWord(DsOffTagTableCount as SegmentOffset, value: 0)
-	segment.writeWord(DsOffPeakUsed as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffMagic as SegmentOffset, value: DsMagic)
+	storeSegmentWord(segment, at: DsOffVersion as SegmentOffset, value: DsSchemaVersion)
+	storeSegmentWord(segment, at: DsOffBufferSize as SegmentOffset, value: DsRingBytes)
+	storeSegmentWord(segment, at: DsOffWriteCursor as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffReadCursor as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffFlags as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffProcessId as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffStartTimestamp as SegmentOffset, value: __Builtins.tickCountMs())
+	storeSegmentWord(segment, at: DsOffTotalEvents as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffDroppedEvents as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffTagTableOffset as SegmentOffset, value: DsSharedMemoryBytes - DsTagReserveBytes)
+	storeSegmentWord(segment, at: DsOffTagTableCount as SegmentOffset, value: 0)
+	storeSegmentWord(segment, at: DsOffPeakUsed as SegmentOffset, value: 0)
 
 	// Seeded to "nobody has spoken". Only the producer writes here, and one too old to know the slot exists
 	// leaves it exactly at this value — which is what makes such a producer DETECTABLE rather than merely
 	// broken. See `producerSchema`.
-	segment.writeWord(DsOffProducerVersion as SegmentOffset, value: DsProducerVersionUnset)
+	storeSegmentWord(segment, at: DsOffProducerVersion as SegmentOffset, value: DsProducerVersionUnset)
 end 'seedHeader'
 
 // ============================================================================
@@ -504,7 +523,7 @@ end 'SchemaVerdict'
 // a producer that had exited cleanly. An instrument that lies is worse than no instrument; this is the
 // check that makes it merely refuse.
 function producerSchema(segment SharedSegment, writeCursor RingPosition) returns SchemaVerdict
-	let announced = segment.readWord(DsOffProducerVersion as SegmentOffset)
+	let announced = segmentWordAt(segment, at: DsOffProducerVersion as SegmentOffset)
 
 	if announced == DsSchemaVersion 'agrees'
 		return SchemaVerdict.agreed

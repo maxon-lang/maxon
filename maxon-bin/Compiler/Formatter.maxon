@@ -1807,6 +1807,10 @@ end 'sliceOf'
 /// see in their own `git status`: one accidental whole-tree run rewrote 92 files across two agent
 /// worktrees. **The traversal ROOT is deliberately exempt** — every checkout contains `.git`, so pruning
 /// it there would make `maxon fmt` inside a repo format nothing at all.
+///
+/// ⭐ **A LIBRARY TIER HOLDS NO MANIFEST.** Inside the `stdlib/` and `runtime/` this compiler reads, a file
+/// named like a manifest is library source — `stdlib/Build.maxon` is the `Build` API — exactly as the build
+/// walk reads it (`SourceSelection.libraryTier`).
 export function collectFormattableFiles(root FilePath) returns FilePathArray
 	var files = FilePathArray.create()
 
@@ -1818,12 +1822,17 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 		return files
 	end 'notPartOfAnyProject'
 
-	var pending = FilePathArray.create()
-	pending.push(root)
+	// Compared as absolute, normalized paths, because the walk keeps the spelling it was handed — relative
+	// for `fmt stdlib` — and that spelling is what the `formatted:` lines print.
+	let cwd = Directory.currentPath()
+	let tiers = libraryTierRoots()
+
+	var pending = PendingFormatDirectoryArray.create()
+	pending.push(PendingFormatDirectory.create(root, inLibraryTier: isInsideAnyTier(root, tiers: tiers, cwd: cwd)))
 
 	while pending.count() > 0 'walk'
 		let dir = try pending.pop() otherwise panic("collectFormattableFiles: the stack is non-empty on the line above")
-		let entries = try Directory.list(dir) otherwise panic("collectFormattableFiles: {dir} was listed as a directory and cannot now be unlistable")
+		let entries = try Directory.list(dir.path) otherwise panic("collectFormattableFiles: {dir.path} was listed as a directory and cannot now be unlistable")
 
 		var subdirectories = FilePathArray.create()
 		var here = FilePathArray.create()
@@ -1834,7 +1843,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 					subdirectories.push(entry)
 				end 'kept'
 			end 'isSubdirectory' else 'isFile'
-				if formattableFileName(entry.filename()) 'isASource'
+				if formattableFileName(entry.filename(), inLibraryTier: dir.inLibraryTier) 'isASource'
 					here.push(entry)
 				end 'isASource'
 			end 'isFile'
@@ -1846,8 +1855,10 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 		subdirectories.sort(function(a FilePath, b FilePath) gives comparePathSpelling(b, right: a))
 		here.sort(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
 
+		// A subdirectory enters a tier only at the tier's own root; below that it inherits its parent's answer.
 		for subdirectory in subdirectories 'eachSubdirectory'
-			pending.push(subdirectory)
+			let inLibraryTier = dir.inLibraryTier or isInsideAnyTier(subdirectory, tiers: tiers, cwd: cwd)
+			pending.push(PendingFormatDirectory.create(subdirectory, inLibraryTier: inLibraryTier))
 		end 'eachSubdirectory'
 
 		for file in here 'eachFile'
@@ -1858,6 +1869,41 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 	return files
 end 'collectFormattableFiles'
 
+// A directory the walk has still to list, and whether it lies in a library tier.
+type PendingFormatDirectory
+	module let path as FilePath
+	module let inLibraryTier as bool
+
+	static function create(path FilePath, inLibraryTier bool) returns PendingFormatDirectory
+		return Self{path: path, inLibraryTier: inLibraryTier}
+	end 'create'
+end 'PendingFormatDirectory'
+
+typealias PendingFormatDirectoryArray = Array with PendingFormatDirectory
+
+// The library tiers this compiler reads: the `stdlib/` above its own executable and the `runtime/` beside
+// it. A compiler with no `stdlib/` above it reads no tier, so no directory is inside one.
+function libraryTierRoots() returns FilePathArray
+	var roots = FilePathArray.create()
+	let stdlibDir = try locateStdlibDir() otherwise return roots
+	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise panic("libraryTierRoots: {stdlibDir} was found by joining a name onto a directory, so it has a parent")
+	roots.push(stdlibDir.normalize())
+	roots.push(runtimeDir.normalize())
+	return roots
+end 'libraryTierRoots'
+
+function isInsideAnyTier(dir FilePath, tiers FilePathArray, cwd FilePath) returns bool
+	let absolute = dir.resolve(cwd).normalize()
+
+	for tier in tiers 'eachTier'
+		if absolute.isInside(tier) 'inside'
+			return true
+		end 'inside'
+	end 'eachTier'
+
+	return false
+end 'isInsideAnyTier'
+
 // A subtree `fmt` must not descend into: another checkout, or a directory taken out of every project.
 function prunedSubdirectory(dir FilePath) returns bool
 	// Interpolated so the argument is a committed `String` — a bare module-`let` is ambiguous between
@@ -1866,24 +1912,17 @@ function prunedSubdirectory(dir FilePath) returns bool
 	return holdsIgnoreMarker(dir) or Directory.exists(marker) or File.exists(marker)
 end 'prunedSubdirectory'
 
-// A file the walk formats. The build manifest is left alone — it is a build SCRIPT the compiler runs,
-// not part of the program — and the match is case-insensitive because the filesystem this walk reads is,
-// on the host that hosts most of these checkouts.
+// A file the walk formats. A project's build manifest is left alone — it is a build SCRIPT the compiler
+// runs, not part of the program; a library tier has none.
 //
 // ⚠ Naming a path OUTRIGHT escapes this, exactly as it escapes `.maxonignore`: `maxon fmt build.maxon`
 // formats it. See `runFmt`.
-function formattableFileName(name String) returns bool
-	if not name.endsWith(MaxonSourceExtension) 'notAMaxonSource'
-		return false
-	end 'notAMaxonSource'
-
-	// Asked SECOND, because `String.toLower` folds its receiver's buffer IN PLACE — asked first it would
-	// leave the extension test reading a lower-cased name, quietly making that half case-insensitive too.
-	return name.toLower() != BuildManifestName
+function formattableFileName(name String, inLibraryTier bool) returns bool
+	return name.endsWith(MaxonSourceExtension) and (inLibraryTier or not isBuildManifestFileName(name))
 end 'formattableFileName'
 
 // Order two discovered paths by their spelling. A `FilePath` is not `Comparable`, and the ordering wanted
 // here is the filesystem-neutral one — the bytes, not a locale's idea of them (`compareBytesOrdinally`).
-function comparePathSpelling(left FilePath, right FilePath) returns Ordering
+module function comparePathSpelling(left FilePath, right FilePath) returns Ordering
 	return compareBytesOrdinally(left.toString().toByteArray(), right: right.toString().toByteArray())
 end 'comparePathSpelling'

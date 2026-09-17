@@ -1516,3 +1516,31 @@ end 'main'
 ```exitcode
 11
 ```
+
+<!-- test: error.mismatched-try-end-label -->
+A label written after `end` must repeat the `try` block's opening label.
+```maxon
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns ExitCode throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try 'work'
+		result = mayFail()
+	end 'job'
+	otherwise (e) 'handler'
+		match e 'kind'
+			failed then result = 7
+		end 'kind'
+	end 'handler'
+	return result
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:14:2: Mismatched end label: expected 'work', got 'job'
+```

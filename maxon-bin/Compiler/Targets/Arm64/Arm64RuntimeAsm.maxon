@@ -62,8 +62,14 @@ export type Arm64RuntimeAsm
 	//
 	// AAPCS64 puts the first eight arguments in registers, and every chunk opened here stays inside them.
 	export static function beginFunction(slots StackSize) returns Arm64RuntimeAsm
-		return Self.openFrame(slots, outgoingArgBytes: NoOutgoingArgRegion)
+		return Self.openFrame(ByteArray.create(), callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), slots: slots, outgoingArgBytes: NoOutgoingArgRegion)
 	end 'beginFunction'
+
+	// Open a function whose first bytes, `entry`, run BEFORE its frame record exists — x64's
+	// `X64RuntimeAsm.beginFunctionAfterEntry`, for `mrt_panic`'s green-thread stack guard.
+	export static function beginFunctionAfterEntry(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize) returns Arm64RuntimeAsm
+		return Self.openFrame(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: slots, outgoingArgBytes: NoOutgoingArgRegion)
+	end 'beginFunctionAfterEntry'
 
 	// ⭐⭐ **THE SAME FRAME WITH `[SP, 0 .. 16)` RESERVED FOR ONE STACK ARGUMENT — what a VARIADIC callee
 	// costs.** Darwin passes a variadic argument on the stack whatever its number, so `shm_open(name, flags,
@@ -71,20 +77,20 @@ export type Arm64RuntimeAsm
 	// up by exactly that region, which is the shape `Arm64PrologueEpilogue`'s `recordOffset` already gives a
 	// compiled function.
 	export static function beginVariadicCallerFunction(slots StackSize) returns Arm64RuntimeAsm
-		return Self.openFrame(slots, outgoingArgBytes: OneOutgoingArgWord)
+		return Self.openFrame(ByteArray.create(), callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), slots: slots, outgoingArgBytes: OneOutgoingArgWord)
 	end 'beginVariadicCallerFunction'
 
-	static function openFrame(slots StackSize, outgoingArgBytes StackSize) returns Arm64RuntimeAsm
+	static function openFrame(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize, outgoingArgBytes StackSize) returns Arm64RuntimeAsm
 		let frameBytes = alignUpStack(outgoingArgBytes + Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
 
-		var code = ByteArray.create()
+		var code = entry
 		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: outgoingArgBytes)
 
 		return Self{
 			code: code,
-			callFixups: CallFixupArray.create(),
+			callFixups: callFixups,
 			iatRelocs: RelocationArray.create(),
-			rdataRelocs: RdataRelocationArray.create(),
+			rdataRelocs: rdataRelocs,
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			labelOffsets: BlockOffsetTable.create(),
 			branchFixups: Arm64BlockBranchFixupArray.create(),

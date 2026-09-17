@@ -171,7 +171,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/field-initialization/string-literal-field-default-errors.test:4:20: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.
+error E2004: specs/fragments/field-initialization/string-literal-field-default-errors.test:4:20: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
 ```
 
 ### Error: a field declared at a TYPE PARAMETER may not carry a default, of either form

@@ -114,14 +114,15 @@ end 'ResultStatusKind'
 // Executable
 // =============================================================================
 
-/// Error raised when an `Executable.name(...)` lookup fails to find a matching
-/// binary on the PATH.
+/// Error raised by `Executable.resolve()` for a name that is not a well-formed path. A missing
+/// executable is not this error: the spawn reports it as `SubprocessError.executableNotFound`.
 public enum ExecutableError implements Error
 	notFound
 end 'ExecutableError'
 
 /// What to run. Either a bare name (`"git"`, looked up through PATH on the
-/// host) or an explicit `FilePath` (used verbatim).
+/// host) or an explicit `FilePath`, which when relative is relative to the
+/// child's working directory.
 public union Executable
 	name(value String)
 	path(value FilePath)
@@ -282,9 +283,7 @@ end 'InputSource'
 ///   field, truncated at `limitBytes`.
 /// - `file(p)` — redirect to a file on disk.
 ///
-/// Each variant routes through the `subprocessSpawn` stdio triple; the
-/// runtime stubs currently fail spawns with -1 until the real OS-side
-/// implementation lands.
+/// Each variant routes through the `subprocessSpawn` stdio triple.
 public union OutputDestination
 	discard
 	inherit
@@ -305,8 +304,9 @@ end 'OutputDestination'
 ///   the child terminated abnormally with NTSTATUS exit code `code` (e.g.
 ///   `0xC0000005` for an access violation).
 ///
-/// The current runtime stubs never produce `signalled`; that decoding lands
-/// alongside the real OS implementation of `subprocessWaitCollect`.
+/// ⚠ No runtime produces `signalled`: every lane reports `exited`, a POSIX child
+/// killed by a signal as `128 + signal` and a Windows abnormal exit as its
+/// NTSTATUS code.
 public union TerminationStatus
 	exited(code ExitInt)
 	signalled(code ExitInt)
@@ -489,10 +489,10 @@ public type Subprocess
 	/// payloads, spawn, wait-collect, decode the result struct, release.
 	public static function runConfiguration(config Configuration) returns CollectedOutput throws SubprocessError
 		try requireDelayedFeedObservable(config.standardInput, stdout: config.standardOutput)
-		let exePath = try resolveExecutablePath(config.executable)
+		let exePath = try resolveExecutablePath(config.executable, workingDirectory: config.workingDirectory)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
-		let spawnEnv = spawnEnvironmentFor(config.environment)
+		let spawnEnv = try spawnEnvironmentFor(config.environment)
 		let stdinTriple = stdinTripleFromSource(config.standardInput)
 		let stdoutTriple = outputTripleFromDestination(config.standardOutput)
 		let stderrTriple = outputTripleFromDestination(config.standardError)
@@ -501,7 +501,7 @@ public type Subprocess
 		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 
 		if handle == -1 'spawnFailed'
-			throw SubprocessError.spawnFailed(lastErrorMessage())
+			throw spawnFailure(exePath)
 		end 'spawnFailed'
 
 		let pid = __Builtins.subprocessGetPid(handle)
@@ -534,17 +534,17 @@ public type Subprocess
 	/// of an attached handle. stdin/stdout/stderr are forced to discard so the
 	/// child doesn't inherit pipe ends the caller would have to drain.
 	public static function runDetachedConfiguration(config Configuration) returns Pid throws SubprocessError
-		let exePath = try resolveExecutablePath(config.executable)
+		let exePath = try resolveExecutablePath(config.executable, workingDirectory: config.workingDirectory)
 		let argvBlob = buildArgvBlob(exePath, args: config.arguments)
 		let argc = config.arguments.count() + 1
-		let spawnEnv = spawnEnvironmentFor(config.environment)
+		let spawnEnv = try spawnEnvironmentFor(config.environment)
 		let emptyCStr = subprocessEmptyCString()
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
 		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), spawnEnv.block.addressableBytes(), spawnEnv.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 
 		if pid == -1 'spawnFailed'
-			throw SubprocessError.spawnFailed(lastErrorMessage())
+			throw spawnFailure(exePath)
 		end 'spawnFailed'
 
 		return pid
@@ -583,13 +583,26 @@ type StdioRuntimeTriple
 	end 'create'
 end 'StdioRuntimeTriple'
 
-/// Resolve `Executable.name(n)` to a launchable path, and pass `Executable.path(p)` through unchanged.
-function resolveExecutablePath(executable Executable) returns String throws SubprocessError
+/// Resolve `Executable.name(n)` to a launchable path, and `Executable.path(p)` to the path the child runs.
+function resolveExecutablePath(executable Executable, workingDirectory FilePath) returns String throws SubprocessError
 	return match executable 'r'
 		name(n) gives try resolveByName(n)
-		path(p) gives p.path
+		path(p) gives launchPathInWorkingDirectory(p, workingDirectory: workingDirectory)
 	end 'r'
 end 'resolveExecutablePath'
+
+// ⭐ **A RELATIVE `Executable.path` IS RELATIVE TO THE CHILD'S `workingDirectory` ON EVERY OS.** A POSIX child
+// enters that directory before `execve` reads the path, so the OS already answers it there, and joining it
+// here would apply a relative directory twice. `CreateProcessA` reads the path before the child exists,
+// against the PARENT's directory, so Windows is handed it joined. An empty `workingDirectory` joins nothing.
+function launchPathInWorkingDirectory(executablePath FilePath, workingDirectory FilePath) returns String
+	#if os(Windows)
+		return executablePath.resolve(workingDirectory).path
+	#else
+		_ = workingDirectory
+		return executablePath.path
+	#endif
+end 'launchPathInWorkingDirectory'
 
 // ⭐⭐ **WINDOWS AND POSIX RESOLVE A NAME DIFFERENTLY, AND THE DIFFERENCE IS WHERE THE SEARCH HAPPENS.**
 //
@@ -666,12 +679,12 @@ end 'subprocessEmptyCString'
 /// intrinsic lowering extracts the `__ManagedMemory`'s buffer pointer before the call and the compiler's runtime
 /// entry reads the same field itself — and no length travels beside them, so the terminating NUL after
 /// the last entry is the only thing that tells a runtime where the block ends.
-function spawnEnvironmentFor(env Environment) returns SpawnEnvironment
+function spawnEnvironmentFor(env Environment) returns SpawnEnvironment throws SubprocessError
 	var out = ByteArray.create()
 
 	match env 'e'
 		inherit then return SpawnEnvironment.create(emptyEnvBlock(), source: EnvSource.parent.rawValue)
-		inheritUpdating(overrides) then appendInheritedEntries(out, overrides: overrides)
+		inheritUpdating(overrides) then try appendInheritedEntries(out, overrides: overrides)
 		custom(vars) then appendEnvEntries(out, vars: vars)
 	end 'e'
 
@@ -696,7 +709,7 @@ end 'emptyEnvBlock'
 /// named. Windows reports its block sorted and CreateProcess documents wanting a sorted one; a map's
 /// iteration order would answer neither, and the platform's own `=X:=X:\dir` drive entries — which
 /// must come first — would move.
-function appendInheritedEntries(out ByteArray, overrides EnvMap)
+function appendInheritedEntries(out ByteArray, overrides EnvMap) throws SubprocessError
 	// The overrides not yet spent on an inherited entry. A copy, because deciding which ones are left
 	// over is exactly what the walk below does and the caller's map is not ours to empty.
 	var pending = EnvMap.create()
@@ -705,7 +718,9 @@ function appendInheritedEntries(out ByteArray, overrides EnvMap)
 		pending.upsert(name, value: value)
 	end 'eachOverride'
 
-	for entry in Process.currentEnvironmentEntries() 'eachInherited'
+	let inherited = try Process.currentEnvironmentEntries() otherwise throw SubprocessError.spawnFailed("this process's environment could not be read, so no child can inherit it")
+
+	for entry in inherited 'eachInherited'
 		let name = Process.envEntryName(entry)
 
 		if let replacement = try pending.get(name) 'overridden'
@@ -823,6 +838,38 @@ function attachedFlagsFor(opts PlatformOptions) returns SpawnFlagsValue
 	return flags
 end 'attachedFlagsFor'
 
+// The codes a file that is not there fails with, on every lane: Windows' own `ERROR_FILE_NOT_FOUND` /
+// `ERROR_PATH_NOT_FOUND`, and the POSIX lanes' `ENOENT` / `ENOTDIR` mapped onto them.
+let spawnErrorFileNotFound = 2
+let spawnErrorPathNotFound = 3
+
+// Which step of a spawn failed, as the runtime records it above the OS code in the word
+// `__Builtins.subprocessLastErrorCode` answers — the raw values of the compiler's `GtRuntime.SpawnPreparation`.
+// A spawn opens its standard streams, and on POSIX its working directory, before it launches anything, and
+// each fails with the same not-found codes a missing executable does; only the runtime knows which step it was.
+enum SpawnPreparation
+	none = 0
+	standardStream = 1
+	workingDirectory = 2
+end 'SpawnPreparation'
+
+let spawnPreparationShift = 32
+let osErrorCodeMask = 0xFFFFFFFF
+
+// What a failed spawn of `launchPath` throws: `executableNotFound` exactly when the launch itself found no file.
+function spawnFailure(launchPath String) returns SubprocessError
+	let word = __Builtins.subprocessLastErrorCode()
+	let preparation = try SpawnPreparation.fromRawValue(word shr spawnPreparationShift) otherwise panic("Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know")
+	let code = word and osErrorCodeMask
+	let fileMissing = code == spawnErrorFileNotFound or code == spawnErrorPathNotFound
+
+	if fileMissing and preparation == SpawnPreparation.none 'executableAbsent'
+		return SubprocessError.executableNotFound(launchPath)
+	end 'executableAbsent'
+
+	return SubprocessError.spawnFailed(lastErrorMessage())
+end 'spawnFailure'
+
 function lastErrorMessage() returns String
 	let managed = __Builtins.subprocessLastErrorMessage()
 	return String.init(managed)
@@ -841,7 +888,7 @@ typealias StreamingHandle = int(0 to u64.max)
 /// A child process whose stdin / stdout / stderr the caller drives by hand.
 ///
 /// Unlike `Subprocess.run(...)` (which fires the process, drains both output
-/// streams via background threads, and returns a `CollectedOutput` when the
+/// streams from one green thread, and returns a `CollectedOutput` when the
 /// child exits), `StreamingSubprocess` keeps the pipes open and exposes
 /// per-line `writeStdinLine` / `readStdoutLine` / `readStderrLine` operations.
 /// Use it when the parent needs interactive request/response with a long-lived
@@ -890,10 +937,10 @@ public type StreamingSubprocess
 	/// `custom` — and `spawnEnvironmentFor` turns any of them into the (block, source) pair the spawn
 	/// contract takes, exactly as the attached spawn does.
 	public static function spawnWithEnvironment(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns StreamingSubprocess throws SubprocessError
-		let exePath = try resolveExecutablePath(executable)
+		let exePath = try resolveExecutablePath(executable, workingDirectory: workingDirectory)
 		let argvBlob = buildArgvBlob(exePath, args: arguments)
 		let argc = arguments.count() + 1
-		let spawnEnv = spawnEnvironmentFor(environment)
+		let spawnEnv = try spawnEnvironmentFor(environment)
 
 		// 4th arg is the spawn-flags bitfield (hideWindow / newProcessGroup / detach). Streaming spawns
 		// never detach — the parent has to keep the pipes open — and don't take platform-options today, so
@@ -901,7 +948,7 @@ public type StreamingSubprocess
 		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0, spawnEnv.block.addressableBytes(), spawnEnv.source)
 
 		if rawHandle == -1 'spawnFailed'
-			throw SubprocessError.spawnFailed(lastErrorMessage())
+			throw spawnFailure(exePath)
 		end 'spawnFailed'
 
 		// rawHandle is the wide builtin return; -1 is excluded above, so the

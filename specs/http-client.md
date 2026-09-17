@@ -43,7 +43,8 @@ end 'postData'
 ```
 
 **Limitations:**
-- HTTP only (no HTTPS/TLS)
+- HTTP only (no TLS): a URL whose scheme is anything but `http` — `https` included — throws
+  `HttpError.unsupportedScheme` before any connection is attempted
 - No chunked transfer encoding — uses `Connection: close`
 - No redirect following (returns 3xx as-is)
 - No streaming — entire response buffered in memory
@@ -64,6 +65,33 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+### An https URL is refused
+
+<!-- test: http-client.an-https-url-is-refused-before-connecting -->
+⛔ **`https` IS REFUSED BY SCHEME, NEVER SENT AS PLAINTEXT.** Nothing listens on port 1, so a client that
+ignored the scheme would dial and answer `connectFailed`; only a refusal decided before the connect answers
+`unsupportedScheme`, which is the one arm that exits 7.
+```maxon
+function main() returns ExitCode
+	let response = try HttpClient.get("https://127.0.0.1:1/") otherwise (e) 'refused'
+		return match e 'why'
+			unsupportedScheme gives 7
+			invalidUrl gives 2
+			connectFailed gives 3
+			sendFailed gives 4
+			recvFailed gives 5
+			invalidResponse gives 6
+		end 'why'
+	end 'refused'
+
+	print("answered with a body of {response.body().byteLength()} bytes\n")
+	return 1
+end 'main'
+```
+```exitcode
+7
 ```
 
 ### Request Building

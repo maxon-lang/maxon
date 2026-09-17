@@ -50,9 +50,11 @@ end 'countDown'
 ```
 
 A function's label is its name; a type's, enum's, union's, interface's or extension's label is the type's
-name; a test's label is its quoted name. Labels on `if`, `while`, `for`, `match` and `try` blocks are chosen by
-you and name the block for `break` and `continue`. Statements end at the end of the line; there are no
-semicolons and no braces around blocks.
+name; a test's label is its quoted name. Labels on `if`, `else`, `while`, `for`, `match`, `try` and `otherwise`
+blocks are chosen by you and name the block for `break` and `continue`. A label written after `end` must be
+the block's own label: anything else is **E2008** (`Mismatched end label: expected 'tick', got 'loop'`), and
+**E2043** for a `match`. Only a `test` must write it; on every other block the label after `end` may be
+omitted. Statements end at the end of the line; there are no semicolons and no braces around blocks.
 
 ### Conditional Compilation
 
@@ -1214,9 +1216,36 @@ end 'main'
 **E3005** (`Type 'Wrapper' does not conform to InitableFromStringLiteral`).
 
 The standard collections accept bracketed literals: a plain `[1, 2, 3]` is an `Array`, `["a": 1]` is a
-`Map`, and `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
-`CharSet from ['a', 'e']`. (`InitableFromArrayLiteral` and `InitableFromDictionaryLiteral` declare that
-surface for the standard collections; `Alias from [...]` is not yet available for user types.)
+`Map`, and `Array`, `Set`, `List` and `Vector` aliases take `Alias from [ ... ]`, for example
+`CharSet from ['a', 'e']`; the alias states the element type, and a `Vector` alias's literal must write
+exactly as many elements as the alias holds. A type that declares `implements InitableFromArrayLiteral with
+Element` takes `Type from [ ... ]`, which is `Type.init(value ElementArray)` over the literal:
+
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitArray = Array with Digit
+typealias Number = int(0 to i64.max)
+
+type Digits implements InitableFromArrayLiteral with Digit
+	export var value as Number
+
+	static function init(digits DigitArray) returns Self
+		var total = 0 as Number
+
+		for d in digits 'each'
+			total = total * 10 + d
+		end 'each'
+
+		return Self{value: total}
+	end 'init'
+end 'Digits'
+
+function main() returns ExitCode
+	let n = Digits from [4, 0, 7]
+	print("{n.value}\n")
+	return 0
+end 'main'
+```
 
 ### Generic Types
 
@@ -1699,7 +1728,8 @@ end 'HttpError'
 ```
 
 The header is only `enum Name` and an optional `implements` clause; the backing type is inferred from the
-raw values, never written.
+raw values, never written. Anything else on the header line — `enum Colour int` — is **E2001**
+(`unexpected token: 'int'`), and the same holds for a `union` header.
 
 ---
 
@@ -2597,8 +2627,8 @@ end 'handle'
 - **Float division** throws on a zero divisor too, including `-0.0`. `inf` and `NaN` produced any other way
   are ordinary IEEE values. There is no float `mod`.
 - `i64.min mod -1` is `0` on every target. `i64.min / -1` has no representable quotient, and a `try`
-  cannot catch it: on x64-windows the program stops with `panic: integer overflow`, on x64-linux with
-  `panic: integer divide by zero`, and on wasm32-wasi with a wasm trap. On arm64 the result is `i64.min`.
+  cannot catch it: on every target the program stops with `panic: integer overflow`, a stack trace and
+  exit code 1.
 
 ### Comparison Operators
 
@@ -3232,7 +3262,10 @@ Stack trace:
 ```
 
 The trace lists the call chain innermost first, up to 100 frames. The runtime raises the same kind of panic
-for a failed [range check](#range-checks) and a negative shift count.
+for a failed [range check](#range-checks), a negative shift count and `i64.min / -1`
+(`panic: integer overflow`). A recursion that outgrows its thread's stack stops with
+`panic: stack overflow` and the same trace on every native target; on `wasm32-wasi` it is the engine's own
+trap.
 
 Use `panic` for invariant violations and unreachable paths; use `throw` for conditions a caller should
 handle.
@@ -4018,7 +4051,7 @@ APIs.
 ### The Scheduler
 
 - **Green threads.** Every green thread starts on a small stack that grows on demand, so thousands are
-  cheap.
+  cheap. A stack stops growing at 1 GiB; a recursion past it stops the program with `panic: stack overflow`.
 - **Parallelism.** By default the scheduler creates one processor per logical CPU. The environment
   variable `MAXON_MAX_PROCS=N` sets the count, clamped to between 1 and the CPU count; a value that is not a
   positive number leaves the default. Services use the processors in parallel; an `async`-only program's
@@ -4038,7 +4071,6 @@ The [CLI reference](CLI_REFERENCE.md) lists the environment variables a compiled
 | 75 | a green thread was neither awaited nor dropped when the program ended |
 | 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
 | 96 | a service send found a value with a second owner |
-| 98 | a green thread's stack grew past its limit |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 
 ### Targets

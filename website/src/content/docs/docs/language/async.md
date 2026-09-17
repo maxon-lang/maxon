@@ -254,7 +254,7 @@ APIs.
 ## The Scheduler
 
 - **Green threads.** Every green thread starts on a small stack that grows on demand, so thousands are
-  cheap.
+  cheap. A stack stops growing at 1 GiB; a recursion past it stops the program with `panic: stack overflow`.
 - **Parallelism.** By default the scheduler creates one processor per logical CPU. The environment
   variable `MAXON_MAX_PROCS=N` sets the count, clamped to between 1 and the CPU count; a value that is not a
   positive number leaves the default. Services use the processors in parallel; an `async`-only program's
@@ -274,7 +274,6 @@ The [CLI reference](/docs/cli/) lists the environment variables a compiled progr
 | 75 | a green thread was neither awaited nor dropped when the program ended |
 | 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
 | 96 | a service send found a value with a second owner |
-| 98 | a green thread's stack grew past its limit |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 
 ## Targets

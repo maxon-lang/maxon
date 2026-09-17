@@ -556,10 +556,10 @@ function expectKind(tokens TokenArray, cursor ConditionCursor, kind TokenKind) r
 end 'expectKind'
 
 // ASCII case-insensitive byte equality. The corpus writes `os(Windows)` and this file's constants are
-// lowercase, so every predicate argument compares through here. Compares the SLICES in place — a
-// `Token.value` is a zero-copy view of the source buffer (see `Token.value`), and lower-casing either
-// side would allocate a String per atom for a handful of byte compares.
-function equalsIgnoringAsciiCase(a ByteArray, b ByteArray) returns bool
+// lowercase, so every predicate argument compares through here, as does a build manifest's file name
+// (`Compiler.isBuildManifestFileName`). Compares the SLICES in place — a `Token.value` is a zero-copy view
+// of the source buffer (see `Token.value`), and lower-casing either side would allocate a String per atom.
+module function equalsIgnoringAsciiCase(a ByteArray, b ByteArray) returns bool
 	if a.count() != b.count() 'lengthDiffers'
 		return false
 	end 'lengthDiffers'
@@ -580,9 +580,9 @@ function equalsIgnoringAsciiCase(a ByteArray, b ByteArray) returns bool
 	return true
 end 'equalsIgnoringAsciiCase'
 
-// ASCII upper-case to lower-case. Bytes outside `A`-`Z` pass through, so a UTF-8 continuation byte is
-// never folded — this is deliberately ASCII-only, because the names it compares (`Windows`, `x64`,
-// `true`) are keywords of the directive grammar and not user text.
+// ASCII upper-case to lower-case. Bytes outside `A`-`Z` pass through, so a UTF-8 byte is never folded:
+// every name compared through here is fixed ASCII vocabulary (a directive keyword, `build.maxon`), not
+// user text.
 function toAsciiLower(b Byte) returns Byte
 	if b >= AsciiUpperA and b <= AsciiUpperZ 'isUpper'
 		return (b + AsciiCaseGap) as Byte

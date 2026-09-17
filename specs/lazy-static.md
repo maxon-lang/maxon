@@ -5,11 +5,11 @@ keywords: [static, var, let, lazy, initializer, cache]
 category: language
 ---
 
-# Lazy Static Initializers
+# Static Initializers — the VALUE half
 
 ## Documentation
 
-Static fields can be initialized with complex expressions including function calls, struct literals, and array literals. These initializers are evaluated lazily on first access.
+Static fields can be initialized with complex expressions including function calls, struct literals, and array literals. Each initializer runs eagerly, exactly once, before `main`. The cases here pin the VALUE a static holds; `lazy-static-observable.md` pins WHEN its initializer runs, and the one exception to that timing: a standard-library static that nothing reads is not emitted at all, initializer included.
 
 ### Syntax
 
@@ -22,8 +22,8 @@ end 'MyType'
 
 ### Semantics
 
-- The initializer expression is evaluated the first time the static field is accessed
-- After initialization, subsequent accesses return the cached value
+- The initializer expression is evaluated once, before `main`, whether or not the field is ever read; an initializer that reads another static runs after the one it reads
+- Every access returns the stored value
 - `static var` fields can be reassigned after initialization
 - `static let` fields are immutable after initialization
 - Constant initializers (integer, float, bool literals) continue to be evaluated at compile time
@@ -428,8 +428,8 @@ A struct construction is a CALL whose callee is a TYPE rather than a function, a
 arguments are its FIELDS. Everything the cases below assert follows from that one sentence: a field's
 value is admitted from exactly the set a factory ARGUMENT is (a constant, a String or array literal, an
 empty container, another call — or another construction), a field the literal omits takes the DEFAULT its
-declaration supplies, and the record is built on first access by the same deferred machinery a
-`static var x = T.create()` already uses.
+declaration supplies, and the record is built before `main` exactly as a `static var x = T.create()`
+initializer is.
 
 The construction is legal **inside the type's own body and nowhere else**, which is the ordinary E3076
 restriction rather than a rule of its own — a `static` member's initializer is written inside the `type`

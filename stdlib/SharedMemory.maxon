@@ -6,8 +6,8 @@
 /// there. Nothing about the ring's layout is here — this file is the door to the bytes.
 ///
 ///     var segment = try SharedSegment.create("maxon-trace-1", bytes: 65536)
-///     segment.writeWord(0, value: 1)
-///     let first = segment.readWord(0)
+///     try segment.writeWord(0, value: 1)
+///     let first = try segment.readWord(0)
 ///     segment.close()
 ///
 /// Forgetting `close()` leaks the mapping AND keeps the section alive: a Win32 section object outlives
@@ -33,6 +33,10 @@ public typealias SegmentOffset = int(0 to u32.max)
 /// format puts there, and nothing here interprets it.
 public typealias SegmentWord = int(i64.min to i64.max)
 
+// One past the last byte an access touches: an offset plus a byte count, so it can reach twice the widest
+// either one is.
+typealias SegmentEnd = int(0 to 8589934590)
+
 // The opaque machine words the two host calls answer — a section HANDLE and the base address of a view.
 // Both are full-range rather than narrowed: they are the OS's numbers, and a narrower alias would be a
 // range check on a value with no domain to check against.
@@ -49,12 +53,17 @@ typealias ByteArray = Array with Byte
 // there. It is also what a teardown passes for the half a failed create never made.
 let NoSection = 0
 
-/// Why a section could not be opened. Two arms because the two host calls fail for different reasons and
-/// a caller can act on the difference: a create fails on a name collision with an incompatible section or
-/// on a size the system will not back, a map on address space.
+// How many bytes one `SegmentWord` occupies in the mapping.
+let SegmentWordBytes = 8
+
+/// Why a section could not be opened or accessed. The two open arms are separate because the two host
+/// calls fail for different reasons and a caller can act on the difference: a create fails on a name
+/// collision with an incompatible section or on a size the system will not back, a map on address space.
+/// `outOfBounds` is an accessor whose bytes would reach past the end of the mapping.
 public union SharedMemoryError implements Error
 	createFailed
 	mapFailed
+	outOfBounds
 end 'SharedMemoryError'
 
 /// A named section, mapped into this process.
@@ -100,23 +109,37 @@ public type SharedSegment
 		return name
 	end 'segmentName'
 
-	/// The 64-bit word at `offset` bytes into the mapping.
-	public function readWord(offset SegmentOffset) returns SegmentWord
+	/// The 64-bit word at `offset` bytes into the mapping. Throws `outOfBounds` when the word would reach
+	/// past the end of the mapping.
+	public function readWord(offset SegmentOffset) returns SegmentWord throws SharedMemoryError
+		try requireInside(offset, byteCount: SegmentWordBytes)
 		return __Builtins.sharedMemoryReadWord(base, offset)
 	end 'readWord'
 
-	/// Write `value` as a 64-bit word at `offset` bytes into the mapping.
-	public function writeWord(offset SegmentOffset, value SegmentWord)
+	/// Write `value` as a 64-bit word at `offset` bytes into the mapping. Throws `outOfBounds` when the word
+	/// would reach past the end of the mapping.
+	public function writeWord(offset SegmentOffset, value SegmentWord) throws SharedMemoryError
+		try requireInside(offset, byteCount: SegmentWordBytes)
 		__Builtins.sharedMemoryWriteWord(base, offset, value)
 	end 'writeWord'
 
-	/// `byteCount` bytes of the mapping starting at `offset`, as a fresh independent array.
+	/// `byteCount` bytes of the mapping starting at `offset`, as a fresh independent array. Throws
+	/// `outOfBounds` when the range would reach past the end of the mapping.
 	///
 	/// It COPIES rather than viewing: the bytes belong to a section another process may be writing, and a
 	/// view would answer differently on each read and would outlive `close()`.
-	public function copyOut(offset SegmentOffset, byteCount SegmentByteCount) returns ByteArray
+	public function copyOut(offset SegmentOffset, byteCount SegmentByteCount) returns ByteArray throws SharedMemoryError
+		try requireInside(offset, byteCount: byteCount)
 		return ByteArray.init(__Builtins.sharedMemoryCopyOut(base, offset, byteCount))
 	end 'copyOut'
+
+	// The host accessors read and write raw memory at `base + offset` and check nothing, so the mapping's
+	// extent is enforced here, where `bytes` is known.
+	function requireInside(offset SegmentOffset, byteCount SegmentByteCount) throws SharedMemoryError
+		if (offset as SegmentEnd) + (byteCount as SegmentEnd) > (bytes as SegmentEnd) 'pastTheEnd'
+			throw SharedMemoryError.outOfBounds
+		end 'pastTheEnd'
+	end 'requireInside'
 
 	/// Unmap this process's view, release the section and withdraw its name. Idempotent.
 	///

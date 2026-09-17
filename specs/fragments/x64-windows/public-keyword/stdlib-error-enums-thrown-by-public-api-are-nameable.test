@@ -1,0 +1,403 @@
+// Test: stdlib-error-enums-thrown-by-public-api-are-nameable
+function describeParse(e JsonError) returns String
+	return match e 'kind'
+		unexpectedEof gives "unexpectedEof"
+		unexpectedChar gives "unexpectedChar"
+		invalidEscape gives "invalidEscape"
+		invalidNumber gives "invalidNumber"
+		invalidSurrogate gives "invalidSurrogate"
+		trailingContent gives "trailingContent"
+	end 'kind'
+end 'describeParse'
+
+function describeAccess(e JsonAccessError) returns String
+	return match e 'kind'
+		wrongType gives "wrongType"
+		notObject gives "notObject"
+		notArray gives "notArray"
+		missingKey gives "missingKey"
+		outOfBounds gives "outOfBounds"
+	end 'kind'
+end 'describeAccess'
+
+function describeConsole(e ConsoleError) returns String
+	return match e 'kind'
+		endOfFile gives "endOfFile"
+	end 'kind'
+end 'describeConsole'
+
+function parseVerdict(text String) returns String
+	let doc = try Json.parse(text) otherwise (e) 'malformed'
+		return describeParse(e)
+	end 'malformed'
+
+	return "parsed a document rooted at {doc.root}"
+end 'parseVerdict'
+
+function accessVerdict(text String) returns String
+	let doc = try Json.parse(text) otherwise return "unparsed"
+	let value = try doc.getString(doc.root, key: "a") otherwise (e) 'wrongShape'
+		return describeAccess(e)
+	end 'wrongShape'
+
+	return "a is {value}"
+end 'accessVerdict'
+
+function main() returns ExitCode
+	let parsed = parseVerdict("\{")
+	let accessed = accessVerdict("\{\"a\": 1\}")
+	let consoled = describeConsole(ConsoleError.endOfFile)
+	print("parse: {parsed}\n")
+	print("access: {accessed}\n")
+	print("console: {consoled}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 232
+    x64.leaRegRdata rcx, [rip + __str_rec_43]  ; "{"
+  __il_body#8:
+    x64.callDirect Json.parse
+    x64.storeSlotReg slot13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.leaRegRegImm32 rax, r10, -1
+  __il_body#12:
+    x64.jumpTable rax, default=matchdead#19 [[0]=matcharm#14, [1]=matcharm#13, [2]=matcharm#15, [3]=matcharm#16, [4]=matcharm#17, [5]=matcharm#18] @__jumptable_109
+  matchdead#19:
+  matcharm#14:
+    x64.leaRegRdata rcx, [rip + __str_rec_28]  ; "unexpectedChar"
+    x64.jmp matchcont#20
+  matcharm#13:
+    x64.leaRegRdata rcx, [rip + __str_rec_27]  ; "unexpectedEof"
+    x64.jmp matchcont#20
+  matcharm#15:
+    x64.leaRegRdata rcx, [rip + __str_rec_29]  ; "invalidEscape"
+    x64.jmp matchcont#20
+  matcharm#16:
+    x64.leaRegRdata rcx, [rip + __str_rec_30]  ; "invalidNumber"
+    x64.jmp matchcont#20
+  matcharm#17:
+    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "invalidSurrogate"
+    x64.jmp matchcont#20
+  matcharm#18:
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "trailingContent"
+  matchcont#20:
+    x64.callDirect __str_retain
+  __il_cont#11:
+    x64.movRegReg rbx, r8
+    x64.jmp __il_cont#7
+  tryok#9:
+    x64.leaRegRdata rax, [rip + __str_rec_39]  ; "parsed a document rooted at "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg r13, r8
+    x64.leaRegRegReg rax, r12, r13
+    x64.storeSlotReg slot18, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot23, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot rbx, slot23
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot18
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot13
+    x64.callDirect __destruct_JsonDoc
+  __il_cont#7:
+    x64.storeSlotReg slot0, rbx
+    x64.leaRegRdata rcx, [rip + __str_rec_44]  ; "{\"a\": 1}"
+  __il_body#21:
+    x64.callDirect Json.parse
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot4, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#22
+  tryerr#23:
+    x64.leaRegRdata rcx, [rip + __str_rec_41]  ; "unparsed"
+    x64.callDirect __str_retain
+    x64.movRegReg r12, r8
+    x64.jmp __il_cont#6
+  tryok#22:
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_40]  ; "a"
+    x64.movRegReg rcx, r12
+    x64.callDirect JsonDoc.getString
+    x64.storeSlotReg slot8, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#24
+  tryerr#25:
+    x64.leaRegRegImm32 rax, r10, -1
+  __il_body#27:
+    x64.jumpTable rax, default=matchdead#33 [[0]=matcharm#29, [1]=matcharm#30, [2]=matcharm#31, [3]=matcharm#28, [4]=matcharm#32] @__jumptable_110
+  matchdead#33:
+  matcharm#29:
+    x64.leaRegRdata rcx, [rip + __str_rec_34]  ; "notObject"
+    x64.jmp matchcont#34
+  matcharm#30:
+    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "notArray"
+    x64.jmp matchcont#34
+  matcharm#31:
+    x64.leaRegRdata rcx, [rip + __str_rec_36]  ; "missingKey"
+    x64.jmp matchcont#34
+  matcharm#28:
+    x64.leaRegRdata rcx, [rip + __str_rec_33]  ; "wrongType"
+    x64.jmp matchcont#34
+  matcharm#32:
+    x64.leaRegRdata rcx, [rip + __str_rec_37]  ; "outOfBounds"
+  matchcont#34:
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+  __il_cont#26:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_JsonDoc
+    x64.movRegReg r12, r13
+    x64.jmp __il_cont#6
+  tryok#24:
+    x64.leaRegRdata rax, [rip + __str_rec_42]  ; "a is "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r14, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot22, rax
+    x64.leaRegRegReg rax, r13, rax
+    x64.storeSlotReg slot12, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot17, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.loadRegSlot rax, slot22
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot22
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot17
+    x64.storeBaseDispReg.word64 [r12 + 0], r15
+    x64.loadRegSlot rax, slot12
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_JsonDoc
+  __il_cont#6:
+    x64.storeSlotReg slot2, r12
+  matcharm#3:
+    x64.leaRegRdata rcx, [rip + __str_rec_38]  ; "endOfFile"
+  matchcont#5:
+    x64.callDirect __str_retain
+    x64.storeSlotReg slot1, r8
+  __il_cont#1:
+    x64.leaRegRdata rax, [rip + __str_rec_45]  ; "parse: "
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.storeSlotReg slot19, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_46]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot14, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot9, rcx
+    x64.leaRegRegReg rax, r14, rax
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r13, rbx, r14
+    x64.loadRegSlot rax, slot19
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot19
+    x64.leaRegRegReg r13, r13, rax
+    x64.loadRegSlot rax, slot9
+    x64.loadRegSlot rdx, slot14
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot9
+    x64.leaRegRegReg rax, r13, rax
+    x64.loadRegSlot r13, slot5
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [r13 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect print
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_47]  ; "access: "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r14, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_46]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot20, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot15, rax
+    x64.leaRegRegReg rcx, r13, r12
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot10, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rax, slot15
+    x64.loadRegSlot rdx, slot20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot15
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot10
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_48]  ; "console: "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.loadRegSlot rax, slot1
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_46]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot21, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot16, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot11, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot16
+    x64.loadRegSlot rdx, slot21
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot16
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot11
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot7
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 232
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

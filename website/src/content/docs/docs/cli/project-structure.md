@@ -79,7 +79,7 @@ reads from the JSON are:
 | `output` | string, required | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. |
 | `sources` | list of strings, required | The files and directories to compile, in order. An empty list is refused. |
 | `debug_info` | `true` or `false` | Whether to write the `.mxdbg` sidecar (default `true`). |
-| `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`. A component that is not a number from 0 to 65535 reads as 0. |
+| `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](/docs/cli/#defines) on the command line. |
 
 A field that is present but malformed is **refused** rather than guessed at, naming the key, for
@@ -143,8 +143,9 @@ The marker means "do not sweep me into somebody else's program", not "this file 
 - Manifests conventionally write their outputs there (`output: ".maxon/myapp"`), and the compiler
   creates the output directory if it is missing.
 
-A plain `maxon build <directory>` without `-o` does not use `.maxon/`: it writes the executable beside
-the first source file it registers. Pass `-o` or use a manifest to choose the location.
+A plain `maxon build <directory>` without `-o` does not use `.maxon/`: it writes the executable into the
+directory, named for it (`maxon build app` writes `app/app.exe` on Windows). Pass `-o` or use a manifest to
+choose the location.
 
 ## The tree lock
 

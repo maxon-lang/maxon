@@ -3,11 +3,10 @@
 // pair, and the session is `completion-probe.test.maxon`'s.
 //
 // ⛔ **`completion for array methods` DOES NOT PIN THE RECOVERED NAME LIST.** The Zig test pinned 21
-// names and asserted the count equalled 21; four of them cannot be offered here — `ensureCapacity`
-// (`stdlib/Array.maxon:290`, declared without `public`), `init` (:133, a `public static`, and a static is
-// not a member of an instance), and `iterIndex` / `next`, which `Array` no longer has at all. The eight
-// names asserted below are a re-verified sample of the surface; the negative is the claim the recovered
-// list had backwards.
+// names and asserted the count equalled 21; four of them cannot be offered here — `init` (a `public
+// static`, and a static is not a member of an instance), and `ensureCapacity`, `iterIndex` and `next`,
+// which `Array` does not have. The eight names asserted below are a sample of the surface; the negative
+// asks the server to filter a member `Array` does declare without `public`.
 //
 // ⭐ **THE COUNT IS PINNED EXACTLY**, because `greaterThan(0)` is satisfied by a server that offers one
 // keyword. It is a fact about THIS TREE — `Array`'s public surface plus what `stdlib/helpers/sort/`
@@ -29,10 +28,9 @@ test 'completion for array methods'
 
 	try assertCompletionOffersEach(labels, wanted: completionArrayMethodsOfferedToday(), after: "`arr.`")
 
-	// `ensureCapacity` is declared at `stdlib/Array.maxon:290` WITHOUT `public`. It is therefore a
-	// negative with teeth rather than the vacuous one the recovered list made of it: the claim is that
-	// the server filters by visibility, not that the method is gone.
-	try Expect.isFalse(completionOffersLabel(labels, label: "ensureCapacity"), message: "completion after `arr.` offered `ensureCapacity`, which `stdlib/Array.maxon` declares without `public`. A completion list that ignores visibility teaches a caller to write code that will not compile.")
+	// `fillPublished` is declared in `stdlib/Array.maxon` WITHOUT `public`, so the claim is that the server
+	// filters by visibility, not that the method is gone.
+	try Expect.isFalse(completionOffersLabel(labels, label: "fillPublished"), message: "completion after `arr.` offered `fillPublished`, which `stdlib/Array.maxon` declares without `public`. A completion list that ignores visibility teaches a caller to write code that will not compile.")
 end 'completion for array methods'
 
 test 'completion for string methods'

@@ -22,6 +22,11 @@ this process's environment rather than two that could disagree. A name nothing i
 carries throws `ProcessIntrospectionError.variableUnset` — it does NOT answer the empty string, which
 is a value a variable can genuinely hold.
 
+`Process.currentEnvironmentEntries()` — the walk itself — is a throwing call. A producer that fails to
+read an entry is reported separately from "no entry at this index", and the walk throws rather than
+handing back the entries before the failure as if they were the whole environment; both
+`environmentVariable` and a spawn's inherited environment propagate that failure.
+
 ### The name is matched case-insensitively on Windows and exactly under POSIX
 
 Windows environment names are case-insensitive and the block spells the search path `Path`, not
@@ -126,4 +131,21 @@ child said a=b
 ```
 ```exitcode
 7
+```
+
+<!-- test: process-environment-variable.the-environment-walk-is-a-throwing-call -->
+<!-- unsupported-targets: wasm32-wasi -->
+⛔ **THE WALK THROWS, SO A CALL WITHOUT `try` IS REFUSED.** A producer that fails partway through the
+environment is distinguishable from the end of it, and the walk reports it rather than answering the
+entries it had read so far as though they were all of them. The refusal is what proves the signature
+carries the error: a bare call that compiled would be a walk that can still truncate silently.
+```maxon
+function main() returns ExitCode
+	let entries = Process.currentEnvironmentEntries()
+	print("{entries.count()} entries\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:3:24: throwing function requires try: 'stdlib.Process.currentEnvironmentEntries'
 ```

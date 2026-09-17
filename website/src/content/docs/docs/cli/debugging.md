@@ -47,7 +47,7 @@ Stack trace:
 Frames are listed innermost first, by function name only, down to the program's start (`mrt_start`).
 At most 100 frames are printed; a deeper chain
 ends with an `...additional frames elided...` line. A processor fault has no source position, for example
-`panic: integer divide by zero`, followed by the same stack trace.
+`panic: nil pointer or invalid memory access` or `panic: stack overflow`, followed by the same stack trace.
 
 ## The leak check
 
@@ -150,7 +150,7 @@ Everything after the executable is the program's command line and reaches it unt
 | Option | Description |
 |--------|-------------|
 | `--filter=mm` | Memory-manager events only: `mm_alloc`, `mm_free`, `mm_incref`, `mm_decref` and related |
-| `--filter=sched` | Scheduler events only. The current runtime emits none, so this filter prints no event lines. |
+| `--filter=sched` | Green-thread events only: `sched_spawn #N`, `sched_await #N` (the thread awaited), `sched_yield #N` and `sched_resume #N` (around `sleep` and `Runtime.yield()`), `io_yield #N` and `io_resume #N` (around a blocking I/O operation). `N` is the thread's number, the same one `--async-trace` prints. |
 | `--filter=log` | Only the events the program emitted through the `__DebugStream` builtin |
 
 With no `--filter`, every family is printed. An unrecognized value is refused with the usage line.

@@ -61,7 +61,6 @@ enum URLError implements Error
   invalidHost
   invalidPort
   invalidEncoding
-  invalidPath
   emptyInput
   relativeWithoutBase
   fieldNotPresent

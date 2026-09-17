@@ -147,9 +147,9 @@ Each view has `count()` and `createIterator()`, and works in `for`-`in`. Constru
 
 ### StringBuilder
 
-A `String` owns exactly the bytes it holds, so appending to one in a loop copies what is already there on
-each append. `StringBuilder` grows geometrically instead; build with it and take the finished `String` at
-the end.
+`String.append` and `StringBuilder` both grow their buffer geometrically, so appending in a loop is amortized
+constant time per byte with either. `StringBuilder` adds `reserve` for a known final size and a `clear` that
+keeps the capacity for reuse; build with it and take the finished `String` at the end.
 
 | Member | Returns | Description |
 |--------|---------|-------------|

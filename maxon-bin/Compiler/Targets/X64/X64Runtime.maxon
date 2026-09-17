@@ -1,21 +1,16 @@
 // X64Runtime — the emitted program's PANIC RUNTIME, hand-assembled into `.text`.
 //
-// When the CPU raises `#DE` — on `a / 0`, or on the one other quotient that does not exist,
-// `i64.min / -1` — Windows offers the fault to any vectored exception handler BEFORE it kills
-// the process. This file emits that handler and the diagnostic it prints:
+// When the CPU faults — a bad address, a stack run past its guard, a stray `#DE` — the OS offers the
+// fault to a handler BEFORE it kills the process: a vectored exception handler on Windows, a signal
+// handler on Linux. This file emits those handlers and the diagnostic they print:
 //
-//     panic: integer divide by zero at rip=0x… diag_base=0x…
+//     panic: nil pointer or invalid memory access at rip=0x… diag_base=0x…
 //     Stack trace:
+//       in maxon_force_segfault
 //       in main
 //       in mrt_start
 //
-// The two causes are ONE trap and two NTSTATUS codes, so which of the two lines above's first
-// words appear is a classification the handler makes (`HardwareFaultKind`); `i64.min / -1` reads
-// `panic: integer overflow` and is otherwise identical.
-//
-// The mechanism is the CPU's, not the compiler's: no divisor is ever tested. `idiv`
-// traps for free, and a divide guarded by an explicit `cmp/jz` would cost every division
-// in every program to diagnose the one that faults.
+// Which words open the line is a classification the handler makes (`HardwareFaultKind`).
 //
 // WHY HAND-ASSEMBLED BYTES, NOT IR. Everything below is a `FunctionCodeChunk` built by
 // calling X64Backend's encoders directly, rather than a Maxon or Std function the normal
@@ -29,11 +24,12 @@
 // — a RIP-relative disp32 and a `call rel32` measure from the same place.
 //
 // WHAT IS DELIBERATELY ABSENT:
-//   - No CONTEXT REDIRECT. Rewriting the faulting thread's Rip/Rsp/Rbp to resume at a
-//     separate diagnostic function and returning EXCEPTION_CONTINUE_EXECUTION is what a
-//     STACK OVERFLOW needs, because there the faulting stack cannot be used to print
-//     anything. The faults this handler converts — `#DE` and an access violation — leave
-//     the stack usable, so it prints on the spot and exits.
+//   - No CONTEXT REDIRECT. Every handler prints on the spot and exits. A STACK OVERFLOW
+//     leaves the faulting stack with no room for the diagnostic, so each lane gives the
+//     handler room of its own: Windows reserves it below the main thread's stack guard
+//     (`SetThreadStackGuarantee`, in `mrt_runtime_init`), and Linux runs the handler on the
+//     thread's alternate signal stack. Only an OS-grown stack can overflow this way — a green
+//     thread's prologue guard grows its stack before a frame could run past it.
 //   - No FAULT GLOBALS. Printing in place means Rip/Rbp/Rsp stay in this frame and travel
 //     as ORDINARY ARGUMENTS — which is also why `mrt_fault_backtrace` takes three
 //     parameters and reads no global. There is no writable-data-section pipeline here, so
@@ -86,9 +82,9 @@ let VehContinueSearch = 0
 // at and the width the thunk loads it with, so the comparand and the loaded value are one type.
 typealias ExceptionCode = int(0 to u32.max)
 
-// The two NTSTATUS codes Windows delivers for the `#DE` that `idiv` raises, and the only two this
-// handler converts. `idiv` raises the SAME trap for a zero divisor and for a quotient that does not
-// fit (`i64.min / -1`), and the CPU distinguishes them only by which code the OS then reports.
+// The two NTSTATUS codes Windows delivers for the `#DE` that `idiv` raises. `idiv` raises the SAME trap
+// for a zero divisor and for a quotient that does not fit (`i64.min / -1`), and the CPU distinguishes them
+// only by which code the OS then reports.
 let ExcCodeIntDivideByZero = 0xC0000094  // EXCEPTION_INT_DIVIDE_BY_ZERO — a zero divisor.
 let ExcCodeIntOverflow = 0xC0000095  // EXCEPTION_INT_OVERFLOW — an unrepresentable quotient.
 
@@ -96,6 +92,10 @@ let ExcCodeIntOverflow = 0xC0000095  // EXCEPTION_INT_OVERFLOW — an unrepresen
 // two above it is raised by no ONE instruction: any memory operand can take it, which is why the handler
 // converts it on the CODE alone and reads nothing else out of the record.
 let ExcCodeAccessViolation = 0xC0000005
+
+// EXCEPTION_STACK_OVERFLOW — a touch of the stack's guard page with no stack left to grow into. The kernel
+// has already classified it, so the handler needs no address test the POSIX lanes make.
+let ExcCodeStackOverflow = 0xC00000FD
 
 // EXCEPTION_POINTERS field offsets (the struct RCX points at).
 let ExcPtrsOffExceptionRecord = 0x00
@@ -293,12 +293,20 @@ export type X64RuntimeAsm
 	// out from the bottom up — shadow space, outgoing args, then the slots — and rounded to
 	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
 	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
+		return Self.beginFunctionAfterEntry(ByteArray.create(), callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), slots: slots, outgoingStackArgBytes: outgoingStackArgBytes)
+	end 'beginFunction'
+
+	// Open a function whose first bytes, `entry`, run BEFORE its frame exists — `mrt_panic`'s green-thread stack
+	// guard, which then sees the entry shape every guarded compiled function presents (`__gt_morestack` builds
+	// the requesting frame's record from it). `entry`'s own branches are resolved; its calls and `.data`
+	// references travel in the two arrays, which the chunk goes on appending to.
+	export static function beginFunctionAfterEntry(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
 		let slotAreaBytes = slots * SpillSlotBytes
 		let frameBytes = alignUpStack(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: StackFrameAlignment)
 
 		// The prologue is emitted into the buffer BEFORE the struct owns it — `Self{…}` is
 		// then a single immutable construction rather than a build-then-mutate.
-		var code = ByteArray.create()
+		var code = entry
 		encodePushReg(code, reg: X64Register.rbp)
 		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
 
@@ -316,9 +324,9 @@ export type X64RuntimeAsm
 
 		return Self{
 			code: code,
-			callFixups: CallFixupArray.create(),
+			callFixups: callFixups,
 			iatRelocs: RelocationArray.create(),
-			rdataRelocs: RdataRelocationArray.create(),
+			rdataRelocs: rdataRelocs,
 			rel32Fixups: ChunkRel32FixupArray.create(),
 			labelOffsets: BlockOffsetTable.create(),
 			nextLabel: 0,
@@ -329,7 +337,7 @@ export type X64RuntimeAsm
 			slotAreaBytes: slotAreaBytes,
 			outgoingArgBytes: outgoingStackArgBytes
 		}
-	end 'beginFunction'
+	end 'beginFunctionAfterEntry'
 
 	// Everything one call of this chunk puts on its caller's stack: the return address and the pushed rbp, which
 	// `ChunkEntryWordsBytes` counts, and the frame.
@@ -1233,11 +1241,12 @@ function buildPrintInlineFramesChunk() returns FunctionCodeChunk
 end 'buildPrintInlineFramesChunk'
 
 // ==========================================================================
-// mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low)
+// mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low, r8 = frame_budget)
 // ==========================================================================
 
-// Walk the saved-RBP chain from `start_frame`, printing up to `MaxBacktraceFrames` symbolized frames and
-// `ElidedFramesLine` if the chain goes on past them.
+// Walk the saved-RBP chain from `start_frame`, printing up to `frame_budget` symbolized frames and
+// `ElidedFramesLine` if the chain goes on past them. The budget is `MaxBacktraceFrames` less the frames the
+// caller already printed, so every trace holds at most that many.
 //
 // ⭐ **IT TERMINATES ON ANY CHAIN, BECAUSE IT RUNS ON THE CORRUPTION IT REPORTS.** A frame is believed only if
 // its whole record lies inside the stack being walked and it is `FrameRecordAlignment`-aligned, and a link
@@ -1264,6 +1273,8 @@ function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	let elided = asm.newLabel()
 	let done = asm.newLabel()
 
+	// The budget first: `emitWalkStackBounds` clobbers r8.
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.r8)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rcx)
 	emitWalkStackBounds(asm, usesGt: usesGt, os: os, lowSlot: SlotStackLow, ceilingSlot: SlotFrameCeiling)
 
@@ -1271,9 +1282,6 @@ function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
 	emitLeaSymtable(asm, dest: X64Register.rax)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
-
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: MaxBacktraceFrames)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
 
 	// UNSIGNED compares: a frame pointer is an address, and a corrupt one with bit 63 set must read as far
 	// above the stack rather than below it. The low bound is never zero, so it also ends the chain at a
@@ -1371,22 +1379,25 @@ end 'emitWalkStackBounds'
 // Frame 0 is the faulting instruction, symbolized from `fault_rip` with NO bias: a fault
 // RIP already points AT the instruction that trapped, whereas a return address points past
 // its call and needs the -1 (see ReturnAddrSymbolBias). Frames 1..N come from walking the
-// saved-RBP chain from `fault_rbp`, with `fault_rsp` as the lowest address the walk believes.
+// saved-RBP chain from `fault_rbp`, with `fault_rsp` as the lowest address the walk believes. A printed
+// frame 0 is charged against the walk's budget.
 //
-// Slots: 0 = fault_rip, 1 = fault_rbp, 2 = fault_rsp, 3 = text_base, 4 = symtable.
+// Slots: 0 = fault_rip, 1 = fault_rbp, 2 = fault_rsp, 3 = text_base, 4 = symtable, 5 = frame budget.
 function buildFaultBacktraceChunk() returns FunctionCodeChunk
 	let SlotFaultRip = 0
 	let SlotFaultRbp = 1
 	let SlotFaultRsp = 2
 	let SlotTextBase = 3
 	let SlotSymtable = 4
-	var asm = X64RuntimeAsm.beginFunction(5)
+	let SlotFrameBudget = 5
+	var asm = X64RuntimeAsm.beginFunction(6)
 
 	let walk = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.r8)
+	emitStoreFrameBudget(asm, slot: SlotFrameBudget, frames: MaxBacktraceFrames)
 
 	emitPrintString(asm, bytes: BacktraceHeader)
 
@@ -1405,14 +1416,21 @@ function buildFaultBacktraceChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
+	emitStoreFrameBudget(asm, slot: SlotFrameBudget, frames: MaxBacktraceFrames - 1)
 
 	asm.placeLabel(walk)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFrameBudget), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	return asm.finishFunction(FaultBacktraceName)
 end 'buildFaultBacktraceChunk'
+
+function emitStoreFrameBudget(asm X64RuntimeAsm, slot StackSize, frames MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: frames)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(slot), srcReg: X64Register.rax)
+end 'emitStoreFrameBudget'
 
 // ==========================================================================
 // mrt_fault_thunk(rcx = EXCEPTION_POINTERS*)  — the vectored exception handler
@@ -1432,23 +1450,26 @@ function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Reg
 	encodeMovRegImm32(asm.code, dest: scratch, value: excCode as MachineWord)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: codeReg, src: scratch, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: next)
+	emitClassifiedFault(asm, kind: kind, scratch: scratch, prefixSlot: prefixSlot, classified: classified)
+	asm.placeLabel(next)
+end 'emitFaultCodeArm'
 
+// Record `kind`'s panic prefix in `prefixSlot` and jump to `classified` — the end of every classification
+// arm on both OSes.
+function emitClassifiedFault(asm X64RuntimeAsm, kind HardwareFaultKind, scratch X64Register, prefixSlot StackSize, classified BlockId)
 	emitLeaString(asm, dest: scratch, bytes: faultPanicLinePrefix(kind))
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(prefixSlot), srcReg: scratch)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: classified)
-
-	asm.placeLabel(next)
-end 'emitFaultCodeArm'
+end 'emitClassifiedFault'
 
 // The callback `AddVectoredExceptionHandler` invokes on a hardware fault, BEFORE the OS
 // applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
 // in EAX.
 //
-// It converts the two integer `#DE` codes and the ACCESS VIOLATION, and NOTHING ELSE. Every
-// other code returns EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler
-// that swallowed faults it was not asked about would turn every unrelated crash into this
-// one's diagnostic. (STACK OVERFLOW is not converted: it would be the same one `cmp` per code, but
-// it also needs a guard page the handler can run on, which none of the three here do.)
+// It converts the two integer `#DE` codes, the ACCESS VIOLATION and the STACK OVERFLOW, and NOTHING
+// ELSE. Every other code returns EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler
+// that swallowed faults it was not asked about would turn every unrelated crash into this one's
+// diagnostic. A stack overflow runs this handler in the room `mrt_runtime_init` guaranteed.
 //
 // ⚠ **THE ACCESS-VIOLATION ARM IS WHAT MAKES THIS HANDLER TESTABLE AT ALL.** Every other route
 // to it is a compiler BUG, so until `__Builtins.forceSegfault()` existed the whole thunk was
@@ -1476,6 +1497,7 @@ function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeCh
 	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntDivideByZero, kind: HardwareFaultKind.divideByZero, prefixSlot: SlotPanicPrefix, classified: classified)
 	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeIntOverflow, kind: HardwareFaultKind.overflow, prefixSlot: SlotPanicPrefix, classified: classified)
 	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeAccessViolation, kind: HardwareFaultKind.accessViolation, prefixSlot: SlotPanicPrefix, classified: classified)
+	emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: ExcCodeStackOverflow, kind: HardwareFaultKind.stackOverflow, prefixSlot: SlotPanicPrefix, classified: classified)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
 
 	asm.placeLabel(classified)
@@ -1522,8 +1544,21 @@ end 'buildFaultThunkChunk'
 // to be band-appended, and every `match` over the union pays for it forever), the address is
 // taken HERE, in a chunk that assembles its own bytes, and `mrt_start` reaches it with the
 // `callDirect` it already has. This is also where the runtime's later prelude lands.
+//
+// ⭐ **THE STACK GUARANTEE IS WHAT LETS THE HANDLER REPORT A STACK OVERFLOW.** Windows runs a vectored
+// handler on the faulting stack, which an overflow has spent. `SetThreadStackGuarantee` keeps
+// `SignalStackBytes` beyond the guard page for exactly this — the room a POSIX lane's alternate signal
+// stack gives its handler. It takes the size through a pointer (and writes the previous one back).
+//
+// Slots: 0 = the guarantee's size.
 function buildRuntimeInitChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let SlotGuaranteeBytes = 0
+	var asm = X64RuntimeAsm.beginFunction(1)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: SignalStackBytes)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes), srcReg: X64Register.rax)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotGuaranteeBytes))
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetThreadStackGuarantee))
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: VehHandlerFirst)
 	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rdx, targetName: FaultThunkName)
@@ -1565,8 +1600,11 @@ end 'buildRuntimeInitChunk'
 //
 // ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `emitPanicStackGuard`.
 function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
-	emitPanicStackGuard(asm, usesGt: usesGt, target: target)
+	var entry = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+	emitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, usesGt: usesGt, target: target)
+	var asm = X64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
@@ -1574,9 +1612,11 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	// (2) The `Stack trace:` header.
 	emitPrintString(asm, bytes: BacktraceHeader)
 
-	// (3) Walk from this frame, which is also the lowest address the walk believes: rcx = rdx = rbp.
+	// (3) Walk from this frame, which is also the lowest address the walk believes: rcx = rdx = rbp, with the
+	// whole frame budget.
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rbp, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rbp, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: MaxBacktraceFrames)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
 
 	// (4) The counters, on an instrumented build only.
@@ -1594,15 +1634,16 @@ end 'buildPanicChunk'
 // `mrt_panic` needs up to a margin of its own. So `mrt_panic` runs the same guard every guarded function
 // runs, projecting one margin as its frame — `requireWriteStreamFitsGreenThreadStack` certifies that the
 // deepest un-guarded chain, x64-Windows' through `mrt_write_stream`, fits in one — and the grower relocates
-// the stack before a byte is printed. It sits after the prologue, which the guard allows: the grower rebases
-// the live rbp and every link above it, and this frame holds no stack address. It never parks
+// the stack before a byte is printed. It runs BEFORE the prologue, as a compiled function's guard does, so a
+// growth past `GtMaxStackBytes` finds the entry shape `__gt_morestack` reports a stack overflow from; the
+// projected frame's margin covers the frame the prologue then opens. It never parks
 // (`GtGuardSite.mrtPanic`). Only a green-thread program has the scheduler words the guard reads.
-function emitPanicStackGuard(asm X64RuntimeAsm, usesGt bool, target Target)
+function emitPanicStackGuard(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, usesGt bool, target Target)
 	if not usesGt 'noGreenThreads'
 		return
 	end 'noGreenThreads'
 
-	emitGtStackGuard(asm.code, callFixups: asm.callFixups, rdataRelocs: asm.rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), site: GtGuardSite.mrtPanic, target: target)
+	emitGtStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: gtStackGuardMargin(target) as StackSize, margin: gtStackGuardMargin(target), site: GtGuardSite.mrtPanic, target: target)
 end 'emitPanicStackGuard'
 
 // ⭐⭐ **PUBLISH THE COUNTERS AN ABORTING RUN DID REACH, MARKED `ABORTED`.** The entry stub's dump is the
@@ -1643,7 +1684,7 @@ end 'emitCoverageAbortDump'
 // `mrt_write_cstr_stderr` BY NAME and touch no IAT, so the Linux runtime appends the same builders — the
 // walker's one OS fact is where it finds its stack's top (`emitWalkStackBounds`). Only THREE chunks differ
 // from Windows, all because Linux reaches the OS through raw syscalls rather than kernel32 imports: the
-// stderr writer (`write` vs a call into `mrt_write_stream`), the fault ENTRY (a SIGFPE handler reading the
+// stderr writer (`write` vs a call into `mrt_write_stream`), the fault ENTRY (a signal handler reading the
 // ucontext vs a VEH callback reading EXCEPTION_POINTERS), and `runtime_init` (rt_sigaction vs
 // AddVectoredExceptionHandler). The first and last carry the SAME names as their Windows twins
 // (`mrt_write_cstr_stderr`, `mrt_runtime_init`), so the reused chunks and `mrt_start` resolve to whichever
@@ -1689,42 +1730,61 @@ function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
 	return asm.finishFunction(WriteStderrName)
 end 'buildLinuxWriteStderrChunk'
 
-// mrt_fault_handler (LINUX) — the SIGFPE handler. Kernel SA_SIGINFO entry ABI: rdi=signum, rsi=siginfo*,
-// rdx=ucontext*. The Linux twin of `buildFaultThunkChunk`: reads the faulting RIP/RBP/RSP from the
-// ucontext (not a Windows CONTEXT), prints the SAME panic line + backtrace, and terminates with
-// exit_group(1) (not ExitProcess). It NEVER returns, which is why the sigaction needs no restorer.
+// mrt_fault_handler (LINUX) — the SIGFPE, SIGSEGV and SIGBUS handler. Kernel SA_SIGINFO entry ABI:
+// rdi=signum, rsi=siginfo*, rdx=ucontext*. The Linux twin of `buildFaultThunkChunk`: reads the faulting
+// RIP/RBP/RSP from the ucontext (not a Windows CONTEXT), prints the SAME panic line + backtrace, and
+// terminates with exit_group(1) (not ExitProcess). It runs on the thread's alternate signal stack, which is
+// what lets it report a stack the fault ran out of.
 //
-// ⚠ IT CANNOT MAKE THE WINDOWS THUNK'S DISTINCTION, AND THE LIMITATION IS THE KERNEL'S. The Windows
-// thunk tells a zero divisor from an unrepresentable quotient (`i64.min / -1`) because the two arrive
-// as different NTSTATUS codes. Linux offers only `siginfo->si_code`, and x86's `exc_divide_error`
-// reports `FPE_INTDIV` for EVERY `#DE` — the CPU never told the kernel which of the two causes fired,
-// so there is nothing to branch on. MEASURED, not inferred: this handler was instrumented to print
-// the raw `si_code` and both a zero divisor and `i64.min / -1` read 1 (`FPE_INTDIV`). Recovering the
-// distinction would mean decoding the faulting `idiv`'s ModRM at the ucontext RIP to find which
-// register held the divisor — a disassembler in hand-assembled bytes, welded to one encoding, whose
-// failure mode is a CONFIDENTLY WRONG diagnostic rather than a missing one. So this handler prints
-// the divide-by-zero wording for every SIGFPE it receives, which is also why a stray floating-point
-// trap would read that way; `specs/safety.md` states both halves and gates the overflow case to
-// `x64-windows`.
+// ⚠ **A SIGFPE READS AS A DIVIDE BY ZERO, AND NO COMPILED DIVIDE RAISES ONE.** x86's `exc_divide_error`
+// reports `FPE_INTDIV` for EVERY `#DE`, so the kernel cannot tell a zero divisor from `i64.min / -1` — and
+// neither reaches the instruction: a possibly-zero divisor throws, and the overflow pair panics from the
+// parser's guard. What is left is a stray trap, worded as the Windows thunk words its commoner code.
 //
-// Slots: 0=rip, 1=rbp, 2=rsp.
+// ⭐ **A MEMORY FAULT IS A STACK OVERFLOW WHEN IT LANDS BESIDE THE STACK POINTER** (`StackFaultReachBytes`).
+//
+// Slots: 0=rip, 1=rbp, 2=rsp, 3=panic prefix.
 function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	let SlotRip = 0
 	let SlotRbp = 1
 	let SlotRsp = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let SlotPanicPrefix = 3
+	var asm = X64RuntimeAsm.beginFunction(4)
+
+	let memoryFault = asm.newLabel()
+	let classified = asm.newLabel()
 
 	// Stash the faulting RIP/RBP/RSP from the ucontext (rdx) BEFORE any call clobbers rdx.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRipOffset, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), srcReg: X64Register.rax)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRbpOffset, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), srcReg: X64Register.rax)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: X64LinuxUContextRspOffset, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: X64LinuxUContextRspOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rdx)
+
+	emitCmpRegImm(asm, reg: X64Register.rdi, imm: LinuxSignalFpe)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: memoryFault)
+	emitClassifiedFault(asm, kind: HardwareFaultKind.divideByZero, scratch: X64Register.rax, prefixSlot: SlotPanicPrefix, classified: classified)
+
+	// Only SIGSEGV and SIGBUS are registered besides SIGFPE. `addr - rsp + reach` is below `2 * reach`, read
+	// UNSIGNED, exactly when the address lies within `reach` of the stack pointer on either side.
+	asm.placeLabel(memoryFault)
+	let stackOverflow = asm.newLabel()
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rsi, disp: LinuxSiginfoOffAddr, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: StackFaultReachBytes as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (StackFaultReachBytes * 2) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: stackOverflow)
+	emitClassifiedFault(asm, kind: HardwareFaultKind.accessViolation, scratch: X64Register.rax, prefixSlot: SlotPanicPrefix, classified: classified)
+
+	asm.placeLabel(stackOverflow)
+	emitClassifiedFault(asm, kind: HardwareFaultKind.stackOverflow, scratch: X64Register.rax, prefixSlot: SlotPanicPrefix, classified: classified)
 
 	// The panic line — through the SAME prefix builder the Windows thunk picks from, so the two OSes
 	// cannot drift on the wording and the harness's strip-from-` at rip=0x` leaves an identical line.
-	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.divideByZero))
+	asm.placeLabel(classified)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotPanicPrefix), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
 
 	// exit_group(1) — never returns. A converted fault is terminal: there is no `recover()`.
@@ -1765,17 +1825,17 @@ function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
 	return asm.finishFunction(SignalStackInstallName)
 end 'buildLinuxSignalStackInstallChunk'
 
-// mrt_runtime_init (LINUX) — registers the SIGFPE handler, and on a lane that stops threads the SIGURG one
-// too, via rt_sigaction. `mrt_start` calls this before `main`, so the first user instruction is already
-// covered. The Linux twin of `buildRuntimeInitChunk`.
+// mrt_runtime_init (LINUX) — registers the fault handler for SIGFPE, SIGSEGV and SIGBUS, and on a lane that
+// stops threads the SIGURG one too, via rt_sigaction. `mrt_start` calls this before `main`, so the first user
+// instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
 // It installs the main thread's signal stack FIRST — `SA_ONSTACK` is a promise that one exists, so the
 // handler is not made reachable before it does. Then it builds a `struct sigaction` on the stack: the handler
-// address, `X64LinuxSigactionFlags`, the mandatory restorer, and an empty mask — then
-// rt_sigaction(SIGFPE, &act, NULL, 8). Slots 0..3 are the 32-byte struct, ascending from the LOWEST
+// address, `X64LinuxSigactionFlags`, the mandatory restorer, and an empty mask — then one
+// rt_sigaction(signal, &act, NULL, 8) per signal. Slots 0..3 are the 32-byte struct, ascending from the LOWEST
 // slot so `&act` (= the lowest field, sa_handler) is `slotDisp(3)`.
 //
-// ⭐ **THE SECOND INSTALL REWRITES ONLY `sa_handler`.** The flags, the restorer and the mask are the same
-// three words for both signals, so the struct is built once and the one field that differs is stored again.
+// ⭐ **THE PREEMPTION INSTALL REWRITES ONLY `sa_handler`.** The flags, the restorer and the mask are the same
+// three words for every signal, so the struct is built once and the one field that differs is stored again.
 function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotHandler = 3  // rbp-32 = &act = sa_handler (offset 0)
 	let SlotFlags = 2  // rbp-24 = sa_flags (offset 8)
@@ -1800,6 +1860,8 @@ function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns Function
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax)
 
 	emitLinuxSigactionCall(asm, signal: LinuxSignalFpe, handlerSlot: SlotHandler)
+	emitLinuxSigactionCall(asm, signal: LinuxSignalSegv, handlerSlot: SlotHandler)
+	emitLinuxSigactionCall(asm, signal: LinuxSignalBus, handlerSlot: SlotHandler)
 
 	if programInstallsPreemptSignal(target, usesGt: usesGt) 'itCanStopAThread'
 		encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: PreemptHandlerName)
@@ -1865,7 +1927,32 @@ function appendX64SharedRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X
 	chunks.push(buildPrintInlineFramesChunk())
 	chunks.push(buildSymtabIndexChunk())
 	chunks.push(buildWriteHexChunk())
+
+	if usesGt 'greenThreads'
+		chunks.push(buildGtStackOverflowChunk(exitRoute, target: target))
+	end 'greenThreads'
 end 'appendX64SharedRuntimeChunks'
+
+// mrt_gt_stack_overflow(rcx = pc, rdx = frame pointer, r8 = stack pointer) — see `GtStackOverflowName`. Called
+// on the machine's system stack, 16-aligned, so its frame and every call under it are aligned by construction.
+//
+// Slots: 0 = pc, 1 = frame pointer, 2 = stack pointer.
+function buildGtStackOverflowChunk(exitRoute X64OsCallKind, target Target) returns FunctionCodeChunk
+	let SlotPc = 0
+	let SlotFp = 1
+	let SlotSp = 2
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPc), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFp), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSp), srcReg: X64Register.r8)
+
+	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.stackOverflow))
+	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotPc, rbpSlot: SlotFp, rspSlot: SlotSp)
+	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: true, target: target)
+
+	return asm.finishFunction(GtStackOverflowName)
+end 'buildGtStackOverflowChunk'
 
 // The Windows-ONLY half of the fault runtime: the VEH `runtime_init` + `fault_thunk`, plus the ONE stream
 // writer every producer in the program reaches and the C-string front end the diagnostics call it through.
@@ -1883,7 +1970,7 @@ function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute 
 end 'appendX64WindowsRuntimeChunks'
 
 // The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack install it and every worker machine
-// call, the sigreturn trampoline and the SIGFPE `fault_handler`, over a `write`-syscall stderr writer published
+// call, the sigreturn trampoline and the signal `fault_handler`, over a `write`-syscall stderr writer published
 // under the same `mrt_write_cstr_stderr` label the Windows writer uses — which is what lets the shared chunks
 // call it without knowing which lane they are on.
 //

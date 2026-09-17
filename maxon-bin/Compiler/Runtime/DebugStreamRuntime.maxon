@@ -8,9 +8,9 @@
 // ⭐⭐ **THE ROSTER BELOW IS THE WHOLE WIRE FORMAT, NOT THE PART THIS PRODUCER WRITES, AND THAT IS WHY
 // CODES NOTHING HERE EMITS ARE DECLARED.** `Debug/DebugStreamDecoder` is the compiler's consumer and it imports
 // these names rather than restating a number — one registry, two ends. It must decode EVERY code,
-// including the sched and dbg families this producer has no emitter for, because the binary in front of
-// it may have been built by a producer that writes them. ⇒ a constant here with no producer is not
-// dead: it is the reader's half of the format.
+// including the dbg family this producer has no emitter for, because the binary in front of it may have
+// been built by a producer that writes them. ⇒ a constant here with no producer is not dead: it is the
+// reader's half of the format.
 //
 // ⭐ **WHAT IT IS FOR.** `specs/mm-trace.md` asserts a program's ALLOCATION BEHAVIOUR: not what it
 // computed, but how many records it allocated and what its refcount column did. No exit code can say
@@ -21,9 +21,9 @@
 //   • **COMPILE TIME — `--debugstream` off implies ZERO INSTRUCTIONS.** Not a branch that is never
 //     taken: no call, no store, no header word. A normal build's emitted code is byte-identical to that
 //     of a compiler carrying no instrument at all, which is what keeps the suite's committed `.test` fragment
-//     goldens from drifting. Every emitter below is a no-op when `debugStream` is false, exactly as
-//     `GtRuntime.emitGtTraceLine` is when the build is untraced, so each call site reads as an
-//     unconditional statement and the gating lives in one place.
+//     goldens from drifting. The gate is asked where an event's ARGUMENTS are built — `MmRuntime`'s and
+//     `GtRuntime`'s event emitters — because those ops would already be in the block by the time a gate
+//     inside `emitMmEvent` or `emitSchedEvent` could decline them.
 //   • **RUN TIME — `__ds_base == 0` implies an INLINE BAIL BEFORE ANY CALL.** A `--debugstream` binary
 //     run with no monitor attached pays one load and one branch per event site, never a call.
 //
@@ -35,9 +35,9 @@
 //   2. PAYLOAD (the caller, outside the lock).
 //   3. COMMIT (`__ds_commit`). Set the commit bit. The entry is now READABLE, and only now.
 // The monitor decodes nothing — and advances past nothing — that does not carry the commit bit.
-// `emitDsEntry` below is the ONLY caller of `__ds_reserve` and it always pairs
-// the reserve with a commit, so the pairing is the only shape a call site can have rather than a
-// convention each one is trusted to follow.
+// `emitReserveEntry` below is the ONLY caller of `__ds_reserve`, and every body that calls it ends in
+// `emitCommitAndFinish`, so the pairing is the only shape a body has rather than a convention each one is
+// trusted to follow.
 //
 // ⚠⚠ **THE LOCK IS A CRITICAL_SECTION, NOT A TICKET SPINLOCK.** A ticket lock is `atomic_xadd`
 // twice, and the Std tier has NO ATOMIC OP AT ALL — not one, in the whole dialect. The compiler already
@@ -196,14 +196,14 @@ export let DsMmPackedIdShift = 16
 export let DsMmTagIndexMask = 65535
 
 // ============================================================================
-// The SCHED and DBG families, and the three STRUCTURAL codes. READER-ONLY.
+// The SCHED family (`__ds_emit_sched`), and the DBG family and STRUCTURAL codes, which are READER-ONLY.
 // ============================================================================
 //
-// ⭐ **NOT ONE OF THESE HAS AN EMITTER IN THIS FILE, AND THEY ARE STILL THE FORMAT.** A scheduler
-// talking about itself writes them, and the decoder must name them rather than refuse. See the file
-// header for why the registry is wider than the producer.
+// ⭐ **THE DBG CODES HAVE NO EMITTER IN THIS FILE, AND THEY ARE STILL THE FORMAT.** See the file header for
+// why the registry is wider than the producer.
 
-// A green thread's life, one code per transition. The payload is the trace id alone.
+// A green thread's life, one code per transition. The payload is the trace id alone — the `#N` the async
+// trace prints for the same thread, so the two instruments name a thread alike.
 export let DsEvSchedSpawn = 0x20
 export let DsEvSchedAwait = 0x21
 export let DsEvSchedYield = 0x22
@@ -211,6 +211,9 @@ export let DsEvSchedResume = 0x23
 export let DsEvIoYield = 0x2B
 export let DsEvIoResume = 0x2C
 export let DsSchedOffTraceId = 8 as ByteOffset
+
+// Header + trace id(8).
+let DsSchedEntryBytes = 16
 
 // The scheduler's INTERNALS — queue moves, status stores, context switches. Five payload words, and what
 // `arg2`/`arg3`/`arg4` MEAN is per code (see the decoder's formatters), which is why they are numbered
@@ -649,6 +652,7 @@ export let DsShutdownName = b"__ds_shutdown"
 let DsReserveName = b"__ds_reserve"
 let DsCommitName = b"__ds_commit"
 let DsEmitMmName = b"__ds_emit_mm"
+let DsEmitSchedName = b"__ds_emit_sched"
 
 // ⭐ **THE THREE LOG ENTRY POINTS, AND THE ONLY `__ds_` NAMES A LOWERED PROGRAM CALLS DIRECTLY.** Every
 // other name in this family is reached from inside it; these are emitted at the site the SOURCE wrote a
@@ -729,10 +733,11 @@ let DsEnvNameRdataPrefix = "__ds_env_"
 // number: a stub that calls an `__ds_init` nothing installed fails to link, and slots laid out for a
 // producer that was never built are `.data` a program pays for and never touches.
 //
-// ⚠ **`usesHeap` IS HALF OF IT, AND NOT A SHORTCUT.** Every event this producer emits is an MM event, so a
-// program with no allocator has none to emit — and the init path itself needs `__slab_alloc` for its two
-// scratch regions. A `--debugstream` build of a heapless program therefore carries nothing and traces
-// nothing, which is the correct answer rather than an omission.
+// ⚠ **`usesHeap` IS HALF OF IT, AND NOT A SHORTCUT.** The init path needs `__slab_alloc` for its two scratch
+// regions, and a heapless program has no event to emit: it allocates nothing, and a program with a
+// scheduler always uses the heap (`RuntimeUsage` sets both bits together). A `--debugstream` build of a
+// heapless program therefore carries nothing and traces nothing, which is the correct answer rather than an
+// omission.
 export function buildCarriesDebugStream(project Project, usage RuntimeUsage) returns bool
 	return project.debugStream and usage.usesHeap
 end 'buildCarriesDebugStream'
@@ -764,6 +769,7 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	buildDsReserve(module)
 	buildDsCommit(module)
 	buildDsEmitMm(module)
+	buildDsEmitSched(module)
 
 	// ⚠ **THE LOG FAMILY IS BUILT UNCONDITIONALLY WITH THE REST, NOT ONLY WHEN A PROGRAM EMITS ONE.** Its
 	// three entry points are dead code in a traced program that writes no `__DebugStream` member, and
@@ -830,7 +836,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	// buffer is spent for the same reason — the open resolved it — and it is released here rather than on each
 	// of the four exits below, all of which pass through this block.
 	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(envBuf)))
+	emitSlabFree(module, block: entry, ptr: envBuf, ids: ids)
 	let mapped = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(mapped, thenBlockId: checkMagic.id, elseBlockId: dark.id))
 
@@ -1100,10 +1106,8 @@ end 'buildDsCommit'
 // `mm_incref` and `mm_decref` are 24 bytes each, carrying an alloc id, a tag index and a 32-bit value — an
 // allocation SIZE for the alloc, the new OWNER COUNT for the refcount pair, and unused (0) for the free.
 //
-// ⭐ **IT IS THE ONLY CALLER OF `__ds_reserve`, AND IT ALWAYS COMMITS.** A producer therefore cannot
-// publish an entry and forget to commit it: the pairing is the only shape a call site can have. A missed
-// commit does not lose one event — an uncommitted entry is never skipped while its producer lives, so the
-// monitor STALLS ON IT FOREVER.
+// ⭐ **IT ALWAYS COMMITS.** A missed commit does not lose one event — an uncommitted entry is never skipped
+// while its producer lives, so the monitor STALLS ON IT FOREVER.
 function buildDsEmitMm(module StdModule)
 	var func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -1118,14 +1122,7 @@ function buildDsEmitMm(module StdModule)
 	let value = 2 as ValueId
 
 	let entryBytes = emitConst(module, block: entry, value: DsMmEntryBytes, ids: ids)
-	let entryPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.call(entryPtr, callee: DsReserveName, args: twoArgs(eventType, second: entryBytes)))
-
-	// 0 means the ring was FULL. The entry was never reserved, so there is nothing to commit — this is a
-	// DROPPED event, counted in the segment header, not a deferred one.
-	let noEntry = emitConst(module, block: entry, value: 0, ids: ids)
-	let reserved = emitCmp(module, block: entry, a: entryPtr, b: noEntry, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(reserved, thenBlockId: write.id, elseBlockId: done.id))
+	let entryPtr = emitReserveEntry(module, block: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
 
 	// The payload, written OUTSIDE the ring lock — which is the whole reason the commit bit exists.
 	let shift = emitConst(module, block: write, value: DsMmPackedIdShift, ids: ids)
@@ -1139,15 +1136,53 @@ function buildDsEmitMm(module StdModule)
 	let valueField = emitShiftedField(module, block: write, value: value, shift: DsMmValueShift, ids: ids)
 	let packed = emitBin(module, block: write, a: tagIndex, b: valueField, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsMmOffPacked, valueId: packed, valueType: StdType.i64))
-
-	let committed = ids.mint()
-	module.appendOp(write, op: StdOp.call(committed, callee: DsCommitName, args: argsOf(entryPtr)))
-	module.setTerminator(write, op: StdOp.branch(done.id))
+	emitCommitAndFinish(module, block: write, entryPtr: entryPtr, done: done, ids: ids)
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildDsEmitMm'
+
+// ============================================================================
+// `__ds_emit_sched(eventType, traceId)` — the ONE sched event body.
+// ============================================================================
+//
+// All six transitions are one 16-byte shape, the header and the green thread's trace id, so they share a
+// body the way the four mm events do. The sites are `GtRuntime`'s (`emitSchedEventOf`).
+function buildDsEmitSched(module StdModule)
+	var func = IrFunction.createFromStd(DsEmitSchedName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let eventType = 0 as ValueId
+	let traceId = 1 as ValueId
+
+	let entryBytes = emitConst(module, block: entry, value: DsSchedEntryBytes, ids: ids)
+	let entryPtr = emitReserveEntry(module, block: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
+
+	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsSchedOffTraceId, valueId: traceId, valueType: StdType.i64))
+	emitCommitAndFinish(module, block: write, entryPtr: entryPtr, done: done, ids: ids)
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildDsEmitSched'
+
+// ⭐ **THE ONE CALLER OF `__ds_reserve`.** It closes `block` with a branch to `write` when an entry was
+// reserved and to `done` when the ring was FULL — a DROPPED event, counted in the segment header, never
+// deferred, and with nothing to commit — and answers the entry's address, readable in `write`.
+function emitReserveEntry(module StdModule, block IrBlock, eventType ValueId, entryBytes ValueId, write IrBlock, done IrBlock, ids ValueMinter) returns ValueId
+	let entryPtr = ids.mint()
+	module.appendOp(block, op: StdOp.call(entryPtr, callee: DsReserveName, args: twoArgs(eventType, second: entryBytes)))
+	let noEntry = emitConst(module, block: block, value: 0, ids: ids)
+	let reserved = emitCmp(module, block: block, a: entryPtr, b: noEntry, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(reserved, thenBlockId: write.id, elseBlockId: done.id))
+	return entryPtr
+end 'emitReserveEntry'
 
 // ============================================================================
 // The LOG family's three bodies — `__ds_emit_log_phase` / `_event` / `_text`.
@@ -1256,9 +1291,6 @@ end 'emitPackedLogFields'
 // reserved entry's address — which is defined in `reserve` and therefore readable anywhere the caller
 // writes below it.
 //
-// A zero from `__ds_reserve` means the ring was FULL, so the event is DROPPED — counted in the segment
-// header, never deferred — and there is nothing to commit.
-//
 // ⚠ `write` and `done` are the CALLER's blocks rather than this function's answers, because a block must
 // be a `var` to be appended to and a field read is not one. It also keeps the caller's `done` terminator
 // where the caller can see it.
@@ -1270,19 +1302,12 @@ function emitLogEntryOpen(module StdModule, func IrFunction, entry IrBlock, even
 	let attached = emitCmp(module, block: entry, a: base, b: detached, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(attached, thenBlockId: reserve.id, elseBlockId: done.id))
 
-	let entryPtr = ids.mint()
-	module.appendOp(reserve, op: StdOp.call(entryPtr, callee: DsReserveName, args: twoArgs(eventType, second: entryBytes)))
-	let noEntry = emitConst(module, block: reserve, value: 0, ids: ids)
-	let reserved = emitCmp(module, block: reserve, a: entryPtr, b: noEntry, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(reserve, op: StdOp.condBranch(reserved, thenBlockId: write.id, elseBlockId: done.id))
-
-	return entryPtr
+	return emitReserveEntry(module, block: reserve, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
 end 'emitLogEntryOpen'
 
-// The commit every log body ends with, and the branch to its DONE block. Stated once for `buildDsEmitMm`'s
-// reason: the reserve and the commit are paired by the SHAPE of a call site rather than by a convention
-// each body is trusted to follow, and a missed commit does not lose one event — the monitor never steps
-// past an uncommitted entry, so it STALLS on it for as long as the producer lives.
+// The commit every event body ends with, and the branch to its DONE block. A missed commit does not lose
+// one event — the monitor never steps past an uncommitted entry, so it STALLS on it for as long as the
+// producer lives.
 function emitCommitAndFinish(module StdModule, block IrBlock, entryPtr ValueId, done IrBlock, ids ValueMinter)
 	let committed = ids.mint()
 	module.appendOp(block, op: StdOp.call(committed, callee: DsCommitName, args: argsOf(entryPtr)))
@@ -1460,7 +1485,7 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 end 'buildDsEmitLogText'
 
 // ============================================================================
-// The CALL-SITE emitter — the one door the MM runtime reaches this producer through.
+// The CALL-SITE emitters — the doors the MM runtime and the scheduler reach this producer through.
 // ============================================================================
 //
 // ⭐ **WHERE THE RUN-TIME HALF OF THE GATING RULE LIVES: the inline `__ds_base == 0` bail, BEFORE any
@@ -1468,16 +1493,26 @@ end 'buildDsEmitLogText'
 // One load and one branch is the whole cost of an unattached `--debugstream` binary at an event site.
 // Because the bail is here, `__ds_reserve` needs no detached path of its own.
 //
-// ⚠⚠ **IT HAS NO COMPILE-TIME GATE OF ITS OWN, AND MUST NOT.** Its four callers — `MmRuntime`'s event
-// emitters — each build their arguments out of OPS (a refcount load, a packed-id load, a plus-one), and
-// those ops would already be in the block by the time a gate here could decline them. An emitted
-// `globalAddr __ds_base` in an untraced build names a `.data` slot that build never laid out, and the
-// backend panics at the relocation rather than quietly emitting dead code. So the gate lives at each
-// caller, where the arguments are built, and reaching here means the build is traced.
+// ⚠⚠ **NEITHER HAS A COMPILE-TIME GATE OF ITS OWN, AND NEITHER MAY.** Every caller builds its arguments out
+// of OPS (a refcount load, a packed-id load, a trace-id load), and those ops would already be in the block by
+// the time a gate here could decline them. An emitted `globalAddr __ds_base` in an untraced build names a
+// `.data` slot that build never laid out, and the backend panics at the relocation rather than quietly
+// emitting dead code. So the gate lives at each caller, where the arguments are built, and reaching here
+// means the build is traced.
 //
-// It SPLITS `block` — the caller continues in the block this returns, exactly as `emitPackedElementZero`
+// Each SPLITS `block` — the caller continues in the block it returns, exactly as `emitPackedElementZero`
 // (`ManagedMemoryRuntime`) does.
 export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
+	return emitEventCallIfAttached(module, func: func, block: block, callee: DsEmitMmName, eventType: eventType, payload: twoArgs(packedId, second: value), ids: ids)
+end 'emitMmEvent'
+
+export function emitSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, traceId ValueId, ids ValueMinter) returns IrBlock
+	return emitEventCallIfAttached(module, func: func, block: block, callee: DsEmitSchedName, eventType: eventType, payload: argsOf(traceId), ids: ids)
+end 'emitSchedEvent'
+
+// `callee(eventType, payload...)` when a monitor is attached. The event type is minted inside the attached
+// arm, so a detached run pays the load and the branch and nothing else.
+function emitEventCallIfAttached(module StdModule, func IrFunction, block IrBlock, callee ByteArray, eventType ParsedInt, payload ValueIdArray, ids ValueMinter) returns IrBlock
 	var emit = module.addBlock(func, label: b"dsEmit", heat: BlockHeat.normal)
 	let resume = module.addBlock(func, label: b"dsResume", heat: BlockHeat.normal)
 
@@ -1486,10 +1521,15 @@ export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, ev
 	let attached = emitCmp(module, block: block, a: base, b: detached, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(attached, thenBlockId: emit.id, elseBlockId: resume.id))
 
-	let typeConst = emitConst(module, block: emit, value: eventType, ids: ids)
+	var args = argsOf(emitConst(module, block: emit, value: eventType, ids: ids))
+
+	for word in payload 'eachPayloadWord'
+		args.push(word)
+	end 'eachPayloadWord'
+
 	let emitted = ids.mint()
-	module.appendOp(emit, op: StdOp.call(emitted, callee: DsEmitMmName, args: threeArgs(typeConst, second: packedId, third: value)))
+	module.appendOp(emit, op: StdOp.call(emitted, callee: callee, args: args))
 	module.setTerminator(emit, op: StdOp.branch(resume.id))
 
 	return resume
-end 'emitMmEvent'
+end 'emitEventCallIfAttached'

@@ -45,23 +45,12 @@ proves non-zero — a non-zero literal, or a ranged type whose range excludes 0 
 its tests; every divide in THIS file is deliberately over a provably non-zero divisor, so the
 sequence the goldens pin is the unguarded one.
 
-⚠ **`INT_MIN / -1` IS STILL UNGUARDED — BUT THAT IS ABOUT `/` ALONE, AND READING IT AS COVERING `mod`
-IS THE DEFECT A1x FIXED. `i64.min mod -1` IS `0`.** The rationale is *"the quotient is
-unrepresentable"*, which is false of the REMAINDER: `a mod -1` is `0` for every `a`. `mod` faulted only
-because x86 fuses both results into one `idiv`, so it inherited a `#DE` raised on account of a quotient
-it does not read. ⇒ **`mod` guards its divisor against `-1` as well as `0`; `/` guards only `0`, and
-`i64.min / -1` remains the documented fault.** `specs/safety.md` owns that rule and its cases;
-the guard's COST is below, and it is nothing at all wherever the divisor's type or value rules `-1`
-out. The rest of this paragraph is about `/`:
-
-`idiv` faults on that quotient as well as on a zero divisor, and it is NOT guarded.
-`DivisionByZero` is about the DIVISOR being zero and says nothing about the quotient being
-unrepresentable, so `i64.min / -1` still raises a hardware fault. It IS diagnosed when it does (A1g):
-it arrives as `STATUS_INTEGER_OVERFLOW` (0xC0000095) rather than the zero divisor's 0xC0000094, and
-the Windows fault thunk classifies both — an unrepresentable quotient panics `integer overflow`, with
-the same backtrace and exit 1. x64-linux cannot make that distinction (its kernel reports `FPE_INTDIV`
-for every `#DE`) and prints the divide-by-zero wording for both. `specs/safety.md` owns that
-reading and its tests.
+⚠ **`/` AND `mod` PART WAYS AT `i64.min` BY `-1`.** `a mod -1` is `0` for every `a`, so `mod` guards
+its divisor against `-1` as well as `0` and answers `0`. `i64.min / -1` has no representable quotient:
+it panics `integer overflow` with the standard backtrace and exits 1, on every target. `DivisionByZero`
+is about the DIVISOR and does not cover it, so a `try` around the divide does not catch it.
+`specs/safety.md` owns both rules and their cases; the `mod` guard's COST is below, and it is nothing
+at all wherever the divisor's type or value rules `-1` out.
 
 The guard, where one is needed, costs **three instructions and no branch** — `cmp divisor, 0`, a
 `setcc` materializing the answer, and `or safe, divisor, flag`. The `idiv` then runs on `safe`, which
@@ -82,6 +71,14 @@ which is why the third instruction is an `add` and not a `sub`.
 of their goldens moved when A1x landed.** A divisor that is a literal OTHER THAN `-1`, or a variable the
 parser folded to one, or a ranged type whose range excludes `-1` — `int(1 to 1000)` included — emits none
 of those four instructions. `/` never emits them at all.
+
+⭐ **`/` HAS A GUARD OF ITS OWN AT THE SAME PAIR, AND IT IS A BRANCH TO A PANIC.** A signed quotient whose
+divisor might be `-1` and whose dividend might be `i64.min` tests `(dividend xor i64.min) or (divisor xor
+-1)` against `0` and branches to `panic: integer overflow` ahead of the divide — one compare-and-branch on
+the hot path, because there is no quotient to repair the operands toward. The same proof removes it: a
+divisor excluding `-1`, or a dividend whose type or value excludes `i64.min`, and the divide is bare —
+which is every divide in this file, so none of their goldens carries it. `safety.md`'s two
+`…-int-min-over-minus-one` cases are the ones that do.
 
 ⚠ **A LITERAL `-1` IS THE EXCEPTION, AND IT IS NOT OPTIMIZED AWAY: `a mod -1` EMITS THE GUARD AND AN
 `idiv` FOR AN ANSWER THAT IS STATICALLY `0`.** The guard fires on the value the compiler can see, so the

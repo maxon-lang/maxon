@@ -59,17 +59,16 @@ have.
 
 ### `currentTimeMs` is the NANOSECOND clock scaled, not the coarse tick
 
-`stdlib/Clock.maxon`'s doc-comment says `nowMs()` reads the platform's COARSE tick counter
-(`GetTickCount64` on Windows, ~15.6 ms period). The compiler derives it from the same
-`QueryPerformanceCounter` reading `currentTimeNanos()` uses, divided by 1,000,000.
+Both monotonic builtins read the one runtime entry `__gt_now_ns`: `QueryPerformanceCounter` scaled
+to nanoseconds on Windows, `clock_gettime(CLOCK_MONOTONIC)` on Linux and
+`clock_gettime(CLOCK_UPTIME_RAW)` on macOS. `currentTimeNanos()` returns that reading, and
+`currentTimeMs()` divides it by 1,000,000 inline. wasm32-wasi has no clock, and a call to either is
+refused with **E3104** (`rejected-on-wasm` below).
 
-That is a strictly STRONGER contract, not a weaker one, and it is why the stdlib was left alone:
-every promise the doc-comment makes — monotonic, milliseconds, absolute value platform-defined —
-still holds, and the resolution is finer than the one it warns about. A caller who reads the
-comment and avoids sub-tick measurements is still correct; a caller who does not is no longer
-wrong. Deriving it the other way round — a coarse tick where a fine one was available — is the
-only direction that could break a caller, and `ms-resolves-sub-tick` below is the test that would
-catch a silent downgrade to it.
+So a millisecond reading resolves to one millisecond on every native lane, never to a scheduler
+tick. A coarse tick source such as `GetTickCount64` (~15.6 ms period) would still be monotonic and
+still be milliseconds, but a caller measuring a short interval would read 0 or 16;
+`ms-resolves-sub-tick` below is the test that catches a downgrade to one.
 
 ### An unrecognized `__` callee is a diagnostic, not a panic
 
@@ -101,11 +100,9 @@ import asked with three different `clockid_t`s (`clock_gettime_nsec_np`), which 
 arithmetic is exact where Windows's is not: `Arm64DarwinRuntime` reports the monotonic frequency as 1e9
 against a reading already in nanoseconds, making the ticks-to-nanos scaling the identity.
 
-⭐ **arm64-LINUX SERVES TWO OF THE FOUR, AND WHICH TWO IS DECIDED BY WHO OWNS THE ENTRY RATHER THAN
-BY WHICH CLOCK IT IS.** The calendar and the thread-CPU read are `clock_gettime` with two `clockid_t`s
-and lower there; the two MONOTONIC readers do not, because both reach `__gt_now_ns`, a SCHEDULER entry
-that lands with the green-thread floor. So a case that reads only the calendar or only the thread cost
-names that lane below, and a case that reads the monotonic clock — or that sleeps — does not.
+⭐ **THE TWO LINUX LANES SERVE ALL FOUR TOO**, each as `clock_gettime` with its own `clockid_t`: the
+calendar, the thread-CPU read, and — through `__gt_now_ns`, a SCHEDULER entry that rides the
+green-thread floor — `CLOCK_MONOTONIC`, the Linux id whose semantics match Darwin's `CLOCK_UPTIME_RAW`.
 
 For `threadCpuTicks` the refusal is stronger than *"not yet"*, and it is the SHAPE argument the
 machine query makes one family over: `QueryThreadCycleTime` answers TSC ticks through a `ULONG64*`
@@ -125,8 +122,7 @@ serving the whole instrumentation family on that lane.
 
 ⚠ **Which cases that gates, exactly**: only the ones that REACH `__gt_now_ns`/`__clock_now_unix_s`.
 `arity-checked` and `unknown-intrinsic` are refused in the front end, are target-neutral, and carry NO
-marker — `arity-checked` wore one until the 2026-07-28 targets audit measured it green on x64-linux and
-wasm32-wasi. See `async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
+marker. See `async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
 
 ## Tests
 
@@ -201,7 +197,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-resolves-sub-tick -->
-**The test that pins the ruling above.** It walks a tight loop, records the SMALLEST non-zero delta
+**The test that pins the millisecond resolution above.** It walks a tight loop, records the SMALLEST non-zero delta
 between two successive `currentTimeMs()` readings — which is precisely the source counter's period,
 expressed in milliseconds — and asserts it is 1.
 

@@ -1,0 +1,35 @@
+// `check` type-checks a file and answers its diagnostics, and writes nothing: no executable, no IR, no
+// sidecar beside the source. A well-formed file is answered as a success, writing nothing either — the half
+// that tells a checker from a build that happened to fail.
+//
+// ⚠ Code and files alone do not tell a type check from the warm-rebuild GATE, which also compiles without
+// writing and also reports the diagnostic. The gate compiles the program several times over to prove the
+// query cache, and its verdict is not the question `check` answers, so the answer is held to not being it.
+
+let TypeErrorDirName = "temp/mcp-check-reports-a-type-error"
+let WellFormedDirName = "temp/mcp-check-well-formed"
+let ProgramFileName = "main.maxon"
+
+let TypeErrorSource = "typealias Byte = int(0 to u8.max)\n\nfunction main() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0\nend 'main'\n"
+let TypeErrorCode = "E3005"
+let WarmRebuildGateName = "verify-warm-rebuild"
+let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'check answers a type error with its code, and writes nothing'
+	let broken = stagedProgram(TypeErrorDirName, fileName: ProgramFileName, source: TypeErrorSource)
+	let brokenAnswer = callTool("check", argumentsJson: pathArgument(broken))
+	let brokenText = toolCallText(brokenAnswer)
+
+	try Expect.isTrue(toolCallIsError(brokenAnswer), message: "`check` over a type error was answered as a success: {brokenText}")
+	try Expect.contains(brokenText, needle: TypeErrorCode, message: "`check` over a type error did not carry its diagnostic code {TypeErrorCode}: {brokenText}")
+	try Expect.isEmpty(filesWrittenBeside(broken, dir: try broken.parent() otherwise panic("a staged program sits in a directory")), message: "`check` over a type error wrote files.")
+
+	let wellFormed = stagedProgram(WellFormedDirName, fileName: ProgramFileName, source: WellFormedSource)
+	let wellFormedAnswer = callTool("check", argumentsJson: pathArgument(wellFormed))
+
+	let wellFormedText = toolCallText(wellFormedAnswer)
+
+	try Expect.isFalse(toolCallIsError(wellFormedAnswer), message: "`check` over a well-formed program was answered as an error: {wellFormedText}")
+	try Expect.isFalse(wellFormedText.contains(WarmRebuildGateName) or brokenText.contains(WarmRebuildGateName), message: "`check` answered with the warm-rebuild gate's run rather than a type check: {wellFormedText}")
+	try Expect.isEmpty(filesWrittenBeside(wellFormed, dir: try wellFormed.parent() otherwise panic("a staged program sits in a directory")), message: "`check` over a well-formed program wrote files.")
+end 'check answers a type error with its code, and writes nothing'

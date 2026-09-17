@@ -31,10 +31,13 @@ so spawning one is a QUALIFIED spawn — `async File.readText(p)` — and most o
 are `try await`. Nothing about the spawn depends on the callee being a free function: `async` names a call,
 and a call whose callee is a namespace member is still a call.
 
-Real file I/O is also a genuine park point, which is what makes the parallel cases mean anything: two
-spawned reads have their waits OVERLAPPED, because each coroutine gives up the green thread while its
-request is in flight. A callee that only computes is refused (E3073); `File.exists` appears in the cases
-below purely to supply that yield point where the subject is the error path rather than the I/O.
+Real file I/O is also a genuine park point, which is what makes the parallel cases mean anything: every
+filesystem call first parks its green thread with a deadline of *now*, so the scheduler runs everything
+else that is ready, and the kernel call itself runs synchronously once the thread is resumed. Two spawned
+reads therefore INTERLEAVE — each gives up its turn at the I/O point — but their kernel calls do not
+overlap: the concurrency is cooperative, not overlapped I/O. A callee that only computes is refused (E3073);
+`File.exists` appears in the cases below purely to supply that yield point where the subject is the error
+path rather than the I/O.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** These cases need both the green-thread substrate and the managed-file surface, and a

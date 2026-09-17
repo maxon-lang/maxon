@@ -1,0 +1,70 @@
+// Test: integer-overflow-fault-from-int-min-over-minus-one
+typealias Integer = int(i64.min to i64.max)
+typealias NegativeOne = int(-1 to -1)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+// The divisor's range excludes 0, so no `DivisionByZero` is possible — that error is about the
+// DIVISOR, and says nothing about a quotient that does not fit. `i64.min / -1` is `i64.max + 1`.
+function divide(d NegativeOne) returns Integer
+	return (dividend / d) as Integer
+end 'divide'
+
+function main() returns ExitCode
+	dividend = ident(i64.min)
+	// Opaque, so the divide is not folded or rewritten as a negation.
+	let d = ident(-1)
+	return divide(d as NegativeOne) as ExitCode
+end 'main'
+var dividend = 0
+---
+ExitCode: 1
+---
+data {
+  __data_dividend@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 9223372036854775808
+  __il_cont#15:
+    arm64.leaGlobal x1, __data_dividend
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 18446744073709551615
+  __rc_ok#11:
+    arm64.leaGlobal x1, __data_dividend
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.movImm x2, 9223372036854775808
+    arm64.eor x2, x1, x2
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x3, x0, x16
+    arm64.orr x2, x2, x3
+    arm64.cmp x2, 0
+    arm64.b.ne divok
+  divovf:
+    arm64.leaRdata x0, __str_blob_0  ; "panic: integer overflow\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  divok:
+    arm64.sdiv x0, x1, x0
+  __il_cont#7:
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at integer-overflow-fault-from-int-min-over-minus-one.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -65,6 +65,42 @@ export function clearStagedFiles(dir FilePath)
 	end 'eachEntry'
 end 'clearStagedFiles'
 
+// A staging directory under `temp/` holding ONE program, the previous run's files cleared, so every file a
+// tool call leaves there afterwards is one the call wrote.
+export function stagedProgram(dirName String, fileName String, source String) returns FilePath
+	let dir = stagingDir(dirName)
+	clearStagedFiles(dir)
+
+	let program = dir.join(fileName)
+	try File.writeText(program, content: source) otherwise panic("McpHarness: could not write {program.path}")
+	return program
+end 'stagedProgram'
+
+// `arguments` for a tool that takes a `path`, naming `file`.
+export function pathArgument(file FilePath) returns String
+	return "\{\"path\":{Json.quote(file.toString())}\}"
+end 'pathArgument'
+
+// Every file under `dir` at any depth other than `kept`, for a report. Empty is what a tool that writes
+// nothing leaves.
+export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
+	var found = ""
+	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			found.append(filesWrittenBeside(kept, dir: entry))
+			continue
+		end 'aDirectory'
+
+		if entry.toString() != kept.toString() 'written'
+			found.append("{entry.path} ")
+		end 'written'
+	end 'eachEntry'
+
+	return found
+end 'filesWrittenBeside'
+
 // A program that prints `line` and exits 0, written into `temp/` by a case so no live `.maxon` sits under
 // `tests/`.
 export function printingProgramSource(line String) returns String
@@ -350,20 +386,3 @@ export function listTools(devMode bool = false) returns JsonDoc
 	let docs = responseDocs(runMcp(reqs, devMode: devMode))
 	return try docs.get(1) otherwise panic("no response to tools/list")
 end 'listTools'
-
-// A Windows path is full of backslashes, and a backslash is an escape inside a JSON string. Cases
-// that build a request by interpolation must escape what they interpolate.
-export function jsonEscaped(raw String) returns String
-	let backslash = 0x5C as Byte
-	var out = ByteArray.create()
-
-	for b in raw.bytes() 'each'
-		if b == backslash 'doubleIt'
-			out.push(backslash)
-		end 'doubleIt'
-
-		out.push(b)
-	end 'each'
-
-	return String.from(out)
-end 'jsonEscaped'

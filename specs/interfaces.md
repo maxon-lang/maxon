@@ -586,3 +586,33 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: error.mismatched-interface-end-label -->
+A label written after `end` must repeat the interface's name.
+```maxon
+typealias Coord = int(0 to 100)
+
+interface Sized
+	function size() returns Coord
+end 'Size'
+
+type Box implements Sized
+	export var n as Coord
+
+	export static function create(n Coord) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function size() returns Coord
+		return n
+	end 'size'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(7)
+	return b.size()
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:6:1: Mismatched end label: expected 'Sized', got 'Size'
+```

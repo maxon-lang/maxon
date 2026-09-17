@@ -565,8 +565,21 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitRet(asm.code)
 
 	// The two refusals, on the system stack with SP 16-aligned by `arm64MorestackFrameBytes`.
+	//
+	// ⭐ **A GROWTH PAST THE CEILING IS A STACK OVERFLOW, REPORTED FROM THE REQUESTING FRAME** — x64's
+	// `buildGtMorestackChunk` states the shape. Here every guard runs before its function's prologue with the
+	// function's own return address in the guard's x30 cell at the ferried SP, x30 the return into the function,
+	// and x29 still its caller's frame, so moving the cell up a word and storing x29 under it lays the record the
+	// prologue would have stored. The process never returns there.
 	asm.placeLabel(exhausted)
-	arm64EmitProcessExit(asm, os: target.os, exitCode: RuntimeAbort.greenThreadStackExhausted.rawValue as MachineWord)
+	arm64GtLoadSp(asm, dest: Arm64MoreSpReg, byteOffset: Arm64MorestackEntrySpSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64MoreTempA, base: Arm64MoreSpReg, byteOffset: FrameOffSavedFramePointer as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64MoreTempA, base: Arm64MoreSpReg, byteOffset: FrameOffReturnAddr as MachineWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x29, base: Arm64MoreSpReg, byteOffset: FrameOffSavedFramePointer as MachineWord)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x30)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64MoreSpReg)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: Arm64MoreSpReg)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtStackOverflowName)
 	asm.placeLabel(refused)
 	arm64EmitProcessExit(asm, os: target.os, exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord)
 

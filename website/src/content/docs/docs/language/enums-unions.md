@@ -155,7 +155,8 @@ end 'HttpError'
 ```
 
 The header is only `enum Name` and an optional `implements` clause; the backing type is inferred from the
-raw values, never written.
+raw values, never written. Anything else on the header line — `enum Colour int` — is **E2001**
+(`unexpected token: 'int'`), and the same holds for a `union` header.
 
 ## Raw-Value Enums
 

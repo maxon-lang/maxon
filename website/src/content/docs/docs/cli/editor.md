@@ -14,8 +14,8 @@ Install **Maxon** from the
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=maxon-lang.maxon-lsp-client)
 or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client) (extension id
 `maxon-lang.maxon-lsp-client`). It activates in a workspace containing `.maxon` files and provides syntax
-highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting and the Compiler
-Explorer.
+highlighting, diagnostics, hover, completion, go-to-definition, rename, formatting, the Compiler
+Explorer and a Test Explorer.
 
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
 
@@ -54,9 +54,13 @@ the lowered Target IR, the same text `maxon build --emit-ir` writes, or the comp
 `Line <line>:<column>: <message>`. Nothing is written to disk. The source is treated as a whole program,
 so it needs a `main`.
 
-**Test Explorer.** In a Maxon source checkout, the extension lists the compiler's spec tests (from
-`specs/*.md`) in VS Code's Testing view and runs them with the checkout's own compiler
-(`maxon-bin/.maxon/maxon spec-test --filter=…`). It does not run a project's `maxon test` tests.
+**Test Explorer.** The **Maxon Tests** controller lists the `test` declarations in the workspace's
+`*.test.maxon` files, one node per file, and runs them with the compiler the extension found, one
+`maxon test <project> --json` per project the selection touches. A test file's project is the highest
+directory above it, never above the workspace folder, whose every level holds a `.maxon` source. When the
+workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
+tests in `specs/*.md` and runs them with the checkout's own compiler
+(`maxon-bin/.maxon/maxon spec-test --filter=…`).
 
 ## `maxon lsp-server`
 
@@ -113,6 +117,16 @@ Both params are required (otherwise `-32602`). The result:
 
 `ir` is the text `maxon build --emit-ir` writes, and is empty when the compile fails. `errors` lists
 every diagnostic with a **1-based** `line` and `column`.
+
+**`maxon/listProjects`** is a Maxon-specific request, not advertised in the capabilities, that lists the
+projects the server holds. It is what the VS Code status bar shows. It takes no params. Each open document
+is a project of its own, because each is analysed on its own:
+
+```json
+{ "projects": [ { "rootPath": "/home/me/app/main.maxon", "isSingleFile": true, "fileCount": 1 } ] }
+```
+
+`rootPath` is a filesystem path, not a URI, and the projects are listed in path order.
 
 ## Other editors
 

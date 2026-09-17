@@ -172,6 +172,7 @@ let WorkerResultMarker = "WORKER_SINGLE_RESULT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let WorkerStepMarker = "WORKER_STEP:"
 let JobSinglesPrefix = "JOB:singles:"
+let JobAlonePrefix = "JOB:alone:"
 let ExitCommand = "EXIT"
 let ProtocolFieldSep = ":"
 
@@ -557,19 +558,20 @@ end 'parseWorkerCount'
 // THE PLAN — what the parent decides BEFORE anything is dispatched
 // ============================================================================================
 
-// One spec's worth of the answer, as the parent expects it: the spec's name, the ordered names of
-// the tests `--filter` selects, and the weight of running them.
+// One job's worth of the answer, as the parent expects it: the spec's name, which of its jobs this is, the
+// ordered names of the tests `--filter` selects for that job, and the weight of running them.
 //
 // `testNames` is the load-bearing field. It is the parent's ORACLE — the drained records are
 // checked against it name for name — and its order is the order the results are printed in, so
 // reassembling out-of-order answers needs no sorting and no comparison operator on String.
 type SpecPlan
 	export let specName as String
+	export let runs as SpecRuns
 	export let testNames as StringArray
 	export let weight as JobWeight
 
-	export static function create(specName String, testNames StringArray, weight JobWeight) returns SpecPlan
-		return Self{specName: specName, testNames: testNames, weight: weight}
+	export static function create(specName String, runs SpecRuns, testNames StringArray, weight JobWeight) returns SpecPlan
+		return Self{specName: specName, runs: runs, testNames: testNames, weight: weight}
 	end 'create'
 end 'SpecPlan'
 
@@ -593,7 +595,8 @@ end 'SuitePlan'
 
 // Decide, before a single worker starts, exactly what this run will report — and what it will report
 // NOT running. Specs are visited in directory-listing order — which is the report order — and a spec
-// that selects no test gets no plan, and therefore no job.
+// that selects no test gets no plan, and therefore no job. A spec gets one plan per `SpecRuns` its selected
+// tests carry, the shared one first, so an `alone` case reports after its spec's other cases.
 //
 // ⚠ **A SPEC WITH NO PLAN CAN STILL OWE THE CENSUS AN ENTRY**, which is why the excluded cases are
 // collected BEFORE the `selectsNothing` skip. `--filter=http-client.get` selects nothing at all on a
@@ -619,21 +622,23 @@ function buildPlans(specDir FilePath, filter String, effectiveTarget Target, inc
 			excluded.push(excludedCase)
 		end 'eachExcluded'
 
-		let tests = selection.selected
+		for runs in SpecRuns.allCases 'eachJob'
+			let tests = testsThatRun(selection.selected, runs: runs)
 
-		if tests.count() == 0 'selectsNothing'
-			continue
-		end 'selectsNothing'
+			if tests.count() == 0 'selectsNothing'
+				continue
+			end 'selectsNothing'
 
-		var testNames = StringArray.create()
-		var weight = 0 as JobWeight
+			var testNames = StringArray.create()
+			var weight = 0 as JobWeight
 
-		for test in tests 'eachTest'
-			testNames.push(test.name)
-			weight = weight + (test.source.byteLength() as JobWeight)
-		end 'eachTest'
+			for test in tests 'eachTest'
+				testNames.push(test.name)
+				weight = weight + (test.source.byteLength() as JobWeight)
+			end 'eachTest'
 
-		plans.push(SpecPlan.create(specName, testNames: testNames, weight: weight))
+			plans.push(SpecPlan.create(specName, runs: runs, testNames: testNames, weight: weight))
+		end 'eachJob'
 	end 'eachSpec'
 
 	return SuitePlan.create(plans, excluded: excluded)
@@ -649,10 +654,11 @@ end 'buildPlans'
 type SpecJob
 	export let planIndex as PlanIndex
 	export let specName as String
+	export let runs as SpecRuns
 	export let weight as JobWeight
 
-	export static function create(planIndex PlanIndex, specName String, weight JobWeight) returns SpecJob
-		return Self{planIndex: planIndex, specName: specName, weight: weight}
+	export static function create(planIndex PlanIndex, specName String, runs SpecRuns, weight JobWeight) returns SpecJob
+		return Self{planIndex: planIndex, specName: specName, runs: runs, weight: weight}
 	end 'create'
 
 	// The placeholder that pre-fills the per-slot in-flight array, so that array is the same length
@@ -660,22 +666,30 @@ type SpecJob
 	// read: `busy[slot]` is the guard, and `inFlight[slot]` is overwritten by a real job in the same
 	// breath as `busy[slot]` is set (see `sendAndDrain`, which orders those writes deliberately).
 	export static function idle() returns SpecJob
-		return Self{planIndex: 0, specName: "", weight: 0}
+		return Self{planIndex: 0, specName: "", runs: SpecRuns.shared, weight: 0}
 	end 'idle'
 
 	// Shallow copy. `popHeaviestJob` and the drain path both need a value that has cut its borrow
 	// on the array's storage before they mutate that array.
 	export function clone() returns SpecJob
-		return Self{planIndex: planIndex, specName: specName, weight: weight}
+		return Self{planIndex: planIndex, specName: specName, runs: runs, weight: weight}
 	end 'clone'
 
 	// The wire line the worker reads off its stdin.
 	export function toJobLine() returns String
-		return "{JobSinglesPrefix}{specName}"
+		return "{jobPrefixOf(runs)}{specName}"
 	end 'toJobLine'
 end 'SpecJob'
 
 typealias SpecJobArray = Array with SpecJob
+
+// The prefix a job line names its `SpecRuns` by — the one spelling both halves of the wire read.
+function jobPrefixOf(runs SpecRuns) returns String
+	return match runs 'runs'
+		shared gives JobSinglesPrefix
+		alone gives JobAlonePrefix
+	end 'runs'
+end 'jobPrefixOf'
 
 // Pop the heaviest job, backfilling its slot from the queue's tail.
 //
@@ -753,16 +767,25 @@ export function runPersistentWorker(specDir FilePath, filter String, updateRequi
 			continue
 		end 'blankLine'
 
-		if not job.startsWith(JobSinglesPrefix) 'unknownJob'
+		var ran = false
+
+		for runs in SpecRuns.allCases 'eachJobKind'
+			let prefix = jobPrefixOf(runs)
+
+			if job.startsWith(prefix) 'thisKind'
+				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+				ran = true
+				break
+			end 'thisKind'
+		end 'eachJobKind'
+
+		if not ran 'unknownJob'
 			// Surface it on stderr — where the parent's shutdown drain will forward it — and still
 			// print the READY this loop now owes. Silently dropping the line would deadlock the
 			// parent instead of diagnosing it.
 			printError("spec worker: unknown job line: '{job}'\n")
-			print("{WorkerReadyMarker}\n")
-			continue
 		end 'unknownJob'
 
-		runSinglesJob(specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 		print("{WorkerReadyMarker}\n")
 	end 'jobLoop'
 
@@ -804,8 +827,8 @@ end 'silenceCompilerLogging'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSinglesJob(specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool)
-	let run = try runOneSpec(specDir, specName: specName, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'specFailed'
+function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filter String, updateRequired bool, effectiveTarget Target, includeNetwork bool)
+	let run = try runOneSpec(specDir, specName: specName, runs: runs, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -817,7 +840,7 @@ function runSinglesJob(specDir FilePath, specName String, filter String, updateR
 	// LAST, after every record — the parent takes it off the end of the drained lines before it
 	// checks the records against its plan. See this file's protocol note.
 	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
-end 'runSinglesJob'
+end 'runSpecJob'
 
 // ⭐⭐ **THE BREADCRUMB: WHAT THIS WORKER IS ABOUT TO DO NEXT.** Printed by `SpecTestRunner` immediately
 // before each compile and before each execution, and read by the parent for TWO things:
@@ -1144,7 +1167,7 @@ end 'splitAtFieldSep'
 
 // Take the job's CPU record OFF THE END of its drained lines, leaving only the result records.
 //
-// The record is MANDATORY and its position is exact: `runSinglesJob` prints it after the last result
+// The record is MANDATORY and its position is exact: `runSpecJob` prints it after the last result
 // and before the WORKER_READY that ends the drain, so it is always the final line of a job that ran at
 // all. A drain that does not end with one is a worker built from a different version of this file —
 // the same protocol break the record checks below panic on, and treated the same way, because the
@@ -2073,6 +2096,26 @@ enum NoSlot implements Error
 	none
 end 'NoSlot'
 
+// Raised by `takeDispatchableJob` when no queued job may go now, for `NoSlot`'s reason.
+enum NoDispatchableJob implements Error
+	none
+end 'NoDispatchableJob'
+
+// The job an idle slot takes next. An `alone` job goes only when the shared queue is empty and no slot is
+// busy, and the shared queue never refills, so once one is in flight nothing else is dispatched beside it
+// (`SpecParser.RunsMarker`).
+function takeDispatchableJob(shared SpecJobArray, alone SpecJobArray, poolIdle bool) returns SpecJob throws NoDispatchableJob
+	if shared.count() > 0 'sharedWork'
+		return popHeaviestJob(shared)
+	end 'sharedWork'
+
+	if poolIdle and alone.count() > 0 'aloneWork'
+		return popHeaviestJob(alone)
+	end 'aloneWork'
+
+	throw NoDispatchableJob.none
+end 'takeDispatchableJob'
+
 // Run the whole suite on a pool of `workerCount` persistent workers and return every verdict in
 // report order.
 //
@@ -2138,6 +2181,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 	// for that function's reason: the selection it checks is the one about to be made.
 	requireNetworkGateHolds(harnessExe, specDir: specDir)
 
+	// ⭐ **AND THAT AN `alone` CASE STILL RUNS WITH NOTHING BESIDE IT** — the other scheduling promise a
+	// marker makes, driven the same way. See `HarnessSelfTest`.
+	requireAloneCasesRunWithNothingBeside(harnessExe, specDir: specDir)
+
 	// ⭐ **AND THAT A GOLDEN NOTHING COMPARES IS STILL NAMED.** The third gate driven the same way, in
 	// the same slot: the two above are about which cases the harness runs, this one is about the files it
 	// leaves behind. It plants orphaned goldens in its own fixture, requires the run to report them, then
@@ -2175,19 +2222,27 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 
 	try prepareSharedDirs(specDir, effectiveTarget: effectiveTarget)
 
+	// ⭐⭐ **TWO QUEUES, AND THE `alone` ONE IS SERVED ONLY BY AN IDLE POOL** — `takeDispatchableJob`.
 	var jobQueue = SpecJobArray.create()
+	var aloneQueue = SpecJobArray.create()
 
 	for i in 0 upto plans.count() 'enqueue'
 		let plan = try plans.get(i) otherwise panic("runSpecPool: plans.get({i}) is in bounds by construction")
-		jobQueue.push(SpecJob.create(i, specName: plan.specName, weight: plan.weight))
+		let job = SpecJob.create(i, specName: plan.specName, runs: plan.runs, weight: plan.weight)
+
+		match plan.runs 'runs'
+			shared then jobQueue.push(job)
+			alone then aloneQueue.push(job)
+		end 'runs'
 	end 'enqueue'
 
 	// A worker with no job would spawn, say hello, and be shut down again — pure cost, and one more
 	// process to go wrong.
 	var poolSize = workerCount
+	let jobCount = jobQueue.count() + aloneQueue.count()
 
-	if jobQueue.count() < poolSize 'moreWorkersThanJobs'
-		poolSize = jobQueue.count() as WorkerCount
+	if jobCount < poolSize 'moreWorkersThanJobs'
+		poolSize = jobCount as WorkerCount
 	end 'moreWorkersThanJobs'
 
 	var workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
@@ -2283,15 +2338,17 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 		// Feed the pool before draining it: the parallelism does not exist until every worker has a
 		// job, so an idle slot always outranks a ready answer.
 		if let idleSlot = try findIdleSlot(busy, cursor: dispatchCursor) 'haveIdleWorker'
-			if jobQueue.count() > 0 'haveWork'
-				sendAndDrain(workers, slot: idleSlot, job: popHeaviestJob(jobQueue), busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired)
+			let poolIdle = not anySlotBusy(busy)
+
+			if let job = try takeDispatchableJob(jobQueue, alone: aloneQueue, poolIdle: poolIdle) 'haveWork'
+				sendAndDrain(workers, slot: idleSlot, job: job, busy: busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired)
 				dispatched = dispatched + 1
 				dispatchCursor = wrapSlot(idleSlot + 1, poolSize: poolSize)
 				continue
 			end 'haveWork'
 
-			// The queue is empty. If nobody is still working, every job has been accounted for.
-			if not anySlotBusy(busy) 'runComplete'
+			// Nothing may be dispatched and nobody is still working: every job has been accounted for.
+			if poolIdle 'runComplete'
 				break
 			end 'runComplete'
 		end 'haveIdleWorker'
@@ -2407,7 +2464,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String
 		let idleFor = Clock.elapsedMs(lastProgressMs)
 
 		if idleFor >= WedgeWatchdogMs 'wedged'
-			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: jobQueue.count(), dispatched: dispatched, completed: completed)
+			abortOnWedgedPool(busy, inFlight: inFlight, drains: drains, dispatchedAt: dispatchedAt, spokeAt: spokeAt, expired: expired, idleFor: idleFor, queued: jobQueue.count() + aloneQueue.count(), dispatched: dispatched, completed: completed)
 		end 'wedged'
 
 		// Park, so the scheduler can run the drain green threads — every one of them blocked on an

@@ -9,11 +9,11 @@ public type Runtime
 	/// Cooperatively reschedule the current green thread.
 	///
 	/// The next runnable green thread takes over and the caller resumes where it left off once its turn comes
-	/// round again — BEHIND everything that was already runnable, never ahead of it. (`main` is the exception
-	/// that proves it: it is not a queued green thread at all, so a yield there runs the queued work and comes
-	/// back.) If nothing else is runnable the call returns
-	/// promptly and the caller simply continues, so a `Runtime.yield()` in a wait loop is a busy wait that
-	/// makes progress rather than a block — `await` and `sleep` are the blocking waits.
+	/// round again — BEHIND everything that was already runnable, never ahead of it. `main` runs as an
+	/// ordinary green thread in a program that spawns any, so a yield there follows the same rule. If nothing
+	/// else is runnable the call returns promptly and the caller simply continues, so a `Runtime.yield()` in
+	/// a wait loop is a busy wait that makes progress rather than a block — `await` and `sleep` are the
+	/// blocking waits.
 	///
 	/// Unlike `sleep(0)` it occupies no timer, so a program may yield as often as it likes without competing
 	/// for the timer store. It is safe outside any async context: called from a program that never spawned a

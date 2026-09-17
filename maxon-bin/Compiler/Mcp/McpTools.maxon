@@ -302,21 +302,74 @@ export function executeFmtTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalN
 	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
 end 'executeFmtTool'
 
-export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
-	var argv = StringArray.create()
-	argv.push("verify-warm-rebuild")
-	argv.push(getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ""))
+// What `check` and `dump_ir` compiled. `diagnostics` is the text the command line would have printed on
+// stderr for the same build.
+union InProcessCompile
+	compiled(project Project, codeResult CodeResult, diagnostics String)
+	refused(diagnostics String)
+end 'InProcessCompile'
 
-	runAndReport(reqDoc, idNode: idNode, ctx: ToolContext.hostRelative(exePath), argv: argv, what: "check", timeoutMs: LongRunTimeoutMs)
+// ⭐ **`check` AND `dump_ir` COMPILE IN THIS PROCESS, AND WRITE NOTHING.** Both answer a question about a
+// program rather than producing or running one, so there is no binary, no `.ir` file and no child whose
+// output has to be read back: the pipeline stops at a `CodeResult`, exactly as `maxon lsp-server` compiles
+// a buffer. The capture keeps the pipeline's diagnostics off this server's own streams.
+function compileInProcess(reqDoc JsonDoc, args OptionalNode) returns InProcessCompile
+	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
+	beginDiagnosticCapture()
+
+	let path = try FilePath.from(pathArg) otherwise 'badPath'
+		emitDiagnosticLine("error: invalid path: {pathArg}")
+		return InProcessCompile.refused(endDiagnosticCapture())
+	end 'badPath'
+
+	var paths = MaxonSourcePathArray.create()
+	paths.push(path)
+
+	var project = try loadProject(paths, target: detectHostTarget()) otherwise (e) 'notLoaded'
+		reportCompileError(e)
+		return InProcessCompile.refused(endDiagnosticCapture())
+	end 'notLoaded'
+
+	return match checkWithoutWriting(project) 'compile'
+		compiled(codeResult) gives InProcessCompile.compiled(project, codeResult: codeResult, diagnostics: endDiagnosticCapture())
+		refused gives InProcessCompile.refused(endDiagnosticCapture())
+	end 'compile'
+end 'compileInProcess'
+
+// `success` and `diagnostics`, which both answers carry. Answers whether the compile succeeded.
+function addCompileOutcome(doc JsonDoc, payload JsonObjectBuilder, compile InProcessCompile) returns bool
+	let (succeeded, diagnostics) = match compile 'outcome'
+		compiled(_, _, text) gives (true, text)
+		refused(text) gives (false, text)
+	end 'outcome'
+
+	payload.addBool(doc, key: "success", value: succeeded)
+	payload.addString(doc, key: "diagnostics", value: diagnostics)
+	return succeeded
+end 'addCompileOutcome'
+
+export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args))
+
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeCheckTool'
 
-export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
-	var argv = StringArray.create()
-	argv.push("build")
-	argv.push(getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ""))
-	argv.push("--emit-ir")
+// `ir` is empty when the compile was refused, as `maxon/generateIR`'s is.
+export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	let compile = compileInProcess(reqDoc, args: args)
+	let succeeded = addCompileOutcome(doc, payload: payload, compile: compile)
 
-	runAndReport(reqDoc, idNode: idNode, ctx: ToolContext.hostRelative(exePath), argv: argv, what: "dump_ir", timeoutMs: LongRunTimeoutMs)
+	let irText = match compile 'ir'
+		compiled(project, codeResult, _) gives renderTargetIr(project, codeResult: codeResult)
+		refused gives ""
+	end 'ir'
+
+	payload.addString(doc, key: "ir", value: irText)
+	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeDumpIrTool'
 
 export function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FilePath)

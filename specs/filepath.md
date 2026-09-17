@@ -76,6 +76,13 @@ end 'main'
 C:\Users\docs\readme.md
 ```
 
+### Normalizing Paths
+
+`normalize()` folds a path lexically, without asking the filesystem: `.` components are removed, each `..`
+cancels the component before it, repeated separators collapse and a trailing separator is dropped. A `..`
+that would climb above an absolute path's root is dropped; one at the front of a relative path is kept. A
+relative path that folds away entirely is `.`, and the empty path stays empty.
+
 ## Tests
 
 <!-- test: filepath-from-string -->
@@ -450,6 +457,72 @@ C:\Users\test
 ```
 ```stdout
 C:/Users/test
+```
+
+<!-- test: filepath-normalize-folds-dot-segments -->
+```maxon
+function main() returns ExitCode
+	for spelled in ["a/./b/../c", "a//b/", "../a/../../b", "a/..", "./", ""] 'eachPath'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		print("[{p.normalize()}]\n")
+	end 'eachPath'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[a\c]
+[a\b]
+[..\..\b]
+[.]
+[.]
+[]
+```
+```stdout
+[a/c]
+[a/b]
+[../../b]
+[.]
+[.]
+[]
+```
+
+<!-- test: filepath-normalize-stops-at-the-root -->
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+		let spellings = ["C:/x/../../y", "C:/..", "//server/share/x/../..", "C:a/../..", "/x/.."]
+	#else
+		let spellings = ["/x/../../y", "/..", "//a/./b", "/x/..", "/"]
+	#endif
+
+	for spelled in spellings 'eachPath'
+		let p = try FilePath.from(spelled) otherwise panic("unspellable path '{spelled}'")
+		print("[{p.normalize()}]\n")
+	end 'eachPath'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+[C:\y]
+[C:\]
+[\\server\share\]
+[C:..]
+[\]
+```
+```stdout
+[/y]
+[/]
+[/a/b]
+[/]
+[/]
 ```
 
 <!-- test: filepath-equality -->

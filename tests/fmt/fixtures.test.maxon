@@ -235,6 +235,42 @@ test 'an option ahead of the command word is still refused'
 	try Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
 end 'an option ahead of the command word is still refused'
 
+// ⭐⭐ **A LIBRARY TIER HOLDS NO MANIFEST, SO `stdlib/Build.maxon` IS FORMATTED.** The manifest name is
+// matched without regard to case, and `Build.maxon` is the stdlib's `Build` API. What makes it library
+// source is WHERE it is — inside the `stdlib/` the compiler reads — so the case stages a compiler of its own
+// below a `stdlib/`, which is the only way a staged tree can be that directory. A project's `build.maxon`
+// beside it, in the same walk, is still skipped.
+//
+// ⭐ `1 changed, 0 unchanged` is the load-bearing half, for `build-manifest-case-folded`'s reason: the
+// library file was visited and the manifest never was.
+test 'a library tier formats its Build.maxon and a project still skips its manifest'
+	let staged = writableDir("{StagingRootDirName}/library-tier-build-source")
+	purgeFilesIn(staged)
+
+	let compilerDir = writableDir("{StagingRootDirName}/library-tier-build-source/maxon-bin/.maxon")
+	let stagedCompiler = compilerDir.join("{testedCompilerPath().filename()}")
+	let compilerImage = try File.readBinary(testedCompilerPath()) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {testedCompilerPath().toString()} to stage a compiler below a library tier.")
+	try File.writeBinary(stagedCompiler, content: compilerImage, mode: FilePermission.executable) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage a compiler at {stagedCompiler.toString()}.")
+
+	let unformatted = "let    f=6\n"
+	let librarySource = writableDir("{StagingRootDirName}/library-tier-build-source/stdlib").join("Build.maxon")
+	let manifest = writableDir("{StagingRootDirName}/library-tier-build-source/app").join("build.maxon")
+	try File.writeText(librarySource, content: unformatted) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {librarySource.toString()}.")
+	try File.writeText(manifest, content: unformatted) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {manifest.toString()}.")
+
+	var arguments = StringArray.create()
+	arguments.push(TestedCommandName)
+	let run = try Subprocess.run(Executable.path(stagedCompiler), arguments: arguments, workingDirectory: staged) otherwise (e) 'spawnFailed'
+		panic("fmt-fixtures.test: the gate could not run — could not spawn the staged compiler at {stagedCompiler.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+	try Expect.equal(run.exitCode() as AssertedInt, expected: SuccessExitCode, message: "`{TestedCommandName}` over a tree holding a library tier did not succeed. {said}")
+	try Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(1, unchanged: 0), message: "`{TestedCommandName}` did not visit exactly one file: the library tier's `Build.maxon` must be formatted and the project's `build.maxon` never reached. {said}")
+	try Expect.notEqual(fileBody(librarySource), expected: unformatted, message: "`stdlib/Build.maxon` was left unformatted: the walk read library source as a build manifest. {said}")
+	try Expect.equal(fileBody(manifest), expected: unformatted, message: "the project's `build.maxon` was rewritten: a manifest outside a library tier must not be walked. {said}")
+end 'a library tier formats its Build.maxon and a project still skips its manifest'
+
 // ============================================================================================
 // ONE CASE
 // ============================================================================================

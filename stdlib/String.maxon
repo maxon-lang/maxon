@@ -830,26 +830,15 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'trimEnd'
 end 'String'
 
-/// Builds a `String` piece by piece — which a `String` itself deliberately cannot do cheaply.
+/// Builds a `String` piece by piece.
 /// @category Text
 ///
-/// WHY THIS TYPE EXISTS, AND WHY `String.append` IS NOT ALLOWED TO BE CLEVER INSTEAD.
-///
-/// A `String` OWNS EXACTLY THE BYTES IT HOLDS. `append` allocates a new buffer of exactly the
-/// required size, copies into it, and frees the old one — no growth factor, no slack, not one byte
-/// more than the string is. Every string in a program pays for that decision, and almost every
-/// string in a program is built once and then only read, so it is the right one: a growth policy
-/// would leave every one of them carrying capacity nobody will ever use.
-///
-/// The price is that appending in a LOOP is Θ(n²) — each append copies everything already there.
-/// That is not a defect to be papered over by giving every string slack it does not need; it is
-/// what this type is for. Build here, where the buffer grows GEOMETRICALLY (`Array`'s policy — see
-/// `grownCapacity` in stdlib/Array.maxon: double while small, ease toward 1.25× once big), so the
-/// whole build is amortized O(1) per byte, and hand the finished bytes to a `String` at the end.
-///
-/// It is Go's split, for Go's reason: an immutable `string` whose `+` copies, and a
-/// `strings.Builder` that grows. The two costs are paid by different code — a program HOLDS many
-/// strings and BUILDS few.
+/// `String.append` grows its buffer geometrically already: it reaches `__managed_append`, whose new
+/// capacity comes from `__managed_grown_cap` — the one growth policy every `Array` grows by too, double
+/// while small and ease toward 1.25× once big — so a loop of appends is amortized O(1) per byte on
+/// either type. What the builder adds is what a `String` has no door for: `reserve` ahead of a known
+/// final size, a `clear` that keeps the capacity for the next build, and appending a byte range whose
+/// grapheme classification the caller already holds, without re-scanning it.
 public type StringBuilder
 	var bytes as ByteArray
 

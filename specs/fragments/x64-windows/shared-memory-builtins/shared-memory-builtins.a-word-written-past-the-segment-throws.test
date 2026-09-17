@@ -1,0 +1,130 @@
+// Test: shared-memory-builtins.a-word-written-past-the-segment-throws
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-write-past-end", bytes: 4096) otherwise return 3
+	try segment.writeWord(4090, value: 1) otherwise (e) 'refused'
+		segment.close()
+		return match e 'why'
+			outOfBounds gives 7
+			createFailed gives 4
+			mapFailed gives 4
+		end 'why'
+	end 'refused'
+
+	segment.close()
+	return 5 as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; "maxon-spec-shm-write-past-end"
+    x64.movRegImm32 rbx, 4096
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.callDirect SharedSegment.create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rdx, 4090
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.writeWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#3
+  tryerr#4:
+    x64.leaRegRegImm32 r12, r10, -1
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.close
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, matchnext#9
+  matcharm#6:
+    x64.movRegImm32 r12, 4
+    x64.jmp matchcont
+  matchnext#9:
+    x64.cmpRegImm32 r12, 1
+    x64.jcc notEqual, matchnext#10
+  matcharm#7:
+    x64.movRegImm32 r12, 4
+    x64.jmp matchcont
+  matchnext#10:
+    x64.cmpRegImm32 r12, 2
+    x64.jcc notEqual, matchdead
+  matcharm#5:
+    x64.movRegImm32 r12, 7
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  tryok#3:
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.close
+    x64.movRegImm32 r12, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

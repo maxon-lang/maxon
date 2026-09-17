@@ -2487,3 +2487,28 @@ end 'main'
 ```maxoncstderr
 error E3059: <fragment>:16:11: type mismatch: 'throw of 'BoxedError' but the enclosing function declares no 'throws' — the error flag has nowhere to be published and would be silently dropped, the throw path handing back the primary register's 0 as a real answer; declare 'throws BoxedError', or handle it here with a `try … otherwise`'
 ```
+
+<!-- test: error.mismatched-otherwise-end-label -->
+A label written after `end` must repeat the `otherwise` block's opening label.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail() otherwise 'recover'
+		result = 42
+	end 'handler'
+	return result
+end 'main'
+```
+```maxoncstderr
+error E2008: <fragment>:16:2: Mismatched end label: expected 'recover', got 'handler'
+```

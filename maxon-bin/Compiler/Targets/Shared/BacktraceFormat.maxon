@@ -54,7 +54,6 @@ let SymbolTableCountBytes = SymbolTableColumnBytes
 let SymbolTableHeaderBytes = SymbolTableColumnBytes * SymbolTableHeaderColumns
 let SymbolTableEntryBytes = SymbolTableColumnBytes * SymbolTableEntryColumns
 
-
 // `__symtable`'s alignment within `.text`: the natural alignment of its u32 columns.
 export let SymbolTableAlignment = 4
 
@@ -409,18 +408,30 @@ export let ElidedFramesLine = b"  ...additional frames elided...\n"
 // The two ADDRESSES recover the ASLR slide: `diag_base` is the runtime address of a known function, so
 // an operator subtracts it out and resolves the faulting instruction against `llvm-objdump -d`.
 
-// The hardware faults a handler converts. The vocabulary the CLASSIFICATION and the DIAGNOSTIC share:
-// what the OS hands over differs per platform (an NTSTATUS on Windows, a signal number on POSIX), but
-// what gets printed must not, so the mapping to words is asked once, of `faultPanicLinePrefix`.
+// The faults a handler converts. The vocabulary the CLASSIFICATION and the DIAGNOSTIC share: what the OS
+// hands over differs per platform (an NTSTATUS on Windows, a signal number and a fault address on POSIX),
+// but what gets printed must not, so the mapping to words is asked once, of `faultPanicMessage`.
 //
-// ⚠ **THE FIRST TWO ARE ONE INSTRUCTION'S AND THE THIRD IS EVERY INSTRUCTION'S.** x64's `idiv` raises the
-// same `#DE` for a zero divisor and for an unrepresentable quotient and the OS tells them apart by code,
-// while an access violation is what a bad address does wherever it is dereferenced.
+// ⚠ **THE FIRST TWO ARE ONE INSTRUCTION'S.** x64's `idiv` raises the same `#DE` for a zero divisor and for
+// an unrepresentable quotient, and Windows tells them apart by code. A compiled divide reaches neither: a
+// possibly-zero divisor throws, and `i64.min / -1` panics with `overflow`'s words from a guard the parser
+// emits (`Parser.emitQuotientOverflowGuard`).
 export enum HardwareFaultKind
 	divideByZero
 	overflow
 	accessViolation
+
+	// An access within `StackFaultReachBytes` of the faulting stack pointer, or Windows'
+	// STATUS_STACK_OVERFLOW.
+	stackOverflow
 end 'HardwareFaultKind'
+
+// ⭐ **HOW FAR FROM THE STACK POINTER A STACK OVERFLOW'S FAULTING ACCESS CAN LAND.** A frame's first touch
+// is within a page of the stack pointer on both backends — x64's `push` lands 8 below it and its probe walk
+// touches at it, and an arm64 frame record is stored within its imm7 reach of it — while a nil or wild
+// address is nowhere near a live stack. A POSIX handler classifies a SIGSEGV or SIGBUS as `stackOverflow`
+// when the fault address lies within this many bytes on either side of the faulting stack pointer.
+export let StackFaultReachBytes = 0x10000 as MachineWord
 
 // The tag that closes a fault panic line and opens its addresses. Written once because the RUNTIME
 // emits it and `SpecTestRunner.stripFaultRipSuffix` recognizes exactly it — a second spelling would
@@ -433,20 +444,29 @@ let FaultRipTag = b" at rip=0x"
 export let FaultDiagBaseTag = b" diag_base=0x"
 export let FaultLineTerminator = b"\n"
 
-// The whole fixed prefix of `kind`'s panic line, up to the ASLR-dependent hex. ONE answer to "which
-// fault prints what", asked by every handler in the tree.
-export function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
-	let message = match kind 'kind'
+// ONE answer to "which fault prints what", for every handler in the tree and for the quotient guard.
+function faultPanicMessage(kind HardwareFaultKind) returns ByteArray
+	return match kind 'kind'
 		divideByZero gives b"panic: integer divide by zero"
 		overflow gives b"panic: integer overflow"
 		accessViolation gives b"panic: nil pointer or invalid memory access"
+		stackOverflow gives b"panic: stack overflow"
 	end 'kind'
+end 'faultPanicMessage'
 
-	var line = ByteArray.create()
-	line.append(message)
-	line.append(FaultRipTag)
-	return line
+// The whole fixed prefix of `kind`'s fault line, up to the ASLR-dependent hex.
+export function faultPanicLinePrefix(kind HardwareFaultKind) returns ByteArray
+	return faultLineOf(kind, tail: FaultRipTag)
 end 'faultPanicLinePrefix'
+
+// `kind`'s words followed by `tail`, in a fresh buffer — the words are an immortal literal and are never
+// appended to in place.
+export function faultLineOf(kind HardwareFaultKind, tail ByteArray) returns ByteArray
+	var line = ByteArray.create()
+	line.append(faultPanicMessage(kind))
+	line.append(tail)
+	return line
+end 'faultLineOf'
 
 // --- The fault line's hex fields ---
 //
@@ -488,6 +508,13 @@ export let RuntimeInitName = b"mrt_runtime_init"
 export let FaultHandlerName = b"mrt_fault_handler"
 export let FaultBacktraceName = b"mrt_fault_backtrace"
 export let WriteHexName = b"mrt_write_hex64"
+
+// The report `__gt_morestack` ends on when a green thread's stack would have to grow past
+// `GtRuntime.GtMaxStackBytes`: the fault diagnostic's `stack overflow` line and backtrace, from the
+// requesting function's own frame, then exit 1. It takes the frame as a fault handler reads one — pc, frame
+// pointer, stack pointer — because that is the shape `mrt_fault_backtrace` walks, and it is laid out only in
+// a program with green threads.
+export let GtStackOverflowName = b"mrt_gt_stack_overflow"
 
 // ⭐⭐ **THE ALTERNATE SIGNAL STACK, ON A POSIX LANE WITH A FAULT HANDLER (`GtRuntime.FaultFrameHome`).** The
 // handler is registered `SA_ONSTACK`, so the kernel builds its frame here rather than on a green thread's

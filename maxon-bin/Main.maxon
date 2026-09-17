@@ -370,9 +370,6 @@ module function commandLineTarget(spec String) returns Target throws TargetFlagE
 	throw TargetFlagError.unrecognized
 end 'commandLineTarget'
 
-// The build script a directory may carry. See `runBuildManifest`.
-let BuildManifestFileName = "build.maxon"
-
 // A manifest is a set of tasks, not a program with one way in; `build` is the task this command
 // asks for.
 let ManifestEntryFunction = b"build"
@@ -542,7 +539,7 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 
 	// The description's `name` is not the product name: it is whatever selected this build, which for
 	// `Build.build` is the source path, often `.`. The product is named by the output.
-	let productVersion = try manifestVersion(doc, build: chosen) otherwise (e) 'badVersion'
+	let productVersion = try manifestVersion(doc, build: chosen, target: target) otherwise (e) 'badVersion'
 		return ManifestRun.ran(reportMalformedManifestField(ManifestVersionKey, error: e))
 	end 'badVersion'
 
@@ -568,6 +565,7 @@ union ManifestFieldError implements Error
 	notAListOfStrings
 	notAPath(entry String)
 	notADefinePair(entry String)
+	notStampable(problem ProductVersionError)
 end 'ManifestFieldError'
 
 function reportMalformedManifestField(key String, error ManifestFieldError) returns ExitCode
@@ -578,6 +576,7 @@ function reportMalformedManifestField(key String, error ManifestFieldError) retu
 		notAListOfStrings gives "is not a list of strings"
 		notAPath(entry) gives "holds `{entry}`, which is not a path"
 		notADefinePair(entry) gives "holds `{entry}`, which is not a `<name>{DefineNameValueSeparator}<value>` pair"
+		notStampable(versionProblem) gives productVersionProblem(versionProblem)
 	end 'whatIsWrong'
 
 	printError("error: {BuildManifestFileName}'s `{key}` {problem}\n")
@@ -614,10 +613,14 @@ function manifestDebugInfo(doc JsonDoc, build JsonNodeId) returns bool throws Ma
 	return value.boolValue
 end 'manifestDebugInfo'
 
-// Absent reads as "unversioned".
-function manifestVersion(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return ""
-	return try manifestString(doc.get(valueId))
+// Absent reads as "unversioned". Checked against the target's version field here, before the build, so a
+// version the binary cannot carry refuses the build rather than being stamped as something else.
+function manifestVersion(doc JsonDoc, build JsonNodeId, target Target) returns VersionComponentArray throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return VersionComponentArray.create()
+	let dotted = try manifestString(doc.get(valueId))
+	return try productVersionFor(dotted, target: target) otherwise (e) 'unstampable'
+		throw ManifestFieldError.notStampable(e)
+	end 'unstampable'
 end 'manifestVersion'
 
 // Refused whole on the first bad entry: a build missing a define its manifest computed is a binary
@@ -705,12 +708,12 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return 1
 
-	return buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: "", defines: args.defines)
+	return buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(), defines: args.defines)
 end 'runBuildPaths'
 
 // The lock is asked of the command line's `-o`: `outputOverride` may be a manifest's own `output`,
 // which says nothing about who else writes the tree.
-function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion String, defines DefineArray) returns ExitCode
+function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
 	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
 		return 1
 	end 'refusedOptions'
@@ -786,7 +789,7 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 end 'acquireBuildTreeLock'
 
 // Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
-function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion String, defines DefineArray) returns ExitCode
+function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
 	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
@@ -1145,10 +1148,8 @@ function filterSuffix(filter String) returns String
 end 'filterSuffix'
 
 // Absolute whichever way it was spelled, and that is a correctness requirement: every path the run
-// computes hangs off it, and the spawned test exe runs in `specRunWorkingDir`. A relative path
-// means different things across that crossing per platform — Windows resolves `lpApplicationName`
-// against the calling process's directory, while arm64-macOS's `posix_spawnp` after
-// `posix_spawn_file_actions_addchdir_np` resolves it against the new one.
+// computes hangs off it, and the spawned test exe runs in `specRunWorkingDir`, against which a
+// relative executable path is resolved.
 function resolveSpecDir(args MaxonArgs) returns FilePath throws FilePathError
 	// Bind the FilePath to a local first: a bare String constant is ambiguous between the
 	// String/FilePath overloads, and an inline `try` expression in an argument position does not
@@ -1346,6 +1347,8 @@ module function reportCompileError(e CompileError)
 		// Not "share no directory": two top-level directories on one drive share the drive root, which a
 		// `FilePath` cannot hold (see `Compiler.commonAncestorOf`).
 		noCommonRoot(first, other) then emitDiagnosticLine("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
+		unnamedDirectory(d) then emitDiagnosticLine("error: {d} has no name for its executable to take. Name the output with -o")
+		invalidOutputPath(spelling) then emitDiagnosticLine("error: -o {spelling} is not a valid path")
 		readError(p) then emitDiagnosticLine("error: could not read {p}")
 		stdlibNotFound then emitDiagnosticLine("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
 		runtimeNotFound then emitDiagnosticLine("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
@@ -1563,7 +1566,7 @@ function optionReference(option HelpOption) returns OptionReference
 		rungs gives OptionReference.create("{RungsFlagPrefix}<n>", description: "Climb <n> rungs (default {DefaultRungCount}, range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the program, so this is exponential in cost.", commands: [MaxonCommand.scaleTest])
 		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest])
 		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest])
-		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Dump the generated corpus to <dir> for inspection (it is otherwise built into a temp dir and thrown away).", commands: [MaxonCommand.scaleTest])
+		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest])
 		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest])
 		testFilter gives OptionReference.create("{TestFilterShortFlag} P, {TestFilterShortPrefix}P, {FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive; comma-separated patterns are a union).", commands: [MaxonCommand.test])
 		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run and compile nothing.", commands: [MaxonCommand.test])

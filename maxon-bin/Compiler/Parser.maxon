@@ -181,8 +181,8 @@ export union ParseError implements Error
 	// ANNOTATED field takes an arbitrary expression, and this is the one form that cannot: with no
 	// annotation, the field's type has to be read off the default's raw tokens, and only a literal
 	// says what it is. It carries NO payload because the sentence names no part of the program: what
-	// the author wrote is wrong in KIND, and the cure — add an annotation — is the same words whatever
-	// they wrote. The message is `specs/field-defaults.md`'s, pinned by
+	// the author wrote is wrong in KIND, and the cure — declare the type with `as` — is the same words
+	// whatever they wrote. The message is `specs/field-defaults.md`'s, pinned by
 	// `missing-type-annotation-errors`.
 	//
 	// ⚠ The sentence names the enum-case form (`var level = Priority.low`) even though the shorthand
@@ -973,7 +973,7 @@ export union ParseError implements Error
 	//     meaningless where every arm must yield a value, and the Pratt climber has already stopped
 	//     at the `and` (see `parseBinary`), so the arm parser meets it as a leftover, not an operator;
 	//   • a token past the end of a function SIGNATURE — `function foo() int`, the `returns` keyword
-	//     missing (see `requireSignatureLineEnd`);
+	//     missing — or of an `enum`/`union` HEADER — `enum Colour int` (see `requireDeclarationHeaderLineEnd`);
 	//   • a token in STATEMENT position that begins no statement — a bare `foo`, a `retur x` typo, a
 	//     `test` that meant `test()` (see `parseStatement`'s fall-through, and the arm above it for the
 	//     one shape there that is `unsupported` instead).
@@ -3691,9 +3691,6 @@ union ArrayLiteralElementSource
 	stated(giid GenericInstanceId)
 end 'ArrayLiteralElementSource'
 
-// Is the literal's element type still open — the question the MAP-literal fork asks, which is the one place
-// the two arms differ before the instance is in hand. A `match` arm may not open a block, so the fork reads
-// it as the predicate it is.
 // ⭐ **WHY AN EMPTY `[…]` IS REFUSED, WHICH IS NOT THE SAME SENTENCE UNDER THE TWO HEADS.** A bare `[]` has
 // no element to infer a type FROM; `ByteArray from []` states the type perfectly well and is refused for a
 // different reason — an empty literal builds no record this path knows how to make, and the container's own
@@ -3707,6 +3704,20 @@ function emptyArrayLiteralMessage(element ArrayLiteralElementSource) returns Str
 	return "an empty array literal `[]` under a `from` head — the element type is stated, but an empty literal builds no record; use the container's own `.create()` for an empty typed array"
 end 'emptyArrayLiteralMessage'
 
+// The `List from []` refusal. Under the bare base name nothing states the element type; under an alias the type
+// is stated and the empty literal still builds nothing, so the two heads earn two sentences for
+// `emptyArrayLiteralMessage`'s reason.
+function emptyListFromMessage(head ByteArray, statedByAlias bool) returns String
+	if statedByAlias 'stated'
+		return "`{String.from(head)} from []` — an empty literal builds no list; an empty one is `{String.from(head)}.{String.from(CreateMethod)}()`"
+	end 'stated'
+
+	return "`{String.from(ListBuiltinBaseName)} from []` states no {ContainerElementColumnNoun} type — an empty list is `<alias>.{String.from(CreateMethod)}()` over a `{String.from(ListBuiltinBaseName)} with <{ContainerElementColumnNoun}>` alias"
+end 'emptyListFromMessage'
+
+// Is the literal's element type still open — the question the MAP-literal fork asks, which is the one place
+// the two arms differ before the instance is in hand. A `match` arm may not open a block, so the fork reads
+// it as the predicate it is.
 function elementSourceIsInferred(element ArrayLiteralElementSource) returns bool
 	return match element 'e'
 		inferred gives true
@@ -12906,9 +12917,10 @@ end 'DivisorZeroVerdict'
 //
 //   • **zero decides FALLIBILITY** — E3103, a bare divide, or a throwing one. It is part of the operation's
 //     TYPE, visible in the source as a required `try`.
-//   • **`-1` decides only whether `mod` needs a GUARD.** `a mod -1` is `0`, so it is TOTAL: folding this
-//     fact into `possiblyZero` would demand a `try` on an operation that cannot fail, and folding it into
-//     `neverZero` is exactly the bug. It changes what is EMITTED and nothing about what is allowed.
+//   • **`-1` decides only whether a GUARD is emitted.** `a mod -1` is `0`, so it is TOTAL, and a signed `/`
+//     panics there only when the dividend may also be `i64.min`: folding this fact into `possiblyZero` would
+//     demand a `try` on an operation whose failure is not a throw, and folding it into `neverZero` is
+//     exactly the bug. It changes what is EMITTED and nothing about what is allowed.
 //
 // A divisor can be any combination of the two: `int(-1 to -1)` excludes zero and is always `-1`;
 // `int(0 to 100)` admits zero and never `-1`; an opaque `int` is both.
@@ -12931,14 +12943,14 @@ enum DivisorProof
 	// A folded constant 0 / 0.0 / -0.0 — **E3103**, whatever the other hazard would have said.
 	provablyZero
 
-	// Both hazards closed: the BARE `idiv`, with no check, no branch and no call. The only route to one.
+	// Both hazards closed: the BARE `idiv`, with no check, no branch and no call.
 	nonZeroAndNotNegativeOne
 
-	// Proven non-zero but possibly `-1`: TOTAL, and a `mod` needs the overflow guard (A1x). A `/` treats it
-	// exactly as the arm above — its own answer at `-1` does not exist, so there is nothing to guard toward.
+	// Proven non-zero but possibly `-1`: a `mod` needs the overflow guard, and a signed `/` the quotient's
+	// panic guard wherever its dividend may be `i64.min`, ahead of its bare `idiv`.
 	nonZeroButMaybeNegativeOne
 
-	// Possibly zero, proven not `-1`: a THROWING divide, and a `mod` needs no overflow guard.
+	// Possibly zero, proven not `-1`: a THROWING divide, with no overflow guard on either operator.
 	maybeZeroButNotNegativeOne
 
 	// ⚠ **NOTHING RULED OUT — THE ANSWER EVERY GAP IN THE PROOF MUST FALL TO**, for `DivisorZeroVerdict`'s
@@ -12969,7 +12981,7 @@ function divisorProofZeroVerdict(proof DivisorProof) returns DivisorZeroVerdict
 	end 'p'
 end 'divisorProofZeroVerdict'
 
-// The OVERFLOW half — read ONLY for `mod`, because only the remainder has an answer at `-1`.
+// The OVERFLOW half — `mod`'s guard reads it alone, and the signed quotient's guard with the dividend's half.
 function divisorProofMayBeNegativeOne(proof DivisorProof) returns bool
 	return match proof 'p'
 		// `provablyZero` answers `false` as a FACT and not as a default: a divisor proven to be `0` is proven not
@@ -13637,24 +13649,35 @@ union StaticRosterVerdict
 	hidden(tier Visibility)
 end 'StaticRosterVerdict'
 
-// ⭐⭐ **THE TWO `<Type> from <literal>` SUGARS, WHICH DIFFER IN EXACTLY TWO FACTS.** Both desugar to the
+// ⭐⭐ **THE THREE `<Type> from <literal>` SUGARS, WHICH DIFFER IN EXACTLY TWO FACTS.** All desugar to the
 // type's own `init` static and share every other rule — the arity and argument checks, the ownership of the
 // returned struct, the E3004 for a type with no `init`. What a form decides is the TOKEN it claims and the
-// CONFORMANCE its site requires, and those are the two functions beneath it. A boolean parameter would have
-// spelled the same choice while naming neither.
+// CONFORMANCE its site requires, and those are the functions beneath it.
 enum LiteralInitForm
-	// `FilePath from "C:\\x.txt"` — `stdlib/Builtins.maxon:40`'s `init(value String)`.
+	// `FilePath from "C:\\x.txt"` — `stdlib/Builtins.maxon`'s `init(value String)`.
 	stringLiteral
 
-	// `CharWrapper from 'X'` — `stdlib/Builtins.maxon:47`'s `init(value Character)`.
+	// `CharWrapper from 'X'` — `stdlib/Builtins.maxon`'s `init(value Character)`.
 	charLiteral
+
+	// `Digits from [4, 0, 7]` — `stdlib/Builtins.maxon`'s `init(value ElementArray)`.
+	arrayLiteral
 end 'LiteralInitForm'
 
-// The literal token a form's operand is.
+// The collection a `<alias> from [ … ]` head's alias must name (`Parser.namesContainerInstanceAlias`).
+enum FromHeadContainer
+	set
+	list
+	vector
+	array
+end 'FromHeadContainer'
+
+// The token a form's operand opens with.
 function literalInitOperandKind(form LiteralInitForm) returns TokenKind
 	return match form 'f'
 		stringLiteral gives TokenKind.stringLiteral
 		charLiteral gives TokenKind.charLiteral
+		arrayLiteral gives TokenKind.leftBracket
 	end 'f'
 end 'literalInitOperandKind'
 
@@ -13664,6 +13687,7 @@ function literalInitInterfaceName(form LiteralInitForm) returns ByteArray
 	return match form 'f'
 		stringLiteral gives InitableFromStringLiteralName
 		charLiteral gives InitableFromCharLiteralName
+		arrayLiteral gives InitableFromArrayLiteralName
 	end 'f'
 end 'literalInitInterfaceName'
 
@@ -13672,6 +13696,22 @@ end 'literalInitInterfaceName'
 let NegativeShiftCountPanicText = "negative shift count"
 let NegativeShiftPanicBlockLabel = b"shiftneg"
 let GuardedShiftBlockLabel = b"shiftok"
+
+// The two blocks `emitQuotientOverflowGuard` splits a signed quotient across.
+let QuotientOverflowPanicBlockLabel = b"divovf"
+let GuardedQuotientBlockLabel = b"divok"
+
+// The line every signed quotient's guard panics with, built once per compile rather than per division. A
+// record because a global initializer cannot hold a bare `ByteArray`.
+type QuotientOverflowPanic
+	static let shared = QuotientOverflowPanic.create()
+
+	export let line as ByteArray
+
+	static function create() returns Self
+		return Self{line: faultLineOf(HardwareFaultKind.overflow, tail: PanicMessageLineTerminator)}
+	end 'create'
+end 'QuotientOverflowPanic'
 
 // A slot of `Parser.bodyOpFlowBlocks` no op of the body stands at, and the mark of a body with no freeze site at
 // all — a position past every op the module has emitted.
@@ -16039,6 +16079,12 @@ export type Parser
 		// (`requireVectorElementType`), so there is no declared-type half to walk.
 		var vectorFromSizes = FixedSizeArray.create()
 
+		// ⭐ **THE HEAD NAMES OF THIS FILE'S `<Name> from […]` CONSTRUCTIONS.** A `Vector` ALIAS head builds its
+		// record through an `Array` literal at the alias's element (`parseAliasedVectorLiteral`), and which alias
+		// a name denotes is known only once every file has folded — so the names are carried, and
+		// `internWellKnownContainerInstances` interns the arrays behind the ones that turn out to be vectors.
+		var fromHeadNames = ByteArrayArray.create()
+
 		// ⚠ **`hasStringSplitCall` WAS HERE AND WENT WITH `String.split`** (W49 wave 5) — see
 		// `atStringSplitCall`'s grave for why the corpus's own `typealias StringArray` replaces it.
 		//
@@ -16119,6 +16165,10 @@ export type Parser
 					vectorFromSizes.push(size)
 				end 'wellFormedLiteral'
 			end 'vectorFromToken'
+
+			if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.kindAt(self.pos + 2) == TokenKind.leftBracket 'fromHeadToken'
+				fromHeadNames.push(self.current().value)
+			end 'fromHeadToken'
 
 			if self.atByteViewCall() 'bytesToken'
 				hasByteViewCall = true
@@ -16227,7 +16277,7 @@ export type Parser
 		// A `.bytes()` byte VIEW joins the byte-string literal's bit because it constructs the same
 		// `Array with Byte`, and `<Enum>.allCaseNames` joins the string literal's for the same reason; neither
 		// has a typealias of its own to intern from, which is the property this whole set shares.
-		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer, managedSocketProducer: hasManagedSocketProducer)
+		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, headNames: fromHeadNames, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer, managedSocketProducer: hasManagedSocketProducer)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -16364,7 +16414,7 @@ export type Parser
 		// The bare base name, or a `Set` INSTANCE ALIAS (`CharSet from ['x']`, P1.8 Slice D). The alias form
 		// is what the corpus spells for a Character-keyed set, and it is the only form that can name a key
 		// type the array literal cannot infer.
-		return self.current().value.equals(SetBuiltinBaseName) or self.namesSetInstanceAlias(self.current().value)
+		return self.current().value.equals(SetBuiltinBaseName) or self.namesContainerInstanceAlias(self.current().value, container: FromHeadContainer.set)
 	end 'atSetFromConstruction'
 
 	// Is the cursor on a `List from` construction — a bare `List` identifier immediately followed by `from`?
@@ -16373,16 +16423,15 @@ export type Parser
 	// arm, for that predicate's stated reason: teaching one and not the other would leave the parser's
 	// instance read as the first write to the shared registry mid-parse.
 	//
-	// ⚠ **ONLY THE BARE BASE NAME, where `Set` also admits an INSTANCE ALIAS.** That form exists for a
-	// `CharSet from ['x']`, whose key type the array literal genuinely cannot infer — a bare `['x', 'y']` is an
-	// array of `Character`, and the alias is what says the container is a `Set` over them rather than an
-	// `Array` of them. A `List`'s
-	// element is whatever the literal's elements are — there is no
-	// element type an alias could state that the literal does not already carry — so `PointList from […]`
-	// would be a second spelling with nothing to decide, and it keeps falling through to `E2004 Undefined
-	// variable 'PointList'` as it does today.
+	// The head is the bare base name or a `List` INSTANCE ALIAS (`Readings from [30, 10]`), whose element type
+	// the alias states. The sweep answers no for every alias, which is sound: the alias's own declaration
+	// interned the instance it names.
 	function atListFromConstruction() returns bool
-		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.current().value.equals(ListBuiltinBaseName)
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from) 'notAFromConstruction'
+			return false
+		end 'notAFromConstruction'
+
+		return self.current().value.equals(ListBuiltinBaseName) or self.namesContainerInstanceAlias(self.current().value, container: FromHeadContainer.list)
 	end 'atListFromConstruction'
 
 	// Is the cursor on an `<alias> from` ARRAY construction — a name that aliases an `Array` INSTANCE,
@@ -16398,7 +16447,7 @@ export type Parser
 	// registers whole-program before any function body is parsed. There is nothing here for a sweep to
 	// pre-intern.
 	function atArrayFromConstruction() returns bool
-		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.namesArrayInstanceAlias(self.current().value)
+		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.namesContainerInstanceAlias(self.current().value, container: FromHeadContainer.array)
 	end 'atArrayFromConstruction'
 
 	// ⭐ **IS THE CURSOR ON A `<Type> from <literal>` CONSTRUCTION OF THIS FORM?** — the `Initable*Literal`
@@ -16410,12 +16459,8 @@ export type Parser
 	// Claiming the shape for any identifier would have replaced a correct diagnostic with a bespoke
 	// one — the "no diagnostic moves" rule every arm added to `parsePrimary` is held to.
 	//
-	// ⚠ **`InitableFromArrayLiteral` IS STILL NOT CLAIMED HERE** — `X from […]` keeps whatever it does today.
-	// It is a third conformance with a third `init` parameter type, and claiming its token shape without its
-	// signature would mint a `<Type>.init` call against the wrong one.
-	//
-	// It cannot collide with `atSetFromConstruction`: `Set` (and a `Set`-instance alias) is not a declared
-	// `type`, and that arm is asked first anyway. The two are ordered, not overlapping.
+	// ⚠ The collection heads — `Set`, `List`, `Vector` and their instance aliases, and an `Array` alias — are
+	// asked first by `parsePrimary`, so the array form here serves only a declared `type` of the program's own.
 	function atLiteralInitConstruction(form LiteralInitForm) returns bool
 		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.kindAt((self.pos + 2) as TokenIndex) == literalInitOperandKind(form)) 'notTheShape'
 			return false
@@ -22274,8 +22319,8 @@ export type Parser
 		self.skipPastBlockEnd()
 	end 'recordScannedExtension'
 
-	// ⭐ **LAND THE CURSOR PAST THE `end` THAT CLOSES THE BLOCK IT IS CURRENTLY INSIDE** — entered anywhere
-	// within exactly one open block, and landing just past that block's own `end` and its optional label.
+	// ⭐ **LAND THE CURSOR ON THE `end` THAT CLOSES THE BLOCK IT IS CURRENTLY INSIDE** — entered anywhere
+	// within exactly one open block. `skipPastBlockEnd` below lands past that `end` and its optional label.
 	//
 	// FOUR walks need it and they must agree to the token, because they are four answers to "where does this
 	// construct stop?": the tolerant sweep steps over a whole `extension`, the whole-program fold steps over
@@ -22288,7 +22333,10 @@ export type Parser
 	// closer is asked through `closesBlockAt` — never a raw `TokenKind.end` — because a method may be NAMED
 	// `end` (D8). An `extension` keyword is the block opener for its callers' purposes, so they enter with the
 	// cursor just past it; the interface name after it is an identifier, which opens and closes nothing.
-	function skipPastBlockEnd()
+	//
+	// The cursor stops ON the outermost block's `end`, so the real parse can judge the label behind it
+	// (`consumeBlockEnd`); the tolerant walks step over both through `skipPastBlockEnd`.
+	function advanceToOutermostBlockEnd()
 		var depth = 1 as BlockDepth
 
 		while not self.isEof() 'walk'
@@ -22298,17 +22346,19 @@ export type Parser
 				continue
 			end 'opensAMethod'
 
-			// The closer test is taken BEFORE the counter moves, because "this token closed the outermost
-			// block" is the conjunction of the two and neither half says it alone.
-			let closes = self.closesBlockAt(self.pos)
-			depth = self.blockDepthAfter(depth)
-			self.advance()
-
-			if closes and depth == 0 'closesTheOutermost'
-				self.skipOptionalLabel()
+			if depth == 1 and self.closesBlockAt(self.pos) 'closesTheOutermost'
 				return
 			end 'closesTheOutermost'
+
+			depth = self.blockDepthAfter(depth)
+			self.advance()
 		end 'walk'
+	end 'advanceToOutermostBlockEnd'
+
+	function skipPastBlockEnd()
+		self.advanceToOutermostBlockEnd()
+		self.advance()
+		self.skipOptionalLabel()
 	end 'skipPastBlockEnd'
 
 	// ⭐⭐ **WHICH NESTED `typealias` MEMBERS THIS EXTENSION BODY DECLARES, PUBLISHED ONTO EVERY CONFORMER, AND
@@ -22577,7 +22627,7 @@ export type Parser
 				// happen is that it is PUBLISHED; what must not happen either is that the cursor lands anywhere
 				// but where a published one leaves it, and the only way to guarantee that is to run the same
 				// reader over it. A second, shorter walk of a signature is exactly the resume point one token
-				// off that `skipPastBlockEnd`'s header warns about.
+				// off that `advanceToOutermostBlockEnd`'s header warns about.
 				// ⭐⭐ **THE CONFORMER'S OWN DECLARATION SHADOWS THE EXTENSION'S (W43), AND THE DECISION IS TAKEN
 				// HERE AND RECORDED.** `stdlib/Map.maxon` declares `contains(key Key)` and
 				// `stdlib/Interfaces.maxon`'s `extension Iterable` declares `contains(predicate …)`: both wanted
@@ -23371,10 +23421,10 @@ export type Parser
 
 			// ⭐ **BEFORE THE LITERAL TEST BELOW, BECAUSE THAT TEST WOULD ANSWER FIRST AND ANSWER THE WRONG
 			// THING.** `let at = __line__` is not a field whose type cannot be inferred; it is a
-			// caller-location keyword in a position that has no caller. Asked in the other order it earned
-			// E2004 "add a type annotation", which sends the author to write `let at as SourceLineNumber =
-			// __line__` — the very program the annotated shape refuses. The two field shapes therefore ask
-			// this ONE question in the same place relative to their own inference, and both answer E2060.
+			// caller-location keyword in a position that has no caller. E2004's remedy would send the author
+			// to write `let at as SourceLineNumber = __line__` — the very program the annotated shape refuses.
+			// The two field shapes therefore ask this ONE question in the same place relative to their own
+			// inference, and both answer E2060.
 			let inferrableDefaultTok = self.current()
 			try requireNotACallerLocationDefault(inferrableDefaultTok.value, at: inferrableDefaultTok)
 
@@ -24557,8 +24607,8 @@ export type Parser
 	// every OTHER FILE's `extension` body over the same type). It leaves the cursor just past the block's own
 	// `end`; a caller that must resume where it started saves and restores `self.pos` itself.
 	//
-	// The extent rule is `skipPastBlockEnd`'s, to the token, and for its reason: a NAMED `function` opens a
-	// block `blockDepthAfter` does not count, the closer test is taken BEFORE the counter moves, and a closer
+	// The extent rule is `advanceToOutermostBlockEnd`'s, to the token, and for its reason: a NAMED `function`
+	// opens a block `blockDepthAfter` does not count, the closer test is taken BEFORE the counter moves, and a closer
 	// is asked through `closesBlockAt` because a member may be NAMED `end` (D8). `depth` starts at 1 because
 	// both callers enter INSIDE exactly one open block.
 	//
@@ -26008,8 +26058,7 @@ export type Parser
 			try self.parseTypeMember(MemberList.typeBody)
 		end 'members'
 
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		try self.consumeBlockEnd(nameTok.value, labelIsRequired: false)
 
 		self.artifact.recordStructType(layout)
 		self.contributeServiceCompanions(layout.name)
@@ -26096,10 +26145,10 @@ export type Parser
 	// implements is unchecked. That is the same bargain a generic body strikes in a monomorphizing compiler,
 	// and the alternative — checking it against a `Self` that has no type — is not available.
 	//
-	// ⚠ The cursor is re-seated from the body start each pass and, at the end, walked past the declaration's
-	// own `end` through `skipPastBlockEnd` — the same walk the sweep used, so the real parse and the sweep
-	// cannot disagree about where this declaration stops. That also makes the zero-conformer case need no arm
-	// of its own.
+	// ⚠ The cursor is re-seated from the body start each pass and, at the end, walked to the declaration's own
+	// `end` through `advanceToOutermostBlockEnd` — the walk the sweep's `skipPastBlockEnd` takes, so the real
+	// parse and the sweep cannot disagree about where this declaration stops — and the label behind it is
+	// judged there. That also makes the zero-conformer case need no arm of its own.
 	//
 	// An `export`/`module` modifier on the `extension` keyword is consumed by `dispatchTopLevel` and means
 	// nothing here: an extension declares no name to make visible, and each of its METHODS carries its own
@@ -26207,7 +26256,8 @@ export type Parser
 		end 'eachConformer'
 
 		self.pos = bodyStart
-		self.skipPastBlockEnd()
+		self.advanceToOutermostBlockEnd()
+		try self.consumeBlockEnd(header.nameTok.value, labelIsRequired: false)
 	end 'parseExtensionDeclaration'
 
 	// ⭐ **THE METHOD NAME AN EXTENSION MEMBER STARTING AT `index` DECLARES, as a PEEK** — the empty source
@@ -26453,8 +26503,7 @@ export type Parser
 			methods.push(try self.parseInterfaceMethod(nameTok.value, declaredSoFar: methods))
 		end 'members'
 
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		try self.consumeBlockEnd(nameTok.value, labelIsRequired: false)
 
 		self.closeTypeParamScope()
 		return IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames)
@@ -27018,6 +27067,7 @@ export type Parser
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
 		let conformsTo = (try self.readOptionalImplementsClause()).names
+		try self.requireDeclarationHeaderLineEnd()
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
@@ -27056,8 +27106,7 @@ export type Parser
 			try self.checkStructBackedCase(layout, caseTok: caseTok)
 		end 'members'
 
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		try self.consumeBlockEnd(nameTok.value, labelIsRequired: false)
 
 		self.artifact.recordEnumType(layout)
 		self.closeTypeParamScope()
@@ -28456,8 +28505,8 @@ export type Parser
 		// ⚠ **IT CANNOT BE A REFUSAL INSIDE `parseOptionalThrowsClause`**, which is the natural place to put
 		// "a test may not write one": that reader is SHARED with the tolerant declaration sweep, whose
 		// `otherwise return` would swallow the judgement and report nothing — the same argument
-		// `requireSignatureLineEnd` makes two lines down. There is nothing left to refuse anyway: the line
-		// break `readTestDeclarationHead` already required means a `throws` keyword here is E2001.
+		// `requireDeclarationHeaderLineEnd` makes. There is nothing left to refuse anyway: the line break
+		// `readTestDeclarationHead` already required means a `throws` keyword here is E2001.
 		//
 		// ⚠ **THE PLACEHOLDER IS THE NULLARY CASE, AND THE REASON IS LEGIBILITY — NOT COST. MEASURED.**
 		// `ThrowsClause` is `none | throwing(name String)`, and this seeded the PAYLOAD case and then
@@ -28474,7 +28523,7 @@ export type Parser
 			throwsClause = try self.parseOptionalThrowsClause()
 		end 'aWrittenThrowsClause'
 
-		try self.requireSignatureLineEnd()
+		try self.requireDeclarationHeaderLineEnd()
 
 		// ⭐ **THE NAME EVERY REGISTRY BELOW IS KEYED BY** — the source name for the first declaration of it,
 		// a mangled variant for a later overload (D7). Decided HERE: the parameter list is complete and
@@ -28971,18 +29020,9 @@ export type Parser
 			end 'nothingUnused'
 		end 'bodyReached'
 
-		// ⭐ **THE SECOND OF THE TWO PLACES THE FORMS DIFFER: a `test`'s `end` LABEL IS CHECKED.** Every block
-		// in the language repeats its opener's label at its `end`, and a test's label IS its name — the one
-		// the reporter prints — so a mismatch there is a test whose two halves name two different tests.
-		// A `function`'s label stays OPTIONAL and unchecked, which is what it has always been; widening that
-		// is a separate change with its own blast radius across every committed spec.
-		let endTok = try self.consume(TokenKind.end)
-
-		if isTest 'aTestsEndLabelRepeatsItsName'
-			try self.requireEndLabelMatches(nameTok.value, endTok: endTok)
-		end 'aTestsEndLabelRepeatsItsName' else 'anOptionalLabel'
-			self.skipOptionalLabel()
-		end 'anOptionalLabel'
+		// ⭐ **THE SECOND OF THE TWO PLACES THE FORMS DIFFER: a `test` MUST write its `end` label.** A test's
+		// label IS its name — the one the reporter prints — so an `end` without it names no test at all.
+		try self.consumeBlockEnd(nameTok.value, labelIsRequired: isTest)
 
 		self.publishExistentialInstances(func)
 		self.fileDeferredProvenance(func)
@@ -29055,23 +29095,46 @@ export type Parser
 		self.mintedTests.push(MintedTest.create(symbol, prose: nameTok.value))
 	end 'requireUnmintedTestName'
 
-	// ⭐ **E2008 — A BLOCK'S `end` LABEL MUST REPEAT THE LABEL ITS HEADER OPENED.** Positioned at the
-	// `end`, where `parseMatch` anchors its own mismatch and for its reason.
+	// ⭐ **E2008 — A LABEL WRITTEN AFTER A BLOCK'S `end` MUST REPEAT THE LABEL ITS HEADER OPENED**, on every
+	// block the real parse closes; `match` is the one exception and reports E2043 itself. A declaration's
+	// opening label is its NAME. Only a `test` must write the label, because its label IS the name the
+	// reporter prints. Positioned at the `end`, where `parseMatch` anchors its own mismatch.
+	//
+	// ⚠ The tolerant declaration sweep steps over these same labels with `skipOptionalLabel` and judges
+	// nothing; the real parse reaches every one of them and is the one place the refusal is raised.
 	//
 	// ⛔ **`got` IS HAND-SPELLED, NOT ROUTED THROUGH `tokenDisplayText`** — the identical rule `parseMatch`
 	// states at length: that helper's fallback rests on "an empty value means the KIND implies the text",
 	// which is false of a block label, whose value IS the label and may legitimately be empty. Through the
 	// helper, `end ''` would report `got 'character literal'` — a reader hunting for a string that is not in
 	// the file.
-	function requireEndLabelMatches(expected ByteArray, endTok Token) throws ParseError
+	function consumeBlockEnd(openingLabel ByteArray, labelIsRequired bool) throws ParseError
+		let endTok = try self.consume(TokenKind.end)
+
+		if not labelIsRequired and not self.at(TokenKind.charLiteral) 'labelOmitted'
+			return
+		end 'labelOmitted'
+
 		let closeTok = try self.consume(TokenKind.charLiteral)
 
-		if closeTok.value.equals(expected) 'repeatsIt'
+		if self.labelInNameSpace(closeTok.value).equals(self.labelInNameSpace(openingLabel)) 'repeatsIt'
 			return
 		end 'repeatsIt'
 
-		throw ParseError.mismatchedEndLabel(String.from(expected), got: String.from(closeTok.value), line: endTok.line, column: endTok.column)
-	end 'requireEndLabelMatches'
+		throw ParseError.mismatchedEndLabel(String.from(openingLabel), got: String.from(closeTok.value), line: endTok.line, column: endTok.column)
+	end 'consumeBlockEnd'
+
+	// A label as the name space this file is parsed in spells it. `shadowRenamedTokens` moves a contested
+	// stdlib declaration's NAME token and never a label, so `type Ascii … end 'Ascii'` opens as `__Ascii` and
+	// closes as `Ascii`; asked of both sides, a block label that happens to spell a contested name moves on
+	// both.
+	function labelInNameSpace(label ByteArray) returns ByteArray
+		if not self.isStdlibSource 'notRenamed'
+			return label
+		end 'notRenamed'
+
+		return self.signatures.stdlibShadowRenameOf(label)
+	end 'labelInNameSpace'
 
 	// ⛔ **A BODY THAT DROPS AN OPAQUE `T` MUST CARRY THE LAYOUT DESCRIPTOR THAT DROP READS (W10).** Asked once
 	// the whole body has been emitted, because "was a drop emitted" is a fact about the WHOLE body — and asked
@@ -31189,32 +31252,29 @@ export type Parser
 		return ThrowsClause.throwing(String.from(qualified))
 	end 'parseOptionalThrowsClause'
 
-	// ⛔ **A FUNCTION SIGNATURE ENDS AT THE END OF ITS LINE.** Both clauses that may follow the
-	// parameter list are optional and both have just been offered (`returns T`, then `throws E`), so a
-	// token still standing here belongs to no part of the header — and the body has not started, because
-	// a body starts on the next line. `function foo() int` is the shape this names: the `returns` keyword
-	// omitted, which the two optional readers cannot see, since "no `returns`" is also how a VOID function
-	// is spelled.
+	// ⛔ **A DECLARATION HEADER ENDS AT THE END OF ITS LINE** — a function signature once its optional
+	// `returns` and `throws` clauses have been offered, an `enum`/`union` header once its optional
+	// `implements` clause has. A token still standing belongs to no part of the header, and the body starts
+	// on the next line. `function foo() int` (the `returns` keyword omitted) and `enum Colour int` (a backing
+	// type the language infers from the raw values) are the shapes this names; without the check the first
+	// reaches the statement dispatcher and the second is read as a CASE.
 	//
-	// ⚠ **THE REASON IT IS A CHECK HERE AND NOT A REFUSAL INSIDE `parseOptionalReturnType`:** that reader
-	// runs BEFORE the `throws` clause, so to leave `function f() throws E` alone it would have to know the
-	// follow set of `)` — the grammar's order, written down a second time, in the one routine that is not
-	// reading it. It is also shared with the TOLERANT declaration sweep, whose `otherwise return` would
-	// swallow the refusal and report nothing; the sweep's contract is to record what it can, and a
-	// judgement it can only discard does not belong in it. The real parse holds the position and reports.
+	// ⚠ **IT IS A CHECK HERE AND NOT A REFUSAL INSIDE THE CLAUSE READERS:** `parseOptionalReturnType` runs
+	// BEFORE the `throws` clause, so to leave `function f() throws E` alone it would have to know the
+	// follow set of `)` — the grammar's order, written down a second time. The readers are also shared with
+	// the TOLERANT declaration sweep, whose `otherwise return` would swallow the refusal and report nothing;
+	// the real parse holds the position and reports.
 	//
-	// Without it the `int` fell through to the statement dispatcher and was rejected as `E2015 Unsupported:
-	// int statement` — a true sentence about the wrong thing, pointing at a body that does not exist and
-	// never naming the missing keyword. EOF is admitted so a source truncated mid-declaration keeps
-	// reaching the missing-`end` diagnostic, which says more about it than "unexpected token".
-	function requireSignatureLineEnd() throws ParseError
+	// EOF is admitted so a source truncated mid-declaration keeps reaching the missing-`end` diagnostic,
+	// which says more about it than "unexpected token".
+	function requireDeclarationHeaderLineEnd() throws ParseError
 		if self.at(TokenKind.newline) or self.isEof() 'headerComplete'
 			return
 		end 'headerComplete'
 
 		let tok = self.current()
 		throw ParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
-	end 'requireSignatureLineEnd'
+	end 'requireDeclarationHeaderLineEnd'
 
 	// The optional `implements <Interface>` clause on an enum/union declaration — error enums declare
 	// `implements Error`. Shared by the tolerant declaration sweep and the real parse, exactly as
@@ -34156,8 +34216,7 @@ export type Parser
 		// Published for `parseWhileStatement`'s drift guard — the cursor is ON the `end` here,
 		// which is the one place the block's closing token index is known.
 		self.lastBlockBodyEnd = self.pos
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		try self.consumeBlockEnd(label, labelIsRequired: false)
 		self.closeBlock(mark)
 		return bodyEnd
 	end 'parseBlockBody'
@@ -54036,7 +54095,7 @@ export type Parser
 			// the rule, both diagnostics AND the throwing desugar — the same split, for the same reason, as the
 			// shift above. See `emitDivOrMod`.
 			if divisionOperator(op) 'isDivision'
-				left = try self.emitDivOrMod(leftValue, divisor: rightValue, op: op, opTok: opTok)
+				left = try self.emitDivOrMod(func, dividend: leftValue, divisor: rightValue, op: op, opTok: opTok)
 				continue
 			end 'isDivision'
 
@@ -54302,32 +54361,53 @@ export type Parser
 		return try self.emitBinOp(raw, rhs: keep, op: MaxonBinOp.bitAnd, opTok: opTok)
 	end 'emitGuardedShift'
 
-	// ⭐ **THE COMPARE, THE TWO-WAY BRANCH AND THE PANIC BLOCK — the shape `InsertRangeChecks` builds one
-	// tier down, built here because the MESSAGE is this operator's.** Nothing crosses the join, so there is
-	// no phi to mint: the panic block never merges (it ends on `mrt_panic`, which exits the process, behind
-	// a dead return that keeps the block well-formed), and every value the continuation reads was defined in
-	// the block that branched to it.
-	//
 	// ⚠ **IT IS EMITTED BEFORE THE SATURATION, NOT AFTER, and the order is the point**: past this branch the
 	// count is known non-negative, so the mask below is doing only the job it can still do — clamping a
 	// count of 64 or more, which is legal.
 	function emitNegativeShiftCountGuard(func IrFunction, count ValueId, opTok Token) throws ParseError
-		let range = SourceRange.ofToken(opTok)
-		let floor = self.emitLiteral(MinShiftCount, valueType: MaxonType.integer, range: range)
+		let floor = self.emitLiteral(MinShiftCount, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
 		let isNegative = try self.emitCompare(count, rhs: floor, op: MaxonCmpOp.lt, opTok: opTok)
+		self.emitPanicBranch(func, condition: isNegative, panicLine: panicMessageLine(self.filePath, line: opTok.line, text: NegativeShiftCountPanicText), panicLabel: NegativeShiftPanicBlockLabel, continueLabel: GuardedShiftBlockLabel, opTok: opTok)
+	end 'emitNegativeShiftCountGuard'
+
+	// ⭐ **`i64.min / -1` — THE ONE SIGNED QUOTIENT THAT DOES NOT EXIST.** Both operands are tested in one
+	// word: `(dividend xor i64.min) or (divisor xor -1)` is zero exactly at the pair, so the divide pays one
+	// compare-and-branch. The line is the fault diagnostic's own words, without the addresses a hardware
+	// trap adds, so a guarded quotient and a trapping one read alike.
+	function emitQuotientOverflowGuard(func IrFunction, dividend ValueId, divisor ValueId, opTok Token) throws ParseError
+		let range = SourceRange.ofToken(opTok)
+		let intMin = self.emitLiteral(OverflowingDividendPattern, valueType: MaxonType.integer, range: range)
+		let minusOne = self.emitLiteral(OverflowingDivisorPattern, valueType: MaxonType.integer, range: range)
+		let dividendBits = try self.emitBinOp(dividend, rhs: intMin, op: MaxonBinOp.bitXor, opTok: opTok)
+		let divisorBits = try self.emitBinOp(divisor, rhs: minusOne, op: MaxonBinOp.bitXor, opTok: opTok)
+		let pairBits = try self.emitBinOp(dividendBits, rhs: divisorBits, op: MaxonBinOp.bitOr, opTok: opTok)
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+		let isOverflowPair = try self.emitCompare(pairBits, rhs: zero, op: MaxonCmpOp.eq, opTok: opTok)
+
+		self.emitPanicBranch(func, condition: isOverflowPair, panicLine: QuotientOverflowPanic.shared.line, panicLabel: QuotientOverflowPanicBlockLabel, continueLabel: GuardedQuotientBlockLabel, opTok: opTok)
+	end 'emitQuotientOverflowGuard'
+
+	// ⭐ **THE COMPARE'S TWO-WAY BRANCH AND ITS PANIC BLOCK — the shape `InsertRangeChecks` builds one tier
+	// down, built here because the MESSAGE is the operator's.** Nothing crosses the join, so there is no phi
+	// to mint: the panic block never merges (it ends on `mrt_panic`, which exits the process, behind a dead
+	// return that keeps the block well-formed), and every value the continuation reads was defined in the
+	// block that branched to it. Control is left in the continuation.
+	function emitPanicBranch(func IrFunction, condition ValueId, panicLine ByteArray, panicLabel ByteArray, continueLabel ByteArray, opTok Token)
+		let range = SourceRange.ofToken(opTok)
 
 		// `var`, not `let`: the panic op is emitted INTO it, and a `let` binding cannot be forwarded to a
 		// mutating parameter (E3019) — `emitShortCircuit`'s entry block for its reason.
-		var panicBlock = self.newBlock(func, label: NegativeShiftPanicBlockLabel, line: opTok.line)
-		let shiftBlock = self.newBlock(func, label: GuardedShiftBlockLabel, line: opTok.line)
-		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.condBranch(isNegative, thenBlockId: panicBlock.id, elseBlockId: shiftBlock.id), range: range)
+		var panicBlock = self.newBlock(func, label: panicLabel, line: opTok.line)
+		let continueBlock = self.newBlock(func, label: continueLabel, line: opTok.line)
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.condBranch(condition, thenBlockId: panicBlock.id, elseBlockId: continueBlock.id), range: range)
 
 		self.currentBlock = panicBlock
-		self.artifact.emitOp(panicBlock, op: MaxonOp.panicAbort(panicMessageLine(self.filePath, line: opTok.line, text: NegativeShiftCountPanicText)), range: range)
+		self.currentBlock.heat = BlockHeat.cold
+		self.artifact.emitOp(panicBlock, op: MaxonOp.panicAbort(panicLine), range: range)
 		self.emitDeadReturn(func, anchor: opTok)
 
-		self.currentBlock = shiftBlock
-	end 'emitNegativeShiftCountGuard'
+		self.currentBlock = continueBlock
+	end 'emitPanicBranch'
 
 	// WHERE E2054 POINTS: the first token of the count as WRITTEN. `x shl SHIFT` points at `SHIFT`,
 	// where the programmer would look, and not at the `let` that gave it its value. Redundant
@@ -56003,7 +56083,7 @@ export type Parser
 	// simply stays a plain `call` — nothing rewrites it — and `validatePlainCall` reports E3057 off
 	// the same `isThrowingRuntimeCallee` every other throwing builtin is reported through. One gate
 	// instead of two, and it cannot disagree with the parser's E3055 accept.
-	function emitDivOrMod(dividend ValueId, divisor ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
+	function emitDivOrMod(func IrFunction, dividend ValueId, divisor ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
 		// The OPERAND rule first, for `emitShift`'s stated reason: a rejected program must leave no ops
 		// behind, and the proof below would otherwise decide the fallibility of operands that are not numbers.
 		// Through `numberTagOf`, and the DECODE below it, for `emitBinOp`'s reason (A4o): a `/` is a question
@@ -56047,7 +56127,7 @@ export type Parser
 		// overflow of the SIGNED quotient; read unsigned, `-1` is `u64.max` and `a mod u64.max` is an ordinary
 		// answer (`5`, not `0`). Guarding it would not merely be wasted work — the guard ANSWERS `0` at that
 		// divisor, so it would turn every `a mod u64.max` into a wrong answer.
-		let needsOverflowGuard = divideOp == MaxonBinOp.mod and divisorProofMayBeNegativeOne(proof)
+		let remainderNeedsOverflowGuard = divideOp == MaxonBinOp.mod and divisorProofMayBeNegativeOne(proof)
 
 		// ⚠ A provably-zero divisor is refused whatever the other hazard says: `a mod 0` has no answer at all,
 		// so there is nothing for the overflow guard to guard and E3103 is still the whole verdict. Kept an
@@ -56066,14 +56146,23 @@ export type Parser
 		let dividendNumber = self.floatBehindEnumValue(dividend, anchor: opTok)
 		let divisorNumber = self.floatBehindEnumValue(divisor, anchor: opTok)
 
+		// ⭐ **A SIGNED QUOTIENT PANICS AT `i64.min / -1`, AHEAD OF EITHER ROUTE.** No quotient exists there, so
+		// the guard branches to a panic rather than repairing an operand, and it is emitted in the dividing
+		// function so the backtrace names that function first. `divUnsigned` has no such pair, and a proof
+		// that rules out either operand of the pair removes the guard.
+		if divideOp == MaxonBinOp.div and not operandsAreFloat(leftTag, right: rightTag) and divisorProofMayBeNegativeOne(proof) and self.dividendMayBeIntMin(dividend) 'quotientMayOverflow'
+			try self.emitQuotientOverflowGuard(func, dividend: dividendNumber, divisor: divisorNumber, opTok: opTok)
+		end 'quotientMayOverflow'
+
 		// The BARE divide goes to `emitBinOpOverCheckedOperands`, not to `emitBinOp` — which now REFUSES a
 		// division outright, so that a division reaching the general emitter is a loud parser bug rather
 		// than an unguarded `idiv`. The operand rule this verdict sits behind is the one that door would
 		// have asked, so nothing is skipped by entering past it.
 		//
-		// ⭐ **NEITHER HAZARD OPEN IS THE ONLY ROUTE TO A BARE `idiv`**, and that conjunction is the rung: the
-		// left half alone was A1's rule, and it waved `i64.min mod -1` through.
-		if zeroVerdict == DivisorZeroVerdict.neverZero and not needsOverflowGuard 'noHazardLeftOpen'
+		// ⭐ **NEITHER HAZARD OPEN IS THE ONLY ROUTE TO A BARE `idiv`**: the zero divisor closed by the proof, and
+		// the `-1` divisor closed by the proof or, for `/`, by the quotient guard above. The zero half alone would
+		// wave `i64.min mod -1` through.
+		if zeroVerdict == DivisorZeroVerdict.neverZero and not remainderNeedsOverflowGuard 'noHazardLeftOpen'
 			return self.emitBinOpOverCheckedOperands(dividendNumber, rhs: divisorNumber, op: divideOp, leftTag: leftTag, rightTag: rightTag, opTok: opTok, aliasName: aliasName)
 		end 'noHazardLeftOpen'
 
@@ -56279,6 +56368,20 @@ export type Parser
 			undeclared gives divisorProofOf(DivisorZeroVerdict.possiblyZero, mayBeNegativeOne: true)
 		end 'a'
 	end 'divisorProof'
+
+	// The dividend's half of the quotient overflow pair, read the way `divisorProof` reads its divisor: a
+	// folded constant, else a proven alias, else nothing known and the pair stays admitted. Asked only of an
+	// integer dividend.
+	function dividendMayBeIntMin(dividend ValueId) returns bool
+		if self.constIsKnown(dividend) 'intConstant'
+			return self.constOf(dividend) == OverflowingDividendPattern
+		end 'intConstant'
+
+		return match self.valueDenotedAlias(dividend) 'a'
+			declared(alias) gives not rangeExcludesIntMin(alias.low, high: alias.high)
+			undeclared gives true
+		end 'a'
+	end 'dividendMayBeIntMin'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
@@ -57769,6 +57872,12 @@ export type Parser
 			if self.atLiteralInitConstruction(LiteralInitForm.charLiteral) 'charLiteralInitConstruction'
 				return try self.parseLiteralInitConstruction(func, form: LiteralInitForm.charLiteral)
 			end 'charLiteralInitConstruction'
+
+			// `Digits from [4, 0, 7]` — the same sugar over an ARRAY literal, for a declared type implementing
+			// `InitableFromArrayLiteral`. After the collection arms above, which claim their own heads.
+			if self.atLiteralInitConstruction(LiteralInitForm.arrayLiteral) 'arrayLiteralInitConstruction'
+				return try self.parseLiteralInitConstruction(func, form: LiteralInitForm.arrayLiteral)
+			end 'arrayLiteralInitConstruction'
 
 			// One-token lookaheads split the four forms an identifier can open. `(` makes it a CALL
 			// (the same shape the statement parser uses to tell a call apart from a bare name); `{`
@@ -63820,11 +63929,16 @@ export type Parser
 			managedDirectory then return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
 			managedSocket then return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
 			managedMemory then return try self.parseManagedMemoryStaticCall(func, typeTok: typeTok)
-			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid)
+			containerAlias(giid) then return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: giid, resultUsed: resultUsed)
 		end 'surface'
 
 		try self.consume(TokenKind.dot)
+		return try self.parseStaticMemberCall(func, typeTok: typeTok, aliasName: aliasName, resultUsed: resultUsed)
+	end 'parseQualifiedCall'
 
+	// The `<member>(…)` of a `Type.member(…)` call whose base no compiler-owned surface claimed, the cursor past
+	// the dot — or of a container alias's member the compiler emits no code for (`parseArrayStaticCall`).
+	function parseStaticMemberCall(func IrFunction, typeTok Token, aliasName ByteArray, resultUsed bool) returns ValueId throws ParseError
 		// PEEKED, not consumed: `parseCallNamed` consumes its own callee token (`dispatchMethodOnBase` says
 		// so where it hands the cursor over), and consuming it here would leave the arguments to a second
 		// reader.
@@ -63835,7 +63949,7 @@ export type Parser
 			namespaceQualifiedFree(free) then return try self.parseCallNamed(func, callee: free, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed)
 		end 'callee'
-	end 'parseQualifiedCall'
+	end 'parseStaticMemberCall'
 
 	// The concrete instance a `Type.method(…)` call constructs (P1.6-B2) — an `instance(gid)` when `Type` is
 	// a generic-instance alias (`StrBox`), so the caller-side consume can move its managed arguments into the
@@ -69064,9 +69178,9 @@ export type Parser
 	// destructor off the enclosing instance's layout descriptor at run time, exactly as an
 	// `Array with <type parameter>` does. What the door refuses is a NODE HANDLE, which has no `create()` at
 	// all.
-	function parseContainerAliasStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws ParseError
+	function parseContainerAliasStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
 		if self.signatures.isArrayInstance(giid) 'array'
-			return try self.parseArrayStaticCall(func, aliasTok: aliasTok, aliasName: aliasName, giid: giid)
+			return try self.parseArrayStaticCall(func, aliasTok: aliasTok, aliasName: aliasName, giid: giid, resultUsed: resultUsed)
 		end 'array'
 
 		return try self.parseBuiltinContainerStaticCall(aliasTok, aliasName: aliasName, giid: giid)
@@ -69082,11 +69196,20 @@ export type Parser
 	// MOVE-OUT (`__drop_type_param`) and COPY (`__managed_*_opaque` via the descriptor `copyFunc@32`, P1.7 slice
 	// 3b-vi-b-β) are all served through the descriptor, never creation.
 	//
-	// ⚠ **THE REFUSAL BELOW NAMES BOTH, AND KEEPING IT CURRENT IS NOT COSMETIC.** It read *"P1.7 slice 1
-	// provides `create()` only"* until this rung, and a reader trusts a refusal's NOUN over the source — a
-	// stale one sends them looking for a mechanism that is one line away.
-	function parseArrayStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws ParseError
+	// Every OTHER static `stdlib/Array.maxon` declares — `from(source)` — is an ordinary corpus call, and goes
+	// through the door every declared static takes. Its member may be a keyword (`from`), which is a name
+	// after the dot.
+	//
+	// ⚠ **THE REFUSAL BELOW NAMES WHAT THE COMPILER PROVIDES, AND KEEPING IT CURRENT IS NOT COSMETIC**: a
+	// reader trusts a refusal's NOUN over the source, and a stale one sends them looking for a mechanism that
+	// is one line away.
+	function parseArrayStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
+
+		if self.arrayStaticIsACorpusCall(self.current(), aliasName: aliasName) 'aCorpusStatic'
+			return try self.parseStaticMemberCall(func, typeTok: aliasTok, aliasName: aliasName, resultUsed: resultUsed)
+		end 'aCorpusStatic'
+
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(aliasTok, last: methodTok)
 
@@ -69106,6 +69229,16 @@ export type Parser
 
 		throw ParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — the compiler provides two: `create()` and `init(managed)`", line: methodTok.line, column: methodTok.column)
 	end 'parseArrayStaticCall'
+
+	// Is the member at the cursor an `Array` static the corpus declares and the compiler does NOT emit itself?
+	// `create` and `init` are declared too, and are the compiler's (`parseArrayStaticCall`).
+	function arrayStaticIsACorpusCall(memberTok Token, aliasName ByteArray) returns bool
+		if not tokenCanBeAName(memberTok) or memberTok.value.equals(CreateMethod) or memberTok.value.equals(StringInitMethod) 'notACorpusStatic'
+			return false
+		end 'notACorpusStatic'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: self.filePath), methodName: memberTok.value))
+	end 'arrayStaticIsACorpusCall'
 
 	// ⭐⭐ **`ByteArray.init(managed)` — ADOPT A BUFFER AS THE ARRAY AROUND IT (BATCH2 slice 5).**
 	// `stdlib/Array.maxon:110-115` declares `init(managed ElementMemory) returns Self` with the body
@@ -69835,29 +69968,32 @@ export type Parser
 	// that failed instead of reciting a roster, and admits any conforming user type (`map.md`'s
 	// `a-user-type-can-be-a-map-key`).
 
-	// Is `name` a typealias for a `Set` instance — the alias form of a `from` construction's head? Asked of
-	// the whole-program index, which is complete in the real parse; during the tolerant sweep every alias
-	// answers no, which is sound because the sweep's artifact is discarded.
+	// Is `name` a typealias for an instance of `container` — the alias form of a `from` construction's head?
+	// Asked of the whole-program index, which is complete in the real parse; during the tolerant sweep every
+	// alias answers no, which is sound because the sweep's artifact is discarded, and because the instance an
+	// alias names was interned by its own declaration.
+	//
+	// ⚠ **EACH CONTAINER IS ASKED ITS OWN WAY, NOT BY ONE BASE-NAME COMPARE.** `isArrayInstance` also admits
+	// the compiler's own minted `__Array_<T>` spellings (`SignatureIndex.isArrayBaseName`), which a name
+	// equality would answer `false` for.
 	//
 	// ⚠⚠ **THE *SHAPE* QUESTION, NEVER THE RUNTIME ONE (W90).** `CharSet from ['x']` is a construction
-	// whoever serves the container: which runtime executes it is settled inside `parseSetFromConstruction`,
-	// and it has nothing to do with whether this token sequence IS a construction. Asked through
-	// the deleted `isSetInstance` — the runtime question — this answered false for every alias head the instant
-	// `stdlib/Set.maxon` was listed, `atSetFromConstruction` stopped claiming the shape, and the head fell
-	// through to **`E2004: Undefined variable 'CharSet'`** on six cases across `character-set`,
-	// `unicode-category` and `lazy-static`. See `ProgramSignatures.isSetShapedInstance`.
-	function namesSetInstanceAlias(name ByteArray) returns bool
-		return self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) and self.signatures.isSetShapedInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
-	end 'namesSetInstanceAlias'
+	// whoever serves the container, so a `Set` is asked `isSetShapedInstance`; asked which runtime executes
+	// it, every alias head fell through to **`E2004: Undefined variable 'CharSet'`**.
+	function namesContainerInstanceAlias(name ByteArray, container FromHeadContainer) returns bool
+		if not self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'notAGenericAlias'
+			return false
+		end 'notAGenericAlias'
 
-	// The same question one container over — is `name` a typealias for an `Array` instance? Its own predicate
-	// rather than a base-name parameter over the pair, because the two bases are not asked the same way:
-	// `isSetShapedInstance` is a name EQUALITY, while `isArrayInstance` also admits the compiler's own minted
-	// `__Array_<T>` spellings (`SignatureIndex.isArrayBaseName`), and a shared base-name compare would have
-	// answered `false` for every one of those.
-	function namesArrayInstanceAlias(name ByteArray) returns bool
-		return self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
-	end 'namesArrayInstanceAlias'
+		let giid = self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath)
+
+		return match container 'container'
+			set gives self.signatures.isSetShapedInstance(giid)
+			list gives self.signatures.genericInstanceBaseName(giid).equals(ListBuiltinBaseName)
+			vector gives self.signatures.isVectorInstance(giid)
+			array gives self.signatures.isArrayInstance(giid)
+		end 'container'
+	end 'namesContainerInstanceAlias'
 
 	// ⭐⭐ **`ByteArray from [10, 20, 30]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN**, `Vector from […]`'s
 	// property and for the same reason: the array literal already builds exactly the record an `Array` is. It
@@ -69896,6 +70032,10 @@ export type Parser
 	// one `Set.insert` per member.
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let setTok = try self.consume(TokenKind.identifier)
+
+		// An alias head NAMES a type, so it is a use for the E3062 unused-type check — `parseArrayFromConstruction`'s
+		// hook, for its reason.
+		self.recordTypeNameUse(setTok.value)
 		try self.consume(TokenKind.from)
 
 		// The source must be an array literal `[…]`; `Set from <other-expr>` is not a construction the compiler parses.
@@ -69910,7 +70050,7 @@ export type Parser
 		// would infer `Array with integer` and a `Set with int` of byte values. The ALIAS states the key type
 		// the elements cannot, so the bracket list is read as members directly and each element adopts
 		// `Character` the way every other Character-expecting position makes a literal adopt it.
-		if self.namesSetInstanceAlias(setTok.value) and self.signatures.genericAliasInstanceFrom(setTok.value, readerFilePath: self.filePath) == self.signatures.setInstanceForCharacter() 'characterKeyed'
+		if self.namesContainerInstanceAlias(setTok.value, container: FromHeadContainer.set) and self.signatures.genericAliasInstanceFrom(setTok.value, readerFilePath: self.filePath) == self.signatures.setInstanceForCharacter() 'characterKeyed'
 			return try self.parseCharacterMemberSetLiteral(func, anchor: setTok, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
 
@@ -70037,9 +70177,10 @@ export type Parser
 		self.recordTypeNameUse(typeTok.value)
 		try self.consume(TokenKind.from)
 
+		let callee = qualifiedMethodName(typeTok.value, methodName: StringInitMethod)
 		let literalTok = self.current()
 		let literalStart = self.pos
-		let value = try self.parseLiteralInitOperand(func, form: form)
+		let value = try self.parseLiteralInitOperand(func, form: form, callee: callee)
 
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
@@ -70053,7 +70194,7 @@ export type Parser
 		// The E3070 call-argument door, taken exactly as `parseCallArgs` takes it — a literal names no
 		// storage, so it returns at `sourceNamesABase`, but asking through the one door is what keeps this
 		// argument path from being a second, quietly different one.
-		self.noteBorrowSubjectCallArg(func, callee: qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, argColumn: args.count(), argLabel: EmptySourceText, valueStart: literalStart)
+		self.noteBorrowSubjectCallArg(func, callee: callee, anchor: typeTok, argColumn: args.count(), argLabel: EmptySourceText, valueStart: literalStart)
 
 		// POSITIONAL and un-nameable: `init`'s single parameter takes it at position 0, and a literal is not a
 		// bare binding, so it can never be the subject of an E3019 blame.
@@ -70067,17 +70208,22 @@ export type Parser
 		// `stringLiteralInit`, not `notMinted`: the author wrote `FilePath from "…"` and never named `init`, and
 		// that is the only fact distinguishing this call from a written-out `FilePath.init("…")` — they build
 		// the identical callee. See `CalleeMint.stringLiteralInit`.
-		return try self.emitCall(qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit)
+		return try self.emitCall(callee, anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit)
 	end 'parseLiteralInitConstruction'
 
 	// The operand each form takes. A String literal goes through `parseStringLiteral` so an INTERPOLATED
 	// `Type from "a{n}b"` materializes the one way every other String expression does; a character literal has
-	// no interpolation and goes through the shared byte decoder every other `'x'` reads.
-	function parseLiteralInitOperand(func IrFunction, form LiteralInitForm) returns ValueId throws ParseError
-		return match form 'f'
-			stringLiteral gives try self.parseStringLiteral(func)
-			charLiteral gives try self.parseCharLiteral()
+	// no interpolation and goes through the shared byte decoder every other `'x'` reads. An array literal is
+	// built at the instance `init`'s parameter states, exactly as it is when written as that call's argument,
+	// because its element stride is fixed when the record is built.
+	function parseLiteralInitOperand(func IrFunction, form LiteralInitForm, callee ByteArray) returns ValueId throws ParseError
+		match form 'f'
+			stringLiteral then return try self.parseStringLiteral(func)
+			charLiteral then return try self.parseCharLiteral()
+			arrayLiteral then self.stateArrayLiteralTargetForArgument(callee, sourceIndex: 0, label: EmptySourceText, valueStart: self.pos)
 		end 'f'
+
+		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 	end 'parseLiteralInitOperand'
 
 	// ⚠⚠ **`dispatchSetMethod` AND `parseSetKeyArg` STOOD HERE AND WENT WITH THE `__set_*` RUNTIME (W105).**
@@ -71071,6 +71217,9 @@ export type Parser
 	// from there, and a second parse-time move would be the leak `emitContainerLiteralElement`'s note measures.
 	function parseListFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let listTok = try self.consume(TokenKind.identifier)
+
+		// An alias head NAMES a type, so it is a use for the E3062 unused-type check.
+		self.recordTypeNameUse(listTok.value)
 		try self.consume(TokenKind.from)
 
 		// The source must be an array literal `[…]`; `List from <other-expr>` is not a construction the compiler parses.
@@ -71093,21 +71242,17 @@ export type Parser
 		// placed where that parser puts them, so a literal that parsed before this rewrite parses after it.
 		self.skipNewlines()
 
-		// An EMPTY literal names no element, so there is no instance to build. `List` has no `[]`-style default
-		// the way an array literal does (a bare `[]` is an `Array with integer`), because nothing here states an
-		// element type — and the alias spelling that DOES state one is what the refusal points at.
+		let statedByAlias = self.namesContainerInstanceAlias(listTok.value, container: FromHeadContainer.list)
+
+		// An EMPTY literal builds nothing, whether or not the head states the element type: an empty list is its
+		// alias's `create()`.
 		if self.at(TokenKind.rightBracket) 'noMembers'
-			throw ParseError.unsupported("`{String.from(ListBuiltinBaseName)} from []` states no {ContainerElementColumnNoun} type — an empty list is `<alias>.{String.from(CreateMethod)}()` over a `{String.from(ListBuiltinBaseName)} with <{ContainerElementColumnNoun}>` alias", line: listTok.line, column: listTok.column)
+			throw ParseError.unsupported(emptyListFromMessage(listTok.value, statedByAlias: statedByAlias), line: listTok.line, column: listTok.column)
 		end 'noMembers'
 
 		let firstTok = self.current()
 		let first = try self.parseExpression(func, block: self.currentBlock)
-		let giid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: try self.literalColumnTypeFor(first, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: firstTok))
-
-		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a `List` is born through
-		// with no `with <Element>` to anchor a diagnostic on — `parseSetMemberList`'s arm, for its reason.
-		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.filePath))
-
+		let giid = try self.listFromInstance(listTok, statedByAlias: statedByAlias, first: first, firstTok: firstTok)
 		let list = try self.emitContainerLiteralCreate(ListBuiltinBaseName, giid: giid, anchor: listTok, range: range)
 		try self.emitContainerLiteralElement(ListBuiltinBaseName, method: AppendMethod, container: list, value: first, anchor: listTok, range: range)
 		self.skipNewlines()
@@ -71123,6 +71268,22 @@ export type Parser
 		try self.consume(TokenKind.rightBracket)
 		return list
 	end 'parseListMemberList'
+
+	// The instance a `List from […]` builds: the one its alias head names, or — under the bare base name — the
+	// one its FIRST member fixes, through `literalColumnTypeFor`, the door `arrayLiteralInstanceFor` asks.
+	function listFromInstance(listTok Token, statedByAlias bool, first ValueId, firstTok Token) returns GenericInstanceId throws ParseError
+		if statedByAlias 'statedByTheAlias'
+			return self.signatures.genericAliasInstanceFrom(listTok.value, readerFilePath: self.filePath)
+		end 'statedByTheAlias'
+
+		let giid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: try self.literalColumnTypeFor(first, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: firstTok))
+
+		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a `List` is born through
+		// with no `with <Element>` to anchor a diagnostic on — `parseSetMemberList`'s arm, for its reason. An alias
+		// head's instantiation is its declaration's site.
+		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.filePath))
+		return giid
+	end 'listFromInstance'
 
 	// ⚠ **`emitListCreate` AND `emitListAppend` STOOD HERE UNTIL THE W153 REVIEW.** They were
 	// `emitContainerLiteralCreate` and `emitContainerLiteralElement` with `ListBuiltinBaseName` written in,
@@ -71260,17 +71421,18 @@ export type Parser
 	// a caller through
 	// `noteStorageReachingCall`'s edge instead of through a receiver mask this door supplied.
 
-	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier immediately followed by
-	// `from`? `atListFromConstruction`'s twin, read by BOTH the declaration sweep (which pre-interns the
-	// instances the construction can name) and `parsePrimary`'s construction arm, for that predicate's stated
-	// reason: taught to one and not the other, the parser's own instance read becomes the FIRST write to the
-	// shared registry mid-parse — an order-dependent gid no drift guard can see.
-	//
-	// ⚠ **BARE BASE NAME ONLY, where `Set` also admits an instance ALIAS.** A vector's element AND its size
-	// both come from the literal, so an alias would state nothing the literal does not already carry;
-	// `Vec3 from […]` keeps falling through to `E2004 Undefined variable 'Vec3'` as it does today.
+	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier or a `Vector` instance alias,
+	// immediately followed by `from`? `atListFromConstruction`'s twin, read by BOTH the declaration sweep (which
+	// pre-interns the instances a bare head can name) and `parsePrimary`'s construction arm, for that predicate's
+	// stated reason: taught to one and not the other, the parser's own instance read becomes the FIRST write to
+	// the shared registry mid-parse — an order-dependent gid no drift guard can see. The sweep answers no for
+	// every alias; an alias's instance was interned by its declaration.
 	function atVectorFromConstruction() returns bool
-		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.current().value.equals(VectorBuiltinBaseName)
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from) 'notAFromConstruction'
+			return false
+		end 'notAFromConstruction'
+
+		return self.current().value.equals(VectorBuiltinBaseName) or self.namesContainerInstanceAlias(self.current().value, container: FromHeadContainer.vector)
 	end 'atVectorFromConstruction'
 
 	// ⭐⭐ **`Vector from [a, b, c]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN.** The source array literal
@@ -71296,12 +71458,19 @@ export type Parser
 	// is fully decided by the array the literal already built, and no vector instance need exist to decide it.
 	function parseVectorFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let vecTok = try self.consume(TokenKind.identifier)
+
+		// An alias head NAMES a type, so it is a use for the E3062 unused-type check.
+		self.recordTypeNameUse(vecTok.value)
 		try self.consume(TokenKind.from)
 
 		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
 			let srcTok = self.current()
 			throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} from` requires an array literal `[…]` — a vector's SIZE is part of its type, and only a literal states it in the source", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
+
+		if self.namesContainerInstanceAlias(vecTok.value, container: FromHeadContainer.vector) 'statedByTheAlias'
+			return try self.parseAliasedVectorLiteral(func, vecTok: vecTok)
+		end 'statedByTheAlias'
 
 		// The literal is parsed FIRST so its own refusals — an empty `[]`, mixed element types, an element type
 		// no literal admits — are reported by the reader that owns those sentences, before this arm asks a
@@ -71320,6 +71489,30 @@ export type Parser
 		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
 		return arr
 	end 'parseVectorFromConstruction'
+
+	// ⭐ **`Vec3 from [1, 2, 3]` — THE ALIAS STATES THE ELEMENT AND THE SIZE, SO THE LITERAL IS BUILT AT THEM.**
+	// The bare form's retype, over a literal built at the alias's element rather than one the first element
+	// inferred: a `Vector with 3 Reading` element strides the alias's slot, and a record built at a bare `int`'s
+	// stride could not be retyped into it. The `Array` instance at that element is interned before any parse
+	// (`ProgramSignatures.internAliasedVectorLiteralArrays`), so this read mints nothing.
+	function parseAliasedVectorLiteral(func IrFunction, vecTok Token) returns ValueId throws ParseError
+		let giid = self.signatures.genericAliasInstanceFrom(vecTok.value, readerFilePath: self.filePath)
+		try self.requireVectorElementType(giid, tok: vecTok)
+
+		let arrayGiid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: self.signatures.containerElementType(giid))
+		let openIndex = self.pos
+		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(arrayGiid))
+
+		let written = try self.arrayLiteralElementCountAt(openIndex, anchor: vecTok)
+		let size = self.signatures.genericInstanceFixedSize(giid)
+
+		if written != size 'wrongElementCount'
+			throw ParseError.unsupported("`{String.from(vecTok.value)} from […]` writes {written} elements, and `{String.from(vecTok.value)}` holds {size} — a vector's size is part of its type", line: vecTok.line, column: vecTok.column)
+		end 'wrongElementCount'
+
+		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
+		return arr
+	end 'parseAliasedVectorLiteral'
 
 	// ⭐ **HOW MANY ELEMENTS THE ARRAY LITERAL AT `openIndex` WRITES** — the top-level commas between its
 	// brackets, plus one. Read from TOKENS because both of its callers need the answer before any expression
@@ -73401,9 +73594,7 @@ export type Parser
 			// `limitKeepsTheCounterNonNegative`). A denoted alias is read by `valueDenotedAlias`'s callers
 			// instead, and two of those answer a DIFFERENT question about the same value:
 			// `domainDeclaringAlias` picks division and comparison SIGNEDNESS from it, and E3010 would
-			// refuse `xs.count() as ElementIndex`. `Array.maxon`'s `ReportedCapacity` header carries the
-			// measured half of that: declaring the neighbouring capacity doors `ElementIndex` panicked
-			// `grownCapacity` at its own entry across 6 spec cases.
+			// refuse `xs.count() as ElementIndex`.
 			//
 			// ⚠ COUNT ONLY, never the sibling read members `noteArrayReadMember` also serves — a
 			// `capacity()` answers a NEGATIVE FLAG for a buffer it does not own, which is the whole reason
@@ -81194,9 +81385,15 @@ export type Parser
 		end 'declared'
 	end 'atConstLiteralInit'
 
-	// Either form at the cursor, for the two doors that only need to know a construction is here.
+	// Any form at the cursor, for the door that only needs to know a construction is here.
 	function atConstLiteralInitOfAnyForm() returns bool
-		return self.atConstLiteralInit(LiteralInitForm.stringLiteral) or self.atConstLiteralInit(LiteralInitForm.charLiteral)
+		for form in LiteralInitForm.allCases 'eachForm'
+			if self.atConstLiteralInit(form) 'claimed'
+				return true
+			end 'claimed'
+		end 'eachForm'
+
+		return false
 	end 'atConstLiteralInitOfAnyForm'
 
 	// ⭐⭐ **WHICH OF THE THREE A `[` OPENS.** ONE classification, so the predicate that claims a bracketed
@@ -81314,13 +81511,11 @@ export type Parser
 			return try self.evalConstStructConstructionInto(calls, stack: stack)
 		end 'structLiteral'
 
-		if self.atConstLiteralInit(LiteralInitForm.stringLiteral) 'stringLiteralInit'
-			return try self.evalConstLiteralInitInto(calls, form: LiteralInitForm.stringLiteral)
-		end 'stringLiteralInit'
-
-		if self.atConstLiteralInit(LiteralInitForm.charLiteral) 'charLiteralInit'
-			return try self.evalConstLiteralInitInto(calls, form: LiteralInitForm.charLiteral)
-		end 'charLiteralInit'
+		for form in LiteralInitForm.allCases 'eachLiteralInitForm'
+			if self.atConstLiteralInit(form) 'literalInit'
+				return try self.evalConstLiteralInitInto(calls, stack: stack, form: form)
+			end 'literalInit'
+		end 'eachLiteralInitForm'
 
 		if self.at(TokenKind.leftBracket) 'bracketedLiteral'
 			match self.constBracketedLiteral() 'literal'
@@ -81379,7 +81574,7 @@ export type Parser
 	// which is exactly why the body form (`parseStringLiteralInitConstruction`) does not ask it
 	// either. Asking existence keeps the arm honest about what it is recording — a call
 	// `__module_init` will emit — without inventing a visibility rule the body spelling does not have.
-	function evalConstLiteralInitInto(calls ConstFactoryCallArray, form LiteralInitForm) returns InitializerCallId throws ConstEvalError
+	function evalConstLiteralInitInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, form LiteralInitForm) returns InitializerCallId throws ConstEvalError
 		let typeTok = self.current()
 		self.advance()
 		try self.consumeConstToken(TokenKind.from)
@@ -81404,27 +81599,44 @@ export type Parser
 		let callee = qualifiedMethodName(typeTok.value, methodName: StringInitMethod)
 
 		var args = ConstFactoryArgumentArray.create()
-		args.push(ConstFactoryArgument.create(EmptySourceText, value: ConstFactoryArgumentValue.folded(try self.constLiteralInitOperand(form))))
+		args.push(ConstFactoryArgument.create(EmptySourceText, value: try self.constLiteralInitOperand(form, typeTok: typeTok, callee: callee, calls: calls, stack: stack)))
 
 		return self.pushConstNode(calls, node: ConstFactoryCall.call(callee, args: args))
 	end 'evalConstLiteralInitInto'
 
-	// The folded argument each form hands its `init`. Both DECODE the literal here rather than carrying the
+	// The argument each form hands its `init`. The scalar forms DECODE the literal here rather than carrying the
 	// token, so an escape means the same thing it means in a body: the two decoders are the ones every other
 	// site of each literal reads (`decodeConstStringLiteral` and `charLiteralBytes`).
-	function constLiteralInitOperand(form LiteralInitForm) returns ConstFoldedValue throws ConstEvalError
-		if form == LiteralInitForm.charLiteral 'aCharacter'
-			let tok = self.current()
-			self.advance()
-			let bytes = try self.charLiteralBytes(tok) otherwise (err) 'malformed'
-				throw ConstEvalError.defective(err)
-			end 'malformed'
-
-			return ConstFoldedValue.managed(bytes, kind: ManagedConstKind.character)
-		end 'aCharacter'
-
-		return ConstFoldedValue.managed(try self.decodeConstStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.string)
+	function constLiteralInitOperand(form LiteralInitForm, typeTok Token, callee ByteArray, calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
+		match form 'f'
+			stringLiteral then return ConstFactoryArgumentValue.folded(ConstFoldedValue.managed(try self.decodeConstStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.string))
+			charLiteral then return ConstFactoryArgumentValue.folded(ConstFoldedValue.managed(try self.consumeConstCharLiteralBytes(), kind: ManagedConstKind.character))
+			arrayLiteral then return try self.evalConstInitArrayOperand(typeTok, callee: callee, calls: calls, stack: stack)
+		end 'f'
 	end 'constLiteralInitOperand'
+
+	function consumeConstCharLiteralBytes() returns ByteArray throws ConstEvalError
+		let tok = self.current()
+		self.advance()
+
+		let bytes = try self.charLiteralBytes(tok) otherwise (err) 'malformed'
+			throw ConstEvalError.defective(err)
+		end 'malformed'
+
+		return bytes
+	end 'consumeConstCharLiteralBytes'
+
+	// ⭐ **THE ARRAY AN `init` RECEIVES IS BUILT AT THE INSTANCE ITS PARAMETER DECLARES**, the one the body
+	// states for the same literal (`stateArrayLiteralTargetForArgument`), so `Digits from [4, 0, 7]` hands
+	// `init` an `Array with Digit` in both positions rather than an `Array with int` at module scope. A
+	// parameter that declares no array alias states nothing, and the literal is typed from its elements as a
+	// body's is.
+	function evalConstInitArrayOperand(typeTok Token, callee ByteArray, calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
+		match self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: 0, label: EmptySourceText) 'declared'
+			none then return try self.evalConstNodeValue(calls, stack: stack)
+			instance(giid) then return ConstFactoryArgumentValue.call(try self.evalConstArrayLiteralAtInstanceInto(calls, stack: stack, giid: giid, typeTok: typeTok))
+		end 'declared'
+	end 'evalConstInitArrayOperand'
 
 	// ⭐⭐ **`Database.create(EntryMap.create(), sourcePaths: StringArray.create())` — A GLOBAL BUILT BY THE
 	// PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`). The cursor sits on the type name;
@@ -82126,6 +82338,53 @@ export type Parser
 		return self.pushConstNode(calls, node: ConstFactoryCall.arrayLiteral(giid, elements: elements))
 	end 'evalConstRecordArrayLiteralInto'
 
+	// `[e0, e1, …]` at an array instance the construction STATES, so every element, the first included, is held
+	// to that instance's element type rather than to one the first element fixes. A newline at each element
+	// boundary, exactly as the folding walk and the body walk allow one.
+	function evalConstArrayLiteralAtInstanceInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, giid GenericInstanceId, typeTok Token) returns InitializerCallId throws ConstEvalError
+		try self.consumeConstToken(TokenKind.leftBracket)
+		self.skipNewlines()
+
+		var elements = ConstFactoryArgumentValueArray.create()
+
+		if not self.at(TokenKind.rightBracket) 'hasElements'
+			elements.push(try self.evalConstElementAtInstance(calls, stack: stack, giid: giid, typeTok: typeTok))
+			self.skipNewlines()
+
+			while self.at(TokenKind.comma) 'moreElements'
+				try self.consumeConstToken(TokenKind.comma)
+				self.skipNewlines()
+				elements.push(try self.evalConstElementAtInstance(calls, stack: stack, giid: giid, typeTok: typeTok))
+				self.skipNewlines()
+			end 'moreElements'
+		end 'hasElements'
+
+		try self.consumeConstToken(TokenKind.rightBracket)
+
+		return self.pushConstNode(calls, node: ConstFactoryCall.arrayLiteral(giid, elements: elements))
+	end 'evalConstArrayLiteralAtInstanceInto'
+
+	// ⭐ **ONE ELEMENT, ADMITTED BY THE STATED INSTANCE'S ELEMENT TYPE** — the slot question a struct field asks
+	// (`requireConstFieldValueFits`), asked of an element slot, and worded as `CharSet from […]`'s member
+	// refusal is (`evalConstSetMember`), the sibling construction whose container the alias also states.
+	function evalConstElementAtInstance(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, giid GenericInstanceId, typeTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
+		let elemTok = self.current()
+		let value = try self.evalConstNodeValue(calls, stack: stack)
+
+		match self.signatures.constArrayElementCheck(giid, value: value, calls: calls, declName: typeTok.value, elementFilePath: self.filePath) 'verdict'
+			agrees then break 'verdict'
+			widensToFloat then return self.constWidenedToFloat(value)
+			mismatch(_, expected) then throw ConstEvalError.defective(ParseError.builtinOperandType("{String.from(typeTok.value)} from", required: expected, got: tokenDisplayText(elemTok), line: elemTok.line, column: elemTok.column))
+		end 'verdict'
+
+		match constScalarOf(value) 'scalar'
+			notAScalar then return value
+			scalar(folded) then try self.requireConstScalarSuitsAlias(folded, alias: self.signatures.arrayElementRangedAlias(giid, readerFilePath: self.filePath), anchor: elemTok)
+		end 'scalar'
+
+		return value
+	end 'evalConstElementAtInstance'
+
 	// Every element must belong to the array the first one typed — the folding walk's homogeneity rule, over
 	// TYPES rather than element kinds because that is what this tier has. The SENTENCE is the folding walk's
 	// own (`MixedArrayLiteralElementsMessage`), so one mistake reads one way whichever walk claimed the literal.
@@ -82251,7 +82510,7 @@ export type Parser
 	function requireConstFieldValueFits(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, fieldTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
 		match self.signatures.constStructFieldCheck(layout, index: index, value: value, calls: calls, declName: layout.name, elementFilePath: layout.declFilePath) 'verdict'
 			agrees then break 'verdict'
-			widensToFloat then return ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(self.constFloatBits(self.constScalarFilling(value, layout: layout, index: index)), tag: ValueTypeTag.float)))
+			widensToFloat then return self.constWidenedToFloat(value)
 			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: layout.name), got: got, expected: expected, line: fieldTok.line, column: fieldTok.column))
 		end 'verdict'
 
@@ -82275,26 +82534,26 @@ export type Parser
 	function requireConstFieldValueInRange(layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, fieldTok Token) throws ConstEvalError
 		match constScalarOf(value) 'scalar'
 			notAScalar then return
-			scalar(folded) then try self.requireConstScalarSuitsFieldRange(folded, layout: layout, index: index, fieldTok: fieldTok)
+			scalar(folded) then try self.requireConstScalarSuitsAlias(folded, alias: self.declaredAliasOfType(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)), anchor: fieldTok)
 		end 'scalar'
 	end 'requireConstFieldValueInRange'
 
-	// The tail of the question above, split out because a `match` arm may not open one.
-	function requireConstScalarSuitsFieldRange(folded ConstValue, layout StructLayout, index FieldIndex, fieldTok Token) throws ConstEvalError
-		match self.declaredAliasOfType(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)) 'alias'
+	// A slot's range check of one folded scalar: a slot that denotes no ranged alias has no range to hold it to.
+	function requireConstScalarSuitsAlias(folded ConstValue, alias DeclaredAlias, anchor Token) throws ConstEvalError
+		match alias 'alias'
 			undeclared then return
-			declared(alias) then try self.reportConstCastIfOutOfRange(folded, alias: alias, anchor: fieldTok)
+			declared(ranged) then try self.reportConstCastIfOutOfRange(folded, alias: ranged, anchor: anchor)
 		end 'alias'
-	end 'requireConstScalarSuitsFieldRange'
+	end 'requireConstScalarSuitsAlias'
 
-	// The number a `widensToFloat` verdict is about. The verdict is returned only for an integer-tagged folded
+	// The value a `widensToFloat` slot verdict stores. The verdict is returned only for an integer-tagged folded
 	// scalar, so anything else here is the index and this walk disagreeing about what was compared.
-	function constScalarFilling(value ConstFactoryArgumentValue, layout StructLayout, index FieldIndex) returns ConstValue
+	function constWidenedToFloat(value ConstFactoryArgumentValue) returns ConstFactoryArgumentValue
 		match constScalarOf(value) 'scalar'
-			scalar(folded) then return folded
-			notAScalar then panic("Parser.constScalarFilling: field {index} of `{String.from(layout.name)}` was told to widen to float, but its value is not a folded scalar — `ProgramSignatures.constStructFieldCheck` answers `widensToFloat` only for an integer constant")
+			scalar(folded) then return ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(self.constFloatBits(folded), tag: ValueTypeTag.float)))
+			notAScalar then panic("Parser.constWidenedToFloat: a slot was told to widen to float, but its value is not a folded scalar — `ProgramSignatures.constSlotCheck` answers `widensToFloat` only for an integer constant")
 		end 'scalar'
-	end 'constScalarFilling'
+	end 'constWidenedToFloat'
 
 	// The `name:` an argument was written with, or the EMPTY bytes that mean "positional" — the same "no
 	// label" spelling `MaxonOp.call`'s `argLabels` uses, so what this walk records and what a body's call
@@ -83273,10 +83532,7 @@ export type Parser
 	// swept into the constant complaint.
 	function evalConstCharLiteral() returns ConstValue throws ConstEvalError
 		let tok = self.current()
-		self.advance()
-		try self.charLiteralBytes(tok) otherwise (err) 'malformed'
-			throw ConstEvalError.defective(err)
-		end 'malformed'
+		_ = try self.consumeConstCharLiteralBytes()
 
 		throw ConstEvalError.defective(ParseError.expectedConstantExpression(String.from(tok.value), line: tok.line, column: tok.column))
 	end 'evalConstCharLiteral'
@@ -84047,7 +84303,7 @@ export type Parser
 			end 'currentTimeNanos'
 
 			if callee.equals(BuiltinsCurrentTimeMsName) 'currentTimeMs'
-				return try self.emitMonotonicMs(args, calleeTok: anchor)
+				return try self.emitMonotonicMs(func, args: args, calleeTok: anchor)
 			end 'currentTimeMs'
 
 			if callee.equals(BuiltinsCurrentUnixTimeSecondsName) 'currentUnixTimeSeconds'
@@ -84733,12 +84989,9 @@ export type Parser
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
 	//
-	// `stdlib/Clock.maxon`'s doc-comment says `nowMs()` is backed by `GetTickCount64`, whose period is
-	// ~15.6 ms. A QPC-derived millisecond satisfies every promise that comment makes — monotonic,
-	// milliseconds, absolute value platform-defined — and satisfies them BETTER, so the stdlib is left
-	// exactly as it is and this lowering is the stronger contract. The only direction that could break a
-	// caller is the other one (a coarse tick where a fine one was promised), and
-	// `specs/builtins-clock.md`'s `ms-resolves-sub-tick` is the test that would catch it.
+	// `nowMs()` is `__gt_now_ns` divided by 1,000,000, which is the contract `stdlib/Clock.maxon` documents,
+	// so a millisecond reading resolves whole milliseconds on every platform rather than a coarse OS tick.
+	// `specs/builtins-clock.md`'s `ms-resolves-sub-tick` is the test that catches a coarse tick.
 	//
 	// The divide is emitted INLINE rather than as a `__clock_now_ms` runtime function, because a runtime
 	// function whose whole body is one call and one divide is a call/ret wrapped around two instructions —
@@ -84750,10 +85003,10 @@ export type Parser
 	// from the parser's own constant view — so this stays a BARE divide with no guard and no `try`, and it
 	// stays one for a reason the compiler checks rather than one this comment asserts. Routing it around
 	// `emitDivOrMod` to save that check would be the second division path the paragraph above forbids.
-	function emitMonotonicMs(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+	function emitMonotonicMs(func IrFunction, args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
 		let nanos = try self.emitClockIntrinsicCall(args, name: BuiltinsCurrentTimeMsName, runtimeName: GtNowNsName, calleeTok: calleeTok)
 		let perMilli = self.emitLiteral(NanosPerMillisecond, valueType: MaxonType.integer, range: SourceRange.ofToken(calleeTok))
-		return try self.emitDivOrMod(nanos, divisor: perMilli, op: MaxonBinOp.div, opTok: calleeTok)
+		return try self.emitDivOrMod(func, dividend: nanos, divisor: perMilli, op: MaxonBinOp.div, opTok: calleeTok)
 	end 'emitMonotonicMs'
 
 	// ⭐⭐ **ONE `__Raw.*` INTRINSIC, EMITTED UNDER ITS TABLE ROW (`RawIntrinsics`).** The row states the
@@ -89523,8 +89776,8 @@ export type Parser
 	// terminator taught to one reader leaves the other two reading a complete statement as an unfinished
 	// one, each with its own unrelated-looking error.
 	//
-	// ⛔ **`requireSignatureLineEnd` IS NOT A FOURTH READER AND MUST NOT BE "FINISHED" INTO ONE.** It asks
-	// `newline or eof` deliberately, WITHOUT `end`: it guards a DECLARATION HEADER, and a header line can
+	// ⛔ **`requireDeclarationHeaderLineEnd` IS NOT A FOURTH READER AND MUST NOT BE "FINISHED" INTO ONE.** It
+	// asks `newline or eof` deliberately, WITHOUT `end`: it guards a DECLARATION HEADER, and a header line can
 	// never legitimately be closed by the token that closes the body it introduces. Routed through here it
 	// would accept `function f() end` — a signature with no newline after it — as a complete header.
 	function statementEndsAt(index TokenIndex) returns bool

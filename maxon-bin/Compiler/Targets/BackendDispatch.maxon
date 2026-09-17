@@ -259,13 +259,10 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// "walk a saved-RBP chain" at this milestone (see X64Runtime's header). It appends AFTER
 	// user code, which keeps `mrt_start` at `.text` offset 0 where the backtrace needs it.
 	//
-	// x64-windows installs a Windows Vectored Exception Handler; x64-linux installs a SIGFPE handler via
-	// rt_sigaction (`appendX64RuntimeChunks` branches on the OS). Both catch the `idiv` #DE and turn it
-	// into a panic diagnostic + symbolized backtrace + exit 1; only the Windows one can say WHICH #DE
-	// (a zero divisor vs `i64.min / -1`), because Linux reports one `si_code` for both — see
-	// `X64Runtime.buildLinuxFaultHandlerChunk`. arm64-macOS installs the same diagnostic behind a POSIX
-	// `sigaction` (`Arm64FaultRuntime`); what differs there is the CAUSE, not the handler — AArch64's
-	// `sdiv` does not trap at all, so only the nil-dereference arm is ever entered.
+	// x64-windows installs a Windows Vectored Exception Handler; x64-linux installs a SIGFPE/SIGSEGV/SIGBUS
+	// handler via rt_sigaction (`appendX64RuntimeChunks` branches on the OS). Both turn a bad address, a
+	// stack overflow or a stray #DE into a panic diagnostic + symbolized backtrace + exit 1. The arm64 lanes
+	// install the same diagnostic behind a POSIX `sigaction` (`Arm64FaultRuntime`).
 	// macos/wasi never reach here for an x64 module: `augmentWithRuntime` above already rejected them.
 	match target.os 'panicRuntime'
 		windows or
@@ -636,7 +633,7 @@ end 'appendExitCodePassThroughCall'
 // reasons that all point the same way:
 //
 //   [argv capture]      argc from [rsp] and the vector from rsp+8 into their two .data words
-//   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
+//   call mrt_runtime_init installs the fault handler (rt_sigaction) — appendX64LinuxRuntimeChunks
 //   [call __ds_init]      attach the DebugStream producer to its ring (a --debugstream build only)
 //   the program          `appendProgramCall`, exactly as on Windows; its ExitCode in R8 either way
 //   [gt drain]           mov rcx, r8 ; call __gt_drain_at_exit  ->  the same code back in R8
@@ -653,7 +650,7 @@ end 'appendExitCodePassThroughCall'
 // `call`). So `call main` from the kernel's alignment lands `main` at rsp ≡ 8 (mod 16) — exactly what a
 // The compiler function expects — with no push to invert the parity. The Windows stub's `push rbp` (which opens
 // the backtrace chain) would flip it the WRONG way here and misalign `main`. And the stub needs no
-// frame: the SIGFPE backtrace chains through MAIN's frame (main's saved rbp is the kernel-zeroed rbp
+// frame: a fault backtrace chains through MAIN's frame (main's saved rbp is the kernel-zeroed rbp
 // this frameless stub left, or a green thread's seed zero, so the trace is `in main` -> `in mrt_start`
 // -> ends), there is no Win64
 // shadow space to reserve (raw syscalls carry no imports, and the compiler functions spill to their OWN frames),
@@ -663,7 +660,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
-	// Install the SIGFPE fault handler (rt_sigaction) before any user code runs, exactly as the Windows
+	// Install the fault handler (rt_sigaction) before any user code runs, exactly as the Windows
 	// stub calls `mrt_runtime_init` first. `RuntimeInitName` resolves to the LINUX init
 	// `appendX64LinuxRuntimeChunks` appended; it runs from the kernel's 16-aligned entry and returns with
 	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
@@ -769,11 +766,34 @@ end 'prependFunction'
 // Each writer lives beside the format it emits; the wasm one takes the core module bytes rather than
 // the whole CodeResult because building a component is a multi-step, multi-file job it owns end to
 // end (see its header).
-export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath, productVersion String)
+export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath, productVersion VersionComponentArray, tools ExecutableWriterTools) throws WasmComponentError
 	match target.os 'os'
 		windows then writePe(outputPath, codeResult: codeResult, target: target, productVersion: productVersion)
 		macos then writeMachO(outputPath, codeResult: codeResult, target: target, productVersion: productVersion)
 		linux then writeElf(outputPath, codeResult: codeResult, target: target)
-		wasi then writeWasm(outputPath, coreModule: codeResult.wasmCoreModule)
+		wasi then try writeWasmWith(tools, outputPath: outputPath, coreModule: codeResult.wasmCoreModule)
 	end 'os'
 end 'writeExecutable'
+
+// The programs a target's writer runs besides the compiler. Located before the pipeline, so a build that
+// could not write its output refuses before it compiles anything.
+export union ExecutableWriterTools
+	noTools
+	wasmComponent(tools WasmComponentTools)
+end 'ExecutableWriterTools'
+
+export function locateExecutableWriterTools(target Target) returns ExecutableWriterTools throws WasmComponentError
+	return match target.os 'os'
+		windows or
+			macos or
+			linux gives ExecutableWriterTools.noTools
+		wasi gives ExecutableWriterTools.wasmComponent(try locateWasmComponentTools())
+	end 'os'
+end 'locateExecutableWriterTools'
+
+function writeWasmWith(tools ExecutableWriterTools, outputPath FilePath, coreModule ByteArray) throws WasmComponentError
+	match tools 'tools'
+		wasmComponent(found) then try writeWasm(outputPath, coreModule: coreModule, tools: found)
+		noTools then panic("writeWasmWith: `locateExecutableWriterTools` answers `wasmComponent` for every wasi target")
+	end 'tools'
+end 'writeWasmWith'

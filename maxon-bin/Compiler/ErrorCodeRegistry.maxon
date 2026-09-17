@@ -703,7 +703,7 @@ export enum ErrorCode
 	asyncNonYielding = "E3073"
 
 	// A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively
-	// calling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so
+	// calling a `__gt_subp_` runtime entry). WASI has no process-spawn primitive, so
 	// subprocess cannot exist on that target -- rather than silently throwing
 	// 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call
 	// with `#if not os(Wasi)` to exclude it from the wasm build.
@@ -1977,6 +1977,14 @@ export enum ErrorCode
 	// an IO fault that is not there. Every project whose output lives in a gitignored directory meets
 	// this on its first build in a fresh clone.
 	binaryOutputDirectoryNotCreated = "E6004"
+
+	// A wasm32-wasi build could not turn its core module into a WASI Preview2 component. The compiler wraps
+	// the module with `wasm-tools` and the WASI WIT package, which it looks for as `vendor/wasm-tools/` and
+	// `vendor/wasi-wit/` in the working directory and the directories above it; a Maxon source checkout
+	// stages both with `scripts/fetch-vendor.sh`, and an installed compiler does not include them. A missing
+	// tool is refused before anything is compiled. The message names what is missing and where it was looked
+	// for, or which `wasm-tools` step failed and what it printed.
+	binaryWasmComponentNotProduced = "E6005"
 
 	// A member is used that the program plainly DECLARES, but the compiler's whole-program declaration index
 	// does not carry it -- the declaration sweep read the declaration's head, failed to read its return type,

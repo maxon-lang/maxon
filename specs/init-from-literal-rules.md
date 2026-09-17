@@ -244,3 +244,205 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:19:7: Operator '!=' dispatches 'Box.equals', which returns 'int' — an equality operator requires the 'bool' result 'Equatable' declares
 ```
+
+### `from` reaches a type through its alias
+
+`<Name> from [...]` takes the same construction whether `<Name>` is the type or an alias of it, and
+naming an alias there is a use of that alias. Each case below names its alias ONLY in the `from`, so an
+alias the construction failed to record would be refused as unused.
+
+<!-- test: a-set-alias-takes-from-an-array-literal -->
+```maxon
+typealias Letters = Set with Character
+
+function main() returns ExitCode
+	let vowels = Letters from ['a', 'e', 'i']
+	print("{vowels.count()} {vowels.contains('a')} {vowels.contains('e')} {vowels.contains('i')} {vowels.contains('o')}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 true true true false
+```
+
+<!-- test: a-list-alias-takes-from-an-array-literal -->
+```maxon
+typealias Reading = int(0 to 1000)
+typealias Readings = List with Reading
+
+function main() returns ExitCode
+	let readings = Readings from [30, 10, 20]
+
+	for r in readings 'each'
+		print("{r} ")
+	end 'each'
+
+	print("count={readings.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+30 10 20 count=3
+```
+
+<!-- test: a-vector-alias-takes-from-an-array-literal -->
+```maxon
+typealias Reading = int(0 to 1000)
+typealias ReadingTriple = Vector with 3 Reading
+
+function main() returns ExitCode
+	let readings = ReadingTriple from [30, 10, 20]
+
+	for r in readings 'each'
+		print("{r} ")
+	end 'each'
+
+	print("count={readings.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+30 10 20 count=3
+```
+
+<!-- test: a-user-type-takes-from-an-array-literal -->
+A user type that implements `InitableFromArrayLiteral` takes `from [...]` exactly as the standard
+collections do: the literal becomes the `Array` its `init` receives, in order.
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitArray = Array with Digit
+typealias Number = int(0 to i64.max)
+
+type Digits implements InitableFromArrayLiteral with Digit
+	export var value as Number
+	export var length as Number
+
+	static function init(digits DigitArray) returns Self
+		var total = 0 as Number
+
+		for d in digits 'each'
+			total = total * 10 + d
+		end 'each'
+
+		return Self{value: total, length: digits.count()}
+	end 'init'
+end 'Digits'
+
+function main() returns ExitCode
+	let n = Digits from [4, 0, 7]
+	print("{n.value} {n.length}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+407 3
+```
+
+<!-- test: a-user-type-takes-from-an-array-literal-at-module-scope -->
+The same construction as a module-scope initializer: like `FilePath from ""` there, it is the call to the
+type's `init` that the module initializer makes before `main`.
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitArray = Array with Digit
+typealias Number = int(0 to i64.max)
+
+type Digits implements InitableFromArrayLiteral with Digit
+	export var value as Number
+	export var length as Number
+
+	static function init(digits DigitArray) returns Self
+		var total = 0 as Number
+
+		for d in digits 'each'
+			total = total * 10 + d
+		end 'each'
+
+		return Self{value: total, length: digits.count()}
+	end 'init'
+end 'Digits'
+
+let lucky = Digits from [4, 0, 7]
+
+function main() returns ExitCode
+	print("{lucky.value} {lucky.length}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+407 3
+```
+
+<!-- test: error.a-module-scope-array-literal-init-element-outside-its-range -->
+At module scope the literal is built at the array its `init` declares, so an element is held to that array's
+element range exactly as a struct field's constant is held to the field's.
+```maxon
+typealias Digit = int(0 to 9)
+typealias DigitArray = Array with Digit
+typealias Number = int(0 to i64.max)
+
+type Digits implements InitableFromArrayLiteral with Digit
+	export var value as Number
+	export var length as Number
+
+	static function init(digits DigitArray) returns Self
+		var total = 0 as Number
+
+		for d in digits 'each'
+			total = total * 10 + d
+		end 'each'
+
+		return Self{value: total, length: digits.count()}
+	end 'init'
+end 'Digits'
+
+let unlucky = Digits from [4, 12]
+
+function main() returns ExitCode
+	print("{unlucky.value}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:31: Value 12 is outside the range of 'Digit' (int(0 to 9))
+```
+
+<!-- test: an-array-alias-reaches-its-static-from -->
+`from` is a keyword and also the name of `Array`'s static constructor over any iterable; after a `.` it
+is the member name, so an `Array` alias reaches it. The alias's element is `RangeBound`, the element a
+`Range` iterates: the iterable must bind `Element` to the array's own element (E3127).
+```maxon
+typealias ReadingArray = Array with RangeBound
+
+function main() returns ExitCode
+	let span = 3 to 6
+	let readings = ReadingArray.from(span)
+
+	for r in readings 'each'
+		print("{r} ")
+	end 'each'
+
+	print("count={readings.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 4 5 6 count=4
+```

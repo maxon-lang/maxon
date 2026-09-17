@@ -96,11 +96,16 @@ tests/
     manifest-define-not-a-string-refused.test.maxon           a define that is not a string is refused, and writes nothing
     manifest-source-not-a-string-refused.test.maxon           a source that is not a string is refused as malformed, and writes nothing
     manifest-program-not-written-into-project.test.maxon      the compiled manifest is kept in the run cache, so nothing lands in the project's `.maxon/`
+    version-component-past-the-pe-field-refused.test.maxon    a `version` component past 65535 is refused for x64-windows, and writes nothing
+    version-component-past-the-macho-field-refused.test.maxon a second `version` component past 1023 is refused for arm64-macos, and writes nothing
+    version-component-not-a-number-refused.test.maxon         a `version` component that is not a number is refused, and writes nothing
     fixtures/<project>/build.maxon.fixture  main.maxon.fixture   stored names only - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
+    monitor-sched-events.test.maxon         `monitor --filter=sched` shows a green thread's spawn and await
     fixtures/spans/main.maxon.fixture       stored name only - see rule 1
+    fixtures/greenthread/main.maxon.fixture stored name only - see rule 1
   coverage/
     CoverageHarness.maxon                   the shared half: the spawn, the staging, the report readers
     coverage-line-states.test.maxon         the four line states, each attached to its own line
@@ -128,6 +133,10 @@ tests/
     dry-run-is-upgrade-only.test.maxon                      every other command refuses `--dry-run`
     reference-documents-every-command.test.maxon            docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.test.maxon        every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)
+    build-directory-without-output-names-the-directory.test.maxon   `build <dir>` with no `-o` writes `<dir>/<dirname><ext>`, staged outside the checkout
+    build-walk-skips-a-case-folded-manifest.test.maxon      a `BUILD.maxon` beside the program is not compiled as source
+    wasm-build-without-tools-is-an-error-not-a-panic.test.maxon     an install-shaped copy outside the checkout, with no `vendor/`: exit 1 naming `wasm-tools`, no panic
+    wasm-build-reports-the-module-size.test.maxon           a wasm32-wasi build's `Wrote N bytes of code` has N > 0
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.test.maxon         the busier function ranks first in every section
@@ -158,6 +167,7 @@ tests/
     ExamplesHarness.maxon                   the shared half: build one example, or one document's program, into temp/examples/<name>/, run it, check its answer
     basic.test.maxon                        exits 42, the value its `main` returns
     hello.test.maxon                        prints `Hello, world!` and exits 0
+    binary-trees.test.maxon                 the published n=10 checks, exit 0
     fannkuch-redux.test.maxon               the published n=7 answer and the documented n=10 one, flip count as exit code
     multifile.test.maxon                    the directory builds as one project and exits 5
     nbody.test.maxon                        the published n=1000 energies, exit 0
@@ -178,6 +188,8 @@ tests/
     rebuild-over-a-running-previous.test.maxon   a self-rebuild succeeds while a server runs its `.previous`
     rebuild-with-a-compile-error.test.maxon      a self-rebuild that fails to compile leaves the slot untouched
     reference-documents-every-tool.test.maxon    docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
+    check-reports-a-type-error-and-writes-nothing.test.maxon   `check` answers a type error's code, is not the warm-rebuild gate, and writes nothing
+    dump-ir-answers-the-ir-text.test.maxon       `dump_ir` answers the IR of `main` as text, and writes nothing
   docs/
     stdlib-reference-documents-every-public-api.test.maxon   docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
 ```
@@ -305,8 +317,8 @@ control so two runs that both failed to build cannot read as agreement.
 
 ## `debug/` — what a binary can be asked about after it is built
 
-One case: stage a fixture, build it with the compiler under test, and ask the binary what it says
-about itself.
+Two cases: stage a fixture, build it with the compiler under test, and ask the binary what it says
+about itself — through its sidecar, or through the trace it writes while `maxon monitor` runs it.
 
 ⛔ **THE SHARED HALF IS A PLAIN `.maxon`, NOT A `.test.maxon`.** `TestedCompilerStem`, the staging, the
 spawning and the stream folds live in `DebugHarness.maxon`, which the runner does not treat as a test
@@ -335,6 +347,13 @@ position in the table and the shape of a prologue all move with codegen and with
 pulls in; a case that pinned them would go red for every unrelated change and teach its reader to
 re-bless it. Every roster this case checks is read OUT OF THE STAGED SOURCE, so a fixture that grows a
 function or a binding grows what is demanded of the sidecar.
+
+### `maxon monitor`
+
+**`monitor-sched-events`** — a `--debugstream` build of a program that spawns one green thread and awaits
+it, run under `monitor --filter=sched`. The program's answer is asserted before any event, because a
+monitor that ran nothing prints no events either; then a `sched_spawn` and a `sched_await` line must
+appear. Presence only: how many yields and resumes one await costs moves with the scheduler.
 
 ## `coverage/` — what a `--coverage` binary can be asked about after it has RUN
 
@@ -587,6 +606,12 @@ JSON-RPC messages, and inspecting structured responses.
 - `rebuild-with-a-compile-error.test.maxon` gates the failure half: a self-rebuild whose program does
   not compile leaves the running image in the slot, byte for byte, and moves nothing to `.previous` —
   and that image then builds a good program over itself.
+- `check-reports-a-type-error-and-writes-nothing.test.maxon` stages a type error and a well-formed program
+  under `temp/`: the first is answered as an error carrying `E3005`, the second as a success, neither
+  answer is the warm-rebuild gate's run (which also compiles without writing, so files alone cannot tell
+  them apart), and nothing but the source is left in either directory.
+- `dump-ir-answers-the-ir-text.test.maxon` stages a well-formed program: the answer carries `func @main`,
+  and nothing but the source is left beside it.
 - `reference-documents-every-tool.test.maxon` reads the `--dev` `tools/list` roster and holds
   `docs/CLI_REFERENCE.md`'s `## MCP Server` section (its heading line up to the next `## ` line) to naming
   every tool and every argument as a whole word. A document with no such section fails naming the whole

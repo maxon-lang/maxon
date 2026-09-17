@@ -94,7 +94,7 @@ Output: `worker` then `main`.
 | `Math.exp(x Real)` | `Real` | e raised to `x`. |
 | `Math.log(x Real)` | `Real` | Natural logarithm. |
 | `Math.log2(x Real)` | `Real` | Base-2 logarithm. |
-| `Math.log10(x Real)` | `Real` | Base-10 logarithm, computed as `log(x) / ln 10`, so exact powers of ten may be off in the last digit. |
+| `Math.log10(x Real)` | `Real` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
 | `Math.pow(base Real, exponent Real)` | `Real` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
 | `Math.hasNegativeSignBit(z Real)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
 
@@ -119,7 +119,7 @@ Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 | Type | Conforms to | Notes |
 |------|-------------|-------|
 | `int` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `hash()` is the low 32 bits of the value. |
-| `float` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `compare` is a total order: NaN equals NaN and sorts below every other value. `-0.0` and `0.0` hash alike. |
+| `float` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `compare` is a total order: NaN equals NaN and sorts below every other value. `hash()` folds the 64-bit IEEE-754 pattern into 32 bits, `(bits xor (bits shr 32)) and 0xFFFFFFFF`, except that `-0.0` hashes as `0.0` does (`0`). |
 | `bool` | `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
 
 | Method | Returns | Description |

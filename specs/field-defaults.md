@@ -245,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/field-defaults/field-defaults.missing-type-annotation-errors.test:6:14: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.
+error E2004: specs/fragments/field-defaults/field-defaults.missing-type-annotation-errors.test:6:14: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
 ```
 
 ### Error: A field default must consume everything up to the end of its line
