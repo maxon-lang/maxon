@@ -80,21 +80,23 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// Built off the same walk's result rather than by a second one, and IDENTICAL to it (same object) for a
 	// program that recorded none. See `collectStorageReachEdges`.
 	//
-	// ⭐ **AND ALL THREE COLUMNS CLOSE OVER THE ALIAS EDGES TOO** — an argument that may BE a parameter's record
+	// ⭐ **AND EVERY COLUMN CLOSES OVER THE ALIAS EDGES TOO** — an argument that may BE a parameter's record
 	// through a call's result, a retain or a merge (`ProvenanceTracer.collectProvenanceParamEdges`), which the
-	// storage-provenance summary is what can say.
+	// storage-provenance summary is what can say. The record-write column's relation also holds an argument that
+	// may lie WITHIN one.
 	var provenance = buildStorageProvenance(project, module: module, signatures: signatures, funcNames: funcNames)
-	let mutationEdges = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
-	let mutationEdgesByCallee = edgesByCallee if mutationEdges is callEdges else mutationEdges.byCallee(funcNames.functions.count())
+	let (mutationEdges, recordEdges) = provenance.collectProvenanceParamEdges(callEdges, funcNames: funcNames)
+	let mutationEdgesByCallee = adjacencyOf(mutationEdges, base: callEdges, baseByCallee: edgesByCallee, funcCount: funcNames.functions.count())
 
 	let storageEdges = collectStorageReachEdges(mutationEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
-	let mutationSummary = buildParamMutationSummary(funcNames, funcSignatures: project.funcSignatures, edges: mutationEdges, byCallee: mutationEdgesByCallee, storageEdges: storageEdges, provenanceWrites: provenance.receiverWriteSeeds)
+	let mutationSummary = buildParamMutationSummary(funcNames, funcSignatures: project.funcSignatures, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, storageEdges: storageEdges, provenanceWrites: provenance.receiverWrites)
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
 
 	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
 	// receiver written through a `let`'s record, E3078 at a `var`, E3160 past the send that lent a graph — after
 	// `checkCalls`, so a program with a bad argument reports it first, in the order the reader meets them.
 	provenance.checkStorageDoors(mutationSummary)
+	provenance.checkVarInitializersTakeNoLetRecord(funcNames)
 
 	// The RETURN half of the interface-widening rule (P1.7a slice 2). After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
@@ -945,8 +947,7 @@ function requireOverloadResultTagAgrees(project Project, func IrFunction, opInde
 		return
 	end 'alreadyRight'
 
-	try func.valueTags.set(result, value: declaredTag) otherwise panic("requireOverloadResultTagAgrees: valueTags.set({result}) OOB inside its own count()")
-	try func.valueNameIds.set(result, value: typeNameIdOf(declared)) otherwise panic("requireOverloadResultTagAgrees: valueNameIds.set({result}) OOB — the two type columns are minted in lockstep")
+	func.retypeValueInPrivateColumns(result, tag: declaredTag, nameId: typeNameIdOf(declared))
 end 'requireOverloadResultTagAgrees'
 
 // ONE sentence for every quadrant of the disagreement — value-vs-value that no retype can repair, and
@@ -1750,19 +1751,20 @@ export type ParamMutationSummary
 	// and not a map: the name resolution is already paid for.
 	export let storageMasks as ParamPositionMaskArray
 
-	// ⭐⭐ **THE THIRD COLUMN, ANSWERING THE WIDEST OF THE THREE QUESTIONS (W117)** — "does a call to this
-	// function write the RECORD this parameter denotes, at all?". Same index space and the same fixpoint over
-	// the same edges; the SEED is `IrFunction.writesThroughParamMask`, whose header carries the two
-	// measurements that make it a third column rather than a reading of the other two.
+	// ⭐⭐ **THE THIRD COLUMN, ANSWERING THE WIDEST QUESTION** — "does a call to this function write the GRAPH
+	// this parameter denotes, at all?". Same index space and the same fixpoint; the SEED is
+	// `IrFunction.writesThroughParamMask` plus every receiver write through a value that may be or lie within a
+	// parameter's record, and the relation holds the argument edges plus every argument that may lie within one.
 	export let recordWriteMasks as ParamPositionMaskArray
 
 	// ⚖⚖ **THE FOURTH COLUMN IS THE THIRD ONE'S SAME SEED CLOSED UNDER A NARROWER RELATION, AND TWO COLUMNS
 	// ARE WHAT KEEPS TWO SUBJECTS FROM SHARING ONE ANSWER.** A method writing a field of its own receiver is
-	// not a parameter mutation for a `let` BINDING (user ruling), so the closure that answers for a binding
-	// stops a method's receiver bit at the edge; a `let`-declared GLOBAL is refused by that same write, so the
-	// closure that answers for a global must not. Applying the exemption inside the ONE drain threw the
-	// global's evidence away before the subject was known — `let G = Box.make()` handed to a `tick(b Box)`
-	// whose body is `b.bump()` reported nothing (`specs/static-variables.md`'s
+	// not a parameter mutation for a `let` BINDING (user ruling), and neither is a write within a record a local
+	// `let` holds (`specs/immutable-method-call.md`), so the closure that answers for a binding takes the argument
+	// edges alone and stops a method's receiver bit at the edge; a `let`-declared GLOBAL and a lent graph are
+	// refused by both writes, so the closure that answers for them must do neither. Applying the exemption inside
+	// ONE drain would throw the global's evidence away before the subject is known — `let G = Box.make()` handed
+	// to a `tick(b Box)` whose body is `b.bump()` (`specs/static-variables.md`'s
 	// `error.let-global-to-a-callee-that-calls-a-self-writing-method`). One fact, derived once, per column.
 	export let bindingWriteMasks as ParamPositionMaskArray
 
@@ -1789,7 +1791,7 @@ export type ParamMutationSummary
 		return self.maskAt(self.storageMasks, callee: callee)
 	end 'storageMaskOf'
 
-	// ⭐ **WHICH PARAMETERS' RECORDS A CALL TO `callee` WRITES BY ANY MEANS (W117)** — the widest answer, with
+	// ⭐ **WHICH PARAMETERS' RECORDS A CALL TO `callee` WRITES BY ANY MEANS** — the widest answer, with
 	// nothing exempted: what a `let`-declared GLOBAL is refused by, and what `StorageProvenance` asks of a
 	// value. ⚠ It is a superset of neither of the two above and a subset of neither; see `IrFunction`'s table,
 	// which carries one row per question.
@@ -1871,20 +1873,28 @@ module type CallParamEdges
 		self.calleeParams.push(calleeParam)
 	end 'record'
 
-	// A second list with the same rows, for a caller that widens the relation while the base keeps its own.
-	export function copy() returns CallParamEdges
+	// This relation with `rows` added, as a second list the base does not see — or this very list when `rows` is
+	// empty, so a caller's `is` can tell that the two relations are one and share an adjacency (`adjacencyOf`).
+	export function widenedBy(rows CallParamEdges) returns CallParamEdges
+		if rows.count() == 0 'nothingToAdd'
+			return self
+		end 'nothingToAdd'
+
 		var edges = CallParamEdges.create()
-
-		for k in 0 upto self.count() 'eachRow'
-			let callee = try self.calleeIndices.get(k) otherwise panic("CallParamEdges.copy: calleeIndices.get OOB at {k} inside count()")
-			let caller = try self.callerIndices.get(k) otherwise panic("CallParamEdges.copy: callerIndices.get OOB at {k} — the four columns are parallel by construction")
-			let callerParam = try self.callerParams.get(k) otherwise panic("CallParamEdges.copy: callerParams.get OOB at {k} — the four columns are parallel by construction")
-			let calleeParam = try self.calleeParams.get(k) otherwise panic("CallParamEdges.copy: calleeParams.get OOB at {k} — the four columns are parallel by construction")
-			edges.record(callee as FuncIndex, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
-		end 'eachRow'
-
+		edges.appendRowsOf(self)
+		edges.appendRowsOf(rows)
 		return edges
-	end 'copy'
+	end 'widenedBy'
+
+	function appendRowsOf(other CallParamEdges)
+		for k in 0 upto other.count() 'eachRow'
+			let callee = try other.calleeIndices.get(k) otherwise panic("CallParamEdges.appendRowsOf: calleeIndices.get OOB at {k} inside count()")
+			let caller = try other.callerIndices.get(k) otherwise panic("CallParamEdges.appendRowsOf: callerIndices.get OOB at {k} — the four columns are parallel by construction")
+			let callerParam = try other.callerParams.get(k) otherwise panic("CallParamEdges.appendRowsOf: callerParams.get OOB at {k} — the four columns are parallel by construction")
+			let calleeParam = try other.calleeParams.get(k) otherwise panic("CallParamEdges.appendRowsOf: calleeParams.get OOB at {k} — the four columns are parallel by construction")
+			self.record(callee as FuncIndex, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
+		end 'eachRow'
+	end 'appendRowsOf'
 
 	// The CSR over the callee key space: `graph.neighbour(calleeIndex, k)` is the k-th EDGE ROW reaching that
 	// callee. The `to` column is the row number itself, which is what makes the other three columns readable
@@ -1911,32 +1921,29 @@ end 'CallParamEdges'
 // backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
 // — which is a fine argument for the answer being harmless and no argument at all for it being made
 // silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
-function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures FuncSignatureMap, edges CallParamEdges, byCallee CsrGraph, storageEdges CallParamEdges, provenanceWrites ParamPositionMaskArray) returns ParamMutationSummary
+function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures FuncSignatureMap, edges CallParamEdges, byCallee CsrGraph, recordEdges CallParamEdges, storageEdges CallParamEdges, provenanceWrites ProvenanceReceiverWrites) returns ParamMutationSummary
 	let funcIndexByName = funcNames.byName
 
-	// ⭐⭐ **TWO SEEDS, ONE FIXPOINT RUN TWICE — and since W58 the graph serves a THIRD seed one caller up.**
-	// The parser records both per-function facts at the same doors (`Parser.noteReceiverWrite`,
-	// `Parser.emitCheckedSelfFieldStore`); the CLOSURE is one statement about one call graph — "a callee that
-	// does X to what it was handed makes its caller do X to what IT was handed" — so the walk that finds the
-	// edges runs ONCE, in `semanticCheck`, and is drained here twice and in `buildEscapeSummary` a third time.
-	// That is what makes the transitive case work without a second rule: `wipe()` calling a `reset()` that
-	// clears the receiver's field inherits the bit through the very same edge E3019's column travels.
-	// ⚖ The record-write column carries ONE exemption the other two do not, and it is the receiver's; the
-	// ruling is stated at `propagateAcrossEdges`.
+	// ⭐⭐ **ONE CALL GRAPH, FOUR COLUMNS.** The parser records the per-function seeds at the same doors
+	// (`Parser.noteReceiverWrite`, `Parser.emitCheckedSelfFieldStore`); the CLOSURE is one statement about one
+	// call graph — "a callee that does X to what it was handed makes its caller do X to what IT was handed" — so
+	// the walk that finds the edges runs ONCE, in `semanticCheck`, and each column here and `buildEscapeSummary`
+	// propagates over it. That is what makes the transitive case work without a second rule: `wipe()` calling a
+	// `reset()` that clears the receiver's field inherits the bit through the very same edge E3019's column
+	// travels. ⚖ The binding column carries the one exemption the others do not, the receiver's; the ruling is
+	// stated at `propagateAcrossEdges`.
 	//
-	// ⚠⚠ **THE STORAGE COLUMN'S EDGE SET IS A SUPERSET, AND THIS PARAGRAPH SAID "SAME EDGES" UNTIL ARR4
-	// MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** E3019 asks about the ARGUMENT (is this value the
-	// caller's parameter?); E3070 asks about the STORAGE (does the caller's parameter OWN the array this
-	// receiver denotes?), and `self.items` answers no to the first and yes to the second. The extra rows are
-	// `StorageReachEdge`'s — recorded by the parser, added by `collectStorageReachEdges`, and deliberately
-	// absent from the owner column, where they would refuse a `let` receiver for a method writing its own
-	// field. The two lists are the same OBJECT for a program that records none — no claim is made about how
-	// often that is (any program reaching `stdlib/String.maxon`'s builder widens it), only that the identity
-	// is exact when it holds, which is what lets the CSR be shared rather than guessed at.
-	// Seeded from the INDEX's own array, not the module's, and the two are the same array: the masks are
-	// addressed by POSITION and `funcIndexByName` resolves a name TO that position, so a seed walk over any
-	// other array would leave every edge pointing at the wrong function's mask (A2l — the staleness
-	// `FunctionNameIndex`'s header describes, made unspellable by taking the array off the index).
+	// ⚠⚠ **THE STORAGE COLUMN'S EDGE SET IS A SUPERSET.** E3019 asks about the ARGUMENT (is this value the
+	// caller's parameter?); E3070 asks about the STORAGE (does the caller's parameter OWN the array this receiver
+	// denotes?), and `self.items` answers no to the first and yes to the second — a use-after-free where the two
+	// are conflated. The extra rows are `StorageReachEdge`'s, recorded by the parser, added by
+	// `collectStorageReachEdges`, and absent from the owner column, where they would refuse a `let` receiver for a
+	// method writing its own field. The two lists are the same OBJECT for a program that records none, which is
+	// what lets the CSR be shared rather than guessed at.
+	//
+	// Seeded from the INDEX's own array, not the module's: the masks are addressed by POSITION and
+	// `funcIndexByName` resolves a name TO that position, so a seed walk over any other array would leave every
+	// edge pointing at the wrong function's mask.
 	var masks = ParamPositionMaskArray.create()
 	var storageMasks = ParamPositionMaskArray.create()
 	var recordWriteMasks = ParamPositionMaskArray.create()
@@ -1947,48 +1954,50 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, funcSignatures F
 	var methodReceivers = BoolArray.create()
 
 	// ⭐ A receiver written through a value that may BE a parameter's record writes that parameter
-	// (`ProvenanceTracer.collectProvenanceParamEdges`): E3019's seed and W117's alike, since both ask whether the
-	// record is written.
+	// (`ProvenanceTracer.seedReceiverWrites`), in every column that asks whether the record is written. One that
+	// may only lie WITHIN a parameter's record writes the graph the parameter denotes and not the parameter: it
+	// seeds the record column alone, since neither a `let` binding nor E3019's parameter column is written by a
+	// write within the record it names.
 	for i in 0 upto funcNames.functions.count() 'seed'
 		let func = try funcNames.functions.get(i) otherwise panic("buildParamMutationSummary: functions.get OOB at {i} below its own count")
-		let writtenThroughAnAlias = try provenanceWrites.get(i) otherwise panic("buildParamMutationSummary: provenanceWrites.get OOB at {i} — the column is built over `funcNames.functions`")
+		let writtenThroughAnAlias = try provenanceWrites.identity.get(i) otherwise panic("buildParamMutationSummary: identity seed OOB at {i} — the column is built over `funcNames.functions`")
+		let writtenWithinAnAlias = try provenanceWrites.within.get(i) otherwise panic("buildParamMutationSummary: within seed OOB at {i} — the column is built over `funcNames.functions`")
 		let recordWrites = func.writesThroughParamMask or writtenThroughAnAlias
 		masks.push(func.writtenParamMask or writtenThroughAnAlias)
 		storageMasks.push(func.storageWrittenParamMask)
-		recordWriteMasks.push(recordWrites)
+		recordWriteMasks.push(recordWrites or writtenWithinAnAlias)
 		bindingWriteMasks.push(recordWrites)
 		methodReceivers.push(declaresAReceiver(funcSignatures, name: func.name))
 	end 'seed'
 
 	propagateParamMasks(masks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 
-	// ⭐ **W117's COLUMN DRAINS THE SAME RELATION A THIRD TIME, WHICH IS NOT A THIRD RELATION.** "A callee that
-	// writes what it was handed makes its caller write what IT was handed" is one statement about one call
-	// graph; the columns differ in what they were SEEDED with and in what the closure lets cross an edge. It
-	// closes over the ARGUMENT edges rather than the wider storage set because its question is about the
-	// argument: does the record this call site handed over get written?
-	propagateParamMasks(recordWriteMasks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: sharedNoExemptCallees)
+	// ⭐ **THE RECORD COLUMN IS CLOSED OVER THE RECORD RELATION** — the argument edges plus every argument that may
+	// lie within a parameter's record, because its question is whether the GRAPH a call site handed over gets
+	// written: `nudge(t)` whose body is `t.inner.bump()` writes it (`ProvenanceTracer.collectProvenanceParamEdges`).
+	let funcCount = funcNames.functions.count()
+	let recordByCallee = adjacencyOf(recordEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount)
+	propagateParamMasks(recordWriteMasks, edges: recordEdges, byCallee: recordByCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 
-	// ⚖ **THE SAME SEED AND THE SAME RELATION, CLOSED WITH THE RECEIVER EXEMPTION APPLIED** — the `let`
-	// BINDING's answer, where the one above is the `let` GLOBAL's. See the column, and `propagateAcrossEdges`
-	// where the ruling is stated.
+	// ⚖ **THE SAME SEED OVER THE ARGUMENT EDGES ALONE, WITH THE RECEIVER EXEMPTION APPLIED** — the `let` BINDING's
+	// answer, where the one above is the `let` GLOBAL's. See the column, and `propagateAcrossEdges` where the ruling
+	// is stated.
 	propagateParamMasks(bindingWriteMasks, edges: edges, byCallee: byCallee, receiverSlotStopsHere: methodReceivers)
 
-	// The CSR over the WIDER set is built HERE and not in `semanticCheck`, because this is its only reader.
-	// A program that recorded no storage-reach edge closes both columns over one relation, so it reuses the
-	// adjacency already built rather than paying for a byte-identical second one — the `is` is the identity
-	// `collectStorageReachEdges` returns its own argument to make answerable, not a length comparison that
-	// would be true by coincidence.
-	let oneRelationForBothColumns = storageEdges is edges
-	var storageByCallee = byCallee
-
-	if not oneRelationForBothColumns 'aWiderRelation'
-		storageByCallee = storageEdges.byCallee(funcNames.functions.count())
-	end 'aWiderRelation'
-
+	let storageByCallee = adjacencyOf(storageEdges, base: edges, baseByCallee: byCallee, funcCount: funcCount)
 	propagateParamMasks(storageMasks, edges: storageEdges, byCallee: storageByCallee, receiverSlotStopsHere: sharedNoExemptCallees)
 	return ParamMutationSummary.create(masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, bindingWriteMasks: bindingWriteMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
+
+// The CSR over `edges`. A relation that gained no row over `base` IS `base` (`CallParamEdges.widenedBy`), so it
+// shares the adjacency already built rather than paying for a byte-identical second one.
+function adjacencyOf(edges CallParamEdges, base CallParamEdges, baseByCallee CsrGraph, funcCount CsrIndex) returns CsrGraph
+	if edges is base 'oneRelation'
+		return baseByCallee
+	end 'oneRelation'
+
+	return edges.byCallee(funcCount)
+end 'adjacencyOf'
 
 // Does the function registered under `name` carry `self` at parameter 0? ⛔ Absence answers `false` because
 // that is the SAFE direction for the one reader: a missing `true` only leaves a receiver bit crossing an edge
@@ -2000,35 +2009,24 @@ function declaresAReceiver(funcSignatures FuncSignatureMap, name ByteArray) retu
 end 'declaresAReceiver'
 
 // ⭐⭐⭐ **THE STORAGE COLUMN'S EDGE SET: the argument-is-a-parameter edges above, PLUS the parser's
-// receiver-owns-a-parameter's-array edges (ARR4).** `StorageReachEdge` carries the measurement — a
-// use-after-free that compiled clean with the suite green over it — and the ruling that keeps these rows off
-// E3019's column.
+// receiver-owns-a-parameter's-array edges.** `StorageReachEdge` states the use-after-free they prevent and the
+// ruling that keeps them off E3019's column.
 //
 // ⚠ **THE BASE SET IS RETURNED UNCHANGED WHEN THERE IS NOTHING TO ADD**, which is not an optimisation
 // dressed as a shortcut: the two columns then genuinely close over one relation and the caller's `is` test
 // says so, where a copy would be a second list nothing keeps equal to the first.
 function collectStorageReachEdges(base CallParamEdges, module MaxonModule, funcSignatures FuncSignatureMap, funcIndexByName FuncIndexByName) returns CallParamEdges
-	var anyRecorded = false
-
-	for func in module.functions 'anyToAdd'
-		anyRecorded = anyRecorded or func.borrowFacts.storageReach.count() > 0
-	end 'anyToAdd'
-
-	if not anyRecorded 'theTwoColumnsCloseOverOneRelation'
-		return base
-	end 'theTwoColumnsCloseOverOneRelation'
-
-	var edges = base.copy()
+	var reachRows = CallParamEdges.create()
 
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectStorageReachEdges: functions.get OOB at {i}")
 
 		for reach in func.borrowFacts.storageReach 'eachReach'
-			addStorageReachEdges(reach, callerIndex: i, callerParamCount: func.paramCount, funcSignatures: funcSignatures, funcIndexByName: funcIndexByName, edges: edges)
+			addStorageReachEdges(reach, callerIndex: i, callerParamCount: func.paramCount, funcSignatures: funcSignatures, funcIndexByName: funcIndexByName, edges: reachRows)
 		end 'eachReach'
 	end 'eachFunc'
 
-	return edges
+	return base.widenedBy(reachRows)
 end 'collectStorageReachEdges'
 
 // One parser-recorded reach, expanded into one edge per caller parameter that owns the receiver's storage.
@@ -2317,13 +2315,13 @@ function propagateAcrossEdges(byCallee CsrGraph, masks ParamPositionMaskArray, e
 	// ⚖ **A CALLEE THAT CALLS A SELF-WRITING METHOD ON ITS PARAMETER IS NOT MUTATING THAT PARAMETER** (user
 	// ruling). A method writing a field of its OWN receiver is legal on a `let` at a direct call —
 	// `let c = Counter.create()` then `c.bump()` — and the exemption must survive a frame, or `tick(c)` whose
-	// body is `c.bump()` would refuse what `c.bump()` allows. So the record-write column stops a method's own
+	// body is `c.bump()` would refuse what `c.bump()` allows. So the binding column stops a method's own
 	// receiver-slot bit HERE, at the edge, and only a callee that writes `p.field` itself — at whatever depth
 	// the chain reaches — reaches its caller's column and earns E3019 there.
 	//
-	// The other two columns exempt nothing: E3019's own asks the narrower question already (`writtenParamMask`
-	// records no self-field write at all), and E3070's asks whose borrowable storage is freed rather than who
-	// may be handed what.
+	// The other columns exempt nothing: E3019's narrow one asks the narrower question already (`writtenParamMask`
+	// records no self-field write at all), the record-write one answers for a subject the exemption does not
+	// cover, and E3070's asks whose borrowable storage is freed rather than who may be handed what.
 	let stopsAtTheReceiver = try receiverSlotStopsHere.get(calleeIndex) otherwise false
 
 	if stopsAtTheReceiver 'aSelfWriteIsNotAParameterMutation'
@@ -3752,23 +3750,16 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	end 'compilerOwnCall'
 
 	if not project.funcSignatures.contains(callee) 'unknownFn'
-		// ⭐⭐ **E3095, AND IT IS A SECOND PASS RE-EXAMINING A RESOLUTION ALREADY MADE — DELIBERATELY NOT
-		// E3063's SHAPE (N1c).**
-		//
-		// The typealias twin is a candidate-set computation baked INTO the lookup: the alias registry holds
-		// every declaration of a contested name under one bare key, so the ambiguity is discovered while
-		// resolving. Nothing of the sort is true here. A contested free function has NO bare declaration —
-		// each was registered under its own directory-qualified spelling — so by the time this pass runs the
-		// parser has already resolved the bare callee, already failed to give it a local meaning
-		// (`Parser.parseCallNamed`'s local-namespace tier), and is one line away from being told there is no
-		// such function. The candidate set has to be RECONSTRUCTED from the contest index, against a decision
-		// that has already been taken.
+		// ⭐⭐ **E3095 RE-ASKS A RESOLUTION THE PARSER ALREADY MADE.** A subdirectory's declaration of a contested
+		// free function is registered under its directory-qualified spelling, so a bare callee that found no single
+		// declaration this file may name (`ProgramSignatures.nameABareCallBinds`) reaches this arm still wearing
+		// the name as written. `ProgramSignatures.resolveFunctionName` answers again which candidates it chose among.
 		//
 		// ⚠ **IT SITS INSIDE THE `unknownFn` ARM, WHICH IS THE POINT.** "There is no function of this name"
 		// and "there are two and you must say which" are answers to one question, and only one of them may be
 		// given. Reporting E3095 ahead of the arm would leave E3004 to fire as well; reporting it after would
 		// never reach it.
-		if reportAmbiguousCrossFileCall(project, signatures: signatures, funcNames: funcNames, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousAcrossDirectories'
+		if reportAmbiguousCrossFileCall(project, signatures: signatures, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousAcrossDirectories'
 			return
 		end 'ambiguousAcrossDirectories'
 
@@ -3787,6 +3778,12 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	end 'unknownFn'
 
 	if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: callee, mint: mint, readerFilePath: filePath) 'notVisibleHere'
+		// A root declaration keeps the bare key, so a bare call can arrive here holding one this file may not
+		// name; it is no candidate, and the visible declarations elsewhere decide the refusal.
+		if reportAmbiguousCrossFileCall(project, signatures: signatures, callee: callee, callRange: callRange, filePath: filePath) 'ambiguousPastAnInvisibleRootDeclaration'
+			return
+		end 'ambiguousPastAnInvisibleRootDeclaration'
+
 		reportCalleeNotVisible(project, funcNames: funcNames, callee: callee, noun: noun, callRange: callRange, filePath: filePath)
 		return
 	end 'notVisibleHere'
@@ -3909,44 +3906,52 @@ function mintSpellsTheWholeCallee(mint CalleeMint) returns bool
 	end 'm'
 end 'mintSpellsTheWholeCallee'
 
-// ⭐⭐ **E3095 — A BARE CALL THAT COULD MEAN MORE THAN ONE DIRECTORY'S DECLARATION (N1c).** Answers whether
-// it reported, so `validateCall` can suppress the "no such function" it would otherwise give the same call.
+// ⭐⭐ **E3095 — A BARE CALL THAT COULD MEAN MORE THAN ONE DIRECTORY'S DECLARATION.** Answers whether it
+// reported, so `validateCall` can suppress the "no such function" it would otherwise give the same call.
 //
-// **THE CANDIDATE SET IS RECONSTRUCTED, NOT LOOKED UP**, which is the whole shape difference from E3063.
-// It walks every qualified spelling the contest index recorded for the bare name and keeps the ones that are
-// (a) really declared and (b) visible from this file — the second test being the one that stops a
-// file-private or out-of-subtree declaration from being offered as a fix the user cannot take. FEWER THAN
-// TWO survivors is not an ambiguity: with one, the caller's real mistake is that it did not qualify a name
-// it could have; with none, `validateCall`'s own E3004 is the honest answer and this stays quiet.
-//
-// ⚠ **`CalleeMint.notMinted` IS PASSED TO `calleeVisibleFrom` AND IT IS NOT A GUESS**: a contested name is
-// one a USER declared as a free function in two directories, so every candidate is a name the author wrote.
-// A minted callee is never in the contest index at all.
-//
-// Sorted through the shared `insertCandidateName`, so E3063 and E3095 order their candidates by one rule —
-// see there for the rule.
-function reportAmbiguousCrossFileCall(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, callRange SourceRange, filePath FilePath) returns bool
+// **THE CANDIDATE SET IS THE ONE THE PARSER CHOSE AMONG** (`ProgramSignatures.resolveFunctionName`), so a
+// declaration this file cannot name is neither what makes the call ambiguous nor offered as a fix. Asked
+// before either of `validateCall`'s other refusals — E3004 for no declaration, E3008/E3088 for an invisible
+// one — because both are true only once no two visible candidates remain.
+function reportAmbiguousCrossFileCall(project Project, signatures ProgramSignatures, callee ByteArray, callRange SourceRange, filePath FilePath) returns bool
+	match signatures.resolveFunctionName(callee, readerFilePath: filePath) 'resolution'
+		ambiguous(candidates) then reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(String.from(callee), candidates: renderAmbiguousCandidates(candidates), use: FunctionNameUse.call), line: callRange.line, column: callRange.column, filePath: filePath)
+		declaration or
+			undeclared then return false
+	end 'resolution'
+
+	return true
+end 'reportAmbiguousCrossFileCall'
+
+// Where an author's function name was written: the three doors E3095 refuses an ambiguous bare name at.
+export enum FunctionNameUse
+	call
+	value
+	enumCaseBacking
+end 'FunctionNameUse'
+
+// E3095's sentence, naming the door — a function value and an enum case's backing are not calls.
+export function ambiguousBareFunctionNameMessage(name String, candidates String, use FunctionNameUse) returns String
+	let subject = match use 'use'
+		call gives "bare-name call to '{name}'"
+		value gives "bare function name '{name}' used as a value"
+		enumCaseBacking gives "bare function name '{name}' backing an enum case"
+	end 'use'
+
+	return "Ambiguous {subject}: multiple visible definitions found. Qualify with a directory name. Candidates: {candidates}"
+end 'ambiguousBareFunctionNameMessage'
+
+// The candidate trailer, sorted through the shared `insertCandidateName` so E3063 and E3095 order their
+// candidates by one rule — see there for the rule.
+export function renderAmbiguousCandidates(spellings ByteArrayArray) returns String
 	var candidates = StringArray.create()
 
-	for spelling in signatures.contestedFreeFunctionSpellings(callee) 'eachSpelling'
-		if not project.funcSignatures.contains(spelling) 'noSuchDeclarationAfterAll'
-			continue
-		end 'noSuchDeclarationAfterAll'
-
-		if not calleeVisibleFrom(project, signatures: signatures, funcNames: funcNames, callee: spelling, mint: CalleeMint.notMinted, readerFilePath: filePath) 'notAFixThisFileCouldTake'
-			continue
-		end 'notAFixThisFileCouldTake'
-
+	for spelling in spellings 'eachSpelling'
 		insertCandidateName(candidates, candidate: String.from(spelling))
 	end 'eachSpelling'
 
-	if candidates.count() < 2 'notAnAmbiguity'
-		return false
-	end 'notAnAmbiguity'
-
-	reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: "Ambiguous bare-name call to '{String.from(callee)}': multiple visible definitions found. Qualify with a directory name. Candidates: {renderCandidateList(candidates)}", line: callRange.line, column: callRange.column, filePath: filePath)
-	return true
-end 'reportAmbiguousCrossFileCall'
+	return renderCandidateList(candidates)
+end 'renderAmbiguousCandidates'
 
 // The two refusals, told apart by the TIER the declaration wrote — E3008 for a file-private callee, E3088
 // for one scoped to a directory subtree the caller is outside of. Both messages are pinned byte for byte
@@ -4519,14 +4524,9 @@ end 'buildEffectFreeSummary'
 // `true` reads all three as effectful and lets `_ = m.get(k)` compile clean where E3064 is owed. One body is
 // shared across instantiations, so the candidates have to be named.
 //
-// ⚠ **`ServiceProgramSurvey.possibleIndirectCallTargets` ASKS THE SAME QUESTION FOR E3143 AND ANSWERS IT
-// FROM A DIFFERENT STORE — deliberately, and neither may be swapped for the other.** That one enumerates
-// `project.witnessSlotImpls`, the members CONFORMANCE accepted, over every requirement at once; this one
-// enumerates by requirement NAME over the declared functions. Its store is the narrower of the two and its
-// own header records the gap (a builtin conformer files no slot impl), which is affordable there — it is
-// UNIONED with the address-taken set and only widens a refusal — and is not affordable here, where a missing
-// candidate would call a dispatch pure and REFUSE a legal program. A change to how conformance is recorded
-// reaches that one and cannot reach this one, which is the point: this scan is complete by construction.
+// ⭐ **E3143's WIDENING ASKS THE SAME QUESTION AND READS THIS ANSWER** (`ServiceProgramSurvey.widenFrom`): a
+// store narrower than every declared member wearing the name would leave out a member a dispatch can land on,
+// which there is a missed refusal — so both rules need a scan that is complete by construction, and this is it.
 //
 // ⚠ **THE KEY IS THE METHOD NAME, WHICH OVER-APPROXIMATES ON PURPOSE.** An unrelated `equals` that prints
 // joins `Equatable.equals`'s candidate set and makes every dispatch through it effectful. That costs a MISSED
@@ -4538,7 +4538,7 @@ typealias WitnessTargetsByRequirement = Map with (ByteArray, ByteArrayArray)
 // The two MEMOS and the two stores they are derived from, carried together because both must outlive the
 // per-op walk: one transitive slot walk per interface and one candidate scan per requirement, never one per
 // dispatch (`checkCalls` keeps the slot memo for that exact reason, stated there).
-type WitnessDispatchTargets
+module type WitnessDispatchTargets
 	let signatures as ProgramSignatures
 	let functions as IrFunctionArray
 
@@ -4549,7 +4549,7 @@ type WitnessDispatchTargets
 	var slots as WitnessSlotsByDeclIndex
 	var byRequirement as WitnessTargetsByRequirement
 
-	static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
+	module static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
 		return Self{signatures: signatures, functions: functions, bareNames: ByteArrayArray.create(), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create()}
 	end 'create'
 
@@ -4583,7 +4583,7 @@ type WitnessDispatchTargets
 
 	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
 	// set and the argument check cannot come to name different requirements for one op.
-	function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns ByteArray
+	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns ByteArray
 		return witnessSlotAt(self.signatures, witnessSlots: self.slots, dispatched: dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
 	end 'requirementNameAt'
 
@@ -4602,7 +4602,7 @@ type WitnessDispatchTargets
 	// pull is one no dispatch here can land on, since the witness table that would name it would then hold a
 	// relocation to a symbol with no code. A demand walk that missed such a body would already be
 	// miscompiling that dispatch, so this cannot be the first thing to notice.
-	function candidatesFor(requirement ByteArray) returns ByteArrayArray
+	module function candidatesFor(requirement ByteArray) returns ByteArrayArray
 		if let memoized = try self.byRequirement.get(requirement) 'alreadyScanned'
 			return memoized
 		end 'alreadyScanned'
@@ -4705,19 +4705,6 @@ end 'buildYieldingSummary'
 module function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
 	return reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: nodeCount), seeds: seeds)
 end 'markSeededCallers'
-
-// ⭐⭐ **THE FORWARD TWIN — "what can a seed REACH?" — and it is the SAME engine with the two columns the
-// other way round.** Every summary above asks which functions are AFFECTED BY a fact, which travels up into
-// callers; E3143 asks the opposite question, *"what does a message run?"*, which travels down into callees.
-// The mark walk itself is direction-free — it drains a worklist over whatever adjacency it is handed — so
-// the whole difference between the two questions is which column `buildCsr` rows by, and that is stated
-// here, once, rather than by a second walk.
-//
-// ⚠ The engine keeps `reverseReachabilityMark`'s name because REVERSE is what it is to its four other
-// callers; renaming it for this one would make four correct call sites read wrongly.
-module function markSeededCallees(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
-	return reverseReachabilityMark(buildCsr(edges.callerIndices, to: edges.calleeIndices, nodeCount: nodeCount), seeds: seeds)
-end 'markSeededCallees'
 
 // The SEED: does this function's OWN body reach a park point, before the call graph is closed? The same walk
 // records the caller-callee edges, so the graph and the seeds come out of ONE pass — `functionShowsAnEffect`'s
@@ -5205,7 +5192,7 @@ end 'listMutatorCallee'
 // `isRuntimeCallee` (the `__mm_` heap band) already draws exactly this line for exactly this reason; the
 // managed, String, List and type-parameter families are the same fact one prefix over.
 module function ownershipBookkeepingCallee(callee ByteArray) returns bool
-	return isRuntimeCallee(callee) or callee.equals(StrRetainName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName) or callee.equals(RetainTypeParamName) or callee.equals(DropTypeParamName) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName)
+	return isRuntimeCallee(callee) or callee.equals(StrRetainName) or callee.equals(StrDecrefName) or callee.equals(StrCloneName) or callee.equals(StrCopyName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedSoleAloneName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ManagedShareAloneName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ListCloneName) or callee.equals(ListCloneManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName) or callee.equals(RetainTypeParamName) or callee.equals(DropTypeParamName) or callee.equals(RetainExistentialName) or callee.equals(DropExistentialName)
 end 'ownershipBookkeepingCallee'
 
 // ⭐ **A READ OF A CONTAINER THE CALLER ALREADY OWNS**, plus the two CREATE entries that belong in the
@@ -5719,9 +5706,8 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 	// two i64 compares, with no membership probe in front of them.
 	let (mask, recordWriteMask, bindingWriteMask) = mutationSummary.writesOf(callee)
 
-	// `StorageProvenance` asks which arguments a call writes (`noteArgumentWritten`) only of a function with an
-	// immutable name to guard, since only its doors read them (`ProvenanceTracer.gatherWrittenTargets`).
-	let asksWrittenArguments = func.provenanceSites().immutableBindings.values.count() > 0
+	// `StorageProvenance` asks which arguments a call writes (`noteArgumentWritten`) only where its doors read them.
+	let asksWrittenArguments = provenance.enteredFunctionAsksWrittenArguments(func)
 
 	// A library body nothing in the program reaches — called only from a function nothing calls — was never read,
 	// so its summary says nothing about what it writes: every argument is taken as written by the door that asks.

@@ -1,0 +1,26 @@
+// The banner program, plus a generic type whose only instance is an argument-inferred call. No declaration names
+// `Box with int`, so the front end files it once the parse of `main` mints it and settles the signature index a
+// second time — which is where a define problem found while settling can be found twice.
+typealias ExitCode = int(0 to 255)
+typealias Tally = int(0 to 1000)
+
+let Banner = "default"
+
+module type Box uses T
+	export let v as T
+
+	module static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	module function pack() returns Tally
+		let t = (self.v, 1)
+		return t.1
+	end 'pack'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(5)
+	print("{Banner} {b.pack()}\n")
+	return 0
+end 'main'

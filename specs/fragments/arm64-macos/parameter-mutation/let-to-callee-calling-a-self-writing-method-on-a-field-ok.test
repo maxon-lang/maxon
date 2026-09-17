@@ -1,0 +1,123 @@
+// Test: let-to-callee-calling-a-self-writing-method-on-a-field-ok
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Counter'
+
+type Holder
+	export var inner as Counter
+
+	static function create() returns Self
+		return Self{inner: Counter.create()}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.inner.bump()
+end 'nudge'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	nudge(h)
+	nudge(h)
+	return h.inner.n as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#7:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+  __il_cont#6:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+  __il_body#10:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_body#12:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, 1
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#14
+  __rc_chk#15:
+    arm64.cmp x2, 1000
+    arm64.b.gt __rc_panic#14
+  __rc_ok#13:
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+  __il_body#16:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_body#18:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, 1
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic#20
+  __rc_chk#21:
+    arm64.cmp x2, 1000
+    arm64.b.gt __rc_panic#20
+  __rc_ok#19:
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
+  __il_cont#8:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.bl __destruct_Holder
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#14:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at let-to-callee-calling-a-self-writing-method-on-a-field-ok.test:12: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#20:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at let-to-callee-calling-a-self-writing-method-on-a-field-ok.test:12: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at let-to-callee-calling-a-self-writing-method-on-a-field-ok.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Nineteen corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Twenty corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -37,6 +37,7 @@ SERVER its tests spawn.
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.test.maxon` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
+| `warm-rebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `WarmRebuildHarness.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -83,6 +84,8 @@ tests/
     unknown-name-refused.test.maxon         a define naming nothing is an error
     non-literal-refused.test.maxon          only a written-out string literal may be replaced
     ambiguous-name-refused.test.maxon       one name reaching two declarations is refused, naming both
+    reported-once.test.maxon                a refused define is reported once when a parse settles the index again
+    reported-on-recheck.test.maxon          a refused define is reported by the second check of one project too
     fixtures/<program>/...                  stored names only - see rule 1
   build-manifest/
     BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check
@@ -104,8 +107,10 @@ tests/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
     monitor-sched-events.test.maxon         `monitor --filter=sched` shows a green thread's spawn and await
+    sidecar-local-types.test.maxon          every local of a two-file program is described under its own type
     fixtures/spans/main.maxon.fixture       stored name only - see rule 1
     fixtures/greenthread/main.maxon.fixture stored name only - see rule 1
+    fixtures/twofiles/<name>.maxon.fixture  stored names only - see rule 1
   coverage/
     CoverageHarness.maxon                   the shared half: the spawn, the staging, the report readers
     coverage-line-states.test.maxon         the four line states, each attached to its own line
@@ -179,6 +184,11 @@ tests/
     first-program-ranged-type.test.maxon    its "Adding a ranged type" prints `listening on 8080`, exit 0
     first-program-labeled-blocks.test.maxon its "Labeled blocks" prints `iteration 0` to `iteration 9`, exit 0
     first-program-try-otherwise.test.maxon  its "Fallible operations" prints `seat 1: Grace` then the fallback `seat 5: empty`, exit 0
+  warm-rebuild/
+    WarmRebuildHarness.maxon                the shared half: the staging and the spawn
+    warm-equals-cold.test.maxon             `verify-warm-rebuild` holds on a program whose parses mint instances
+    filed-type-reuse.test.maxon             a bytes-only edit re-parses one file when a parse files a type
+    fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
     McpHarness.maxon                        the shared JSON-RPC stdio harness and JSON helpers
     standard.test.maxon                     standard user-facing MCP server tests (8 standard tools)
@@ -218,7 +228,7 @@ Two independent reasons, and the second is the one that bites:
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
 `profile/ProfileHarness.maxon`, `run/RunHarness.maxon`, `cli/CliHarness.maxon`,
-`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
+`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
 named so the runner does not take them for test files. That is fine and is not an exception being
 smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
 `lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s are string constants inside its
@@ -301,13 +311,19 @@ Written down because a limit nobody states gets mistaken for coverage.
   like one that was already perfect. One fixture pins that for one file; nothing tells
   you it is happening to two hundred.
 
-## `parallel-compile/` — the backend's worker pools
+## `parallel-compile/` — the compiler's worker pools
 
 It gates a COMPILER phase rather than a driver command, and it lives here for the same reason `fmt/` does: what it asserts is what `maxon build`
 REPORTS and EMITS at two processor counts, which a `specs` program cannot observe about
 the compiler that compiled it. `parallel.test.maxon` is the shared half; each contract line has
 its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-order`, `log-order`,
-`pressure-refusal` — and `fixtures/<program>/main.maxon.fixture` holds the programs. It applies
+`pressure-refusal`, and for the front end's pool:
+
+- `front-end-pool-pinned` — under `MAXON_MAX_PROCS=1` the front end reports one worker over one processor
+- `front-end-pool-default` — at the default it reports min(P, F) workers over P processors, exactly once, F being the most files one drain dispatched
+- `front-end-byte-identical` — a two-file project whose parses mint instances in both files, and one of whose files is folded again with the other's row-set answer, emits the same image at both counts
+
+`fixtures/<program>/` holds the programs, each as `<name>.maxon.fixture`. It applies
 rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),
 and departs from rule 5 on rule 5's own terms: the contracts need two compiles each, and `maxon
 test` runs files concurrently, so every case stages into a directory named for ITSELF under
@@ -341,6 +357,11 @@ source file, and every function the fixture DECLARES, each with a non-empty code
 `--symbolize`, handed an offset the dump itself published inside one of those functions, must answer that
 file and a line inside that function's body. That last one is the JOIN: a function table and a line table
 can each be internally consistent and still disagree, and only asking one about the other can see it.
+
+**`sidecar-local-types`** — a two-file project, because one file cannot see this: each file interns its type
+names into a table of its own and the merge renumbers every file but the first, so a local's declared type
+names the right type in the sidecar only if the renumbering reached it. Every `let <name> = <Type>.create(`
+binding in the staged sources is a local whose row must end `: <Type>`.
 
 ⭐ **WHAT IS PINNED IS RELATIONSHIPS, NEVER NUMBERS.** Code offsets, row counts, struct sizes, a type's
 position in the table and the shape of a prologue all move with codegen and with the stdlib a program
@@ -581,6 +602,25 @@ Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs fi
 `-o` keeps each build out of the tree lock. A document's program has no file of its own, so it is cut
 out of the document as it stands and written into `temp/examples/<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
 more than once. It runs at the default deadline.
+
+## `warm-rebuild/` — a compile that reuses memos emits what a cold one emits, and reuses what it should
+
+Two cases, each over `maxon verify-warm-rebuild <dir>`: the driver compiles one project cold, edits the last file
+the author wrote by bytes alone, compiles the same project warm, and compares what that emits with a cold
+compile of the edited sources. A bytes-only edit rebuilds the signature index and leaves every other file's
+parse reused, so whatever a reused artifact says about the index has to mean the same thing in the rebuilt one.
+
+⭐ **THE FIXTURE IS THE CASE.** `nested/` has two files whose parses each mint an instance no declaration names —
+a holder's cell read through a concrete holder — and the edited file is LAST in fold order, so its re-parse runs
+after the reused artifact, which is where an instance id could be claimed twice.
+
+`filed/` (`filed-type-reuse.test.maxon`) has a generic type whose only instance is an argument-inferred call, so
+the front end files it and settles the index again. The filed type is part of the key every parse memo reads, so
+the case asserts the driver's invalidation property: the edit re-parses the edited file and no other.
+
+⚠ **IT EXCEEDS THE 5,000 ms PER-FILE DEADLINE**: the driver compiles the program several times. Run the corpus
+with `--timeout=60000`. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging
+directory under `temp/warm-rebuild/`).
 
 ## `mcp/` — JSON-RPC MCP server for end users and compiler contributors
 

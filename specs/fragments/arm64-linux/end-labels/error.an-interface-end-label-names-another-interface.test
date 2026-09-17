@@ -1,0 +1,25 @@
+// Test: error.an-interface-end-label-names-another-interface
+typealias Count = int(0 to 10)
+
+interface Sized
+	function size() returns Count
+end 'Size'
+
+type Box implements Sized
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function size() returns Count
+		return self.n
+	end 'size'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.create().size() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:6:1: Mismatched end label: expected 'Sized', got 'Size'

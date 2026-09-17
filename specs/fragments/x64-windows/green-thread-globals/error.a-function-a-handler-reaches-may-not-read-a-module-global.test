@@ -1,0 +1,40 @@
+// Test: error.a-function-a-handler-reaches-may-not-read-a-module-global
+var noEntries = IntArray.create()
+
+function holdsNothing(column IntArray) returns bool
+	return column is noEntries
+end 'holdsNothing'
+
+function entryCount(column IntArray) returns Integer
+	if holdsNothing(column) 'shared'
+		return 0
+	end 'shared'
+
+	return column.count()
+end 'entryCount'
+
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function count(by Integer) returns Integer
+		var column = IntArray.create()
+		column.push(by)
+		return entryCount(column)
+	end 'count'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.count(5) otherwise 0
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+---
+CompilerError:
+error E3143: <fragment>:5:19: `holdsNothing` reads the module-level `noEntries`, and the message `Counter.count` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `noEntries` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store. Keep it in a field of `self` and hand it back through a reply, or make `noEntries` a `let`
+note: <fragment>:31:10: the `spawn` that makes `Counter` a service

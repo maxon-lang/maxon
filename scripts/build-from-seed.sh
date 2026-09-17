@@ -8,6 +8,8 @@
 #   * **ITS OWN RUNTIME IS THE SEED'S.** `C1` emits the new runtime into what it builds, but the
 #     runtime inside `C1` was emitted by the previous release. `spec-test`'s worker IS the compiler,
 #     so a suite run by `C1` exercises last release's scheduler, subprocess and console handling.
+#   * **ITS FRONT END RUNS IN PROCESS.** A seed never binds `FrontEndPool.RuntimeMovesSharedRecords`, so `C1`
+#     lexes and parses serially, and only a compile `C2` runs reports the pool under `--log=compiler:debug`.
 #   * **IT REPORTS `dev`.** A seed older than named manifest targets reads `maxon-bin` as a PATH, so
 #     `build.maxon` — where the version is derived from the ref and handed to `--define` — never runs.
 #     MEASURED on the 0.1.1 rehearsal: the x64-windows archive came out as `maxon-dev-x64-windows`.

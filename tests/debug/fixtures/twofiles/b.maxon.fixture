@@ -1,0 +1,35 @@
+// The second file of the two-file debug-info fixture: two types of its own, each bound to a local whose
+// declared type the sidecar must name. It calls the first file's function from two sites, which keeps that
+// function out of the called-once inliner and so keeps its own local in the sidecar.
+typealias Amount = int(0 to 1000)
+
+type Beta
+	export var b as Amount
+
+	static function create(b Amount) returns Beta
+		return Self{b: b}
+	end 'create'
+end 'Beta'
+
+type Gamma
+	export var g as Amount
+
+	static function create(g Amount) returns Gamma
+		return Self{g: g}
+	end 'create'
+end 'Gamma'
+
+function main() returns ExitCode
+	let betaValue = Beta.create(4)
+	let gammaValue = Gamma.create(5)
+	var sum = betaValue.b + gammaValue.g
+	var j = 0
+
+	while j < 3 'loop'
+		sum = sum + (accumulateAlpha(j) as Amount)
+		j = j + 1
+	end 'loop'
+
+	sum = sum + (accumulateAlpha(7) as Amount)
+	return (sum mod 100) as ExitCode
+end 'main'

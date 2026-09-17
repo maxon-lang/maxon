@@ -70,10 +70,16 @@ The rule is about **who writes**, not about what is written, and not about globa
 | a handler READS a module-level `var` | **refused** — the use-after-free above; the writer need not be another handler, `main` will do |
 | a function a handler CALLS touches a module-level `var` | **refused** — transitive through the call graph, exactly as a service's blocking edge is (`services.md`'s `cycle-through-a-free-function-is-refused`) |
 | a handler writes `self.<field>` | **legal** — a service's fields are the service's, reached by one green thread, which is the whole point of putting state there |
-| a handler READS a module-level `let` | **legal** — an immortal, never-written word has no second writer to race, and this is the escape hatch every configuration constant takes |
+| a handler READS a module-level `let` | **legal** — an immortal, never-written word has no second writer to race, and this is the escape hatch every configuration constant takes. A `let` record `__module_init` has to BUILD is marked shared before `main`, so the counts every handler steps on it are atomic |
+| a handler — or a function one reaches — reads a `let` whose graph no share walk can mark (an OS handle) | **refused** (E3163) — nothing could make the counts the handlers step on it atomic |
+| the same `let`, read only by functions no handler reaches | **legal** — only `main` counts it, so it stays unmarked |
+| a global initializer reaches a `spawn` | **refused** (E3164) — the `let`s are marked only once the last initializer returns, so no other green thread may exist before then |
+| a `let` initializer reaches a module-level `var` holding a record | **refused** (E3165), spawn or no spawn — a record the `var` owns has an owner no `let` holds, so no mark could make it shared |
+| a `var` initializer may be handed a `let`'s record, or one holding it | **refused** (E3166), spawn or no spawn — the `var` would be that owner |
 | a plain function, not reachable from any handler, touches a module-level `var` | **legal** — the program spawning a service somewhere else does not make `main`'s own bookkeeping concurrent |
-| a handler reaches an INDIRECT or WITNESS dispatch, and a function whose ADDRESS IS TAKEN (or which satisfies a witness slot) assigns to a module-level `var` | **refused** — the target is chosen at run time, so no edge can be followed and every function the dispatch could land on is treated as reachable |
-| the same, but the assigning function's address is taken nowhere and it satisfies no witness slot | **legal** — it has no address in the image, so no dispatch can reach it. Marking it anyway refused `stdlib/Log.maxon` in every service program that used an interface |
+| a handler CALLS A CLOSURE VALUE, and a function whose ADDRESS IS TAKEN assigns to a module-level `var` | **refused** — the target is chosen at run time, so no edge can be followed and every function the call could land on is treated as reachable |
+| a handler reaches a WITNESS dispatch, and a function wearing the dispatched requirement's name assigns to a module-level `var` | **refused**, for the same reason — a witness table holds the members of a conformance, so every member wearing that name is treated as reachable |
+| the same, but the assigning function's address is taken nowhere and it wears no name a dispatch the handler reaches is for | **legal** — no dispatch can reach it. Marking it anyway refused `stdlib/Log.maxon` in every service program that used an interface, and a closure in `main` in every service program that keeps a `Map` |
 
 ⛔⛔ **THAT LAST ROW IS THIS RULE'S REFUSING DIRECTION, AND IT IS THE EXACT OPPOSITE OF `services.md`'s
 DEADLOCK RULE ON THE SAME EDGES.** `ServiceCallCycleCheck`'s header says an unknown callee *"contributes no
@@ -358,6 +364,55 @@ error E3143: <fragment>:23:12: the message `Reader.size` reads the module-level 
 note: <fragment>:37:11: the `spawn` that makes `Reader` a service
 ```
 
+<!-- test: error.a-function-a-handler-reaches-may-not-read-a-module-global -->
+<!-- unsupported-targets: wasm32-wasi -->
+**THE READ HALF TWO HOPS OUT, AND IT IS THE SHAPE A COPY-ON-WRITE ANCHOR TAKES.** `Counter.count` names no
+global; it calls `entryCount`, which calls `holdsNothing`, and only that asks whether a column IS the shared
+empty `noEntries` — an identity test, which READS the slot. A work function run from a handler is refused for
+exactly this, however deep in its call graph the test sits: the anchor has to belong to the work, not to the
+module, which is why the compiler's own parser holds its anchors per parser (`ParserAnchors`).
+```maxon
+var noEntries = IntArray.create()
+
+function holdsNothing(column IntArray) returns bool
+	return column is noEntries
+end 'holdsNothing'
+
+function entryCount(column IntArray) returns Integer
+	if holdsNothing(column) 'shared'
+		return 0
+	end 'shared'
+
+	return column.count()
+end 'entryCount'
+
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function count(by Integer) returns Integer
+		var column = IntArray.create()
+		column.push(by)
+		return entryCount(column)
+	end 'count'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.count(5) otherwise 0
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+```
+```maxoncstderr
+error E3143: <fragment>:5:19: `holdsNothing` reads the module-level `noEntries`, and the message `Counter.count` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `noEntries` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store. Keep it in a field of `self` and hand it back through a reply, or make `noEntries` a `let`
+note: <fragment>:31:10: the `spawn` that makes `Counter` a service
+```
+
 <!-- test: a-handler-may-write-its-own-field -->
 **THE OVER-REFUSAL GUARD THAT MATTERS MOST — the cure the two refusals above prescribe must itself
 compile.** `self.count = self.count + by` is a store to a word owned by ONE green thread: the service's
@@ -435,6 +490,385 @@ scaled=42
 ```
 ```exitcode
 42
+```
+
+<!-- test: every-handler-may-co-own-a-global-built-at-run-time -->
+**A `let` WHOSE RECORD `__module_init` BUILDS IS READ BY EVERY THREAD TOO, AND ITS COUNT IS ONE WORD THEY ALL
+STEP.** A `let` no image can hold — here a factory with a loop in it — is a counted record, and a handler that
+puts it somewhere that outlives a statement takes an owner on it and gives the owner back. Eight handlers
+doing that at once on different OS threads step one refcount, so the record is marked shared once it is built,
+exactly as a lent graph is, and every count on it from then on is atomic. Unmarked, a lost increment frees the
+roster under a reader and a lost decrement leaks it.
+```maxon
+type Roster
+	export var names as NameArray
+
+	static function create(count Integer) returns Self
+		var names = NameArray.create()
+
+		for i in 0 upto count 'fill'
+			names.push("member {i}")
+		end 'fill'
+
+		return Self{names: names}
+	end 'create'
+end 'Roster'
+
+let roster = Roster.create(4)
+
+type Churner
+	var served as Integer
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function churn(rounds Integer) returns Integer
+		var held = 0
+
+		for _ in 0 upto rounds 'eachRound'
+			var kept = HeldNamesArray.create()
+			kept.push(roster.names)
+			held = held + kept.count()
+		end 'eachRound'
+
+		return held
+	end 'churn'
+end 'Churner'
+
+function main() returns ExitCode
+	var replies = ChurnReplyArray.create()
+
+	for _ in 0 upto ChurnerCount 'eachChurner'
+		let h = spawn Churner.create()
+		replies.push(h.churn(RoundsPerChurner))
+	end 'eachChurner'
+
+	var held = 0
+
+	for r in replies 'eachReply'
+		held = held + (try await r otherwise 0)
+	end 'eachReply'
+
+	print("held={held} names={roster.names.count()}\n")
+	return 0
+end 'main'
+
+let ChurnerCount = 8
+let RoundsPerChurner = 200000
+
+typealias Integer = int(i64.min to i64.max)
+typealias NameArray = Array with String
+typealias HeldNamesArray = Array with NameArray
+typealias ChurnReplyArray = Array with Promise with (Integer, ServiceError)
+```
+```stdout
+held=1600000 names=4
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-message-may-not-read-a-let-no-share-walk-can-mark -->
+<!-- unsupported-targets: wasm32-wasi -->
+**AND A `let` THE MARK CANNOT REACH IS REFUSED WHERE A MESSAGE READS IT.** An OS handle has a destructor and no
+walk, so nothing can make the counts on a record holding one atomic. The refusal sits at the read the message
+reaches, and the note is the declaration.
+```maxon
+type Listening
+	export var listener as TcpListener
+
+	static function open() returns Self
+		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("bind")
+		return Self{listener: listener}
+	end 'open'
+end 'Listening'
+
+let listening = Listening.open()
+
+type Porter
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function port() returns Integer
+		self.asked = self.asked + 1
+		return listening.listener.port()
+	end 'port'
+end 'Porter'
+
+function main() returns ExitCode
+	let h = spawn Porter.create()
+	let p = try await h.port() otherwise 0
+	return (0 if p > 0 else 1) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3163: <fragment>:22:10: the message `Porter.port` reads the module-level `listening`, and it holds a `Listening` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance. A message runs on a green thread the scheduler may put on any OS thread, so the counts every message steps on `listening` must be atomic, and no share walk can mark it so. Keep it in a field of the service that reads it
+note: <fragment>:11:5: `listening` is declared here
+```
+
+<!-- test: a-let-no-message-reads-may-hold-an-os-handle-beside-a-service -->
+**THE SAME `let`, READ ONLY BY `main`, IS LEGAL.** No message reaches `listening`, so nothing but `main`'s green
+thread counts it and it needs no mark.
+```maxon
+type Listening
+	export var listener as TcpListener
+
+	static function open() returns Self
+		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("bind")
+		return Self{listener: listener}
+	end 'open'
+end 'Listening'
+
+let listening = Listening.open()
+
+type Doubler
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function double(n Integer) returns Integer
+		self.asked = self.asked + 1
+		return n * 2
+	end 'double'
+end 'Doubler'
+
+function main() returns ExitCode
+	let h = spawn Doubler.create()
+	let d = try await h.double(21) otherwise 0
+	let open = listening.listener.port() > 0
+	print("d={d} open={open}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+d=42 open=true
+```
+```exitcode
+0
+```
+
+<!-- test: lets-reaching-one-record-are-marked-through-one-visit-table -->
+**ONE VISIT TABLE SERVES EVERY `let`.** `pair` holds `bag` twice and `bag`'s own slot holds it too, so the
+record has three owners, all of them `let`s. Marked `let` by `let`, the second and third meetings would read
+as owners no walk met; one table across every `let` counts all three and the program starts.
+```maxon
+type Bag
+	export var n as Integer
+	export var names as NameArray
+
+	static function create() returns Self
+		var names = NameArray.create()
+
+		for i in 0 upto 3 'fill'
+			names.push("name {i}")
+		end 'fill'
+
+		return Self{n: 7, names: names}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	static function around(bag Bag) returns Self
+		return Self{left: bag, right: bag}
+	end 'around'
+end 'Pair'
+
+let bag = Bag.create()
+let pair = aroundBag()
+
+function aroundBag() returns Pair
+	return Pair.around(bag)
+end 'aroundBag'
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return pair.right.n + bag.names.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let h = spawn Reader.create()
+	let n = try await h.read() otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias NameArray = Array with String
+```
+```stdout
+n=10
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-spawn-a-global-initializer-reaches-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+**A GLOBAL INITIALIZER MAY NOT START A SERVICE.** `Box.start` spawns `Reader` while `box` is being built, before
+`roster` is marked shared, so `Reader.read` could step `roster`'s plain count from another OS thread.
+```maxon
+type Roster
+	export var names as NameArray
+
+	static function create(count Integer) returns Self
+		var names = NameArray.create()
+
+		for i in 0 upto count 'fill'
+			names.push("member {i}")
+		end 'fill'
+
+		return Self{names: names}
+	end 'create'
+end 'Roster'
+
+let roster = Roster.create(4)
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return roster.names.count()
+	end 'read'
+end 'Reader'
+
+type Box
+	export var h as Reader.handle
+
+	static function start() returns Self
+		let h = spawn Reader.create()
+		_ = h.read()
+		return Self{h: h}
+	end 'start'
+end 'Box'
+
+let box = Box.start()
+
+function main() returns ExitCode
+	let n = try await box.h.read() otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias NameArray = Array with String
+```
+```maxoncstderr
+error E3164: <fragment>:35:11: `Box.start` spawns `Reader`, and a module-level global's initializer reaches it — initializers run before `main`, and the `let`s every message may read are marked shared only once the last one returns, so a service started here could step a plain count on one concurrently with the mark or read a global not yet built. Start the service in `main`, or in a function `main` calls
+note: <fragment>:41:5: the initializer of `box`, which reaches it
+```
+
+<!-- test: error.a-let-initializer-may-not-read-a-managed-var-beside-a-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+**A `let` THAT HOLDS WHAT A `var` OWNS CANNOT BE MARKED SHARED.** `l` is the record `g` owns, so marking `l`'s
+graph before `main` would meet an owner no `let` holds. The program is refused at compile time (E3165, owned
+by `static-variables.md`) rather than stopping before `main` runs.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return g
+	end 'current'
+end 'Box'
+
+var g = Box.create()
+let l = Box.current()
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return l.n
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let h = spawn Reader.create()
+	let n = try await h.read() otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3165: <fragment>:10:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:14:5: `g` is declared here
+```
+
+<!-- test: error.a-var-initializer-may-not-take-a-lets-record-beside-a-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+**AND A `var` MAY NOT TAKE WHAT A `let` HOLDS.** `v` would be an owner of `a`'s record that no `let` is, so marking
+`a` shared before `main` would meet it. Refused at compile time (E3166, owned by `static-variables.md`).
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+end 'Box'
+
+let a = Box.create()
+var v = Box.current()
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return a.n
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let h = spawn Reader.create()
+	let n = try await h.read() otherwise 0
+	print("n={n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3166: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
 <!-- test: a-plain-function-may-write-a-module-global -->
@@ -560,4 +994,116 @@ n=10 keys=0
 ```
 ```exitcode
 10
+```
+
+<!-- test: a-witness-dispatch-in-a-handlers-cone-does-not-implicate-a-closure -->
+⭐⭐ **A WITNESS DISPATCH LANDS ON A MEMBER WEARING ITS REQUIREMENT'S NAME, AND NEVER ON A CLOSURE.** The
+handler looks a key up in a `Map`, and a `Map` hashes and compares its key through a witness slot — so every
+handler that keeps a map is a handler whose cone holds a run-time dispatch. `bookKeeping` writes a module
+global and its address is taken, exactly as in `error.a-dispatch-the-compiler-cannot-follow-widens-the-rule`;
+what differs is that no closure is CALLED anywhere a message can run. A witness table holds a conformance's
+members and nothing else, so the dispatch can reach every `hash` and every `equals` the program declares, and
+cannot reach `bookKeeping`. Widened to every address-taken function, this program was refused, and so was
+every service a compiler's own pool runs, whose handlers index maps throughout.
+```maxon
+var ledger = 0
+
+typealias Step = function(Integer) returns Integer
+
+function bookKeeping(by Integer) returns Integer
+	ledger = ledger + by
+	return ledger
+end 'bookKeeping'
+
+function callIndirect(f Step, n Integer) returns Integer
+	return f(n)
+end 'callIndirect'
+
+typealias Tally = Map with (String, Integer)
+
+type Counter
+	var counts as Tally
+
+	static function create() returns Self
+		return Self{counts: Tally.create()}
+	end 'create'
+
+	export function add(key String, by Integer) returns Integer
+		let before = try self.counts.get(key) otherwise 0
+		self.counts.upsert(key, value: before + by)
+		return before + by
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add("apples", by: 5) otherwise 0
+	let l = callIndirect(bookKeeping, n: 1)
+	print("n={n} l={l}\n")
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+n=5 l=1
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-member-a-witness-dispatch-can-land-on-may-not-write-a-module-global -->
+<!-- unsupported-targets: wasm32-wasi -->
+The refusing twin of the case above, and of `an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib`:
+the handler dispatches `greet` through an interface value, and the one member wearing that requirement's
+name writes a module global. No named call runs from `Counter.add` to `Loud.greet`, so the sentence names
+the dispatch rather than a call path.
+```maxon
+var greetings = 0
+
+interface Greeter
+	function greet() returns String
+end 'Greeter'
+
+type Loud implements Greeter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function greet() returns String
+		greetings = greetings + 1
+		return "HELLO"
+	end 'greet'
+end 'Loud'
+
+function describe(g Greeter) returns String
+	return g.greet()
+end 'describe'
+
+type Counter
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function add(by Integer) returns Integer
+		let loud = Loud.create()
+		self.count = self.count + by + (describe(loud).count() as Integer)
+		return self.count
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add(5) otherwise 0
+	print("n={n} greetings={greetings}\n")
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3143: <fragment>:16:3: `Loud.greet` writes the module-level `greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `greetings = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
+note: <fragment>:40:10: the `spawn` that makes `Counter` a service
 ```

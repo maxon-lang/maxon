@@ -40,7 +40,6 @@
 // `ServiceError` — the service can be gone.
 typealias StdPassReply = Promise with (StdUnitBody, ServiceError)
 typealias StdPassReplyArray = Array with StdPassReply
-typealias StdPassReportReply = Promise with (StdPassWorkerReport, ServiceError)
 typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
 
 // The per-function landing slots the drain fills in ARRIVAL order, and the fold reads in index order
@@ -290,7 +289,7 @@ end 'StdPassWorkerReport'
 // `classifyPass` answers `perFunction` for (`PassPipeline.requireFanOutMembership`).
 export function runStdPassesOnAWorkerPool(project Project, module StdModule, members StdFanOutStepArray)
 	let funcCount = module.funcCount()
-	let processors = __Builtins.schedProcessorCount()
+	let processors = Runtime.processorCount() as FuncCount
 	let workerCount = processors if processors < funcCount else funcCount
 	let reducesDivision = targetLowersMulHighSigned(project.target.cpu)
 
@@ -308,16 +307,9 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 
 	var landedOrigins = DerivedOriginsArray.create()
 	var landedLogs = CapturedLogArray.create()
-	var slots = LandingSlots.create(funcCount)
+	var slots = LandingSlots.create(funcCount as PoolJob)
 
 	if funcCount > 0 'somethingToRun'
-		// ⛔ **THE FLOOR IS ASKED, NOT ASSUMED.** `min(P, F)` is the pool size, so a resolved P of zero
-		// would make an EMPTY pool that runs no pass over any function — a program emitted unoptimized
-		// rather than a diagnostic. The scheduler clamps to one; this is where that promise is held to.
-		if processors < 1 'theSchedulerResolvedNoProcessor'
-			panic("runStdPassesOnAWorkerPool: the scheduler resolved {processors} processor(s), so the pool would be empty and no pass would run over any function at all")
-		end 'theSchedulerResolvedNoProcessor'
-
 		let poolSize = workerCount as PoolSize
 		let irLevel = effectiveLogLevelOf(LogCategory.ir)
 
@@ -336,7 +328,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 		// worker order cannot reach a row or a line.
 		for slot in 0 upto workerCount 'eachReport'
 			var worker = try workers.get(slot) otherwise panic("runStdPassesOnAWorkerPool: workers.get OOB at {slot} below count {workers.count()}")
-			foldWorkerReport(project, report: awaitedReport(worker.report(), slot: slot), members: members, tallies: tallies)
+			foldWorkerReport(project, report: try await worker.report() otherwise panic("{workerGoneMessage("runStdPassesOnAWorkerPool", subject: "worker {slot}")}"), members: members, tallies: tallies)
 		end 'eachReport'
 
 		// ⛔ **EVERY HANDLE GOES BEFORE THIS FRAME DOES.** Dropping the last handle to a service closes its
@@ -474,18 +466,6 @@ function bandPhaseOfStep(step StdFanOutStep) returns CompilePhase
 	end 'phase'
 end 'bandPhaseOfStep'
 
-function awaitedReport(reply StdPassReportReply, slot LandingSlot) returns StdPassWorkerReport
-	if let report = try await reply 'reported'
-		return report
-	end 'reported' else (e) 'notReported'
-		match e 'why'
-			// Nothing here drops a handle before every report has landed, so the worker's green thread
-			// DIED — a panic inside a pass, whose message is already on stderr.
-			stopped then panic("runStdPassesOnAWorkerPool: worker {slot} is gone before reporting. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed.")
-		end 'why'
-	end 'notReported'
-end 'awaitedReport'
-
 // Fold one worker's per-step costs into the passes' own phase rows, and its tallies into the driver's.
 function foldWorkerReport(project Project, report StdPassWorkerReport, members StdFanOutStepArray, tallies StdPassTallyArray)
 	if report.costs.width() != members.count() or report.tallies.count() != members.count() 'notTheSchedule'
@@ -504,10 +484,10 @@ end 'foldWorkerReport'
 // `PoolDispatch`'s, shared with `BackendPool.drainTheBackendPool`; what is this pool's own is the reply
 // type and the landing. Every promise is awaited (an un-awaited one is the green-thread exit gate's own
 // error, exit 75), `awaitAny` keeps the pool busy, and the dispatch order is longest-first
-// (`functionsLongestFirst`, which says why that order cannot reach the output).
+// (`jobsLongestFirst`, which says why that order cannot reach the output).
 function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, landedLogs CapturedLogArray, slots LandingSlots)
 	var scratch = SpliceScratch.create()
-	var dispatch = PoolDispatch.create(module.functions, blocks: module.blocks, funcCount: module.funcCount() as PoolSize, workerCount: workerCount)
+	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount)
 	var replies = StdPassReplyArray.create()
 
 	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
@@ -517,22 +497,15 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
 		let ready = __Builtins.awaitAny(replies)
 		let freedWorker = dispatch.workerAt(ready)
-		let funcIndex = dispatch.land(ready, outstanding: replies.count())
+		let job = dispatch.land(ready, outstanding: replies.count())
+		let funcIndex = job as FuncIndex
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
-		if let body = try await reply 'ran'
-			spliceStdUnit(module, func: module.getFunc(funcIndex), body: body, scratch: scratch)
-			slots.record(funcIndex, slot: landedOrigins.count())
-			landedOrigins.push(body.origins)
-			landedLogs.push(body.capturedLog)
-		end 'ran' else (e) 'notRun'
-			match e 'why'
-				// The worker's mailbox closed under a job in flight. Nothing here drops a handle before the
-				// drain has finished, so it means the worker's green thread DIED — a panic inside a pass,
-				// whose message is already on stderr.
-				stopped then panic("drainTheStdPool: the worker running function {funcIndex} is gone. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed.")
-			end 'why'
-		end 'notRun'
+		let body = try await reply otherwise panic("{workerGoneMessage("drainTheStdPool", subject: "the worker running function {funcIndex}")}")
+		spliceStdUnit(module, func: module.getFunc(funcIndex), body: body, scratch: scratch)
+		slots.record(job, slot: landedOrigins.count())
+		landedOrigins.push(body.origins)
+		landedLogs.push(body.capturedLog)
 
 		if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
 			dispatchOneStdJob(module, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
@@ -546,7 +519,7 @@ end 'drainTheStdPool'
 // (`StdUnit.extract`).
 function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot PoolSlot, dispatch PoolDispatch, replies StdPassReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
-	let funcIndex = dispatch.nextJob(workerSlot)
+	let funcIndex = dispatch.nextJob(workerSlot) as FuncIndex
 	replies.push(worker.run(StdUnit.extract(module, func: module.getFunc(funcIndex), funcIndex: funcIndex)))
 end 'dispatchOneStdJob'
 

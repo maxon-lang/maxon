@@ -1,0 +1,28 @@
+// Test: error.a-try-block-end-label-names-another-block
+typealias Count = int(0 to 10)
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function risky(n Count) returns Count throws Oops
+	if n > 5 'tooBig'
+		throw Oops.bad
+	end 'tooBig'
+
+	return n
+end 'risky'
+
+function main() returns ExitCode
+	try 'work'
+		let n = risky(2)
+		return n as ExitCode
+	end 'job' otherwise (e) 'failed'
+		match e 'kind'
+			bad then return 1
+		end 'kind'
+	end 'failed'
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:20:2: Mismatched end label: expected 'work', got 'job'

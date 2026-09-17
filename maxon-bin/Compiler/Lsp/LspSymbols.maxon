@@ -93,7 +93,7 @@ module function symbolsServedMethods() returns LspMethodArray
 end 'symbolsServedMethods'
 
 module function symbolsAnswer(request LspRequest) returns LspAnswer throws LspParamsError
-	let blocks = lspDocumentBlocks(lspDocumentTokens(request.text))
+	let blocks = lspDocumentBlocks(lspDocumentTokens(request.text, keywords: request.keywords))
 
 	if request.method == LspMethod.documentSymbol 'outline'
 		return documentSymbolAnswer(request.text, blocks: blocks)
@@ -189,8 +189,8 @@ end 'blockRangeNode'
 /// token stream to read, and every feature built on one then answers LSP's "nothing here" rather than a
 /// guess. Every language feature here re-lexes: a document changes on every keystroke, and one `tokenize`
 /// of one open file is cheap next to the request that follows it.
-module function lspDocumentTokens(source String) returns TokenArray
-	return try tokenize(source) otherwise TokenArray.create()
+module function lspDocumentTokens(source String, keywords KeywordTable) returns TokenArray
+	return try tokenize(source, keywords: keywords) otherwise TokenArray.create()
 end 'lspDocumentTokens'
 
 // One source line's extent in the token stream, layout tokens excluded. `module`, because a line is the

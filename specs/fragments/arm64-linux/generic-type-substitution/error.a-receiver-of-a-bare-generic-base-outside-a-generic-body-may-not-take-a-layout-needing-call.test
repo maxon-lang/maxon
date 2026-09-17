@@ -1,0 +1,22 @@
+// Test: error.a-receiver-of-a-bare-generic-base-outside-a-generic-body-may-not-take-a-layout-needing-call
+typealias Int = int(i64.min to i64.max)
+
+type Tag uses Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function width() returns Int
+		return sizeof(Element)
+	end 'width'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create()
+	return t.width() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3162: <fragment>:18:11: 'Tag' is named without type arguments and nothing binds its parameter 'Element', so 'Tag.width' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument

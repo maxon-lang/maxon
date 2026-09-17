@@ -1,0 +1,49 @@
+// Test: error.existential-field-store-through-a-concrete-instance-disagrees-with-the-claim
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Reader implements Taker with String
+	function take(e String) returns Integer
+		return e.count() as Integer
+	end 'take'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Reader'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	export var t as TakerOfT
+
+	static function create(t TakerOfT) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	var box = StrBox.create(Reader.create())
+	box.t = Runner.create(21)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:44:2: cannot widen 'Runner' into the field 'Box.t', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'Runner' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'

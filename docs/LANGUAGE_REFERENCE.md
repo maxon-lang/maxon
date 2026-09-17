@@ -1017,7 +1017,19 @@ end 'main'
 - An initializer may be a literal, a factory call (`static var shared = Cache.create()`), a literal of the
   enclosing type, or an array literal. A literal of *another* type is **E3076** — call its factory.
 - **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
-  order rather than declaration order. Initializers that depend on each other in a cycle are **E2012**.
+  order rather than declaration order: one that reads another static, directly or through a function it
+  calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,
+  are **E2012**. Assigning to a `static var` is a plain store; the initializer does not run again.
+- A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
+  literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
+  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time.
+  Any other `static let`, and every `static var`, is built before `main`.
+- A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
+  and neither is its initializer.
+- A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
+  may reach follows the [Top-Level Variables](#top-level-variables) rules: a `let`'s initializer may not reach
+  a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
+  (**E3166**), and a `spawn` reachable from any global initializer is **E3164**.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
 ### Equality and Copying
@@ -1285,6 +1297,17 @@ end 'main'
 - One compiled body serves every instantiation.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a `float` type argument is not
   yet supported (**E2062**); a type argument to a non-generic type is **E2055**.
+
+Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
+`Inner uses T` means `Inner with T`. A base whose parameters the scope does not declare (`Box uses Element`)
+binds nothing and stays the bare base, and a call on it — static (`Box.create(first)`) or through a receiver
+of that type — may neither hand a slot written over one of its type parameters (`Element`, or
+`Array with Element`) a value typed at `Outer`'s parameters nor call a method that needs a layout descriptor
+(**E3162**); an overloaded callee is judged by the member its arguments pick. Name the instance with a
+`typealias` instead: `typealias Inner = Box with T`. Outside a generic type body, a layout-needing call on a
+bare generic base is **E3162** as well unless the calling function carries a layout descriptor of its own — a
+static whose arguments do not fix every one of the base's parameters (`Holder.create()` in `main`), or a
+method called through a receiver of the bare base type.
 
 ### Where Clauses
 
@@ -2243,10 +2266,29 @@ end 'main'
 
 - `var` declares module state any function in the file can reassign; `let` declares a constant.
 - An initializer is a literal, a constant expression, an enum case, an array or dictionary literal,
-  `Type from "literal"`, or a static factory call (`let shared = Cache.create()`). Any other function call is
-  **E2045** (`Function calls are not allowed in global variable initializers`).
-- Every initializer runs **before `main`**, once, in dependency order. Initializers that depend on each
-  other in a cycle are **E2012**.
+  `Type from "literal"`, a static factory call (`let shared = Cache.create()`), or a free function call that
+  returns a record (`let shared = makeCache()`). A free function call returning a scalar, and any other call,
+  is **E2045** (`Function calls are not allowed in global variable initializers`).
+- Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
+  binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
+  compile time is image data, laid down in read-only memory with nothing to run; anything else runs in the
+  program's `__module_init` before `main`. A static field follows the same rules
+  (see [Static Fields](#static-fields)).
+- A field read off another global (`let n = shared.count`) is **E2015**, and a struct literal at file scope
+  is **E3076**; call a factory instead, or declare a static field inside the type.
+- An initializer cannot name another global, but what it calls may. A `let`'s initializer may not reach a
+  module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
+  it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
+  and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number
+  out of the `var` is refused too. "Reaches" is the call graph after overload resolution, dispatches
+  included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
+  other `let`s.
+- The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
+  within or hold a module-level `let`'s record (**E3166**, at the `var`'s declaration, naming the call). What
+  a call hands back is followed through further calls, witness dispatches and calls through function values;
+  a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
+  function, through a record a call handed back out of a `let` (**E3159**).
+- A `spawn` reachable from a global initializer is **E3164**; start services in `main`.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
 - A [service](#services--spawn) handler may not read or write a module-level `var`
   (**E3143**); keep service state in its fields.
@@ -3779,13 +3821,19 @@ bypasses visibility. Types are referred to by their bare name.
 
 ### Bare Names and Ambiguity
 
-A bare name resolves when exactly one visible declaration has it. When several do:
+A bare name resolves when exactly one visible declaration has it. Only a declaration the referring file may
+name is a candidate: a file-private function in another file and a `module` function outside the caller's
+subtree never count, and the candidate list an error prints names only visible ones. A bare call or a bare
+function value takes the type of the declaration it resolves to, and a function-backed enum case's function
+is resolved from the file that declares the enum, whichever file reads the case. When several do:
 
 - a declaration at the project root, or in an enclosing directory, takes precedence over one in a nested
   directory, and a project declaration takes precedence over a standard-library one;
 - otherwise the reference is ambiguous. A function call is **E3095** (`Ambiguous bare-name call to 'describe':
   multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
-  beta.describe`), and a typealias is **E3063**. Qualify the name to resolve it.
+  beta.describe`), worded for a function value or an enum case's backing where the name is one, and a
+  typealias is **E3063**. Qualify the name to resolve it — a call (`api.format(...)`), a function value
+  (`let f = api.format`) and a function-backed enum case (`plain = api.format`) all accept the qualified form.
 
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
 
@@ -4048,21 +4096,34 @@ either side could write, because the two green threads may run at the same time 
   afterwards is **E3102**. Factory arguments and replies are moved too.
 - A `let` argument that owns its value outright is **lent**: the sender keeps reading it, and from the send
   onwards neither side may store it anywhere writable, return it, capture it or pass it to anything that
-  writes it (**E3160**).
+  writes it (**E3160**). A handler that writes its parameter's graph at any depth — a method that writes its
+  own receiver, called on a record within the parameter, included — refuses every send that lends to it
+  (**E3019**).
 - A value the sender does not solely own — captured by a closure, held in a container, borrowed from a
   parameter — is **E3138**; send a `.clone()`.
 - A parameter type that cannot cross at all — a promise, a function value, a value held at an interface
   type — is **E3135**. A reply that is part of the service's own state is **E3137**; return a copy.
-- Before a send, the runtime also checks the value's whole object graph. If some nested record has a second
-  owner the compiler could not see, the program aborts with exit code **96** before anything is sent. A
-  reply is checked after the handler's locals and the message's arguments are released, so a reply built
-  from them crosses. A generic service's reply is checked at the type its `spawn` fixes: a `returns T`
-  message that hands back a container or a reference-holding record from the service's own state aborts
-  with **96**, and a reply whose graph holds a type the runtime cannot walk (a value held at an interface
-  type, an OS handle) is **E3138** at the `spawn`.
+- Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
+  several times — two fields, two slots of an array — when every owner of that record is one of those
+  references, and the record is walked once however many paths reach it. If some nested record has an owner
+  outside the graph, the program aborts with exit code **96** before anything is sent. A reply is checked
+  after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
+  generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
+  container or a reference-holding record from the service's own state aborts with **96**, and a reply whose
+  graph holds a type the runtime cannot walk (a value held at an interface type, an OS handle) is **E3138** at
+  the `spawn`.
 
 **Module-level state.** A service handler — and anything it calls — may not read or write a module-level
 `var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.
+
+A module-level `let` stays readable. In a program that spawns a service, every `let` record built before
+`main` is marked shared once the last global initializer has returned, so every count a handler steps on it
+is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
+holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
+**E3163** where a message can read it, and legal where only `main` does. A `spawn` a global initializer can
+reach is **E3164**, a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
+a `var` whose initializer may take a `let`'s record is **E3166** (see
+[Top-Level Variables](#top-level-variables)).
 
 **Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
 through awaited replies when order matters.

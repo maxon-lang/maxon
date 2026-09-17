@@ -1,10 +1,14 @@
-// ServiceGlobalAccessCheck.maxon — A SHARED WORD BELONGS TO ONE GREEN THREAD (E3143), the message-reachability closure.
+// ServiceGlobalAccessCheck.maxon — A SHARED WORD BELONGS TO ONE GREEN THREAD (E3143), the message-reachability closure,
+// the two rules that keep module `let`s safe to read from any green thread (E3163, E3164), and the two that keep a
+// `let` and a `var` from owning one record (E3165, E3166).
 //
 // ⭐⭐ **A MODULE-LEVEL `var` IS ONE WORD, AND A MESSAGE IS A GREEN THREAD THE SCHEDULER MAY PUT ON ANY OS
 // THREAD.** Those two facts cannot both hold in a program that compiles, so one of them is refused, and it
 // is the ACCESS: ⚖ a message — and anything reachable from one — may neither WRITE nor READ module storage.
-// A module-level `let` stays fully legal, and that is the whole of the escape hatch: an immortal,
-// written-once word has no second writer for anybody to race.
+// A module-level `let` stays legal, and that is the whole of the escape hatch: a written-once word has no second
+// writer for anybody to race, and `__module_init` marks its record shared before `main`, so the counts messages
+// step on it are atomic. A `let` no share walk can mark is refused where a message reads it (E3163), and a
+// `spawn` an initializer reaches is refused (E3164), because no green thread may run before the marks.
 //
 // ⭐⭐⭐ **NEITHER HALF CAN BE A RUN-TIME CHECK, BECAUSE THERE IS NO MOMENT AT WHICH THE RUNTIME COULD
 // NOTICE.** `done = done + 1` is a load, an add and a store; two Ms that interleave those six steps each
@@ -50,19 +54,16 @@
 // ⭐⭐ **IT OWNS NO CLOSURE OF ITS OWN, AND ITS DIRECTION IS THE OPPOSITE OF EVERY OTHER SUMMARY'S.** The
 // four whole-program summaries in `SemanticCheck` and the blocking graph in `ServiceCallCycleCheck` all ask
 // which functions are AFFECTED BY a fact, which travels UP into callers (`markSeededCallers`). This one asks
-// *"what does a message RUN?"*, which travels DOWN into callees — the same engine, rowed by the other column,
-// spelled once in `markSeededCallees`. The seed predicate (`messageOwnerNameOf`) and the edge predicate
+// *"what does a message RUN?"*, which travels DOWN into callees — the same edges, rowed by the other column,
+// built once as `ServiceProgramSurvey.calleeGraph`. The seed predicate (`messageOwnerNameOf`) and the edge predicate
 // (`opIsACallGraphEdge`) are the cycle check's own, shared rather than restated, so the two rules cannot come
 // to disagree about what a message is or about which op is a call.
 //
-// ⭐ **AND THE WALK IS SHARED TOO, NOW.** The predicates were single-sourced while the SWEEP was not: this
-// rule and E3139 each built their own `CallGraphEdges` and their own `ownerPerFunc`, back to back, out of two
-// identical passes over every function's every op. `ServiceProgramSurvey` is that pass, written once; both
-// rules read the same object, so a future change to "the ops of a function" cannot reach one and not the
-// other.
+// ⭐ **AND THE SWEEP IS SHARED TOO.** `ServiceProgramSurvey` is the one pass over every function's every op that
+// every service rule reads, so a change to "the ops of a function" cannot reach one rule and not another.
 //
-// ⛔⛔ **AN UNNAMEABLE DISPATCH REACHED FROM A MESSAGE MAKES EVERY FUNCTION MESSAGE-REACHABLE, AND THAT IS
-// THIS FILE'S REFUSING DIRECTION — THE EXACT OPPOSITE OF `ServiceCallCycleCheck`'s.** An `indirectCall`
+// ⛔⛔ **AN UNNAMEABLE DISPATCH REACHED FROM A MESSAGE MAKES EVERY FUNCTION IT COULD LAND ON MESSAGE-REACHABLE,
+// AND THAT IS THIS FILE'S REFUSING DIRECTION — THE EXACT OPPOSITE OF `ServiceCallCycleCheck`'s.** An `indirectCall`
 // through a closure and a `witnessDispatch` both choose their target at run time, so neither contributes an
 // edge; the two rules then have to decide what that silence MEANS, and they decide it oppositely because
 // they fail oppositely. A missed edge THERE costs a deadlock-freedom guarantee for a program shape nobody
@@ -74,9 +75,7 @@
 // ⭐ **BOTH VERDICTS ARE RUN, ONE INDIRECT CALL APART.**
 // `green-thread-globals.error.a-dispatch-the-compiler-cannot-follow-widens-the-rule` and
 // `green-thread-globals.a-plain-function-may-write-a-module-global` are the SAME program except that the
-// first routes its handler through a closure value; they answer refused and accepted respectively. Delete
-// the `indirectCall gives true` arm below and the first goes green, which is the sabotage this paragraph is
-// proved by.
+// first routes its handler through a closure value; they answer refused and accepted respectively.
 //
 // ⚠ **AN UNRESOLVABLE *NAMED* CALLEE IS NOT ONE OF THOSE, AND TREATING IT AS ONE WOULD MAKE THE RULE
 // VACUOUS-BY-REFUSAL.** A name no `IrFunction` declares is a Std-tier runtime entry point or an extern —
@@ -85,57 +84,72 @@
 // following them buys nothing. Counting them would mark every handler that prints or allocates as blind and
 // refuse essentially every service program in the corpus.
 
-// ⭐⭐ **WHAT A MESSAGE CAN RUN — the named closure, WIDENED WHEN A FUNCTION INSIDE IT DISPATCHES SOMEWHERE
-// THE EDGES CANNOT EXPRESS.** See this file's header for why the widening is the safe direction here and the
-// wrong one next door, and why it is a single step rather than a fixpoint.
+// ⭐⭐ **WHAT `seeds` CAN RUN — the named closure, WIDENED WHEN A FUNCTION INSIDE IT DISPATCHES SOMEWHERE THE
+// EDGES CANNOT EXPRESS.** See this file's header for why the widening is the safe direction here and the wrong
+// one next door.
 //
-// ⛔⛔ **THE WIDENING IS TO THE FUNCTIONS A DISPATCH COULD ACTUALLY LAND ON, AND IT USED TO BE TO EVERY
-// FUNCTION IN THE PROGRAM — WHICH MADE THE RULE UNUSABLE.** A function value in this language comes from a
-// `functionRef` or a witness slot and from nowhere else, so a function that is neither address-taken nor a
-// conformance member has no address anywhere in the image and no `indirectCall` or `witnessDispatch` can
-// reach it. Marking it anyway was not conservatism, it was a wrong answer in the refusing direction:
-// MEASURED, a service whose handler called ONE ordinary interface method and then `Log.trace` was refused
-// with *"`Log.startCapture` writes the module-level `capturing` … make `capturing` a `let`"* — a cure in
-// `stdlib/Log.maxon`, which the author does not own, and `stdlib/Testing.maxon` has the same shape. Every
-// service program using an interface was refused.
+// ⛔ **THE WIDENING IS TO THE FUNCTIONS A DISPATCH COULD ACTUALLY LAND ON, PER DISPATCH SHAPE** — an
+// address-taken function for a closure call, a member wearing the requirement's name for a witness dispatch
+// (`ServiceProgramSurvey.widenFrom` argues each set's completeness). Any wider set refuses every service that
+// uses an interface or keeps a `Map`, over a global a function no dispatch can reach touches.
 //
-// ⚠ **THE SAFE DIRECTION IS KEPT WITHIN THE NARROWED SET, and it is still a WIDENING**: the possible targets
-// are added to the seeds and the closure then runs FORWARD over the named graph, so everything one of them
-// calls is marked too. `possibleIndirectCallTargets` is where the enumeration's completeness is argued.
-//
-// ⭐ **SABOTAGE-PROVED.** With `possibleIndirectCallTargets` replaced by a column of all-`true` — the old
-// behaviour — `green-thread-globals.an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib` goes RED
-// with exactly the sentence above (`Log.startCapture` writes `capturing`), and the other seven cases in that
-// file, `error.a-dispatch-the-compiler-cannot-follow-widens-the-rule` included, stay green. The narrowing is
-// the only thing that case is measuring, and it does not weaken the refusal beside it.
-function functionsAMessageCanRun(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns BoolArray
-	let named = markSeededCallees(survey.edges, seeds: survey.messageSeeds, nodeCount: survey.funcCount())
+// ⚡ One walk: a function is visited once, when it is first reached, and widens from there, so every call edge and
+// every dispatch row is read once however many targets a widening adds.
+module function functionsSeedsCanRun(funcNames FunctionNameIndex, survey ServiceProgramSurvey, seeds BoolArray, dispatch WitnessDispatchTargets) returns BoolArray
+	var walk = CalleeWalk.create(survey.funcCount())
+	var widening = DispatchWidening.create()
 
-	if not aReachedFunctionDispatchesBlindly(survey, reached: named) 'everyTargetIsNamed'
-		return named
-	end 'everyTargetIsNamed'
+	for (position, seeded) in seeds.withIterator() 'eachSeed'
+		if seeded 'aSeed'
+			walk.reach(position.index() as FuncIndex)
+		end 'aSeed'
+	end 'eachSeed'
 
-	var widened = BoolArray.create()
-	let targets = survey.possibleIndirectCallTargets(project, funcNames: funcNames)
+	var head = 0 as CsrIndex
 
-	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
-		let alreadyNamed = try named.get(funcIndex) otherwise panic("functionsAMessageCanRun: named.get OOB at {funcIndex} below count {named.count()}")
-		let reachableByADispatch = try targets.get(funcIndex) otherwise panic("functionsAMessageCanRun: targets.get OOB at {funcIndex} below count {targets.count()}")
-		widened.push(alreadyNamed or reachableByADispatch)
-	end 'eachFunc'
+	while head < walk.worklist.count() 'drain'
+		let node = try walk.worklist.get(head) otherwise panic("functionsSeedsCanRun: worklist.get OOB at {head} below its own count")
+		head = head + 1
 
-	return markSeededCallees(survey.edges, seeds: widened, nodeCount: survey.funcCount())
-end 'functionsAMessageCanRun'
+		for k in 0 upto survey.calleeGraph.degree(node as CsrIndex) 'eachCallee'
+			walk.reach(survey.calleeGraph.neighbour(node as CsrIndex, k: k) as FuncIndex)
+		end 'eachCallee'
 
-// Does any function a message can run choose a callee at run time? Asked of the NAMED-path answer, which is
-// why the widening above is one step rather than a fixpoint: the widened seed set is fixed and the closure
-// over it settles in one pass.
+		survey.widenFrom(node, walk: walk, widening: widening, dispatch: dispatch, funcIndexByName: funcNames.byName)
+	end 'drain'
+
+	return walk.reached
+end 'functionsSeedsCanRun'
+
+// The functions a walk has reached, and the ones it has still to visit.
+module type CalleeWalk
+	export var reached as BoolArray
+	export var worklist as FuncIndexArray
+
+	static function create(funcCount CsrIndex) returns CalleeWalk
+		var reached = BoolArray.create()
+		reached.resize(funcCount)
+		return Self{reached: reached, worklist: FuncIndexArray.create()}
+	end 'create'
+
+	export function reach(funcIndex FuncIndex)
+		let already = try self.reached.get(funcIndex) otherwise panic("CalleeWalk.reach: reached.get OOB at {funcIndex} — every index comes from the list the survey swept")
+
+		if already 'reachedAlready'
+			return
+		end 'reachedAlready'
+
+		try self.reached.set(funcIndex, value: true) otherwise panic("CalleeWalk.reach: reached.set OOB at {funcIndex}")
+		self.worklist.push(funcIndex)
+	end 'reach'
+end 'CalleeWalk'
+
+// Does any function in `reached` choose a callee at run time?
 function aReachedFunctionDispatchesBlindly(survey ServiceProgramSurvey, reached BoolArray) returns bool
 	for funcIndex in 0 upto survey.funcCount() 'eachFunc'
-		let messageRunsIt = try reached.get(funcIndex) otherwise panic("aReachedFunctionDispatchesBlindly: reached.get OOB at {funcIndex} below count {reached.count()}")
-		let blind = try survey.dispatchesBlindly.get(funcIndex) otherwise panic("aReachedFunctionDispatchesBlindly: dispatchesBlindly.get OOB at {funcIndex} below count {survey.funcCount()}")
+		let messageRunsIt = reachedAt(reached, funcIndex: funcIndex)
 
-		if messageRunsIt and blind 'aTargetThisWalkCannotName'
+		if messageRunsIt and survey.dispatchesAtRunTime(funcIndex) 'aTargetThisWalkCannotName'
 			return true
 		end 'aTargetThisWalkCannotName'
 	end 'eachFunc'
@@ -146,7 +160,7 @@ end 'aReachedFunctionDispatchesBlindly'
 // What ONE function can run. Error path only — the widened answer above says a message reaches a run-time
 // dispatch without saying whose, and this is what asks each message in turn.
 function coneOf(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
-	return markSeededCallees(survey.edges, seeds: oneHotSeeds(survey, funcIndex: funcIndex), nodeCount: survey.funcCount())
+	return reverseReachabilityMark(survey.calleeGraph, seeds: oneHotSeeds(survey, funcIndex: funcIndex))
 end 'coneOf'
 
 // Who can run ONE function — the same graph rowed the way every other summary in the compiler rows it.
@@ -155,16 +169,10 @@ function callersReaching(survey ServiceProgramSurvey, funcIndex FuncIndex) retur
 	return markSeededCallers(survey.edges, seeds: oneHotSeeds(survey, funcIndex: funcIndex), nodeCount: survey.funcCount())
 end 'callersReaching'
 
-// A seed column holding exactly one function. Written once because both error-path closures need one and a
-// second spelling would be free to size it differently — which is the single thing the mark walk panics on.
 function oneHotSeeds(survey ServiceProgramSurvey, funcIndex FuncIndex) returns BoolArray
-	var seeds = BoolArray.create()
-
-	for candidate in 0 upto survey.funcCount() 'eachFunc'
-		seeds.push(candidate == funcIndex)
-	end 'eachFunc'
-
-	return seeds
+	var one = FuncIndexArray.create()
+	one.push(funcIndex)
+	return seedsAt(survey, funcIndices: one)
 end 'oneHotSeeds'
 
 // ⭐⭐ **THE EARLIEST ACCESS OF ONE DIRECTION THAT A MESSAGE CAN RUN, REPORTED — OR `false` IF THERE IS
@@ -180,7 +188,7 @@ function reportEarliest(project Project, signatures ProgramSignatures, funcNames
 
 		let funcIndex = survey.accessFuncAt(row)
 
-		if not (try reached.get(funcIndex) otherwise panic("reportEarliest: reached.get OOB at {funcIndex} below count {reached.count()}")) 'noMessageRunsIt'
+		if not reachedAt(reached, funcIndex: funcIndex) 'noMessageRunsIt'
 			continue
 		end 'noMessageRunsIt'
 
@@ -218,12 +226,12 @@ end 'sameModuleVarAccess'
 //
 // A survey with no access ROW is a different answer from an empty site MAP: every recorded access belonged
 // to a body dead-code elimination dropped, so there is nothing to close over.
-module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
+module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray)
 	if survey.accessRowCount() == 0 'everyRecordedAccessBelongsToADroppedBody'
 		return
 	end 'everyRecordedAccessBelongsToADroppedBody'
 
-	reportFirstAccessAMessageCanRun(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: functionsAMessageCanRun(project, funcNames: funcNames, survey: survey))
+	reportFirstAccessAMessageCanRun(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached)
 end 'checkServiceGlobalAccesses'
 
 // ⭐ **THE FIRST OFFENDING ACCESS, AND ONLY THE FIRST.** One statement is one defect and the cure is the same
@@ -255,8 +263,8 @@ end 'reportFirstAccessAMessageCanRun'
 // another file.
 function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, funcIndex FuncIndex, site ModuleVarAccessSite)
 	let blame = blameForSharedGlobalAccess(survey, funcIndex: funcIndex)
-	let writer = try funcNames.functions.get(funcIndex) otherwise panic("reportSharedGlobalAccess: functions.get OOB at {funcIndex}")
-	let message = try funcNames.functions.get(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: functions.get OOB at {blame.messageIndex}")
+	let writer = functionAt(funcNames, index: funcIndex)
+	let message = functionAt(funcNames, index: blame.messageIndex)
 	let serviceName = survey.serviceOf(blame.messageIndex)
 	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
 	reportPositionedWithNote(project, code: ErrorCode.semanticSharedGlobalAccessFromGreenThread, message: sharedGlobalAccessRefusal(blame.route, access: site.access, writer: writer.name, message: message.name, storageName: site.storageName), line: site.line, column: site.column, filePath: site.declFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
@@ -325,7 +333,7 @@ function messageReachingAnUnnameableDispatch(survey ServiceProgramSurvey) return
 		end 'itsConeHoldsOne'
 	end 'eachMessage'
 
-	panic("messageReachingAnUnnameableDispatch: no message's own cone holds a run-time dispatch, yet the widening marked a writer no named chain reaches — the widening fires only from `aReachedFunctionDispatchesBlindly` over the seeds this walk re-closes one message at a time")
+	panic("messageReachingAnUnnameableDispatch: no message's own cone holds a run-time dispatch, yet the widening marked a writer no named chain reaches — the widening marks nothing until a function some message names dispatches at run time, and this walk re-closes the messages one at a time")
 end 'messageReachingAnUnnameableDispatch'
 
 // ⭐⭐ **THE WHOLE SENTENCE: who writes, why one word cannot have two writers, and the cure.** The rule and
@@ -385,10 +393,223 @@ function sharedGlobalAccessVerb(access ModuleVarAccess) returns String
 	end 'access'
 end 'sharedGlobalAccessVerb'
 
-// Does this op hand control somewhere no NAME can be recovered for? The bands are `opYields`', so a newly
-// appended op fails to compile here rather than silently reading as followable — which is this rule's
-// accepting direction and the one it must never take by accident.
-module function opChoosesItsTargetAtRunTime(op MaxonOp) returns bool
+function reachedAt(reached BoolArray, funcIndex FuncIndex) returns bool
+	return try reached.get(funcIndex) otherwise panic("reachedAt: reached.get OOB at {funcIndex} below count {reached.count()} — every function index comes from the list the closure was sized to")
+end 'reachedAt'
+
+// ⭐ **E3163: A `let` NO SHARE WALK CAN MARK, READ BY A FUNCTION A MESSAGE CAN RUN.** Such a `let` stays a plain
+// count, which is sound only while `main` alone counts it. The first read a message can run is reported, with
+// the message that reaches it; one `let` is one defect whatever else reads it.
+module function checkUnmarkableLetReads(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray)
+	for row in 0 upto survey.globalUses.sites.rowCount() 'eachRead'
+		let readerIndex = survey.globalUses.sites.funcAt(row)
+
+		if not reachedAt(reached, funcIndex: readerIndex) 'noMessageRunsIt'
+			continue
+		end 'noMessageRunsIt'
+
+		let letGlobal = managedGlobalAt(project, index: survey.globalUses.subjectAt(row))
+
+		match letGlobal.threadReach 'reach'
+			mainOnly or
+				everyThreadThrough then continue
+			everyThreadUnwalkable(noun) then reportUnmarkableLetRead(project, funcNames: funcNames, survey: survey, row: row, letGlobal: letGlobal, noun: noun)
+		end 'reach'
+
+		return
+	end 'eachRead'
+end 'checkUnmarkableLetReads'
+
+function reportUnmarkableLetRead(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, row CsrIndex, letGlobal ManagedGlobal, noun String)
+	let readerIndex = survey.globalUses.sites.funcAt(row)
+	let reader = functionAt(funcNames, index: readerIndex)
+	let blame = blameForSharedGlobalAccess(survey, funcIndex: readerIndex)
+	let message = functionAt(funcNames, index: blame.messageIndex)
+	let global = String.from(letGlobal.declName)
+	let range = project.opRanges.get(survey.globalUses.sites.opAt(row))
+	let subject = sharedGlobalAccessSubject(blame.route, access: ModuleVarAccess.read, writer: reader.name, message: message.name, global: global)
+	let declaration = DiagnosticNote.at("`{global}` is declared here", line: letGlobal.nameLine, column: letGlobal.nameColumn, filePath: letGlobal.declFilePath)
+	reportPositionedWithNote(project, code: ErrorCode.semanticUnmarkableLetReadByAMessage, message: "{subject}, and it holds {noun}. A message runs on a green thread the scheduler may put on any OS thread, so the counts every message steps on `{global}` must be atomic, and no share walk can mark it so. Keep it in a field of the service that reads it", line: range.line, column: range.column, filePath: reader.sourceFilePath, note: declaration)
+end 'reportUnmarkableLetRead'
+
+// ⭐ **E3164: A `spawn` A GLOBAL INITIALIZER CAN RUN.** `__module_init` marks the `let`s every message may read
+// only after its last initializer returns, so no other green thread may exist before then. Closed from
+// `__module_init` itself, whose calls overload resolution has settled, over the same widened graph E3143 closes.
+module function checkSpawnsDuringGlobalInitialization(project Project, module MaxonModule, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
+	let initIndex = try funcNames.byName.get(ModuleInitName) otherwise panic("checkSpawnsDuringGlobalInitialization: `checkServiceRules` asks this only of a program holding `__module_init`")
+	let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: oneHotSeeds(survey, funcIndex: initIndex), dispatch: dispatch)
+
+	for row in 0 upto survey.spawns.rowCount() 'eachSpawn'
+		let spawnerIndex = survey.spawns.funcAt(row)
+
+		if not reachedAt(reached, funcIndex: spawnerIndex) 'noInitializerRunsIt'
+			continue
+		end 'noInitializerRunsIt'
+
+		let spawner = functionAt(funcNames, index: spawnerIndex)
+		let spawnOp = survey.spawns.opAt(row)
+		let serviceName = maxonOpSpawnedServiceType(try module.ops.get(spawnOp) otherwise panic("checkSpawnsDuringGlobalInitialization: the survey filed op {spawnOp}, which is not in the module"))
+		let initializer = initializerReaching(project, funcNames: funcNames, survey: survey, dispatch: dispatch, initializers: initializers, spawnerIndex: spawnerIndex)
+		let range = project.opRanges.get(spawnOp)
+		let note = DiagnosticNote.at("the initializer of `{String.from(initializer.declName)}`, which reaches it", line: initializer.nameLine, column: initializer.nameColumn, filePath: initializer.declFilePath)
+		reportPositionedWithNote(project, code: ErrorCode.semanticSpawnDuringGlobalInitialization, message: "`{String.from(spawner.name)}` spawns `{String.from(serviceName)}`, and a module-level global's initializer reaches it — initializers run before `main`, and the `let`s every message may read are marked shared only once the last one returns, so a service started here could step a plain count on one concurrently with the mark or read a global not yet built. Start the service in `main`, or in a function `main` calls", line: range.line, column: range.column, filePath: spawner.sourceFilePath, note: note)
+		return
+	end 'eachSpawn'
+end 'checkSpawnsDuringGlobalInitialization'
+
+// ⭐ **THE GLOBAL WHOSE INITIALIZER REACHES `spawnerIndex`.** Error path only. The widened closure of every
+// initializer together is the one that marked the spawner, and each target a widening adds is added by some one
+// initializer's closure, so one initializer reaches it.
+function initializerReaching(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows, spawnerIndex FuncIndex) returns ManagedGlobal
+	for (position, callees) in initializers.withIterator() 'eachGlobal'
+		if reachedAt(functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: callees), dispatch: dispatch), funcIndex: spawnerIndex) 'itsInitializerReachesIt'
+			return managedGlobalAt(project, index: position.index() as SlotSubjectIndex)
+		end 'itsInitializerReachesIt'
+	end 'eachGlobal'
+
+	panic("initializerReaching: no initializer reaches function {spawnerIndex}, yet the closure from `__module_init` marked it")
+end 'initializerReaching'
+
+// ⭐ **E3165: A `let` WHOSE INITIALIZER REACHES A MANAGED `var`.** A record read out of a `var` is still the
+// `var`'s to write, so a `let` holding it would not be fixed, and `__module_init` could not mark it shared with an
+// owner no `let` holds. What the initializer keeps is not followed, so a scalar read out of the `var` is refused
+// too. Closed over the call graph overload resolution settles, so a member of an overload set the initializer does
+// not call reaches nothing; a run-time dispatch widens the way E3143's closure does.
+//
+// ⚡ One closure over every `let` initializer at once, which is all a program that compiles pays. The closure is
+// distributive over its seeds, so some `let` alone reaches the use the joint closure found.
+module function checkLetInitializersReachNoVar(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, dispatch WitnessDispatchTargets, initializers FuncIndexRows)
+	var everyLetsCallees = FuncIndexArray.create()
+
+	for (position, row) in initializers.withIterator() 'eachGlobal'
+		if not managedGlobalAt(project, index: position.index() as SlotSubjectIndex).isAVar() 'aLet'
+			everyLetsCallees.append(row)
+		end 'aLet'
+	end 'eachGlobal'
+
+	if let useRow = try reachedVarUseRow(project, survey: survey, reached: functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: everyLetsCallees), dispatch: dispatch)) 'aLetReachesAVar'
+		let userIndex = survey.globalUses.sites.funcAt(useRow)
+
+		for (position, row) in initializers.withIterator() 'eachGlobal'
+			let global = managedGlobalAt(project, index: position.index() as SlotSubjectIndex)
+
+			if not global.isAVar() and reachedAt(functionsSeedsCanRun(funcNames, survey: survey, seeds: seedsAt(survey, funcIndices: row), dispatch: dispatch), funcIndex: userIndex) 'thisLetReachesIt'
+				reportLetInitializerReachingAVar(project, funcNames: funcNames, survey: survey, letGlobal: global, useRow: useRow)
+				return
+			end 'thisLetReachesIt'
+		end 'eachGlobal'
+
+		panic("checkLetInitializersReachNoVar: every `let` initializer together reaches function {userIndex}, yet none alone does — a widening is triggered by one reached function, which one initializer's own closure reaches")
+	end 'aLetReachesAVar'
+end 'checkLetInitializersReachNoVar'
+
+enum VarUseLookup implements Error
+	noneReached
+end 'VarUseLookup'
+
+// The first use of a managed `var`'s slot held by a `reached` function.
+function reachedVarUseRow(project Project, survey ServiceProgramSurvey, reached BoolArray) returns CsrIndex throws VarUseLookup
+	for row in 0 upto survey.globalUses.sites.rowCount() 'eachUse'
+		if reachedAt(reached, funcIndex: survey.globalUses.sites.funcAt(row)) and managedGlobalAt(project, index: survey.globalUses.subjectAt(row)).isAVar() 'reachedHere'
+			return row
+		end 'reachedHere'
+	end 'eachUse'
+
+	throw VarUseLookup.noneReached
+end 'reachedVarUseRow'
+
+function reportLetInitializerReachingAVar(project Project, funcNames FunctionNameIndex, survey ServiceProgramSurvey, letGlobal ManagedGlobal, useRow CsrIndex)
+	let varGlobal = managedGlobalAt(project, index: survey.globalUses.subjectAt(useRow))
+	let letName = String.from(letGlobal.declName)
+	let varName = String.from(varGlobal.declName)
+	let user = functionAt(funcNames, index: survey.globalUses.sites.funcAt(useRow))
+	let range = project.opRanges.get(survey.globalUses.sites.opAt(useRow))
+	let declaration = DiagnosticNote.at("`{varName}` is declared here", line: varGlobal.nameLine, column: varGlobal.nameColumn, filePath: varGlobal.declFilePath)
+	reportPositionedWithNote(project, code: ErrorCode.semanticLetInitializerReachesAVar, message: "the initializer of the `let` `{letName}` reaches the module-level `var` `{varName}` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `{varName}`. Make `{letName}` a `var`, or build its value without reading `{varName}`", line: range.line, column: range.column, filePath: user.sourceFilePath, note: declaration)
+end 'reportLetInitializerReachingAVar'
+
+// ⭐ **THE DECLARED FUNCTIONS EACH MANAGED GLOBAL'S INITIALIZER CALLS**, one row per `project.managedGlobals`
+// entry, read off `__module_init`, whose calls overload resolution has settled. It emits each global's calls
+// before the `globalAddr` its store opens with, in that list's order, and marks the `let`s only after the last
+// store.
+module function initializerCallees(project Project, module MaxonModule, funcNames FunctionNameIndex) returns FuncIndexRows
+	let globalCount = project.managedGlobals.count()
+	var rows = FuncIndexRows.create()
+
+	if globalCount == 0 'noManagedGlobal'
+		return rows
+	end 'noManagedGlobal'
+
+	let initIndex = try funcNames.byName.get(ModuleInitName) otherwise panic("initializerCallees: a program with a managed global holds `__module_init`")
+	var callees = FuncIndexArray.create()
+
+	for blockRef in functionAt(funcNames, index: initIndex).blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("initializerCallees: blockRef from `__module_init`'s blockRefs not in module.blocks")
+
+		for opIndex in block.opRefs 'eachOp'
+			if rows.count() == globalCount 'everySlotIsFilled'
+				return rows
+			end 'everySlotIsFilled'
+
+			let op = try module.ops.get(opIndex) otherwise panic("initializerCallees: opIndex {opIndex} not in module.ops")
+
+			if maxonOpNamesAGlobalLabel(op) 'theSlotItFills'
+				let filled = managedGlobalAt(project, index: rows.count())
+
+				if not filled.label.equals(maxonOpGlobalLabelName(op)) 'outOfOrder'
+					panic("initializerCallees: `__module_init` addresses `{String.from(maxonOpGlobalLabelName(op))}` where it fills `{String.from(filled.label)}` — it builds the globals in the order it was handed")
+				end 'outOfOrder'
+
+				rows.push(callees)
+				callees = FuncIndexArray.create()
+			end 'theSlotItFills' else if opIsACallGraphEdge(op) 'aCall'
+				if let calleeIndex = try funcNames.byName.get(maxonOpCalleeName(op)) 'aDeclaredCallee'
+					callees.push(calleeIndex)
+				end 'aDeclaredCallee'
+			end 'aCall'
+		end 'eachOp'
+	end 'eachBlock'
+
+	if rows.count() != globalCount 'aSlotUnfilled'
+		panic("initializerCallees: `__module_init` fills {rows.count()} of {globalCount} managed globals")
+	end 'aSlotUnfilled'
+
+	return rows
+end 'initializerCallees'
+
+module typealias FuncIndexRows = Array with FuncIndexArray
+
+function managedGlobalAt(project Project, index SlotSubjectIndex) returns ManagedGlobal
+	return try project.managedGlobals.get(index) otherwise panic("managedGlobalAt: managedGlobals.get OOB at {index} — every position is one `__module_init` was built over")
+end 'managedGlobalAt'
+
+// A seed column holding exactly `funcIndices`.
+function seedsAt(survey ServiceProgramSurvey, funcIndices FuncIndexArray) returns BoolArray
+	var seeds = BoolArray.create()
+	seeds.resize(survey.funcCount())
+
+	for funcIndex in funcIndices 'eachSeed'
+		try seeds.set(funcIndex, value: true) otherwise panic("seedsAt: seeds.set OOB at {funcIndex} — every index was resolved through the function list the survey swept")
+	end 'eachSeed'
+
+	return seeds
+end 'seedsAt'
+
+function functionAt(funcNames FunctionNameIndex, index FuncIndex) returns IrFunction
+	return try funcNames.functions.get(index) otherwise panic("functionAt: functions.get OOB at {index} — every index comes from the list the survey swept")
+end 'functionAt'
+
+// Where an op hands control: nowhere a name cannot say, to a function VALUE, or through a witness slot.
+module union RunTimeTarget
+	named
+	closureValue
+	witnessSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex)
+end 'RunTimeTarget'
+
+// Does this op hand control somewhere no NAME can be recovered for, and through which door? The bands are
+// `opYields`', so a newly appended op fails to compile here rather than silently reading as followable —
+// which is this rule's accepting direction and the one it must never take by accident.
+module function runTimeTargetOf(op MaxonOp) returns RunTimeTarget
 	return match op 'op'
 		call or
 			literal or
@@ -398,39 +619,39 @@ module function opChoosesItsTargetAtRunTime(op MaxonOp) returns bool
 			unaryOp or
 			compare or
 			condBranch or
-			branch gives false
-		globalAddr or
+			branch or
+			globalAddr or
 			loadIndirect or
 			storeIndirect or
 			stringLiteral or
-			tryCall gives false
-		throwError or
+			tryCall or
+			throwError or
 			propagateError or
-			panicAbort gives false
+			panicAbort gives RunTimeTarget.named
 
 		// Taking a function's ADDRESS runs nothing; the `indirectCall` that eventually runs it is the op below.
-		functionRef gives false
-		indirectCall gives true
-		asyncCall gives false
-		await or
+		functionRef gives RunTimeTarget.named
+		indirectCall gives RunTimeTarget.closureValue
+		asyncCall or
+			await or
 			tryAwait or
 			sizeofType or
 			constArrayLiteral or
-			switch gives false
-		witnessDispatch or
-			witnessTryDispatch gives true
-		panicAbortValue gives false
-		errorFlagEncode gives false
+			switch gives RunTimeTarget.named
+		witnessDispatch(_, _, _, methodIndex, interfaceDeclIndex, _, _) gives RunTimeTarget.witnessSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		witnessTryDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _) gives RunTimeTarget.witnessSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		panicAbortValue or
+			errorFlagEncode gives RunTimeTarget.named
 
 		// A `spawn` names a TYPE and a send names a MESSAGE — both are names, and a send's handler is a seed
 		// of this walk in its own right.
 		serviceSpawn or
 			serviceSend or
-			serviceReplyCell gives false
-		immortalStructRecord or
+			serviceReplyCell or
+			immortalStructRecord or
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness gives false
+			existentialWitness gives RunTimeTarget.named
 	end 'op'
-end 'opChoosesItsTargetAtRunTime'
+end 'runTimeTargetOf'

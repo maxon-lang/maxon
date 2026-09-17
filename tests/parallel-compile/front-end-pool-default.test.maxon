@@ -1,0 +1,16 @@
+// front-end-pool-default.test.maxon — with no processor pin, the front end lexes and parses on min(P, F) workers,
+// F the most files one drain dispatched, and says so once (`requireFrontEndPoolAtDefault`).
+
+test 'the front end is one worker per processor up to the files it parses'
+	let staged = stagedProgram("front-end-program", caseLabel: "front-end-pool-default")
+
+	var arguments = StringArray.create()
+	arguments.push(CompilerDebugLogFlag)
+	let run = spawnBuild(staged, label: "default-processors", extraArguments: arguments, singleProcessor: false, wholeDirectory: true)
+
+	let observedExit = run.exitCode() as AssertedInt
+	try Expect.equal(observedExit, expected: 0, message: "the front-end program did not compile at the default processor count. It wrote to stderr: {run.stderr}")
+
+	try requireOneFrontEndPoolLine(run)
+	try requireFrontEndPoolAtDefault(run)
+end 'the front end is one worker per processor up to the files it parses'

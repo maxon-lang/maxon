@@ -1,0 +1,324 @@
+// Runtime/WalkVisitTable.maxon — the table a soleness or share walk counts a record's meetings in.
+//
+// ⭐⭐ **A MOVED OR LENT GRAPH IS A DAG, AND ITS RULE IS "NO OWNER OUTSIDE THE GRAPH".** A counted record the
+// walk meets k times is legal when it has exactly k owners; an owner the walk never meets is left behind on the
+// sending green thread, stepping a count the receiver steps too, and the send aborts
+// (`RuntimeAbort.transferredRecordNotSole`). The one exception is a record only byte views have met
+// (`MmRuntime.WalkMeeting.view`): no holder of viewed bytes writes them in place, so its entry is tolerated.
+//
+// ⭐ **ONLY A RECORD OF SEVERAL OWNERS IS ENTERED.** A record with one owner can be met once, so the walk
+// descends it without asking; the table is created at the first record whose count says more, which keeps a
+// tree-shaped graph free of it. An entry holds the record's address and the owners not yet met — the refcount
+// word itself at the first meeting, since the word is `owners - 1` — and every later meeting takes one off.
+// `__mm_walk_settle` runs once the root's walk has returned, still on the sending green thread and before
+// anything is enqueued, and aborts unless every entry an owner has met reached zero.
+//
+// Layout: `mask@0` (entries - 1, a power of two less one), `used@8`, then two-word entries from `@16` — the
+// record (`VacantVisitEntry` when free) and its unmet owners, `ViewsOnlyFlag` set while only views have met it.
+// Open addressing with linear probing, grown to keep at least half the entries vacant, so a probe always ends.
+
+let WalkNoteName = b"__mm_walk_note"
+let WalkRevisitName = b"__mm_walk_revisit"
+export let WalkSettleName = b"__mm_walk_settle"
+let WalkSlotName = b"__mm_walk_slot"
+
+// The visit table a walk starts from: none yet.
+export let NoVisitTable = 0 as ParsedInt
+
+// What `__mm_walk_revisit` answers.
+export let WalkNotMetBefore = 0 as ParsedInt
+let WalkMetBefore = 1 as ParsedInt
+
+let VisitTableMaskOffset = 0 as ByteOffset
+let VisitTableUsedOffset = 8 as ByteOffset
+let VisitTableEntriesOffset = 16 as ByteOffset
+let VisitEntryRecordOffset = 0 as ByteOffset
+let VisitEntryUnmetOffset = 8 as ByteOffset
+let VisitEntryBytes = 16 as ParsedInt
+let VacantVisitEntry = 0 as ParsedInt
+let AllOwnersMet = 0 as ParsedInt
+let VisitTableFirstEntries = 16 as ParsedInt
+
+// Set in an entry's unmet word while only views have met its record. A counted record's word stays below 2^61
+// (`MmSharedRefcountMark`), so the flag never meets a count.
+let ViewsOnlyFlag = 4611686018427387904 as ParsedInt  // 2^62
+let ViewsOnlyFlagShift = 62 as ParsedInt
+
+// What a revisit keeps of an entry's unmet word: an owner's meeting clears `ViewsOnlyFlag`, a view's keeps it.
+let OwnerMeetingKeeps = -4611686018427387905 as ParsedInt  // every bit but 2^62
+let ViewMeetingKeeps = -1 as ParsedInt
+
+// Entries per used entry the table keeps at least, and the factor it grows by when it would not.
+let VisitTableSpareFactor = 2 as ParsedInt
+
+// Fibonacci hashing: an address times 2^64/φ, whose high half mixes every bit of the address into the index.
+let VisitHashMultiplier = -7046029254386353131 as ParsedInt  // 0x9E3779B97F4A7C15
+let VisitHashDiscardBits = 32 as ParsedInt
+
+let SlotParamCount = 2 as ParamCount
+let RevisitParamCount = 3 as ParamCount
+let NoteParamCount = 3 as ParamCount
+let SettleParamCount = 1 as ParamCount
+
+export function installWalkVisitTable(module StdModule)
+	buildWalkSlot(module)
+	buildWalkRevisit(module)
+	buildWalkNote(module)
+	buildWalkSettle(module)
+end 'installWalkVisitTable'
+
+// `__mm_walk_note(visits, record, unmet) -> visits` at a first meeting with a counted record of several owners;
+// `ownersBesidesThis` is its refcount word.
+export function emitWalkNote(module StdModule, block IrBlock, visits ValueId, record ValueId, ownersBesidesThis ValueId, meeting WalkMeeting, ids ValueMinter) returns ValueId
+	let unmet = match meeting 'meeting'
+		owner gives ownersBesidesThis
+		view gives emitBin(module, block: block, a: ownersBesidesThis, b: emitConst(module, block: block, value: ViewsOnlyFlag, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	end 'meeting'
+
+	return emitRuntimeCall(module, block: block, callee: WalkNoteName, args: threeArgs(visits, second: record, third: unmet), ids: ids)
+end 'emitWalkNote'
+
+// `__mm_walk_revisit(visits, record, kept) -> met` at a later meeting.
+export function emitWalkRevisit(module StdModule, block IrBlock, visits ValueId, record ValueId, meeting WalkMeeting, ids ValueMinter) returns ValueId
+	let kept = match meeting 'meeting'
+		owner gives OwnerMeetingKeeps
+		view gives ViewMeetingKeeps
+	end 'meeting'
+
+	return emitRuntimeCall(module, block: block, callee: WalkRevisitName, args: threeArgs(visits, second: record, third: emitConst(module, block: block, value: kept, ids: ids)), ids: ids)
+end 'emitWalkRevisit'
+
+// `__mm_walk_slot(table, record) -> entryAddress` — the entry holding `record`, or the vacant one a probe for it
+// ends at.
+function buildWalkSlot(module StdModule)
+	var func = IrFunction.createFromStd(WalkSlotName, returnType: StdReturnType.value(StdType.i64), paramCount: SlotParamCount, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(SlotParamCount)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var vacancyTest = module.addBlock(func, label: b"probevacant", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"probenext", heat: BlockHeat.normal)
+	var found = module.addBlock(func, label: b"probefound", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: SlotParamCount)
+	let table = 0 as ValueId
+	let record = 1 as ValueId
+
+	let mask = emitLoadField(module, block: entry, record: table, offset: VisitTableMaskOffset, ids: ids)
+	let entries = emitFieldAddr(module, block: entry, record: table, offset: VisitTableEntriesOffset, ids: ids)
+	let multiplier = emitConst(module, block: entry, value: VisitHashMultiplier, ids: ids)
+	let mixed = emitBin(module, block: entry, a: record, b: multiplier, opcode: StdBinOpcode.mul, ids: ids)
+	let discard = emitConst(module, block: entry, value: VisitHashDiscardBits, ids: ids)
+	let hashed = emitBin(module, block: entry, a: mixed, b: discard, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let start = emitBin(module, block: entry, a: hashed, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let probe = emitCascadeJoin(module, func: func, label: b"probe", template: argsOf(start), ids: ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(entry, carried: argsOf(start)), to: probe)
+
+	let index = onlyCarried(probe)
+	let slot = emitVisitEntryAddr(module, block: probe.block, entries: entries, index: index, ids: ids)
+	let occupant = emitLoadField(module, block: probe.block, record: slot, offset: VisitEntryRecordOffset, ids: ids)
+	let isRecord = emitCmp(module, block: probe.block, a: occupant, b: record, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(probe.block, op: StdOp.condBranch(isRecord, thenBlockId: found.id, elseBlockId: vacancyTest.id))
+
+	let vacant = emitConst(module, block: vacancyTest, value: VacantVisitEntry, ids: ids)
+	let isVacant = emitCmp(module, block: vacancyTest, a: occupant, b: vacant, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(vacancyTest, op: StdOp.condBranch(isVacant, thenBlockId: found.id, elseBlockId: advance.id))
+
+	let one = emitConst(module, block: advance, value: 1, ids: ids)
+	let next = emitBin(module, block: advance, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let wrapped = emitBin(module, block: advance, a: next, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(advance, carried: argsOf(wrapped)), to: probe)
+
+	module.setTerminator(found, op: StdOp.ret(slot))
+	module.functions.push(func)
+end 'buildWalkSlot'
+
+// `__mm_walk_revisit(table, record, kept) -> met` — has the walk met `record` before? If so, one more of its owners
+// is met, and the unmet word keeps only the bits `kept` holds.
+function buildWalkRevisit(module StdModule)
+	var func = IrFunction.createFromStd(WalkRevisitName, returnType: StdReturnType.value(StdType.i64), paramCount: RevisitParamCount, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(RevisitParamCount)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var look = module.addBlock(func, label: b"look", heat: BlockHeat.normal)
+	var met = module.addBlock(func, label: b"met", heat: BlockHeat.normal)
+	var notMet = module.addBlock(func, label: b"notmet", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: RevisitParamCount)
+	let table = 0 as ValueId
+	let record = 1 as ValueId
+	let kept = 2 as ValueId
+
+	emitBranchOnTable(module, block: entry, table: table, whenPresent: look, whenAbsent: notMet, ids: ids)
+
+	let slot = emitRuntimeCall(module, block: look, callee: WalkSlotName, args: twoArgs(table, second: record), ids: ids)
+	let occupant = emitLoadField(module, block: look, record: slot, offset: VisitEntryRecordOffset, ids: ids)
+	let isRecord = emitCmp(module, block: look, a: occupant, b: record, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(look, op: StdOp.condBranch(isRecord, thenBlockId: met.id, elseBlockId: notMet.id))
+
+	let unmet = emitLoadField(module, block: met, record: slot, offset: VisitEntryUnmetOffset, ids: ids)
+	let one = emitConst(module, block: met, value: 1, ids: ids)
+	let fewer = emitBin(module, block: met, a: unmet, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	let judged = emitBin(module, block: met, a: fewer, b: kept, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitStoreField(module, block: met, record: slot, offset: VisitEntryUnmetOffset, value: judged)
+	module.setTerminator(met, op: StdOp.ret(emitConst(module, block: met, value: WalkMetBefore, ids: ids)))
+
+	module.setTerminator(notMet, op: StdOp.ret(emitConst(module, block: notMet, value: WalkNotMetBefore, ids: ids)))
+	module.functions.push(func)
+end 'buildWalkRevisit'
+
+// `__mm_walk_note(table, record, unmet) -> table` — enter `record` at its first meeting with the owners not yet
+// met, creating the table or growing it first when it must. The caller has established the walk has not met
+// `record` before.
+function buildWalkNote(module StdModule)
+	var func = IrFunction.createFromStd(WalkNoteName, returnType: StdReturnType.value(StdType.i64), paramCount: NoteParamCount, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(NoteParamCount)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var create = module.addBlock(func, label: b"create", heat: BlockHeat.normal)
+	var check = module.addBlock(func, label: b"check", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	var relocate = module.addBlock(func, label: b"growmove", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: NoteParamCount)
+	let table = 0 as ValueId
+	let record = 1 as ValueId
+	let unmet = 2 as ValueId
+	let place = emitCascadeJoin(module, func: func, label: b"place", template: argsOf(table), ids: ids)
+
+	emitBranchOnTable(module, block: entry, table: table, whenPresent: check, whenAbsent: create, ids: ids)
+
+	let fresh = emitVisitTableAlloc(module, block: create, entries: emitConst(module, block: create, value: VisitTableFirstEntries, ids: ids), ids: ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(create, carried: argsOf(fresh)), to: place)
+
+	let entries = emitVisitTableEntryCount(module, block: check, table: table, ids: ids)
+	let used = emitLoadField(module, block: check, record: table, offset: VisitTableUsedOffset, ids: ids)
+	let one = emitConst(module, block: check, value: 1, ids: ids)
+	let usedAfter = emitBin(module, block: check, a: used, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let spare = emitConst(module, block: check, value: VisitTableSpareFactor, ids: ids)
+	let needed = emitBin(module, block: check, a: usedAfter, b: spare, opcode: StdBinOpcode.mul, ids: ids)
+	let tooFull = emitCmp(module, block: check, a: needed, b: entries, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(check, op: StdOp.condBranch(tooFull, thenBlockId: grow.id, elseBlockId: place.block.id))
+	pushCascadeEdge(check, to: place, values: argsOf(table))
+
+	let grownEntries = emitBin(module, block: grow, a: entries, b: spare, opcode: StdBinOpcode.mul, ids: ids)
+	let grown = emitVisitTableAlloc(module, block: grow, entries: grownEntries, ids: ids)
+	emitStoreField(module, block: grow, record: grown, offset: VisitTableUsedOffset, value: used)
+	let oldEntries = emitFieldAddr(module, block: grow, record: table, offset: VisitTableEntriesOffset, ids: ids)
+	let stride = emitConst(module, block: grow, value: VisitEntryBytes, ids: ids)
+	var loop = emitElementRange(module, func: func, cur: grow, base: oldEntries, count: entries, elementSize: stride, visit: relocate, carried: ValueIdArray.create(), labels: ElementRangeLabels.create(b"growh", body: b"growb", step: b"growstep", done: b"growdone"), ids: ids)
+
+	let oldSlot = emitVisitEntryAddr(module, block: relocate, entries: oldEntries, index: loop.index, ids: ids)
+	let relocatedUnmet = emitLoadField(module, block: relocate, record: oldSlot, offset: VisitEntryUnmetOffset, ids: ids)
+	emitVisitEntryStore(module, block: relocate, table: grown, record: loop.element, unmet: relocatedUnmet, ids: ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(relocate, carried: loop.carried), to: loop.step)
+
+	var relocated = loop.done
+	module.appendOp(relocated, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(table)))
+	emitCascadeBranch(module, from: CascadeCursor.create(relocated, carried: argsOf(grown)), to: place)
+
+	let placed = onlyCarried(place)
+	emitVisitEntryStore(module, block: place.block, table: placed, record: record, unmet: unmet, ids: ids)
+	let placedUsed = emitLoadField(module, block: place.block, record: placed, offset: VisitTableUsedOffset, ids: ids)
+	let placeOne = emitConst(module, block: place.block, value: 1, ids: ids)
+	let nowUsed = emitBin(module, block: place.block, a: placedUsed, b: placeOne, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: place.block, record: placed, offset: VisitTableUsedOffset, value: nowUsed)
+	module.setTerminator(place.block, op: StdOp.ret(placed))
+
+	module.functions.push(func)
+end 'buildWalkNote'
+
+// `__mm_walk_settle(table)` — once the root's walk has returned: free the table, then abort if any record an owner
+// has met has an owner the walk never met. The table is freed first so the abort path returns it too.
+function buildWalkSettle(module StdModule)
+	var func = IrFunction.createFromStd(WalkSettleName, returnType: StdReturnType.void, paramCount: SettleParamCount, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(SettleParamCount)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"scan", heat: BlockHeat.normal)
+	var tally = module.addBlock(func, label: b"tally", heat: BlockHeat.normal)
+	var ownerOutside = module.addBlock(func, label: b"owneroutside", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: SettleParamCount)
+	let table = 0 as ValueId
+
+	emitBranchOnTable(module, block: entry, table: table, whenPresent: scan, whenAbsent: done, ids: ids)
+
+	let entries = emitVisitTableEntryCount(module, block: scan, table: table, ids: ids)
+	let base = emitFieldAddr(module, block: scan, record: table, offset: VisitTableEntriesOffset, ids: ids)
+	let stride = emitConst(module, block: scan, value: VisitEntryBytes, ids: ids)
+	let noneUnmet = emitConst(module, block: scan, value: AllOwnersMet, ids: ids)
+	var loop = emitElementRange(module, func: func, cur: scan, base: base, count: entries, elementSize: stride, visit: tally, carried: argsOf(noneUnmet), labels: ElementRangeLabels.create(b"settleh", body: b"settleb", step: b"settlestep", done: b"settledone"), ids: ids)
+
+	// Any unmet owner an owner meeting judges leaves a nonzero bit in the union, whichever sign it has. A views-only
+	// entry is masked out whole: `(unmet >> 62 & 1) - 1` is all ones without the flag and zero with it.
+	let residue = try loop.carried.get(0) otherwise panic("buildWalkSettle: the loop carries the one residue it was entered with")
+	let slot = emitVisitEntryAddr(module, block: tally, entries: base, index: loop.index, ids: ids)
+	let unmet = emitLoadField(module, block: tally, record: slot, offset: VisitEntryUnmetOffset, ids: ids)
+	let flagShift = emitConst(module, block: tally, value: ViewsOnlyFlagShift, ids: ids)
+	let flagWord = emitBin(module, block: tally, a: unmet, b: flagShift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let one = emitConst(module, block: tally, value: 1, ids: ids)
+	let flag = emitBin(module, block: tally, a: flagWord, b: one, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let judgedMask = emitBin(module, block: tally, a: flag, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	let judged = emitBin(module, block: tally, a: unmet, b: judgedMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let merged = emitBin(module, block: tally, a: residue, b: judged, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(tally, carried: argsOf(merged)), to: loop.step)
+
+	var settled = loop.done
+	module.appendOp(settled, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(table)))
+	let allMet = emitConst(module, block: settled, value: AllOwnersMet, ids: ids)
+	let clean = emitCmp(module, block: settled, a: residue, b: allMet, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(settled, op: StdOp.condBranch(clean, thenBlockId: done.id, elseBlockId: ownerOutside.id))
+
+	emitRuntimeAbort(module, func: func, block: ownerOutside, abort: RuntimeAbort.transferredRecordNotSole, ids: ids)
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildWalkSettle'
+
+// `table != NoVisitTable` → `whenPresent`, otherwise `whenAbsent`.
+function emitBranchOnTable(module StdModule, block IrBlock, table ValueId, whenPresent IrBlock, whenAbsent IrBlock, ids ValueMinter)
+	let none = emitConst(module, block: block, value: NoVisitTable, ids: ids)
+	let present = emitCmp(module, block: block, a: table, b: none, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(present, thenBlockId: whenPresent.id, elseBlockId: whenAbsent.id))
+end 'emitBranchOnTable'
+
+// The entries a table holds: its mask is one less.
+function emitVisitTableEntryCount(module StdModule, block IrBlock, table ValueId, ids ValueMinter) returns ValueId
+	let mask = emitLoadField(module, block: block, record: table, offset: VisitTableMaskOffset, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	return emitBin(module, block: block, a: mask, b: one, opcode: StdBinOpcode.add, ids: ids)
+end 'emitVisitTableEntryCount'
+
+// The one value a single-argument join carries.
+function onlyCarried(join CascadeCursor) returns ValueId
+	if join.carried.count() != 1 'notOneValue'
+		panic("onlyCarried: a join carrying {join.carried.count()} values is asked for its one")
+	end 'notOneValue'
+
+	return try join.carried.get(0) otherwise panic("onlyCarried: carried.get(0) OOB after the count test")
+end 'onlyCarried'
+
+// A table of `entries` vacant entries, its mask written. `__mm_alloc` answers zeroed memory, which is every entry
+// vacant and `used` zero.
+function emitVisitTableAlloc(module StdModule, block IrBlock, entries ValueId, ids ValueMinter) returns ValueId
+	let stride = emitConst(module, block: block, value: VisitEntryBytes, ids: ids)
+	let entryBytes = emitBin(module, block: block, a: entries, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	let headBytes = emitConst(module, block: block, value: VisitTableEntriesOffset as ParsedInt, ids: ids)
+	let bytes = emitBin(module, block: block, a: entryBytes, b: headBytes, opcode: StdBinOpcode.add, ids: ids)
+	let noDestructor = emitConst(module, block: block, value: NoDestructor, ids: ids)
+	let table = ids.mint()
+	emitMmAllocCall(module, block: block, result: table, size: bytes, destructor: noDestructor, tag: mmTagIndex(MmTag.WalkVisitTable), ids: ids)
+
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let mask = emitBin(module, block: block, a: entries, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: block, record: table, offset: VisitTableMaskOffset, value: mask)
+	return table
+end 'emitVisitTableAlloc'
+
+// Write `record` and its unmet owners into the entry a probe of `table` for it ends at.
+function emitVisitEntryStore(module StdModule, block IrBlock, table ValueId, record ValueId, unmet ValueId, ids ValueMinter)
+	let slot = emitRuntimeCall(module, block: block, callee: WalkSlotName, args: twoArgs(table, second: record), ids: ids)
+	emitStoreField(module, block: block, record: slot, offset: VisitEntryRecordOffset, value: record)
+	emitStoreField(module, block: block, record: slot, offset: VisitEntryUnmetOffset, value: unmet)
+end 'emitVisitEntryStore'
+
+function emitVisitEntryAddr(module StdModule, block IrBlock, entries ValueId, index ValueId, ids ValueMinter) returns ValueId
+	let stride = emitConst(module, block: block, value: VisitEntryBytes, ids: ids)
+	return emitSlotAddr(module, block: block, buffer: entries, index: index, elementSize: stride, ids: ids)
+end 'emitVisitEntryAddr'

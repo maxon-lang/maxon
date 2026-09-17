@@ -1,0 +1,225 @@
+// Test: vector.an-array-element-may-hold-a-union-carrying-a-vector
+typealias Flags = Vector with 4 bool
+typealias CellArray = Array with Cell
+
+union Content
+	empty
+	marked(flags Flags)
+end 'Content'
+
+type Cell
+	var content as Content
+
+	static function create(content Content) returns Self
+		return Self{content: content}
+	end 'create'
+
+	function firstFlag() returns bool
+		return match self.content 'kind'
+			empty gives false
+			marked(flags) gives try flags.get(0) otherwise false
+		end 'kind'
+	end 'firstFlag'
+end 'Cell'
+
+function main() returns ExitCode
+	var flags = Flags.create()
+	try flags.set(0, value: true) otherwise panic("index 0 is inside a 4-element vector")
+
+	var cells = CellArray.create()
+	cells.push(Cell.create(Content.marked(flags)))
+
+	for cell in cells 'each'
+		print("{cell.firstFlag()}\n")
+	end 'each'
+
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.leaRegRdata rax, [rip + __layout_Vector_N4_bool]
+    x64.movRegImm32 rbx, 4
+  __il_body#9:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rax + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+  __il_cont#8:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.leaRegRdata r9, [rip + __layout_Vector_N4_bool]
+    x64.movRegImm32 rsi, 4
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Cell]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+  __il_body#11:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], r13
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Content
+  __il_cont#10:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  each:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rcx + rax*8 + 0]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#15:
+    x64.movRegImm32 r12, 0
+    x64.jmp __il_cont#13
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#16:
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegImm32 rdx, 0
+    x64.leaRegRdata rax, [rip + __layout_Vector_N4_bool]
+    x64.movRegReg rcx, r12
+    x64.callDirect Vector.get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#17
+  tryerr#18:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont
+  tryok#17:
+    x64.movRegReg r13, r8
+  trycont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r12, r13
+  __il_cont#13:
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot2, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __bool_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegReg rax, r12, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rax, slot5
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __mm_decref
+  __il_body#23:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#12:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+  forstep:
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr:
+    x64.storeSlotReg slot1, rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, each
+    x64.jmp forexit
+  matchdead:
+  forexit:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at vector.an-array-element-may-hold-a-union-carrying-a-vector.test:27: index 0 is inside a 4-element vector\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

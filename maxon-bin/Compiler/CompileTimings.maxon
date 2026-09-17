@@ -21,11 +21,11 @@
 // and the `isel` row. So on a sixteen-processor box the breakdown reads several times the phase above it:
 // that is the pool's work, not a double count, and the multiple is the parallelism. The row under the
 // breakdown says which reading it is (see `PoolRemainder`). The twelve per-function Std pass rows
-// `StdPassPool` folds are sums of the same kind, broken down under `stdFanOut`. A pool row is marked
-// `(pool)` in the report and NAMES THE DRIVER PHASE it breaks down (`PhaseRowKind`); `attributedCost`
-// leaves it out of the disjoint sum for that reason. Every SERIAL row in the table is unaffected, and so
-// are the `regalloc` and `stdFanOut` PHASE rows themselves — they are bracketed on the main thread and
-// stay exact in every column.
+// `StdPassPool` folds are sums of the same kind, broken down under `stdFanOut`, and so are the `lex`,
+// `directives` and `parse` rows `FrontEndPool` folds under `frontEndPool`. A pool row is marked `(pool)` in
+// the report and NAMES THE DRIVER PHASE it breaks down (`PhaseRowKind`); `attributedCost` leaves it out of
+// the disjoint sum for that reason. Every SERIAL row in the table is unaffected, and so are the driver PHASE
+// rows themselves — they are bracketed on the main thread and stay exact in every column.
 //
 // ⚠ **THE SUB-PHASES' MEMORY COLUMNS ARE NOT THE SAME KIND OF SUM.** They read the CALLING GREEN THREAD's
 // allocator counters (`__Builtins.threadAllocTotal` and its two siblings), so each bracket counts what its
@@ -527,6 +527,15 @@ export enum CompilePhase
 	// every program that declares no such body, which is nearly all of them, and folded together that zero
 	// would be reported as the arity walk getting cheaper.
 	alwaysSplicedGate
+
+	// The front end's pool DRIVER (`FrontEndPool`): dispatching every file's lex and parse to the workers,
+	// landing what comes back in source-path order, and handing each worker its private signature index —
+	// everything the pool costs the main thread, and the wall it ran inside. APPENDED HERE for this enum's own
+	// reason — the ordinals are the `.metrics.tsv` wire format.
+	//
+	// ⚠ `lex`, `directives` and `parse` keep their rows, and a compile that ran them on the pool fills those
+	// rows from the workers' brackets — a breakdown of this one, as `stdFanOut`'s passes are of it.
+	frontEndPool
 end 'CompilePhase'
 
 // How a phase's row was measured. A pool row is a sum over worker brackets that ran inside `driver`'s

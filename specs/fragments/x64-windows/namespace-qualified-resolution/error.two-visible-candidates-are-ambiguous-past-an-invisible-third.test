@@ -1,0 +1,33 @@
+// Test: error.two-visible-candidates-are-ambiguous-past-an-invisible-third
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 1
+end 'pick'
+
+// --- file: mid/f.maxon
+typealias Integer = int(0 to 125)
+
+function pick() returns Integer
+	return 2
+end 'pick'
+
+export function useMid() returns Integer
+	return pick()
+end 'useMid'
+
+// --- file: zulu/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (pick() + mid.useMid()) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3095: app/<fragment>:29:10: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick

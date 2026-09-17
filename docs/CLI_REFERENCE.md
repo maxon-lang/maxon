@@ -1543,9 +1543,11 @@ maxon verify-recheck <file|dir>
 
 - **`verify-warm-rebuild`** checks that the query layer is deterministic (two cold compiles agree byte
   for byte) and incremental (a rebuild reuses cached work, and each kind of edit invalidates exactly what
-  it should). A file with compile errors reports them and exits 1.
+  it should), and that a compile reusing the memos of files an edit left alone emits exactly what a cold
+  compile of the edited program emits. A file with compile errors reports them and exits 1.
 - **`verify-recheck`** checks that one project can be re-checked the way an editor does: two checks of
-  unchanged input agree, and a diagnostic introduced by an edit clears when the edit is undone.
+  unchanged input agree, and a diagnostic introduced by an edit clears when the edit is undone. It takes
+  `--define=<name>=<value>` as `build` does, so a define is checked on every re-check.
 
 ### A typical loop
 

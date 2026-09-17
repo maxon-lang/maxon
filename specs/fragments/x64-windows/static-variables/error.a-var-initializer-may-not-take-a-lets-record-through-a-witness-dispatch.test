@@ -1,0 +1,45 @@
+// Test: error.a-var-initializer-may-not-take-a-lets-record-through-a-witness-dispatch
+interface Source
+	function box() returns Box
+end 'Source'
+
+type FromLet implements Source
+	export var tag as Integer
+
+	static function create() returns Self
+		return Self{tag: 1}
+	end 'create'
+
+	export function box() returns Box
+		return a
+	end 'box'
+end 'FromLet'
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function viaSource() returns Self
+		return through(FromLet.create())
+	end 'viaSource'
+end 'Box'
+
+function through(source Source) returns Box
+	return source.box()
+end 'through'
+
+let a = Box.create()
+var v = Box.viaSource()
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3166: <fragment>:35:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.viaSource` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`

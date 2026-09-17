@@ -50,12 +50,13 @@ end 'runLspServer'
 
 type LspSession
 	var documents as LspDocumentTextMap
+	let keywords as KeywordTable
 	var shutdownRequested = false
 	var stopped = false
 	var streamBroken = false
 
 	static function create() returns LspSession
-		return Self{documents: LspDocumentTextMap.create()}
+		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create()}
 	end 'create'
 
 	// The message pump. One turn reads one framed message; the session ends when the client says so
@@ -185,7 +186,7 @@ type LspSession
 		let uri = try lspMemberText(doc, of: textDocument, key: LspUriKey)
 		let text = try self.documents.get(uri) otherwise return LspAnswer.nothing()
 
-		return try answerFor(LspRequest.of(method, incoming: doc, params: params, uri: uri, text: text))
+		return try answerFor(LspRequest.of(method, incoming: doc, params: params, uri: uri, text: text, keywords: self.keywords))
 	end 'answerResolving'
 
 	// ⛔ NO `else` ARM, AND THAT IS THE PROTOCOL: a notification is never answered, so one this server

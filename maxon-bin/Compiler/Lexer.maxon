@@ -483,7 +483,7 @@ end 'expressionOperandDisplayText'
 // text: a QUOTED expectation names a keyword or operator token's own spelling, and a BARE one does
 // not.
 //
-// ⛔ **THE SPELLING TEST IS THEREFORE `classifyIdentifier`'s — THE LEXER'S OWN KEYWORD TABLE — AND NOT
+// ⛔ **THE SPELLING TEST IS THEREFORE `KeywordTable.classify`'s — THE LEXER'S OWN KEYWORD TABLE — AND NOT
 // A LIST OF WORDS.** No property of the TEXT can separate `identifier` from `function`: both are one
 // lowercase word, and `identifier` is itself a legal identifier. What separates them is that the lexer
 // reads `function` as a keyword and `identifier` as no token at all. A word list here would fail OPEN —
@@ -497,8 +497,8 @@ end 'expressionOperandDisplayText'
 // for these two. Moving them is 20 pins and its own decision. (E2004 hardcodes the bare
 // `expression` in its own template: a different CODE with a different sentence, which agrees with
 // the rule rather than being decided by it.)
-export function expectationDisplayText(expected String) returns String
-	if expectationNamesATokenClass(expected) 'aClassNoSourceSpells'
+export function expectationDisplayText(expected String, keywords KeywordTable) returns String
+	if expectationNamesATokenClass(expected, keywords: keywords) 'aClassNoSourceSpells'
 		return expected
 	end 'aClassNoSourceSpells'
 
@@ -508,7 +508,7 @@ end 'expectationDisplayText'
 // Is `expected` a CLASS of token rather than a spelling of one? Answered for the single-word case only,
 // which is where the two are genuinely indistinguishable by text — see `expectationDisplayText` for the
 // rule, for why the keyword table and not a list, and for the multi-word classes this leaves quoted.
-function expectationNamesATokenClass(expected String) returns bool
+function expectationNamesATokenClass(expected String, keywords KeywordTable) returns bool
 	let word = expected.toByteArray()
 
 	if word.isEmpty() 'namesNothingAtAll'
@@ -521,7 +521,7 @@ function expectationNamesATokenClass(expected String) returns bool
 		end 'notOneIdentifierShapedWord'
 	end 'eachByte'
 
-	return classifyIdentifier(word) == TokenKind.identifier
+	return keywords.classify(word) == TokenKind.identifier
 end 'expectationNamesATokenClass'
 
 // The two characters the lexer hands to the parser as IDENTIFIERS so that it, not the
@@ -681,9 +681,10 @@ type Lexer
 	// CursorError because that's the shared "done" channel; the flag lets
 	// run() distinguish "clean completion at EOF" from a truncated token.
 	var emittedAtEof as bool
+	let keywords as KeywordTable
 
-	static function create(source String, bytes ByteArray, cursor ByteCursor) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false}
+	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable) returns Lexer
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count(), line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords}
 	end 'create'
 
 	// --- Navigation helpers ---
@@ -1649,7 +1650,7 @@ type Lexer
 		end 'includeLastByte'
 
 		let identBytes = try bytes.slice(startPos as ElementIndex, endIndex: identEnd as ElementIndex) otherwise panic("Lexer: identifier-slice invariant violated")
-		let kind = classifyIdentifier(identBytes)
+		let kind = keywords.classify(identBytes)
 		emitWithSource(kind, value: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
 
 		if atEof 'identDone'
@@ -1848,8 +1849,6 @@ type Lexer
 	// --- Main DFA loop ---
 
 	function run() returns TokenArray throws LexerError
-		logDebug(LogCategory.lexer, message: function() gives "Starting lexer")
-
 		// Drive the DFA until either stepDfa returns true (consumed everything
 		// cleanly) or a scanner unwinds via CursorError. CursorError with
 		// `emittedAtEof` set means a complete token landed on the last byte
@@ -1895,14 +1894,16 @@ end 'Lexer'
 // (e.g. unterminated string literal) so queryTokens can route them through
 // the project's diagnostic sink and stop the pipeline before parsing runs
 // on partial tokens.
-export function tokenize(source String) returns TokenArray throws LexerError
+//
+// It reaches no module `var` — not even the logger's — so a pool worker may run it (E3143).
+export function tokenize(source String, keywords KeywordTable) returns TokenArray throws LexerError
 	let bytes = source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
 		// Empty or whitespace-only source yields an empty token stream.
 		return TokenArray.create()
 	end 'emptySource'
 
-	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor)
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords)
 	return try lexer.run()
 end 'tokenize'
 
@@ -1950,105 +1951,115 @@ type KeywordInfo
 	end 'create'
 end 'KeywordInfo'
 
-var keywordMap = [
-	b"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
-	b"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
-	b"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
-	b"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
-	b"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
-	b"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
-	b"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
-	b"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
-	b"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
-	b"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
-	b"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
-	b"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
-	b"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
-	b"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
-	b"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
-	b"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
-	b"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
-	b"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
-	b"async": KeywordInfo.create(TokenKind.async, helpText: "Starts a COROUTINE of the current green thread to run a function call, returning a promise. It overlaps waiting, never execution: the coroutine is published only to its own green thread's queue and driven only by that thread, which is what keeps a box reachable from exactly one thread. Starting a thread that is scheduled independently is `spawn`, which starts a SERVICE.", canHaveBlockLabel: false),
-	b"await": KeywordInfo.create(TokenKind.await, helpText: "Suspends the current green thread until a promise completes, yielding its result.", canHaveBlockLabel: false),
-	b"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
-	b"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
-	b"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
-	b"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
-	b"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
-	b"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
-	b"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
-	b"union": KeywordInfo.create(TokenKind.union, helpText: "Declares a union type with named cases, optional associated values, and methods.", canHaveBlockLabel: false),
-	b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with named cases, optional raw values, and methods.", canHaveBlockLabel: false),
-	b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
-	b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
-	// ⭐ **A REAL LEXER KEYWORD, UNLIKE `module`, AND THAT IS A MEASUREMENT TOO.** `module` cannot be one
-	// because the word is an ordinary identifier 6,537 times in `maxon-bin/` alone (see
-	// `Parser.atModuleModifier`). `public` is used ZERO times as an identifier anywhere in the tree — 45
-	// occurrences, every one inside a comment or a string — so it costs nothing to reserve program-wide and
-	// needs none of `module`'s contextual machinery.
-	b"public": KeywordInfo.create(TokenKind.public, helpText: "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostics (E3092/E3093). Visibility is identical to `export`; the difference is that `public` states the symbol exists for callers outside this program, so \"nobody here references it\" is not a finding.", canHaveBlockLabel: false),
-	b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
-	b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
-	b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
-	b"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
-	b"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
-	b"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
-	b"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
-	b"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
-	b"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
-	b"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
-	b"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
-	b"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
-	b"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
-	b"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
-	b"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
-	b"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
-	b"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
-	b"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
-	b"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
-	b"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
-	b"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
-	b"sizeof": KeywordInfo.create(TokenKind.sizeof, helpText: "Returns the size of a type in bytes — a compile-time constant for a concrete type, a runtime layout-descriptor read for a generic type's parameter.", canHaveBlockLabel: false),
-	b"countof": KeywordInfo.create(TokenKind.countof, helpText: "Returns how many ELEMENTS a fixed-size container type holds — a compile-time constant for an instance that states its count, a runtime layout-descriptor read for the sized container's own `Self`.", canHaveBlockLabel: false),
-	b"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
-	b"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
-	b"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
-	b"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
-	b"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
-	b"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
-	b"cstring": KeywordInfo.create(TokenKind.cstring, helpText: "NUL-terminated UTF-8 byte pointer. Used to pass strings to `__Builtins.*` runtime intrinsics that strlen their buffers. Produce one with `String.cstr()` or `__ManagedMemory.toCString()`.", canHaveBlockLabel: false)
-]
+typealias KeywordInfoMap = Map with (ByteArray, KeywordInfo)
 
-// Keyed on the identifier's raw BYTES, so the hot path never materializes a String:
-// `ByteArray` hashes and compares by content, so the source slice looks the keyword
-// up directly (see Array's Hashable/Equatable extension).
-function classifyIdentifier(name ByteArray) returns TokenKind
-	let info = try keywordMap.get(name) otherwise return TokenKind.identifier
-	return info.kind
-end 'classifyIdentifier'
+// ⭐ **THE RESERVED WORDS, AS A VALUE EACH OWNER BUILDS ONCE AND HANDS TO EVERY `tokenize` IT RUNS** — a compile's
+// `Project`, an LSP session, one formatting pass. Not a module `var`: a lexer on a pool worker may reach none
+// (E3143). It is the only place the set is written down; every keyword question is asked of it.
+module type KeywordTable
+	let byName as KeywordInfoMap
 
-// ⭐ **IS `kind` A RESERVED WORD — DERIVED FROM `keywordMap`, NEVER RESTATED.** The formatter has to know
-// whether a token it is re-emitting is a keyword or an ordinary identifier, and a second list of the
-// keywords is exactly the copy that goes stale silently: a word added to the map above would keep
-// lexing as a keyword and start formatting as an identifier. The map is the only place the set is
-// written down, so this scans it.
-//
-// The scan is linear in the keyword count and the map is the wrong index for this direction — it is
-// keyed by SPELLING, and the answer wanted here is keyed by KIND. A reverse index would be a second
-// copy of the same fact with its own initialization order to get wrong, for a question asked once per
-// token by ONE caller that is already writing bytes to a file.
-//
-// `module` and not `export`: the formatter lives under `Compiler/` (see `Ascii` for the E3093 rule).
-module function isKeywordKind(kind TokenKind) returns bool
-	for (_, info) in keywordMap 'eachKeyword'
-		if info.kind == kind 'isTheKind'
-			return true
-		end 'isTheKind'
-	end 'eachKeyword'
+	module static function create() returns KeywordTable
+		let byName = [
+			b"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
+			b"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
+			b"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
+			b"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
+			b"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
+			b"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
+			b"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
+			b"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
+			b"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
+			b"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
+			b"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
+			b"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
+			b"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
+			b"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
+			b"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
+			b"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
+			b"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
+			b"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
+			b"async": KeywordInfo.create(TokenKind.async, helpText: "Starts a COROUTINE of the current green thread to run a function call, returning a promise. It overlaps waiting, never execution: the coroutine is published only to its own green thread's queue and driven only by that thread, which is what keeps a box reachable from exactly one thread. Starting a thread that is scheduled independently is `spawn`, which starts a SERVICE.", canHaveBlockLabel: false),
+			b"await": KeywordInfo.create(TokenKind.await, helpText: "Suspends the current green thread until a promise completes, yielding its result.", canHaveBlockLabel: false),
+			b"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
+			b"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
+			b"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
+			b"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
+			b"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
+			b"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
+			b"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
+			b"union": KeywordInfo.create(TokenKind.union, helpText: "Declares a union type with named cases, optional associated values, and methods.", canHaveBlockLabel: false),
+			b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with named cases, optional raw values, and methods.", canHaveBlockLabel: false),
+			b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
+			b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+			// ⭐ **A REAL LEXER KEYWORD, UNLIKE `module`, AND THAT IS A MEASUREMENT TOO.** `module` cannot be one
+			// because the word is an ordinary identifier 6,537 times in `maxon-bin/` alone (see
+			// `Parser.atModuleModifier`). `public` is used ZERO times as an identifier anywhere in the tree — 45
+			// occurrences, every one inside a comment or a string — so it costs nothing to reserve program-wide and
+			// needs none of `module`'s contextual machinery.
+			b"public": KeywordInfo.create(TokenKind.public, helpText: "Makes a declaration visible to other modules AND marks it as public API surface, exempting it from the unused-export diagnostics (E3092/E3093). Visibility is identical to `export`; the difference is that `public` states the symbol exists for callers outside this program, so \"nobody here references it\" is not a finding.", canHaveBlockLabel: false),
+			b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
+			b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
+			b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
+			b"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
+			b"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
+			b"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
+			b"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
+			b"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
+			b"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
+			b"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
+			b"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+			b"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+			b"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
+			b"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
+			b"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
+			b"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
+			b"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
+			b"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
+			b"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
+			b"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
+			b"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
+			b"sizeof": KeywordInfo.create(TokenKind.sizeof, helpText: "Returns the size of a type in bytes — a compile-time constant for a concrete type, a runtime layout-descriptor read for a generic type's parameter.", canHaveBlockLabel: false),
+			b"countof": KeywordInfo.create(TokenKind.countof, helpText: "Returns how many ELEMENTS a fixed-size container type holds — a compile-time constant for an instance that states its count, a runtime layout-descriptor read for the sized container's own `Self`.", canHaveBlockLabel: false),
+			b"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
+			b"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
+			b"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
+			b"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
+			b"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
+			b"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
+			b"cstring": KeywordInfo.create(TokenKind.cstring, helpText: "NUL-terminated UTF-8 byte pointer. Used to pass strings to `__Builtins.*` runtime intrinsics that strlen their buffers. Produce one with `String.cstr()` or `__ManagedMemory.toCString()`.", canHaveBlockLabel: false)
+		]
 
-	return false
-end 'isKeywordKind'
+		return Self{byName: byName}
+	end 'create'
+
+	// Keyed on the identifier's raw BYTES, so the hot path never materializes a String:
+	// `ByteArray` hashes and compares by content, so the source slice looks the keyword
+	// up directly (see Array's Hashable/Equatable extension).
+	module function classify(name ByteArray) returns TokenKind
+		let info = try self.byName.get(name) otherwise return TokenKind.identifier
+		return info.kind
+	end 'classify'
+
+	// ⭐ **IS `kind` A RESERVED WORD — DERIVED FROM THE TABLE, NEVER RESTATED.** The formatter has to know
+	// whether a token it is re-emitting is a keyword or an ordinary identifier, and a second list of the
+	// keywords is exactly the copy that goes stale silently: a word added above would keep lexing as a
+	// keyword and start formatting as an identifier.
+	//
+	// The scan is linear in the keyword count and the map is the wrong index for this direction — it is
+	// keyed by SPELLING, and the answer wanted here is keyed by KIND. A reverse index would be a second
+	// copy of the same fact, for a question asked once per token by ONE caller that is already writing
+	// bytes to a file.
+	module function holdsKind(kind TokenKind) returns bool
+		for (_, info) in self.byName 'eachKeyword'
+			if info.kind == kind 'isTheKind'
+				return true
+			end 'isTheKind'
+		end 'eachKeyword'
+
+		return false
+	end 'holdsKind'
+end 'KeywordTable'
 
 // Map a directive name (the text following `#`) to its TokenKind. Returns
 // TokenKind.identifier for unrecognized names so the lexer caller can

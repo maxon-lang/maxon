@@ -563,23 +563,19 @@ end 'appendPromotionRuntimeCall'
 // would shift every later value's type by one — the invariant `Parser.mintValue` and
 // `ModuleInit.SynthesizedFunction.mint` each keep for their own tier.
 //
-// ⚠ **AND THE DENSE COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT.** `IrFunction.shallowCopy` —
-// which `IrModule.merge` relocates every function through — carries them across BY REFERENCE, and the
-// artifact is memoized:
-// `queryAllModule` hands the same object back on a cache hit, and the stdlib body-demand fixpoint re-folds
-// artifacts within a single compile. Pushing onto the merged function's column would therefore lengthen
-// the ARTIFACT's column, and every later fold would inherit values no op defines. So the first mint
-// DE-ALIASES: it replaces each column with a private copy, and only that copy grows. A function this pass
-// does not change never mints, so it never copies.
+// ⚠ **AND THE DENSE COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT**, which `queryAllModule` hands back on a
+// cache hit and the stdlib body-demand fixpoint re-folds — so a push onto the merged function's column would
+// lengthen the ARTIFACT's, and every later fold would inherit values no op defines. Each mint therefore writes
+// through `IrFunction.makeValueColumnsPrivate`; a function this pass does not change never mints, so it never
+// copies.
 //
 // `valueWitnessIds` is deliberately not among them: it is grown on demand and stops at its highest paired
 // value, so a ValueId past its end already reads as unpaired — which is what a promoted byte record is.
 type PromotedValueMinter
 	var func as IrFunction
-	var deAliased as bool
 
 	static function over(func IrFunction) returns PromotedValueMinter
-		return Self{func: func, deAliased: false}
+		return Self{func: func}
 	end 'over'
 
 	// Allocate a fresh ValueId on the function and record its type, in lockstep. The id IS the column
@@ -590,15 +586,7 @@ type PromotedValueMinter
 	// returns `void`, none of which is a `named`/`structRef` value — the only tags whose name column is
 	// ever read.
 	function mint(tag ValueTypeTag) returns ValueId
-		if not self.deAliased 'stillSharedWithTheArtifact'
-			self.func.valueTags = self.func.valueTags.clone()
-			self.func.valueNameIds = self.func.valueNameIds.clone()
-			self.func.valueBrandIds = self.func.valueBrandIds.clone()
-			self.func.valueMintedSole = self.func.valueMintedSole.clone()
-			self.func.valueClosureEnv = self.func.valueClosureEnv.clone()
-			self.func.valueIsCapturingClosure = self.func.valueIsCapturingClosure.clone()
-			self.deAliased = true
-		end 'stillSharedWithTheArtifact'
+		self.func.makeValueColumnsPrivate()
 
 		let id = self.func.valueTags.count()
 		self.func.valueTags.push(tag)

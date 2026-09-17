@@ -85,10 +85,11 @@ ROOT this frame does not solely own — a value a closure or a container also ho
 `Promise` (a handle its awaiter owns), a function value (whose captured environment is shared), a value
 held at an interface type (a fat pointer released through a witness), an opaque type parameter (no layout
 at the send). Every other aggregate — a container, a record with a managed field, a union with a managed
-payload — is admitted, moved or lent, after a runtime WALK over its graph at the send: every reachable
-refcounted record must be sole (a count of exactly 1; an immortal literal has no count and passes), a
-shared copy-on-write buffer is detached, and a shared RECORD aborts the process with exit **96** rather
-than hand one box to two green threads.
+payload — is admitted, moved or lent, after a runtime WALK over its graph at the send: no reachable
+refcounted record may have an owner outside the graph (a record the graph reaches twice is legal when both
+references are its owners; an immortal literal has no count and passes), a shared copy-on-write buffer is
+detached, and a RECORD with an owner outside the graph aborts the process with exit **96** rather than hand
+one box to two green threads.
 
 A lent graph is **frozen** from the send on (**E3160**): neither the binding nor any value read out of it
 may reach storage through which it could be written — a `var`, a field or union payload, a container, a
@@ -2199,6 +2200,179 @@ main 3
 crossed 3
 ```
 
+<!-- test: deepmove.a-cloned-string-crosses-while-the-sender-keeps-its-source -->
+A `String` moved by a send is walked like every other managed argument. A clone is a fresh record of its own,
+so the walk finds nothing outside the graph and the temporary crosses while `main` goes on reading and writing
+the source it was copied from. The reply sequences the two sides.
+```maxon
+type Svc
+	var last as String
+
+	static function create() returns Self
+		return Self{last: ""}
+	end 'create'
+
+	export function keep(s String) returns Integer
+		self.last = s
+		print("svc {self.last}\n")
+		return self.last.byteLength() as Integer
+	end 'keep'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var src = "payload {42}"
+	let n = try await h.keep(src.clone()) otherwise 0
+	src.append("!")
+	print("main {src} after the service kept {n} bytes\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+svc payload 42
+main payload 42! after the service kept 10 bytes
+```
+
+<!-- test: deepmove.a-slice-written-at-the-send-crosses-while-the-sender-keeps-its-source -->
+A slice is a temporary too: each `slice` overload hands back the fresh record `sliceBytes` builds, a view onto
+the source's bytes that nothing but the send can name. It moves, the walk detaches the view onto bytes of its
+own, and `main` goes on reading and writing the source.
+```maxon
+type Svc
+	var last as String
+
+	static function create() returns Self
+		return Self{last: ""}
+	end 'create'
+
+	export function keep(s String) returns Integer
+		self.last = s
+		print("svc {self.last}\n")
+		return self.last.byteLength() as Integer
+	end 'keep'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var src = "payload {42}"
+	let n = try await h.keep(src.slice(src.startIndex(), length: 7)) otherwise 0
+	src.append("!")
+	let m = try await h.keep(src.slice(src.startIndex(), endIndex: src.endIndex())) otherwise 0
+	src.append("?")
+	print("main {src} after the service kept {n} and {m} bytes\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+svc payload
+svc payload 42!
+main payload 42!? after the service kept 7 and 11 bytes
+```
+
+<!-- test: deepmove.abort.a-string-whose-bytes-the-sender-still-views-aborts -->
+An owned `String` keeps its bytes inline, so a `toByteArray()` view counts the String's own RECORD. That owner
+is invisible to the static soleness question — `s` is a `var` nothing else names — so only the walk can see
+it: moving `s` would leave the view on this green thread stepping a plain count the service steps too. The
+walk finds the record at a count of 2 and aborts before anything is enqueued, exactly as the lend of the same
+graph does (`borrow.abort.a-let-string-whose-bytes-the-sender-still-views-aborts`).
+```maxon
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s String)
+		print("svc {s}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	var s = "payload {42}"
+	let bytes = s.toByteArray()
+	h.take(s)
+	return bytes.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: deepmove.a-grown-string-whose-bytes-the-sender-still-views-detaches-at-the-send -->
+<!-- procs: 16 -->
+A String that has been APPENDED to owns a separate buffer, so a `toByteArray()` view counts that buffer and
+not the record. A shared buffer is what copy-on-write is for: the move's walk detaches `s` onto a private copy,
+and the view is left the old buffer's one owner on this green thread. Without the detach the view's release
+here and the String's release on the service step one plain count from two processors — a lost update leaks
+the buffer (exit 101) or frees it early.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let serviceCount = 8
+let rounds = 100000
+
+type Reader
+	var sum as Integer
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function take(s String)
+		self.sum = self.sum + (s.byteLength() as Integer)
+	end 'take'
+
+	export function report() returns Integer
+		return self.sum
+	end 'report'
+end 'Reader'
+
+typealias ReaderHandles = Array with Reader.handle
+
+function main() returns ExitCode
+	var readers = ReaderHandles.create()
+	for _ in 1 to serviceCount 'spawnEach'
+		readers.push(spawn Reader.create())
+	end 'spawnEach'
+
+	var kept = 0
+	for i in 1 to rounds 'round'
+		let r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
+		var s = ""
+		s.append("payload {i mod 10}")
+		let bytes = s.toByteArray()
+		r.take(s)
+		kept = kept + bytes.count()
+	end 'round'
+
+	var total = 0
+	for k in 0 upto serviceCount 'collect'
+		let r = try readers.get(k) otherwise panic("readers.get({k})")
+		total = total + (try await r.report() otherwise 0)
+	end 'collect'
+
+	print("total {total} kept {kept}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total 900000 kept 900000
+```
+
 <!-- test: deepmove.a-chain-crosses-with-its-elements -->
 The SECOND element-bearing record crosses too, and it is a different walk: a chain owns its record, a node
 per element and each node's element, so `__list_sole` proves all three where the buffer's walk proves the
@@ -2356,6 +2530,233 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 96
+```
+
+<!-- test: deepmove.a-map-releases-a-removed-entry-so-the-map-crosses -->
+`remove` releases the key and the value it takes out, so the map no longer owns them. `main` still holds both
+records, but they are not in the moved graph: the walk reaches the tombstoned slot and finds it empty, and the
+map crosses. A tombstone that kept its occupants would reach `key` and `text` inside the graph while `main`
+owns them outside it, and the walk would abort with exit 96.
+```maxon
+typealias Texts = Map with (String, String)
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(m Texts) returns Integer
+		return m.count() as Integer
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var m = Texts.create()
+	let key = "gone {1}"
+	let text = "value {7}"
+	m.upsert(key, value: text)
+	m.upsert("kept {2}", value: "value {8}")
+	let removed = m.remove(key)
+	let h = spawn Svc.create()
+	let n = try await h.take(m) otherwise 0
+	print("removed {removed}, the service holds {n}, main still reads {key} and {text}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+removed true, the service holds 1, main still reads gone 1 and value 7
+```
+
+<!-- test: deepmove.a-set-releases-a-removed-member-so-the-set-crosses -->
+`Set.remove` releases the member it takes out, exactly as `Map.remove` does, so the set crosses while `main`
+keeps reading the record it removed.
+```maxon
+type Cell implements Hashable, Equatable
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	export function hash() returns HashValue
+		return n as HashValue
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return n == other.n
+	end 'equals'
+end 'Cell'
+
+typealias Cells = Set with Cell
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s Cells) returns Integer
+		return s.count() as Integer
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var s = Cells.create()
+	var cell = Cell.create(1)
+	s.insert(cell)
+	let removed = s.remove(cell)
+	let h = spawn Svc.create()
+	let n = try await h.take(s) otherwise 0
+	print("removed {removed}, the service holds {n}, main still reads {cell.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+removed true, the service holds 0, main still reads 1
+```
+
+<!-- test: deepmove.a-map-releases-a-removed-record-value-so-the-map-crosses -->
+The same release for a record value: `main` keeps `key` and `cell` after `remove`, and the map crosses holding
+only the entry it still owns.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Map with (String, Cell)
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(m Cells) returns Integer
+		let kept = try m.get("kept 2") otherwise panic("the kept entry crossed with the map")
+		return (m.count() as Integer) + kept.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var m = Cells.create()
+	let key = "gone {1}"
+	var cell = Cell.create(7)
+	m.upsert(key, value: cell)
+	m.upsert("kept {2}", value: Cell.create(8))
+	let removed = m.remove(key)
+	let h = spawn Svc.create()
+	let n = try await h.take(m) otherwise 0
+	cell.n = cell.n + 1
+	print("removed {removed}, the service read {n}, main still reads {key} and {cell.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+removed true, the service read 9, main still reads gone 1 and 8
+```
+
+<!-- test: deepmove.a-set-releases-one-of-two-members-so-the-set-crosses -->
+A set that keeps a member after `remove` crosses with that member, and `main` keeps reading the one it removed.
+```maxon
+typealias Names = Set with String
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(s Names) returns Integer
+		if s.contains("kept 2") 'kept'
+			return s.count() as Integer
+		end 'kept'
+
+		return 0
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var s = Names.create()
+	let gone = "gone {1}"
+	s.insert(gone)
+	s.insert("kept {2}")
+	let removed = s.remove(gone)
+	let h = spawn Svc.create()
+	let n = try await h.take(s) otherwise 0
+	print("removed {removed}, the service holds {n}, main still reads {gone}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+removed true, the service holds 1, main still reads gone 1
+```
+
+<!-- test: deepmove.a-map-whose-value-was-built-inside-the-upsert-crosses -->
+A record built as the `value:` argument has no owner but the map, so the map crosses with it.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Map with (String, Cell)
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(m Cells) returns Integer
+		let kept = try m.get("kept 2") otherwise panic("the kept entry crossed with the map")
+		return kept.n
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var m = Cells.create()
+	m.upsert("kept {2}", value: Cell.create())
+	let h = spawn Svc.create()
+	let n = try await h.take(m) otherwise 0
+	print("crossed {n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+crossed 7
 ```
 
 <!-- test: deepmove.a-union-payload-crosses-and-a-shared-one-aborts -->
@@ -3058,6 +3459,559 @@ typealias Level = int(0 to 1024)
 released 63
 ```
 
+<!-- test: deepmove.dag.a-record-held-by-two-fields-crosses -->
+A moved graph may reach one record twice. `Pair.create` puts its one `Bag` in both fields, so the bag's count
+is 2 and both owners are inside the graph: nothing outside it can write the bag once it crosses, and the walk
+counts the owners it meets rather than demanding a count of 1. The bag is descended once, so its `CellArray`
+is proved once however many paths reach it. The service's write through `left` is what `right` reads.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Bag
+	export var n as Integer
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{n: 1, cells: cells}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	export static function create() returns Self
+		let bag = Bag.create()
+		return Self{left: bag, right: bag}
+	end 'create'
+end 'Pair'
+
+type Svc
+	var held as Pair
+
+	static function create(held Pair) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function report()
+		self.held.left.n = 5
+		print("{self.held.right.n} {self.held.right.cells.count()}\n")
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(Pair.create())
+	h.report()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+5 2
+```
+
+<!-- test: deepmove.dag.an-array-holding-one-record-twice-crosses -->
+The same inside a container: both slots hold one `Cell`, the array is that cell's only other owner, and the
+service's write through slot 0 is what slot 1 reads.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+function oneCellTwice() returns CellArray
+	var cs = CellArray.create()
+	let c = Cell.create()
+	cs.push(c)
+	cs.push(c)
+	return cs
+end 'oneCellTwice'
+
+type Svc
+	var cells as CellArray
+
+	static function create(cells CellArray) returns Self
+		return Self{cells: cells}
+	end 'create'
+
+	export function report()
+		var first = try self.cells.get(0) otherwise panic("two cells were pushed")
+		first.n = 7
+		let second = try self.cells.get(1) otherwise panic("two cells were pushed")
+		print("{second.n}\n")
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(oneCellTwice())
+	h.report()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: deepmove.dag.a-union-payload-shared-with-a-sibling-field-crosses -->
+A union payload and a sibling field may be one record: the walk meets the `Cell` once under the live case and
+once under the field, both inside the graph, so the frame crosses and the service's write through the field
+is what the payload reads.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+union Shape
+	empty
+	held(c Cell)
+end 'Shape'
+
+type Frame
+	export var shape as Shape
+	export var cell as Cell
+
+	export static function create() returns Self
+		let cell = Cell.create()
+		return Self{shape: Shape.held(cell), cell: cell}
+	end 'create'
+end 'Frame'
+
+type Svc
+	var frame as Frame
+
+	static function create(frame Frame) returns Self
+		return Self{frame: frame}
+	end 'create'
+
+	export function report()
+		self.frame.cell.n = 7
+		match self.frame.shape 'k'
+			empty then print("empty\n")
+			held(c) then print("held {c.n}\n")
+		end 'k'
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(Frame.create())
+	h.report()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+held 7
+```
+
+<!-- test: deepmove.dag.a-reply-holding-one-record-twice-crosses -->
+The reply road admits the same shape: the handler mints a `Pair` whose two fields hold one `Bag`, and the
+awaiter's write through `left` is what `right` reads.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Bag
+	export var n as Integer
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{n: 1, cells: cells}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	export static function create() returns Self
+		let bag = Bag.create()
+		return Self{left: bag, right: bag}
+	end 'create'
+end 'Pair'
+
+type Maker
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function make() returns Pair
+		return Pair.create()
+	end 'make'
+end 'Maker'
+
+function main() returns ExitCode
+	let h = spawn Maker.create()
+	var p = try await h.make() otherwise Pair.create()
+	p.left.n = 5
+	print("{p.right.n} {p.right.cells.count()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+5 2
+```
+
+<!-- test: deepmove.dag.an-outside-owner-of-a-record-reached-twice-aborts -->
+Reaching a record twice is admitted only when every owner is inside the graph. `Pair.around(bag)` puts `bag`
+in both fields, so the record has three owners and `main`'s binding, which reads it after the send, is not
+one the walk meets: the move aborts with `RuntimeAbort` exit **96** before anything is enqueued.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Bag
+	export var n as Integer
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{n: 1, cells: cells}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	export static function around(bag Bag) returns Self
+		return Self{left: bag, right: bag}
+	end 'around'
+end 'Pair'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function take(p Pair)
+		print("svc {p.right.n}\n")
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	let bag = Bag.create()
+	let h = spawn Svc.create()
+	h.take(Pair.around(bag))
+	return bag.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: deepmove.dag.a-string-and-its-bytes-cross-together -->
+A move meets a view's reference to the String record its bytes live in before it detaches the view, so a moved
+`Holder` owning `text` and a view of it crosses: both of the record's owners are inside the graph.
+```maxon
+type Holder
+	export let text as String
+	export let bytes as ByteArray
+
+	static function around(text String) returns Self
+		return Self{text: text, bytes: text.toByteArray()}
+	end 'around'
+end 'Holder'
+
+type Reader
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function read(h Holder) returns Integer
+		return h.text.byteLength() + h.bytes.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let r = spawn Reader.create()
+	var holder = Holder.around("payload {42}")
+	let n = try await r.read(holder) otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+n=20
+```
+
+<!-- test: deepmove.dag.a-map-holding-one-record-under-two-keys-crosses -->
+A `Map`'s value column may hold one record under two keys: both owners are slots of the moved map, so it
+crosses, and the service's write through one key is what the other reads.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias Cells = Map with (String, Cell)
+
+function oneCellUnderTwoKeys() returns Cells
+	var m = Cells.create()
+	let c = Cell.create()
+	m.upsert("a", value: c)
+	m.upsert("b", value: c)
+	return m
+end 'oneCellUnderTwoKeys'
+
+type Svc
+	var cells as Cells
+
+	static function create(cells Cells) returns Self
+		return Self{cells: cells}
+	end 'create'
+
+	export function report()
+		var a = try self.cells.get("a") otherwise panic("a was inserted")
+		a.n = 7
+		let b = try self.cells.get("b") otherwise panic("b was inserted")
+		print("{b.n}\n")
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(oneCellUnderTwoKeys())
+	h.report()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: deepmove.dag.a-chain-holding-one-record-twice-crosses -->
+The chain's walk admits the same shape: two nodes hold one `Cell`, the chain is its only owner, and the
+service's write through the first node is what the second reads.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias Cells = List with Cell
+
+function oneCellTwice() returns Cells
+	var xs = Cells.create()
+	let c = Cell.create()
+	xs.append(c)
+	xs.append(c)
+	return xs
+end 'oneCellTwice'
+
+type Svc
+	var cells as Cells
+
+	static function create(cells Cells) returns Self
+		return Self{cells: cells}
+	end 'create'
+
+	export function report()
+		var first = try self.cells.first() otherwise panic("two cells were appended")
+		first.n = 7
+
+		for c in self.cells 'each'
+			print("{c.n}\n")
+		end 'each'
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(oneCellTwice())
+	h.report()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+7
+7
+```
+
+<!-- test: deepmove.dag.many-records-each-reached-twice-cross -->
+Forty records, each held by two slots of one array: every one of them is met twice, and the graph crosses.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+function pairedCells(pairs Integer) returns CellArray
+	var cs = CellArray.create()
+
+	for _ in 1 to pairs 'each'
+		let c = Cell.create()
+		cs.push(c)
+		cs.push(c)
+	end 'each'
+
+	return cs
+end 'pairedCells'
+
+type Svc
+	var cells as CellArray
+
+	static function create(cells CellArray) returns Self
+		return Self{cells: cells}
+	end 'create'
+
+	export function report()
+		var sum = 0 as Integer
+
+		for c in self.cells 'each'
+			sum = sum + c.n
+		end 'each'
+
+		print("{self.cells.count()} slots sum to {sum}\n")
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create(pairedCells(40))
+	h.report()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+80 slots sum to 80
+```
+
+<!-- test: deepmove.dag.an-outside-owner-among-many-records-reached-twice-aborts -->
+Among forty records each met twice, one has a third owner: `main`'s `kept`, which the walk never meets. The
+move aborts with exit **96** before anything is enqueued.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+function pairedCellsAround(kept Cell, pairs Integer) returns CellArray
+	var cs = CellArray.create()
+
+	for _ in 1 to pairs 'each'
+		let c = Cell.create()
+		cs.push(c)
+		cs.push(c)
+	end 'each'
+
+	cs.push(kept)
+	cs.push(kept)
+	return cs
+end 'pairedCellsAround'
+
+type Svc
+	var cells as CellArray
+
+	static function create(cells CellArray) returns Self
+		return Self{cells: cells}
+	end 'create'
+
+	export function report()
+		print("svc {self.cells.count()}\n")
+	end 'report'
+end 'Svc'
+
+function main() returns ExitCode
+	let kept = Cell.create()
+	let h = spawn Svc.create(pairedCellsAround(kept, pairs: 40))
+	h.report()
+	return kept.n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
 <!-- test: borrow.a-let-string-stays-readable-after-the-send -->
 A `let` local is LENT, not moved: the service reads the sender's own record and the sender's binding stays
 readable after the send. The awaited reply orders the service's read before `main`'s.
@@ -3090,6 +4044,70 @@ typealias Integer = int(i64.min to i64.max)
 ```stdout
 service read 7 characters
 sender still reads hello 1
+```
+
+<!-- test: borrow.a-cloned-let-string-is-lent-while-the-sender-keeps-its-source -->
+A clone bound to a `let` is LENT, and its walk marks a record of its own: the source it was copied from is not
+part of the graph, so `main` may go on writing it after the send.
+```maxon
+type Meter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function measure(s String) returns Integer
+		return s.byteLength() as Integer
+	end 'measure'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create()
+	var src = "payload {42}"
+	let part = src.clone()
+	let n = try await h.measure(part) otherwise 0
+	src.append("!")
+	print("service read {n} bytes of {part}, sender wrote {src}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+service read 10 bytes of payload 42, sender wrote payload 42!
+```
+
+<!-- test: borrow.abort.a-let-string-whose-bytes-the-sender-still-views-aborts -->
+A `toByteArray()` view of an owned `String` counts the String's own record, because its bytes are inline. The
+share walk finds that owner outside the lent graph and aborts, as the move of the same graph does
+(`deepmove.abort.a-string-whose-bytes-the-sender-still-views-aborts`).
+```maxon
+type Meter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function measure(s String) returns Integer
+		return s.byteLength() as Integer
+	end 'measure'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create()
+	let s = "payload {42}"
+	let bytes = s.toByteArray()
+	let n = try await h.measure(s) otherwise 0
+	return (n + bytes.count()) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
 ```
 
 <!-- test: borrow.two-services-and-the-sender-read-one-graph -->
@@ -3365,6 +4383,474 @@ function main() returns ExitCode
 	return cell.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: borrow.a-handler-may-write-a-copy-of-a-record-inside-its-lent-parameter-through-a-self-writing-method -->
+The control for the self-writing-method refusals: `copy` is the handler's own record, so `bump` writes
+nothing the sender lent and the send is legal.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Holder)
+		var copy = target.inner.clone()
+		copy.bump()
+		print("{copy.n}\n")
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: borrow.dag.a-graph-reaching-one-record-twice-is-lent -->
+A lent graph may reach one record through two fields: the second owner is inside the graph the service
+reads, not outside it, so the send's walk admits it and the sender reads the record back after the reply.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Bag
+	export var n as Integer
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{n: 3, cells: cells}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	export static function create() returns Self
+		let bag = Bag.create()
+		return Self{left: bag, right: bag}
+	end 'create'
+end 'Pair'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function look(target Pair) returns Integer
+		print("service reads {target.right.n}\n")
+		return target.right.cells.count() as Integer
+	end 'look'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let p = Pair.create()
+	let cells = try await h.look(p) otherwise 0
+	print("sender reads {p.left.n} with {cells} cells\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+service reads 3
+sender reads 3 with 2 cells
+```
+
+<!-- test: borrow.dag.a-graph-reaching-one-record-twice-is-lent-twice -->
+The second lend of that graph finds it already marked, and marking is closed, so it crosses again with
+nothing left to count.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Bag
+	export var n as Integer
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		cells.push(Cell.create())
+		return Self{n: 3, cells: cells}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	export static function create() returns Self
+		let bag = Bag.create()
+		return Self{left: bag, right: bag}
+	end 'create'
+end 'Pair'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function look(target Pair) returns Integer
+		print("service reads {target.right.n}\n")
+		return target.right.cells.count() as Integer
+	end 'look'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let p = Pair.create()
+	let first = try await h.look(p) otherwise 0
+	let second = try await h.look(p) otherwise 0
+	print("sender reads {p.left.n} with {first + second} cells\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+service reads 3
+service reads 3
+sender reads 3 with 4 cells
+```
+
+<!-- test: borrow.dag.an-array-holding-one-record-twice-is-lent -->
+The container's share walk meets the one `Cell` in both slots, marks it once and counts the second slot
+against its owners.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Shelf
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		let c = Cell.create()
+		cells.push(c)
+		cells.push(c)
+		return Self{cells: cells}
+	end 'create'
+end 'Shelf'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function look(shelf Shelf) returns Integer
+		let second = try shelf.cells.get(1) otherwise panic("two cells were pushed")
+		return second.n
+	end 'look'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let shelf = Shelf.create()
+	let n = try await h.look(shelf) otherwise 0
+	let first = try shelf.cells.get(0) otherwise panic("two cells were pushed")
+	print("service read {n}, sender reads {first.n} of {shelf.cells.count()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+service read 1, sender reads 1 of 2
+```
+
+<!-- test: borrow.dag.an-outside-owner-of-a-record-reached-twice-aborts -->
+A lend admits a record reached twice only when every owner is inside the lent graph. `bag` is a third owner
+the walk never meets, so the send aborts with exit **96** before anything is enqueued.
+```maxon
+type Cell
+	export var n as Integer
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+
+type Bag
+	export var n as Integer
+	export var cells as CellArray
+
+	export static function create() returns Self
+		var cells = CellArray.create()
+		cells.push(Cell.create())
+		return Self{n: 3, cells: cells}
+	end 'create'
+end 'Bag'
+
+type Pair
+	export var left as Bag
+	export var right as Bag
+
+	export static function around(bag Bag) returns Self
+		return Self{left: bag, right: bag}
+	end 'around'
+end 'Pair'
+
+type Svc
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function look(target Pair) returns Integer
+		return target.right.n
+	end 'look'
+end 'Svc'
+
+function main() returns ExitCode
+	let bag = Bag.create()
+	let h = spawn Svc.create()
+	let p = Pair.around(bag)
+	let n = try await h.look(p) otherwise 0
+	print("{n} {bag.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+96
+```
+
+<!-- test: borrow.dag.a-string-and-its-bytes-are-lent-together -->
+An owned `String` keeps its bytes inline, so a `toByteArray()` view holds a reference to the String's own record.
+`Holder` owns `text` and a view of it, so the record has two owners and both are inside the lent graph: the walk
+meets the record through `text` and again through the view's reference, and the graph is lent.
+```maxon
+type Holder
+	export let text as String
+	export let bytes as ByteArray
+
+	static function around(text String) returns Self
+		return Self{text: text, bytes: text.toByteArray()}
+	end 'around'
+end 'Holder'
+
+type Reader
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function read(h Holder) returns Integer
+		return h.text.byteLength() + h.bytes.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let r = spawn Reader.create()
+	let holder = Holder.around("payload {42}")
+	let n = try await r.read(holder) otherwise 0
+	print("n={n} {holder.text}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+n=20 payload 42
+```
+
+<!-- test: borrow.dag.bytes-and-their-string-are-lent-together -->
+The same graph with the view declared first, so the walk meets the record through the view before it meets it
+through `text`. Either order counts both references.
+```maxon
+type Holder
+	export let bytes as ByteArray
+	export let text as String
+
+	static function around(text String) returns Self
+		return Self{bytes: text.toByteArray(), text: text}
+	end 'around'
+end 'Holder'
+
+type Reader
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function read(h Holder) returns Integer
+		return h.text.byteLength() + h.bytes.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let r = spawn Reader.create()
+	let holder = Holder.around("payload {42}")
+	let n = try await r.read(holder) otherwise 0
+	print("n={n} {holder.text}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+n=20 payload 42
+```
+
+<!-- test: borrow.dag.an-outside-owner-of-a-viewed-string-aborts -->
+`kept` takes a third owner of the String's record outside the lent graph, so the send aborts with exit **96**.
+```maxon
+type Holder
+	export let text as String
+	export let bytes as ByteArray
+
+	static function around(text String) returns Self
+		return Self{text: text, bytes: text.toByteArray()}
+	end 'around'
+end 'Holder'
+
+type Reader
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function read(h Holder) returns Integer
+		return h.text.byteLength() + h.bytes.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let r = spawn Reader.create()
+	let holder = Holder.around("payload {42}")
+	var kept = TextArray.create()
+	kept.push(holder.text)
+	let n = try await r.read(holder) otherwise 0
+	print("n={n} kept={kept.count()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias TextArray = Array with String
+```
+```exitcode
+96
+```
+
+<!-- test: borrow.dag.an-outside-owner-of-a-string-its-bytes-reach-first-aborts -->
+The same outside owner with the view declared first. The view's meeting is the record's first, so it is entered
+in the visit table rather than only marked, and the meeting through `text` then finds the owner `kept` holds
+unmet: exit **96**.
+```maxon
+type Holder
+	export let bytes as ByteArray
+	export let text as String
+
+	static function around(text String) returns Self
+		return Self{bytes: text.toByteArray(), text: text}
+	end 'around'
+end 'Holder'
+
+type Reader
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function read(h Holder) returns Integer
+		return h.text.byteLength() + h.bytes.count()
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let r = spawn Reader.create()
+	let holder = Holder.around("payload {42}")
+	var kept = TextArray.create()
+	kept.push(holder.text)
+	let n = try await r.read(holder) otherwise 0
+	print("n={n} kept={kept.count()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias TextArray = Array with String
 ```
 ```exitcode
 96
@@ -4567,6 +6053,437 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3019: <fragment>:25:2: cannot pass 'b' to function that mutates parameter 'target' (in main)
+```
+
+<!-- test: borrow.error.a-handler-may-not-write-its-lent-parameter-through-a-self-writing-method -->
+<!-- unsupported-targets: wasm32-wasi -->
+A method that writes its own receiver writes the record it is called on, so a handler calling `bump` on its
+parameter writes the sender's graph as surely as `target.n = …` does, and the lending send is E3019. Which
+methods write their receiver is a whole-program fact, so this is pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Box)
+		target.bump()
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Box.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:29:2: cannot pass 'b' to function that mutates parameter 'target' (in main)
+```
+
+<!-- test: borrow.error.a-handler-may-not-write-a-record-inside-its-lent-parameter-through-a-self-writing-method -->
+<!-- unsupported-targets: wasm32-wasi -->
+The lent graph is everything the parameter reaches, so a self-writing method called on `target.inner` writes
+the sender's graph one record down, and the lending send is E3019. Whole-program, so pinned on the native
+lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Holder)
+		target.inner.bump()
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:37:2: cannot pass 'b' to function that mutates parameter 'target' (in main)
+```
+
+<!-- test: borrow.error.a-handler-may-not-write-a-record-inside-its-lent-parameter-one-frame-down-through-a-self-writing-method -->
+<!-- unsupported-targets: wasm32-wasi -->
+The handler writes nothing itself: `nudge` calls the self-writing method on what it was handed, and the
+summary that says `nudge` writes its parameter reaches the handler, so the lending send is E3019.
+Whole-program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.inner.bump()
+end 'nudge'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Holder)
+		nudge(target)
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:41:2: cannot pass 'b' to function that mutates parameter 'target' (in main)
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-have-a-record-inside-it-written-through-a-self-writing-method -->
+<!-- unsupported-targets: wasm32-wasi -->
+The sender's side of the same door: `b.inner` is part of the graph the service reads, so calling a
+self-writing method on it after the lend writes that graph, and the diagnostic names the root. Whole-program,
+so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(target Holder)
+		print("{target.inner.n}\n")
+	end 'look'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.look(b)
+	b.inner.bump()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:38:9: `b` was lent to another green thread at <fragment>:37:9, so what it holds is frozen: calling `bump`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-handler-may-not-push-into-a-container-a-call-hands-back-from-inside-its-lent-parameter -->
+<!-- unsupported-targets: wasm32-wasi -->
+`pick` hands back the array `target` holds, so pushing into it writes the sender's graph one record down, and
+the lending send is E3019. The container is written by a built-in method rather than a declared one, which is
+the receiver write a value that may lie within a parameter must carry. Whole-program, so pinned on the native
+lanes.
+```maxon
+typealias Counts = Array with Integer
+
+type Holder
+	export var items as Counts
+
+	static function create() returns Self
+		return Self{items: Counts.create()}
+	end 'create'
+end 'Holder'
+
+function pick(t Holder) returns Counts
+	return t.items
+end 'pick'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Holder)
+		pick(target).push(1)
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:31:2: cannot pass 'b' to function that mutates parameter 'target' (in main)
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-callee-that-writes-inside-it-through-a-witness -->
+<!-- unsupported-targets: wasm32-wasi -->
+`kick` dispatches `bump` through the `Bumpable` witness on each element the shelf holds, so `poke(s)` writes
+the lent graph one record down. The element lies within the receiver, and the dispatch carries that edge to
+every implementation. Whole-program, so pinned on the native lanes.
+```maxon
+interface Bumpable
+	function bump()
+end 'Bumpable'
+
+type Box implements Bumpable
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Shelf uses T where T is Bumpable
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function count() returns Integer
+		return self.items.count()
+	end 'count'
+
+	export function kick()
+		for item in self.items 'eachItem'
+			item.bump()
+		end 'eachItem'
+	end 'kick'
+end 'Shelf'
+
+typealias BoxShelf = Shelf with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(target BoxShelf)
+		self.seen = self.seen + target.count()
+	end 'look'
+end 'Svc'
+
+function poke(s BoxShelf)
+	s.kick()
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let s = BoxShelf.create()
+	h.look(s)
+	poke(s)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:60:7: `s` was lent to another green thread at <fragment>:59:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `s` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-callee-that-spawns-a-write-inside-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+`poke` hands `t.inner` to an `async` call whose target writes it, so the lent graph is written one record down
+on the spawned green thread. The argument lies within the parameter, and the spawn carries that edge. Whole-
+program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(target Holder)
+		self.seen = self.seen + target.inner.n
+	end 'look'
+end 'Svc'
+
+function bumpIt(b Box) returns Integer
+	Runtime.yield()
+	b.n = b.n + 1
+	return b.n
+end 'bumpIt'
+
+function poke(t Holder) returns Integer
+	let pending = async bumpIt(t.inner)
+	return await pending
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.look(b)
+	return poke(b) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:45:14: `b` was lent to another green thread at <fragment>:44:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
+```
+
+<!-- test: borrow.error.a-lent-let-may-not-reach-a-callee-that-writes-what-a-call-hands-back-from-inside-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+`pick` hands back the record `t` holds, and `poke` calls a self-writing method on that result, so the lent
+graph is written one record down. Whole-program, so pinned on the native lanes.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(target Holder)
+		self.seen = self.seen + target.inner.n
+	end 'look'
+end 'Svc'
+
+function pick(t Holder) returns Box
+	return t.inner
+end 'pick'
+
+function poke(t Holder)
+	let c = pick(t)
+	c.bump()
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.look(b)
+	poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3160: <fragment>:47:7: `b` was lent to another green thread at <fragment>:46:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `b` with `var` so the send moves it
 ```
 
 <!-- test: error.a-promise-may-not-be-sent -->
@@ -6572,6 +8489,54 @@ typealias Integer = int(i64.min to i64.max)
 ```stdout
 caller still has hello
 kept hello (1)
+```
+
+<!-- test: a-static-factory-forwarding-to-its-sibling-static-sends-a-fresh-record -->
+A bare call inside a type body names the type's own member first, so `create`'s `return build()` hands back the
+record `build` constructs — a fresh record the send moves into the service.
+```maxon
+type Payload
+	var n as Integer
+
+	static function build() returns Self
+		return Self{n: 7}
+	end 'build'
+
+	export static function create() returns Self
+		return build()
+	end 'create'
+
+	export function count() returns Integer
+		return n
+	end 'count'
+end 'Payload'
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(p Payload)
+		self.n = self.n + p.count()
+	end 'keep'
+
+	export function total() returns Integer
+		return n
+	end 'total'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.keep(Payload.create())
+	let total = try await h.total() otherwise panic("the service answers")
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+7
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation -->

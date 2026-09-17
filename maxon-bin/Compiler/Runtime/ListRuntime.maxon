@@ -286,7 +286,7 @@ export let ListCloneManagedName = b"__list_clone_managed"
 // ⭐⭐ **THE CHAIN'S SOLENESS WALKS** — the `__managed_sole`/`__managed_sole_managed` pair one container
 // over, and split by element kind on the SAME `direct` boundary the clone pair above is split on. A chain
 // owns its record, a node per element and — when the element is managed — each node's element, so proving it
-// moveable means proving all three sole rather than only the record. There is no buffer to detach: a chain
+// moveable means walking all three rather than only the record. There is no buffer to detach: a chain
 // has no copy-on-write shape.
 export let ListSoleName = b"__list_sole"
 export let ListSoleManagedName = b"__list_sole_managed"
@@ -1825,82 +1825,76 @@ function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, 
 	movedOut.branchEdges.push(BranchEdge.create(append.id, argIds: argsOf(absent)))
 end 'emitListClonedElement'
 
-// ⭐⭐ **`__list_sole(list)` / `__list_sole_managed(list, soleFn)` — PROVE A CHAIN MOVEABLE; `__list_share` /
-// `__list_share_managed` — MARK ONE LENT.** The record, then every node, then — for the managed entry — every
-// live element, each box through the one walk step (`MmRuntime.emitBoxWalkStep`). All four entries in one
-// builder for `buildListClone`'s reason, and the node walk is shared rather than conditional: a node is a
-// co-ownable box in EITHER chain, because a `ListNode` handle takes a reference to one whatever its element is.
+// ⭐⭐ **`__list_sole(list, visits)` / `__list_sole_managed(list, visits, soleFn)` — PROVE A CHAIN MOVEABLE;
+// `__list_share` / `__list_share_managed` — MARK ONE LENT.** The record, then every node, then — for the managed
+// entry — every live element, each box through the one walk step (`MmRuntime.emitBoxWalkStep`), carrying the
+// visit table along the chain. All four entries in one builder for `buildListClone`'s reason, and the node walk
+// is shared rather than conditional: a node is a co-ownable box in EITHER chain, because a `ListNode` handle
+// takes a reference to one whatever its element is.
 //
 // ⚠ **A NODE THE STEP STOPS AT STILL ADVANCES THE CHAIN.** Stopping means nothing below THAT NODE needs the
 // walk — its element — and says nothing about the nodes after it, which are boxes of their own.
 function buildListWalk(module StdModule, name ByteArray, walksElements bool, action CascadeAction)
-	var paramTypes = oneI64Param()
+	let walk = beginWalkBody(module, name: name, scope: WalkScope.graph, walksElements: walksElements, recursesPerLevel: false)
+	let list = WalkBoxParam
+	var header = module.addBlock(walk.func, label: b"walk", heat: BlockHeat.normal)
+	var body = module.addBlock(walk.func, label: b"body", heat: BlockHeat.normal)
+	var step = emitCascadeJoin(module, func: walk.func, label: b"step", template: walk.entry.carried, ids: walk.ids)
 
-	if walksElements 'perElementWalk'
-		paramTypes.push(StdType.i64)
-	end 'perElementWalk'
-
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
-
-	// ⚠ Both entries reserve two parameter id slots — `buildListClone`'s rule, for its reason.
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: paramTypes.count())
-	let list = 0 as ValueId
-	let elementWalk = 1 as ValueId
-
-	var walked = emitBoxWalkStep(module, func: func, block: entry, box: list, action: action, stop: done, ids: ids)
-	let head = emitLoadField(module, block: walked, record: list, offset: ListHeadOffset, ids: ids)
-	module.setTerminator(walked, op: StdOp.branch(header.id))
-	walked.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(head)))
-
-	// walk(node): a 0 link is the chain's end — `buildListClone`'s own stopping test.
-	let node = ids.mint()
+	// walk(node, visits): a 0 link is the chain's end — `buildListClone`'s own stopping test.
+	let node = walk.ids.mint()
 	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
-	let chainEnd = emitConst(module, block: header, value: 0, ids: ids)
-	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	let atNode = CascadeCursor.create(body, carried: appendCarriedBlockArgs(header, template: walk.entry.carried, ids: walk.ids))
+	let atLink = CascadeCursor.create(header, carried: linkThenCarried(node, carried: atNode.carried))
 
-	var nodeWalked = emitBoxWalkStep(module, func: func, block: body, box: node, action: action, stop: step, ids: ids)
-	emitListElementWalk(module, func: func, body: nodeWalked, step: step, node: node, elementWalk: elementWalk, walksElements: walksElements, ids: ids)
+	let walked = emitBoxWalkStep(module, func: walk.func, cursor: walk.entry, box: list, action: action, meeting: WalkMeeting.owner, stop: walk.done, ids: walk.ids)
+	let head = emitLoadField(module, block: walked.block, record: list, offset: ListHeadOffset, ids: walk.ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(walked.block, carried: linkThenCarried(head, carried: walked.carried)), to: atLink)
 
-	let next = emitLoadField(module, block: step, record: node, offset: ListNextOffset, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+	let chainEnd = emitConst(module, block: header, value: 0, ids: walk.ids)
+	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: walk.ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: walk.done.block.id, elseBlockId: body.id))
+	pushCascadeEdge(header, to: walk.done, values: atNode.carried)
 
-	module.setTerminator(done, op: StdOp.retVoid)
+	let nodeWalked = emitBoxWalkStep(module, func: walk.func, cursor: atNode, box: node, action: action, meeting: WalkMeeting.owner, stop: step, ids: walk.ids)
+	emitListElementWalk(module, body: nodeWalked, step: step, node: node, walk: walk, walksElements: walksElements)
 
-	module.functions.push(func)
+	let next = emitLoadField(module, block: step.block, record: node, offset: ListNextOffset, ids: walk.ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(step.block, carried: linkThenCarried(next, carried: step.carried)), to: atLink)
+
+	finishWalkBody(module, body: walk)
 end 'buildListWalk'
 
+// The chain walk's loop arguments: the link to walk next, then the visit table.
+function linkThenCarried(link ValueId, carried ValueIdArray) returns ValueIdArray
+	var args = argsOf(link)
+	args.append(carried)
+	return args
+end 'linkThenCarried'
+
 // One node's ELEMENT, walked or skipped. A TRIVIAL element owns nothing, so the trivial entry falls straight
-// to the advance. A MANAGED one is walked through the caller's `(box) -> void`, except where the slot is the 0
-// `__list_remove_node` leaves behind — `emitListClonedElement`'s null rule, and `callIndirect` on a null box is
-// a fault either way.
-function emitListElementWalk(module StdModule, func IrFunction, body IrBlock, step IrBlock, node ValueId, elementWalk ValueId, walksElements bool, ids ValueMinter)
+// to the advance. A MANAGED one is walked through the caller's `(box, visits) -> visits`, except where the slot
+// is the 0 `__list_remove_node` leaves behind — `emitListClonedElement`'s null rule, and `callIndirect` on a
+// null box is a fault either way.
+function emitListElementWalk(module StdModule, body CascadeCursor, step CascadeCursor, node ValueId, walk WalkBody, walksElements bool)
 	if not walksElements 'trivialElement'
-		module.setTerminator(body, op: StdOp.branch(step.id))
+		emitCascadeBranch(module, from: body, to: step)
 		return
 	end 'trivialElement'
 
-	var visit = module.addBlock(func, label: b"walkelem", heat: BlockHeat.normal)
+	var visit = module.addBlock(walk.func, label: b"walkelem", heat: BlockHeat.normal)
 
-	let value = emitLoadField(module, block: body, record: node, offset: ListValueOffset, ids: ids)
-	let absent = emitConst(module, block: body, value: 0, ids: ids)
-	let owns = emitCmp(module, block: body, a: value, b: absent, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(owns, thenBlockId: visit.id, elseBlockId: step.id))
+	let value = emitLoadField(module, block: body.block, record: node, offset: ListValueOffset, ids: walk.ids)
+	let absent = emitConst(module, block: body.block, value: 0, ids: walk.ids)
+	let owns = emitCmp(module, block: body.block, a: value, b: absent, pred: StdCmpPred.ne, ids: walk.ids)
+	module.setTerminator(body.block, op: StdOp.condBranch(owns, thenBlockId: visit.id, elseBlockId: step.block.id))
+	pushCascadeEdge(body.block, to: step, values: body.carried)
 
-	// Both ABI masks are 0 for `emitListClonedElement`'s reason: a stamped element walk takes one
-	// whole-machine-word POINTER.
-	let visited = ids.mint()
-	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: elementWalk, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(value)))
-	module.setTerminator(visit, op: StdOp.branch(step.id))
+	// Both ABI masks are 0 for `emitListClonedElement`'s reason: a stamped element walk takes two
+	// whole-machine-word arguments, a POINTER and a table address.
+	let visited = walk.ids.mint()
+	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: walk.elementWalk(), resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: twoArgs(value, second: body.visits())))
+	emitCascadeBranch(module, from: CascadeCursor.create(visit, carried: argsOf(visited)), to: step)
 end 'emitListElementWalk'
 
 // `__list_decref(list)` — one fewer owner; at the last, let go of every node (each one destroying its own

@@ -1,0 +1,25 @@
+// Test: error.a-let-initializer-may-not-read-a-scalar-out-of-a-managed-var
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function copied() returns Self
+		return Self{n: g.n}
+	end 'copied'
+end 'Box'
+
+var g = Box.create()
+let l = Box.copied()
+
+function main() returns ExitCode
+	print("l={l.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3165: <fragment>:10:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:14:5: `g` is declared here

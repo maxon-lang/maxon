@@ -1,0 +1,39 @@
+// Test: error.a-var-initializer-may-not-take-a-lets-record-beside-a-spawn
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+end 'Box'
+
+let a = Box.create()
+var v = Box.current()
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return a.n
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let h = spawn Reader.create()
+	let n = try await h.read() otherwise 0
+	print("n={n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3166: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`

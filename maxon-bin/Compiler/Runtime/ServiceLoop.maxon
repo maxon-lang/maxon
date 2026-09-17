@@ -24,16 +24,14 @@
 // is ALREADY project-scoped gets a SECOND crossing, from the wrong side: the number is resolved through the
 // index, lands on an unrelated name, and that name is re-interned into the project.
 //
-// ⛔ **MEASURED, and it is the lexer keyword map's `expected 'KeywordInfo', got 'SpillSlot'` a second time.**
-// This file resolved its payload types `into: project.typeNames` and then minted from them. On a program
-// with two services where one message takes a `String` its handler calls a method on and another takes a
-// `Logger.handle`, the tables had diverged by exactly one entry and the loop's handle argument came out as
-// **`E3005 argument type mismatch for 'sink': expected 'Logger.handle', got 'ExitCode'`** — a clean refusal
-// of a correct program, with no file or line, because the check was walking THIS synthesized body. The
-// diagnostic is the mild face of it: the same misread id also chooses `classifyUnionPayload`'s class and
-// `managedFieldDropCallee`'s callee, which is a payload dropped through the wrong destructor or not at all.
-// It stayed invisible for a rung because the two tables agree at every id until enough types are declared to
-// push them apart, and every existing service case was under that threshold.
+// ⛔ Payload types resolved `into: project.typeNames` and then minted are crossed twice. On a program with two
+// services where one message takes a `String` its handler calls a method on and another takes a
+// `Logger.handle`, the tables diverge by one entry and the loop's handle argument comes out as
+// `E3005 argument type mismatch for 'sink': expected 'Logger.handle', got 'ExitCode'` — a refusal of a
+// correct program with no file or line, because the check walks THIS synthesized body. The same misread id
+// also chooses `classifyUnionPayload`'s class and `managedFieldDropCallee`'s callee, which is a payload
+// dropped through the wrong destructor or not at all. A small program does not show it: the two tables agree
+// at every id until enough types are declared to push them apart.
 //
 // ⇒ **`signatures.indexTypeNames()` at every one of those doors, and `project.typeNames` at exactly two:**
 // `stateType`, which is interned by NAME rather than read out of the index and is handed to
@@ -628,17 +626,26 @@ end 'publishAnsweredReply'
 // ⚠ **A REFUSED GRAPH HERE MEANS THE PROGRAM IS ALREADY REFUSED** — at the handler's `return`
 // (`Parser.proveReplyCrossable`) for the type the body declares, and at the `spawn` for the type an
 // instantiation substitutes (`ServiceCompanions.instantiatedReplyGraphRefusal`), both through
-// `transferGraphProofOfShape`. The loop is still built for a service whose handler's file failed to parse, and
-// that diagnostic is the one the author must see.
+// `ProgramSignatures.transferWalkOf`. The loop is still built for a service whose handler's file failed to parse,
+// and that diagnostic is the one the author must see.
 function publishReplyValue(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, replyType MaxonType, result ValueId, reply ServiceReplyTarget, threw ValueId, range SourceRange)
-	match replyGraphProof(signatures, replyType: replyType, declFilePath: signatures.recordedReturnDeclFileOf(callee)) 'graph'
+	match replyTransferWalk(signatures, replyType: replyType, declFilePath: signatures.recordedReturnDeclFileOf(callee)) 'graph'
 		closed then break 'graph'
-		provenBy(walk) then fn.emitPositionalCallDiscarding(walk, args: argsOf(result), range: range)
+		walkedBy(walk) then emitReplyGraphWalk(fn, walk: walk, result: result, range: range)
+		walkedAlone(walk) then fn.emitPositionalCallDiscarding(walk, args: argsOf(result), range: range)
 		refused(noun) then requireReplyAlreadyRefused(project, callee: callee, noun: noun)
 	end 'graph'
 
 	completeServiceReply(fn, reply: reply, result: result, threw: threw, range: range)
 end 'publishReplyValue'
+
+// `walk(result, NoVisitTable)` threads one visit table through the reply's graph, so a record two of its paths
+// reach is walked once, and `__mm_walk_settle` then aborts on an owner the graph does not hold and frees the table.
+function emitReplyGraphWalk(fn SynthesizedFunction, walk ByteArray, result ValueId, range SourceRange)
+	let noVisits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)
+	let visits = fn.emitPositionalCall(walk, args: pairArgs(result, second: noVisits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), range: range)
+end 'emitReplyGraphWalk'
 
 function requireReplyAlreadyRefused(project Project, callee ByteArray, noun String)
 	if not projectHasErrors(project) 'refusedNowhere'

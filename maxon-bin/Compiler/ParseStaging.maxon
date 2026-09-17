@@ -53,6 +53,78 @@ let sharedEmptyDiscardedResults = PendingDiscardedResultArray.create()
 // a rare spelling.
 let sharedEmptyCovPoints = CovPointArray.create()
 
+// Only a real parse mints instance rows, so every other artifact shares this, and a merge replaces it rather
+// than writing into it.
+let sharedNoInstanceIds = GenericInstanceIdArray.create()
+
+export typealias FileParseArtifactArray = Array with FileParseArtifact
+
+// ⭐ **WHAT A `Parser` IS BUILT FROM, AS VALUES RATHER THAN A `Project`** — every per-file fact the caller derived from
+// the project (`Queries.parseJobFor`), so a parse on a pool worker needs nothing the main thread owns.
+export type ParseJob
+	export let path as FilePath
+	export let namespace as String
+	export let isStdlibSource as bool
+	export let isRuntimeSource as bool
+	export let declaresCompilerInternalNames as bool
+	export let compilerMintedNames as ByteArrayArray
+	export let livesUnderStdlibDirectory as bool
+	export let buildsBodies as bool
+	export let capturesDebugLocals as bool
+	export let instrumentsCoverage as bool
+
+	export static function create(path FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
+		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage}
+	end 'create'
+
+	// ⭐ **THE JOB OF A TOP-LEVEL CONSTANT'S INITIALIZER** (`ProgramSignatures.walkConstInitializer`), and every flag in it
+	// is exact rather than a default, because an initializer is const-FOLDED and declares no name:
+	//   • `isStdlibSource` governs only a `typealias` declaration, which an initializer cannot contain;
+	//   • `declaresCompilerInternalNames` and `compilerMintedNames` admit a reserved DECLARATION or call, and the
+	//     declaration whose initializer this is has been through the real parse's check — generated source declares
+	//     no top-level binding at all;
+	//   • `livesUnderStdlibDirectory` gates two `module`-visible `String` METHODS, and a fold reaches no method dispatch;
+	//   • `instrumentsCoverage` would mint a counter in ops no emitted image holds.
+	// So the walk never asks the project for a path, which would put a `Directory.currentPath()` probe on the
+	// per-declaration path.
+	export static function forConstantInitializer(path FilePath, namespace String) returns ParseJob
+		return Self{path: path, namespace: namespace, isStdlibSource: false, isRuntimeSource: false, declaresCompilerInternalNames: false, compilerMintedNames: ByteArrayArray.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false}
+	end 'forConstantInitializer'
+end 'ParseJob'
+
+// What one file's parse answers: its artifact, or the refusal with the blame it carries and what an aborted parse
+// still knows (`Parser.abortedParseArtifact`).
+export union FileParseOutcome
+	parsed(artifact FileParseArtifact)
+	failed(error ParseError, blame LibraryBlame, salvaged FileParseArtifact)
+end 'FileParseOutcome'
+
+// ⭐⭐ **ONE FILE'S PARSE, AS A FUNCTION OF WHAT IT IS HANDED** — the job, the file's tokens, the row-set answers it
+// is told and the settled index, which it leaves as it found them. It reaches no `Project` and no module `var`, so
+// a pool worker holding a private index may run it (E3143); the caller reports the outcome. Its parser's anchors
+// are its own, so the artifact holds no record from outside itself.
+export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseOutcome
+	var parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
+	signatures.openParseBand(overrides)
+
+	// A refusal and its blame may hold records the index owns (a `throws` clause's name, a recorded constant's
+	// error, an instantiation's file), and the outcome crosses back from a pool worker, so it carries copies.
+	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
+		_ = signatures.closeParseBand(job.path)
+		return FileParseOutcome.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact())
+	end 'parseFail'
+
+	artifact.recordParseMints(signatures.closeParseBand(job.path))
+	return FileParseOutcome.parsed(artifact)
+end 'parseFile'
+
+// What a real parse wrote into the signature index — `none` for an artifact no real parse produced: the
+// declaration sweep's, a top-level constant's, and an aborted parse's.
+export union ParseMints
+	none
+	minted(mints LocalInstanceMints)
+end 'ParseMints'
+
 // One `funcReturnTypes` registry contribution: a function's name and its
 // declared return type, recorded by the parser. Ordered in an array so the
 // merge order is the declaration order.
@@ -194,28 +266,16 @@ export type FileParseArtifact
 	// own declarations, or the readiness probe would disagree with the loaded module.
 	export var livesUnderStdlibDirectory as bool
 
-	// ⭐⭐ **HAVE THIS ARTIFACT'S `named(id)`s ALREADY BEEN FOLDED INTO THE PROJECT INTERNER?**
+	// ⭐⭐ **HAVE THIS ARTIFACT'S NAME IDS ALREADY BEEN FOLDED INTO THE PROJECT INTERNER?**
 	//
-	// `mergeArtifact` rewrites a file's LOCAL type-name ids into PROJECT-GLOBAL ones, and it does so in
-	// place — the module's functions, `funcReturnTypes`, and the struct/enum LAYOUTS, the last of which the
-	// project registries then hold BY REFERENCE (`commitStructTypes` upserts the artifact's own object).
-	// Rewriting them into a copy instead would mean a copy constructor for `StructLayout` and `EnumLayout`,
-	// i.e. two field lists to keep in step with the real ones forever — the "one fact written twice" defect
-	// this tree keeps paying for.
+	// The merge rewrites a file's LOCAL type-name ids into PROJECT-GLOBAL ones in place — the struct/enum
+	// LAYOUTS included, which the project registries then hold BY REFERENCE (`commitStructTypes` upserts the
+	// artifact's own object) — so a second fold of the same artifact must not rewrite them again. That is exact
+	// rather than defensive: `Queries.resetMergeTargets` does NOT reset `project.typeNames`, so the interner
+	// they were folded into is the one still in hand, across the stdlib body-demand fixpoint's re-folds.
 	//
-	// So the fold is made IDEMPOTENT instead of non-mutating: an artifact remembers that its ids are
-	// already the project's, and a second fold of it re-folds nothing. That is exact rather than defensive
-	// — the ids ARE correct, because `Queries.resetMergeTargets` deliberately does NOT reset
-	// `project.typeNames`, so the interner they were folded into is the one still in hand.
-	//
-	// ⚠ **A RE-PARSE CLEARS IT FOR FREE**, which is the property that makes this safe: a fresh parse builds
-	// a fresh artifact through `create` below, with file-local ids and this flag `false`. There is no state
-	// to invalidate and no way to forget to.
-	//
-	// It exists because `queryAllModule` folds more than once — the stdlib body-demand fixpoint. Before it,
-	// the second fold died on `TypeNameRemap.apply: id 2 out of range (this remap was built from a smaller
-	// interner)`, and the first cure was to DROP THE PARSE MEMOS between rounds, which cost a stdlib-using
-	// compile ~10% (`Math.exp(0.0)`: 609.8 -> 672.2 ms). This is that cost's actual cause, fixed.
+	// ⚠ **A RE-PARSE CLEARS IT FOR FREE**: a fresh parse builds a fresh artifact through `create` below, with
+	// file-local ids and this flag `false`.
 	export var typeIdsAreProjectGlobal as bool
 
 	// This file's Maxon IR fragment. `IrModule.merge` offset-relocates it into
@@ -324,10 +384,8 @@ export type FileParseArtifact
 	// This file's declared struct types (`type Point`), in declaration order.
 	export var structTypes as StructLayoutArray
 
-	// This file's declared enum/union types, in declaration order. The twin of `structTypes`, but
-	// UNLIKE it carries no type-name ids — a case is a plain NAME and a tag is a plain INT, so
-	// `mergeArtifact` needs no remap for these (contrast `remapArtifact`, which rewrites struct
-	// field types).
+	// This file's declared enum/union types, in declaration order. The twin of `structTypes`: a payload field's
+	// declared type carries ids, which `rewriteTypeIds` renumbers.
 	export var enumTypes as EnumLayoutArray
 
 	// This file's declared `interface` types (P1.7a slice 1), in declaration order. Remap-free like
@@ -431,6 +489,16 @@ export type FileParseArtifact
 	// function body and is settled at its `end`.
 	export var bindingHygieneDiagnostics as DiagnosticArray
 
+	// ⭐⭐ **WHAT THIS FILE'S PARSE WROTE INTO THE SIGNATURE INDEX (B2).** The parse's writes are undone when it
+	// ends, so a parse reads only the settled index and its own mints; every merge folds these back in
+	// (`ProgramSignatures.adoptParseMints`), whether this artifact is a fresh parse or a memo reused against a
+	// rebuilt index.
+	export var parseMints as ParseMints
+
+	// The id each of `parseMints`' instance rows is known by in this artifact's ids right now: the parse's band
+	// ids until a merge renumbers them, then the ids the latest merge adopted the rows under.
+	export var instanceIdsInUse as GenericInstanceIdArray
+
 	export static function create(filePath FilePath, livesUnderStdlibDirectory bool) returns FileParseArtifact
 		return Self{
 			filePath: filePath,
@@ -469,9 +537,24 @@ export type FileParseArtifact
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredNameDiagnostics,
-			bindingHygieneDiagnostics: DiagnosticArray.create()
+			bindingHygieneDiagnostics: DiagnosticArray.create(),
+			parseMints: ParseMints.none,
+			instanceIdsInUse: sharedNoInstanceIds
 		}
 	end 'create'
+
+	// File what the parse that built this artifact wrote into the signature index, with each instance row known
+	// by the band id the parse handed it.
+	export function recordParseMints(mints LocalInstanceMints)
+		var bandIds = GenericInstanceIdArray.create()
+
+		for position in 0 upto mints.rows.count() 'eachRow'
+			bandIds.push(BandInstanceIdBase + position)
+		end 'eachRow'
+
+		self.parseMints = ParseMints.minted(mints)
+		self.instanceIdsInUse = bandIds
+	end 'recordParseMints'
 
 	// Record an alias this file declared and never named, and an `as` target naming an alias this file
 	// cannot see. Each installs its own list on the first entry (`DeferredNameDiagnosticRoster`).
@@ -499,7 +582,7 @@ export type FileParseArtifact
 	// every later span by one.
 	export function emitOp(block IrBlock, op MaxonOp, range SourceRange)
 		let opIndex = self.module.opCount()
-		self.module.appendOp(block, op: op)
+		self.module.appendOp(block, op: artifactOwnedOp(op))
 		self.opRanges.record(opIndex as OpIndex, range: range)
 		self.recordValueOrigin(op, opIndex: opIndex as OpIndex)
 	end 'emitOp'
@@ -514,7 +597,7 @@ export type FileParseArtifact
 	// The SV2 twin, on the same read-it-through-here contract and for its reason: the site lands on the op
 	// the parser is ABOUT to append, so the key is the current count.
 	export function recordServiceAwaitSite(site ServiceAwaitSite)
-		self.serviceAwaitSites.upsert(self.module.opCount() as OpIndex, value: site)
+		self.serviceAwaitSites.upsert(self.module.opCount() as OpIndex, value: site.clone())
 	end 'recordServiceAwaitSite'
 
 	// The E3143 twin, on the same read-it-through-here contract. ⚠ Here the key is the op the assignment
@@ -522,7 +605,7 @@ export type FileParseArtifact
 	// is all its one reader needs: it asks which FUNCTION the write sits in, and every op the statement emits
 	// belongs to that one.
 	export function recordModuleVarAccessSite(site ModuleVarAccessSite)
-		self.moduleVarAccessSites.upsert(self.module.opCount() as OpIndex, value: site)
+		self.moduleVarAccessSites.upsert(self.module.opCount() as OpIndex, value: site.clone())
 	end 'recordModuleVarAccessSite'
 
 	// Record the mm-trace TAG of the box the op `emitOp` is about to append allocates — the same
@@ -535,7 +618,7 @@ export type FileParseArtifact
 	// Record the compile-time NAME the `__ds_name_id` marker `emitOp` is about to append interns — the same
 	// read-it-through-here contract its two neighbours state, and for their reason.
 	export function recordDebugStreamNameSite(name ByteArray)
-		self.debugStreamNameSites.upsert(self.module.opCount() as OpIndex, value: name)
+		self.debugStreamNameSites.upsert(self.module.opCount() as OpIndex, value: name.clone())
 	end 'recordDebugStreamNameSite'
 
 	// Record that the `constArrayLiteral` `emitOp` is about to append materializes an IMMORTAL `.rdata`
@@ -574,7 +657,7 @@ export type FileParseArtifact
 		end 'alreadyTerminated'
 
 		let opIndex = self.module.opCount()
-		self.module.setTerminator(block, op: op)
+		self.module.setTerminator(block, op: artifactOwnedOp(op))
 		self.opRanges.record(opIndex as OpIndex, range: range)
 		self.recordValueOrigin(op, opIndex: opIndex as OpIndex)
 	end 'emitTerminator'
@@ -614,7 +697,7 @@ export type FileParseArtifact
 	// project-wide `funcReturnTypes` registry. Called by the parser after it
 	// builds a function — NEVER touching `Project`.
 	export function recordFuncReturnType(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface)
-		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name, returnType: returnType, declaredSurface: declaredSurface))
+		self.funcReturnTypes.push(FuncReturnTypeEntry.create(name.clone(), returnType: returnType.clone(), declaredSurface: declaredSurface))
 	end 'recordFuncReturnType'
 
 	// Record a function's parameter signature as this file's contribution to the
@@ -623,7 +706,7 @@ export type FileParseArtifact
 	// name's source position travels with the entry so a merge-time duplicate can be
 	// positioned on the offending declaration.
 	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool)
-		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
+		self.funcSignatures.push(FuncSignatureEntry.create(name.clone(), signature: signature.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
 	end 'recordFuncSignature'
 
 	// Record the whole current member list of one overloaded bare name (D7). REPLACES rather than appends:
@@ -631,7 +714,7 @@ export type FileParseArtifact
 	// projection of the parser's own records rather than a second accumulation to keep in step.
 	export function recordOverloadSet(base ByteArray, members ByteArrayArray)
 		var byBase = self.overloadSetsForWrite()
-		byBase.upsert(base, value: members)
+		byBase.upsert(base.clone(), value: members.clone())
 	end 'recordOverloadSet'
 
 	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3019), so a
@@ -678,7 +761,7 @@ export type FileParseArtifact
 	// a cast into a ranged alias or a ranged `return` — a function with neither files nothing, so
 	// the registry stays proportional to the range checks a program contains, not its function count.
 	export function recordFunctionRangeChecks(name ByteArray, checks FunctionRangeChecks)
-		self.rangeChecks.push(FunctionRangeCheckEntry.create(name, checks: checks))
+		self.rangeChecks.push(FunctionRangeCheckEntry.create(name.clone(), checks: checks.clone()))
 	end 'recordFunctionRangeChecks'
 
 	// Record a ranged-typealias declaration as this file's contribution to the
@@ -692,7 +775,7 @@ export type FileParseArtifact
 	// Record a declared struct type as this file's contribution to the project-wide `structTypes`
 	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
 	export function recordStructType(layout StructLayout)
-		self.structTypes.push(layout)
+		self.structTypes.push(layout.clone())
 	end 'recordStructType'
 
 	// Record a declared enum/union type as this file's contribution to the project-wide `enumTypes`
@@ -703,8 +786,9 @@ export type FileParseArtifact
 	// header says why both registries need it). Here rather than at `parseEnumDeclaration`'s tail so the
 	// artifact's enum list and the sweep's are filled by one rule.
 	export function recordEnumType(layout EnumLayout)
-		self.enumTypes.push(layout)
-		appendUnionCasesCompanion(self.enumTypes, layout: layout)
+		let owned = layout.clone()
+		self.enumTypes.push(owned)
+		appendUnionCasesCompanion(self.enumTypes, layout: owned)
 	end 'recordEnumType'
 
 	// Record a declared `interface` as this file's contribution to `project.interfaces` (P1.7a slice 1)
@@ -715,7 +799,7 @@ export type FileParseArtifact
 			self.interfaces = IrInterfaceArray.create()
 		end 'firstInterface'
 
-		self.interfaces.push(iface)
+		self.interfaces.push(iface.clone())
 	end 'recordInterface'
 
 	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
@@ -740,7 +824,7 @@ export type FileParseArtifact
 			self.conformances = ConformanceDeclArray.create()
 		end 'firstConformance'
 
-		self.conformances.push(conformance)
+		self.conformances.push(conformance.clone())
 	end 'recordConformance'
 
 	// Record a `<Type> from "…"` construction as this file's contribution to `project.literalInitSites`
@@ -774,7 +858,7 @@ export type FileParseArtifact
 			self.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 		end 'firstDoor'
 
-		self.pendingFunctionTypeDoors.push(door)
+		self.pendingFunctionTypeDoors.push(door.clone())
 	end 'recordFunctionTypeDoor'
 
 	// Record a statement that used none of a call's result (see PendingDiscardedResult). Copy-on-write off
@@ -784,7 +868,7 @@ export type FileParseArtifact
 			self.pendingDiscardedResults = PendingDiscardedResultArray.create()
 		end 'firstSite'
 
-		self.pendingDiscardedResults.push(site)
+		self.pendingDiscardedResults.push(site.clone())
 	end 'recordDiscardedResult'
 
 	// Allocate this file's next counter slot and return its FILE-LOCAL id, which is what the op carries.
@@ -801,6 +885,73 @@ export type FileParseArtifact
 	end 'recordCovPoint'
 end 'FileParseArtifact'
 
+// ⭐⭐ **THE OP AS THE ARTIFACT KEEPS IT: every record in its payload the artifact's own.** A name, a label, a
+// constant's bytes or a type in a payload is often a record the signature index holds, and an artifact built on a
+// pool worker crosses back to the main thread while the worker keeps that index. So the artifact's doors copy what
+// they store — this one for ops, the `record…` doors above, `IrFunction.create` and `VarInfo.make` — and a door of
+// the index that hands a record out never does. An arm whose payload is scalars and value ids the parser built for
+// this op holds nothing of the index's and is kept as it is.
+function artifactOwnedOp(op MaxonOp) returns MaxonOp
+	match op 'op'
+		call or
+			tryCall or
+			asyncCall then return artifactOwnedCall(op)
+		literal or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			panicAbort or
+			functionRef or
+			sizeofType or
+			constArrayLiteral or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable then return op.clone()
+		ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			throwError or
+			propagateError or
+			indirectCall or
+			await or
+			tryAwait or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			covPoint or
+			rawIntrinsic then return op
+
+		// The interface name is read off the artifact's own interner, which holds its own copy.
+		existentialWitness then return op
+	end 'op'
+end 'artifactOwnedOp'
+
+// A call's names are copied and its value-id columns kept: the parser builds `args`, `argRanges` and
+// `argDefaultSlots` for this op, while a label or a blamed name may be a parameter name the index holds. Bound in a
+// match of its own, for `LowerMaxonToStd.lowerIndirectCall`'s reason.
+function artifactOwnedCall(op MaxonOp) returns MaxonOp
+	match op 'call'
+		call(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.call(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
+		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint)
+		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) then return MaxonOp.asyncCall(result, callee: callee.clone(), args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), argDefaultSlots: argDefaultSlots)
+		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall` and `asyncCall` here")
+	end 'call'
+end 'artifactOwnedCall'
+
+// An empty column is kept: most calls share the parser's one empty `NoImmutableArgNames`, which is image data.
+function ownedNames(names ByteArrayArray) returns ByteArrayArray
+	return names if names.isEmpty() else names.clone()
+end 'ownedNames'
+
 // Fold `artifact` into the whole-program build in source-path order:
 //   1. reconcile the artifact's local type-name ids into the project interner,
 //   2. offset-merge the artifact's MaxonModule fragment into `target`,
@@ -810,26 +961,9 @@ end 'FileParseArtifact'
 // registries land on `Project`. This is the ONLY writer of `project.typeNames`,
 // `project.funcReturnTypes`, and `project.opRanges`, and it needs no rollback
 // because nothing is ever written to `Project` speculatively.
-export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact)
-	// ⭐ **FOLDED AT MOST ONCE, whatever this artifact is merged into and however often.** The second and
-	// later folds of one compile are the stdlib body-demand fixpoint's re-folds; this artifact's ids are
-	// already the project interner's, and its names are already in that interner, so there is nothing left
-	// to do — see `FileParseArtifact.typeIdsAreProjectGlobal` for why the flag is exact rather than a
-	// guess, and `Queries.resetMergeTargets` for the one line it rests on.
-	if not artifact.typeIdsAreProjectGlobal 'notYetFolded'
-		let remap = project.typeNames.foldInto(artifact.typeNames)
-
-		if not remap.isIdentity 'remapNeeded'
-			// A prior file already interned some of these names under different ids
-			// (the multi-file case, first exercised at M2). Rewrite this artifact's
-			// module signatures + registry entries through the remap before merging
-			// so every `named(id)` indexes the project interner. Identity (always
-			// true for the first/only file) skips this entirely.
-			remapArtifact(artifact, remap: remap)
-		end 'remapNeeded'
-
-		artifact.typeIdsAreProjectGlobal = true
-	end 'notYetFolded'
+export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
+	signatures.beginMerge()
+	renumberArtifact(project, artifact: artifact, signatures: signatures)
 
 	// `IrModule.merge` relocates the artifact's ops to `target.ops.count()` and up,
 	// so the spans must land at exactly that offset in `project.opRanges` to stay
@@ -1396,72 +1530,172 @@ function commitFunctionTypeAliases(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitFunctionTypeAliases'
 
-// Rewrite every file-local `named(id)` that a LATER pass will READ — the module's
-// function return types + param types + per-value name column — to its project-global id. The
-// `funcSignatures` registry's param types are deliberately NOT remapped here: `resolveTypes`
-// (`syncResolvedSignature`) unconditionally OVERWRITES each signature's param types with
-// the function's own (already-remapped, then resolved) `maxonParamTypes` before the merge
-// output is ever consumed, and no consumer reads a signature's param types regardless
-// (`slotCallArgs` uses only the param NAMES + count). Remapping them here would be dead work.
-function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
-	// Index-based so `func`/`entry` are mutable bindings (a `for x in ...` loop
-	// var is immutable; field assignment through it is rejected).
+// ⭐⭐ **MAKE EVERY TYPE ID THIS ARTIFACT HOLDS THE MERGED PROGRAM'S — NAMES ONCE, INSTANCES ON EVERY MERGE.**
+//
+// NAMES are this file's own interner's, folded into `project.typeNames` the first time the artifact is merged:
+// `typeIdsAreProjectGlobal` says it happened, and it stays true because `Queries.resetMergeTargets` never resets
+// that interner.
+//
+// INSTANCES are the rows this file's parse minted, re-adopted by every merge: the index is restored to its
+// baseline before each fold, and after an edit elsewhere it is a different index altogether, so a row's id is
+// whatever THIS merge's source-path order gives it.
+//
+// ⚠ **A RENUMBERING IS APPLIED IN PLACE, AND ONE RECORD CAN BE REACHED TWICE** (a binding filed in several
+// places), so a renumbering must not move an id it already moved. An instance renumbering is safe when no id it
+// moves FROM is one it moves TO — true of the parse's band ids, which no merge assigns — and otherwise it is
+// taken through the band in two walks. A name renumbering is applied once, and per binding at most once
+// (`VarInfo.renumberedIn`).
+function renumberArtifact(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
+	let adopted = adoptedInstanceIds(artifact, signatures: signatures)
+	let names = TypeIdRemap.unmoved() if artifact.typeIdsAreProjectGlobal else project.typeNames.foldInto(artifact.typeNames)
+	artifact.typeIdsAreProjectGlobal = true
+
+	var direct = GenericInstanceIdMap.create()
+	var intoTheBand = GenericInstanceIdMap.create()
+	var outOfTheBand = GenericInstanceIdMap.create()
+	var targets = GenericInstanceIdSet.create()
+
+	for position in 0 upto artifact.instanceIdsInUse.count() 'eachRow'
+		let inUse = try artifact.instanceIdsInUse.get(position) otherwise panic("renumberArtifact: instanceIdsInUse.get OOB at {position}")
+		let target = try adopted.get(position) otherwise panic("renumberArtifact: the merge adopted {adopted.count()} rows of an artifact holding {artifact.instanceIdsInUse.count()}")
+
+		if inUse != target 'moves'
+			direct.upsert(inUse, value: target)
+			intoTheBand.upsert(inUse, value: BandInstanceIdBase + position)
+			outOfTheBand.upsert(BandInstanceIdBase + position, value: target)
+			targets.insert(target)
+		end 'moves'
+	end 'eachRow'
+
+	if movesOntoAMovedId(direct, targets: targets) 'throughTheBand'
+		rewriteTypeIds(project, artifact: artifact, remap: TypeIdRemap.unmoved().movingInstances(intoTheBand))
+		rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(outOfTheBand))
+	end 'throughTheBand' else 'direct'
+		rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(direct))
+	end 'direct'
+
+	artifact.instanceIdsInUse = adopted
+end 'renumberArtifact'
+
+// Would moving `moves` in place move some id twice — is an id it moves FROM also one it moves TO?
+function movesOntoAMovedId(moves GenericInstanceIdMap, targets GenericInstanceIdSet) returns bool
+	for (source, _) in moves 'eachMove'
+		if targets.contains(source) 'aSourceIsATarget'
+			return true
+		end 'aSourceIsATarget'
+	end 'eachMove'
+
+	return false
+end 'movesOntoAMovedId'
+
+// The id each of the artifact's parse rows is adopted under by this merge — every artifact no real parse built
+// has none.
+function adoptedInstanceIds(artifact FileParseArtifact, signatures ProgramSignatures) returns GenericInstanceIdArray
+	return match artifact.parseMints 'mints'
+		none gives sharedNoInstanceIds
+		minted(mints) gives signatures.adoptParseMints(mints)
+	end 'mints'
+end 'adoptedInstanceIds'
+
+// Rewrite every type id the artifact holds through `remap`. The list is every id-bearing place a parse fills,
+// whether or not a pass after the merge reads it today: an id left stale is a wrong answer waiting for its first
+// reader.
+function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeIdRemap)
+	if not remap.movesAnything() 'nothingMoves'
+		return
+	end 'nothingMoves'
+
+	project.lastRenumbering = project.lastRenumbering + 1
+	let epoch = project.lastRenumbering
+
 	for i in 0 upto artifact.module.functions.count() 'eachFunc'
-		var func = try artifact.module.functions.get(i) otherwise panic("remapArtifact: functions.get OOB at {i}")
-		func.maxonReturnType = remapMaxonReturnType(func.maxonReturnType, remap: remap)
-		func.maxonParamTypes = remapMaxonTypes(func.maxonParamTypes, remap: remap)
-
-		// The per-value NAME column moves with the signature: a body value typed `structRef(SomeStruct)`
-		// for a struct declared in ANOTHER file carries a file-local id this merge is moving, and
-		// SemanticCheck's call-argument identity check (OPEN #54 Slice B) resolves that id against the
-		// merged `project.typeNames`. Rebuilt tag-aware — a scalar slot keeps its `UnnamedTypeId` filler
-		// (see `remapValueNameId`) — in lockstep with `valueTags`, which is interner-independent and so
-		// is never remapped. Only the multi-file (non-identity) path reaches here.
-		var remappedNames = TypeNameIdArray.create()
-
-		for k in 0 upto func.valueNameIds.count() 'eachValue'
-			let tag = try func.valueTags.get(k) otherwise panic("remapArtifact: valueTags.get OOB at {k} — the two type columns fell out of lockstep")
-			let nameId = try func.valueNameIds.get(k) otherwise panic("remapArtifact: valueNameIds.get OOB at {k} — the two type columns fell out of lockstep")
-			remappedNames.push(remapValueNameId(tag, nameId: nameId, remap: remap))
-		end 'eachValue'
-
-		func.valueNameIds = remappedNames
-
-		// The brand column holds interner ids throughout — `UnnamedTypeId` included, which is the empty
-		// name in every interner — so it remaps without the tag.
-		var remappedBrands = TypeNameIdArray.create()
-
-		for k in 0 upto func.valueBrandIds.count() 'eachBrand'
-			remappedBrands.push(remap.apply(try func.valueBrandIds.get(k) otherwise panic("remapArtifact: valueBrandIds.get OOB at {k} — the brand column is pushed in lockstep with the type columns")))
-		end 'eachBrand'
-
-		func.valueBrandIds = remappedBrands
+		var func = try artifact.module.functions.get(i) otherwise panic("rewriteTypeIds: functions.get OOB at {i}")
+		func.renumberTypeIds(remap, epoch: epoch)
 	end 'eachFunc'
 
-	for j in 0 upto artifact.funcReturnTypes.count() 'eachEntry'
-		var entry = try artifact.funcReturnTypes.get(j) otherwise panic("remapArtifact: funcReturnTypes.get OOB at {j}")
-		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
-	end 'eachEntry'
+	for position in 0 upto artifact.module.ops.count() 'eachOp'
+		let op = try artifact.module.ops.get(position) otherwise panic("rewriteTypeIds: ops.get OOB at {position}")
+		try artifact.module.ops.set(position, value: renumberedOp(op, remap: remap)) otherwise panic("rewriteTypeIds: ops.set OOB at {position}")
+	end 'eachOp'
 
-	// A declared struct's FIELD TYPES are remapped, and the contrast with `funcSignatures` two
-	// paragraphs up is the whole reason to say so. That one is skipped because `syncResolvedSignature`
-	// OVERWRITES every param type before anything reads it — the stale ids are provably erased. Nothing
-	// erases these: they land in `project.structTypes` and stay. `TypeResolution` happens to read only
-	// the registry's KEY today (`is this name a declared type?`), so a stale id would be silent — which
-	// makes it a TRAP rather than dead data, and the difference between the two is a reader arriving
-	// later. The cost is one pass over the types a file declares, on the multi-file path only.
+	for j in 0 upto artifact.funcReturnTypes.count() 'eachReturnEntry'
+		var entry = try artifact.funcReturnTypes.get(j) otherwise panic("rewriteTypeIds: funcReturnTypes.get OOB at {j}")
+		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
+		entry.paramTypes = remapMaxonTypes(entry.paramTypes, remap: remap)
+	end 'eachReturnEntry'
+
+	for j in 0 upto artifact.funcSignatures.count() 'eachSignatureEntry'
+		var entry = try artifact.funcSignatures.get(j) otherwise panic("rewriteTypeIds: funcSignatures.get OOB at {j}")
+		entry.signature.renumberTypeIds(remap)
+	end 'eachSignatureEntry'
+
+	var aliases = FunctionTypeAliasArray.create()
+
+	for alias in artifact.functionTypeAliases 'eachFunctionAlias'
+		aliases.push(alias.withInstancesRenumbered(remap))
+	end 'eachFunctionAlias'
+
+	artifact.functionTypeAliases = aliases
+
 	for layout in artifact.structTypes 'eachStruct'
 		remapStructLayoutFieldTypes(layout, remap: remap)
 	end 'eachStruct'
 
-	// A declared union/enum's PAYLOAD field types are id-bearing (`walk(dir Direction)`) for the same
-	// reason a struct's field types are, so they are reconciled the same way and land in
-	// `project.enumTypes` the same way `structTypes` does above. (A payload-free enum's cases carry
-	// no ids, so its loop body rewrites nothing.)
 	for layout in artifact.enumTypes 'eachEnum'
 		remapEnumLayoutPayloadTypes(layout, remap: remap)
 	end 'eachEnum'
-end 'remapArtifact'
+
+	var sites = GenericInstantiationSiteArray.create()
+
+	for site in artifact.inferredInstantiationSites 'eachInferredSite'
+		sites.push(GenericInstantiationSite.create(remap.applyInstance(site.gid), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
+	end 'eachInferredSite'
+
+	artifact.inferredInstantiationSites = sites
+end 'rewriteTypeIds'
+
+// The op with the type it carries renumbered. Four variants carry one; every other carries none.
+function renumberedOp(op MaxonOp, remap TypeIdRemap) returns MaxonOp
+	return match op 'op'
+		literal(result, value, valueType) gives MaxonOp.literal(result, value: value, valueType: remapMaxonType(valueType, remap: remap))
+		loadIndirect(result, addr, offset, valueType) gives MaxonOp.loadIndirect(result, addr: addr, offset: offset, valueType: remapMaxonType(valueType, remap: remap))
+		storeIndirect(addr, offset, value, valueType) gives MaxonOp.storeIndirect(addr, offset: offset, value: value, valueType: remapMaxonType(valueType, remap: remap))
+		sizeofType(result, targetType) gives MaxonOp.sizeofType(result, targetType: remapMaxonType(targetType, remap: remap))
+		call or
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			stringLiteral or
+			tryCall or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			constArrayLiteral or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness gives op
+	end 'op'
+end 'renumberedOp'
 
 // Commit the artifact's `funcReturnTypes` contributions into the project registry.
 // A plain upsert: whole-program duplicate-function detection lives in the parallel

@@ -620,6 +620,39 @@ end 'main'
 0
 ```
 
+<!-- test: reassign-managed-opaque-field-reached-through-a-declaration-view -->
+No `with` in the program names `Box with String`: `Box` is instantiated only as `Outer`'s `Box with T`, and
+`Outer with String` is what makes that a `Box with String`. The shared `replace` still drops the old String,
+because an instance written over another type's parameter stands for every instantiation of that parameter.
+Leak-free under `__mm_free` poisoning.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+type Outer uses T
+	typealias Inner = Box with T
+	export var inner as Inner
+	export static function create(first T) returns Self
+		return Self{ inner: Inner.create(first) }
+	end 'create'
+end 'Outer'
+typealias OuterStr = Outer with String
+function main() returns ExitCode
+	var o = OuterStr.create("alpha")
+	o.inner.replace("beta")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: error.instance-arg-wrong-instance -->
 ```maxon
 type Leaf

@@ -485,13 +485,13 @@ export let ManagedCloneManagedName = b"__managed_clone_managed"
 export let ManagedAppendManagedName = b"__managed_append_managed"
 
 // ⭐⭐ **THE SOLENESS WALK OVER A CONTAINER RECORD** — the third answer beside `__managed_decref` and
-// `__managed_clone_managed`, and the one a String record takes too (it IS this record format). It proves the
-// record has one owner, DETACHES a shared copy-on-write buffer, and — the `_managed` entry — walks each live
+// `__managed_clone_managed`, and the one a String record takes too (it IS this record format). It counts the
+// record's owners in the moved graph, DETACHES a shared copy-on-write buffer, and — the `_managed` entry — walks each live
 // element through the per-element walk the call site stamps (`funcAddr(__sole_<E>)`), exactly as the clone
 // pair passes an element cloner.
 //
 // ⭐ **A SHARED BUFFER IS DETACHED RATHER THAN REFUSED, AND THAT IS THE WHOLE DIFFERENCE BETWEEN THE TWO
-// THINGS A COUNT CAN MEAN HERE.** A counted RECORD with two owners is what a move may not leave behind. A
+// THINGS A COUNT CAN MEAN HERE.** A counted RECORD with an owner outside the graph is what a move may not leave behind. A
 // shared BUFFER is copy-on-write — `.clone()`/`.slice()` share bytes until a write — and a counted buffer's
 // count steps plain, so leaving the two records on two green threads would race that word. **A MOVE IS A
 // WRITE-LIKE EVENT**, so the answer is the one a write already gives: `__managed_cow_detach`, called rather
@@ -500,15 +500,19 @@ export let ManagedSoleName = b"__managed_sole"
 export let ManagedSoleManagedName = b"__managed_sole_managed"
 
 // ⭐⭐ **THE SHARE WALK OVER A CONTAINER RECORD** — the soleness pair's twin for a LEND. It marks the record
-// shared, marks the separate allocation its bytes live in (`__mm_share_buffer`) — views step that count from
-// any green thread once the record is lent — and — the `_managed` entry — walks each live element through the
-// stamped `funcAddr(__share_<E>)`.
+// shared, marks the allocation its bytes live in — views step that count from any green thread once the record
+// is lent — and — the `_managed` entry — walks each live element through the stamped `funcAddr(__share_<E>)`.
 //
 // ⭐ **IT DETACHES NOTHING.** A lend is not a write: the record stays where it is, frozen, and every holder of
 // its bytes — a view copies before it writes, the owner writes only after a detach — finds the marked buffer's
 // count non-zero and copies out rather than writing in place.
 export let ManagedShareName = b"__managed_share"
 export let ManagedShareManagedName = b"__managed_share_managed"
+
+// The soleness and share walks over a record handed over as the whole graph — a `String` or `Character` message
+// argument or reply — which meet no record twice and keep no visit table.
+export let ManagedSoleAloneName = b"__managed_sole_alone"
+export let ManagedShareAloneName = b"__managed_share_alone"
 
 // ⭐⭐ **THE TWO CO-OWN ENTRIES A BUFFER RECORD TAKES INSTEAD OF THE PLAIN BOX'S, BECAUSE ONE SUCH RECORD
 // IS IMAGE DATA.** A module-level managed constant materializes as an immortal `.rdata` record
@@ -1326,19 +1330,14 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 		buildManagedAppendOpaque(module)
 	end 'opaqueCopy'
 
-	// The two SOLENESS walks and the two SHARE walks — each pair under its OWN bit, so a program that hands
-	// nothing to a green thread does not carry them. Both entries of a pair are installed together for the
-	// reason `buildManagedWalk` states: they are one operation split only by whether the elements are
-	// managed, and a `String` field reaches the first while an `Array with <struct>` field reaches the second
-	// in the same program.
+	// The SOLENESS walks and the SHARE walks — each set under its OWN bit, so a program that hands nothing to a
+	// green thread does not carry them.
 	if usage.usesSoleWalk 'soleWalk'
-		buildManagedWalk(module, name: ManagedSoleName, walksElements: false, action: CascadeAction.soleWalk)
-		buildManagedWalk(module, name: ManagedSoleManagedName, walksElements: true, action: CascadeAction.soleWalk)
+		buildManagedWalks(module, action: CascadeAction.soleWalk)
 	end 'soleWalk'
 
 	if usage.usesShareWalk 'shareWalk'
-		buildManagedWalk(module, name: ManagedShareName, walksElements: false, action: CascadeAction.shareWalk)
-		buildManagedWalk(module, name: ManagedShareManagedName, walksElements: true, action: CascadeAction.shareWalk)
+		buildManagedWalks(module, action: CascadeAction.shareWalk)
 	end 'shareWalk'
 
 	verifyThrowingAccessorsMatchPredicate(module)
@@ -5532,7 +5531,7 @@ end 'buildManagedDecref'
 // Threads `cur` (sets its terminator) and returns the continuation block.
 function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, srcBase ValueId, destBase ValueId, count ValueId, elementSize ValueId, cloneFn ValueId, ids ValueMinter) returns IrBlock
 	var visit = module.addBlock(func, label: b"clndo", heat: BlockHeat.normal)
-	let loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(CascadeAction.clone), ids: ids)
+	let loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
 
 	let cloned = ids.mint()
 
@@ -5541,22 +5540,24 @@ function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, s
 	module.appendOp(visit, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(loop.element)))
 	let destSlot = emitSlotAddr(module, block: visit, buffer: destBase, index: loop.index, elementSize: elementSize, ids: ids)
 	module.appendOp(visit, op: StdOp.storeIndirect(destSlot, offset: 0, valueId: cloned, valueType: StdType.i64))
+	emitCascadeBranch(module, from: CascadeCursor.create(visit, carried: loop.carried), to: loop.step)
 
 	return loop.done
 end 'emitElementCloneRange'
 
 // ⭐⭐ **THE PER-ELEMENT LOOP EVERY CONTAINER-RECORD WALK EMITS — ONE SKELETON FOR EVERY ACTION.** Walk
-// `[0, count)` over `base` (stride `elementSize`, always 8 for a managed element — a heap pointer), load each
-// slot, and hand the caller back the `visit` block a NON-NULL element reaches, that element, its index, and
-// the continuation. A NULL slot is SKIPPED: a moved-out or resize-created empty owns nothing, and
-// `callIndirect` on a null box is a fault. Threads `cur` (sets its terminator).
+// `[0, count)` over `base` (stride `elementSize`), load each slot's first word, and hand the caller back the
+// `visit` block a NON-NULL one reaches, that word, its index, the values the loop carries as they stand on
+// this trip, the join `visit` must branch to with their next values, and the continuation. A NULL slot is
+// SKIPPED: a moved-out or resize-created empty owns nothing, and `callIndirect` on a null box is a fault.
+// Threads `cur` (sets its terminator); `carried` are the values entering the loop.
 //
 // The bounds test, the null rule and the advance are what must not diverge — a second copy of them is free to
 // visit a different set of slots, which on the soleness side is one element of a moved graph left unproved.
-function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, visit IrBlock, labels ElementRangeLabels, ids ValueMinter) returns ElementRangeLoop
+export function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, visit IrBlock, carried ValueIdArray, labels ElementRangeLabels, ids ValueMinter) returns ElementRangeLoop
 	var header = module.addBlock(func, label: labels.header, heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: labels.body, heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: labels.step, heat: BlockHeat.normal)
+	var step = emitCascadeJoin(module, func: func, label: labels.step, template: carried, ids: ids)
 	let done = module.addBlock(func, label: labels.done, heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
@@ -5564,7 +5565,10 @@ function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base V
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let onThisTrip = appendCarriedBlockArgs(header, template: carried, ids: ids)
+	var entering = argsOf(zero)
+	entering.append(carried)
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: entering))
 	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
@@ -5573,41 +5577,45 @@ function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base V
 	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
 	let zeroElem = emitConst(module, block: body, value: 0, ids: ids)
 	let nonNull = emitCmp(module, block: body, a: elem, b: zeroElem, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: visit.id, elseBlockId: step.id))
+	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: visit.id, elseBlockId: step.block.id))
+	pushCascadeEdge(body, to: step, values: onThisTrip)
 
-	module.setTerminator(visit, op: StdOp.branch(step.id))
+	let one = emitConst(module, block: step.block, value: 1, ids: ids)
+	let iNext = emitBin(module, block: step.block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step.block, op: StdOp.branch(header.id))
+	var looping = argsOf(iNext)
+	looping.append(step.carried)
+	step.block.branchEdges.push(BranchEdge.create(header.id, argIds: looping))
 
-	let one = emitConst(module, block: step, value: 1, ids: ids)
-	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(step, op: StdOp.branch(header.id))
-	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	return ElementRangeLoop.create(elem, index: i, done: done)
+	return ElementRangeLoop.create(elem, index: i, carried: onThisTrip, step: step, done: done)
 end 'emitElementRange'
 
-// What the skeleton hands back: the live element the caller's `visit` block is reached with, its index, and
-// the block the loop leaves through. A record rather than three out-parameters, so a caller cannot spend one
-// loop's element against another loop's index.
-type ElementRangeLoop
+// What the skeleton hands back: the live element the caller's `visit` block is reached with, its index, the
+// carried values on that trip (which dominate `visit` and `done` alike), the join `visit` ends at, and the block
+// the loop leaves through. A record rather than out-parameters, so a caller cannot spend one loop's element
+// against another loop's index.
+export type ElementRangeLoop
 	export let element as ValueId
 	export let index as ValueId
+	export let carried as ValueIdArray
+	export let step as CascadeCursor
 	export let done as IrBlock
 
-	static function create(element ValueId, index ValueId, done IrBlock) returns ElementRangeLoop
-		return Self{element: element, index: index, done: done}
+	static function create(element ValueId, index ValueId, carried ValueIdArray, step CascadeCursor, done IrBlock) returns ElementRangeLoop
+		return Self{element: element, index: index, carried: carried, step: step, done: done}
 	end 'create'
 end 'ElementRangeLoop'
 
 // The four skeleton block names one action's loop wears (the caller names its own `visit`). They exist for an
 // IR dump and nothing else: a `__`-prefixed runtime body is not printed into a spec golden, so a program that
 // both clones and moves is where the two name sets earn their keep.
-type ElementRangeLabels
+export type ElementRangeLabels
 	export let header as ByteArray
 	export let body as ByteArray
 	export let step as ByteArray
 	export let done as ByteArray
 
-	static function create(header ByteArray, body ByteArray, step ByteArray, done ByteArray) returns ElementRangeLabels
+	export static function create(header ByteArray, body ByteArray, step ByteArray, done ByteArray) returns ElementRangeLabels
 		return Self{header: header, body: body, step: step, done: done}
 	end 'create'
 end 'ElementRangeLabels'
@@ -5652,86 +5660,107 @@ function buildManagedCloneManaged(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCloneManaged'
 
-// ⭐⭐ **`__managed_sole(arr)` / `__managed_sole_managed(arr, soleFn)` — PROVE A CONTAINER RECORD MOVEABLE;
-// `__managed_share(arr)` / `__managed_share_managed(arr, shareFn)` — MARK ONE LENT.** One builder for every
-// entry, for `buildListClone`'s reason: the box step and what follows it are ONE answer per action, and the
-// element walk is the only thing an entry's two forms differ by.
+// ⭐⭐ **`__managed_sole(arr, visits)` / `__managed_sole_managed(arr, visits, soleFn)` — PROVE A CONTAINER RECORD
+// MOVEABLE; `__managed_share(arr, visits)` / `__managed_share_managed(arr, visits, shareFn)` — MARK ONE LENT; and
+// `__managed_sole_alone(arr)` / `__managed_share_alone(arr)`, the same over a record handed over as the whole
+// graph.** The graph entries answer the visit table (`WalkVisitTable`). One builder for every entry, for
+// `buildListClone`'s reason: the record's meeting and what follows it are ONE answer per action, and the entries
+// differ only by the element walk and the scope.
 //
-// ⚠ **THE BOX STEP COMES FIRST** (`MmRuntime.emitBoxWalkStep`), and it is what sends an image record and an
+// ⚠ **THE MEETING COMES FIRST** (`MmRuntime.emitBoxWalkStep`), and it is what sends an image record and an
 // already-shared record home untouched: an `ImmortalRecordCapacity` record carries the immortal header too
 // (`BufferOwnership.immortalRecordPayload`), and a shared record's `buffer@0` may be read by another green
 // thread at this moment, so neither may be detached or marked again.
 //
-// ⚠ **A MANAGED-ELEMENT ARRAY'S OWN BUFFER IS NEVER SHARED TODAY** — `.clone()`/`.slice()` on one deep-copy
-// through the `_managed` entries rather than viewing — so the move's detach is a no-op there. It is called
-// anyway because "a move is a write" is a rule about the RECORD FORMAT, not about which elements it happens to
-// hold, and a second element-bearing view shape would otherwise need this same line added back.
-function buildManagedWalk(module StdModule, name ByteArray, walksElements bool, action CascadeAction)
-	var paramTypes = oneI64Param()
+// ⚠ **A MANAGED-ELEMENT ARRAY'S OWN BUFFER IS NEVER SHARED** — `.clone()`/`.slice()` on one deep-copy through
+// the `_managed` entries rather than viewing — so the move's detach is a no-op there. It is called anyway because
+// "a move is a write" is a rule about the RECORD FORMAT, not about which elements the record holds.
+// Every entry of one action, installed together because they are one operation split by scope and by whether the
+// elements are managed, and one program reaches several of them: a `String` argument, a `String` field and an
+// `Array with <struct>` field.
+function buildManagedWalks(module StdModule, action CascadeAction)
+	let entries = managedRecordCascadeEntries(action)
+	buildManagedWalk(module, name: entries.trivial, scope: WalkScope.graph, walksElements: false, action: action)
+	buildManagedWalk(module, name: entries.perElement, scope: WalkScope.graph, walksElements: true, action: action)
+	buildManagedWalk(module, name: byteRecordAloneWalk(action), scope: WalkScope.record, walksElements: false, action: action)
+end 'buildManagedWalks'
 
-	if walksElements 'perElementWalk'
-		paramTypes.push(StdType.i64)
-	end 'perElementWalk'
-
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
-
-	// ⚠ BOTH entries reserve two parameter id slots, so `elementWalk` is either parameter 1 or nothing at
-	// all — `buildListClone`'s rule, and it is what keeps the name from denoting a temporary in the other entry.
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: paramTypes.count())
-	let arr = 0 as ValueId
-	let elementWalk = 1 as ValueId
-
-	var walked = emitBoxWalkStep(module, func: func, block: entry, box: arr, action: action, stop: done, ids: ids)
-
-	match action 'action'
-		clone then panic("buildManagedWalk: a clone is `__managed_clone`/`__managed_clone_managed`, not a walk")
-		soleWalk then emitCowDetach(module, block: walked, arr: arr, ids: ids)
-		shareWalk then walked = emitShareOwedBuffer(module, func: func, cur: walked, record: arr, ids: ids)
-	end 'action'
+function buildManagedWalk(module StdModule, name ByteArray, scope WalkScope, walksElements bool, action CascadeAction)
+	let body = beginWalkBody(module, name: name, scope: scope, walksElements: walksElements, recursesPerLevel: false)
+	let arr = WalkBoxParam
+	let stepped = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: arr, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	let walked = emitWalkedRecordBytes(module, func: body.func, cursor: stepped, arr: arr, action: action, ids: body.ids)
 
 	if walksElements 'eachElement'
-		// Read AFTER the detach: it replaces `buffer@0`, so a pointer taken above it would walk the
-		// abandoned allocation.
-		let buffer = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-		let length = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-		let es = emitLoadField(module, block: walked, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-		var afterWalk = emitElementWalkRange(module, func: func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: elementWalk, action: action, ids: ids)
-		module.setTerminator(afterWalk, op: StdOp.branch(done.id))
+		// Read AFTER the detach: it replaces `buffer@0`, so a pointer taken above it would walk the abandoned
+		// allocation.
+		let buffer = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordBufferOffset, ids: body.ids)
+		let length = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordLengthOffset, ids: body.ids)
+		let es = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordElementSizeOffset, ids: body.ids)
+		let afterWalk = emitElementWalkRange(module, func: body.func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: body.elementWalk(), action: action, ids: body.ids)
+		emitCascadeBranch(module, from: afterWalk, to: body.done)
 	end 'eachElement' else 'noElementWalk'
-		module.setTerminator(walked, op: StdOp.branch(done.id))
+		emitCascadeBranch(module, from: walked, to: body.done)
 	end 'noElementWalk'
 
-	module.setTerminator(done, op: StdOp.retVoid)
-
-	module.functions.push(func)
+	finishWalkBody(module, body: body)
 end 'buildManagedWalk'
 
-// Mark the separate allocation `record`'s bytes live in shared, when there is one — an owner's `buffer@0` or a
-// view's parent base; an `.rdata` blob and an inline String's bytes owe nothing (`emitOwedAllocationBase`) and
-// nothing can step a count on them. Threads `cur` and returns the continuation block.
-function emitShareOwedBuffer(module StdModule, func IrFunction, cur IrBlock, record ValueId, ids ValueMinter) returns IrBlock
-	var join = module.addBlock(func, label: b"sharebase", heat: BlockHeat.normal)
-	let base = emitOwedAllocationBase(module, func: func, cur: cur, join: join, record: record, ids: ids)
-	return emitReleaseOwedBase(module, func: func, cur: join, base: base, callee: MmShareBufferName, ids: ids)
-end 'emitShareOwedBuffer'
+// ⭐ **WHAT A WALK OWES THE BYTES OF A RECORD IT DESCENDS.** A view's reference to the allocation its bytes live in
+// is met (`WalkMeeting.view`), because that allocation may be a String record the graph also owns; an owner's
+// separate buffer is a lend's to mark, and no owner reference but the record's reaches it. A move then detaches
+// either, since a move is a write. Answers the cursor the walk continues at.
+function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
+	var ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
+	var viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
+	var meetParent = module.addBlock(func, label: b"viewparent", heat: BlockHeat.normal)
+	let bytesWalked = emitCascadeJoin(module, func: func, label: b"byteswalked", template: cursor.carried, ids: ids)
 
-// Walk each live element through the caller's `(box) -> void` `elementWalk`, over the same per-element
-// skeleton `emitElementCloneRange` copies through. Threads `cur` and returns the continuation block.
-function emitElementWalkRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns IrBlock
+	let notOwned = emitBufferNotOwned(module, block: cursor.block, record: arr, ids: ids)
+	module.setTerminator(cursor.block, op: StdOp.condBranch(notOwned, thenBlockId: viewedBytes.id, elseBlockId: ownedBytes.id))
+
+	match action 'action'
+		clone then panic("emitWalkedRecordBytes: a clone is `__managed_clone`/`__managed_clone_managed`, not a walk")
+		soleWalk then emitCascadeBranch(module, from: cursor.at(ownedBytes), to: bytesWalked)
+		shareWalk then emitSharedOwnBuffer(module, func: func, from: cursor.at(ownedBytes), arr: arr, to: bytesWalked, ids: ids)
+	end 'action'
+
+	let parent = emitLoadField(module, block: viewedBytes, record: arr, offset: ManagedRecordParentOffset, ids: ids)
+	emitRouteOnOwedBase(module, block: viewedBytes, base: parent, whenOwed: meetParent, whenNone: bytesWalked.block, ids: ids)
+	pushCascadeEdge(viewedBytes, to: bytesWalked, values: cursor.carried)
+
+	let parentMet = emitBoxWalkStep(module, func: func, cursor: cursor.at(meetParent), box: parent, action: action, meeting: WalkMeeting.view, stop: bytesWalked, ids: ids)
+	emitCascadeBranch(module, from: parentMet, to: bytesWalked)
+
+	if action == CascadeAction.soleWalk 'aMoveWrites'
+		emitCowDetach(module, block: bytesWalked.block, arr: arr, ids: ids)
+	end 'aMoveWrites'
+
+	return bytesWalked
+end 'emitWalkedRecordBytes'
+
+// Mark an owner's separate buffer shared, when it has one; an owner that never allocated a buffer owes nothing.
+function emitSharedOwnBuffer(module StdModule, func IrFunction, from CascadeCursor, arr ValueId, to CascadeCursor, ids ValueMinter)
+	let buffer = emitLoadField(module, block: from.block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let marked = emitReleaseOwedBase(module, func: func, cur: from.block, base: buffer, callee: MmShareBufferName, ids: ids)
+	emitCascadeBranch(module, from: from.at(marked), to: to)
+end 'emitSharedOwnBuffer'
+
+// Walk each live element through the caller's `(box, visits) -> visits` `elementWalk`, over the same per-element
+// skeleton `emitElementCloneRange` copies through, carrying the visit table from element to element. Threads
+// `cur` and returns the continuation.
+function emitElementWalkRange(module StdModule, func IrFunction, cur CascadeCursor, base ValueId, count ValueId, elementSize ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	var visit = module.addBlock(func, label: b"walkdo", heat: BlockHeat.normal)
-	let loop = emitElementRange(module, func: func, cur: cur, base: base, count: count, elementSize: elementSize, visit: visit, labels: elementRangeLabels(action), ids: ids)
+	let loop = emitElementRange(module, func: func, cur: cur.block, base: base, count: count, elementSize: elementSize, visit: visit, carried: cur.carried, labels: elementRangeLabels(action), ids: ids)
+	let trip = CascadeCursor.create(visit, carried: loop.carried)
 
-	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk is a
-	// `(box) -> void` whose one argument is a whole-machine-word POINTER.
+	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk takes two
+	// whole-machine-word arguments, a POINTER and a table address.
 	let visited = ids.mint()
-	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: elementWalk, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(loop.element)))
+	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: elementWalk, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: twoArgs(loop.element, second: trip.visits())))
+	emitCascadeBranch(module, from: CascadeCursor.create(visit, carried: argsOf(visited)), to: loop.step)
 
-	return loop.done
+	return CascadeCursor.create(loop.done, carried: loop.carried)
 end 'emitElementWalkRange'
 
 // `__managed_slice_managed(arr, start, end, cloneFn) -> (newArr, flag)` — the throwing managed slice: the SAME

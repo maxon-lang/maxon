@@ -288,11 +288,11 @@ export typealias StorageReachEdgeArray = Array with StorageReachEdge
 // for the reason `writtenParamMask` does: the parser holds the only view in which a binding exists,
 // and the merged module is the only place the whole program does.
 //
-// ⚠ **A FUNCTION THAT BORROWS NOTHING SHARES ONE OBJECT** (`sharedEmptyBorrowFacts`) and allocates
-// nothing at all, so every mutation door's `borrows.count() == 0` gate is one read against a
-// permanently empty array. It is COPY-ON-WRITE (`Parser.borrowFactsOf`) and the shared instance is
-// NEVER mutated — the same invariant `sharedEmptyIterationLocks` carries, and it must hold for the
-// same reason: the per-file parse fan-out shares it across threads.
+// ⚠ **EVERY FUNCTION ONE PARSER BUILDS THAT BORROWS NOTHING SHARES ONE OBJECT** (`FunctionPlaceholders.noBorrows`)
+// and allocates nothing at all, so every mutation door's `borrows.count() == 0` gate is one read against a
+// permanently empty array. It is COPY-ON-WRITE (`Parser.borrowFactsOf`) and the shared instance is NEVER
+// mutated. It is the PARSER's and not the module's: a parse runs on a pool worker and its artifact crosses
+// back, so a record every parse shared would have owners on every worker at once.
 export type BorrowFacts
 	// The distinct storages this body borrows from or writes, in first-seen order — the id space
 	// `BorrowSubjectId` indexes. Parser working state; the resolver reads only its COUNT, as the key
@@ -312,10 +312,17 @@ export type BorrowFacts
 	export static function create() returns BorrowFacts
 		return Self{subjects: VarInfoArray.create(), pending: PendingBorrowArray.create(), borrows: BorrowRecordArray.create(), mutations: MutationSiteArray.create(), storageReach: StorageReachEdgeArray.create()}
 	end 'create'
-end 'BorrowFacts'
 
-// The one instance every function starts at — see `BorrowFacts`'s ⚠ block for the invariant.
-export let sharedEmptyBorrowFacts = BorrowFacts.create()
+	export function renumberBindingTypeIds(remap TypeIdRemap, epoch RenumberingEpoch)
+		for subject in self.subjects 'eachSubject'
+			subject.renumberTypeIds(remap, epoch: epoch)
+		end 'eachSubject'
+
+		for borrow in self.borrows 'eachBorrow'
+			borrow.borrower.renumberTypeIds(remap, epoch: epoch)
+		end 'eachBorrow'
+	end 'renumberBindingTypeIds'
+end 'BorrowFacts'
 
 // The `via '<x>'` text for a FREE call: the callee's UNQUALIFIED name, so `Bag.wipe` reads `wipe` and
 // a bare `grow` is unchanged.

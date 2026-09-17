@@ -635,18 +635,22 @@ end 'Connection'
 var conn = Connection.createSecure("example.com")
 ```
 
-### Use Lazy Static Fields for Expensive Initialization
+### Use Static Fields for Shared Precomputed Values
 
-Static fields with complex initializers are evaluated lazily on first access and cached. Use this for lookup tables, precomputed data, and singleton-like patterns.
+A static field's initializer runs once, before `main`, and every read afterwards shares the result. Use this for lookup tables, precomputed data, and singleton-like values instead of rebuilding them on each call. Prefer `static let`: a value decided at compile time is image data and costs nothing at run time. Every initializer runs whether or not anything reads the field, so a static nothing reads is pure startup cost.
 
 ```maxon
 type Classifier
-	static let _whitespace = CharacterSet.whitespacesAndNewlines()
-	static let _digits = CharacterSet.decimalDigits()
+	static let whitespace = CharacterSet.whitespacesAndNewlines()
+	static let digits = CharacterSet.decimalDigits()
 
 	export static function isWhitespace(c Character) returns bool
 		return Classifier.whitespace.contains(c)
 	end 'isWhitespace'
+
+	export static function isDigit(c Character) returns bool
+		return Classifier.digits.contains(c)
+	end 'isDigit'
 end 'Classifier'
 ```
 

@@ -1,0 +1,24 @@
+// Test: error-a-type-parameter-no-receiver-fixes-is-not-offered-even-as-a-type-argument
+typealias Tally = int(0 to 1000)
+
+type Batch uses T
+	typealias Items = Array with T
+	typealias Inspect = function(Items) returns Tally
+
+	export static function measure(seed Items, inspect Inspect) returns Tally
+		return inspect(seed)
+	end 'measure'
+end 'Batch'
+
+typealias TallyBatch = Batch with Tally
+typealias TallyArray = Array with Tally
+
+function main() returns ExitCode
+	var seed = TallyArray.create()
+	seed.push(4)
+	print("{TallyBatch.measure(seed, inspect: function(items) gives items.count())}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:19:53: Unsupported: parameter 'items' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type

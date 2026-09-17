@@ -1,0 +1,30 @@
+// Test: error.non-conformer-stored-directly-in-an-interface-field
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Plain
+	let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Plain'
+
+type Holder
+	let t as Tagged
+
+	static function create(n Integer) returns Self
+		return Self{t: Plain.create(n)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(4)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:10: field type mismatch for 'Holder.t': type 'Plain' does not implement interface 'Tagged'

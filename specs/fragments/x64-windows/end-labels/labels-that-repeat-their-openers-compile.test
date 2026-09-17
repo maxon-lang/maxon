@@ -1,0 +1,183 @@
+// Test: labels-that-repeat-their-openers-compile
+typealias Count = int(0 to 100)
+
+interface Sized
+	function size() returns Count
+end 'Sized'
+
+type Box implements Sized
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function size() returns Count
+		return self.n
+	end 'size'
+end 'Box'
+
+extension Box
+	export function doubled() returns Count
+		return self.n * 2
+	end 'doubled'
+end 'Box'
+
+enum Color
+	red
+	green
+end 'Color'
+
+union Shape
+	dot
+	square(side Count)
+end 'Shape'
+
+function unlabelled() returns Count
+	return 1
+end
+
+function main() returns ExitCode
+	var total = unlabelled()
+	let box = Box.create()
+
+	if box.size() > 2 'big'
+		total = total + box.doubled()
+	end 'big' else 'small'
+		total = total + 1
+	end 'small'
+
+	for i in 0 upto 2 'eachStep'
+		total = total + i
+	end 'eachStep'
+
+	while total < 10 'grow'
+		total = total + 1
+	end 'grow'
+
+	let color = Color.green
+
+	match color 'pick'
+		red then total = total + 1
+		green then total = total + 2
+	end 'pick'
+
+	match Shape.square(2) 'shape'
+		dot then total = total + 1
+		square(side) then total = total + side
+	end 'shape'
+
+	return total
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+  __il_body#27:
+    x64.movRegImm32 rbx, 1
+  __il_body#28:
+    x64.movRegImm32 r12, 3
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+  __il_body#29:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_cont#24:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc lessEqual, ifelse
+  __il_body#31:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#33
+  __rc_chk#34:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc greater, __rc_panic#33
+  __il_cont#30:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRegImm32 rax, rbx, 1
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  eachStep:
+    x64.leaRegRegReg rax, rax, rcx
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc less, eachStep
+    x64.jmp whilehdr
+  grow:
+    x64.leaRegRegImm32 rax, rax, 1
+  whilehdr:
+    x64.cmpRegImm32 rax, 10
+    x64.jcc less, grow
+  matcharm#12:
+    x64.leaRegRegImm32 rax, rax, 2
+  matchcont#15:
+    x64.movRegImm32 rcx, 2
+    x64.movRegImm32 rdx, 1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#16:
+    x64.leaRegRegImm32 rbx, rax, 1
+    x64.jmp matchcont#20
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#17:
+    x64.leaRegRegReg rbx, rax, rcx
+  matchcont#20:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#22
+  __rc_chk#23:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic#22
+  __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  __rc_panic#33:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at labels-that-repeat-their-openers-compile.test:22: Range check failed: value outside typealias 'Count'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#22:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at labels-that-repeat-their-openers-compile.test:70: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,99 @@
+// Test: function-backing.contested-name-qualified-by-its-directory
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = beta.doubleFn
+	tripleOp = alpha.doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	let g = Op.tripleOp.rawValue
+	return (f(10) + g(1)) as ExitCode
+end 'main'
+---
+ExitCode: 23
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @alpha.doubleFn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 3
+    x64.popReg rbp
+    x64.ret
+}
+
+func @beta.doubleFn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegFunc rax, [rip + __fnref_beta.doubleFn]
+    x64.leaRegFunc rcx, [rip + __fnref_alpha.doubleFn]
+    x64.imulRegRegImm32 rcx, rcx, 0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegFunc rcx, [rip + __fnref_beta.doubleFn]
+    x64.imulRegRegImm32 rcx, rcx, 0
+    x64.leaRegFunc rdx, [rip + __fnref_alpha.doubleFn]
+    x64.leaRegRegReg rbx, rcx, rdx
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 0
+    x64.callReg rax
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.leaRegRegReg r8, r12, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

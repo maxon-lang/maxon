@@ -1,0 +1,36 @@
+// Test: error.a-receiver-of-a-bare-generic-base-may-not-take-a-layout-needing-call
+typealias Int = int(i64.min to i64.max)
+
+type Tag uses Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function width() returns Int
+		return sizeof(Element)
+	end 'width'
+end 'Tag'
+
+type Outer uses T
+	var tag as Tag
+
+	export static function create() returns Self
+		return Self{tag: Tag.create()}
+	end 'create'
+
+	export function width() returns Int
+		return tag.width()
+	end 'width'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create()
+	return o.width()
+end 'main'
+---
+CompilerError:
+error E3162: <fragment>:24:14: 'Tag' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Tag.width' has no layout descriptor to be handed: the base has none, and this frame's describes the parameters of 'Outer'. Name the instance with a typealias, e.g. 'typealias TagInstance = Tag with T'

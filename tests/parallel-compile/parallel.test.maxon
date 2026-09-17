@@ -1,4 +1,4 @@
-// parallel.test.maxon — the shared half of the backend's PARALLEL-POOL gate: how a fixture program is
+// parallel.test.maxon — the shared half of the compiler's PARALLEL-POOL gate: how a fixture program is
 // staged, how the compiler is spawned at it with the processor count pinned or left to the machine, and
 // the two things asked of the corpus itself. The per-contract `test` declarations are the files beside
 // this one, one contract line each.
@@ -7,13 +7,14 @@
 // (`BackendPool`), and its contract has four lines: it REPORTS the pool it built, the executable it
 // emits is BYTE-IDENTICAL whatever the processor count — its `.rdata` section included, which every
 // function's isel registers content into — a register-pressure refusal is RENDERED identically at every
-// count, and the per-function log lines of the Std pool come out in declaration order.
+// count, and the per-function log lines of the Std pool come out in declaration order. Lexing and parsing
+// run on a pool of their own (`FrontEndPool`), which REPORTS the pool it built the same way.
 //
-// ⚠ THE POOL LINE IS LOGGED UNDER `LogCategory.codegen`, SO THE FLAG THAT SHOWS IT IS `--log=codegen:debug`.
-// `Logger.parseLogOption` raises ONE category for a `<category>:<level>` spec and every other category
-// falls through to the global level, which is INFO — `--log=compiler:debug` raises `[CMP]` alone and can
-// never print a `[GEN]` line at DEBUG. The needle carries the sink's whole prefix (`[GEN] DEBUG: `) so a
-// line that moved to another category or level is red rather than merely quieter.
+// ⚠ EACH POOL LINE IS SHOWN ONLY BY ITS OWN CATEGORY'S FLAG: the allocator's by `--log=codegen:debug`
+// (`[GEN]`), the front end's by `--log=compiler:debug` (`[CMP]`). `Logger.parseLogOption` raises ONE
+// category for a `<category>:<level>` spec and every other category falls through to the global level,
+// which is INFO. Each needle carries the sink's whole prefix so a line that moved to another category or
+// level is red rather than merely quieter.
 //
 // ⛔ ONE SPAWNING `test` PER FILE, FOR TWO REASONS THAT ARE BOTH STRUCTURAL. A file is what ONE process
 // runs under `TestExecutor.DefaultTestTimeoutMs` (5,000 ms), and the four contracts need six compiles
@@ -45,15 +46,23 @@ let StagedProgramFileName = "main.maxon"
 // Where `retainImage` parks a build's image: a name no build writes, inside the case's own staging tree.
 let RetainedImageFileName = "retained-image"
 
-// The flag that raises the codegen category to DEBUG — see the header for why it is not `compiler:debug`.
+// The flags that raise each pool line's category to DEBUG — see the header for why they are two.
 export let CodegenDebugLogFlag = "--log=codegen:debug"
+export let CompilerDebugLogFlag = "--log=compiler:debug"
 
-// The sink's rendering of a codegen DEBUG line, then the pool report's own words. The report ends with
-// the function count, which is the allocator's and not the fixture's; `defaultPoolNeedle` says why it
-// is not pinned.
-let PoolLinePrefix = "[GEN] DEBUG: regalloc: "
+// Each pool line as the sink renders it, then the words both reports share. Each report ends with a count
+// no needle pins: the allocator's functions and the front end's files both include what the stdlib adds.
+let RegallocPoolLinePrefix = "[GEN] DEBUG: regalloc: "
+let FrontEndPoolLinePrefix = "[CMP] DEBUG: front end: "
 let PoolLineWorkersWord = "worker(s) over"
 let PoolLineProcessorsWord = "processor(s), "
+
+// Where the three counts sit among a front-end pool line's space-separated words:
+// `<workers> worker(s) over <processors> processor(s), <files> file(s)`.
+let PoolLineWordSeparator = " "
+let PoolLineWorkersPosition = 0 as ElementIndex
+let PoolLineProcessorsPosition = 3 as ElementIndex
+let PoolLineFilesPosition = 5 as ElementIndex
 
 // The scheduler's processor-count marker. Spelled here rather than read from `SchedRuntime.MaxProcsEnvName`
 // because a test project cannot import the compiler. It cannot rot silently: a marker the scheduler stops
@@ -82,14 +91,17 @@ let MaxonSourceSuffix = ".maxon"
 // a generated entry source beside the copy, so the corpus walk must not descend into one.
 let ProjectProductsDirName = ".maxon"
 
-// The three folds a refusal's stderr goes through before two runs are compared: CR, the host separator,
-// and the absolute staging path, in that order because the path is matched in its forward-slash form.
+// The folds a stderr goes through before two runs are compared: CR, the host separator, and the absolute
+// staging path, in that order because the path is matched in its forward-slash form — then the wall time below.
 let CarriageReturn = "\r"
 let LineFeed = "\n"
 let PortablePathSeparator = "/"
 let StagingTreeToken = "<TREE>"
-let ElapsedOpener = " (compiled in "
-let ElapsedToken = "<ELAPSED>"
+
+// The wall time a build's `Wrote` line reports: everything from the opener to the end of the line is folded.
+let CompileTimeOpener = "(compiled in "
+let CompileTimeCloser = ")"
+let CompileTimeToken = "<TIME>"
 
 // A processor count as the scheduler resolves one. Its floor is carried in by a guard rather than by the
 // runtime's clamp, which nothing here proves.
@@ -147,20 +159,23 @@ end 'stagedProgram'
 
 // Compile the staged program, pinned to one processor or left to the machine. `label` names the run in
 // this file's failure reports and reaches nothing the child does — see `builtExecutable` for why it may
-// not reach the output path.
+// not reach the output path. `wholeDirectory` builds the staged tree as ONE project; otherwise only its
+// `main.maxon` is compiled and a sibling source is not part of the build.
 //
 // Everything that would stop the build running at all panics rather than failing an assertion: a missing
 // binary or a spawn that never happened is the gate being broken, never the allocator answering wrongly.
-export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool) returns CollectedOutput
+export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool, wholeDirectory bool = false) returns CollectedOutput
 	let binary = testedCompilerPath()
 
 	if not File.exists(binary) 'noBinary'
 		panic("parallel-compile.test: the gate could not run — there is no compiler at {binary.toString()}. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'
 
+	let source = staged if wholeDirectory else staged.join("{StagedProgramFileName}")
+
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
-	arguments.push(staged.join("{StagedProgramFileName}").toString())
+	arguments.push(source.toString())
 	arguments.push(OutputOption)
 	arguments.push(builtExecutable(staged).toString())
 
@@ -191,7 +206,7 @@ end 'spawnBuild'
 //
 // The host suffix is spelled INTO the `-o` argument rather than left for the compiler to append, so the
 // path handed to the child and the path read back are one spelling.
-export function builtExecutable(staged FilePath) returns FilePath
+function builtExecutable(staged FilePath) returns FilePath
 	return staged.join("{OutputFileStem}{executableSuffix()}")
 end 'builtExecutable'
 
@@ -234,29 +249,72 @@ end 'executableSuffix'
 // the count, and W = P is asserted only where the DECLARED count alone guarantees it; a host with more
 // processors than the fixture declares functions is refused loudly rather than pinned to a guess.
 export function defaultPoolNeedle(staged FilePath) returns String
+	let reported = defaultProcessorCount()
+	let declared = declaredFunctionCount(staged)
+
+	if reported as FunctionTally > declared 'poolSmallerThanTheMachine'
+		panic("parallel-compile.test: the gate could not run — this host has {reported} processors and the staged program declares only {declared} functions, so the default pool's worker count is min(P, F) with F unknowable from here. Add functions to the fixture until it declares more than the host has processors.")
+	end 'poolSmallerThanTheMachine'
+
+	return poolNeedle(RegallocPoolLinePrefix, workers: reported, processors: reported)
+end 'defaultPoolNeedle'
+
+// The pool line with the scheduler pinned to one processor: a pool of one worker.
+export function singleProcessorPoolNeedle() returns String
+	return poolNeedle(RegallocPoolLinePrefix, workers: SingleProcessor, processors: SingleProcessor)
+end 'singleProcessorPoolNeedle'
+
+// The front end's pool line with the scheduler pinned to one processor: one worker, whatever it parses.
+export function frontEndPoolNeedleSingleProcessor() returns String
+	return poolNeedle(FrontEndPoolLinePrefix, workers: SingleProcessor, processors: SingleProcessor)
+end 'frontEndPoolNeedleSingleProcessor'
+
+// ⭐ **THE DEFAULT POOL IS min(P, F) WORKERS, WHERE F IS THE MOST FILES ONE DRAIN DISPATCHED — AND THE LINE SAYS
+// WHAT F WAS.** F includes the stdlib files this file cannot count, so it is read off the report rather than
+// derived here; P is read off the report too and must be the machine's.
+export function requireFrontEndPoolAtDefault(run CollectedOutput) throws TestFailure
+	let line = frontEndPoolLine(run)
+	let words = line.split(PoolLineWordSeparator)
+	let workers = reportedCount(words, position: PoolLineWorkersPosition, line: line)
+	let processors = reportedCount(words, position: PoolLineProcessorsPosition, line: line)
+	let files = reportedCount(words, position: PoolLineFilesPosition, line: line)
+	let machine = defaultProcessorCount() as AssertedInt
+
+	try Expect.equal(processors, expected: machine, message: "the front end reported a pool over {processors} processor(s) with nothing pinned, where the machine has {machine}. It wrote: {line}")
+	try Expect.equal(workers, expected: files if files < machine else machine, message: "the front end reported {workers} worker(s) over {processors} processor(s) for {files} file(s) dispatched — the pool is min(P, F) workers, because a worker with no file is a mailbox bought for nothing and a file with no worker waits. It wrote: {line}")
+end 'requireFrontEndPoolAtDefault'
+
+// The front end's one pool line, from its first count to the end of the line.
+function frontEndPoolLine(run CollectedOutput) returns String
+	let afterPrefix = try run.stderr.split(FrontEndPoolLinePrefix).get(1) otherwise panic("parallel-compile.test: `{CompilerDebugLogFlag}` printed no line starting `{FrontEndPoolLinePrefix}`, so the pool it built cannot be read. It wrote to stderr: {run.stderr}")
+	return (try afterPrefix.split(LineFeed).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")).trim()
+end 'frontEndPoolLine'
+
+function reportedCount(words StringArray, position ElementIndex, line String) returns AssertedInt
+	let word = try words.get(position) otherwise panic("parallel-compile.test: the front end's pool line has no word at position {position}. It wrote: {line}")
+	return try int.fromString(word) otherwise panic("parallel-compile.test: the front end's pool line holds '{word}' where a count belongs. It wrote: {line}")
+end 'reportedCount'
+
+// The front end reports its pool once per build, never once per file or per batch.
+export function requireOneFrontEndPoolLine(run CollectedOutput) throws TestFailure
+	let lines = run.stderr.split(FrontEndPoolLinePrefix).count() - 1
+	try Expect.equal(lines as AssertedInt, expected: 1, message: "`{CompilerDebugLogFlag}` printed {lines} lines starting `{FrontEndPoolLinePrefix}`. The front end builds ONE pool per build and reports it once. It wrote to stderr: {run.stderr}")
+end 'requireOneFrontEndPoolLine'
+
+// The processor count the scheduler resolves when nothing pins it: the machine's.
+function defaultProcessorCount() returns ProcessorCount
 	let reported = __Builtins.cpuCount()
 
 	if reported < 1 'unreported'
 		panic("parallel-compile.test: the gate could not run — __Builtins.cpuCount() answered {reported}, below the floor its own contract promises.")
 	end 'unreported'
 
-	let declared = declaredFunctionCount(staged)
+	return reported
+end 'defaultProcessorCount'
 
-	if reported > declared 'poolSmallerThanTheMachine'
-		panic("parallel-compile.test: the gate could not run — this host has {reported} processors and the staged program declares only {declared} functions, so the default pool's worker count is min(P, F) with F unknowable from here. Add functions to the fixture until it declares more than the host has processors.")
-	end 'poolSmallerThanTheMachine'
-
-	return poolNeedle(reported, processors: reported)
-end 'defaultPoolNeedle'
-
-// The pool line with the scheduler pinned to one processor: a pool of one worker.
-export function singleProcessorPoolNeedle() returns String
-	return poolNeedle(SingleProcessor, processors: SingleProcessor)
-end 'singleProcessorPoolNeedle'
-
-// The one grammar every pool needle is built from, up to and excluding the function count.
-function poolNeedle(workers ProcessorCount, processors ProcessorCount) returns String
-	return "{PoolLinePrefix}{workers} {PoolLineWorkersWord} {processors} {PoolLineProcessorsWord}"
+// The one grammar every pool needle is built from, up to and excluding the trailing count.
+function poolNeedle(prefix String, workers ProcessorCount, processors ProcessorCount) returns String
+	return "{prefix}{workers} {PoolLineWorkersWord} {processors} {PoolLineProcessorsWord}"
 end 'poolNeedle'
 
 // How many declarations the staged program holds: every line that opens a function, `main` included.
@@ -279,35 +337,55 @@ end 'declaredFunctionCount'
 // ============================================================================================
 
 // A run's stderr as two runs are compared: CR folded, separators folded, the staging path replaced by
-// `<TREE>` so a message that names the source stays readable in a failure report, and the build's
-// wall-clock figure replaced by `<ELAPSED>` — it is the one line two identical compiles may not agree on.
+// `<TREE>` so a message that names the source stays readable in a failure report, and the wall time a
+// build reports replaced by `<TIME>` — a pool of one and a pool of sixteen do not take the same time.
 export function normalizedStderr(run CollectedOutput, staged FilePath) returns String
 	let folded = run.stderr.replace(CarriageReturn, with: "").replace(FilePath.separator(), with: PortablePathSeparator)
 	let tree = staged.toString().replace(FilePath.separator(), with: PortablePathSeparator)
-	let lines = folded.replace(tree, with: StagingTreeToken).split(LineFeed)
 
-	var normalized = ""
+	return withoutCompileTimes(folded.replace(tree, with: StagingTreeToken))
+end 'normalizedStderr'
+
+function withoutCompileTimes(text String) returns String
+	var folded = ""
 	var first = true
 
-	for line in lines 'eachLine'
-		if not first 'separated'
-			normalized.append(LineFeed)
-		end 'separated'
+	for line in text.split(LineFeed) 'eachLine'
+		if not first 'afterTheFirst'
+			folded.append(LineFeed)
+		end 'afterTheFirst'
 
 		first = false
-
-		if line.contains(ElapsedOpener) 'timed'
-			let pieces = line.split(ElapsedOpener)
-			let beforeElapsed = try pieces.get(0) otherwise panic("a line holding the opener splits into at least one piece")
-
-			normalized.append("{beforeElapsed}{ElapsedOpener}{ElapsedToken})")
-		end 'timed' else 'untimed'
-			normalized.append(line)
-		end 'untimed'
+		folded.append(withoutCompileTime(line))
 	end 'eachLine'
 
-	return normalized
-end 'normalizedStderr'
+	return folded
+end 'withoutCompileTimes'
+
+function withoutCompileTime(line String) returns String
+	let opener = try line.findFirst(CompileTimeOpener) otherwise return line
+	return "{line.slice(line.startIndex(), endIndex: opener)}{CompileTimeOpener}{CompileTimeToken}{CompileTimeCloser}"
+end 'withoutCompileTime'
+
+// The staged program compiled pinned to one processor and at the default, and the two images compared
+// byte for byte. Both builds are given the SAME output path — see `builtExecutable` for why the basename
+// may not vary — and the pinned image is kept aside between them, so the processor count is the only
+// difference between the two builds compared. `programName` names the program in failure reports.
+export function requireIdenticalImagesAcrossProcessorCounts(staged FilePath, programName String, wholeDirectory bool = false) throws TestFailure
+	let noArguments = StringArray.create()
+
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true, wholeDirectory: wholeDirectory)
+	let pinnedExit = pinnedRun.exitCode() as AssertedInt
+	try Expect.equal(pinnedExit, expected: 0, message: "the {programName} did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
+
+	let pinnedImage = retainImage(staged)
+
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false, wholeDirectory: wholeDirectory)
+	let defaultExit = defaultRun.exitCode() as AssertedInt
+	try Expect.equal(defaultExit, expected: 0, message: "the {programName} did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
+
+	try requireIdenticalBytes(pinnedImage, second: builtExecutable(staged))
+end 'requireIdenticalImagesAcrossProcessorCounts'
 
 // Two emitted executables, byte for byte. The count is asked first and asked to be non-zero: two empty
 // files are identical, and a pair of builds that wrote nothing must not read as agreement.
@@ -316,7 +394,7 @@ end 'normalizedStderr'
 // neither the Mach-O nor the ELF writer reads a clock at all. That is what makes raw identity the right
 // instrument here, rather than a comparison that has to mask known noise: masking hides whatever else
 // drifted into the bytes it covers.
-export function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
+function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailure
 	let firstBytes = fileBytes(first)
 	let secondBytes = fileBytes(second)
 	let firstCount = firstBytes.count()
@@ -338,7 +416,7 @@ export function requireIdenticalBytes(first FilePath, second FilePath) throws Te
 		offset = offset + 1
 	end 'eachByte'
 
-	try Expect.isTrue(identical, message: "{second.toString()} first differs from {first.toString()} at byte offset {offset}. The allocator's result must not depend on which worker allocated a function or in what order the pool finished; a difference here is a nondeterminism, not a performance fact.")
+	try Expect.isTrue(identical, message: "{second.toString()} first differs from {first.toString()} at byte offset {offset}. The emitted image must not depend on which worker parsed a file or allocated a function, or in what order a pool finished; a difference here is a nondeterminism, not a performance fact.")
 end 'requireIdenticalBytes'
 
 // ============================================================================================
@@ -446,8 +524,8 @@ function liveSourcesUnder(root FilePath) returns StringArray
 	return live
 end 'liveSourcesUnder'
 
-// The paths a refusal lists, one per line — empty when there are none, which is what makes the guards
-// an `isEmpty` on the very text a reader has to act on.
+// Entries one per line — empty when there are none, which is what makes the guards an `isEmpty` on the
+// very text a reader has to act on.
 function listedLines(paths StringArray) returns String
 	var listed = ""
 

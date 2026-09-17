@@ -1,0 +1,38 @@
+// Test: error.a-local-var-may-not-write-through-a-lets-record-an-await-hands-back
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+
+function fetch() returns Box
+	return Wrap.around().box
+end 'fetch'
+
+function show() returns Integer
+	return a.n
+end 'show'
+
+function main() returns ExitCode
+	var pending = async fetch()
+	var b = await pending
+	b.n = 9
+	print("a={show()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3159: <fragment>:31:2: cannot write through 'b', which may be the record of a module-level `let` a call handed back; use clone()

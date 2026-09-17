@@ -57,69 +57,80 @@ typealias BackendWorkerHandleArray = Array with BackendWorker.handle
 // A position in a pool's own arrays — a worker slot, an in-flight reply, a job in the dispatch order.
 export typealias PoolSlot = int(0 to u64.max)
 
-// How many workers a pool holds, or how many functions it has to run. NARROWED to exclude zero, which
-// is what lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a guard
-// that has already answered for the empty module, and a range is how that guard is carried to the
-// arithmetic instead of being remembered at it.
+// How many workers a pool holds, or how many jobs it has to run. NARROWED to exclude zero, which is what
+// lets the round-robin and the key unpacking DIVIDE by one: both are reached only past a guard that has
+// already answered for an empty pool, and a range is how that guard is carried to the arithmetic instead
+// of being remembered at it.
 export typealias PoolSize = int(1 to u32.max)
 
 export typealias PoolSlotArray = Array with PoolSlot
 
-// A position in a pool's landing array — where one function's answer was pushed as it arrived.
-export typealias LandingSlot = int(0 to u64.max)
+// One job of a pool, by its position in the caller's own job list — a function index for the two backend
+// pools, a position among the files the front end dispatches.
+export typealias PoolJob = int(0 to u64.max)
+export typealias PoolJobArray = Array with PoolJob
+
+// How much work one job is — what the dispatch orders by: a function's live ops, a file's bytes or tokens.
+export typealias PoolJobSize = int(0 to u64.max)
+export typealias PoolJobSizeArray = Array with PoolJobSize
+
+// A position in a pool's landing array — where one job's answer was pushed as it arrived.
+typealias LandingSlot = int(0 to u64.max)
 export typealias LandingSlotArray = Array with LandingSlot
 
-// ⭐ **WHERE EACH FUNCTION'S ANSWER LANDED — the column that turns arrival order back into index order.**
-// A drain pushes answers as they arrive and records the slot here; the fold after the drain walks the
-// functions in index order and reads each one's answer through `slotOf`. One record for both pools.
+// ⭐ **WHERE EACH JOB'S ANSWER LANDED — the column that turns arrival order back into job order.** A drain
+// pushes answers as they arrive and records the slot here; the fold after the drain walks the jobs in
+// order and reads each one's answer through `slotOf`. One record for every pool.
 export type LandingSlots
-	var slotOfFunc as LandingSlotArray
-	var funcCount as FuncCount
+	var slotOfJob as LandingSlotArray
+	var jobCount as PoolJob
 
-	// Filled with the one value no landing slot has — the function count — so a function that never
-	// landed is a panic at the fold rather than function 0's answer folded twice.
-	export static function create(funcCount FuncCount) returns LandingSlots
-		var slotOfFunc = LandingSlotArray.create()
-		slotOfFunc.refill(funcCount as ElementIndex, value: funcCount as LandingSlot)
-		return Self{slotOfFunc: slotOfFunc, funcCount: funcCount}
+	// Filled with the one value no landing slot has — the job count — so a job that never landed is a panic
+	// at the fold rather than job 0's answer folded twice.
+	export static function create(jobCount PoolJob) returns LandingSlots
+		var slotOfJob = LandingSlotArray.create()
+		slotOfJob.refill(jobCount as ElementIndex, value: jobCount as LandingSlot)
+		return Self{slotOfJob: slotOfJob, jobCount: jobCount}
 	end 'create'
 
-	export function record(funcIndex FuncIndex, slot LandingSlot)
-		try self.slotOfFunc.set(funcIndex, value: slot) otherwise panic("LandingSlots.record: slotOfFunc.set OOB at {funcIndex} below {self.funcCount}")
+	export function record(job PoolJob, slot LandingSlot)
+		try self.slotOfJob.set(job, value: slot) otherwise panic("LandingSlots.record: slotOfJob.set OOB at {job} below {self.jobCount}")
 	end 'record'
 
-	export function slotOf(funcIndex FuncIndex) returns LandingSlot
-		let slot = try self.slotOfFunc.get(funcIndex) otherwise panic("LandingSlots.slotOf: slotOfFunc.get OOB at {funcIndex} below {self.funcCount}")
+	export function slotOf(job PoolJob) returns LandingSlot
+		let slot = try self.slotOfJob.get(job) otherwise panic("LandingSlots.slotOf: slotOfJob.get OOB at {job} below {self.jobCount}")
 
-		if slot == self.funcCount as LandingSlot 'neverLanded'
-			panic("LandingSlots.slotOf: function {funcIndex} never came home from the pool — the drain awaits every reply, so a function with no landing slot is a dispatch that never happened")
+		if slot == self.jobCount as LandingSlot 'neverLanded'
+			panic("LandingSlots.slotOf: job {job} never came home from the pool — the drain awaits every reply, so a job with no landing slot is a dispatch that never happened")
 		end 'neverLanded'
 
 		return slot
 	end 'slotOf'
 end 'LandingSlots'
 
-// ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for both drains, this pool's and
-// `StdPassPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs per worker longest-first,
-// then serves whichever reply `awaitAny` answers and hands its worker the next job in order. Everything
-// in that protocol that is not the reply itself lives here: the dispatch order and how far it has been
-// consumed, and for each outstanding reply which function it is for and which worker holds it.
+// ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for every drain: this pool's,
+// `StdPassPool`'s and `FrontEndPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs per
+// worker longest-first, then serves whichever reply `awaitAny` answers and hands its worker the next job in
+// order. Everything in that protocol that is not the reply itself lives here: the dispatch order and how far
+// it has been consumed, and for each outstanding reply which job it is for and which worker holds it.
 //
 // ⚠ **THE REPLY ARRAY STAYS WITH THE CALLER, IN THE SAME SLOT ORDER.** A reply's type names the worker's
-// message (`run`), which no shared record can be generic over. So a caller pushes its reply exactly when
-// it takes a job (`nextJob`) and removes the reply at the slot `awaitAny` answered exactly when it lands
-// that slot here (`land`); the two columns here and the caller's array are one sequence, and `land`'s
-// count check is what catches a caller that pushed without taking or took without pushing.
+// message, which no shared record can be generic over. So a caller pushes its reply exactly when it takes a
+// job (`nextJob`) and removes the reply at the slot `awaitAny` answered exactly when it lands that slot here
+// (`land`); the two columns here and the caller's array are one sequence, and `land`'s count check is what
+// catches a caller that pushed without taking or took without pushing.
 export type PoolDispatch
-	var order as FuncIndexArray
+	var order as PoolJobArray
 	var jobCount as PoolSize
 	var workerCount as PoolSize
 	var dispatched as PoolSlot
-	var replyJob as FuncIndexArray
+	var replyJob as PoolJobArray
 	var replyWorker as PoolSlotArray
 
-	export static function create(functions IrFunctionArray, blocks IrBlockArray, funcCount PoolSize, workerCount PoolSize) returns PoolDispatch
-		return Self{order: functionsLongestFirst(functions, blocks: blocks, funcCount: funcCount), jobCount: funcCount, workerCount: workerCount, dispatched: 0, replyJob: FuncIndexArray.create(), replyWorker: PoolSlotArray.create()}
+	// One size per job, in job order; the caller has already answered for an empty pool.
+	export static function create(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolDispatch
+		let jobCount = sizes.count() as PoolSize
+		return Self{order: jobsLongestFirst(sizes, jobCount: jobCount), jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create()}
 	end 'create'
 
 	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
@@ -141,7 +152,7 @@ export type PoolDispatch
 
 	// Take the next job in dispatch order for `worker`. The caller pushes the worker's reply now, at the
 	// slot these columns just gained.
-	export function nextJob(worker PoolSlot) returns FuncIndex
+	export function nextJob(worker PoolSlot) returns PoolJob
 		let job = try self.order.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {self.dispatched} is past the end — ask `hasUndispatched` first")
 		self.dispatched = self.dispatched + 1
 		self.replyJob.push(job)
@@ -154,10 +165,10 @@ export type PoolDispatch
 		return try self.replyWorker.get(ready) otherwise panic("PoolDispatch.workerAt: {ready} is not an outstanding slot — {self.replyWorker.count()} are in flight")
 	end 'workerAt'
 
-	// Land the reply at `ready` — `awaitAny`'s answer over the caller's reply array — and say which
-	// function it was for. `outstanding` is that array's count before the caller removes its reply, so
-	// the two sequences are checked to be one.
-	export function land(ready ElementIndex, outstanding ElementIndex) returns FuncIndex
+	// Land the reply at `ready` — `awaitAny`'s answer over the caller's reply array — and say which job it
+	// was for. `outstanding` is that array's count before the caller removes its reply, so the two sequences
+	// are checked to be one.
+	export function land(ready ElementIndex, outstanding ElementIndex) returns PoolJob
 		if outstanding != self.replyJob.count() 'columnsOutOfStep'
 			panic("PoolDispatch.land: the caller holds {outstanding} reply(ies) against {self.replyJob.count()} job(s) in flight — a reply was pushed without `nextJob`, or a job taken without its reply being pushed")
 		end 'columnsOutOfStep'
@@ -167,9 +178,9 @@ export type PoolDispatch
 	end 'land'
 end 'PoolDispatch'
 
-// How many ops one function holds, and the packed longest-first sort key built from it.
-typealias FunctionOpTally = int(0 to u64.max)
-typealias FunctionOpTallyArray = Array with FunctionOpTally
+// A job's size and position packed into one longest-first sort key.
+typealias LongestFirstKey = int(0 to u64.max)
+typealias LongestFirstKeyArray = Array with LongestFirstKey
 
 // The isel of one ISA, as a worker holds it for the whole compile. A union rather than an interface
 // value because a worker's state is MOVED at `spawn`, and a value held at an interface type cannot cross
@@ -360,7 +371,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 
 	var landed = BackendUnitLandingArray.create()
 	landed.reserve(funcCount as ElementIndex)
-	var slots = LandingSlots.create(funcCount)
+	var slots = LandingSlots.create(funcCount as PoolJob)
 
 	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
 	// parallel if the runtime actually SPREADS it, and a work-STEAL is the one event that says an idle
@@ -424,7 +435,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
 	var refused = stdModule.funcCount() as FuncIndex
-	var dispatch = PoolDispatch.create(stdModule.functions, blocks: stdModule.blocks, funcCount: stdModule.funcCount() as PoolSize, workerCount: workerCount)
+	var dispatch = PoolDispatch.create(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount)
 	var replies = BackendReplyArray.create()
 
 	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
@@ -434,19 +445,17 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
 		let ready = __Builtins.awaitAny(replies)
 		let freedWorker = dispatch.workerAt(ready)
-		let funcIndex = dispatch.land(ready, outstanding: replies.count())
+		let job = dispatch.land(ready, outstanding: replies.count())
+		let funcIndex = job as FuncIndex
 		let reply = try replies.remove(ready) otherwise panic("drainTheBackendPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		if let answer = try await reply 'finished'
 			spliceBackendUnit(module, func: module.getFunc(funcIndex), unitModule: answer.unitModule)
-			slots.record(funcIndex, slot: landed.count())
+			slots.record(job, slot: landed.count())
 			landed.push(answer.landing)
 		end 'finished' else (e) 'notFinished'
 			match e 'why'
-				// The worker's mailbox closed under a job in flight. Nothing here drops a handle before
-				// the drain has finished, so it means the worker's green thread DIED — a panic inside the
-				// isel or the allocator, whose message is already on stderr.
-				stopped then panic("drainTheBackendPool: the worker running function {funcIndex} is gone. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed.")
+				stopped then panic("{workerGoneMessage("drainTheBackendPool", subject: "the worker running function {funcIndex}")}")
 				hotOverflow then refused = funcIndex if funcIndex < refused else refused
 			end 'why'
 		end 'notFinished'
@@ -459,6 +468,12 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	return refused
 end 'drainTheBackendPool'
 
+// Why a pool worker's reply never came, for every pool's panic: no driver drops a handle before every reply has
+// landed, so the worker's green thread ended on its own — a panic whose message is already on stderr.
+export function workerGoneMessage(driver String, subject String) returns String
+	return "{driver}: {subject} is gone. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed."
+end 'workerGoneMessage'
+
 // Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
 // recorded the job in.
 //
@@ -468,50 +483,54 @@ end 'drainTheBackendPool'
 // `BackendUnit.extract`).
 function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot PoolSlot, dispatch PoolDispatch, replies BackendReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
-	let funcIndex = dispatch.nextJob(workerSlot)
+	let funcIndex = dispatch.nextJob(workerSlot) as FuncIndex
 	replies.push(worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex)))
 end 'dispatchOneBackendJob'
 
 // ⭐⭐ **THE DISPATCH ORDER: LONGEST JOB FIRST (LPT).**
 //
 // A pool that takes jobs in declaration order finishes when its unluckiest worker finishes, and the
-// worst case is the biggest function starting LAST: it then runs alone while every other worker idles.
-// Starting the longest job first bounds that, and the module's shape here is the friendly one — 8,478
-// functions with the ten largest holding 4% of the ops — so the tail is small work that fills the gaps
-// behind the big jobs.
+// worst case is the biggest job starting LAST: it then runs alone while every other worker idles.
+// Starting the longest job first bounds that, and the small jobs behind it fill the gaps.
 //
-// ⚠ **IT IS A THROUGHPUT HEURISTIC AND CANNOT REACH THE OUTPUT.** The emitted code is a function of the
-// FUNCTION order, which this does not change: every fold runs in index order and splicing is
-// order-independent (see this file's header). A different order here is a different wall time and the
-// same bytes.
+// ⚠ **IT IS A THROUGHPUT HEURISTIC AND CANNOT REACH THE OUTPUT.** The output is a function of the JOB
+// order, which this does not change: every fold runs in job order and splicing is order-independent (see
+// this file's header). A different order here is a different wall time and the same bytes.
 //
-// The key packs (op count, function index) into ONE integer, so ordering is a plain ascending sort of
-// scalars with no comparator closure to carry: `opCount * funcCount + funcIndex` is injective for
-// `funcIndex < funcCount`, and it is bounded by the module's total op count times its function count.
-// Read back DESCENDING, which is what makes it longest-first.
-//
-// It takes the two arrays rather than a module because it serves two pools over the same Std module, and
-// a block's op count is one question for both.
-function functionsLongestFirst(functions IrFunctionArray, blocks IrBlockArray, funcCount PoolSize) returns FuncIndexArray
-	var keys = FunctionOpTallyArray.create()
-	let keyStride = funcCount as FunctionOpTally
+// The key packs (size, job) into ONE integer, so ordering is a plain ascending sort of scalars with no
+// comparator closure to carry: `size * jobCount + job` is injective for `job < jobCount`, and it is bounded
+// by the total size times the job count. Read back DESCENDING, which is what makes it longest-first.
+function jobsLongestFirst(sizes PoolJobSizeArray, jobCount PoolSize) returns PoolJobArray
+	var keys = LongestFirstKeyArray.create()
+	let keyStride = jobCount as LongestFirstKey
 
-	for funcIndex in 0 upto funcCount 'eachFunc'
-		let func = try functions.get(funcIndex) otherwise panic("functionsLongestFirst: functions.get OOB at {funcIndex}")
-		keys.push((liveOpTallyOf(blocks, func: func) as FunctionOpTally) * keyStride + funcIndex)
-	end 'eachFunc'
+	for (position, size) in sizes.withIterator() 'eachJob'
+		keys.push((size as LongestFirstKey) * keyStride + (position.index() as LongestFirstKey))
+	end 'eachJob'
 
 	keys.sort()
 
-	var order = FuncIndexArray.create()
+	var order = PoolJobArray.create()
 
 	for k in 0 upto keys.count() 'largestFirst'
-		let key = try keys.get(keys.count() - 1 - k) otherwise panic("functionsLongestFirst: keys.get OOB walking back from {keys.count()}")
-		order.push((try (key mod keyStride) otherwise panic("functionsLongestFirst: a pool of no functions never reaches the ordering")) as FuncIndex)
+		let key = try keys.get(keys.count() - 1 - k) otherwise panic("jobsLongestFirst: keys.get OOB walking back from {keys.count()}")
+		order.push((try (key mod keyStride) otherwise panic("jobsLongestFirst: a pool of no jobs never reaches the ordering")) as PoolJob)
 	end 'largestFirst'
 
 	return order
-end 'functionsLongestFirst'
+end 'jobsLongestFirst'
+
+// Every function's live op count, in index order — the size both backend pools dispatch a function by. It
+// takes the two arrays rather than a module because it serves two pools over the same Std module.
+export function functionOpTallies(functions IrFunctionArray, blocks IrBlockArray) returns PoolJobSizeArray
+	var sizes = PoolJobSizeArray.create()
+
+	for func in functions 'eachFunc'
+		sizes.push(liveOpTallyOf(blocks, func: func))
+	end 'eachFunc'
+
+	return sizes
+end 'functionOpTallies'
 
 // How many ops one function holds. Counted rather than collected: `IrModule.liveOpIndices` answers the
 // same number and allocates an array per function to do it, and this runs on every function of every

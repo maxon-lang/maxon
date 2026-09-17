@@ -286,6 +286,27 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return try managed.remove(at) otherwise throw ArrayError.indexOutOfBounds
 	end 'remove'
 
+	/// Release the element at `at` and leave its slot empty, moving neither the length nor any other element —
+	/// a hash table's tombstone, where `remove` would slide every later slot out of its probe position.
+	///
+	/// The released slot is swapped to the end so a one-slot shrink vacates it (`setLength` releases what leaves
+	/// the live range and zeroes the slot), the length is republished over the zeroed slot, and the swap back
+	/// returns it to `at`. It is composed from existing buffer members because this library is also compiled by
+	/// the released compiler that bootstraps the tree, which serves no member it has never heard of.
+	module function clearSlot(at ElementIndex) throws ArrayError
+		if isOutsideLiveRange(at) 'outsideLiveRange'
+			throw ArrayError.indexOutOfBounds
+		end 'outsideLiveRange'
+
+		let len = managed.length()
+		let last = len - 1
+
+		try managed.swap(at, j: last) otherwise panic("Array.clearSlot: swap OOB — `at` and the last index are both below the length")
+		try managed.setLength(last) otherwise panic("Array.clearSlot: setLength refused a length below the current one")
+		try managed.setLength(len) otherwise panic("Array.clearSlot: setLength refused the length the array had a moment ago")
+		try managed.swap(at, j: last) otherwise panic("Array.clearSlot: swap OOB — `at` and the last index are both below the length")
+	end 'clearSlot'
+
 	/// Remove all elements from the array (keeps capacity)
 	public function clear()
 		managed.clear()

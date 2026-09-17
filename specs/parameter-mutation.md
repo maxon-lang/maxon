@@ -519,6 +519,85 @@ end 'main'
 2
 ```
 
+<!-- test: let-to-self-writing-method-on-a-field-ok -->
+⚖ The receiver door one record down: `bump` writes its own `self`, and here its `self` is `h.inner`. The
+exemption is about the method's own receiver slot, whatever expression fills it, so a `let` holder is legal.
+
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Counter'
+
+type Holder
+	export var inner as Counter
+
+	static function create() returns Self
+		return Self{inner: Counter.create()}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	h.inner.bump()
+	return h.inner.n as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: let-to-callee-calling-a-self-writing-method-on-a-field-ok -->
+⚖ The same door one frame down: `nudge` writes nothing itself and only calls a self-writing method on a record
+inside what it was handed, so a `let` may be handed there for the reason `h.inner.bump()` is legal on it.
+
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Counter'
+
+type Holder
+	export var inner as Counter
+
+	static function create() returns Self
+		return Self{inner: Counter.create()}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.inner.bump()
+end 'nudge'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	nudge(h)
+	nudge(h)
+	return h.inner.n as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
 <!-- test: let-global-string-to-appending-param-error -->
 A top-level `let` is immutable wherever it is read, and its String is the same immortal record a local
 `let`'s is.

@@ -1,0 +1,29 @@
+// Test: error.a-local-var-may-not-write-through-a-lets-record-a-call-built-around
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+
+function main() returns ExitCode
+	var w = Wrap.around()
+	w.box.n = 9
+	print("w={w.box.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3159: <fragment>:22:2: cannot write through 'w.box', which may be the record of a module-level `let` a call handed back; use clone()

@@ -1,0 +1,35 @@
+// The second file of the front-end fixture. `Held` substitutes `Outer`'s parameter into `Holder` while this body is
+// parsed, which mints the `Holder with String` the first file's question is answered by.
+
+type Outer uses T
+	typealias Held = Holder with T
+
+	var holder as Held
+
+	export static function create(first T) returns Self
+		return Self{holder: Held.create(first)}
+	end 'create'
+
+	export function twinSize() returns Tally
+		return holder.twin().size()
+	end 'twinSize'
+end 'Outer'
+
+typealias TextOuter = Outer with String
+
+function heapText(seed Tally) returns String
+	var builder = StringBuilder.create()
+	builder.append("a heap string long enough to allocate, number ")
+	builder.append("{seed}")
+	return builder.build()
+end 'heapText'
+
+function main() returns ExitCode
+	let outer = TextOuter.create(heapText(1))
+
+	if outer.twinSize() == 1 'theTwinHoldsTheElement'
+		return 0
+	end 'theTwinHoldsTheElement'
+
+	return 1
+end 'main'

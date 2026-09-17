@@ -47,6 +47,7 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 // The driver surface under test, spelled as the command line takes it.
 let BuildCommandName = "build"
 let OutputOption = "-o"
+export let RecheckCommandName = "verify-recheck"
 export let DefineOption = "--define="
 
 // What every case builds its program as. One spelling, because a second would be a name two cases could
@@ -187,6 +188,17 @@ export function requireRefusedBuild(staged FilePath, pair String) returns String
 
 	return withoutCarriageReturns(build.stderr)
 end 'requireRefusedBuild'
+
+// `verify-recheck` over the staged tree with one `--define`: the command that checks one project more than once,
+// which is where a problem found only while a memo is computed goes missing.
+export function recheckWithDefine(staged FilePath, pair String) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(RecheckCommandName)
+	arguments.push(staged.toString())
+	arguments.push("{DefineOption}{pair}")
+
+	return spawnCompiler(arguments, staged: staged, what: "`{RecheckCommandName} {DefineOption}{pair}`")
+end 'recheckWithDefine'
 
 // Run what a build produced and hand back its stdout. The program prints the constant and nothing else,
 // so its output IS the answer to "what value did the binary get?".

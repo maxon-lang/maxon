@@ -1,0 +1,41 @@
+// Test: error.a-nested-view-another-file-reaches-refuses-the-store-holder-first
+// --- file: a_holder.maxon
+typealias Int = int(0 to 1000)
+
+type Cell uses T
+	export var value as T
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Cell'
+
+type Holder uses T
+	var cell as Cell
+	export static function create(value T) returns Self
+		return Self{cell: Cell.create(value)}
+	end 'create'
+	export function replace(next Cell)
+		self.cell = next
+	end 'replace'
+end 'Holder'
+
+export type Outer uses T
+	var holder as Holder
+	export static function create(value T) returns Self
+		return Self{holder: Holder.create(value)}
+	end 'create'
+	export function tag() returns Int
+		return 3
+	end 'tag'
+end 'Outer'
+
+// --- file: b_use.maxon
+typealias TextOuter = Outer with String
+
+function main() returns ExitCode
+	let o = TextOuter.create("x")
+	return o.tag()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:10: Unsupported: storing into a field a value of type 'Cell_T28fe889e854d6824' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice

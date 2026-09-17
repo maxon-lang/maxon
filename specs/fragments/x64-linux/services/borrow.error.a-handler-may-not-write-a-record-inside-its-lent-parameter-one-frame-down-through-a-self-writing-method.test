@@ -1,0 +1,47 @@
+// Test: borrow.error.a-handler-may-not-write-a-record-inside-its-lent-parameter-one-frame-down-through-a-self-writing-method
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function create() returns Self
+		return Self{inner: Box.create()}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.inner.bump()
+end 'nudge'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Holder)
+		nudge(target)
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3019: <fragment>:41:2: cannot pass 'b' to function that mutates parameter 'target' (in main)

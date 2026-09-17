@@ -134,12 +134,17 @@ _ = sideEffect()  // discard: no binding, no unused check
 var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
 
-// Lazy static fields (inside types)
-// Complex initializers (function calls, struct/array literals) run on first access
-static var ws = CharacterSet.whitespacesAndNewlines()   // lazy, cached after first use
-static var origin = Point.create(0, y: 0)   // lazy struct value
-static var data = [10, 20, 30]              // lazy array literal
-static let MAX = 100                         // constant, evaluated at compile time
+// Static fields (inside types): every initializer runs once, before main,
+// in dependency order, whether or not anything reads the field
+type Origin
+	export var x as Coord
+	export var y as Coord
+
+	static let zero = Origin{x: 0, y: 0}                    // struct literal: own type only
+	static let ws = CharacterSet.whitespacesAndNewlines()   // function call
+	static var data = [10, 20, 30]                          // array literal
+	static let MAX = 100                                    // compile-time constant
+end 'Origin'
 
 // Reference-by-default for structs
 var a = Point.create(1, y: 2)

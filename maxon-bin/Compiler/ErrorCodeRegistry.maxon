@@ -820,12 +820,13 @@ export enum ErrorCode
 	// `module` modifier). Emitted by `checkUnusedExports`.
 	semanticUnusedModuleSymbol = "E3094"
 
-	// A bare function name has more than one reachable definition; qualify it as 'dir.name()'.
-	// a bare-name function call has more than one reachable
-	// definition under directory-as-module rules. The user must write the
-	// directory-qualified form (`dir.name()`) to disambiguate. Emitted by
-	// the cross-file fallback in `qualifyCalleeForContextWithType` when
-	// `methodNameIndex` returns multiple distinct visible candidates.
+	// A bare function name has more than one reachable definition; qualify it as 'dir.name'.
+	// Two or more directories declare a free function of the name and this file may name more than one of those
+	// declarations, none in its own directory or at the root. It is refused at each door a bare function name is
+	// written at — a call, a function value (`let f = helper`) and a function-backed enum case
+	// (`op = helper`) — and each accepts the directory-qualified form (`beta.helper`) as the remedy. Decided by
+	// `ProgramSignatures.resolveFunctionName`; a call is reported by `SemanticCheck.validateCall`, the other two
+	// doors by the parser.
 	semanticAmbiguousCrossFileCall = "E3095"
 
 	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or
@@ -1598,9 +1599,10 @@ export enum ErrorCode
 	// it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
 	// `push(Cell.create())` build the same TYPE. So the graph is walked where the counts are -- at run time,
 	// immediately before the hand-off, by a synthesized per-type walk, which for a lend also marks every
-	// record it reaches shared. A reachable record with a second owner ABORTS the process (exit 96) on the
-	// sending green thread, before anything is enqueued; an immortal `.rdata` literal passes with no count to
-	// check; a shared copy-on-write BUFFER is detached, exactly as a write to it would detach it.
+	// record it reaches shared. The graph may reach one record several times when each of those references is
+	// one of its owners; a reachable record with an owner OUTSIDE the graph ABORTS the process (exit 96) on
+	// the sending green thread, before anything is enqueued. An immortal `.rdata` literal passes with no count
+	// to check; a shared copy-on-write BUFFER is detached, exactly as a write to it would detach it.
 	// What this arm still REFUSES is the shape no walk can be built for, never a shape that might be
 	// shared: a value held at an interface type (a witness table names a destructor and no walk), an opaque
 	// type parameter (the site cannot see its slots), a record no declaration in scope describes, and any
@@ -1705,9 +1707,10 @@ export enum ErrorCode
 	// the rule worth having -- a rule keyed on writes syntactically inside a handler body would refuse only
 	// the shape an author would have spotted anyway, while the race does not care which frame the store
 	// instruction sits in.
-	// An INDIRECT or WITNESS dispatch reached from a message is followed by treating every function in the
-	// program as message-reachable, which is this rule's refusing direction: unlike E3139 -- where a missed
-	// edge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.
+	// An INDIRECT or WITNESS dispatch reached from a message is followed by treating every function it could
+	// land on as message-reachable -- every address-taken function for a closure call, every function wearing
+	// the requirement's name for a witness dispatch -- which is this rule's refusing direction: unlike E3139 --
+	// where a missed edge costs a guarantee -- a missed edge here costs a silently wrong answer at run time.
 	// The cure is always available and is always the same for both directions: keep the value in a field of
 	// `self` and hand it back through a reply, or make the global a `let`. A reply is a Promise the awaiter
 	// owns, so the value is handled by one green thread at every instant.
@@ -1899,6 +1902,55 @@ export enum ErrorCode
 	// program and owes nothing.
 	// The cure is to match `e` once and bind in its arms whatever the rest of the handler needs.
 	errorMatchNotExactlyOnce = "E3161"
+
+	// A call's subject is a generic type named without `with` arguments that nothing binds — written statically
+	// (`Box.create(first)`) or as the type of the receiver. Such a base has no instance behind it. Inside a generic
+	// type body whose parameters do not bind it by name (`Box uses Element` inside `type Outer uses T`), the call
+	// may not hand a slot written over one of the base's type parameters (`Element`, `Array with Element`) a value
+	// typed at the enclosing type's parameters (nothing would release what it stores), and may not reach a callee
+	// that needs a layout descriptor (the base has none, and the enclosing frame's describes the enclosing type's
+	// parameters). An overloaded callee is judged by the member its arguments pick. Outside a generic type body, a
+	// layout-needing callee, static or through a receiver, is refused where the calling function has no descriptor
+	// of its own (`Holder.create()` in `main`). A static call
+	// whose arguments fix every parameter to a concrete type builds that instance and is not refused. Name the
+	// instance with a typealias: `typealias Inner = Box with T`.
+	bareGenericSubjectUnbound = "E3162"
+
+	// A message of a service may read a module-level `let` whose value no share walk can mark. In a program that
+	// spawns a service, every `let` record is marked shared before `main` runs, so the counts green threads on
+	// different OS threads step on it are atomic -- which needs a walk over its graph, and none can be built for
+	// an OS handle, a value held at an interface type, or a generic instance with no base layout. A `let` no
+	// message can reach stays legal and unmarked, since only `main` counts it. Reached through the message call
+	// graph E3143 closes, dispatches included, and reported at the read with the message that reaches it; the
+	// note is the declaration. Keep the value in a field of the service that reads it.
+	semanticUnmarkableLetReadByAMessage = "E3163"
+
+	// A `spawn` runs while the module-level globals are still being initialized. A global initializer runs
+	// before `main`, and the `let`s every message may read are marked shared only once the last initializer
+	// has returned, so a service started earlier could step a plain count concurrently with the mark -- or read
+	// a global not yet built. Found by closing the call graph from the initializers, dispatches included, and
+	// reported at the `spawn`; the note is the initializer that reaches it. Start the service in `main`, or in
+	// a function `main` calls.
+	semanticSpawnDuringGlobalInitialization = "E3164"
+
+	// A module-level `let`'s initializer reaches a module-level `var` whose value holds a record. A `let` is fixed
+	// at startup and may not hold what a `var` owns: the `var` may write the record after `main` starts, and in a
+	// program that spawns a service the `let`'s graph could not be marked shared with an owner outside the
+	// `let`s. An initializer cannot name another global, so the `var` is reached through what it calls -- the call
+	// graph once overload resolution has chosen each callee, dispatches included. Refused whether or not the
+	// program spawns, and even when only a scalar is read out of the `var`, since what the initializer keeps is
+	// not followed. A scalar `var` owns no record and is not refused. Reported at the `var`'s use; the note is its
+	// declaration. Make the binding a `var`, or build its value without reading the `var`.
+	semanticLetInitializerReachesAVar = "E3165"
+
+	// A module-level `var`'s initializer calls a function whose result may be, lie within or hold a module-level
+	// `let`'s record. A `let` is fixed at startup and a `var` may write what it holds, so the two may not share a
+	// record; in a program that spawns a service the `let`'s graph could not be marked shared with the `var` as an
+	// outside owner. Decided by the storage-provenance summary of the call the initializer makes, carried through
+	// calls, witness dispatches and calls through function values. A value built fresh from what a `let` holds --
+	// a number read out of it -- is not refused. Reported at the `var`'s declaration, naming the call. Build the
+	// value without taking the `let`'s record, or make the binding a `let`.
+	semanticVarInitializerTakesALetRecord = "E3166"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

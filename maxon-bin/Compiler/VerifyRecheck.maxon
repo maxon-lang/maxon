@@ -41,6 +41,14 @@ let MinFilesForRecheck = 1 as DiagnosticTally
 // re-check can clear.
 let SemanticBreakEditText = "function recheckProbeBroken() returns bool\n\treturn recheckProbeNobodyDeclaredThis()\nend 'recheckProbeBroken'"
 
+// Every property loads its projects here, so a define reaches each check exactly as it reaches a build.
+function definedProject(inputPath FilePath, target Target, defines DefineArray) returns Project throws CompileError
+	var project = try loadProject([inputPath], target: target)
+	project.defines = defines
+
+	return project
+end 'definedProject'
+
 // Drive `project` through the whole pipeline once and report how many diagnostics stand afterwards.
 //
 // ⚠ **THE REFUSAL IS AN EXPECTED OUTCOME HERE, NOT AN ERROR TO REPORT.** Half of this gate's runs are
@@ -81,12 +89,12 @@ function printStandingDiagnostics(project Project, heading String)
 	end 'each'
 end 'printStandingDiagnostics'
 
-export function verifyRecheck(inputPath FilePath, target Target) returns bool throws CompileError
+export function verifyRecheck(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
 	print("verify-recheck {inputPath}\n")
 
-	let stabilityOk = try verifyRecheckStability(inputPath, target: target)
-	let clearingOk = try verifyDiagnosticsClear(inputPath, target: target)
-	let isolationOk = try verifyProjectIsolation(inputPath, target: target)
+	let stabilityOk = try verifyRecheckStability(inputPath, target: target, defines: defines)
+	let clearingOk = try verifyDiagnosticsClear(inputPath, target: target, defines: defines)
+	let isolationOk = try verifyProjectIsolation(inputPath, target: target, defines: defines)
 
 	let allOk = stabilityOk and clearingOk and isolationOk
 
@@ -106,8 +114,8 @@ end 'verifyRecheck'
 // diagnostics accumulating on a sink nothing clears; a count that SHRINKS is a pass that consumed a
 // one-shot input and cannot report it twice. The two read differently and the message says which
 // happened, because they have different fixes.
-function verifyRecheckStability(inputPath FilePath, target Target) returns bool throws CompileError
-	var project = try loadProject([inputPath], target: target)
+function verifyRecheckStability(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
+	var project = try definedProject(inputPath, target: target, defines: defines)
 
 	let first = checkOnce(project)
 	let second = checkOnce(project)
@@ -133,8 +141,8 @@ end 'verifyRecheckStability'
 // fix it, and the squiggle must go away. Property 1 can hold while this fails — a pipeline that
 // reports nothing at all is perfectly stable — so the two are asked separately, and the middle step
 // is asserted to actually BREAK the program, which is what stops this passing vacuously.
-function verifyDiagnosticsClear(inputPath FilePath, target Target) returns bool throws CompileError
-	var project = try loadProject([inputPath], target: target)
+function verifyDiagnosticsClear(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
+	var project = try definedProject(inputPath, target: target, defines: defines)
 	let fileCount = project.db.sourcePaths.count()
 
 	if fileCount < MinFilesForRecheck 'cannotProve'
@@ -146,7 +154,7 @@ function verifyDiagnosticsClear(inputPath FilePath, target Target) returns bool 
 	// is an element of the array `fileChanged` pushes to, and `original` is the content of the map
 	// entry every `fileChanged` upserts. Reading either through the storage an edit writes is a
 	// use-after-free — the borrow checker catches it for the array and does not watch the map.
-	let fixture = firstSourceOf(project)
+	let fixture = editableSourceAt(project, index: 0)
 	let editedPath = fixture.path
 	let original = fixture.content
 
@@ -219,9 +227,9 @@ end 'verifyDiagnosticsClear'
 // caught. What it IS: the only thing in the tree that opens two `Project`s at once, standing where a
 // future change to the three module-level latches would have to walk past it. Cheap (one extra load),
 // honest about what it is worth, and not to be cited as though a sabotage had confirmed it.
-function verifyProjectIsolation(inputPath FilePath, target Target) returns bool throws CompileError
-	var first = try loadProject([inputPath], target: target)
-	var second = try loadProject([inputPath], target: target)
+function verifyProjectIsolation(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
+	var first = try definedProject(inputPath, target: target, defines: defines)
+	var second = try definedProject(inputPath, target: target, defines: defines)
 
 	let firstAlone = checkOnce(first)
 	let secondAlone = checkOnce(second)
@@ -230,7 +238,7 @@ function verifyProjectIsolation(inputPath FilePath, target Target) returns bool 
 	// version interleaved two CLEAN projects and passed while diagnostics were accumulating unbounded —
 	// every count was 0, so "A did not drift" was true and meant nothing. A needs something to be
 	// contaminated BY, so B is given real diagnostics and left holding them.
-	let source = firstSourceOf(second)
+	let source = editableSourceAt(second, index: 0)
 	fileChanged(second, path: source.path, content: "{source.content}\n{SemanticBreakEditText}\n")
 	let secondBroken = checkOnce(second)
 
@@ -260,24 +268,22 @@ function verifyProjectIsolation(inputPath FilePath, target Target) returns bool 
 	return true
 end 'verifyProjectIsolation'
 
-// The first source file of `project`, and its content, as OWNED copies.
+// The source at `index` of the project's fold order, and its content, as OWNED copies.
 //
-// ⚠ **BOTH COPIES ARE LOAD-BEARING, and `verifyInvalidation` states the argument at length**:
-// `editedPath` is an element of the array `fileChanged` PUSHES to, and `original` is the content of
-// the map entry every `fileChanged` UPSERTS. Reading either through the storage an edit writes is a
-// use-after-free — the borrow checker catches it for the array and does not watch the map. Factored
-// out because two properties below need it, and a second copy of this rule is a second chance to get
-// the clone wrong.
-function firstSourceOf(project Project) returns EditableSource
-	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("firstSourceOf: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
-	let path = try FilePath.from(firstPath.path.clone()) otherwise panic("firstSourceOf: that path came out of the project's own source list, so it cannot fail to re-parse as a path")
-	let entry = try project.db.sourceFiles.get(path) otherwise panic("firstSourceOf: sourcePaths lists a file that sourceFiles has no entry for")
+// ⚠ **BOTH COPIES ARE LOAD-BEARING**: the path is an element of the array `fileChanged` PUSHES to, and the
+// content is the content of the map entry every `fileChanged` UPSERTS. Reading either through the storage an
+// edit writes is a use-after-free — the borrow checker catches it for the array and does not watch the map.
+// Every edit `verify-recheck` and `verify-warm-rebuild` make reads its file through here.
+module function editableSourceAt(project Project, index ElementIndex) returns EditableSource
+	let listed = try project.db.sourcePaths.get(index) otherwise panic("editableSourceAt: index {index} is not below the project's {project.db.sourcePaths.count()} source files — loadSourceFiles throws noSourceFiles before an empty project reaches here")
+	let path = try FilePath.from(listed.path.clone()) otherwise panic("editableSourceAt: that path came out of the project's own source list, so it cannot fail to re-parse as a path")
+	let entry = try project.db.sourceFiles.get(path) otherwise panic("editableSourceAt: sourcePaths lists a file that sourceFiles has no entry for")
 
 	return EditableSource.create(path, content: entry.content.clone())
-end 'firstSourceOf'
+end 'editableSourceAt'
 
-// One file's path and content, owned. See `firstSourceOf`.
-type EditableSource
+// One file's path and content, owned. See `editableSourceAt`.
+module type EditableSource
 	export let path as FilePath
 	export let content as String
 

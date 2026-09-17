@@ -911,6 +911,69 @@ typealias Integer = int(i64.min to i64.max)
 1
 ```
 
+<!-- test: a-tuple-of-a-type-parameter-instantiated-only-by-inference-body-first -->
+### A generic instantiated only by an argument-inferred `create` takes its reference, whichever comes first
+No declaration names the instance, so the declarations alone say `Box` is uninstantiated and `pack` needs no
+layout descriptor; the parse of `main` mints it. The front end files that and settles the index again, so `pack`
+reserves the descriptor its tuple takes a reference through — with the body above the `create` that
+instantiates it (here over a heap `String`, whose reference the tuple must release: no leak), and below
+(`tuple-of-a-type-parameter` above is the same order over an `Integer`).
+```maxon
+type Box uses T
+	export let v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function pack() returns Integer
+		let t = (self.v, 1)
+		return t.1
+	end 'pack'
+end 'Box'
+
+function heapText() returns String
+	var builder = StringBuilder.create()
+	builder.append("a heap string long enough to allocate ")
+	builder.append("and then some")
+	return builder.build()
+end 'heapText'
+
+function main() returns ExitCode
+	let b = Box.create(heapText())
+	return b.pack()
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+
+<!-- test: a-tuple-of-a-type-parameter-instantiated-only-by-inference-use-first -->
+```maxon
+function main() returns ExitCode
+	let b = Box.create(5)
+	return b.pack()
+end 'main'
+
+type Box uses T
+	export let v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	export function pack() returns Integer
+		let t = (self.v, 1)
+		return t.1
+	end 'pack'
+end 'Box'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+
 <!-- test: tuple-of-a-managed-type-parameter -->
 The same body instantiated over `String`, so the tuple's element 0 is an opaque word that really does own
 heap. Measured: exit 7, and no leak.

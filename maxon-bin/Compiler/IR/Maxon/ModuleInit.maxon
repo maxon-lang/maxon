@@ -75,15 +75,59 @@ let ExitCodeParam = 0 as ValueId
 //
 // A program with no managed global builds NOTHING — no functions, no ops, no `.data` — which is what keeps
 // the entire existing corpus byte-neutral.
-export function installManagedGlobalInit(module MaxonModule, project Project, globals ManagedGlobalArray) returns bool
+export function installManagedGlobalInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray) returns bool
 	if globals.count() == 0 'noManagedGlobals'
 		return false
 	end 'noManagedGlobals'
 
-	buildModuleInit(module, project: project, globals: globals)
+	buildModuleInit(module, project: project, globals: globals, sharedLets: sharedLets)
 	buildGlobalCleanup(module, project: project, globals: globals)
 	return true
 end 'installManagedGlobalInit'
+
+// A `let` `__module_init` marks shared, and the walk that marks it.
+type SharedLet
+	export let global as ManagedGlobal
+	export let walk as ByteArray
+
+	static function create(global ManagedGlobal, walk ByteArray) returns SharedLet
+		return Self{global: global, walk: walk}
+	end 'create'
+end 'SharedLet'
+
+export typealias SharedLetArray = Array with SharedLet
+
+// The `let`s of a program that spawns a service, split by whether a share walk can mark them.
+export type LetShareWalks
+	export let marked as SharedLetArray
+
+	// The `let`s no share walk can mark; what each holds that none can is its `threadReach`.
+	export let unmarkable as ManagedGlobalArray
+
+	static function create(marked SharedLetArray, unmarkable ManagedGlobalArray) returns LetShareWalks
+		return Self{marked: marked, unmarkable: unmarkable}
+	end 'create'
+end 'LetShareWalks'
+
+// ⭐ **ONLY A PROGRAM THAT SPAWNS A SERVICE HAS A SECOND GREEN THREAD THAT COUNTS A GLOBAL**, so a program that
+// spawns none marks nothing. An unmarkable `let` stays a plain count: `ServiceGlobalAccessCheck` refuses it where a
+// message can read it.
+export function letShareWalksOf(globals ManagedGlobalArray, spawnsAService bool) returns LetShareWalks
+	var marked = SharedLetArray.create()
+	var unmarkable = ManagedGlobalArray.create()
+
+	if spawnsAService 'aSecondGreenThreadMayCount'
+		for global in globals 'eachGlobal'
+			match global.threadReach 'reach'
+				mainOnly then continue
+				everyThreadThrough(callee) then marked.push(SharedLet.create(global, walk: callee))
+				everyThreadUnwalkable then unmarkable.push(global)
+			end 'reach'
+		end 'eachGlobal'
+	end 'aSecondGreenThreadMayCount'
+
+	return LetShareWalks.create(marked, unmarkable: unmarkable)
+end 'letShareWalksOf'
 
 // `__module_init()` — for each managed global, in the order it was handed: build its initial owned record
 // and store the record's address into its `.data` slot.
@@ -101,7 +145,7 @@ end 'installManagedGlobalInit'
 // `GlobalInitOrder.dependencyOrderedGlobals` is what settles that, over the merged module's call graph, and
 // it is the caller's to apply: this function emits the array it is handed, in the order it is handed. A
 // cycle has no such order and is refused there rather than reaching this loop.
-function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray)
+function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray)
 	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create())
 
 	for global in globals 'eachGlobal'
@@ -109,8 +153,30 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: declaredAggregateSlotWidth()), range: global.range)
 	end 'eachGlobal'
 
+	if sharedLets.count() > 0 'messagesReadTheLets'
+		markLetsShared(fn, sharedLets: sharedLets, range: anchorRange(globals))
+	end 'messagesReadTheLets'
+
 	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
 end 'buildModuleInit'
+
+// ⭐⭐ **EVERY MARKABLE `let` RECORD IS MARKED SHARED BEFORE `main` RUNS**, so the count every message steps on it
+// is atomic; no other green thread exists yet, because a `spawn` a global initializer can reach is refused
+// (`ServiceGlobalAccessCheck`). One visit table serves every `let`, because a record two of them reach has both
+// slots as owners; `__mm_walk_settle` aborts on an owner no `let` holds, which is a record a `var` could still
+// write. It runs after the LAST store, when no initializer temporary holds a record any more. A program with no
+// walked `let` opens no table: `__mm_walk_settle` is installed only beside a walk.
+function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray, range SourceRange)
+	var visits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)
+
+	for shared in sharedLets 'eachLet'
+		let record = fn.mintOfType(shared.global.valueType)
+		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(shared.global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: shared.global.range)
+		visits = fn.emitPositionalCall(shared.walk, args: pairArgs(record, second: visits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: shared.global.range)
+	end 'eachLet'
+
+	fn.emitPositionalCallDiscarding(WalkSettleName, args: singletonArgs(visits), range: range)
+end 'markLetsShared'
 
 // The OWNED value a managed global's slot starts life holding — either a record this function MATERIALIZES,
 // or whatever a user factory RETURNS.
@@ -266,14 +332,13 @@ function bornContainerRecord(fn SynthesizedFunction, create ContainerCreateCall,
 	return fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 end 'bornContainerRecord'
 
-// ⭐⭐ **`var keywordMap = [b"if": KeywordInfo.create(…), …]` — A MAP LITERAL AT FILE SCOPE**, emitted as the
+// ⭐⭐ **`var table = [b"if": Info.create(…), …]` — A MAP LITERAL AT FILE SCOPE**, emitted as the
 // two calls a body's literal emits: `Map.create()` then one `Map.upsert(key, value: v)` per pair
 // (`Parser.parseMapLiteralBody`). One desugar written at two positions, so a literal-built map is one
 // representation wherever it was written.
 //
 // ⚠ **IT IS AN ARENA NODE AND NOT A `ManagedGlobalRecord`, WHICH IS WHY IT TAKES `calls`.** Either half of a
-// pair may itself be a CALL — `KeywordInfo.create(TokenKind.if, helpText: …)` is the whole point of the
-// shape — and only an arena entry can name one. `materializedValue` recurses back through
+// pair may itself be a CALL — `Info.create(…)` above — and only an arena entry can name one. `materializedValue` recurses back through
 // `initializerNodeRecord`, exactly as a factory ARGUMENT does.
 function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCall, entries GlobalInitMapEntryArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, range: range)
@@ -640,7 +705,7 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), needsGreenThreadStackGuard: true)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueMintedSole: valueMintedSole, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, valueWitnessIds: ValueIdArray.create(), returnLine: 0, declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount() as FuncIndex
 		module.pushFunc(func)
 
@@ -678,13 +743,11 @@ export type SynthesizedFunction
 	// says what that costs: *"names travel between interners; ids never do"* — an id means whatever name
 	// happens to sit at that number in the other table.
 	//
-	// ⛔⛔ **MEASURED ON THIS COMPILER'S OWN LEXER, 62 TIMES OVER.** `var keywordMap = [b"if":
-	// KeywordInfo.create(…), …]` synthesizes one `Map.upsert` per pair, and the value argument's id — the
-	// index's `KeywordInfo` — read back through the project's table named a completely unrelated type:
-	// **`E3005 argument type mismatch for 'value': expected 'KeywordInfo', got 'SpillSlot'`**. Nothing was
-	// wrong with the program; the number meant two things. A repro needs the two tables to have DIVERGED,
-	// which is why a small one does not show it — the ids coincide until enough types are declared, and a
-	// read that is right only while two independent insertion orders agree is a wrong answer waiting.
+	// ⛔⛔ `var table = [b"if": Info.create(…), …]` synthesizes one `Map.upsert` per pair, and the value
+	// argument's id — the index's `Info` — read back uncrossed through the project's table names an unrelated
+	// type: `E3005 argument type mismatch for 'value': expected 'Info', got 'SpillSlot'`. A small program does
+	// not show it, because the ids of the two tables coincide until enough types are declared to push their
+	// insertion orders apart.
 	//
 	// It sits in `mint` rather than at the five emit sites because that is the ONE place a value of this
 	// carrier gets its type columns, and a door list is what rots.

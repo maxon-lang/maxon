@@ -1208,6 +1208,96 @@ end 'main'
 error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
+<!-- test: error.a-managed-instantiation-another-file-reaches-refuses-the-shared-body-holder-first -->
+The same rule when the managed instantiation is written nowhere: `Holder with String` exists only because a
+SECOND file builds an `Outer with String`, whose field is a `Holder` over `Outer`'s own parameter. The body is
+refused whichever file is parsed first — an instantiation is a fact about the program, not about the files
+parsed before the body.
+```maxon
+// --- file: a_holder.maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses T
+	typealias Slot = Vector with 4 T
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+export type Outer uses T
+	var holder as Holder
+
+	export static function create() returns Self
+		return Self{holder: Holder.create()}
+	end 'create'
+
+	export function size() returns Int
+		return holder.size()
+	end 'size'
+end 'Outer'
+
+// --- file: b_use.maxon
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	var o = StrOuter.create()
+	return o.size()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+```
+
+<!-- test: error.a-managed-instantiation-another-file-reaches-refuses-the-shared-body-use-first -->
+```maxon
+// --- file: a_use.maxon
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	var o = StrOuter.create()
+	return o.size()
+end 'main'
+
+// --- file: b_holder.maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses T
+	typealias Slot = Vector with 4 T
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+export type Outer uses T
+	var holder as Holder
+
+	export static function create() returns Self
+		return Self{holder: Holder.create()}
+	end 'create'
+
+	export function size() returns Int
+		return holder.size()
+	end 'size'
+end 'Outer'
+```
+```maxoncstderr
+error E2015: <fragment>:19:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+```
+
 <!-- test: a-vector-in-an-extension-body-over-an-associated-type -->
 NOT FROM `/specs/vector.md` — the construct reached from its third position, which sources its layout
 descriptor differently from the other two: an `extension` body has no `uses` clause of its own and is

@@ -1,0 +1,36 @@
+// Test: error.a-lets-record-a-call-handed-back-may-not-go-to-a-writing-parameter
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+
+function bump(b Box)
+	b.n = 9
+end 'bump'
+
+function show() returns Integer
+	return a.n
+end 'show'
+
+function main() returns ExitCode
+	bump(Wrap.around().box)
+	print("a={show()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3019: <fragment>:29:2: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'b' (in main)

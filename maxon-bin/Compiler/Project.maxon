@@ -78,7 +78,7 @@ export enum VisibilityModifierWord
 	wordPublic
 end 'VisibilityModifierWord'
 
-// The quoted spelling a diagnostic prints. The words themselves are reserved in `Lexer.keywordMap`
+// The quoted spelling a diagnostic prints. The words themselves are reserved in `Lexer.KeywordTable`
 // (`export`, `public`) and in `Parser.ModuleModifierName` (`module`, which is contextual and so has no
 // keyword entry) — two different mechanisms, which is why the display spelling is written here once
 // rather than derived from whichever of them happens to hold a given word.
@@ -438,6 +438,10 @@ export typealias DebugLocalSlot = int(0 to u64.max)
 
 export let NoDebugLocalSlot = 0 as DebugLocalSlot
 
+// Which merge renumbering an artifact walk is: one per walk per `Project`, counting up from 1, so no record a
+// parse built starts out marked as rewritten.
+export typealias RenumberingEpoch = int(0 to u64.max)
+
 // VarInfo — one entry in a function's `Scope` symbol table.
 //
 // The parser tracks every local by its source-level `MaxonType`; that type is
@@ -737,6 +741,10 @@ export type VarInfo
 	// and past a join a lend on any reaching path is.
 	export var lentOnPath as TokenIndex = NotLent
 
+	// The merge renumbering that last rewrote this binding's type ids (`ParseStaging.renumberArtifact`). One
+	// binding is filed in several places, and a name renumbering applied twice moves an id it already moved.
+	export var renumberedIn as RenumberingEpoch = 0
+
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
 	// that starts cleared — comes from a default here.
@@ -752,13 +760,28 @@ export type VarInfo
 	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
 	// and every binding starts with them clear. A constructor argument for one of them would be a way to
 	// start a binding already moved-from, which nothing means.
+	//
+	// The type is the binding's own copy: a binding rides its body's artifact, and its type is often a record the
+	// signature index holds (`ParseStaging.artifactOwnedOp`).
 	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
+		return Self{name: name, varType: varType.clone(), mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
 		return Self.make(name, varType: varType, mutable: mutable, slot: slot)
 	end 'create'
+
+	// Renumber this binding's type ids once per renumbering, however many places filed it.
+	export function renumberTypeIds(remap TypeIdRemap, epoch RenumberingEpoch)
+		if self.renumberedIn == epoch 'alreadyRenumbered'
+			return
+		end 'alreadyRenumbered'
+
+		self.renumberedIn = epoch
+		self.varType = remapMaxonType(self.varType, remap: remap)
+		self.payloadStorage = remapMaxonType(self.payloadStorage, remap: remap)
+		self.brandId = remap.applyName(self.brandId)
+	end 'renumberTypeIds'
 
 	// ⭐⭐ **THE E3070 SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
 	// on, minted and interned by `Parser.topLevelBorrowSubjectOf`.
@@ -787,8 +810,11 @@ export type VarInfo
 	// `c.count = 1` already asks. A `true` here would be that column copied onto every alias, free
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
+	//
+	// The name is the alias's own copy: it is read off a layout the signature index may hold, and an alias a body
+	// borrows through rides that body's artifact (`BorrowFacts.subjects`). `make` copies the type.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self.make(name, varType: varType, mutable: false, isSelfField: true, fieldIndex: fieldIndex)
+		return Self.make(name.clone(), varType: varType, mutable: false, isSelfField: true, fieldIndex: fieldIndex)
 	end 'createSelfField'
 
 	// The value binding a MATCH-ARM PAYLOAD gets — `createValueBinding` plus the box coordinates a write
@@ -798,8 +824,10 @@ export type VarInfo
 	// `mutable` is the caller's, and it is a fact about the SCRUTINEE rather than about this name — a
 	// payload bound out of a `let` union is read-only however the pattern spells it
 	// (`Parser.declarePayloadBindings`).
+	//
+	// The storage type is its own copy, for `make`'s reason.
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo
-		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isPayloadBinding: true, payloadScrutBox: scrutBox, payloadSlotOffset: slotOffset, payloadStorage: storage)
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isPayloadBinding: true, payloadScrutBox: scrutBox, payloadSlotOffset: slotOffset, payloadStorage: storage.clone())
 	end 'createPayloadBinding'
 
 	// The owned entry that holds a combined error's match obligation (`isErrorMatchObligation`) — named after the
@@ -1754,6 +1782,17 @@ export type RangedAliasRegistry
 		_ = registry.record(builtinStdlibAlias(GraphemeIndexAliasName, low: StringPositionAliasLow, high: StringPositionAliasHigh, declPathText: StringPositionAliasDeclPath))
 		return registry
 	end 'create'
+
+	export function noteFingerprint(fingerprint IndexFingerprint, group String)
+		fingerprint.openGroup(group)
+		fingerprint.note("byName", value: self.byName.count())
+		fingerprint.note("multiplyDeclared", value: self.multiplyDeclared.count())
+		fingerprint.note("storageBytes", value: self.storageBytes.count())
+		fingerprint.note("packedBits", value: self.packedBits.count())
+		fingerprint.note("nameable", value: self.nameable.count())
+		fingerprint.note("rangeContested", value: self.rangeContested.count())
+		fingerprint.closeGroup()
+	end 'noteFingerprint'
 
 	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with the one every
 	// earlier declaration of the name shares — the one place that decides it, so the conflict test and
@@ -3616,6 +3655,17 @@ export type FunctionTypeAlias
 	export function underName(qualifiedName ByteArray) returns FunctionTypeAlias
 		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnGenericInstanceId: self.returnGenericInstanceId, returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility}
 	end 'underName'
+
+	// The same declaration with its instance ids renumbered — `underName`'s carry-everything rule, for its reason.
+	export function withInstancesRenumbered(remap TypeIdRemap) returns FunctionTypeAlias
+		var params = FunctionAliasParamArray.create()
+
+		for param in self.paramTypes 'eachParam'
+			params.push(FunctionAliasParam.create(param.tag, typeName: param.typeName, typeParamToken: param.typeParamToken, genericInstanceId: remap.applyInstance(param.genericInstanceId), aggregateName: param.aggregateName))
+		end 'eachParam'
+
+		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnTypeParamToken: self.returnTypeParamToken, returnGenericInstanceId: remap.applyInstance(self.returnGenericInstanceId), returnAggregateName: self.returnAggregateName, display: self.display, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility}
+	end 'withInstancesRenumbered'
 end 'FunctionTypeAlias'
 
 // ONE parameter of a function typealias, stored the way the alias's RETURN type is and for the same
@@ -5861,6 +5911,12 @@ export type EnumLayout
 		end 'identity'
 	end 'rawValueCollidesAt'
 
+	// Replace case `index`'s backing function name with the declaration it resolves to
+	// (`ProgramSignatures.settleFunctionBackedEnumCases`).
+	export function nameCaseFunction(index CaseIndex, functionName String)
+		try self.caseRawValues.set(index, value: functionName) otherwise panic("EnumLayout.nameCaseFunction: caseRawValues.set OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'nameCaseFunction'
+
 	// How case `index`'s raw value was written — see `caseRawValues`.
 	export function rawValueAt(index CaseIndex) returns String
 		return try self.caseRawValues.get(index) otherwise panic("EnumLayout.rawValueAt: caseRawValues.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
@@ -6770,6 +6826,28 @@ export type FuncSignature
 
 		return false
 	end 'hasTypeParameterParam'
+
+	// Renumber the type ids this signature holds. The columns are rebuilt rather than written into: the
+	// parameter types are the declaring function's own array.
+	export function renumberTypeIds(remap TypeIdRemap)
+		self.paramTypes = remapMaxonTypes(self.paramTypes, remap: remap)
+
+		var paramSites = ParamExistentialSiteArray.create()
+
+		for site in self.paramExistentialSites 'eachParamSite'
+			paramSites.push(ParamExistentialSite.create(site.position, instance: remap.applyInstance(site.instance)))
+		end 'eachParamSite'
+
+		self.paramExistentialSites = paramSites
+
+		var returnSites = GenericInstanceIdArray.create()
+
+		for instance in self.returnExistentialSites 'eachReturnSite'
+			returnSites.push(remap.applyInstance(instance))
+		end 'eachReturnSite'
+
+		self.returnExistentialSites = returnSites
+	end 'renumberTypeIds'
 end 'FuncSignature'
 
 // Registry: qualified function name -> its parameter signature. Populated by
@@ -7648,6 +7726,10 @@ export type Project
 	// holds a USER function, so no user-only program's checks change.
 	export var libraryFacts as LibraryFacts
 
+	// This compile's live managed globals in initialization order, set before the pipeline runs, for the service
+	// rules `semanticCheck` asks about module `let`s and global initializers.
+	export var managedGlobals as ManagedGlobalArray
+
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
 
@@ -7864,6 +7946,9 @@ export type Project
 	// (`productVersionFor`). Empty when nobody said, which is most programs, and the writers then stamp a zero
 	// version.
 	export var productVersion as VersionComponentArray = VersionComponentArray.create()
+
+	// The last merge renumbering this project walked an artifact with. See `VarInfo.renumberedIn`.
+	export var lastRenumbering as RenumberingEpoch = 0
 
 	// Where each source file's block of counter slots begins in `covPoints` — the FILE-LOCAL id a
 	// `MaxonOp.covPoint` carries plus this file's base is the whole-program id. Written by `mergeArtifact`
@@ -8119,6 +8204,13 @@ export type Project
 	// day N compiles run at once.
 	export var traceUnit as TraceUnit
 
+	// The reserved words every lex of this compile, and every diagnostic naming an expected keyword, reads.
+	export let keywords as KeywordTable
+
+	// The anchors of every parser the query layer builds to fold a file into the index — the sweep, the declaration
+	// folds and the constant evaluator. A real parse builds its own (`ParseStaging.parseFile`).
+	export var readerAnchors as ParserAnchors
+
 	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool) returns Project
 		return Self{
 			db: db,
@@ -8126,6 +8218,7 @@ export type Project
 			runtimeDir: runtimeDir,
 			librarySourcePaths: MaxonSourcePathArray.create(),
 			libraryFacts: LibraryFacts.empty(),
+			managedGlobals: ManagedGlobalArray.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			overloadSets: OverloadSetMap.create(),
@@ -8186,7 +8279,9 @@ export type Project
 			globalData: GlobalDataTable.create(),
 			timings: CompileTimings.create(),
 			memory: CompileMemory.create(),
-			traceUnit: traceUnitOf(rootPath)
+			traceUnit: traceUnitOf(rootPath),
+			keywords: KeywordTable.create(),
+			readerAnchors: ParserAnchors.create()
 		}
 	end 'create'
 end 'Project'

@@ -727,6 +727,20 @@ function runtimeDirFor(runtimeDirOverride String, stdlibDir FilePath) returns Fi
 	return staged.resolve(Directory.currentPath())
 end 'runtimeDirFor'
 
+// Refuse this compile's `--define`s that could not bind, once per compile — whether the index was settled for it
+// or served from the memo.
+//
+// ⚠ **EVERY PROBLEM IS REPORTED BEFORE ANY IS FATAL.** Three bad defines on one command line are three facts a
+// person wants at once; stopping at the first would make fixing them a sequence of builds.
+//
+// The diagnostics carry no file position, because a `--define` has none. What each message DOES carry is where the
+// declarations it reached are, which is the part a reader cannot look up.
+function reportDefineProblems(project Project)
+	for problem in programSignaturesIn(project, asker: "reportDefineProblems").defineProblems 'eachProblem'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(problem.code, message: problem.message))
+	end 'eachProblem'
+end 'reportDefineProblems'
+
 // Drive the query spine + mid/lowering pipeline + backend for an already-loaded
 // `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
 // the single compile path both `compile` (which then writes the executable) and
@@ -757,6 +771,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// that throws part way through leaves no more behind than one that completes. The full argument, the
 	// measurements, and why this rather than a clone, are in `invalidateAllModuleCache`.
 	invalidateAllModuleCache(project)
+	reportDefineProblems(project)
 
 	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81) — HERE, before the pipeline.** Every
 	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
@@ -986,7 +1001,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		try refuseCompile(project)
 	end 'initOrderRefused'
 
-	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals)
+	// A `let` no share walk can mark, a `spawn` an initializer reaches, and a `let` initializer reaching a managed
+	// `var` are refused by `semanticCheck`, over the call graph overload resolution settles.
+	project.managedGlobals = orderedGlobals
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals, sharedLets: letShareWalksOf(orderedGlobals, spawnsAService: serviceTypeRoster(signatures).count() > 0).marked)
 
 	// ⭐⭐ **SYNTHESIZE `<T>.__loop` FOR EVERY SERVICE — HERE, AND FOR `installManagedGlobalInit`'s REASON ONE
 	// LINE UP (SV1 wave 3, see `Runtime/ServiceLoop`).** It is a Maxon-tier function appended to the merged

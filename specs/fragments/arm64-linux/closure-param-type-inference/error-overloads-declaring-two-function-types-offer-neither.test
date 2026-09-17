@@ -1,0 +1,20 @@
+// Test: error-overloads-declaring-two-function-types-offer-neither
+typealias Tally = int(0 to 1000)
+typealias Grow = function(Tally) returns Tally
+typealias Judge = function(bool) returns Tally
+
+function apply(step Grow) returns Tally
+	return step(3)
+end 'apply'
+
+function apply(step Judge) returns Tally
+	return step(true)
+end 'apply'
+
+function main() returns ExitCode
+	print("{apply(function(n) gives n)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:25: Unsupported: parameter 'n' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type

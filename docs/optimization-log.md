@@ -225,6 +225,7 @@ ragged.
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | Land A: a `let` message argument is LENT, not moved — `__share_<T>` marks the graph shared (2^61, beside the immortal 2^62), a marked record's count steps are atomic, and a static freeze (E3160) refuses every door through which a lent graph could be written: a parse-time tier in the parser and a whole-program tier in StorageProvenance with one memoized BFS per lend over the block graph. Measured on the landing tree. Allocations rise x1.50 to x1.94 per doubling — the corpus's own rate — and the tier is allocation-neutral here because the scale corpus spawns no service, so every freeze door is gated off by `spawnsAnyService()`: this row is a no-regression reading for programs that do not lend, not a measurement of the freeze. The CPU column is NOT comparable with the row above it (different session), and nothing here is attributed to it. | 4,726,258 | 7,077,266 | 11,776,230 | 21,177,430 | 39,998,326 | 77,734,340 |
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | E3019 widened to a callee's field write through its parameter, with the receiver exemption carried transitively (the record-write closure is now taken TWICE over one seed — unexempted for the `let`-global question, exempted for the `let`-binding one) and a union-typed parameter admitted as a mutable scrutinee. Allocations move by +25 to +85 per rung, FLAT across the doubling rather than growing — the fourth mask column is one array per compile, not per-program work; the 83 `let`→`var` and the five loop restructures change no allocation shape. | 4,727,459 | 7,079,224 | 11,779,630 | 21,183,852 | 40,010,640 | 77,758,555 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | /land #2 (the defect queue): end labels checked on every block, enum/union header checked, `from` through Set/List/Vector aliases and InitableFromArrayLiteral (the sweep now collects `<Name> from [` heads and interns a vector alias's element array), an inline `i64.min / -1` guard on signed `/` where neither the divisor excludes -1 nor the dividend excludes i64.min, sched debug-stream emitters (no code without --debugstream), float.hash fold, stdlib bound checks. Allocations vs the previous row: +15k at rung 0 rising to +578k at rung 5 (0.7%), the delta growing with the program — a per-program cost, linear (total allocs x1.94 at the top doubling). Not attributed per phase: no control binary was measured. | 4,904,945 | 7,269,643 | 11,995,937 | 21,451,810 | 40,382,009 | 78,336,733 |
+| 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land B — front-end fan-out: freeze gap closed (B0), transfer walks carry a DAG with a visit table (B1), the per-file parse writes no shared index state and merge renumbers every generic-instance id (B2), a worker-safe parse path (B3), FrontEndPool lex/parse workers with per-worker index clones (B4), E3162, bare calls resolve to their one visible declaration. Allocations +2.2M at rung 0 rising to +13.1M at rung 5, GROWING with the program (≈+17% at rung 5): per-file artifacts own what they carry (ops and index records cloned where they enter an outcome), row-set answers, per-parse ParserAnchors. Every phase stays linear (top-rung ratio ≤ x1.99); frontEndPool x1.88. Self-compile wall 42.3–42.8 s (pre-B4) → 38.6–39.5 s, 3 of 3 interleaved. | 6,974,043 | 9,486,612 | 14,795,788 | 25,497,443 | 47,148,184 | 90,841,926 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -259,6 +260,7 @@ ragged.
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | Land A: a `let` message argument is LENT, not moved — `__share_<T>` marks the graph shared (2^61, beside the immortal 2^62), a marked record's count steps are atomic, and a static freeze (E3160) refuses every door through which a lent graph could be written: a parse-time tier in the parser and a whole-program tier in StorageProvenance with one memoized BFS per lend over the block graph. Measured on the landing tree. Allocations rise x1.50 to x1.94 per doubling — the corpus's own rate — and the tier is allocation-neutral here because the scale corpus spawns no service, so every freeze door is gated off by `spawnsAnyService()`: this row is a no-regression reading for programs that do not lend, not a measurement of the freeze. The CPU column is NOT comparable with the row above it (different session), and nothing here is attributed to it. | 505,900,903 | 820,487,311 | 1,470,395,765 | 2,763,883,662 | 5,363,712,039 | 10,496,095,059 |
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | E3019 widened to a callee's field write through its parameter, with the receiver exemption carried transitively (the record-write closure is now taken TWICE over one seed — unexempted for the `let`-global question, exempted for the `let`-binding one) and a union-typed parameter admitted as a mutable scrutinee. Allocations move by +25 to +85 per rung, FLAT across the doubling rather than growing — the fourth mask column is one array per compile, not per-program work; the 83 `let`→`var` and the five loop restructures change no allocation shape. | 505,992,128 | 820,590,327 | 1,470,594,080 | 2,764,173,194 | 5,364,304,214 | 10,497,405,864 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | /land #2 (the defect queue): end labels checked on every block, enum/union header checked, `from` through Set/List/Vector aliases and InitableFromArrayLiteral (the sweep now collects `<Name> from [` heads and interns a vector alias's element array), an inline `i64.min / -1` guard on signed `/` where neither the divisor excludes -1 nor the dividend excludes i64.min, sched debug-stream emitters (no code without --debugstream), float.hash fold, stdlib bound checks. Allocations vs the previous row: +15k at rung 0 rising to +578k at rung 5 (0.7%), the delta growing with the program — a per-program cost, linear (total allocs x1.94 at the top doubling). Not attributed per phase: no control binary was measured. | 522,612,351 | 840,285,031 | 1,490,967,357 | 2,796,369,729 | 5,414,004,993 | 10,637,084,114 |
+| 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land B — front-end fan-out: freeze gap closed (B0), transfer walks carry a DAG with a visit table (B1), the per-file parse writes no shared index state and merge renumbers every generic-instance id (B2), a worker-safe parse path (B3), FrontEndPool lex/parse workers with per-worker index clones (B4), E3162, bare calls resolve to their one visible declaration. Allocations +2.2M at rung 0 rising to +13.1M at rung 5, GROWING with the program (≈+17% at rung 5): per-file artifacts own what they carry (ops and index records cloned where they enter an outcome), row-set answers, per-parse ParserAnchors. Every phase stays linear (top-rung ratio ≤ x1.99); frontEndPool x1.88. Self-compile wall 42.3–42.8 s (pre-B4) → 38.6–39.5 s, 3 of 3 interleaved. | 652,026,319 | 974,696,521 | 1,659,861,821 | 3,030,473,782 | 5,796,309,514 | 11,283,147,144 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -336,6 +338,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | Land A: a `let` message argument is LENT, not moved — `__share_<T>` marks the graph shared (2^61, beside the immortal 2^62), a marked record's count steps are atomic, and a static freeze (E3160) refuses every door through which a lent graph could be written: a parse-time tier in the parser and a whole-program tier in StorageProvenance with one memoized BFS per lend over the block graph. Measured on the landing tree. Allocations rise x1.50 to x1.94 per doubling — the corpus's own rate — and the tier is allocation-neutral here because the scale corpus spawns no service, so every freeze door is gated off by `spawnsAnyService()`: this row is a no-regression reading for programs that do not lend, not a measurement of the freeze. The CPU column is NOT comparable with the row above it (different session), and nothing here is attributed to it. | 2,574,152,300 | 3,567,501,180 | 5,880,585,500 | 10,879,211,520 | 22,332,893,740 | 45,676,745,180 |
 | 2026-09-16 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | E3019 widened to a callee's field write through its parameter, with the receiver exemption carried transitively (the record-write closure is now taken TWICE over one seed — unexempted for the `let`-global question, exempted for the `let`-binding one) and a union-typed parameter admitted as a mutable scrutinee. Allocations move by +25 to +85 per rung, FLAT across the doubling rather than growing — the fourth mask column is one array per compile, not per-program work; the 83 `let`→`var` and the five loop restructures change no allocation shape. | 2,626,165,560 | 3,751,044,600 | 5,743,866,820 | 10,674,987,740 | 22,125,737,120 | 47,007,130,500 |
 | 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | /land #2 (the defect queue): end labels checked on every block, enum/union header checked, `from` through Set/List/Vector aliases and InitableFromArrayLiteral (the sweep now collects `<Name> from [` heads and interns a vector alias's element array), an inline `i64.min / -1` guard on signed `/` where neither the divisor excludes -1 nor the dividend excludes i64.min, sched debug-stream emitters (no code without --debugstream), float.hash fold, stdlib bound checks. Allocations vs the previous row: +15k at rung 0 rising to +578k at rung 5 (0.7%), the delta growing with the program — a per-program cost, linear (total allocs x1.94 at the top doubling). Not attributed per phase: no control binary was measured. | 2,563,288,075 | 3,594,794,006 | 6,378,141,359 | 10,875,885,479 | 19,716,857,297 | 38,400,918,722 |
+| 2026-09-17 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | Land B — front-end fan-out: freeze gap closed (B0), transfer walks carry a DAG with a visit table (B1), the per-file parse writes no shared index state and merge renumbers every generic-instance id (B2), a worker-safe parse path (B3), FrontEndPool lex/parse workers with per-worker index clones (B4), E3162, bare calls resolve to their one visible declaration. Allocations +2.2M at rung 0 rising to +13.1M at rung 5, GROWING with the program (≈+17% at rung 5): per-file artifacts own what they carry (ops and index records cloned where they enter an outcome), row-set answers, per-parse ParserAnchors. Every phase stays linear (top-rung ratio ≤ x1.99); frontEndPool x1.88. Self-compile wall 42.3–42.8 s (pre-B4) → 38.6–39.5 s, 3 of 3 interleaved. | 2,931,948,900 | 3,410,887,980 | 5,456,316,640 | 9,978,551,860 | 17,986,791,560 | 35,710,528,500 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -373,6 +376,69 @@ a single fitted number.
 The four earliest rows predate the automated log; their numbers are reconstructed from the diffs in
 git, so they are accurate but were not written by the tool. They also predate the exponent table,
 which is why it starts empty.
+
+**2026-09-16 — LAND B / B4 OPTIMIZATION PASS: THE PARALLEL FRONT END WAS SLOWER THAN THE SERIAL ONE IT
+REPLACED, AND THREE COSTS OUTSIDE THE PARSE WERE WHY.** No `scale-test` row: the subject is the self-compile's
+wall time on one host (x64-windows, 8 cores / 16 logical), measured with `maxon build maxon-bin -o … --metrics=…`,
+the pre-B4 control (`temp/landb-control-b4/maxon.exe`, serial lex + parse) and this compiler **interleaved run by
+run in one session**. Wall and allocations are the metrics file's `total` row; the pool rows are `frontEndPool`
+(the driver) against the serial `lex` + `directives` + `parse` rows it replaces.
+
+| run | pre-B4 total | **after** total | pre-B4 lex+dir+parse | **after** `frontEndPool` |
+|---|---:|---:|---:|---:|
+| 1 | 42.28 s | **38.56 s** | 7.29 s | **2.58 s** |
+| 2 | 42.67 s | **39.17 s** | 7.06 s | **2.62 s** |
+| 3 | 42.78 s | **39.50 s** | 7.27 s | **2.59 s** |
+
+**3 of 3 faster, −3.5 s (−8%) on the whole compile.** Allocations: pre-B4 285.0 M / 25.39 GB; B4 before this
+pass, one diagnostic run, 424.1 M / 33.79 GB with `frontEndPool` at 8.27 s and 46.0 s total; after,
+**307.9 M / 26.83 GB**. The self-compile is byte-identical — exe and `.mxdbg` — pinned to one processor against
+the default, and against the pre-pass B4 compiler.
+
+**Where B4's 8.27 s went — measured with temporary probes around each step of the driver, then removed:**
+
+| step (main thread unless noted) | before | after |
+|---|---:|---:|
+| lex drain, 263 files | 345 ms | ~320 ms |
+| index copies (`signatures.clone()` + the send's soleness walk), 16 of them, all ahead of the first parse | **5,541 ms / 121.3 M allocs** | 7 of them, ~140 ms each, interleaved with dispatch |
+| parse drain: token copies for the sends | 477 ms / 21.2 M allocs | (inside the drain below) |
+| parse drain: waiting on workers | 1,776 ms | — |
+| whole first-round parse drain | 2,253 ms after the copies | **2,003 ms including the copies** |
+
+1. **Every worker's copy of the index copied every file's token stream.** `ProgramSignatures.declTokenStreams`
+   (the streams the constant evaluator reads initializer ranges out of) rode in the index, so each clone copied
+   ~every token of the program, and the send's soleness walk then COW-detached each token's text from the shared
+   source buffer — three allocations per token, per worker. The streams have no reader once
+   `evaluateInitializers` has settled every declaration except the module-init span, which is now recorded on the
+   `TopLevelDecl` at the sweep (`initRange`); the map is emptied when the evaluation settles. One copy went from
+   ~7.6 M to 1.36 M allocations (940 K clone + 421 K detach).
+2. **All copies were taken before the first parse was dispatched**, so the longest file waited for sixteen
+   serial copies. A worker now adopts its copy immediately before its own first parse
+   (`FrontEndPool.requireAdopted`), so the longest file starts after one.
+3. **Sixteen workers could not finish before the longest file did, and each cost a serial copy.** A drain cannot
+   end before its longest parse, so the parse uses `ceil(total tokens / longest)` of the pool's workers
+   (`parseDrainWorkerCount`) — 6-7 here. The lex keeps the whole pool, which costs no copy.
+
+**What bounded the drain next was ONE FILE, and a pre-existing superlinear term inside it.** Per-job landing
+times put `Parser.maxon` (378.5 K tokens, 17% of the program's) last, at 2,400 ms. Pinned to one processor it
+parsed in 1,877 ms — **5.0 µs/token, as did `SignatureIndex.maxon` (122 K tokens, 615 ms), against 2-3 µs/token
+for every other file.** A pinned sampling profile of that window (`scripts/sample_profile.py`, depth-12 stacks)
+put 356 of the 998 parser samples outside the declaration sweep under `Parser.declareSelfFieldAliases`:
+every instance method installs every field of its type as an alias and re-resolved each field's type through
+`fieldTypeOf` (several name-keyed registry probes) per method, i.e. **fields × methods** — 180 × 2,177 for
+`Parser`, 147 × 897 for `ProgramSignatures`. The resolved field types are now memoized per layout for the parse
+(`Parser.resolveSelfFieldTypes`); the scope installs per method remain. `Parser.maxon` then landed at 1,690 ms,
+the `parse` pool row fell 9.2 → 7.8 s and its allocations 36.3 M → 31.9 M, and the drain now ends with the
+workers rather than with one file.
+
+**What is left, and why it is a limit rather than a to-do.** (a) The per-worker index copy (~140 ms, serial on the
+main thread) is the price of a PRIVATE index per worker: a parse writes the index and restores it, so a shared
+read-only one is a different design. The copy's biggest parts are the overload table and `ParamReassignInfo`
+(forward-call edges included). (b) The pooled parse costs **1.37-1.40× the CPU cycles** of a pinned one — `parse`
+row 24.0 G ticks at `MAXON_MAX_PROCS=1`, 32.9 G at 8, 33.7 G at 16 (7 parse workers in both) — and a profile
+of the parallel window shows the same leaf distribution as the pinned one with no lock or allocator entry
+standing out: a hash-probe-heavy workload sharing memory bandwidth, not contention in the compiler. (c) `merge`
+reads 2.35-2.40 s against the control's 2.16-2.22 s.
 
 **2026-09-01 — W219: THE DRIVER'S TIMED WAITS BECAME INTERRUPTIBLE. A RUNTIME row, and the FIRST one here
 whose subject is LATENCY rather than throughput — read MC1's row below first, because this one is its

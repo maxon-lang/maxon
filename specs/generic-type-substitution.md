@@ -54,6 +54,28 @@ overlap binds nothing rather than binding what it can — `type Pair uses A, B` 
 `type Outer uses A` has no `B` for the scope to stand for — and the name then resolves exactly as
 it did before, with the ordinary refusals speaking for it.
 
+### A base the scope does not bind may not be fed the scope's parameters, nor laid out
+
+A bare name that binds nothing — `Box uses Element` inside `type Outer uses T` — is the BASE, and no
+instance stands behind a value of it. Two calls on such a subject are refused (**E3162**), whether the base
+is named statically (`Box.create(…)`) or is the type of the receiver (`self.tag.width()`):
+
+- a call that hands a slot written over one of the base's own type parameters — `Element` itself, or an
+  instance such as `Array with Element` — a value typed at the enclosing type's parameters: `Box.create(first)`
+  with `first as T`. The value would be stored where no type argument describes it, so nothing releases it.
+  An overloaded callee is judged by the member its arguments pick;
+- a call whose callee needs a layout descriptor — `Holder.create()` whose body sizes an `Element`. The base
+  has no descriptor of its own, and the enclosing frame's describes `Outer`'s parameters, not `Holder`'s.
+
+A static call whose arguments fix every one of the base's parameters to a concrete type is not a bare
+subject at all: it builds that instance. Name the instance with a `typealias` — `typealias Inner = Box with T`
+— and both calls are ordinary; a field typed `Box with T` inline does not parse.
+
+Outside a generic type body there is no scope to feed, but a layout-needing call on a bare base has no
+descriptor either unless the calling function carries one of its own: a static whose arguments do not fix every
+one of the base's parameters (`Holder.create()` in `main`), and a method called through a receiver of the bare
+base type (`t.width()` in `main`), are refused the same way.
+
 ### The type's own name still means `Self`
 
 `Self.make(x)`, and the type's own name written inside its own body, are the DECLARATION view (the
@@ -546,15 +568,13 @@ end 'main'
 <!-- test: error.a-name-the-scope-does-not-bind-binds-nothing -->
 ### A parameter name the enclosing scope does not declare binds nothing
 `Inner uses U` inside `type Outer uses T` has no `U` for the scope to stand for, so the bare
-`Inner` is left alone and the argument meets the declaration view it always did. The refusal is
-positioned, rather than accepted silently and left to die in the assembler
+`Inner` is left alone and stays the base. `make`'s slot is `Array with U`, written over the base's own
+parameter, and `items` is an `Array with T`, so the call hands the unbound base a value typed at `Outer`'s
+parameter: E3162, positioned at the call rather than accepted silently and left to die in the assembler
 (`E9001: Unresolved label: Inner.first`).
 
-⚠ The `otherwise` is DIVERGING, and it has to be for this case to keep testing its own subject. A VALUE
-fallback merges with the try's success value through one owned phi, and since P1.7 slice 3b-vi-a a
-`returns U` hand-off is an owned `+1` even when `U` is unbound — so `otherwise 0` is a second, perfectly
-correct refusal (`E3059`, an `int` fallback against a `type parameter` result) that fires during the parse
-and hides the semantic one this case is about.
+⚠ `main` hands the unbound `Inner` on without calling a method on it. `first()` needs a layout descriptor and
+the value is the bare base, so calling it would be a second refusal of the same code.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -583,16 +603,463 @@ end 'Outer'
 typealias O = Outer with Integer
 typealias IntArray = Array with Integer
 
+function takes(_ Inner) returns ExitCode
+	return 7
+end 'takes'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(7)
 	let o = O.create(a)
-	let w = o.wrap()
-	return (try w.first() otherwise panic("Inner binds nothing")) as ExitCode
+	return takes(o.wrap())
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:16: argument type mismatch for 'v': expected 'Inner.UArr', got 'Outer.OArr'
+error E3162: <fragment>:22:16: 'Inner' is named without type arguments inside 'type Outer uses T', where its parameter 'U' binds to nothing, so 'Inner.make' may not be handed a value typed at a parameter of 'Outer': no instance of 'Inner' describes what it would hold. Name the instance with a typealias, e.g. 'typealias InnerInstance = Inner with T'
+```
+
+<!-- test: error.a-bare-generic-base-may-not-be-fed-the-enclosing-types-parameter -->
+### A base the scope does not bind may not be handed a value of the scope's parameter
+`Box uses Element` binds nothing inside `type Outer uses T`, so `inner` holds the base and `Box.create(first)`
+fixes no instance. `Outer with String`'s drop reaches `inner` through the base, whose `Element` owns nothing,
+and the `String` is never released.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{saved: first}
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+
+type Outer uses T
+	export var inner as Box
+	export static function create(first T) returns Self
+		return Self{inner: Box.create(first)}
+	end 'create'
+end 'Outer'
+
+typealias OuterStr = Outer with String
+
+function main() returns ExitCode
+	var o = OuterStr.create("alpha")
+	o.inner.replace("beta")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:15:26: 'Box' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Box.create' may not be handed a value typed at a parameter of 'Outer': no instance of 'Box' describes what it would hold. Name the instance with a typealias, e.g. 'typealias BoxInstance = Box with T'
+```
+
+<!-- test: error.a-bare-generic-base-may-not-take-a-layout-needing-call -->
+### A base the scope does not bind may not take a layout-needing call
+`Holder.create` sizes a `Vector with 4 Element`, so it is handed a layout descriptor. The bare `Holder` has
+none, and the enclosing frame's describes `Outer`'s parameters rather than `Holder`'s.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+type Outer uses T
+	var holder as Holder
+
+	export static function create() returns Self
+		return Self{holder: Holder.create()}
+	end 'create'
+
+	export function size() returns Int
+		return holder.size()
+	end 'size'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create()
+	return o.size()
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:22:30: 'Holder' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Holder.create' has no layout descriptor to be handed: the base has none, and this frame's describes the parameters of 'Outer'. Name the instance with a typealias, e.g. 'typealias HolderInstance = Holder with T'
+```
+
+<!-- test: error.a-receiver-of-a-bare-generic-base-may-not-be-fed-the-enclosing-types-parameter -->
+### The receiver spelling of the same feed
+`Tag.create()` is neither fed nor laid out, so it stays legal and `tag` holds the base. Handing that receiver a
+`T` is the feed the static spelling above refuses, reached one call later.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Tag uses Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function accepts(_ Element) returns Int
+		return n
+	end 'accepts'
+end 'Tag'
+
+type Outer uses T
+	var tag as Tag
+
+	export static function create() returns Self
+		return Self{tag: Tag.create()}
+	end 'create'
+
+	export function probe(x T) returns Int
+		return tag.accepts(x)
+	end 'probe'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create()
+	return o.probe("a")
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:24:14: 'Tag' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Tag.accepts' may not be handed a value typed at a parameter of 'Outer': no instance of 'Tag' describes what it would hold. Name the instance with a typealias, e.g. 'typealias TagInstance = Tag with T'
+```
+
+<!-- test: error.a-receiver-of-a-bare-generic-base-may-not-take-a-layout-needing-call -->
+### The receiver spelling of the layout-needing call
+`Tag.width` reads `sizeof(Element)` out of the descriptor it is handed. Through the bare receiver there is no
+`Element` to size, and the only descriptor in reach is `Outer with String`'s.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Tag uses Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function width() returns Int
+		return sizeof(Element)
+	end 'width'
+end 'Tag'
+
+type Outer uses T
+	var tag as Tag
+
+	export static function create() returns Self
+		return Self{tag: Tag.create()}
+	end 'create'
+
+	export function width() returns Int
+		return tag.width()
+	end 'width'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create()
+	return o.width()
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:24:14: 'Tag' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Tag.width' has no layout descriptor to be handed: the base has none, and this frame's describes the parameters of 'Outer'. Name the instance with a typealias, e.g. 'typealias TagInstance = Tag with T'
+```
+
+<!-- test: error.a-bare-generic-base-outside-a-generic-body-may-not-take-a-layout-needing-call -->
+### Outside a generic body a bare base's layout-needing static has no descriptor either
+`main` has no type parameters to bind `Holder` over and `create` takes no argument that could fix
+`Element`, so the call names the base, and a frame that is no generic body has no descriptor to hand on.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.size()
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:19:17: 'Holder' is named without type arguments and nothing binds its parameter 'Element', so 'Holder.create' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: error.a-receiver-of-a-bare-generic-base-outside-a-generic-body-may-not-take-a-layout-needing-call -->
+### Outside a generic body a bare receiver's layout-needing method has no descriptor either
+`Tag.create()` needs no descriptor, so `t` holds the bare base legally. `width` sizes an `Element`, and neither
+the base nor `main` has a descriptor to hand it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Tag uses Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function width() returns Int
+		return sizeof(Element)
+	end 'width'
+end 'Tag'
+
+function main() returns ExitCode
+	let t = Tag.create()
+	return t.width() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:18:11: 'Tag' is named without type arguments and nothing binds its parameter 'Element', so 'Tag.width' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: error.a-bare-generic-base-overload-is-judged-by-the-member-the-arguments-fit -->
+### An overloaded factory is judged by the member its arguments fit
+`items` is an `Array with T`, which the `IntArray` overload cannot take, so the call resolves to `create(_ Element)`
+and hands the bare base's `Element` slot a value typed at `Outer`'s parameter. The `IntArray` member takes no such
+value, and it is not the member the call resolves to.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type Box uses Element
+	export var n as Int
+
+	export static function create(_ Element) returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export static function create(first IntArray) returns Self
+		return Self{n: first.count()}
+	end 'create'
+end 'Box'
+
+type Outer uses T
+	typealias TArr = Array with T
+	export var inner as Box
+
+	export static function create(first T) returns Self
+		var items = TArr.create()
+		items.push(first)
+		return Self{inner: Box.create(items)}
+	end 'create'
+end 'Outer'
+
+typealias OuterStr = Outer with String
+
+function main() returns ExitCode
+	let o = OuterStr.create("alpha {1}")
+	return o.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:24:26: 'Box' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Box.create' may not be handed a value typed at a parameter of 'Outer': no instance of 'Box' describes what it would hold. Name the instance with a typealias, e.g. 'typealias BoxInstance = Box with T'
+```
+
+<!-- test: a-base-written-with-the-enclosing-parameter-is-fed-and-released -->
+### The control: the same feed through `typealias Inner = Box with T`
+The instance is spelled, so `inner` holds a `Box with String` at `Outer with String` and its `String` is
+released with it — exit 0 rather than 101.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{saved: first}
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+
+type Outer uses T
+	typealias Inner = Box with T
+	export var inner as Inner
+	export static function create(first T) returns Self
+		return Self{inner: Inner.create(first)}
+	end 'create'
+end 'Outer'
+
+typealias OuterStr = Outer with String
+
+function main() returns ExitCode
+	var o = OuterStr.create("alpha")
+	o.inner.replace("beta")
+	print("{o.inner.saved}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+beta
+
+```
+
+<!-- test: a-base-written-with-the-enclosing-parameter-takes-a-layout-needing-call -->
+### The control: the same layout-needing call through `typealias Held = Holder with T`
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+type Outer uses T
+	typealias Held = Holder with T
+	var holder as Held
+
+	export static function create() returns Self
+		return Self{holder: Held.create()}
+	end 'create'
+
+	export function size() returns Int
+		return holder.size()
+	end 'size'
+end 'Outer'
+
+typealias IntOuter = Outer with Int
+
+function main() returns ExitCode
+	let o = IntOuter.create()
+	print("{o.size()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+
+```
+
+<!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-vector-body-first -->
+### …and at a MANAGED argument the vector is refused, though the instance is minted below the body that asks
+`Holder with String` is written nowhere: `Outer`'s body mints it, below `Holder`'s. A parse asks whether some
+instantiation makes the vector's element managed while it emits `Slot.create()`, and the answer it acts on must
+be the whole program's rather than the rows the file had minted by then — admitted, this program compiles and a
+`for … in` read of a published slot dereferences a null.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+type Outer uses T
+	typealias Held = Holder with T
+	var holder as Held
+
+	export static function create() returns Self
+		return Self{holder: Held.create()}
+	end 'create'
+
+	export function size() returns Int
+		return holder.size()
+	end 'size'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create()
+	print("{o.size()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+```
+
+<!-- test: error.a-managed-instantiation-a-later-body-mints-refuses-the-vector-use-first -->
+The same program with the minting body ABOVE the vector's, which the file's own rows answered all along.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Outer uses T
+	typealias Held = Holder with T
+	var holder as Held
+
+	export static function create() returns Self
+		return Self{holder: Held.create()}
+	end 'create'
+
+	export function size() returns Int
+		return holder.size()
+	end 'size'
+end 'Outer'
+
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create()
+	print("{o.size()}\n")
+	return 0
+end 'main'
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+```
+```maxoncstderr
+error E2015: <fragment>:31:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: own-name-in-a-generic-body-is-still-Self -->

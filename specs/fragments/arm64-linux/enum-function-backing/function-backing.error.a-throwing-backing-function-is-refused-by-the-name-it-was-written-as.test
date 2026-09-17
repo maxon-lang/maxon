@@ -1,0 +1,40 @@
+// Test: function-backing.error.a-throwing-backing-function-is-refused-by-the-name-it-was-written-as
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+export function viaAlpha() returns Integer
+	return doubleFn(1)
+end 'viaAlpha'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum OpError implements Error
+	overflow
+end 'OpError'
+
+export function doubleFn(x Integer) returns Integer throws OpError
+	if x > 1000 'tooBig'
+		throw OpError.overflow
+	end 'tooBig'
+
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return (f(10) + viaAlpha()) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3101: api/<fragment>:30:2: Cannot use throwing function 'doubleFn' as a value: it throws 'OpError', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.

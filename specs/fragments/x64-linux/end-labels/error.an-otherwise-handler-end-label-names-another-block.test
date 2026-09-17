@@ -1,0 +1,25 @@
+// Test: error.an-otherwise-handler-end-label-names-another-block
+typealias Count = int(0 to 10)
+
+enum Oops implements Error
+	bad
+end 'Oops'
+
+function risky(n Count) returns Count throws Oops
+	if n > 5 'tooBig'
+		throw Oops.bad
+	end 'tooBig'
+
+	return n
+end 'risky'
+
+function main() returns ExitCode
+	let n = try risky(2) otherwise 'failed'
+		return 1
+	end 'recovered'
+
+	return n as ExitCode
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:19:2: Mismatched end label: expected 'failed', got 'recovered'

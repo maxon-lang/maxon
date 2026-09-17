@@ -54,7 +54,7 @@ module function hoverAnswer(request LspRequest) returns LspAnswer throws LspPara
 	// A buffer mid-edit routinely does not even LEX — an unterminated string is enough. That is LSP's
 	// "nothing here" and not a refusal: the client asked a well-formed question about a place with
 	// nothing to say.
-	let document = try HoverDocument.of(request.text) otherwise return LspAnswer.nothing()
+	let document = try HoverDocument.of(request.text, keywords: request.keywords) otherwise return LspAnswer.nothing()
 
 	match document.renderingAt(position) 'answer'
 		present(markdown) then return markdownAnswer(markdown)
@@ -174,9 +174,10 @@ type HoverDocument
 	let bytes as ByteArray
 	let tokens as TokenArray
 	let lines as LspLineIndex
+	let keywords as KeywordTable
 
-	static function of(text String) returns HoverDocument throws LexerError
-		return Self{text: text, bytes: text.toByteArray(), tokens: try tokenize(text), lines: LspLineIndex.build(text)}
+	static function of(text String, keywords KeywordTable) returns HoverDocument throws LexerError
+		return Self{text: text, bytes: text.toByteArray(), tokens: try tokenize(text, keywords: keywords), lines: LspLineIndex.build(text), keywords: keywords}
 	end 'of'
 
 	// --- The stream, and the cursor in it -----------------------------------------------------
@@ -743,7 +744,7 @@ type HoverDocument
 	// Maxon source, so it is asked the question a declaration in a document is asked; a second table of the
 	// eight return types would be the same fact written twice.
 	function mathBuiltinReturnType(builtin MathBuiltin) returns HoverType
-		let signature = try HoverDocument.of(mathBuiltinSignature(builtin)) otherwise return HoverType.unknown
+		let signature = try HoverDocument.of(mathBuiltinSignature(builtin), keywords: keywords) otherwise return HoverType.unknown
 		return signature.returnTypeOf(SignatureFunctionToken)
 	end 'mathBuiltinReturnType'
 
@@ -871,7 +872,7 @@ type HoverDocument
 	end 'stdlibMethodRendering'
 
 	function libraryMethodRendering(source String, owner ByteArray, method ByteArray) returns HoverRendering
-		let module = try HoverDocument.of(source) otherwise return HoverRendering.absent
+		let module = try HoverDocument.of(source, keywords: keywords) otherwise return HoverRendering.absent
 
 		let head = try module.methodDeclaredHere(owner, method: method) otherwise return HoverRendering.absent
 
@@ -895,7 +896,7 @@ type HoverDocument
 	end 'stdlibMethodReturnType'
 
 	function libraryMethodReturnType(source String, owner ByteArray, method ByteArray) returns HoverType
-		let module = try HoverDocument.of(source) otherwise return HoverType.unknown
+		let module = try HoverDocument.of(source, keywords: keywords) otherwise return HoverType.unknown
 
 		let head = try module.methodDeclaredHere(owner, method: method) otherwise return HoverType.unknown
 

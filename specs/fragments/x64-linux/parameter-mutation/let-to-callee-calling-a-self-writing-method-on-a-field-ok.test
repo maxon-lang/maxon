@@ -1,0 +1,130 @@
+// Test: let-to-callee-calling-a-self-writing-method-on-a-field-ok
+typealias Tally = int(0 to 1000)
+
+type Counter
+	export var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Counter'
+
+type Holder
+	export var inner as Counter
+
+	static function create() returns Self
+		return Self{inner: Counter.create()}
+	end 'create'
+end 'Holder'
+
+function nudge(t Holder)
+	t.inner.bump()
+end 'nudge'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	nudge(h)
+	nudge(h)
+	return h.inner.n as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+  __il_body#7:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#6:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body#12:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#14
+  __rc_chk#15:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic#14
+  __rc_ok#13:
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+  __il_body#16:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body#18:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#20
+  __rc_chk#21:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic#20
+  __rc_ok#19:
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+  __il_cont#8:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at let-to-callee-calling-a-self-writing-method-on-a-field-ok.test:12: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at let-to-callee-calling-a-self-writing-method-on-a-field-ok.test:12: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at let-to-callee-calling-a-self-writing-method-on-a-field-ok.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

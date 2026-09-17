@@ -1,0 +1,124 @@
+// WarmRebuildHarness.maxon — the shared half every case under `tests/warm-rebuild/` reaches for: staging a fixture
+// and running `verify-warm-rebuild` at it.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a missing
+// compiler, an unspellable path, a spawn that never happened.
+//
+// ⚠ **A CASE EXCEEDS THE 5,000 ms PER-FILE DEADLINE**: the driver compiles the program several times over. Run the
+// corpus with `--timeout=60000`.
+//
+// ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, the working directory a test binary inherits from
+// `maxon test`; everything handed to the child is made absolute first.
+
+let FixturesDirName = "tests/warm-rebuild/fixtures"
+let StagingRootDirName = "temp/warm-rebuild"
+let StoredFixtureSuffix = ".fixture"
+let PathSeparator = "/"
+
+// The compiler under test, relative to the checkout root and without its host suffix — also the driver whose
+// properties are under test.
+export let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+export let VerifyCommandName = "verify-warm-rebuild"
+
+// What the driver prints for the verdict over every property.
+export let VerdictPassLine = "verify-warm-rebuild: PASS"
+
+typealias PathArray = Array with FilePath
+
+// Each `<name>.fixture` of `fixture`, staged as `<name>` under a directory named for the case. A previous run's
+// files are cleared first so a renamed fixture file cannot leave a stale source in the program.
+export function stagedFixture(fixture String, caseLabel String) returns FilePath
+	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
+	clearStagedFiles(staged)
+
+	for stored in listing(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}")) 'eachStored'
+		let storedName = stored.filename()
+
+		if not storedName.endsWith(StoredFixtureSuffix) 'notAStoredSource'
+			continue
+		end 'notAStoredSource'
+
+		let stagedName = storedName.replace(StoredFixtureSuffix, with: "")
+		let body = try File.readText(stored) otherwise panic("warm-rebuild tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
+		try File.writeText(staged.join(stagedName), content: body) otherwise panic("warm-rebuild tests: the gate could not run — could not stage {stagedName} into {staged.toString()}.")
+	end 'eachStored'
+
+	return staged
+end 'stagedFixture'
+
+// `<compiler> verify-warm-rebuild <staged>`, run in the staging tree.
+export function spawnVerify(staged FilePath) returns CollectedOutput
+	let binary = testedCompilerPath()
+
+	if not File.exists(binary) 'noBinary'
+		panic("warm-rebuild tests: the gate could not run — this case needs a compiler at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	var arguments = StringArray.create()
+	arguments.push(VerifyCommandName)
+	arguments.push(staged.toString())
+
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("warm-rebuild tests: the gate could not run — could not spawn `{VerifyCommandName}` ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'spawnVerify'
+
+function testedCompilerPath() returns FilePath
+	#if os(Windows)
+		let spelled = "{TestedCompilerStem}.exe"
+	#else
+		let spelled = "{TestedCompilerStem}"
+	#endif
+
+	let relative = try FilePath.from(spelled) otherwise panic("warm-rebuild tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	return relative.resolve(Directory.currentPath())
+end 'testedCompilerPath'
+
+function clearStagedFiles(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("warm-rebuild tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
+	end 'eachEntry'
+end 'clearStagedFiles'
+
+function fixtureDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("warm-rebuild tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	if not Directory.isDirectory(path) 'notThere'
+		panic("warm-rebuild tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+	end 'notThere'
+
+	return path
+end 'fixtureDir'
+
+// Created ancestor by ancestor so a fresh checkout without `temp/` is not a failure, and absolute because it is
+// handed to a child process as its working directory.
+function stagingDir(spelled String) returns FilePath
+	var prefix = ""
+
+	for component in spelled.split(PathSeparator) 'eachComponent'
+		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
+		let ancestor = try FilePath.from(prefix) otherwise panic("warm-rebuild tests: the gate could not run — '{prefix}' is not a spellable path")
+
+		if not Directory.create(ancestor) 'couldNotCreate'
+			panic("warm-rebuild tests: the gate could not run — could not create '{prefix}'.")
+		end 'couldNotCreate'
+	end 'eachComponent'
+
+	let path = try FilePath.from(spelled) otherwise panic("warm-rebuild tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	return path.resolve(Directory.currentPath())
+end 'stagingDir'
+
+function listing(dir FilePath) returns PathArray
+	return try Directory.list(dir) otherwise panic("warm-rebuild tests: the gate could not run — could not list {dir.toString()}")
+end 'listing'

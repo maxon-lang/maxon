@@ -1,0 +1,66 @@
+// Test: borrow.error.a-lent-let-may-not-reach-a-callee-that-writes-inside-it-through-a-witness
+interface Bumpable
+	function bump()
+end 'Bumpable'
+
+type Box implements Bumpable
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Shelf uses T where T is Bumpable
+	typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function count() returns Integer
+		return self.items.count()
+	end 'count'
+
+	export function kick()
+		for item in self.items 'eachItem'
+			item.bump()
+		end 'eachItem'
+	end 'kick'
+end 'Shelf'
+
+typealias BoxShelf = Shelf with Box
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(target BoxShelf)
+		self.seen = self.seen + target.count()
+	end 'look'
+end 'Svc'
+
+function poke(s BoxShelf)
+	s.kick()
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let s = BoxShelf.create()
+	h.look(s)
+	poke(s)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3160: <fragment>:60:7: `s` was lent to another green thread at <fragment>:59:9, so what it holds is frozen: passing it to `poke`, which writes it would let it be written. Send a `.clone()` instead, or bind `s` with `var` so the send moves it

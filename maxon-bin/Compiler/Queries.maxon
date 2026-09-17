@@ -14,19 +14,25 @@
 // parses, so the chain stays acyclic — and a parse memo must be keyed on both the file's bytes and
 // this index's hash (QueryEngine.parseMemoKey).
 
+// Where a stream no memo holds comes from: lexed here, on the query's own thread, or already lexed by a
+// front-end pool worker (`FrontEndPool.lexEveryFile`), whose answer then lands through exactly the memo steps
+// a lex here takes — so a pooled file's memos, counters and diagnostics are the ones a serial query leaves.
+module union LexSource
+	onThisThread
+	pooled(outcome LexOutcome)
+end 'LexSource'
+
 // Tokenizing reads ONE input — the file — so the memo's key is that file's content hash and nothing
 // else. Contrast `queryParseOps`, whose key mixes in the signature index.
-function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
+function queryTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe for the whole query: `entry` carries both the bytes to lex and the hash
 	// that validates and stamps the memo. See `sourceEntryOf` for why a probe is worth not repeating.
 	let entry = try sourceEntryOf(project, path: path)
 
-	if let memo = try project.db.tokenCache.get(path) 'memoized'
-		if memo.keyHash == entry.contentHash 'hit'
-			project.db.tokenHits = project.db.tokenHits + 1
-			return memo.value
-		end 'hit'
-	end 'memoized'
+	if let memo = try validMemoValue(project.db.tokenCache, path: path, entry: entry) 'hit'
+		project.db.tokenHits = project.db.tokenHits + 1
+		return memo
+	end 'hit'
 
 	project.db.tokenMisses = project.db.tokenMisses + 1
 
@@ -38,19 +44,13 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 		return shared
 	end 'sharedHit'
 
-	// The `lex` phase is probed HERE, around `tokenize` alone: `queryParseOps` calls this query before
-	// it opens its own `parse` probe, so the two phases are disjoint by construction and neither
-	// absorbs the other.
-	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
-	let tokens = try tokenize(entry.content) otherwise (lexErr) 'lexFail'
+	let tokens = try lexedTokens(project, content: entry.content, lexing: lexing) otherwise (lexErr) 'lexFail'
 		reportLexerError(project, path: path, error: lexErr)
 
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and the next attempt must
 		// re-run against corrected source.
 		return TokenArray.create()
 	end 'lexFail'
-
-	recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
 
 	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
 
@@ -59,6 +59,45 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	shareTokens(project, contentHash: entry.contentHash, tokens: tokens)
 	return tokens
 end 'queryTokens'
+
+// Why a per-file token memo could not answer.
+enum TokenMemoMiss implements Error
+	absent
+	stale
+end 'TokenMemoMiss'
+
+// A per-file memo's value when it was stamped with these bytes' hash.
+function validMemoValue(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns TokenArray throws TokenMemoMiss
+	let memo = try cache.get(path) otherwise throw TokenMemoMiss.absent
+
+	if memo.keyHash != entry.contentHash 'stale'
+		throw TokenMemoMiss.stale
+	end 'stale'
+
+	return memo.value
+end 'validMemoValue'
+
+function lexedTokens(project Project, content String, lexing LexSource) returns TokenArray throws LexerError
+	return match lexing 'source'
+		onThisThread gives try tokenizedHere(project, content: content)
+		pooled(outcome) gives try outcome.rawStream()
+	end 'source'
+end 'lexedTokens'
+
+// The `lex` phase is probed HERE, around `tokenize` alone: `queryParseOps` calls the token queries before it
+// opens its own `parse` probe, so the two phases are disjoint by construction and neither absorbs the other.
+function tokenizedHere(project Project, content String) returns TokenArray throws LexerError
+	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
+	logDebug(LogCategory.lexer, message: function() gives "Starting lexer")
+
+	let tokens = try tokenize(content, keywords: project.keywords) otherwise (lexErr) 'lexFail'
+		recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
+		throw lexErr
+	end 'lexFail'
+
+	recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
+	return tokens
+end 'tokenizedHere'
 
 // The one door every token consumer goes through: the declaration sweep (`queryProgramSignatures`)
 // and the real parse (`queryParseOps`) read different code over a file's tokens, and handing them
@@ -75,23 +114,21 @@ end 'queryTokens'
 // compile). Two targets or two flag settings are therefore two `Project`s and two databases, so
 // this cache can never be asked about a build it was not filled for. The process-wide store below
 // has no such guarantee — it outlives every `Project` — and so carries both in its key.
-function queryActiveTokens(project Project, path FilePath) returns TokenArray throws CompileError
+module function queryActiveTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
 	let entry = try sourceEntryOf(project, path: path)
 
-	if let memo = try project.db.activeTokenCache.get(path) 'memoized'
-		if memo.keyHash == entry.contentHash 'hit'
-			project.db.activeTokenHits = project.db.activeTokenHits + 1
-			return memo.value
-		end 'hit'
-	end 'memoized'
+	if let memo = try validMemoValue(project.db.activeTokenCache, path: path, entry: entry) 'hit'
+		project.db.activeTokenHits = project.db.activeTokenHits + 1
+		return memo
+	end 'hit'
 
 	project.db.activeTokenMisses = project.db.activeTokenMisses + 1
 
 	// Outside the probe, exactly as `queryParseOps` keeps `queryTokens` outside its `parse` probe: the
 	// tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
-	let tokens = try queryTokens(project, path: path)
+	let tokens = try queryTokens(project, path: path, lexing: lexing)
 
 	// This memo's key carries the target and the flag because a memo that outlives the `Project` has
 	// no guarantee of a single build for its life — see this function's header.
@@ -105,14 +142,11 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 		return shared
 	end 'sharedHit'
 
-	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.directives)
-
 	// The failure is memoized too, which is what makes the diagnostic appear once: this query has two
 	// callers per file with no error gate between them, so anything not cached here would be computed
 	// — and reported — twice. Caching is sound because the key is the file's content hash, so the
 	// empty stream can only ever be served back for the bytes that produced it.
-	let filtered = activeTokensOrReported(project, path: path, tokens: tokens)
-	recordPhase(project, phase: CompilePhase.directives, probe: probe)
+	let filtered = activeTokensOrReported(project, path: path, tokens: tokens, lexing: lexing)
 
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(filtered.value, keyHash: entry.contentHash))
 
@@ -138,14 +172,42 @@ type FilteredTokens
 	end 'create'
 end 'FilteredTokens'
 
-function activeTokensOrReported(project Project, path FilePath, tokens TokenArray) returns FilteredTokens
-	let active = try filterConditionalTokens(tokens, facts: conditionFactsOf(project)) otherwise (directiveErr) 'directiveFail'
+function activeTokensOrReported(project Project, path FilePath, tokens TokenArray, lexing LexSource) returns FilteredTokens
+	let active = try filteredTokens(project, tokens: tokens, lexing: lexing) otherwise (directiveErr) 'directiveFail'
 		reportDirectiveError(project, path: path, error: directiveErr)
 		return FilteredTokens.create(TokenArray.create(), filtered: false)
 	end 'directiveFail'
 
 	return FilteredTokens.create(active, filtered: true)
 end 'activeTokensOrReported'
+
+function filteredTokens(project Project, tokens TokenArray, lexing LexSource) returns TokenArray throws DirectiveError
+	return match lexing 'source'
+		onThisThread gives try filteredHere(project, tokens: tokens)
+		pooled(outcome) gives try outcome.resolvedStream(tokens)
+	end 'source'
+end 'filteredTokens'
+
+// The `directives` phase, around the filter alone.
+function filteredHere(project Project, tokens TokenArray) returns TokenArray throws DirectiveError
+	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.directives)
+
+	let active = try filterConditionalTokens(tokens, facts: conditionFactsOf(project)) otherwise (directiveErr) 'directiveFail'
+		recordPhase(project, phase: CompilePhase.directives, probe: probe)
+		throw directiveErr
+	end 'directiveFail'
+
+	recordPhase(project, phase: CompilePhase.directives, probe: probe)
+	return active
+end 'filteredHere'
+
+// Whether a query of `path`'s resolved stream would be answered without a lex — by this project's memo or by
+// the process-wide store — asked without counting, so the query that later answers is the one that counts.
+module function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
+	let entry = try sourceEntryOf(project, path: path)
+	_ = try validMemoValue(project.db.activeTokenCache, path: path, entry: entry) otherwise return holdsSharedActiveTokens(entry.contentHash, buildKey: buildKey)
+	return true
+end 'activeTokensAreHeld'
 
 // Built from tokens, never from parses: a parse needs this index, so the index cannot need a parse.
 // See SignatureIndex.maxon for the wrong answer a per-file version of this query exists to kill.
@@ -158,28 +220,6 @@ end 'activeTokensOrReported'
 // ⚠ This is a whole-program query sitting under a per-file one, so anything O(files) inside it
 // would be O(files²). It is not: the memo makes it run once per build, and the constant evaluation
 // below is O(declarations), not O(files) per file.
-// Bind this compile's `--define`s to the declarations they name, and refuse the ones that cannot bind.
-//
-// ⚠ **EVERY PROBLEM IS REPORTED BEFORE ANY IS FATAL.** Three bad defines on one command line are three
-// facts a person wants at once; stopping at the first would make fixing them a sequence of builds.
-//
-// The diagnostics carry no file position, because a `--define` has none — it was written on a command
-// line, not in a source file. What each message DOES carry is where the declarations it reached are,
-// which is the part a reader cannot look up.
-function applyDefines(project Project, signatures ProgramSignatures)
-	signatures.defines = project.defines
-	let problems = signatures.resolveDefines()
-
-	if problems.count() == 0 'allBound'
-		return
-	end 'allBound'
-
-	// Reported and not thrown: a recorded diagnostic is what refuses the compile, at the one gate that
-	// already does it for every other check in this file.
-	for problem in problems 'eachProblem'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(problem.code, message: problem.message))
-	end 'eachProblem'
-end 'applyDefines'
 
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
@@ -190,6 +230,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
 	var signatures = ProgramSignatures.create(project.target.os)
+	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
@@ -256,6 +297,9 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// on a verdict they would have to throw away.
 	signatures.allFilesFolded = true
 
+	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
+	signatures.settleFunctionBackedEnumCases()
+
 	// Every file is folded in; now the top-level constants can be evaluated, and not one moment
 	// earlier — a constant's initializer may name a constant declared later in its own file or in a
 	// file not yet swept, so evaluation must wait until every declaration in the program is known.
@@ -308,8 +352,9 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// ⛔ **STRICTLY BEFORE THE FOLD, AND STRICTLY AFTER THE SWEEP.** Binding a define needs every
 	// declaration to exist — that is what makes two claimants for one name visible rather than one — and
 	// the fold is what would otherwise read the initializer this replaces.
-	applyDefines(project, signatures: signatures)
-	signatures.evaluateInitializers()
+	signatures.defines = project.defines
+	signatures.defineProblems = signatures.resolveDefines()
+	signatures.evaluateInitializers(project.readerAnchors)
 
 	// Every declared `interface`'s requirements, for the same "the whole program is known now" reason.
 	// Before `deriveInstanceNames`: reading a requirement's parameter types can intern a generic
@@ -361,6 +406,9 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// now" reason: the parse reads both, and each memo behind them is a write, which a per-file
 	// fan-out must never make.
 	signatures.deriveInstanceNames()
+
+	// Last: from here on the index is what every parse reads, and a write past it is journaled and undone.
+	signatures.settleBaseline()
 	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
 
 	// Reported because a cache nobody can see fire is a cache nobody can prove fired: every counter
@@ -368,9 +416,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// board. `admitted` is what THIS compile offered `stdlib/`'s files; `holding` is what the process
 	// has kept — the two are equal while the store is bounded, and only `holding` moves if it ever
 	// stops being.
-	logDebug(LogCategory.compiler, message: function() gives "shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {sharedMemoEntryCount()} holding")
+	//
+	// The holding count is read HERE rather than inside the message: the message is an address-taken body, which
+	// E3143 may judge a run-time dispatch on a pool worker to land on, and the count reads the process-wide store.
+	let holding = sharedMemoEntryCount()
+	logDebug(LogCategory.compiler, message: function() gives "shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding")
 
-	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
+	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true)
 	return signatures
 end 'queryProgramSignatures'
 
@@ -985,7 +1037,27 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	signatures.recordFixedElementCountNeeds(solveDescriptorNeeds(methodNames, directSeeds: countSeeds, selfCallees: countCallees))
 end 'foldDescriptorNeeds'
 
+// A file's parse as a compile asks for it: the memo's artifact, or everything a parse of the file reads beside
+// the settled index, and the key its artifact is stamped with.
+module union ParseQuery
+	memoized(artifact FileParseArtifact)
+	needed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest)
+end 'ParseQuery'
+
+// ⚠ A miss parses against the index as it stands, so it is legal only while no fold has merged into that index — a
+// reader after the fold of the same sources is a hit. `ProgramSignatures.openParseBand` refuses the other case.
 export function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
+	let query = try parseQueryOf(project, path: path)
+
+	return match query 'query'
+		memoized(artifact) gives artifact
+		needed(job, tokens, overrides, keyHash) gives parsedHere(project, path: path, job: job, tokens: tokens, overrides: overrides, keyHash: keyHash)
+	end 'query'
+end 'queryParseOps'
+
+// Everything `queryParseOps` does before a parse, and the one door both it and the front-end pool ask: the memo
+// check with its counters, and on a miss the file's resolved tokens and its job.
+module function parseQueryOf(project Project, path FilePath) returns ParseQuery throws CompileError
 	// Before the memo check, because half the memo's key is this (see `QueryEngine.parseMemoKey`): a
 	// parse reads this file's tokens AND every other file's declarations, so a memo validated against
 	// the file's bytes alone would serve a stale parse after a return type changed elsewhere.
@@ -997,12 +1069,13 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	// key carries the body demand it decides.
 	let isStdlibSource = isStdlibSourceFile(project, path: path)
 	let buildsBodies = buildsBodiesFor(project, path: path, isStdlibSource: isStdlibSource)
-	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash, buildsBodies: buildsBodies)
+	let overrides = project.db.rowSetOverrides.of(path)
+	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash, buildsBodies: buildsBodies, overrides: overrides)
 
 	if let memo = try project.db.parseCache.get(path) 'memoized'
 		if memo.keyHash == keyHash 'hit'
 			project.db.parseHits = project.db.parseHits + 1
-			return memo.value
+			return ParseQuery.memoized(memo.value)
 		end 'hit'
 	end 'memoized'
 
@@ -1013,40 +1086,49 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	end 'probeArmed'
 
 	let tokens = try queryActiveTokens(project, path: path)
+	return ParseQuery.needed(parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies), tokens: tokens, overrides: overrides, keyHash: keyHash)
+end 'parseQueryOf'
 
+function parsedHere(project Project, path FilePath, job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest) returns FileParseArtifact
 	// Opens only NOW, after the tokens query has returned, so it bills the parse alone and never
 	// absorbs the lexing it depends on.
 	let parseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.parse)
-
-	var parser = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
-	let errorCountBefore = project.diagnostics.count()
-	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
-		// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
-		// call wide — written where the diagnostic is stored rather than at each of `reportParseError`'s
-		// ~200 match arms.
-		project.libraryBlame = blameOutsideTheLibrary(project, blame: parser.libraryBlame)
-		reportParseError(project, path: path, error: parseErr)
-		project.libraryBlame = LibraryBlame.unblamed
-
-		// A failed parse is never cached. What IS returned carries only the type names the file had
-		// declared before it stopped — see `Parser.abortedParseArtifact` for why that one registry
-		// crosses an abort and the rest cannot.
-		return parser.abortedParseArtifact()
-	end 'parseFail'
-
-	// Only cache a clean parse — a parse that reported a diagnostic must re-run. Stamped through the
-	// very `keyHash` value that failed to validate above, not a second computation of it, so the stamp
-	// and the check cannot disagree about what a parse depends on.
-	let hadErrors = project.diagnostics.count() > errorCountBefore
-
-	if not hadErrors 'cacheOk'
-		artifact.module.assertAllBlocksTerminated()
-		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: keyHash))
-	end 'cacheOk'
-
+	let outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: programSignaturesIn(project, asker: "parsedHere"))
 	recordPhase(project, phase: CompilePhase.parse, probe: parseProbe)
+
+	return landParseOutcome(project, path: path, outcome: outcome, keyHash: keyHash)
+end 'parsedHere'
+
+// What a compile keeps of one file's parse, wherever it ran: a clean artifact is memoized, and a refusal is
+// reported.
+module function landParseOutcome(project Project, path FilePath, outcome FileParseOutcome, keyHash HashDigest) returns FileParseArtifact
+	return match outcome 'outcome'
+		parsed(artifact) gives memoizedArtifact(project, path: path, artifact: artifact, keyHash: keyHash)
+		failed(error, blame, salvaged) gives reportFailedParse(project, path: path, error: error, blame: blame, salvaged: salvaged)
+	end 'outcome'
+end 'landParseOutcome'
+
+// A failed parse is never cached. What IS returned carries only the type names the file had declared before it
+// stopped — see `Parser.abortedParseArtifact` for why that one registry crosses an abort and the rest cannot.
+function reportFailedParse(project Project, path FilePath, error ParseError, blame LibraryBlame, salvaged FileParseArtifact) returns FileParseArtifact
+	// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
+	// call wide — written where the diagnostic is stored rather than at each of `reportParseError`'s
+	// ~200 match arms.
+	project.libraryBlame = blameOutsideTheLibrary(project, blame: blame)
+	reportParseError(project, path: path, error: error)
+	project.libraryBlame = LibraryBlame.unblamed
+	return salvaged
+end 'reportFailedParse'
+
+// A parse that completed is memoized whatever its artifact records: the parse reaches no `Project`, so its
+// diagnostics ride the artifact and every fold that merges it re-reports them. Stamped through the very
+// `keyHash` value that failed to validate the memo, not a second computation of it, so the stamp and the check
+// cannot disagree about what a parse depends on.
+function memoizedArtifact(project Project, path FilePath, artifact FileParseArtifact, keyHash HashDigest) returns FileParseArtifact
+	artifact.module.assertAllBlocksTerminated()
+	project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: keyHash))
 	return artifact
-end 'queryParseOps'
+end 'memoizedArtifact'
 
 export function queryAllModule(project Project) returns MaxonModule throws CompileError
 	if allModuleCacheValid(project) 'hit'
@@ -1056,25 +1138,16 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 
 	project.db.allModuleMisses = project.db.allModuleMisses + 1
 
-	// The merge is a fixpoint, because a stdlib body is built only if something reaches it: round 0
-	// folds every file with no stdlib body built at all, and each later round has the bodies the
-	// previous round's reachability walk demanded. See `StdlibSource.growStdlibBodyDemand` for why it
-	// terminates.
-	//
-	// ⚠ A round re-folds EVERY file rather than patching the previous module: `mergeArtifact`'s
-	// registries are first-wins and push-append, and its `opRanges`/`valueOrigins` are parallel to the
-	// module's op array by offset, so splicing one file's newly-built bodies into a merged module
-	// would have to re-derive every one of those — precisely what re-folding does. The re-fold is
-	// cheap because every parse it asks for is a memo hit except the files whose demand actually
-	// moved.
-	var merged = try foldEveryFileIntoAModule(project)
+	// ⛔ **THE POOL IS CLOSED ON EVERY EXIT.** Dropping the last handle to a worker is what lets its green thread
+	// finish, and a front end that threw with its workers still held would leave services no exit can end.
+	var pool = FrontEndPool.create()
 
-	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
-		// Nothing is invalidated here, and that is the point: only the files whose bodies this round
-		// newly demanded have a moved parse key, so a round costs one re-parse of the files that changed
-		// plus a fold, not a re-parse of the whole cone.
-		merged = try foldEveryFileIntoAModule(project)
-	end 'demandGrew'
+	let merged = try foldTheFrontEnd(project, pool: pool) otherwise (err) 'frontEndFailed'
+		pool.close(project)
+		throw err
+	end 'frontEndFailed'
+
+	pool.close(project)
 
 	// The project's ranged-alias registry gets the same range-contest settlement `ProgramSignatures`
 	// did, and it must be settled here because this is where its last declaration lands. The two
@@ -1088,30 +1161,174 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	return merged
 end 'queryAllModule'
 
+// Every file lexed, then folded into a module until the stdlib's body demand stops growing — all of it on one
+// pool.
+function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule throws CompileError
+	try pool.lexEveryFile(project)
+
+	// The merge is a fixpoint, because a stdlib body is built only if something reaches it: round 0
+	// folds every file with no stdlib body built at all, and each later round has the bodies the
+	// previous round's reachability walk demanded. See `StdlibSource.growStdlibBodyDemand` for why it
+	// terminates.
+	//
+	// ⚠ A round re-folds EVERY file rather than patching the previous module: `mergeArtifact`'s
+	// registries are first-wins and push-append, and its `opRanges`/`valueOrigins` are parallel to the
+	// module's op array by offset, so splicing one file's newly-built bodies into a merged module
+	// would have to re-derive every one of those — precisely what re-folding does. The re-fold is
+	// cheap because every parse it asks for is a memo hit except the files whose demand actually
+	// moved.
+	var merged = try foldEveryFileIntoAModule(project, pool: pool)
+
+	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
+		// Nothing is invalidated here, and that is the point: only the files whose bodies this round
+		// newly demanded have a moved parse key, so a round costs one re-parse of the files that changed
+		// plus a fold, not a re-parse of the whole cone.
+		merged = try foldEveryFileIntoAModule(project, pool: pool)
+	end 'demandGrew'
+
+	return merged
+end 'foldTheFrontEnd'
+
 // One round of the merge: every file's artifact folded into a fresh module, with the registries
 // `mergeArtifact` builds reset first. Artifacts are the source of truth for those registries, so a
 // miss rebuilds them from scratch and a warm re-run never double-commits — which is what makes a
 // second round of the body-demand fixpoint above safe to run over the same project.
 //
-// `merge` is probed around `mergeArtifact` ALONE: `queryParseOps` is called outside the probe on
-// each iteration, so the fold's cost never absorbs the parse's.
-function foldEveryFileIntoAModule(project Project) returns MaxonModule throws CompileError
-	resetMergeTargets(project)
-
+// ⭐ **EVERY FILE IS PARSED BEFORE ANY IS MERGED**, against the signature index restored to its settled
+// baseline: a merge writes the index, and a parse reads only what every parse reads. Once every file is merged
+// the index holds every file's rows, and each file's row-set answers are checked against them; a file told
+// something the whole program disagrees with is filed the whole program's answer and the round is folded again,
+// its parse now keyed on that answer (`ProgramSignatures.rowSetAnswersThatMoved`).
+//
+// `merge` is probed around `mergeArtifact` ALONE: the parses run before it, so the fold's cost never absorbs
+// the parse's.
+function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns MaxonModule throws CompileError
+	// ⭐ **THIS TERMINATES WITH NO BOUND OF ITS OWN.** A fold that is not the last either files or drops a generic
+	// type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index and drops
+	// every override, or, against one index, stands an answer for a (file, question) pair no earlier fold stood
+	// (`RowSetOverrideTable.stand`). Both are finite, so the folds are too.
+	var signatures = try queryProgramSignatures(project)
+	project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
+	var moved = InstantiatedTypeNameSet.create()
+	var folds = 1 as FoldCount
 	var merged = MaxonModule.create()
 
-	// Index loop, not `for … in`: the element is a BORROW of `project`, and the call below is recorded
-	// as writing that same storage. See `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
-		var artifact = try queryParseOps(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("foldEveryFileIntoAModule: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
+	while true 'untilTheFoldStands'
+		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, moved: moved) 'verdict'
+			stands then break 'untilTheFoldStands'
+			answersMoved or
+				indexMoved then folds = folds + 1
+		end 'verdict'
 
-		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
-		mergeArtifact(project, target: merged, artifact: artifact)
-		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
-	end 'eachFile'
+		// A new index when the one before it was settled without a type this fold filed; the same one otherwise.
+		signatures = try queryProgramSignatures(project)
+		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
+		merged = MaxonModule.create()
+	end 'untilTheFoldStands'
 
+	logDebug(LogCategory.compiler, message: function() gives "merge: {folds} fold(s) of {project.db.sourcePaths.count()} file(s)")
 	return merged
 end 'foldEveryFileIntoAModule'
+
+typealias FoldCount = int(1 to u64.max)
+
+// What one fold found: nothing to redo, a file's row-set answers to redo it with, or an index to settle again.
+enum FoldVerdict
+	stands
+	answersMoved
+	indexMoved
+end 'FoldVerdict'
+
+// One fold into `merged`.
+//
+// ⚠ **A NEWLY INSTANTIATED TYPE IS ASKED FIRST, EVEN OF A FOLD THAT WAS REFUSED**, because it changes which methods
+// carry a layout descriptor — an input every parse reads. Answers checked against this index would describe parses
+// the next fold does not run, and a refusal may be one a store without its descriptor earned; the fold's own
+// diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
+// program really mints whether or not every file merged, so the type is filed either way.
+function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet) returns FoldVerdict throws CompileError
+	let diagnosticsBeforeTheFold = project.diagnostics.count()
+	resetMergeTargets(project)
+	signatures.restoreBaseline()
+
+	var artifacts = try pool.parseEveryFile(project, signatures: signatures)
+
+	for position in 0 upto artifacts.count() 'eachArtifact'
+		var artifact = try artifacts.get(position) otherwise panic("foldVerdict: artifacts.get OOB at {position}")
+		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+		mergeArtifact(project, target: into, artifact: artifact, signatures: signatures)
+		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
+	end 'eachArtifact'
+
+	let newlyInstantiated = signatures.typesNewlyInstantiatedByAParse()
+
+	if not newlyInstantiated.isEmpty() 'aParseInstantiatedATypeTheIndexDidNotCount'
+		for name in newlyInstantiated 'eachType'
+			logDebug(LogCategory.compiler, message: function() gives "instantiated by a parse: '{String.from(name)}' — the signature index is settled again")
+			noteMoved(moved, name: name)
+			project.db.instantiatedByAParse.file(name)
+		end 'eachType'
+
+		project.diagnostics.truncate(diagnosticsBeforeTheFold as ElementIndex)
+		return FoldVerdict.indexMoved
+	end 'aParseInstantiatedATypeTheIndexDidNotCount'
+
+	// A program already refused has a half-merged index, so its answers are no evidence either way.
+	if projectHasErrors(project) 'refused'
+		return FoldVerdict.stands
+	end 'refused'
+
+	let needless = signatures.typesFiledNeedlessly()
+
+	if not needless.isEmpty() 'aFiledTypeNoLongerNeedsFiling'
+		for name in needless 'eachType'
+			logDebug(LogCategory.compiler, message: function() gives "no longer instantiated only by a parse: '{String.from(name)}' — the signature index is settled again")
+			noteMoved(moved, name: name)
+			project.db.instantiatedByAParse.drop(name)
+		end 'eachType'
+
+		return FoldVerdict.indexMoved
+	end 'aFiledTypeNoLongerNeedsFiling'
+
+	return FoldVerdict.answersMoved if rowSetAnswersMoved(project, artifacts: artifacts, signatures: signatures) else FoldVerdict.stands
+end 'foldVerdict'
+
+// A name filed or dropped in one front end moves once: the rows a parse mints do not depend on whether a type is
+// filed, so a name that moved back would be a fold that never settles.
+function noteMoved(moved InstantiatedTypeNameSet, name ByteArray)
+	if moved.contains(name) 'movedBefore'
+		panic("foldVerdict: '{String.from(name)}' was filed and then dropped in one front end — the rows a parse mints moved with whether the type was filed, so the folds would not settle")
+	end 'movedBefore'
+
+	moved.insert(name)
+end 'noteMoved'
+
+// Check every artifact's row-set answers against the merged index, filing each file's moved answers as its
+// overrides. Answers whether any moved.
+function rowSetAnswersMoved(project Project, artifacts FileParseArtifactArray, signatures ProgramSignatures) returns bool
+	var complete = RowSetAnswerMap.create()
+	var moved = false
+
+	for artifact in artifacts 'eachArtifact'
+		match artifact.parseMints 'mints'
+			none then continue
+			minted(mints) then moved = fileRowSetAnswersMoved(project, path: artifact.filePath, mints: mints, signatures: signatures, complete: complete) or moved
+		end 'mints'
+	end 'eachArtifact'
+
+	return moved
+end 'rowSetAnswersMoved'
+
+function fileRowSetAnswersMoved(project Project, path FilePath, mints LocalInstanceMints, signatures ProgramSignatures, complete RowSetAnswerMap) returns bool
+	var overrides = project.db.rowSetOverrides.of(path)
+
+	if not signatures.rowSetAnswersThatMoved(path, mints: mints, overrides: overrides, complete: complete) 'stands'
+		return false
+	end 'stands'
+
+	project.db.rowSetOverrides.file(path, table: overrides)
+	return true
+end 'fileRowSetAnswersMoved'
 
 // Every function-value ternary / match expression recorded a `PendingFnMergeCheck` at parse,
 // because a forward-referenced or cross-file arm's signature is not knowable at parse (the
@@ -1467,11 +1684,10 @@ function compilerMintedNamesIn(project Project, path FilePath) returns ByteArray
 	return ByteArrayArray.create()
 end 'compilerMintedNamesIn'
 
-// Every pass that reads a file reads it through here: the per-file signature sweep, the
-// whole-program interface pass, the extension pass, and the real parse. Each needs the same four
-// per-file facts, which written out per pass would be four copies of one derivation and four
-// chances to disagree — three copies updated and one missed would classify the SAME file two ways
-// inside one compile, silently.
+// ⭐ **WHAT EVERY PASS READS A FILE WITH, DERIVED FROM THE PROJECT ON THE MAIN THREAD** — the per-file signature sweep,
+// the whole-program interface and extension passes, and the real parse (`ParseStaging.parseFile`). Each needs the same
+// per-file facts, which written out per pass would be copies of one derivation free to classify the SAME file two
+// ways inside one compile, silently.
 //
 // `isStdlibSourceFile` is the expensive probe its own header prices, and
 // `livesUnderStdlibDirectory` is a derivation over its answer, not a second probe — which is why
@@ -1480,17 +1696,22 @@ end 'compilerMintedNamesIn'
 // The namespace is read back from the index rather than re-derived: `foldOneFileInto` derives it
 // once per file from the anchor only it holds, and a second derivation is a second chance to pick a
 // different anchor for the same file.
-//
-// `tokens` is a parameter rather than a `queryActiveTokens` call in here because two callers
-// deliberately fetch them outside their phase probe, so that a `signatures` or `parse` phase never
-// absorbs the lexing it depends on.
-function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
+function parseJobFor(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, buildsBodies bool) returns ParseJob
 	// Probed ONCE and handed to both readers: the tier bit the parser carries and the declaration
 	// exemption derived from it. Two probes would be two chances to classify one file two ways inside
 	// one compile, which is the drift this routine exists to prevent.
 	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
 
-	return Parser.create(tokens, filePath: path, namespace: signatures.namespaceOf(path), signatures: signatures, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: compilerMintedNamesIn(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+	return ParseJob.create(path, namespace: signatures.namespaceOf(path), isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: compilerMintedNamesIn(project, path: path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+end 'parseJobFor'
+
+// A reader over one file for a pass that folds what it reads into the index rather than building an artifact —
+// the sweep and the whole-program declaration folds — sharing the project's anchors.
+//
+// `tokens` is a parameter rather than a `queryActiveTokens` call in here because a caller deliberately
+// fetches them outside its phase probe, so that a `signatures` phase never absorbs the lexing it depends on.
+function fileReader(project Project, signatures ProgramSignatures, path FilePath, tokens TokenArray, isStdlibSource bool, buildsBodies bool) returns Parser
+	return Parser.create(tokens, job: parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: buildsBodies), signatures: signatures, anchors: project.readerAnchors)
 end 'fileReader'
 
 // ⭐⭐ **THREE STATES, AND ONLY `stdlib/` IS THE LAZY ONE.**
@@ -1708,7 +1929,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// is the only place that does: a bare lexical CATEGORY (`identifier`) is written bare and
 		// everything else quoted, which is canonical `/specs`' own rule. See there. This text is compared
 		// byte-for-byte by `variables.md`'s type-annotation-rejection tests.
-		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected)} but got '{got}'", line: line, column: column, filePath: path)
+		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected, keywords: project.keywords)} but got '{got}'", line: line, column: column, filePath: path)
 		expectedExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
 
 		// The fifth E2004 family (see the registry's `doc`): the initializer parsed fine and is simply
@@ -1775,6 +1996,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		droppedSignature(name, declaredIn, declLine, declColumn, line, column) then reportPositioned(project, code: ErrorCode.internalDroppedSignature, message: "'{name}' is declared at {declaredIn}:{declLine}:{declColumn}, but the declaration sweep could not read its signature and the whole-program index does not carry it — so every use of it is refused as though nothing had been declared. This is a compiler bug: the sweep's tolerance exists for MALFORMED source, which the real parse then reports with a position, and a declaration the real parse reads is not that", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
 		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
+		ambiguousBareFunctionName(name, candidates, use, line, column) then reportPositioned(project, code: ErrorCode.semanticAmbiguousCrossFileCall, message: ambiguousBareFunctionNameMessage(name, candidates: candidates, use: use), line: line, column: column, filePath: path)
 
 		// E3008 / E3088 by tier, through the same producer `SemanticCheck.reportCalleeNotVisible` reports
 		// a BODY's hidden call with, applied to the refusals a parse-time door has to decide for itself:
@@ -2109,6 +2331,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// what has to change. The third says which of `public`/`export` is wrong, since only one is.
 		rawIntrinsicOutsideRuntimeTier(callee, line, column) then reportPositioned(project, code: ErrorCode.rawIntrinsicOutsideRuntimeTier, message: "call to '{callee}' from outside the runtime source tier: '__Raw' names a raw runtime intrinsic, callable only from a source file under runtime/", line: line, column: column, filePath: path)
 		managedValueInRuntimeSource(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "'{name}' has managed type '{typeName}': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
+		bareGenericSubjectUnbound(message, line, column) then reportPositioned(project, code: ErrorCode.bareGenericSubjectUnbound, message: message, line: line, column: column, filePath: path)
 		contradictoryFrameDirectives(line, column) then reportPositioned(project, code: ErrorCode.contradictoryFrameDirectives, message: "a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site", line: line, column: column, filePath: path)
 		wideVisibilityInRuntimeSource(keyword, line, column) then reportPositioned(project, code: ErrorCode.wideVisibilityInRuntimeSource, message: "{visibilityModifierSpelling(keyword)} is not allowed in a runtime source file: runtime/ is loaded into every program, so a declaration visible outside the tier contests names with the programs it is linked into — the compiler compiling itself among them; 'module' is the widest visibility the tier's own file-to-file sharing needs", line: line, column: column, filePath: path)
 		managedTypeInRuntimeSource(typeName, line, column) then reportPositioned(project, code: ErrorCode.managedValueInRuntimeSource, message: "managed type '{typeName}' is not allowed in a runtime source file: the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)

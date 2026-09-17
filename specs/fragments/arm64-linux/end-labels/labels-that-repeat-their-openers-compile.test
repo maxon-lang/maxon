@@ -1,0 +1,173 @@
+// Test: labels-that-repeat-their-openers-compile
+typealias Count = int(0 to 100)
+
+interface Sized
+	function size() returns Count
+end 'Sized'
+
+type Box implements Sized
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	export function size() returns Count
+		return self.n
+	end 'size'
+end 'Box'
+
+extension Box
+	export function doubled() returns Count
+		return self.n * 2
+	end 'doubled'
+end 'Box'
+
+enum Color
+	red
+	green
+end 'Color'
+
+union Shape
+	dot
+	square(side Count)
+end 'Shape'
+
+function unlabelled() returns Count
+	return 1
+end
+
+function main() returns ExitCode
+	var total = unlabelled()
+	let box = Box.create()
+
+	if box.size() > 2 'big'
+		total = total + box.doubled()
+	end 'big' else 'small'
+		total = total + 1
+	end 'small'
+
+	for i in 0 upto 2 'eachStep'
+		total = total + i
+	end 'eachStep'
+
+	while total < 10 'grow'
+		total = total + 1
+	end 'grow'
+
+	let color = Color.green
+
+	match color 'pick'
+		red then total = total + 1
+		green then total = total + 2
+	end 'pick'
+
+	match Shape.square(2) 'shape'
+		dot then total = total + 1
+		square(side) then total = total + side
+	end 'shape'
+
+	return total
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body#27:
+    arm64.movImm x19, 1
+  __il_body#28:
+    arm64.movImm x20, 3
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x20
+  __il_body#29:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+  __il_cont#24:
+    arm64.cmp x1, 2
+    arm64.b.le ifelse
+  __il_body#31:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.lsl x1, x1, 1
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#33
+  __rc_chk#34:
+    arm64.cmp x1, 100
+    arm64.b.gt __rc_panic#33
+  __il_cont#30:
+    arm64.add x1, x1, 1
+    arm64.b ifcont
+  ifelse:
+    arm64.add x1, x19, 1
+  ifcont:
+    arm64.movImm x2, 0
+    arm64.b forhdr
+  eachStep:
+    arm64.add x1, x1, x2
+  forstep:
+    arm64.add x2, x2, 1
+  forhdr:
+    arm64.cmp x2, 2
+    arm64.b.lt eachStep
+    arm64.b whilehdr
+  grow:
+    arm64.add x1, x1, 1
+  whilehdr:
+    arm64.cmp x1, 10
+    arm64.b.lt grow
+  matcharm#12:
+    arm64.add x1, x1, 2
+  matchcont#15:
+    arm64.movImm x2, 2
+    arm64.movImm x3, 1
+    arm64.cmp x3, 0
+    arm64.b.ne matchnext
+  matcharm#16:
+    arm64.add x19, x1, 1
+    arm64.b matchcont#20
+  matchnext:
+    arm64.cmp x3, 1
+    arm64.b.ne matchdead
+  matcharm#17:
+    arm64.add x19, x1, x2
+  matchcont#20:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#22
+  __rc_chk#23:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic#22
+  __rc_ok:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  __rc_panic#33:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at labels-that-repeat-their-openers-compile.test:22: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic#22:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at labels-that-repeat-their-openers-compile.test:70: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,70 @@
+// Test: error.try-block-combined-error-matched-between-two-calls-of-an-inner-try
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(msg String)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+enum ErrC implements Error
+	boom
+end 'ErrC'
+
+function callA(which Score) returns Score throws ErrA
+	if which == 1 'bad'
+		throw ErrA.bad("bad {which}")
+	end 'bad'
+
+	return 5
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function callC(which Score) returns Score throws ErrC
+	if which == 1 'boom'
+		throw ErrC.boom
+	end 'boom'
+
+	return 7
+end 'callC'
+
+function classify(which Score) returns String
+	var said = ""
+
+	try 'work'
+		let a = callA(which)
+		let b = callB()
+		said = "sum {a + b}"
+	end 'work'
+	otherwise (e) 'h'
+		try 'inner'
+			let first = callC(which)
+			said = match e 'k'
+				ErrA.bad(msg) gives msg
+				splat gives "splat"
+			end 'k'
+			let second = callC(first)
+			said = "{said}{second}"
+		end 'inner'
+		otherwise (f) 'ih'
+			match f 'fk'
+				boom then said = "boom"
+			end 'fk'
+		end 'ih'
+	end 'h'
+
+	return said
+end 'classify'
+
+function main() returns ExitCode
+	print("{classify(1)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3161: <fragment>:45:3: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs

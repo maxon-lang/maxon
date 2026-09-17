@@ -1,0 +1,18 @@
+// reported-once.test.maxon — a define that cannot bind is reported once per build, however many times the front
+// end settles the signature index.
+//
+// A parse that mints a generic instance no declaration names settles the index again, and the defines are
+// resolved in every settle. The problem belongs to the build, so the count is the assertion.
+
+let UnknownCode = "E3149"
+let UnknownName = "NoSuchConstant"
+let InferredFixtureName = "inferred"
+
+test 'a define naming nothing is reported once when a parse settles the index again'
+	let staged = stagedProgram("reported-once", fixture: InferredFixtureName)
+
+	let stderr = try requireRefusedBuild(staged, pair: "{UnknownName}=x")
+	let reports = stderr.split(UnknownCode).count() - 1
+	try Expect.equal(reports as AssertedInt, expected: 1, message: "the refusal carried {UnknownCode} {reports} time(s), expected once. It said: {stderr}")
+	try Expect.isTrue(stderr.contains(UnknownName), message: "the refusal did not name the define that could not bind. It said: {stderr}")
+end 'a define naming nothing is reported once when a parse settles the index again'

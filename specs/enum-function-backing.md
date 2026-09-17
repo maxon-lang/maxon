@@ -206,3 +206,186 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: function-backing.contested-name-resolves-at-the-declaring-file -->
+A case's function name is resolved where the ENUM is declared, under the bare-call rule: `doubleFn` is
+declared in `alpha/` (file-private) and in `beta/` (exported), so from `api/dispatch.maxon` it means
+beta's. The read happens inside `alpha/a.maxon`, where alpha's own `doubleFn` is visible — so a name
+resolved at the reader would answer 30 + 3 instead of 20 + 3.
+
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+export function viaEnum() returns Integer
+	let f = Op.doubleOp.rawValue
+	return f(10) + doubleFn(1)
+end 'viaEnum'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return viaEnum() as ExitCode
+end 'main'
+```
+```exitcode
+23
+```
+
+<!-- test: function-backing.error.contested-name-with-two-visible-candidates -->
+Two visible declarations of the case's function name are an ambiguity at the enum's declaration, and
+the case is refused rather than bound to either.
+
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(10) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.doubleFn, beta.doubleFn
+```
+
+<!-- test: function-backing.contested-name-qualified-by-its-directory -->
+The remedy E3095 names is writable in the declaration: a directory-qualified function name backs the case with
+the declaration that directory holds.
+
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = beta.doubleFn
+	tripleOp = alpha.doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	let g = Op.tripleOp.rawValue
+	return (f(10) + g(1)) as ExitCode
+end 'main'
+```
+```exitcode
+23
+```
+
+<!-- test: function-backing.error.a-throwing-backing-function-is-refused-by-the-name-it-was-written-as -->
+The case's refusal quotes the function name the declaration wrote, though it resolves to beta's declaration.
+
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+export function viaAlpha() returns Integer
+	return doubleFn(1)
+end 'viaAlpha'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export enum OpError implements Error
+	overflow
+end 'OpError'
+
+export function doubleFn(x Integer) returns Integer throws OpError
+	if x > 1000 'tooBig'
+		throw OpError.overflow
+	end 'tooBig'
+
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return (f(10) + viaAlpha()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3101: api/<fragment>:30:2: Cannot use throwing function 'doubleFn' as a value: it throws 'OpError', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+```
+
+<!-- test: function-backing.error.a-type-method-does-not-back-a-case -->
+A dotted name backs a case only where it would read as a function value: `beta.doubleFn` names a function in a
+directory, and `Box.make` names a type's method, which `let f = Box.make` does not read as one either.
+
+```maxon
+type Box
+	export var n as Integer
+
+	export static function make(value Integer) returns Integer
+		return value * 2
+	end 'make'
+end 'Box'
+
+enum Op
+	double = Box.make
+end 'Op'
+
+function main() returns ExitCode
+	let f = Op.double.rawValue
+	print("{f(21)}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2004: <fragment>:11:11: Undefined variable 'Box.make'
+```

@@ -1,7 +1,7 @@
 ---
 feature: lazy-static
 status: experimental
-keywords: [static, var, let, lazy, initializer, cache]
+keywords: [static, var, let, initializer, before-main, struct-literal]
 category: language
 ---
 
@@ -9,43 +9,47 @@ category: language
 
 ## Documentation
 
-Static fields can be initialized with complex expressions including function calls, struct literals, and array literals. Each initializer runs eagerly, exactly once, before `main`. The cases here pin the VALUE a static holds; `lazy-static-observable.md` pins WHEN its initializer runs, and the one exception to that timing: a standard-library static that nothing reads is not emitted at all, initializer included.
+A static field can be initialized by a function call, an array literal, or a struct literal of the type whose
+body declares it, as well as by a constant. The cases here pin the VALUE every such initializer leaves in its
+slot; `specs/lazy-static-observable.md` pins WHEN it runs, which no case here can see, and the one exception
+to that timing: a standard-library static that nothing reads is not emitted at all, initializer included.
 
 ### Syntax
 
 ```text
 type MyType
-  static var cached = SomeType.create()
-  static let DEFAULTS = [1, 2, 3]
+	static var cached = SomeType.create()
+	static let DEFAULTS = [1, 2, 3]
 end 'MyType'
 ```
 
 ### Semantics
 
-- The initializer expression is evaluated once, before `main`, whether or not the field is ever read; an initializer that reads another static runs after the one it reads
-- Every access returns the stored value
-- `static var` fields can be reassigned after initialization
-- `static let` fields are immutable after initialization
-- Constant initializers (integer, float, bool literals) continue to be evaluated at compile time
+- Every initializer runs before `main`, exactly once, in dependency order, whether or not anything reads the
+  field, a standard-library static aside (`specs/lazy-static-observable.md`)
+- Every read answers with the value the initializer left, until a `static var` is assigned
+- Assigning to a `static var` is a plain store; the initializer does not run again
+- Assigning to a `static let` is E2013 (`specs/static-variables.md`)
+- A constant initializer is folded at compile time
 
 ### Use Cases
 
-Caching expensive computations:
+Sharing one computed value:
 
 ```text
 type CharacterSet
-  static var cachedWhitespace = CharacterSet.buildWhitespace()
+	static let cachedWhitespaces = CharacterSet{chars: CharSet from ['\t'], categoryMask: 8388608}
 
-  export static function whitespace() returns CharacterSet
-    return CharacterSet.cachedWhitespace
-  end 'whitespace'
+	public static function whitespaces() returns CharacterSet
+		return CharacterSet.cachedWhitespaces
+	end 'whitespaces'
 end 'CharacterSet'
 ```
 
 ## Tests
 
 <!-- test: lazy-static.basic-function-call -->
-### Basic lazy static with function call
+### A static initialized by a function call
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -73,7 +77,7 @@ end 'main'
 ```
 
 <!-- test: lazy-static.initialized-once -->
-### Lazy static initialized only once
+### A static initialized only once
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -113,7 +117,7 @@ end 'main'
 ```
 
 <!-- test: lazy-static.factory-call-with-labelled-argument -->
-### Lazy static built by a static factory call with a labelled argument
+### A static built by a static factory call with a labelled argument
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -149,7 +153,7 @@ end 'main'
 ```
 
 <!-- test: lazy-static.mutable-reassign -->
-### Lazy static var can be reassigned
+### A static var built by a call can be reassigned
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -192,7 +196,7 @@ end 'main'
 ```
 
 <!-- test: lazy-static.multiple-fields -->
-### Multiple lazy statics in same type
+### Several call-initialized statics in one type
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -224,7 +228,7 @@ end 'main'
 ```
 
 <!-- test: lazy-static.array-literal -->
-### Lazy static with array literal
+### A static initialized by an array literal
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -254,7 +258,7 @@ end 'main'
 
 ```maxon
 type WSCache
-	static var ws = CharacterSet.whitespacesAndNewlines()
+	static let ws = CharacterSet.whitespacesAndNewlines()
 
 	export static function isWhitespace(c Character) returns bool
 		return WSCache.ws.contains(c)
@@ -282,7 +286,7 @@ space tab
 ```
 
 <!-- test: lazy-static.collection-initializer -->
-### Lazy static with collection initializer
+### A static initialized by a collection conversion
 
 ```maxon
 typealias CharSet = Set with Character
@@ -308,7 +312,7 @@ true false true
 ```
 
 <!-- test: lazy-static.cross-type-return -->
-### Lazy static with function returning a different type
+### A static initialized by a function returning a different type
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -351,14 +355,10 @@ end 'main'
 ```
 
 <!-- test: lazy-static.two-loads-in-one-function -->
-### Two loads of one lazy static in the same function
+### Two loads of one static in the same function
 
-Each load emits a guard whose "already initialized" edge is a **fall-through** to its own merge
-block, so nothing may sit between the two. The init block is therefore emitted at the end of the
-function rather than next to its merge block: placed next to it, the second guard — which is
-emitted *into* the first merge block — would fall through into the first init block, which ends by
-branching back to the first merge block. That is an endless loop. Every other test in this file
-reads its static through a one-load accessor, which is why one load was enough to look correct.
+Every other case in this file reads its static through a one-load accessor. Here one function loads the same
+static twice, and both loads answer with the same value.
 
 ```maxon
 type Vocab
@@ -386,10 +386,10 @@ end 'main'
 ```
 
 <!-- test: lazy-static.repeated-loads-across-a-branch -->
-### Several lazy statics loaded repeatedly, including inside a branch
+### Several statics loaded repeatedly, including inside a branch
 
-Three loads of two different statics in one function, one of them on a conditional path, so the
-deferred init blocks are a chain rather than a single pair and one guard sits inside a branch.
+Three loads of two different statics in one function, one of them on a conditional path: a load that runs on
+only some paths answers with the same value as the loads that run on every path.
 
 ```maxon
 type Vocab
@@ -428,8 +428,8 @@ A struct construction is a CALL whose callee is a TYPE rather than a function, a
 arguments are its FIELDS. Everything the cases below assert follows from that one sentence: a field's
 value is admitted from exactly the set a factory ARGUMENT is (a constant, a String or array literal, an
 empty container, another call — or another construction), a field the literal omits takes the DEFAULT its
-declaration supplies, and the record is built before `main` exactly as a `static var x = T.create()`
-initializer is.
+declaration supplies, and the record is built before `main` the same way a `static var x = T.create()`
+is.
 
 The construction is legal **inside the type's own body and nowhere else**, which is the ordinary E3076
 restriction rather than a rule of its own — a `static` member's initializer is written inside the `type`
@@ -705,8 +705,7 @@ end 'main'
 <!-- test: lazy-static.struct-literal-never-read -->
 ### A struct-literal static nothing ever reads
 
-The initializer runs on first access, so a static nothing accesses builds nothing — and the program still
-exits cleanly, with no record left behind for the cleanup to trip over.
+Nothing ever loads `Pair.origin`, and the program still runs to a clean exit.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -819,11 +818,11 @@ end 'main'
 error E2010: specs/fragments/lazy-static/error.struct-literal-initializer-positional-fields.test:8:27: Expected identifier but got '1'
 ```
 
-### Error: A lazy static field's initializer must consume everything up to the end of its line
+### Error: a static field's initializer must consume everything up to the end of its line
 
-A static field with a non-constant initializer is deferred to its first access and re-parsed from a
-stored token region — the same door a top-level `var` uses, and it dropped its leftovers the same way:
-`static var b = Box.create() zzz` initialized `b` and said nothing about `zzz`.
+An initializer is its whole token range. A non-constant one folds nothing — all of it is a call `__module_init`
+makes before `main` — so a token left over after that call is refused where it stands rather than ignored, in
+the same words a top-level binding's initializer gets (`specs/top-level-let.md`).
 
 <!-- test: error.static-field-init-trailing-tokens -->
 ```maxon

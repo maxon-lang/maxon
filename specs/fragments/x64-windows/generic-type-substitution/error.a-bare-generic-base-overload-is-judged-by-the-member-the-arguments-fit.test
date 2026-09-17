@@ -1,0 +1,36 @@
+// Test: error.a-bare-generic-base-overload-is-judged-by-the-member-the-arguments-fit
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type Box uses Element
+	export var n as Int
+
+	export static function create(_ Element) returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export static function create(first IntArray) returns Self
+		return Self{n: first.count()}
+	end 'create'
+end 'Box'
+
+type Outer uses T
+	typealias TArr = Array with T
+	export var inner as Box
+
+	export static function create(first T) returns Self
+		var items = TArr.create()
+		items.push(first)
+		return Self{inner: Box.create(items)}
+	end 'create'
+end 'Outer'
+
+typealias OuterStr = Outer with String
+
+function main() returns ExitCode
+	let o = OuterStr.create("alpha {1}")
+	return o.inner.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3162: <fragment>:24:26: 'Box' is named without type arguments inside 'type Outer uses T', where its parameter 'Element' binds to nothing, so 'Box.create' may not be handed a value typed at a parameter of 'Outer': no instance of 'Box' describes what it would hold. Name the instance with a typealias, e.g. 'typealias BoxInstance = Box with T'

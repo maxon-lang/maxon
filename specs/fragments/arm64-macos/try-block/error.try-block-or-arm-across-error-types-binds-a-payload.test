@@ -1,0 +1,39 @@
+// Test: error.try-block-or-arm-across-error-types-binds-a-payload
+typealias Score = int(0 to 1000)
+
+union ErrA implements Error
+	bad(note Score, code Score)
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function callA() returns Score throws ErrA
+	throw ErrA.bad(50, code: 7)
+end 'callA'
+
+function callB() returns Score throws ErrB
+	return 6
+end 'callB'
+
+function main() returns ExitCode
+	var sum = 0
+
+	try 'work'
+		let a = callA()
+		let b = callB()
+		sum = a + b
+	end 'work'
+	otherwise (e) 'h'
+		match e 'k'
+			ErrA.bad(_, code) or
+				ErrB.splat then sum = code
+		end 'k'
+	end 'h'
+
+	return sum
+end 'main'
+---
+CompilerError:
+error E3129: <fragment>:30:16: the payload binding 'code' cannot be honoured: this arm names cases of more than one error type, and its bindings read slots of one type's value, which a case of another type does not hold. Give each error type an arm of its own

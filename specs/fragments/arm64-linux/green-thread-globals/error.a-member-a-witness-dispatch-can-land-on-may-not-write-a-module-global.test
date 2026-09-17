@@ -1,0 +1,49 @@
+// Test: error.a-member-a-witness-dispatch-can-land-on-may-not-write-a-module-global
+var greetings = 0
+
+interface Greeter
+	function greet() returns String
+end 'Greeter'
+
+type Loud implements Greeter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function greet() returns String
+		greetings = greetings + 1
+		return "HELLO"
+	end 'greet'
+end 'Loud'
+
+function describe(g Greeter) returns String
+	return g.greet()
+end 'describe'
+
+type Counter
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function add(by Integer) returns Integer
+		let loud = Loud.create()
+		self.count = self.count + by + (describe(loud).count() as Integer)
+		return self.count
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add(5) otherwise 0
+	print("n={n} greetings={greetings}\n")
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3143: <fragment>:16:3: `Loud.greet` writes the module-level `greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `greetings = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
+note: <fragment>:40:10: the `spawn` that makes `Counter` a service

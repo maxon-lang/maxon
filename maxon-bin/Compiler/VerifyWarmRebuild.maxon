@@ -10,6 +10,8 @@
 //      cache HIT, not recompute.
 //   3. Invalidation (soundness): a re-query over CHANGED input must land as a MISS —
 //      and only the memos that actually read that input may miss.
+//   4. Warm equals cold: a compile that reuses the memos of files an edit did not touch must emit
+//      exactly what a cold compile of the edited program emits.
 //
 // ⚠ **(3) IS THE ONE WITH TEETH, AND IT WAS MISSING FOR AS LONG AS A PARSE READ ONLY ITS OWN
 // FILE.** (1) and (2) both prove a memo is STABLE; neither can catch the opposite failure — a
@@ -81,11 +83,12 @@ export function verifyWarmRebuild(inputPath FilePath, target Target) returns boo
 	let determinismOk = try verifyDeterminism(inputPath, target: target)
 	let cacheOk = try verifyCacheHit(inputPath, target: target)
 	let invalidationOk = try verifyInvalidation(inputPath, target: target)
+	let warmOk = try verifyWarmCompileMatchesCold(inputPath, target: target)
 
-	let allOk = determinismOk and cacheOk and invalidationOk
+	let allOk = determinismOk and cacheOk and invalidationOk and warmOk
 
 	if allOk 'passed'
-		print("verify-warm-rebuild: PASS (determinism + cache + invalidation)\n")
+		print("verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold)\n")
 		return true
 	end 'passed'
 
@@ -111,17 +114,22 @@ function verifyDeterminism(inputPath FilePath, target Target) returns bool throw
 	let first = try compileColdOnce(inputPath, target: target)
 	let second = try compileColdOnce(inputPath, target: target)
 
-	var sections = EmittedSectionArray.create()
-	sections.push(EmittedSection.create(SectionNameCode, left: first.code, right: second.code))
-	sections.push(EmittedSection.create(SectionNameRdata, left: first.rdata, right: second.rdata))
-	sections.push(EmittedSection.create(SectionNameSymdata, left: first.symdata, right: second.symdata))
-	sections.push(EmittedSection.create(SectionNameData, left: first.dataPrelude, right: second.dataPrelude))
-
-	return match compareEmittedSections(sections) 'outcome'
+	return match compareCodeResults(first, right: second) 'outcome'
 		allIdentical(totalBytes) gives reportDeterminismPass(totalBytes)
 		sectionDiffers(detail) gives reportDeterminismFail(detail)
 	end 'outcome'
 end 'verifyDeterminism'
+
+// Every emitted section of two compiles, compared as one verdict.
+function compareCodeResults(left CodeResult, right CodeResult) returns DeterminismOutcome
+	var sections = EmittedSectionArray.create()
+	sections.push(EmittedSection.create(SectionNameCode, left: left.code, right: right.code))
+	sections.push(EmittedSection.create(SectionNameRdata, left: left.rdata, right: right.rdata))
+	sections.push(EmittedSection.create(SectionNameSymdata, left: left.symdata, right: right.symdata))
+	sections.push(EmittedSection.create(SectionNameData, left: left.dataPrelude, right: right.dataPrelude))
+
+	return compareEmittedSections(sections)
+end 'compareCodeResults'
 
 function reportDeterminismPass(totalBytes BytePos) returns bool
 	print("PASS determinism: {totalBytes} bytes identical across 2 cold compiles\n")
@@ -603,6 +611,65 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	printError("FAIL invalidation: a parse memo does not track both of its inputs (see above)\n")
 	return false
 end 'verifyInvalidation'
+
+// --- Property 4: warm equals cold (a reused parse means what it meant) ---
+
+// ⭐ **THE EDIT IS BYTES-ONLY AND LANDS ON THE LAST FILE THE AUTHOR WROTE, AND BOTH CHOICES ARE THE
+// MEASUREMENT.** A bytes-only edit keeps every other file's parse memo valid while the signature index is
+// rebuilt from scratch, so the warm compile folds artifacts parsed against the OLD index into a NEW one. The
+// last file is the one re-parsed after every reused artifact in fold order, which is where a parse could claim
+// an instance id a reused artifact still holds for another instance. Properties 2 and 3 count memo hits and
+// misses and cannot see that; only comparing what the two compiles EMIT can.
+function verifyWarmCompileMatchesCold(inputPath FilePath, target Target) returns bool throws CompileError
+	var warm = try loadProject([inputPath], target: target)
+	let edited = try lastAuthoredSourceOf(warm)
+
+	if warm.db.sourcePaths.count() - warm.librarySourcePaths.count() < MinFilesForInvalidation 'cannotProve'
+		printError("FAIL warm: this project has fewer than {MinFilesForInvalidation} source files of its own, so no file's parse is reused across the edit and a warm compile IS a cold one. Point the gate at a project with at least {MinFilesForInvalidation} files\n")
+		return false
+	end 'cannotProve'
+
+	_ = try compileToCodeResult(warm)
+	let editedContent = "{edited.content}\n{BytesOnlyEditText}\n"
+
+	fileChanged(warm, path: edited.path, content: editedContent)
+	let warmResult = try compileToCodeResult(warm)
+
+	var cold = try loadProject([inputPath], target: target)
+	fileChanged(cold, path: edited.path, content: editedContent)
+	let coldResult = try compileToCodeResult(cold)
+
+	return match compareCodeResults(warmResult, right: coldResult) 'outcome'
+		allIdentical(totalBytes) gives reportWarmPass(totalBytes)
+		sectionDiffers(detail) gives reportWarmFail(detail)
+	end 'outcome'
+end 'verifyWarmCompileMatchesCold'
+
+function reportWarmPass(totalBytes BytePos) returns bool
+	print("PASS warm: {totalBytes} bytes identical between a warm compile after a bytes-only edit and a cold compile of the edited program\n")
+	return true
+end 'reportWarmPass'
+
+function reportWarmFail(detail String) returns bool
+	printError("FAIL warm: a warm compile after a bytes-only edit emitted different bytes from a cold compile of the edited program — {detail}\n")
+	return false
+end 'reportWarmFail'
+
+// The last source file in fold order that is not library source, owned (`editableSourceAt`).
+function lastAuthoredSourceOf(project Project) returns EditableSource throws CompileError
+	var index = project.db.sourcePaths.count()
+
+	while index > 0 'fromTheEnd'
+		index = index - 1
+		let source = editableSourceAt(project, index: index)
+
+		if not isLibrarySourceFile(project, path: source.path) 'authored'
+			return source
+		end 'authored'
+	end 'fromTheEnd'
+
+	throw CompileError.noSourceFiles(project.rootPath)
+end 'lastAuthoredSourceOf'
 
 // Re-query every file's parse and report how many RECOMPUTED. The miss DELTA is the whole
 // measurement: it names exactly which memos the preceding edit invalidated.

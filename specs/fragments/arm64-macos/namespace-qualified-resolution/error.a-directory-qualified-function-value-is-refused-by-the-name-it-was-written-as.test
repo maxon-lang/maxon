@@ -1,0 +1,31 @@
+// Test: error.a-directory-qualified-function-value-is-refused-by-the-name-it-was-written-as
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function risky(raw Integer) returns Integer
+	return raw
+end 'risky'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export enum Oops implements Error
+	bad
+end 'Oops'
+
+export function risky(raw Integer) returns Integer throws Oops
+	if raw > 100 'tooBig'
+		throw Oops.bad
+	end 'tooBig'
+
+	return raw
+end 'risky'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = beta.risky
+	return f(1) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3101: app/<fragment>:26:10: Cannot use throwing function 'beta.risky' as a value: it throws 'Oops', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.

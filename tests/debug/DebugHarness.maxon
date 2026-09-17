@@ -33,6 +33,7 @@ let StagingRootDirName = "temp/debug"
 // The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
 let StoredFixtureSuffix = ".fixture"
 export let StagedProgramFileName = "main.maxon"
+let StagedSourceSuffix = ".maxon"
 
 // The binary this directory spawns, relative to the checkout root and without its host suffix. It is the
 // compiler under test AND the debug driver under test. ONE constant, so the SUBJECT axis cannot move when
@@ -91,29 +92,38 @@ typealias PathArray = Array with FilePath
 // STAGING AND SPAWNING
 // ============================================================================================
 
-// A runnable copy of one fixture program under a directory named for the CASE, so concurrent case files
-// never share a staging tree. Absolute, because it is handed to a child as its working directory. The
+// A runnable copy of every source of one fixture under a directory named for the CASE, so concurrent case
+// files never share a staging tree. Absolute, because it is handed to a child as its working directory. The
 // previous run's files go first: a stale executable or a stale sidecar would let a build that produced
 // neither be read as though it had.
 //
 // The FIXTURE is a required parameter and the CASE LABEL is not the fixture's name: two cases staging the
 // same program still need two trees, and one case may need a fixture another has no use for.
-export function stagedProgram(caseLabel String, fixture String) returns FilePath
+export function stagedFixture(caseLabel String, fixture String) returns FilePath
 	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
 	clearStagedFiles(staged)
 
-	let stored = fixtureDir("{FixturesDirName}{PathSeparator}{fixture}").join("{StagedProgramFileName}{StoredFixtureSuffix}")
-	let body = try File.readText(stored) otherwise panic("debug tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
-	try File.writeText(staged.join("{StagedProgramFileName}"), content: body) otherwise panic("debug tests: the gate could not run — could not stage {StagedProgramFileName} into {staged.toString()}.")
+	for stored in listing(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}")) 'eachStored'
+		let storedName = stored.filename()
+
+		if not storedName.endsWith(StoredFixtureSuffix) 'notAStoredSource'
+			continue
+		end 'notAStoredSource'
+
+		let stagedName = storedName.replace(StoredFixtureSuffix, with: "")
+		let body = try File.readText(stored) otherwise panic("debug tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
+		try File.writeText(staged.join(stagedName), content: body) otherwise panic("debug tests: the gate could not run — could not stage {stagedName} into {staged.toString()}.")
+	end 'eachStored'
 
 	return staged
-end 'stagedProgram'
+end 'stagedFixture'
 
-// Compile the staged program, with whatever extra flag this build is asking about.
-export function spawnBuild(staged FilePath, label String, extraArguments StringArray) returns CollectedOutput
+// Compile `source` — one staged file, or the staged directory as one project — with whatever extra flag this
+// build is asking about.
+export function spawnBuild(source FilePath, staged FilePath, label String, extraArguments StringArray) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
-	arguments.push(staged.join("{StagedProgramFileName}").toString())
+	arguments.push(source.toString())
 	arguments.push(OutputOption)
 	arguments.push(builtExecutable(staged).toString())
 
@@ -223,6 +233,51 @@ export function whitespaceTokens(row String) returns StringArray
 end 'whitespaceTokens'
 
 // ============================================================================================
+// THE DUMP'S SECTIONS
+// ============================================================================================
+
+// Every section heading the dump prints. The roster is complete because a section ends where the NEXT one
+// begins: a heading missing from it would have its rows read as the previous section's.
+export let DumpFilesHeading = "files ("
+export let DumpFunctionsHeading = "functions ("
+let DumpTypesHeading = "types ("
+export let DumpLineTableHeading = "line table ("
+
+// The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
+// heading nothing opens yields no rows, which the caller reports as the section being absent.
+export function dumpSectionRows(dump String, heading String) returns StringArray
+	var rows = StringArray.create()
+	var inSection = false
+
+	for rawLine in dump.split(LineFeed) 'eachLine'
+		let line = rawLine.trim()
+
+		if line.startsWith(heading) 'opensThisSection'
+			inSection = true
+			continue
+		end 'opensThisSection'
+
+		if not inSection 'beforeTheSection'
+			continue
+		end 'beforeTheSection'
+
+		if opensASection(line) 'nextSection'
+			break
+		end 'nextSection'
+
+		if not line.isEmpty() 'aRow'
+			rows.push(line)
+		end 'aRow'
+	end 'eachLine'
+
+	return rows
+end 'dumpSectionRows'
+
+function opensASection(line String) returns bool
+	return line.startsWith(DumpFilesHeading) or line.startsWith(DumpFunctionsHeading) or line.startsWith(DumpTypesHeading) or line.startsWith(DumpLineTableHeading)
+end 'opensASection'
+
+// ============================================================================================
 // NUMBERS THE DUMP PRINTS
 // ============================================================================================
 
@@ -268,14 +323,31 @@ end 'hexDigitValue'
 // READING THE STAGED FIXTURE — the roster every case here derives rather than writes down
 // ============================================================================================
 
-// The staged program's lines, CR folded. Read on demand rather than held: every case that wants them
-// has already paid for a spawned compile.
-export function stagedSourceLines(staged FilePath) returns StringArray
-	let path = staged.join("{StagedProgramFileName}")
-	let body = try File.readText(path) otherwise panic("debug tests: the gate could not run — could not read the staged program at {path.toString()}, which this process wrote moments ago.")
+// Every line of every staged source, CR folded — the roster a case over a multi-file fixture derives its
+// demands from.
+export function everyStagedSourceLine(staged FilePath) returns StringArray
+	var lines = StringArray.create()
+
+	for entry in listing(staged) 'eachEntry'
+		if not entry.filename().endsWith(StagedSourceSuffix) 'notASource'
+			continue
+		end 'notASource'
+
+		for line in linesOfStagedSource(entry) 'eachLine'
+			lines.push(line)
+		end 'eachLine'
+	end 'eachEntry'
+
+	return lines
+end 'everyStagedSourceLine'
+
+// One staged source's lines, CR folded. Read on demand rather than held: every case that wants them has
+// already paid for a spawned compile.
+export function linesOfStagedSource(path FilePath) returns StringArray
+	let body = try File.readText(path) otherwise panic("debug tests: the gate could not run — could not read the staged source at {path.toString()}, which this process wrote moments ago.")
 
 	return outputLines(body)
-end 'stagedSourceLines'
+end 'linesOfStagedSource'
 
 // The functions the staged program DECLARES, in source order. Derived from the source rather than listed
 // in a case file, so a fixture that grows a function grows every roster checked against it.
@@ -285,7 +357,7 @@ end 'stagedSourceLines'
 export function declaredFunctionNames(staged FilePath) returns StringArray
 	var names = StringArray.create()
 
-	for line in stagedSourceLines(staged) 'eachLine'
+	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
 		if line.startsWith(FunctionDeclarationPrefix) 'aDeclaration'
 			names.push(declaredNameIn(line))
 		end 'aDeclaration'

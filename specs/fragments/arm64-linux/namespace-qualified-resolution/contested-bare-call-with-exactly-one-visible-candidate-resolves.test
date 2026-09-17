@@ -1,0 +1,43 @@
+// Test: contested-bare-call-with-exactly-one-visible-candidate-resolves
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+module function helper() returns Integer
+	return 3
+end 'helper'
+
+// --- file: alpha/use.maxon
+typealias Integer = int(0 to 125)
+
+export function useAlpha() returns Integer
+	return helper()
+end 'useAlpha'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (useAlpha() * 10 + helper()) as ExitCode
+end 'main'
+---
+ExitCode: 37
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __il_body:
+    arm64.movImm x0, 3
+  __il_cont#6:
+    arm64.movImm x16, 10
+    arm64.mul x0, x0, x16
+  __il_cont#4:
+    arm64.add x0, x0, 7
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}

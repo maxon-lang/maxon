@@ -1,0 +1,18 @@
+// Test: error.float-stored-directly-in-an-interface-field
+typealias Real = float(f64.min to f64.max)
+
+type Holder
+	let c as Comparable
+
+	static function create(r Real) returns Self
+		return Self{c: r}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(2.5)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3121: <fragment>:8:10: Cannot store a `float` into the field 'Holder.c', which is declared at the interface type 'Comparable': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or declare the field as `float`

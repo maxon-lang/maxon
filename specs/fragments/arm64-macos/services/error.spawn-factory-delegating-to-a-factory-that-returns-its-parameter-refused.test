@@ -1,0 +1,34 @@
+// Test: error.spawn-factory-delegating-to-a-factory-that-returns-its-parameter-refused
+typealias Tally = int(0 to u64.max)
+
+type Worker
+	var scale as Tally
+
+	static function make(scale Tally) returns Self
+		return Self{scale: scale}
+	end 'make'
+
+	static function adopt(seed Worker) returns Self
+		return seed
+	end 'adopt'
+
+	static function create(seed Worker) returns Self
+		return adopt(seed)
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * self.scale
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let seed = Worker.make(2)
+	let worker = spawn Worker.create(seed)
+	let total = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{total} {seed.scale}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name

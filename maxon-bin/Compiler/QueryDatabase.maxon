@@ -245,6 +245,78 @@ export typealias QueryCount = int(0 to u64.max)
 // The paths `parseMisses` counted, in miss order.
 export typealias ParseMissPathRoster = Array with String
 
+typealias RowSetOverrideMap = Map with (FilePath, RowSetOverrideTable)
+
+// The whole program's row-set answers each file is parsed with, and the sources of the program they were filed
+// for. An answer describes rows every file's parse minted, so a table filed for other sources is dropped
+// rather than handed to a parse of these: a warm fold starts from exactly what a cold fold of the same sources
+// starts from.
+export type RowSetOverrides
+	var program as HashDigest
+	var tables as RowSetOverrideMap
+
+	export static function create() returns RowSetOverrides
+		return Self{program: Hasher.empty(), tables: RowSetOverrideMap.create()}
+	end 'create'
+
+	// Keep the tables only if they were filed for `sources`.
+	export function belongTo(sources HashDigest)
+		if self.program == sources 'filedForTheseSources'
+			return
+		end 'filedForTheseSources'
+
+		self.program = sources
+		self.tables = RowSetOverrideMap.create()
+	end 'belongTo'
+
+	// The answers `path` is parsed with — none, until a fold files some.
+	export function of(path FilePath) returns RowSetOverrideTable
+		return try self.tables.get(path) otherwise RowSetOverrideTable.create()
+	end 'of'
+
+	export function file(path FilePath, table RowSetOverrideTable)
+		self.tables.upsert(path, value: table)
+	end 'file'
+end 'RowSetOverrides'
+
+// ⭐ **THE GENERIC TYPES A PARSE INSTANTIATED THAT NO DECLARATION DID.** Which methods carry a layout descriptor is
+// settled before any body is parsed, and whether a type is instantiated at all decides some of it — so a type only
+// an expression instantiates (`Box.create(5)`) is filed here after a fold and the signature index is settled again
+// with it (`Queries.foldEveryFileIntoAModule`).
+//
+// ⚠ **KEPT ACROSS AN EDIT, AND RE-CHECKED BY THE FOLD RATHER THAN DROPPED WITH THE SOURCES.** The set is a key of the
+// index every parse memo reads, so an edit that emptied it would rebuild the index without the type and re-parse
+// every file — then file it again and re-parse every file once more. A fold instead drops a name no merged row
+// instantiates or a declaration now does (`ProgramSignatures.typesFiledNeedlessly`), which leaves exactly the set a
+// cold compile of the same sources files.
+export type InstantiatedByAParse
+	export var names as InstantiatedTypeNameSet
+
+	// Folded by `xor`, so the order names arrive in cannot move it.
+	export var digest as HashDigest
+
+	export static function create() returns InstantiatedByAParse
+		return Self{names: InstantiatedTypeNameSet.create(), digest: Hasher.empty()}
+	end 'create'
+
+	export function file(name ByteArray)
+		if self.names.contains(name) 'filedAlready'
+			panic("InstantiatedByAParse.file: '{String.from(name)}' is already filed — the index settled with it answers it instantiated, so no fold can find it newly so")
+		end 'filedAlready'
+
+		self.names.insert(name)
+		self.digest = self.digest xor mixBytes(Hasher.empty(), bytes: name)
+	end 'file'
+
+	export function drop(name ByteArray)
+		if not self.names.remove(name) 'neverFiled'
+			panic("InstantiatedByAParse.drop: '{String.from(name)}' is not filed — only a filed name can be found needless")
+		end 'neverFiled'
+
+		self.digest = self.digest xor mixBytes(Hasher.empty(), bytes: name)
+	end 'drop'
+end 'InstantiatedByAParse'
+
 export type QueryDatabase
 	// Source inputs (path -> content + hash) and insertion-ordered path list.
 	export var sourceFiles as SourceFileMap
@@ -286,6 +358,14 @@ export type QueryDatabase
 	// an artifact built when nothing reached this file is missing every body, and serving it to the round
 	// that has just reached one is the stale-memo failure `parseMemoKey`'s header is about.
 	export var demandedLibraryBodyFiles as MaxonSourcePathSet
+
+	// The whole program's answers each file is parsed with — the fourth input of a parse memo's key, filed by the
+	// fold that found a file's own answers disagreeing with the whole program's.
+	export var rowSetOverrides as RowSetOverrides
+
+	// The generic types a parse instantiated that no declaration did — an input of the signature index, and so of
+	// its memo's key.
+	export var instantiatedByAParse as InstantiatedByAParse
 
 	// Whole-program signature-index memo. Sits BETWEEN tokens and parse in the chain:
 	// every parse reads it, and a parse memo is keyed on it (QueryEngine.parseMemoKey).
@@ -340,6 +420,8 @@ export type QueryDatabase
 			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
 			demandedLibraryBodyFiles: MaxonSourcePathSet.create(),
+			rowSetOverrides: RowSetOverrides.create(),
+			instantiatedByAParse: InstantiatedByAParse.create(),
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,

@@ -20,6 +20,8 @@ DISCRIMINATE, each case here having been found by probing the mechanism rather t
   same-named declaration a bare lookup would have won with;
 - the qualifier is a NAME LOOKUP and never a visibility bypass — `export`, `module` and file-private each
   answer at the qualified spelling exactly as they answer at the bare one;
+- a bare name declared as a free function in several directories means the one declaration the caller
+  may name — a declaration it cannot see never counts toward ambiguity, and two visible ones are E3095;
 - a `Type.method` reading of the same tokens always wins, so a directory may be named after a type
   without moving a single call;
 - the CALL position and the TYPE position read one and the same namespace, segment for segment — a
@@ -668,31 +670,14 @@ AB
 ```
 
 
-<!-- test: error.contested-bare-call-with-exactly-one-visible-candidate -->
-⛔ **THIS CASE RECORDS A DIAGNOSTIC THAT IS WRONG, AND IT IS PINNED SO THAT IT IS VISIBLE RATHER
-THAN MERELY UNTESTED.** `helper` is declared in two directories, so it is contested and neither
-declaration keeps the bare key. From `app/`, alpha's is `module`-scoped and out of reach; beta's is
-exported and perfectly nameable. The compiler answers **`call to undefined function 'helper'`** — a
-false statement about a function that is both defined and visible.
+<!-- test: contested-bare-call-with-exactly-one-visible-candidate-resolves -->
+**A DECLARATION THE CALLER CANNOT SEE NEVER COUNTS TOWARD A CONTEST.** `helper` is declared in two
+directories; from `app/`, alpha's is `module`-scoped and out of reach, so beta's exported one is the
+only candidate and the bare call resolves to it. Ambiguity is a question about what a file could
+MEAN, and a file cannot mean a name it may not write — otherwise a `module` helper added inside
+`alpha/` would break a call in `app/` that can only ever reach `beta/`.
 
-The RULE behind the refusal is defensible and is this rung's thesis: once a name is contested the
-qualifier IS the name, so a file with no local declaration must write `beta.helper()`. What is not
-defensible is the sentence. The two ways out are a language decision and not a bug fix, which is why
-this case is recorded rather than changed:
-
-  • **REFUSE, truthfully** — a diagnostic of E3095's family saying the bare name is contested and
-    naming the one spelling this file may use. Needs a new code; the sentence E3095 is pinned to
-    ("multiple visible definitions found") is false when only one is.
-  • **RESOLVE** — bind the single visible candidate, which is what the self-hosted reference does
-    (`MaxonDialect.maxon:2191-2248` collects `methodNameIndex` candidates and returns the first
-    VISIBLE one; `TypeResolution.maxon:10267-10284` explicitly suppresses the undefined-callee
-    report when any candidate is visible). Its own header concedes the tier is order-dependent —
-    "if multiple files are visible, the first one wins" — which is the property N1b's
-    "a qualified spelling is a route, never a key" was written to avoid.
-
-Note what makes this sharp: a `module`-scoped helper added inside `alpha/` breaks a call in `app/`
-that names a function in `beta/`. Before this rung the same program was refused outright (E3006), so
-nothing regressed — but nothing resolves either.
+alpha's helper answers 3 and beta's 7, so the exit code says which one was reached.
 ```maxon
 // --- file: alpha/a.maxon
 typealias Integer = int(0 to 125)
@@ -700,6 +685,13 @@ typealias Integer = int(0 to 125)
 module function helper() returns Integer
 	return 3
 end 'helper'
+
+// --- file: alpha/use.maxon
+typealias Integer = int(0 to 125)
+
+export function useAlpha() returns Integer
+	return helper()
+end 'useAlpha'
 
 // --- file: beta/b.maxon
 typealias Integer = int(0 to 125)
@@ -710,11 +702,387 @@ end 'helper'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
+	return (useAlpha() * 10 + helper()) as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+
+<!-- test: contested-bare-call-resolves-past-a-file-private-competitor-declared-first -->
+A file-private competitor in another directory, folded BEFORE the exported declaration. The two
+declarations disagree about the return type (`bool` against an integer), so a call that bound the
+private one would be refused at the cast rather than merely answer differently; `true 8` is only
+reachable with each call reaching its own declaration.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+function helper(raw Integer) returns bool
+	return raw > 3
+end 'helper'
+
+export function useAlpha() returns bool
+	return helper(9)
+end 'useAlpha'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let flag = useAlpha()
+	let n = helper(1)
+	print("{flag} {n}\n")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+```stdout
+true 8
+```
+
+
+<!-- test: contested-bare-call-resolves-past-a-file-private-competitor-declared-second -->
+The same pair with the exported declaration folded FIRST, so neither order of the two can decide the
+answer.
+```maxon
+// --- file: alpha/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 7
+end 'helper'
+
+// --- file: zeta/a.maxon
+typealias Integer = int(0 to 125)
+
+function helper(raw Integer) returns bool
+	return raw > 3
+end 'helper'
+
+export function useZeta() returns bool
+	return helper(9)
+end 'useZeta'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let flag = useZeta()
+	let n = helper(1)
+	print("{flag} {n}\n")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+```stdout
+true 8
+```
+
+
+<!-- test: contested-bare-call-resolves-past-an-invisible-root-competitor -->
+A ROOT declaration keeps the bare key, but a file-private one is still invisible from `app/`, so it is
+no candidate there and beta's exported declaration is the one the bare call means.
+```maxon
+// --- file: r.maxon
+typealias Integer = int(0 to 125)
+
+function helper() returns Integer
+	return 3
+end 'helper'
+
+public function useRoot() returns Integer
 	return helper()
+end 'useRoot'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (useRoot() * 10 + helper()) as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+
+<!-- test: contested-bare-call-resolves-past-an-invisible-same-directory-competitor -->
+The caller's OWN directory declares the name, but in another file and file-private, so the local tier
+has nothing this file may name and the one visible declaration elsewhere is the answer.
+```maxon
+// --- file: app/other.maxon
+typealias Integer = int(0 to 125)
+
+function helper() returns Integer
+	return 3
+end 'helper'
+
+export function useOther() returns Integer
+	return helper()
+end 'useOther'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper() returns Integer
+	return 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (useOther() * 10 + helper()) as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+
+<!-- test: contested-bare-function-value-resolves-past-an-invisible-competitor -->
+A bare name READ as a function value answers the same question a bare call does: the one declaration
+the file may name, here beta's, whose return type the value's calls carry.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+function helper(raw Integer) returns bool
+	return raw > 3
+end 'helper'
+
+export function useAlpha() returns bool
+	return helper(9)
+end 'useAlpha'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let flag = useAlpha()
+	let f = helper
+	let n = f(1)
+	print("{flag} {n}\n")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+8
+```
+```stdout
+true 8
+```
+
+
+<!-- test: error.contested-bare-function-value-with-two-visible-candidates -->
+A function value is refused for the ambiguity a call is refused for, rather than bound to either
+declaration.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 3
+end 'helper'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = helper
+	return f(1) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: app/specs/fragments/namespace-qualified-resolution/error.contested-bare-call-with-exactly-one-visible-candidate.test:18:9: call to undefined function 'helper'
+error E3095: app/<fragment>:18:10: Ambiguous bare function name 'helper' used as a value: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.helper, beta.helper
+```
+
+
+<!-- test: contested-function-value-named-by-its-directory -->
+The remedy E3095 names is writable at the value door: a directory-qualified name read as a value binds the
+declaration that directory holds, exactly as a qualified call does.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 3
+end 'helper'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export function helper(raw Integer) returns Integer
+	return raw + 7
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = beta.helper
+	let g = alpha.helper
+	return (f(1) * 10 + g(1)) as ExitCode
+end 'main'
+```
+```exitcode
+84
+```
+
+
+<!-- test: function-value-named-by-its-directory -->
+An uncontested name qualified by its directory is a route to the one declaration, as a value as well as a call.
+```maxon
+// --- file: lib/util.maxon
+typealias Integer = int(0 to 125)
+
+export function triple(raw Integer) returns Integer
+	return raw * 3
+end 'triple'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = lib.triple
+	return f(4) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+
+<!-- test: error.a-directory-qualified-function-value-is-refused-by-the-name-it-was-written-as -->
+A refusal at the value door quotes the name the author wrote, not the declaration it resolved to.
+```maxon
+// --- file: alpha/a.maxon
+typealias Integer = int(0 to 125)
+
+export function risky(raw Integer) returns Integer
+	return raw
+end 'risky'
+
+// --- file: beta/b.maxon
+typealias Integer = int(0 to 125)
+
+export enum Oops implements Error
+	bad
+end 'Oops'
+
+export function risky(raw Integer) returns Integer throws Oops
+	if raw > 100 'tooBig'
+		throw Oops.bad
+	end 'tooBig'
+
+	return raw
+end 'risky'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = beta.risky
+	return f(1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3101: app/<fragment>:26:10: Cannot use throwing function 'beta.risky' as a value: it throws 'Oops', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+```
+
+
+<!-- test: error.two-visible-candidates-are-ambiguous-past-an-invisible-root-declaration -->
+A file-private ROOT declaration keeps the bare key, but from `app/` it is no candidate: the call is
+ambiguous between the two visible subdirectory declarations, and the root one is neither reported as
+"not exported" nor listed.
+```maxon
+// --- file: r.maxon
+typealias Integer = int(0 to 125)
+
+function pick() returns Integer
+	return 1
+end 'pick'
+
+public function useRoot() returns Integer
+	return pick()
+end 'useRoot'
+
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 2
+end 'pick'
+
+// --- file: zulu/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (pick() + useRoot()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:29:10: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
+```
+
+
+<!-- test: error.two-visible-candidates-are-ambiguous-past-an-invisible-third -->
+Two VISIBLE declarations are still an ambiguity, and the invisible third is neither what makes it one
+nor offered as a way out of it.
+```maxon
+// --- file: alpha/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 1
+end 'pick'
+
+// --- file: mid/f.maxon
+typealias Integer = int(0 to 125)
+
+function pick() returns Integer
+	return 2
+end 'pick'
+
+export function useMid() returns Integer
+	return pick()
+end 'useMid'
+
+// --- file: zulu/f.maxon
+typealias Integer = int(0 to 125)
+
+export function pick() returns Integer
+	return 4
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (pick() + mid.useMid()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:29:10: Ambiguous bare-name call to 'pick': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.pick, zulu.pick
 ```
 
 

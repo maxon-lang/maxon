@@ -72,7 +72,7 @@ module function semanticTokensAnswer(request LspRequest) returns LspAnswer throw
 	var doc = JsonDoc.create()
 	var values = JsonNodeIdArray.create()
 
-	for value in encodedTokensOf(request.text) 'eachValue'
+	for value in encodedTokensOf(request.text, keywords: request.keywords) 'eachValue'
 		values.push(doc.add(JsonNode.numberNode(value as JsonFloat)))
 	end 'eachValue'
 
@@ -131,8 +131,8 @@ end 'stringArrayNode'
 //
 // ⚠ Both the character and the length are counted in UTF-16 code units, which is why they come from
 // `LspLineIndex.positionOf` on the two ends of the token's span rather than from its byte width.
-function encodedTokensOf(source String) returns LspSemanticTokenValueArray
-	let tokens = lspDocumentTokens(source)
+function encodedTokensOf(source String, keywords KeywordTable) returns LspSemanticTokenValueArray
+	let tokens = lspDocumentTokens(source, keywords: keywords)
 	let blocks = lspDocumentBlocks(tokens)
 	let index = LspLineIndex.build(source)
 

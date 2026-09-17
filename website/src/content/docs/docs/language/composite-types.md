@@ -159,7 +159,19 @@ end 'main'
 - An initializer may be a literal, a factory call (`static var shared = Cache.create()`), a literal of the
   enclosing type, or an array literal. A literal of *another* type is **E3076** — call its factory.
 - **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
-  order rather than declaration order. Initializers that depend on each other in a cycle are **E2012**.
+  order rather than declaration order: one that reads another static, directly or through a function it
+  calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,
+  are **E2012**. Assigning to a `static var` is a plain store; the initializer does not run again.
+- A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
+  literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
+  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time.
+  Any other `static let`, and every `static var`, is built before `main`.
+- A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
+  and neither is its initializer.
+- A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
+  may reach follows the [Top-Level Variables](/docs/language/variables/#top-level-variables) rules: a `let`'s initializer may not reach
+  a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
+  (**E3166**), and a `spawn` reachable from any global initializer is **E3164**.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
 ### Equality and Copying
@@ -427,6 +439,17 @@ end 'main'
 - One compiled body serves every instantiation.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a `float` type argument is not
   yet supported (**E2062**); a type argument to a non-generic type is **E2055**.
+
+Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
+`Inner uses T` means `Inner with T`. A base whose parameters the scope does not declare (`Box uses Element`)
+binds nothing and stays the bare base, and a call on it — static (`Box.create(first)`) or through a receiver
+of that type — may neither hand a slot written over one of its type parameters (`Element`, or
+`Array with Element`) a value typed at `Outer`'s parameters nor call a method that needs a layout descriptor
+(**E3162**); an overloaded callee is judged by the member its arguments pick. Name the instance with a
+`typealias` instead: `typealias Inner = Box with T`. Outside a generic type body, a layout-needing call on a
+bare generic base is **E3162** as well unless the calling function carries a layout descriptor of its own — a
+static whose arguments do not fix every one of the base's parameters (`Holder.create()` in `main`), or a
+method called through a receiver of the bare base type.
 
 ### Where Clauses
 

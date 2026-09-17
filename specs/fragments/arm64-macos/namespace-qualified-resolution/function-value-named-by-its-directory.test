@@ -1,0 +1,56 @@
+// Test: function-value-named-by-its-directory
+// --- file: lib/util.maxon
+typealias Integer = int(0 to 125)
+
+export function triple(raw Integer) returns Integer
+	return raw * 3
+end 'triple'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = lib.triple
+	return f(4) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+func @triple {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 125
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.arm64AddLsl x0, x0, x0, lsl #1
+  __rc_chk#6:
+    arm64.cmp x0, 125
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at util.maxon:3: Range check failed: value outside typealias 'Integer'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at util.maxon:4: Range check failed: value outside typealias 'Integer'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x2, __fnref_triple
+    arm64.movImm x0, 4
+    arm64.movImm x1, 0
+    arm64.blr x2
+    arm64.epilogue 16
+    arm64.ret
+}

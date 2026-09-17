@@ -309,3 +309,86 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:15:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
 ```
+
+<!-- test: error.reassign-co-owned-trivial-instantiated-by-another-file-box-first -->
+The same refusal when the co-owning instantiation is written nowhere: `Box with Point` exists only because a
+SECOND file calls a method through an `Outer with Point`. The shared body is refused whichever file is parsed
+first — the instantiation is a fact about the program, not about the files parsed before the body.
+```maxon
+// --- file: a_box.maxon
+type Box uses T
+	export var saved as T
+	export static function create(first T) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next T)
+		self.saved = next
+	end 'replace'
+end 'Box'
+export type Outer uses T
+	export var inner as Box
+	export static function create(first T) returns Self
+		return Self{ inner: Box.create(first) }
+	end 'create'
+	export function swapInner(next T)
+		self.inner.replace(next)
+	end 'swapInner'
+end 'Outer'
+// --- file: b_use.maxon
+typealias Coord = int(0 to 1000)
+type Point
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+end 'Point'
+typealias PointOuter = Outer with Point
+function main() returns ExitCode
+	var o = PointOuter.create(Point.create(7))
+	o.swapInner(Point.create(9))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
+```
+
+<!-- test: error.reassign-co-owned-trivial-instantiated-by-another-file-use-first -->
+```maxon
+// --- file: a_use.maxon
+typealias Coord = int(0 to 1000)
+type Point
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+end 'Point'
+typealias PointOuter = Outer with Point
+function main() returns ExitCode
+	var o = PointOuter.create(Point.create(7))
+	o.swapInner(Point.create(9))
+	return 0
+end 'main'
+// --- file: b_box.maxon
+type Box uses T
+	export var saved as T
+	export static function create(first T) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next T)
+		self.saved = next
+	end 'replace'
+end 'Box'
+export type Outer uses T
+	export var inner as Box
+	export static function create(first T) returns Self
+		return Self{ inner: Box.create(first) }
+	end 'create'
+	export function swapInner(next T)
+		self.inner.replace(next)
+	end 'swapInner'
+end 'Outer'
+```
+```maxoncstderr
+error E2015: <fragment>:23:8: Unsupported: reassigning the type-parameter field 'saved' of 'Box' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type
+```

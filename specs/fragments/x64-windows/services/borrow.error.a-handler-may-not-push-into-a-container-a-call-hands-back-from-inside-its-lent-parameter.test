@@ -1,0 +1,37 @@
+// Test: borrow.error.a-handler-may-not-push-into-a-container-a-call-hands-back-from-inside-its-lent-parameter
+typealias Counts = Array with Integer
+
+type Holder
+	export var items as Counts
+
+	static function create() returns Self
+		return Self{items: Counts.create()}
+	end 'create'
+end 'Holder'
+
+function pick(t Holder) returns Counts
+	return t.items
+end 'pick'
+
+type Svc
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(target Holder)
+		pick(target).push(1)
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let b = Holder.create()
+	h.poke(b)
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3019: <fragment>:31:2: cannot pass 'b' to function that mutates parameter 'target' (in main)

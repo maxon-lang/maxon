@@ -1,0 +1,22 @@
+// Test: async-promise-drop.error.a-whole-pair-from-withIterator-over-promises
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var s = IntPromiseArray.create()
+	s.push(async plain(7))
+	var total = 0
+	for pair in s.withIterator() 'each'
+		total = total + (await pair.1)
+	end 'each'
+	return total as ExitCode
+end 'main'
+---
+CompilerError:
+error E3141: <fragment>:15:6: a promise cannot be borrowed through 'current': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A pair keeps no slot for the promise it carries: destructure an array's `withIterator()` pair in the loop header (`for (it, p) in a.withIterator()`), read the array with `get(i)`, or move the promise out with `pop`/`remove`

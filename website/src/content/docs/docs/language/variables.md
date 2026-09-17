@@ -107,10 +107,29 @@ end 'main'
 
 - `var` declares module state any function in the file can reassign; `let` declares a constant.
 - An initializer is a literal, a constant expression, an enum case, an array or dictionary literal,
-  `Type from "literal"`, or a static factory call (`let shared = Cache.create()`). Any other function call is
-  **E2045** (`Function calls are not allowed in global variable initializers`).
-- Every initializer runs **before `main`**, once, in dependency order. Initializers that depend on each
-  other in a cycle are **E2012**.
+  `Type from "literal"`, a static factory call (`let shared = Cache.create()`), or a free function call that
+  returns a record (`let shared = makeCache()`). A free function call returning a scalar, and any other call,
+  is **E2045** (`Function calls are not allowed in global variable initializers`).
+- Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
+  binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
+  compile time is image data, laid down in read-only memory with nothing to run; anything else runs in the
+  program's `__module_init` before `main`. A static field follows the same rules
+  (see [Static Fields](/docs/language/composite-types/#static-fields)).
+- A field read off another global (`let n = shared.count`) is **E2015**, and a struct literal at file scope
+  is **E3076**; call a factory instead, or declare a static field inside the type.
+- An initializer cannot name another global, but what it calls may. A `let`'s initializer may not reach a
+  module-level `var` that holds a record — a String, an array, a struct, a boxed union — through any function
+  it calls (**E3165**, reported at the `var`'s use with its declaration as a note). A `let` is fixed at startup
+  and may not hold what a `var` owns, and what the initializer keeps is not followed, so reading only a number
+  out of the `var` is refused too. "Reaches" is the call graph after overload resolution, dispatches
+  included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
+  other `let`s.
+- The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
+  within or hold a module-level `let`'s record (**E3166**, at the `var`'s declaration, naming the call). What
+  a call hands back is followed through further calls, witness dispatches and calls through function values;
+  a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
+  function, through a record a call handed back out of a `let` (**E3159**).
+- A `spawn` reachable from a global initializer is **E3164**; start services in `main`.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
 - A [service](/docs/language/async/#services--spawn) handler may not read or write a module-level `var`
   (**E3143**); keep service state in its fields.

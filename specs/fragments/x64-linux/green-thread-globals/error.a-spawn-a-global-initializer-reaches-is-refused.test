@@ -1,0 +1,53 @@
+// Test: error.a-spawn-a-global-initializer-reaches-is-refused
+type Roster
+	export var names as NameArray
+
+	static function create(count Integer) returns Self
+		var names = NameArray.create()
+
+		for i in 0 upto count 'fill'
+			names.push("member {i}")
+		end 'fill'
+
+		return Self{names: names}
+	end 'create'
+end 'Roster'
+
+let roster = Roster.create(4)
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return roster.names.count()
+	end 'read'
+end 'Reader'
+
+type Box
+	export var h as Reader.handle
+
+	static function start() returns Self
+		let h = spawn Reader.create()
+		_ = h.read()
+		return Self{h: h}
+	end 'start'
+end 'Box'
+
+let box = Box.start()
+
+function main() returns ExitCode
+	let n = try await box.h.read() otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias NameArray = Array with String
+---
+CompilerError:
+error E3164: <fragment>:35:11: `Box.start` spawns `Reader`, and a module-level global's initializer reaches it — initializers run before `main`, and the `let`s every message may read are marked shared only once the last one returns, so a service started here could step a plain count on one concurrently with the mark or read a global not yet built. Start the service in `main`, or in a function `main` calls
+note: <fragment>:41:5: the initializer of `box`, which reaches it

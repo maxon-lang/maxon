@@ -174,9 +174,11 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		let slotIndex = try findSlot(key, hash: key.hash()) otherwise return false
 
 		if slotHoldsKey(slotIndex) 'found'
-			// Only the Deleted state marks the slot as removed. The cached hash is
-			// left as-is: the hash-guard only runs inside the Occupied branch of
-			// findSlot, so a tombstone's stale hash can never cause a false match.
+			// A tombstone owns nothing: holding the key and value until the map drops would keep them alive and
+			// make the map a second owner of records the caller still holds. The cached hash stays, because the
+			// hash-guard only runs inside findSlot's Occupied branch.
+			try keys.clearSlot(slotIndex as ElementIndex) otherwise panic("Map.remove: keys.clearSlot OOB — slot from findSlot is always in-bounds")
+			try values.clearSlot(slotIndex as ElementIndex) otherwise panic("Map.remove: values.clearSlot OOB — slot from findSlot is always in-bounds")
 			try states.set(slotIndex, value: SlotState.Deleted) otherwise panic("Map.remove: states.set OOB — slot from findSlot is always in-bounds")
 			count = count - 1
 			return true

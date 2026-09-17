@@ -1,0 +1,50 @@
+// Test: error.a-deferred-claim-field-cannot-be-filled-from-a-value-already-held-at-the-interface
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let t as TakerOfT
+
+	export function run() returns Integer
+		return self.t.label()
+	end 'run'
+
+	static function create(t Taker) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function relay(t Taker) returns StrBox
+	return StrBox.create(t)
+end 'relay'
+
+function main() returns ExitCode
+	return relay(Runner.create(31)).run() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:35:10: cannot store a value already held at the interface type 'Taker' into the field 'Box.t', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the store to settle it against. Store the concrete conformer, or declare the field 'Box.t' at 'Taker' with no `with` clause

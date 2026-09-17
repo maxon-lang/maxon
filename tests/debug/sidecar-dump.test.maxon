@@ -46,14 +46,6 @@ let SymbolizeOption = "--symbolize"
 let DumpTargetKey = "target:"
 let DumpBuildIdKey = "build-id:"
 
-// The three sections this case reads, and the one it does not. `DumpTypesHeading` is in the roster because
-// a section ends where the NEXT one begins: without it, the rows of `types (…)` would be read as belonging
-// to `functions (…)`.
-let DumpFilesHeading = "files ("
-let DumpFunctionsHeading = "functions ("
-let DumpTypesHeading = "types ("
-let DumpLineTableHeading = "line table ("
-
 // A function row's code range, `[START, END)`. The bracket is also what tells a function row apart from
 // the local-variable rows nested under it (`total  [rbp-0x10]  : i64`), which carry no `)`.
 let RangeOpen = "["
@@ -73,10 +65,10 @@ typealias FixtureLineNumber = int(0 to u64.max)
 // ============================================================================================
 
 test 'the sidecar names this build, this source and every function the fixture declares'
-	let staged = stagedProgram(DumpCaseLabel, fixture: SpansFixtureName)
+	let staged = stagedFixture(DumpCaseLabel, fixture: SpansFixtureName)
 	let noArguments = StringArray.create()
 
-	let build = spawnBuild(staged, label: DumpBuildLabel, extraArguments: noArguments)
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: DumpBuildLabel, extraArguments: noArguments)
 
 	if build.exitCode() != 0 'didNotBuild'
 		panic("sidecar-dump.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
@@ -210,42 +202,6 @@ function keyedDumpValue(dump String, key String) returns String
 	return ""
 end 'keyedDumpValue'
 
-// The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
-// heading nothing opens yields no rows, which the caller reports as the section being absent.
-function dumpSectionRows(dump String, heading String) returns StringArray
-	var rows = StringArray.create()
-	var inSection = false
-
-	for rawLine in dump.split(LineFeed) 'eachLine'
-		let line = rawLine.trim()
-
-		if line.startsWith(heading) 'opensThisSection'
-			inSection = true
-			continue
-		end 'opensThisSection'
-
-		if not inSection 'beforeTheSection'
-			continue
-		end 'beforeTheSection'
-
-		if opensASection(line) 'nextSection'
-			break
-		end 'nextSection'
-
-		if not line.isEmpty() 'aRow'
-			rows.push(line)
-		end 'aRow'
-	end 'eachLine'
-
-	return rows
-end 'dumpSectionRows'
-
-// Whether a line opens one of the dump's sections. The roster is complete because a section ends where the
-// next one begins: a heading missing from it would have its rows read as the previous section's.
-function opensASection(line String) returns bool
-	return line.startsWith(DumpFilesHeading) or line.startsWith(DumpFunctionsHeading) or line.startsWith(DumpTypesHeading) or line.startsWith(DumpLineTableHeading)
-end 'opensASection'
-
 // Whether any row names `name` as one of its words, or as the tail of a path one of them spells. The
 // `files (…)` rows carry an index (`[0] main.maxon`), so the test is on a row's WORDS, not on the line.
 function anyRowNames(rows StringArray, name String) returns bool
@@ -363,7 +319,7 @@ end 'lineNumberAfter'
 function sourceLineStartingWith(staged FilePath, prefix String, what String) returns FixtureLineNumber
 	var number = 0
 
-	for line in stagedSourceLines(staged) 'eachLine'
+	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
 		number = number + 1
 
 		if line.startsWith(prefix) 'theLine'

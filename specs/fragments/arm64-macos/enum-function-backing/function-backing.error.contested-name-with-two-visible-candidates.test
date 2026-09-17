@@ -1,0 +1,28 @@
+// Test: function-backing.error.contested-name-with-two-visible-candidates
+// --- file: alpha/a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 3
+end 'doubleFn'
+
+// --- file: beta/ops.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function doubleFn(x Integer) returns Integer
+	return x * 2
+end 'doubleFn'
+
+// --- file: api/dispatch.maxon
+export enum Op
+	doubleOp = doubleFn
+end 'Op'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let f = Op.doubleOp.rawValue
+	return f(10) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: multiple visible definitions found. Qualify with a directory name. Candidates: alpha.doubleFn, beta.doubleFn

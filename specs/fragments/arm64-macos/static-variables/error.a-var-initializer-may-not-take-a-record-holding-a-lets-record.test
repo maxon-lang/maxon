@@ -1,0 +1,29 @@
+// Test: error.a-var-initializer-may-not-take-a-record-holding-a-lets-record
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+var w = Wrap.around()
+
+function main() returns ExitCode
+	w.box.n = 9
+	print("a={a.n} w={w.box.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3166: <fragment>:19:5: the initializer of the module-level `var` `w` may hand it a record a module-level `let` holds, through `Wrap.around` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `w` a `let`

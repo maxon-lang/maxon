@@ -852,7 +852,7 @@ function runVerifyRecheck(args MaxonArgs) returns ExitCode
 	end 'badPath'
 
 	let target = detectHostTarget()
-	let allPass = try verifyRecheck(inputPath, target: target) otherwise (e) 'verifyErr'
+	let allPass = try verifyRecheck(inputPath, target: target, defines: args.defines) otherwise (e) 'verifyErr'
 		reportCompileError(e)
 		return 1
 	end 'verifyErr'
@@ -1557,7 +1557,7 @@ function optionReference(option HelpOption) returns OptionReference
 		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build])
 		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build])
 		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build])
-		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build])
+		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.verifyRecheck])
 		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build])
 		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern>. A bare spec name selects that whole spec.", commands: [MaxonCommand.specTest])
 		updateRequired gives OptionReference.create(UpdateRequiredFlag, description: "Rewrite the committed .test goldens instead of checking against them. Running a test proves its allocation is CORRECT; only the pinned IR proves the code did not get WORSE. REVIEW THE RESULTING DIFF. Pair it with {FilterFlagPrefix}: an unfiltered run rewrites EVERY golden in the suite.", commands: [MaxonCommand.specTest])

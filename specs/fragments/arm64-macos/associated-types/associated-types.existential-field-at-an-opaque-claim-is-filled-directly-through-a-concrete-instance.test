@@ -1,0 +1,131 @@
+// Test: associated-types.existential-field-at-an-opaque-claim-is-filled-directly-through-a-concrete-instance
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	export var t as TakerOfT
+
+	static function create(t TakerOfT) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	var box = IntBox.create(Runner.create(1))
+	box.t = Runner.create(21)
+	return box.t.take(10) as ExitCode
+end 'main'
+---
+ExitCode: 31
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @Runner.take {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Runner.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl Runner.create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x20, __witness_Runner.Taker
+  __il_body:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __retain_existential
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x19
+    arm64.bl __drop_existential
+  __il_cont:
+    arm64.movImm x0, 21
+    arm64.bl Runner.create
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x1, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.bl __drop_existential
+    arm64.leaRdata x0, __witness_Runner.Taker
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+    arm64.movImm x1, 10
+    arm64.loadRegBaseDisp.word64 x16, [x2 + 24]
+    arm64.blr x16
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x21
+    arm64.bl __destruct_Box_Integer
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at associated-types.existential-field-at-an-opaque-claim-is-filled-directly-through-a-concrete-instance.test:35: Range check failed: value outside typeali"...
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

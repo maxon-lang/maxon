@@ -1,0 +1,29 @@
+// Test: error.let-global-to-a-callee-that-pushes-into-a-container-a-call-hands-back-from-inside-it
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Holder
+	export var items as CountArray
+
+	export static function make() returns Holder
+		return Holder{items: CountArray.create()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function pick(t Holder) returns CountArray
+	return t.items
+end 'pick'
+
+function poke(h Holder)
+	pick(h).push(1)
+end 'poke'
+
+function main() returns ExitCode
+	poke(G)
+	return G.items.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:24:2: cannot pass 'G' to function that mutates parameter 'h' (in main)

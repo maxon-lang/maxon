@@ -1,0 +1,20 @@
+// Test: error.mismatched-union-end-label
+typealias Coord = int(0 to 100)
+
+union Shape
+	circle(radius Coord)
+	empty
+end 'Shapes'
+
+function main() returns ExitCode
+	let s = Shape.circle(7)
+	var r = 0 as Coord
+	match s 'which'
+		circle(radius) then r = radius
+		empty then r = 0
+	end 'which'
+	return r
+end 'main'
+---
+CompilerError:
+error E2008: <fragment>:7:1: Mismatched end label: expected 'Shape', got 'Shapes'

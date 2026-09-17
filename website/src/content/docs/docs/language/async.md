@@ -235,21 +235,34 @@ either side could write, because the two green threads may run at the same time 
   afterwards is **E3102**. Factory arguments and replies are moved too.
 - A `let` argument that owns its value outright is **lent**: the sender keeps reading it, and from the send
   onwards neither side may store it anywhere writable, return it, capture it or pass it to anything that
-  writes it (**E3160**).
+  writes it (**E3160**). A handler that writes its parameter's graph at any depth — a method that writes its
+  own receiver, called on a record within the parameter, included — refuses every send that lends to it
+  (**E3019**).
 - A value the sender does not solely own — captured by a closure, held in a container, borrowed from a
   parameter — is **E3138**; send a `.clone()`.
 - A parameter type that cannot cross at all — a promise, a function value, a value held at an interface
   type — is **E3135**. A reply that is part of the service's own state is **E3137**; return a copy.
-- Before a send, the runtime also checks the value's whole object graph. If some nested record has a second
-  owner the compiler could not see, the program aborts with exit code **96** before anything is sent. A
-  reply is checked after the handler's locals and the message's arguments are released, so a reply built
-  from them crosses. A generic service's reply is checked at the type its `spawn` fixes: a `returns T`
-  message that hands back a container or a reference-holding record from the service's own state aborts
-  with **96**, and a reply whose graph holds a type the runtime cannot walk (a value held at an interface
-  type, an OS handle) is **E3138** at the `spawn`.
+- Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
+  several times — two fields, two slots of an array — when every owner of that record is one of those
+  references, and the record is walked once however many paths reach it. If some nested record has an owner
+  outside the graph, the program aborts with exit code **96** before anything is sent. A reply is checked
+  after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
+  generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
+  container or a reference-holding record from the service's own state aborts with **96**, and a reply whose
+  graph holds a type the runtime cannot walk (a value held at an interface type, an OS handle) is **E3138** at
+  the `spawn`.
 
 **Module-level state.** A service handler — and anything it calls — may not read or write a module-level
 `var` (**E3143**). Keep a service's state in its own fields and hand results back through replies.
+
+A module-level `let` stays readable. In a program that spawns a service, every `let` record built before
+`main` is marked shared once the last global initializer has returned, so every count a handler steps on it
+is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
+holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
+**E3163** where a message can read it, and legal where only `main` does. A `spawn` a global initializer can
+reach is **E3164**, a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
+a `var` whose initializer may take a `let`'s record is **E3166** (see
+[Top-Level Variables](/docs/language/variables/#top-level-variables)).
 
 **Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
 through awaited replies when order matters.

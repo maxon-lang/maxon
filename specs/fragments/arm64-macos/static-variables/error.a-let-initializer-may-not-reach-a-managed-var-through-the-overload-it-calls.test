@@ -1,0 +1,29 @@
+// Test: error.a-let-initializer-may-not-reach-a-managed-var-through-the-overload-it-calls
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function make() returns Self
+		return Self{n: 1}
+	end 'make'
+
+	static function make(seed Integer) returns Self
+		return Self{n: g.n + seed}
+	end 'make'
+end 'Box'
+
+var g = Box.create()
+let l = Box.make(2)
+
+function main() returns ExitCode
+	print("l={l.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3165: <fragment>:14:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:18:5: `g` is declared here

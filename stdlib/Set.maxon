@@ -289,9 +289,9 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				if slotHash == hash 'hash_match'
 					if let existing = try elements.get(index) 'get_existing'
 						if existing == element 'found'
-							// Only the Deleted state marks the slot as removed. The cached
-							// hash is left as-is: the hash-guard only runs inside the
-							// Occupied branch, so a tombstone can never cause a false match.
+							// A tombstone owns nothing, for `Map.remove`'s reason. The cached hash stays,
+							// because the hash-guard only runs inside the Occupied branch.
+							try elements.clearSlot(index as ElementIndex) otherwise panic("Set.remove: elements.clearSlot OOB — probe index is in-bounds")
 							try states.set(index, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
 							count = count - 1
 							return true

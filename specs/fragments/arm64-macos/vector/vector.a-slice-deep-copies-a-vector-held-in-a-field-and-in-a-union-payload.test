@@ -1,0 +1,528 @@
+// Test: vector.a-slice-deep-copies-a-vector-held-in-a-field-and-in-a-union-payload
+typealias Flags = Vector with 4 bool
+typealias CellArray = Array with Cell
+
+union Content
+	empty
+	marked(flags Flags)
+end 'Content'
+
+type Cell
+	var content as Content
+	var mask as Flags
+
+	static function create(content Content) returns Self
+		return Self{content: content, mask: Flags.create()}
+	end 'create'
+
+	function firstFlag() returns bool
+		return match self.content 'kind'
+			empty gives false
+			marked(flags) gives try flags.get(0) otherwise false
+		end 'kind'
+	end 'firstFlag'
+
+	function secondMaskBit() returns bool
+		return try self.mask.get(1) otherwise false
+	end 'secondMaskBit'
+
+	function overwrite()
+		self.content = Content.empty
+		try self.mask.set(1, value: true) otherwise panic("index 1 is inside a 4-element vector")
+	end 'overwrite'
+end 'Cell'
+
+function main() returns ExitCode
+	var flags = Flags.create()
+	try flags.set(0, value: true) otherwise panic("index 0 is inside a 4-element vector")
+
+	var cells = CellArray.create()
+	cells.push(Cell.create(Content.marked(flags)))
+	cells.push(Cell.create(Content.marked(flags)))
+
+	let copies = try cells.slice(0, endIndex: 2) otherwise return 1
+
+	for cell in cells 'overwriteOriginals'
+		cell.overwrite()
+	end 'overwriteOriginals'
+
+	for cell in cells 'eachOriginal'
+		print("original {cell.firstFlag()} {cell.secondMaskBit()}\n")
+	end 'eachOriginal'
+
+	for cell in copies 'eachCopy'
+		print("copy {cell.firstFlag()} {cell.secondMaskBit()}\n")
+	end 'eachCopy'
+
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @Cell.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __layout_Vector_N4_bool
+    arm64.movImm x1, 4
+    arm64.bl Vector.create
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 0], x19
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Content
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Cell.firstFlag {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movImm x1, 0
+    arm64.leaRdata x2, __layout_Vector_N4_bool
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x20, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x20, x0
+  trycont:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+  matchcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+}
+
+func @Cell.secondMaskBit {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.movImm x1, 1
+    arm64.leaRdata x2, __layout_Vector_N4_bool
+    arm64.bl Vector.get
+    arm64.cmp x9, 0
+    arm64.b.eq trycont
+  tryerr:
+    arm64.movImm x0, 0
+  trycont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 192
+    arm64.storeSlotReg slot21, x28
+    arm64.storeSlotReg slot20, x27
+    arm64.storeSlotReg slot19, x26
+    arm64.storeSlotReg slot18, x25
+    arm64.storeSlotReg slot17, x24
+    arm64.storeSlotReg slot16, x23
+    arm64.storeSlotReg slot15, x22
+    arm64.storeSlotReg slot14, x21
+    arm64.storeSlotReg slot13, x20
+    arm64.storeSlotReg slot12, x19
+    arm64.leaRdata x0, __layout_Vector_N4_bool
+    arm64.movImm x1, 4
+    arm64.bl Vector.create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.leaRdata x3, __layout_Vector_N4_bool
+    arm64.movImm x4, 4
+    arm64.movRegReg x0, x19
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+  tryok#1:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_Cell
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movRegReg x0, x21
+    arm64.bl Cell.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.movRegReg x0, x21
+    arm64.bl Cell.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+    arm64.movImm x1, 0
+    arm64.movImm x2, 2
+    arm64.leaRdata x3, __layout_Array_Cell
+    arm64.movRegReg x0, x20
+    arm64.bl Array.slice
+    arm64.storeSlotReg slot2, x0
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#3
+  tryerr#4:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot12
+    arm64.loadRegSlot x20, slot13
+    arm64.loadRegSlot x21, slot14
+    arm64.loadRegSlot x22, slot15
+    arm64.loadRegSlot x23, slot16
+    arm64.loadRegSlot x24, slot17
+    arm64.loadRegSlot x25, slot18
+    arm64.loadRegSlot x26, slot19
+    arm64.loadRegSlot x27, slot20
+    arm64.loadRegSlot x28, slot21
+    arm64.epilogue 192
+    arm64.ret
+  tryok#3:
+    arm64.movImm x19, 0
+    arm64.b forhdr#5
+  overwriteOriginals:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x19*8 + 0]
+  __il_body:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
+    arm64.bl __destruct_Content
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.movImm x1, 1
+    arm64.movImm x2, 1
+    arm64.leaRdata x3, __layout_Vector_N4_bool
+    arm64.movImm x4, 4
+    arm64.bl Vector.set
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#23
+  forstep#7:
+    arm64.add x19, x19, 1
+  forhdr#5:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x19, x0
+    arm64.b.lt overwriteOriginals
+  forexit#8:
+    arm64.movImm x0, 0
+    arm64.b forhdr#9
+  eachOriginal:
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x19, [x1 + x0*8 + 0]
+  __im_cont#18:
+    arm64.leaRdata x0, __str_rec_6  ; "original "
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl Cell.firstFlag
+    arm64.movRegReg x23, x0
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x24
+    arm64.bl __bool_to_string
+    arm64.movRegReg x23, x0
+    arm64.leaRdata x0, __str_rec_7  ; " "
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl Cell.secondMaskBit
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x27, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.bl __bool_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot11, x1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot9, x0
+    arm64.add x1, x22, x23
+    arm64.add x1, x1, x26
+    arm64.add x1, x1, x19
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot5, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot7, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x21, x28, x22
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x21, x21, x23
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x25
+    arm64.movRegReg x2, x26
+    arm64.bl __str_copy
+    arm64.add x21, x21, x26
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x27
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x21, x19
+    arm64.loadRegSlot x2, slot9
+    arm64.loadRegSlot x1, slot11
+    arm64.movRegReg x0, x19
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot9
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot7
+    arm64.storeBaseDispReg.word64 [x19 + 0], x28
+    arm64.loadRegSlot x0, slot5
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x24
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x27
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+  forstep#11:
+    arm64.loadRegSlot x0, slot3
+    arm64.add x0, x0, 1
+  forhdr#9:
+    arm64.storeSlotReg slot3, x0
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 8]
+    arm64.cmp x0, x1
+    arm64.b.lt eachOriginal
+  forexit#12:
+    arm64.movImm x0, 0
+    arm64.b forhdr#13
+  eachCopy:
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseIndexScale.word64 x19, [x1 + x0*8 + 0]
+  __im_cont#19:
+    arm64.leaRdata x0, __str_rec_9  ; "copy "
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl Cell.firstFlag
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __bool_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_7  ; " "
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.movRegReg x0, x19
+    arm64.bl Cell.secondMaskBit
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x26
+    arm64.bl __bool_to_string
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x27, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeSlotReg slot10, x0
+    arm64.add x1, x21, x22
+    arm64.add x1, x1, x25
+    arm64.add x1, x1, x19
+    arm64.add x0, x1, x0
+    arm64.storeSlotReg slot6, x0
+    arm64.add x0, x0, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeSlotReg slot8, x0
+    arm64.add x28, x0, 56
+    arm64.movRegReg x0, x28
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x20, x28, x21
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x20, x20, x25
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x26
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x19, x20, x19
+    arm64.loadRegSlot x2, slot10
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x27
+    arm64.bl __str_copy
+    arm64.loadRegSlot x0, slot10
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot8
+    arm64.storeBaseDispReg.word64 [x19 + 0], x28
+    arm64.loadRegSlot x0, slot6
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x26
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl print
+    arm64.movRegReg x0, x19
+    arm64.bl __str_decref
+  forstep#15:
+    arm64.loadRegSlot x0, slot4
+    arm64.add x0, x0, 1
+  forhdr#13:
+    arm64.storeSlotReg slot4, x0
+    arm64.loadRegSlot x1, slot2
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
+    arm64.cmp x0, x1
+    arm64.b.lt eachCopy
+  forexit#16:
+    arm64.movImm x19, 0
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot12
+    arm64.loadRegSlot x20, slot13
+    arm64.loadRegSlot x21, slot14
+    arm64.loadRegSlot x22, slot15
+    arm64.loadRegSlot x23, slot16
+    arm64.loadRegSlot x24, slot17
+    arm64.loadRegSlot x25, slot18
+    arm64.loadRegSlot x26, slot19
+    arm64.loadRegSlot x27, slot20
+    arm64.loadRegSlot x28, slot21
+    arm64.epilogue 192
+    arm64.ret
+  tryerr#2:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at vector.a-slice-deep-copies-a-vector-held-in-a-field-and-in-a-union-payload.test:37: index 0 is inside a 4-element vector\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot12
+    arm64.loadRegSlot x20, slot13
+    arm64.loadRegSlot x21, slot14
+    arm64.loadRegSlot x22, slot15
+    arm64.loadRegSlot x23, slot16
+    arm64.loadRegSlot x24, slot17
+    arm64.loadRegSlot x25, slot18
+    arm64.loadRegSlot x26, slot19
+    arm64.loadRegSlot x27, slot20
+    arm64.loadRegSlot x28, slot21
+    arm64.epilogue 192
+    arm64.ret
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at vector.a-slice-deep-copies-a-vector-held-in-a-field-and-in-a-union-payload.test:31: index 1 is inside a 4-element vector\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot12
+    arm64.loadRegSlot x20, slot13
+    arm64.loadRegSlot x21, slot14
+    arm64.loadRegSlot x22, slot15
+    arm64.loadRegSlot x23, slot16
+    arm64.loadRegSlot x24, slot17
+    arm64.loadRegSlot x25, slot18
+    arm64.loadRegSlot x26, slot19
+    arm64.loadRegSlot x27, slot20
+    arm64.loadRegSlot x28, slot21
+    arm64.epilogue 192
+    arm64.ret
+}

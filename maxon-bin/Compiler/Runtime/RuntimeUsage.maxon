@@ -301,9 +301,9 @@ export type RuntimeUsage
 	export var neededSoleWalks as SoleWalkSet
 
 	// ⭐ The program proves a moved graph SOLE at run time — any `__sole_<T>` walk, `__managed_sole`,
-	// `__list_sole` or a bare handle box. It gates the container walks and `__mm_sole_box`, the handle's leaf.
-	// DECOUPLED from `usesHeap`, which every one of them also implies: these are entries a program that
-	// crosses nothing to a green thread must not carry.
+	// `__list_sole` or a bare handle box. It gates the container walks, `__mm_sole_box` (the handle's leaf) and,
+	// with `usesShareWalk`, the visit table (`WalkVisitTable`). DECOUPLED from `usesHeap`, which every one of
+	// them also implies: these are entries a program that crosses nothing to a green thread must not carry.
 	export var usesSoleWalk as bool
 
 	// ⭐ The `__share_<T>` symbols this module references — `neededSoleWalks`' twin for the walk a LEND
@@ -1251,9 +1251,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'structcloner'
 
 	// A per-type SOLENESS WALK (`__sole_<T>`) — the third twin of the two arms above, referenced by a
-	// transfer door's emitted call or by a `funcAddr(__sole_<E>)` element stamp. It allocates nothing and
-	// frees nothing, so it declares no `usesHeap` of its own. Its transitive nested-walk needs close through
-	// `noteCascadeUsage`.
+	// transfer door's emitted call or by a `funcAddr(__sole_<E>)` element stamp. The only memory a walk touches
+	// is its visit table, and every `__mm_walk_settle` call — a transfer door's or `__module_init`'s — declares
+	// `usesHeap` for it. Its transitive nested-walk needs close through `noteCascadeUsage`.
 	if bytesStartWith(callee, prefix: SoleWalkPrefix) 'soleWalk'
 		usage.usesSoleWalk = true
 		usage.neededSoleWalks.insert(callee)
@@ -1277,16 +1277,16 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 end 'recordCallUsage'
 
 // ⭐ **THE FIXED SOLENESS ENTRIES — every callee of a walk that is not itself a per-type walk.**
-// `__sole_<T>` is decided by prefix above; these five are what a walk bottoms out in: the handle's box leaf,
-// the two container-record walks and the two chain walks. Named as one roster because they turn on ONE bit
+// `__sole_<T>` is decided by prefix above; these six are what a walk bottoms out in: the handle's box leaf,
+// the three container-record walks and the two chain walks. Named as one roster because they turn on ONE bit
 // and a caller of any of them reaches all it needs through that bit.
 function isSoleWalkRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(MmSoleBoxName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName)
+	return callee.equals(MmSoleBoxName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedSoleAloneName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName)
 end 'isSoleWalkRuntimeCallee'
 
 // The fixed SHARE entries — `isSoleWalkRuntimeCallee`'s roster for the lend's walk.
 function isShareWalkRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(MmShareBoxName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName)
+	return callee.equals(MmShareBoxName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ManagedShareAloneName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName)
 end 'isShareWalkRuntimeCallee'
 
 // ⚠⚠ **`recordCharacterSetUsage` AND `closeCharacterSetNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME

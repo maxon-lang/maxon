@@ -1,0 +1,165 @@
+// Test: runtime-processor-count.pinned-to-one
+function main() returns ExitCode
+	print("procs={Runtime.processorCount()}\n")
+	return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_live_count@56 = i64 0
+  __gt_seed_bytes@64 = i64 2048
+  __gt_stack_bytes_sum@72 = i64 0
+  __gt_stack_bytes_count@80 = i64 0
+  __gt_seed_sum_seen@88 = i64 0
+  __gt_seed_count_seen@96 = i64 0
+  __gt_keeps_cpu_clock@104 = i64 0
+  __sched_active_workers@112 = i64 1
+  __sched_max_active_workers@120 = i64 1
+  __sched_tls_index@128 = i64 0
+  __sched_tls_teb_offset@136 = i64 0
+  __sched_procs@144 = i64 0
+  __sched_allm@152 = i64 0
+  __sched_midle@160 = i64 0
+  __sched_pidle@168 = i64 0
+  __gt_gfree_head@176 = i64 0
+  __sched_arena_cursor@184 = i64 0
+  __sched_arena_limit@192 = i64 0
+  __gt_records_carved@200 = i64 0
+  __sched_npidle@208 = i64 0
+  __sched_runq_size@216 = i64 0
+  __sched_global_pushes@224 = i64 0
+  __sched_timer_scan_steps@232 = i64 0
+  __sched_mcount@240 = i64 0
+  __sched_nmidle@248 = i64 0
+  __sched_main_m@256 = i64 0
+  __sched_phase@264 = i64 0
+  __sched_lastpoll@272 = i64 0
+  __sched_poll_until@280 = i64 0
+  __sched_regain_head@288 = i64 0
+  __np_poller@296 = i64 0
+  __np_break@304 = i64 0
+  __np_wake_sig@312 = i64 0
+  __np_pd_table@320 = i64 0
+  __np_pd_cap@328 = i64 0
+  __np_waiters@336 = i64 0
+  __sched_num_procs@344 = i64 0
+  __sched_shutdown_flag@352 = i64 0
+  __sched_lock@360 = i64 0
+  __sched_lock_depth_sink@368 = i64 0
+  __sched_nmspinning@376 = i64 0
+  __sched_needspinning@384 = i64 0
+  __sched_sysmon_event@392 = i64 0
+  __sched_sysmon_wait@400 = i64 0
+  __sched_timer_starts@408 = i64 0
+  __mrt_errno@416 = i64 0
+  __mrt_envp@424 = i64 0
+  __mrt_tls_next_key@432 = i64 0
+  __slab_arena_list@440 = i64 0
+  __slab_arena_map_l1@448 = i64 0
+  __slab_state@456 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_2  ; "procs="
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+  __il_body#3:
+    arm64.bl __sched_processor_count
+    arm64.movRegReg x21, x0
+    arm64.cmp x21, 1
+    arm64.b.lt __rc_panic
+  __il_cont#2:
+    arm64.movImm x0, 20
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __uint_to_string
+    arm64.movRegReg x21, x0
+    arm64.leaRdata x0, __str_rec_3  ; "\x0a"
+    arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
+    arm64.add x0, x20, x21
+    arm64.add x25, x0, x24
+    arm64.add x0, x25, 57
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 56
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x19, x27, x20
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x19, x19, x21
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x24
+    arm64.bl __str_copy
+    arm64.add x0, x19, x24
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, 18446744073709551613
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+  __il_body#6:
+    arm64.movRegReg x0, x26
+    arm64.bl __write_stdout
+  __il_cont#1:
+    arm64.movRegReg x0, x26
+    arm64.bl __str_decref
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at Runtime.maxon:35: Range check failed: value outside typealias 'SchedulerProcessorCount'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}

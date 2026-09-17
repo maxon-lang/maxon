@@ -398,46 +398,34 @@ function instantiatedReplyGraphRefusal(signatures ProgramSignatures, returnType 
 end 'instantiatedReplyGraphRefusal'
 
 function replyGraphRefusalOfType(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns String throws MapError
-	match replyGraphProof(signatures, replyType: replyType, declFilePath: declFilePath) 'graph'
+	match replyTransferWalk(signatures, replyType: replyType, declFilePath: declFilePath) 'graph'
 		closed or
-			provenBy then throw MapError.keyNotFound
+			walkedBy or
+			walkedAlone then throw MapError.keyNotFound
 		refused(noun) then return noun
 	end 'graph'
 end 'replyGraphRefusalOfType'
 
-// How a reply of `replyType` crosses to its awaiter: the MOVE answer for the type, read where the handler is
-// declared. The `spawn` refuses on it and the loop walks by it, so the two cannot come to ask different things.
-module function replyGraphProof(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns TransferGraphProof
-	return transferGraphProofOfShape(signatures, shape: declaredTransferShape(signatures, declared: replyType, slotScopeFilePath: declFilePath), handOff: GreenThreadHandOff.move, readerFilePath: declFilePath)
-end 'replyGraphProof'
-
-// What a value of a DECLARED type is to `transferGraphProofOfShape`, read off the type through the classifier
-// the payload drops use — for the askers that hold a type rather than a parser value.
-function declaredTransferShape(signatures ProgramSignatures, declared MaxonType, slotScopeFilePath FilePath) returns TransferredShape
-	match classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: declared, slotScopeFilePath: slotScopeFilePath) 'class'
+// How a reply of `replyType` crosses to its awaiter: a MOVE, walked through `ProgramSignatures.transferWalkOf`
+// as a value's own type is at a send, read where the handler is declared. The `spawn` refuses on it and the
+// loop walks by it, so the two cannot come to ask different things.
+module function replyTransferWalk(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns TransferWalk
+	match classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: replyType, slotScopeFilePath: declFilePath) 'class'
 		scalar or
 			floatPayload or
-			greenThread then return TransferredShape.ownsNothing
-		managed(storage, isString) then return managedTransferShape(signatures, storage: storage, isString: isString)
-		nestedUnion(storage) then return TransferredShape.record(serviceIndexTypeName(signatures, id: typeNameIdOf(storage)))
-		existential then return TransferredShape.existential
-		typeParam then return TransferredShape.unreadable("an opaque type parameter, which this instantiation did not substitute")
-		undeclaredName then return TransferredShape.unreadable("a name no declaration describes")
+			greenThread then return TransferWalk.closed
+		managed(storage, _) then return declaredTransferWalk(signatures, walked: storage, declFilePath: declFilePath)
+		nestedUnion(storage) then return declaredTransferWalk(signatures, walked: storage, declFilePath: declFilePath)
+		existential or
+			typeParam or
+			undeclaredName then return declaredTransferWalk(signatures, walked: replyType, declFilePath: declFilePath)
 	end 'class'
-end 'declaredTransferShape'
+end 'replyTransferWalk'
 
-function managedTransferShape(signatures ProgramSignatures, storage MaxonType, isString bool) returns TransferredShape
-	if isString 'aByteRecord'
-		return TransferredShape.byteRecord
-	end 'aByteRecord'
-
-	if maxonTypeTag(storage) == ValueTypeTag.genericInstance 'aContainer'
-		let instance = genericInstanceIdOf(storage)
-		return TransferredShape.container(instance, subject: String.from(signatures.instanceDisplayName(instance)))
-	end 'aContainer'
-
-	return TransferredShape.record(serviceIndexTypeName(signatures, id: typeNameIdOf(storage)))
-end 'managedTransferShape'
+function declaredTransferWalk(signatures ProgramSignatures, walked MaxonType, declFilePath FilePath) returns TransferWalk
+	let subject = transferSubjectOf(maxonTypeTag(walked), nameId: typeNameIdOf(walked), typeNames: signatures.indexTypeNames())
+	return signatures.transferWalkOf(subject, action: CascadeAction.soleWalk, roots: TransferRoots.one, readerFilePath: declFilePath)
+end 'declaredTransferWalk'
 
 // The verdict itself, over a type nothing can still fix. Split out because the two knowledge arms reach it
 // with types resolved to different depths and the SENTENCE must be one.
@@ -555,7 +543,7 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 end 'untransferableParameterNoun'
 
 // The noun for a value held at an interface type — one string, because the three arms that reach that verdict
-// (an `interfaceRef` the parse minted, a bare `named` the sweep left, and `transferGraphProofOfShape`'s
+// (an `interfaceRef` the parse minted, a bare `named` the sweep left, and `ProgramSignatures.transferWalkOf`'s
 // existential arm) are one finding about one shape.
 module let InterfaceParameterNoun = "a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry"
 
@@ -725,7 +713,7 @@ end 'serviceSharedTransferMessage'
 // thread leaves that second owner behind on THIS one, stepping a count the service now steps too.
 //
 // ⚠⚠ **A GRAPH THAT MIGHT BE SHARED IS NOT WHAT THIS SENTENCE IS FOR — that is walked at RUN TIME**
-// (`transferGraphProofOfShape`, the synthesized `__sole_<T>` and `__share_<T>` walks,
+// (`ProgramSignatures.transferWalkOf`, the synthesized `__sole_<T>` and `__share_<T>` walks,
 // `RuntimeAbort.transferredRecordNotSole`). This is the refusal for the shapes no walk can be BUILT for, so it
 // names the shape and not a suspicion.
 //

@@ -632,9 +632,7 @@ export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlo
 	var step = module.addBlock(func, label: b"rcstep", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rccont", heat: BlockHeat.normal)
 
-	let zero = emitConst(module, block: cur, value: NoOwedAllocation, ids: ids)
-	let shares = emitCmp(module, block: cur, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(shares, thenBlockId: step.id, elseBlockId: cont.id))
+	emitRouteOnOwedBase(module, block: cur, base: base, whenOwed: step, whenNone: cont, ids: ids)
 
 	let counted = ids.mint()
 	module.appendOp(step, op: StdOp.call(counted, callee: callee, args: argsOf(base)))
@@ -642,6 +640,13 @@ export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlo
 
 	return cont
 end 'emitReleaseOwedBase'
+
+// `base != NoOwedAllocation` → `whenOwed`, otherwise `whenNone`: the null guard every step on an owed base takes.
+export function emitRouteOnOwedBase(module StdModule, block IrBlock, base ValueId, whenOwed IrBlock, whenNone IrBlock, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: NoOwedAllocation, ids: ids)
+	let owed = emitCmp(module, block: block, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(owed, thenBlockId: whenOwed.id, elseBlockId: whenNone.id))
+end 'emitRouteOnOwedBase'
 
 // ⭐⭐ **WHICH ALLOCATION MUST STAY ALIVE FOR THIS RECORD'S BUFFER TO BE READABLE — `NoOwedAllocation` when
 // none must.** A near-twin of `emitOwedAllocationBase`, and DELIBERATELY BUILT ON IT rather than beside it,
@@ -707,9 +712,7 @@ export function emitBufferHostAllocation(module StdModule, func IrFunction, cur 
 	let base = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
 
-	let zero = emitConst(module, block: owedJoin, value: NoOwedAllocation, ids: ids)
-	let owesOne = emitCmp(module, block: owedJoin, a: owedBase, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(owedJoin, op: StdOp.condBranch(owesOne, thenBlockId: separate.id, elseBlockId: noSeparate.id))
+	emitRouteOnOwedBase(module, block: owedJoin, base: owedBase, whenOwed: separate, whenNone: noSeparate, ids: ids)
 
 	module.setTerminator(separate, op: StdOp.branch(join.id))
 	separate.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owedBase)))

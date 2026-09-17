@@ -1,0 +1,24 @@
+// Test: error.a-bare-generic-base-outside-a-generic-body-may-not-take-a-layout-needing-call
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.size()
+end 'main'
+---
+CompilerError:
+error E3162: <fragment>:19:17: 'Holder' is named without type arguments and nothing binds its parameter 'Element', so 'Holder.create' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument

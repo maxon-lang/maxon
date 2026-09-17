@@ -10,7 +10,7 @@ category: language
 
 ### Top-Level `var` Declarations
 
-Top-level `var` declarations define mutable module-level variables. Unlike `let` constants which are compile-time evaluated and stored in read-only memory, `var` declarations create mutable storage in the program's data section.
+Top-level `var` declarations define mutable module-level variables stored in the program's writable data section. A `var` is never image data; a top-level `let` whose value is decided at compile time is, and lives in read-only memory.
 
 #### Syntax
 
@@ -22,20 +22,22 @@ export var globalState = false
 #### Features
 
 - **Runtime storage**: Variables are stored in the writable data section
-- **Initialization**: Initializers are evaluated at program start before `main`
+- **Initialization**: Every initializer runs before `main`, exactly once, in dependency order, whether or not anything reads the variable (`specs/lazy-static-observable.md`)
 - **Type inference**: Type is inferred from the initializer
 - **Export support**: Use `export var` to make variables available to other modules
 
 #### Initializer Requirements
 
-Top-level `var` initializers must be constant expressions (same rules as `let`):
-- Literals: integers, floats, booleans, strings, bytes, characters
-- Array literals whose elements are integer constant expressions or String literals
+A top-level `let` or `var` initializer is one of:
+- A literal: integer, float, boolean, string, byte string, or array literal
 - Arithmetic and logical operations on constants
-- References to other top-level constants
-- Enum member access
+- Another top-level `let`
+- An empty container, or an enum or union case (a case that declares a payload is written with its arguments)
+- A built-in sized type's `.min` / `.max` (`u8.max`)
+- A `Type from "literal"` conversion
+- A call — a free function or a `create()`-style static factory — at the TOP of the initializer, which `__module_init` makes before `main`
 
-Function calls and runtime expressions are not allowed in initializers.
+Anything else is refused (E2015, E2045) — a field read off another global, or a method call on a value. A struct literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3165, E3166 and E3164, below and in `specs/green-thread-globals.md`.
 
 ### Static Fields in Types
 
@@ -48,9 +50,13 @@ typealias Score = int(i64.min to i64.max)
 
 type Counter
 	static var count = 0       // Mutable static field
-	static let MAX = 100       // Compile-time static constant
+	static let MAX = 100       // Immutable static field
 
-	export var value as Score       // Instance field
+	export var value as Score  // Instance field
+
+	static function create(value Score) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Counter'
 ```
 
@@ -58,15 +64,20 @@ end 'Counter'
 
 - **Shared storage**: One copy exists for the type, not per instance
 - **Direct access**: Access via `TypeName.fieldName` syntax
-- **Static let**: Compile-time constant (same as top-level `let`)
-- **Static var**: Mutable storage (same as top-level `var`)
+- **Static let**: Immutable (E2013 on assignment); image data when its value is decided at compile time, otherwise built before `main` (same as top-level `let`)
+- **Static var**: Mutable storage, never image data (same as top-level `var`)
+- **Initializer**: The top-level initializer grammar above, plus a struct literal of the declaring type
 
 #### Access Patterns
 
 ```maxon
-Counter.count = Counter.count + 1   // Access static field
-var c = Counter.create(10)          // Create instance
-c.value = 20                        // Access instance field
+function main() returns ExitCode
+	Counter.count = Counter.count + 1   // Access static field
+	var c = Counter.create(10)          // Create instance
+	c.value = 20                        // Access instance field
+	print("{c.value} {Counter.count} {Counter.MAX}")
+	return 0
+end 'main'
 ```
 
 ## Tests
@@ -349,12 +360,9 @@ member is written inside the `type` body that declares it, so `static var origin
 FILE scope is written inside no type body and stays refused. `specs/lazy-static.md` holds the cases for both
 halves.
 
-⛔ **THIS SECTION USED TO ASSERT THE OPPOSITE** — that a struct literal is refused as a static initializer,
-"a property of the top-level initializer grammar rather than of `static`", with `specs/lazy-static.md`
-nominated as the rung that would close it. That rung has landed, and the sentence was already only half
-true when it was written: the refusal it described was `E2004 Undefined constant 'CharacterSet'`, a message
-about a `let` nobody wrote, and the file-scope spelling it pointed at is refused for a completely different
-reason (E3076). The two cases below are what a claim of this shape is owed.
+⛔ **A STRUCT LITERAL IS NEVER REFUSED FOR STANDING IN AN INITIALIZER.** Every refusal it meets there is one
+the same literal meets in a method body: E3076 for the wrong body, and the field refusals the sections below
+pin.
 
 ### A struct-literal initializer's field refusals are the LITERAL's own, not the initializer grammar's
 
@@ -1428,6 +1436,166 @@ end 'main'
 error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
 ```
 
+<!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method-on-a-field -->
+The same refusal where the self-writing method is called on a record INSIDE what the callee was handed: the
+global's graph is written one record down, and nothing may write a global declared immutable.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	export static function make() returns Holder
+		return Holder{inner: Box.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function nudge(t Holder)
+	t.inner.bump()
+end 'nudge'
+
+function main() returns ExitCode
+	nudge(G)
+	return G.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:31:2: cannot pass 'G' to function that mutates parameter 't' (in main)
+```
+
+<!-- test: error.let-global-to-a-callee-that-pushes-into-a-container-a-call-hands-back-from-inside-it -->
+The same refusal where the write is a built-in container method: `pick` hands back the array `t` holds, and
+`poke` pushes into it, so the global's graph is written one record down.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Holder
+	export var items as CountArray
+
+	export static function make() returns Holder
+		return Holder{items: CountArray.create()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function pick(t Holder) returns CountArray
+	return t.items
+end 'pick'
+
+function poke(h Holder)
+	pick(h).push(1)
+end 'poke'
+
+function main() returns ExitCode
+	poke(G)
+	return G.items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:24:2: cannot pass 'G' to function that mutates parameter 'h' (in main)
+```
+
+<!-- test: error.let-global-to-a-callee-that-pushes-into-a-var-merged-from-inside-it -->
+The same write through a `var` that may hold the array inside the parameter on one path and a fresh one on the
+other: what it may lie within is what the push writes.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Inner
+	export var items as CountArray
+
+	export static function make() returns Inner
+		return Inner{items: CountArray.create()}
+	end 'make'
+end 'Inner'
+
+type Holder
+	export var inner as Inner
+
+	export static function make() returns Holder
+		return Holder{inner: Inner.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function poke(t Holder, deep bool)
+	var list = CountArray.create()
+
+	if deep 'fromInner'
+		list = t.inner.items
+	end 'fromInner'
+
+	list.push(1)
+end 'poke'
+
+function main() returns ExitCode
+	poke(G, deep: true)
+	return G.inner.items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:34:2: cannot pass 'G' to function that mutates parameter 't' (in main)
+```
+
+<!-- test: a-let-global-held-by-a-record-a-callee-builds-is-not-written-by-writing-that-record -->
+The control: `mint` stores `guards` in the record it builds and pushes into that record's own fresh array, which
+lies within nothing `guards` holds, so handing it the global is legal and the global is untouched.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Guards
+	export var cols as CountArray
+
+	export static function make() returns Guards
+		return Guards{cols: CountArray.create()}
+	end 'make'
+end 'Guards'
+
+let Shared = Guards.make()
+
+type Blocks
+	export var subst as CountArray
+	export var guards as Guards
+
+	export static function create(guards Guards) returns Blocks
+		return Blocks{subst: CountArray.create(), guards: guards}
+	end 'create'
+end 'Blocks'
+
+function mint(guards Guards) returns Blocks
+	var blocks = Blocks.create(guards)
+	blocks.subst.push(1)
+	return blocks
+end 'mint'
+
+function main() returns ExitCode
+	let b = mint(Shared)
+	return (b.subst.count() * 10 + Shared.cols.count()) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
 <!-- test: error.let-global-accessor-result-to-field-writing-callee -->
 The same write one call away from a RETURNED alias — the shape that forces both halves at once: the
 accessor's whole-program return fact, and the callee's whole-program parameter-write fact. `bump` writes
@@ -1785,6 +1953,660 @@ end 'main'
 ```
 ```stdout
 Ada
+```
+
+### A `let` initializer may not reach a managed `var`
+
+⚖ **A `let` IS FIXED AT STARTUP, SO ITS INITIALIZER MAY NOT READ A MODULE-LEVEL `var` THAT HOLDS A RECORD.**
+An initializer cannot name another global, but it may call, and a callee may read one. A record read out of a
+`var` is still owned by the `var`, which can write it after `main` starts, and in a program that spawns a
+service the `let`'s graph must have no owner outside the `let`s to be marked shared. The refusal is E3165, at
+the read, with the `var`'s declaration as a note — whether or not the program spawns anything, and even when
+only a scalar is read out of the `var`: the compiler does not follow what the initializer keeps.
+
+"Reaches" is the call graph once overload resolution has chosen each callee, closed through run-time
+dispatches the way every whole-program service rule closes it. A scalar `var` owns no record and is not
+refused; a `var` initializer and a `let` read by a `let` initializer are legal.
+
+<!-- test: error.a-let-initializer-may-not-read-a-managed-var -->
+The initializer's own callee hands back the `var`'s record, so `l` and `g` would own one record and `g`
+could rewrite what `l` is fixed to.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return g
+	end 'current'
+end 'Box'
+
+var g = Box.create()
+let l = Box.current()
+
+function main() returns ExitCode
+	print("l={l.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3165: <fragment>:10:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:14:5: `g` is declared here
+```
+
+<!-- test: error.a-let-initializer-may-not-read-a-scalar-out-of-a-managed-var -->
+**THE ACCEPTED OVER-APPROXIMATION.** `copied` builds a fresh record and keeps only the number, so nothing `g`
+owns reaches `l` — and it is refused all the same, because the rule is about what the initializer reaches,
+not about what it keeps.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function copied() returns Self
+		return Self{n: g.n}
+	end 'copied'
+end 'Box'
+
+var g = Box.create()
+let l = Box.copied()
+
+function main() returns ExitCode
+	print("l={l.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3165: <fragment>:10:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:14:5: `g` is declared here
+```
+
+<!-- test: error.a-let-initializer-may-not-reach-a-managed-var-through-a-call -->
+The read is two calls below the initializer: `current` names no global, `inner` does.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return Box.inner()
+	end 'current'
+
+	static function inner() returns Self
+		return g
+	end 'inner'
+end 'Box'
+
+var g = Box.create()
+let l = Box.current()
+
+function main() returns ExitCode
+	print("l={l.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3165: <fragment>:14:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:18:5: `g` is declared here
+```
+
+<!-- test: error.a-let-initializer-may-not-reach-a-managed-var-through-the-overload-it-calls -->
+The initializer calls the one-argument `make`, and that member reads `g`.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function make() returns Self
+		return Self{n: 1}
+	end 'make'
+
+	static function make(seed Integer) returns Self
+		return Self{n: g.n + seed}
+	end 'make'
+end 'Box'
+
+var g = Box.create()
+let l = Box.make(2)
+
+function main() returns ExitCode
+	print("l={l.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3165: <fragment>:14:18: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:18:5: `g` is declared here
+```
+
+<!-- test: an-overload-a-let-initializer-does-not-call-may-read-a-managed-var -->
+**THE CONTROL FOR THE CASE ABOVE.** The initializer calls the zero-argument `make`; the member that reads `g`
+is never called from it, so nothing refuses the program.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function make() returns Self
+		return Self{n: 1}
+	end 'make'
+
+	static function make(seed Integer) returns Self
+		return Self{n: g.n + seed}
+	end 'make'
+end 'Box'
+
+var g = Box.create()
+let l = Box.make()
+
+function main() returns ExitCode
+	g.n = 9
+	let m = Box.make(1)
+	print("l={l.n} g={g.n} m={m.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+l=1 g=9 m=10
+```
+
+<!-- test: a-let-initializer-may-read-a-scalar-var -->
+A scalar `var` owns no record, so a `let` initializer may read it.
+```maxon
+type Box
+	export var n as Integer
+
+	static function sized() returns Self
+		return Self{n: count}
+	end 'sized'
+end 'Box'
+
+var count = 3
+let l = Box.sized()
+
+function main() returns ExitCode
+	count = 4
+	print("l={l.n} count={count}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+l=3 count=4
+```
+
+<!-- test: a-var-initializer-may-read-a-managed-var -->
+A `var` may share what another `var` owns: neither is fixed.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return g
+	end 'current'
+end 'Box'
+
+var g = Box.create()
+var v = Box.current()
+
+function main() returns ExitCode
+	v.n = 9
+	print("v={v.n} g={g.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+v=9 g=9
+```
+
+<!-- test: a-let-initializer-may-read-another-let -->
+A `let` may hold what another `let` holds: both are fixed.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+end 'Box'
+
+let a = Box.create()
+let b = Box.current()
+
+function main() returns ExitCode
+	print("a={a.n} b={b.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+a=7 b=7
+```
+
+### A `var` initializer may not take a `let`'s record
+
+⚖ **THE OTHER DIRECTION: A MODULE-LEVEL `var` MAY NOT BE HANDED A RECORD A MODULE-LEVEL `let` HOLDS.** The `var` could
+write the record the `let` is fixed to, and in a program that spawns a service the `let` could not be marked shared
+with the `var` as an outside owner. Unlike E3165 this is a question about FLOW: what the initializer's call may
+hand back, at any depth — the `let`'s record itself or a record built around it. It is answered by the
+storage-provenance summary of the call, carried through calls, witness dispatches and calls through function values.
+A value built fresh out of numbers read from a `let` is legal. The refusal is E3166, at the `var`'s declaration.
+
+The same summary refuses a write, inside a function, through a record a call handed back out of a `let`
+(E3159).
+
+<!-- test: error.a-var-initializer-may-not-take-a-lets-record -->
+`current` hands back the `let`'s own record, so `main`'s write through `v` would change `a`.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+end 'Box'
+
+let a = Box.create()
+var v = Box.current()
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3166: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+```
+
+<!-- test: error.a-var-initializer-may-not-take-a-record-holding-a-lets-record -->
+`around` builds a fresh record, but the record it holds is `a`'s.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+var w = Wrap.around()
+
+function main() returns ExitCode
+	w.box.n = 9
+	print("a={a.n} w={w.box.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3166: <fragment>:19:5: the initializer of the module-level `var` `w` may hand it a record a module-level `let` holds, through `Wrap.around` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `w` a `let`
+```
+
+<!-- test: error.a-var-initializer-may-not-take-a-lets-record-through-two-calls -->
+`current` names no global; the record comes back from `inner`, one call further down.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return Box.inner()
+	end 'current'
+
+	static function inner() returns Self
+		return a
+	end 'inner'
+end 'Box'
+
+let a = Box.create()
+var v = Box.current()
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3166: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+```
+
+<!-- test: error.a-var-initializer-may-not-take-a-lets-record-through-a-witness-dispatch -->
+`through` dispatches `box` on a `Source`, and the conformer that answers hands back `a`.
+```maxon
+interface Source
+	function box() returns Box
+end 'Source'
+
+type FromLet implements Source
+	export var tag as Integer
+
+	static function create() returns Self
+		return Self{tag: 1}
+	end 'create'
+
+	export function box() returns Box
+		return a
+	end 'box'
+end 'FromLet'
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function viaSource() returns Self
+		return through(FromLet.create())
+	end 'viaSource'
+end 'Box'
+
+function through(source Source) returns Box
+	return source.box()
+end 'through'
+
+let a = Box.create()
+var v = Box.viaSource()
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3166: <fragment>:35:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.viaSource` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+```
+
+<!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-call-built-around -->
+The same wrapper bound to a local `var`: holding `a`'s record is legal, and the write through `w.box` is what is
+refused.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+
+function main() returns ExitCode
+	var w = Wrap.around()
+	w.box.n = 9
+	print("w={w.box.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:22:2: cannot write through 'w.box', which may be the record of a module-level `let` a call handed back; use clone()
+```
+
+<!-- test: a-var-initializer-may-build-fresh-from-a-lets-scalars -->
+**THE CONTROL.** `fresh` reads a number out of `a` and builds a record of its own, and a local `var` holding `a`'s
+record through a wrapper may write the wrapper's own field.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function fresh() returns Self
+		return Self{n: a.n + 1}
+	end 'fresh'
+end 'Box'
+
+type Wrap
+	export var box as Box
+	export var count as Integer
+
+	static function around() returns Self
+		return Self{box: a, count: 0}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+var b = Box.fresh()
+
+function main() returns ExitCode
+	b.n = 9
+	var w = Wrap.around()
+	w.count = 3
+	print("a={a.n} b={b.n} w={w.count} {w.box.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+a=7 b=9 w=3 7
+```
+
+<!-- test: error.a-lets-record-a-call-handed-back-may-not-go-to-a-writing-parameter -->
+`main` names no `let`, and hands `bump` the record `around` holds out of `a`.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+
+function bump(b Box)
+	b.n = 9
+end 'bump'
+
+function show() returns Integer
+	return a.n
+end 'show'
+
+function main() returns ExitCode
+	bump(Wrap.around().box)
+	print("a={show()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3019: <fragment>:29:2: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'b' (in main)
+```
+
+<!-- test: error.a-local-var-may-not-write-through-a-lets-record-an-await-hands-back -->
+The record reaches `b` through a promise.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export var box as Box
+
+	static function around() returns Self
+		return Self{box: a}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+
+function fetch() returns Box
+	return Wrap.around().box
+end 'fetch'
+
+function show() returns Integer
+	return a.n
+end 'show'
+
+function main() returns ExitCode
+	var pending = async fetch()
+	var b = await pending
+	b.n = 9
+	print("a={show()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:31:2: cannot write through 'b', which may be the record of a module-level `let` a call handed back; use clone()
+```
+
+<!-- test: a-var-initializer-may-take-a-number-read-through-a-nested-call -->
+**THE CONTROL FOR A NESTED CALL.** `current` hands `copyOf` the `let`'s record, and `copyOf` keeps only its number.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+
+	static function copyOf(source Box) returns Self
+		return Self{n: source.n}
+	end 'copyOf'
+end 'Box'
+
+let a = Box.create()
+var v = Box.copyOf(Box.current())
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+a=7 v=9
+```
+
+<!-- test: error.a-var-initializer-may-not-take-a-lets-record-a-nested-call-passes-back -->
+`pass` hands back the parameter it is given, which is `a`'s record.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+
+	static function pass(source Box) returns Self
+		return source
+	end 'pass'
+end 'Box'
+
+let a = Box.create()
+var v = Box.pass(Box.current())
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3166: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.pass` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
 ### A managed constant is the WEAKEST claim on `<base>.<member>(…)`

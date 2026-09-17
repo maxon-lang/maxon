@@ -1,0 +1,29 @@
+// Test: error.a-var-initializer-may-not-take-a-lets-record-a-nested-call-passes-back
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+
+	static function pass(source Box) returns Self
+		return source
+	end 'pass'
+end 'Box'
+
+let a = Box.create()
+var v = Box.pass(Box.current())
+
+function main() returns ExitCode
+	v.n = 9
+	print("a={a.n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+---
+CompilerError:
+error E3166: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.pass` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
