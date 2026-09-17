@@ -98,7 +98,8 @@ export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanc
 //
 // `subject` is the record the field belongs to, whose concrete instance fixes a `with` clause the field wrote
 // over its declaring type's own parameter. `claims` is that clause's instance, or empty for a field that
-// wrote none. `fieldSite` is the `<Type>.<field>` a refusal names. The position is carried whole because
+// wrote none. `fieldSite` is what a refusal names: the `<Type>.<field>` of a field, the `'<param>' of the
+// message '<message>'` of a message argument (`place`). The position is carried whole because
 // `__module_init` has no source file of its own to anchor one.
 export type ExistentialFieldStore
 	export let value as ValueId
@@ -106,12 +107,13 @@ export type ExistentialFieldStore
 	export let interfaceName as ByteArray
 	export let claims as GenericInstanceIdArray
 	export let fieldSite as ByteArray
+	export let place as ExistentialStorePlace
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let filePath as FilePath
 
-	export static function create(value ValueId, subject ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns Self
-		return Self{value: value, subject: subject, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, line: line, column: column, filePath: filePath}
+	export static function create(value ValueId, subject ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, place ExistentialStorePlace, line LineNumber, column ColumnNumber, filePath FilePath) returns Self
+		return Self{value: value, subject: subject, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, place: place, line: line, column: column, filePath: filePath}
 	end 'create'
 
 	// The same store with its claimed instances renumbered by a merge (`ParseStaging.rewriteTypeIds`).
@@ -122,9 +124,16 @@ export type ExistentialFieldStore
 			renumbered.push(remap.applyInstance(claim))
 		end 'eachClaim'
 
-		return Self{value: self.value, subject: self.subject, interfaceName: self.interfaceName, claims: renumbered, fieldSite: self.fieldSite, line: self.line, column: self.column, filePath: self.filePath}
+		return Self{value: self.value, subject: self.subject, interfaceName: self.interfaceName, claims: renumbered, fieldSite: self.fieldSite, place: self.place, line: self.line, column: self.column, filePath: self.filePath}
 	end 'withClaimsRenumbered'
 end 'ExistentialFieldStore'
+
+// What an interface-typed store fills: a struct FIELD, or a MESSAGE ARGUMENT, which a service's request
+// payload stores beside its witness half. Only the words of a refusal differ.
+export enum ExistentialStorePlace
+	structField
+	messageArgument
+end 'ExistentialStorePlace'
 
 export typealias ExistentialFieldStoreArray = Array with ExistentialFieldStore
 

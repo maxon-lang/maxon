@@ -2601,7 +2601,7 @@ type MaxonToStdLowering
 	end 'forwardCallerWitness'
 
 	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName`.** The
-	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `destroyFunc@8`, `flags@16`=0, `methods[N]@24`) is
+	// `40 + 8*methodCount`-byte blob (`IrInterface.WitnessTableHeaderBytes` states the header) is
 	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
 	// `funcAbs64InRdata` relocation whose target is the member `checkConformance` ACCEPTED for that
 	// requirement (`witnessSlotImpl` — NOT a second `<Type>.<method>` join of this pass's own) with
@@ -2630,7 +2630,7 @@ type MaxonToStdLowering
 		let methodCount = slots.count()
 		let associatedCount = self.heldAssociatedSlotCount(interfaceName, iface: iface)
 
-		// `methodCount@0`, then zero-fill through the header (`destroyFunc@8`, `flags@16`), every method
+		// `methodCount@0`, then zero-fill through the header's four ownership words, every method
 		// slot and — where this interface holds an associated position at an interface — the associated
 		// block past them. The writer patches the slots via the relocations below. `scalarImage` is the SAME
 		// little-endian serializer the `.data`/`.rdata` images use, so the header word matches every other
@@ -2655,6 +2655,14 @@ type MaxonToStdLowering
 		self.stampOwnershipWord(self.witnessDestroyCallee(typeName, instance: table), label: label, offsetInLabel: WitnessDestroyFuncOffset)
 		self.stampOwnershipWord(self.witnessRetainCallee(typeName, instance: table), label: label, offsetInLabel: WitnessRetainFuncOffset)
 
+		// ⚠ **THE TWO WALK WORDS ARE STAMPED ONLY IN A PROGRAM THAT SPAWNS A SERVICE**, the one kind of program
+		// that hands a value to another green thread and so the only reader of either word. Stamped in every
+		// program, each conformer's walk cascades would be installed where nothing can reach them.
+		if self.signatures.spawnsAnyService() 'aValueCanCross'
+			self.stampOwnershipWord(self.witnessWalkCallee(typeName, instance: table, action: CascadeAction.soleWalk), label: label, offsetInLabel: WitnessSoleWalkFuncOffset)
+			self.stampOwnershipWord(self.witnessWalkCallee(typeName, instance: table, action: CascadeAction.shareWalk), label: label, offsetInLabel: WitnessShareWalkFuncOffset)
+		end 'aValueCanCross'
+
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
 
@@ -2670,24 +2678,26 @@ type MaxonToStdLowering
 
 	// ⭐⭐ **THE VERDICT BEHIND `WitnessTableInstance` — a caller states which instance it holds, and this
 	// decides whether the table is keyed by it.** Two independent reasons reduce a stated instance back
-	// to the shared table, and both are about what the ADAPTER would have to build:
+	// to the shared table:
 	//
-	//   • the conformance's impls carry NO hidden dictionary, so a per-instance table would name the identical
-	//     slots as the shared one under a second label — a duplicate blob and a moved golden for nothing;
+	//   • the conformance's impls carry NO hidden dictionary AND the program spawns no service, so a
+	//     per-instance table would name the identical slots as the shared one under a second label. A program
+	//     that spawns reads the table's walk words, and only an instance's table can name its walk
+	//     (`ProgramSignatures.existentialWalkCallee`);
 	//   • the instance is not CONCRETE, so there is no descriptor and no argument witness to put in one. An
 	//     instance over the enclosing body's own type parameters is exactly this shape, and it is the same
 	//     fact `emitInstanceDescriptorAddr` acts on one mechanism over (it forwards the caller's blocks; a
 	//     table has no caller to forward from, so here it can only decline).
 	//
-	// ⇒ a program that never reaches a dictionary-carrying conformance through a concrete instance mints
-	// exactly the tables it always did.
+	// ⇒ a program that spawns no service and never reaches a dictionary-carrying conformance through a
+	// concrete instance mints only shared tables.
 	function witnessTableInstanceFor(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns WitnessTableInstance
 		match instance 'stated'
 			shared then return WitnessTableInstance.shared
 			perInstance then break 'stated'
 		end 'stated'
 
-		if not self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName) 'nothingToSupply'
+		if not self.signatures.spawnsAnyService() and not self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName) 'nothingToSupply'
 			return WitnessTableInstance.shared
 		end 'nothingToSupply'
 
@@ -2712,6 +2722,13 @@ type MaxonToStdLowering
 			perInstance(gid) gives self.signatures.instanceRetainCallee(gid)
 		end 'table'
 	end 'witnessRetainCallee'
+
+	function witnessWalkCallee(typeName ByteArray, instance WitnessTableInstance, action CascadeAction) returns ByteArray
+		return match instance 'table'
+			shared gives self.signatures.existentialWalkCallee(typeName, action: action)
+			perInstance(gid) gives self.signatures.instanceExistentialWalkCallee(gid, action: action)
+		end 'table'
+	end 'witnessWalkCallee'
 
 	// The `<Type>` half of a table's label: the conformer's own name for the shared table, the instance's
 	// canonical mangling for a per-instance one — the SAME mangling `__layout_<instance>` is built from
@@ -4874,6 +4891,10 @@ type MaxonToStdLowering
 	// `await p` → `__gt_await(p)`. The scheduler drive is entirely in the runtime; here it is a plain call
 	// yielding the awaited scalar in R8.
 	function lowerAwait(result ValueId, promise ValueId, dstBlock IrBlock)
+		if self.valueTagOf(result) == ValueTypeTag.interfaceRef 'aFatPointer'
+			panic("lowerAwait: a plain `await` yields a value held at an interface type — only a service reply does, and a reply throws `ServiceError`, so it is `try await`ed (E3057)")
+		end 'aFatPointer'
+
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtAwaitName, args: argsOf(promise)))
 	end 'lowerAwait'
 
@@ -4881,8 +4902,17 @@ type MaxonToStdLowering
 	// flag in R10 (`errorFlag`). The runtime driver returns both through `errorReturn`; this `tryCall`
 	// captures both, exactly as `lowerTryCall` does for a throwing free call. The parser's `try … otherwise …`
 	// desugar (already emitted around this op) reads the flag.
+	//
+	// A reply held at an interface type takes its witness half out of the cell AFTER the await, which leaves the
+	// cell alive for exactly that read (`GtRuntime.GtTryAwaitHoldingName`).
 	function lowerTryAwait(result ValueId, errorFlag ValueId, promise ValueId, dstBlock IrBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: GtTryAwaitName, args: argsOf(promise)))
+		if self.valueTagOf(result) != ValueTypeTag.interfaceRef 'aSingleWord'
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: GtTryAwaitName, args: argsOf(promise)))
+			return
+		end 'aSingleWord'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: GtTryAwaitHoldingName, args: argsOf(promise)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(self.pairedWitnessOf(result, site: GtReplyWitnessName), callee: GtReplyWitnessName, args: argsOf(promise)))
 	end 'lowerTryAwait'
 
 	// Materialize a function value's `.text` address. Under the uniform `(userargs, env) -> R`

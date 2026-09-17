@@ -350,7 +350,7 @@ end 'applyRdataAbsRelocs'
 // wasm twin of `bakeFuncAbs64Relocs`, and the whole of what makes witness tables and managed-opaque-`T`
 // `Array` descriptors work on this target: **the blob LAYOUT is target-agnostic and only the VALUE in the
 // slot differs.** The x64 PE/ELF writers bake the target's absolute `.text` VA, because their reader
-// DEREFERENCES it (`call qword [witness + 24 + 8*i]`); wasm has no code addresses at all, so its reader is a
+// DEREFERENCES it (`call qword [witness + witnessMethodSlotOffset(i)]`); wasm has no code addresses at all, so its reader is a
 // `call_indirect` through the module's one funcref table — and the value the slot must hold is therefore the
 // callee's TABLE INDEX. `table[i] == funcIdx i` (`emitElementSection`), so that index IS `wasmFuncIdxOf`'s
 // answer, known here from `module.functions` order alone with no writer-stage layout to wait for.
@@ -1864,7 +1864,7 @@ type WasmFuncEmitter
 			osHostSample then panic("emitStraightLineTerminator: a host sample call is a body op, never a terminator")
 			osNetpoll then panic("emitStraightLineTerminator: a poller call is a body op, never a terminator")
 			osSocketOverlapped or
-			osSocketServe then panic("emitStraightLineTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
+				osSocketServe then panic("emitStraightLineTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -2035,7 +2035,7 @@ type WasmFuncEmitter
 			osHostSample then panic("emitDispatcherTerminator: a host sample call is a body op, never a terminator")
 			osNetpoll then panic("emitDispatcherTerminator: a poller call is a body op, never a terminator")
 			osSocketOverlapped or
-			osSocketServe then panic("emitDispatcherTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
+				osSocketServe then panic("emitDispatcherTerminator: a socket transfer or a server-side socket call is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -2995,7 +2995,7 @@ type WasmFuncEmitter
 	end 'captureIndirectResult'
 
 	// ⭐ **THE FUSED `witnessCall` — a `call_indirect` whose table index is LOADED FROM
-	// MEMORY.** The x64 lowering is a memory-indirect `call qword [witnessAddr + 24 + 8*i]`, where the loaded
+	// MEMORY.** The x64 lowering is a memory-indirect `call qword [witnessAddr + witnessMethodSlotOffset(i)]`, where the loaded
 	// function pointer is dereferenced by the call itself and never occupies a register; wasm's `call_indirect`
 	// takes its callee off the operand stack, so the same shape is: push the args, then push the slot's
 	// contents — the callee's funcref-TABLE INDEX, baked there by `bakeFuncTableIndexRelocs` — and call. The

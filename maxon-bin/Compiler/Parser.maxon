@@ -12480,6 +12480,10 @@ enum DeclaredStoragePosition
 	// `interfaceRequirementParameter` sits between them and does not share the reason.
 	functionTypeParameter
 
+	// ⭐ A generic type argument INFERRED from a factory's arguments (`spawnFactoryConstructorInstance`) — the
+	// one road to an instantiation that names no written type, so it asks no declaration door.
+	inferredTypeArgument
+
 	// ⭐ A TUPLE ELEMENT. Reached by a THIRD route the ones above do not — a tuple type is interned into a
 	// synthesized struct, so its element list is parsed by `parseTupleTypeReference` rather than by any
 	// field/parameter/return reader, and it asked no door at all.
@@ -12583,7 +12587,8 @@ end 'interfaceStoragePositionMessage'
 function storagePositionRemedy(position DeclaredStoragePosition) returns String
 	match position 'which'
 		unionPayload or
-			containerElement then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
+			containerElement or
+			inferredTypeArgument then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
 		closureParameter then return functionValueAbiRemedy()
 		interfaceRequirementParameter then return "Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains"
 		functionTypeParameter then return functionValueAbiRemedy()
@@ -12625,6 +12630,7 @@ function storagePositionSubject(position DeclaredStoragePosition) returns String
 	match position 'which'
 		unionPayload then return "a union case payload"
 		containerElement then return "a container's element type"
+		inferredTypeArgument then return "a type argument inferred from a factory argument"
 		closureParameter then return "a closure parameter"
 		interfaceRequirementParameter then return "an interface requirement's parameter"
 		functionTypeParameter then return "a function type's parameter"
@@ -12653,6 +12659,7 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// `typealias` and then thrown away, and what the author saw was *"E3005: cannot assign 'struct' to
 		// variable 'push' of type 'int'"* eighteen lines further down.
 		containerElement then return "an element slot is one machine word"
+		inferredTypeArgument then return "a slot standing at a type parameter is one machine word"
 		closureParameter then return functionValueAbiRoom()
 
 		// ⚠ MEASURED on every shape and on BOTH compilers, before this arm existed: a proper CONFORMER
@@ -37418,6 +37425,7 @@ export type Parser
 		// `rangeCheckReturnAlias`, which is the declared return type's RANGED-ALIAS name, and an interface is
 		// not one — so it is empty on every path that reaches here.
 		if declaredTag == ValueTypeTag.interfaceRef 'existentialReturn'
+			try self.requireServiceReplyDoesNotAliasState(func, value: retVal, anchor: anchor)
 			try self.emitOwnedValueReturn(retVal, anchor: anchor)
 			return
 		end 'existentialReturn'
@@ -37600,7 +37608,8 @@ export type Parser
 		match self.transferWalkOfValue(value, handOff: GreenThreadHandOff.move) 'graph'
 			closed or
 				walkedBy or
-				walkedAlone then break 'graph'
+				walkedAlone or
+				walkedThroughWitness then break 'graph'
 			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: serviceReplyBlame(typeName, methodName: methodName), noun: noun, anchor: anchor)
 		end 'graph'
 	end 'proveReplyCrossable'
@@ -43199,7 +43208,6 @@ export type Parser
 	function retainBorrowedAggregate(source ValueId, range SourceRange) returns ValueId
 		let retained = self.emitRetainCall(source, range: range)
 		self.markValueOwnsHeap(retained, exclusivity: OwnedHeapExclusivity.coOwned)
-		self.carryInterfaceWitness(retained, from: source)
 		return retained
 	end 'retainBorrowedAggregate'
 
@@ -43234,8 +43242,8 @@ export type Parser
 	// (`SemanticCheck.checkExistentialSiteClaimAtFieldStore`). A non-existential source has neither and carries
 	// nothing, which is what lets the two retain doors share this step.
 	//
-	// ⚠ Single-sourced because `retainBorrowedAggregate` and `coOwnBorrowedForConsume` are two callers of ONE
-	// retain: spelled at either door it looks like a property of that door rather than of the retain.
+	// ⚠ Asked by the one existential retain (`emitRetainExistentialCall`) and by nothing else: it is a property
+	// of the retain, and every door that retains — a co-own, a consume, a lend — reaches it there.
 	function carryInterfaceWitness(retained ValueId, from ValueId)
 		if self.tagOf(from) != ValueTypeTag.interfaceRef 'notAnExistential'
 			return
@@ -43342,7 +43350,9 @@ export type Parser
 		// choice (incref a record, copy a byte record, hand back a raw value), and the co-owned answer is the
 		// sound one under every branch — the incref one makes it literally true, and the others make it harmless.
 		self.markValueCoOwnsHeap(source)
-		return self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		let retained = self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		self.carryInterfaceWitness(retained, from: source)
+		return retained
 	end 'emitRetainExistentialCall'
 
 	// ⭐ **BECOME A SECOND OWNER OF `source`'s BOX, AS AN UNBOUND STATEMENT-SCOPED TEMPORARY** — the door for
@@ -43389,9 +43399,7 @@ export type Parser
 	// transferred `+1` a double free at the second destructor.
 	function coOwnBorrowedForConsume(value ValueId, range SourceRange) returns ValueId
 		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
-			let retained = self.emitRetainExistentialCall(value, range: range)
-			self.carryInterfaceWitness(retained, from: value)
-			return retained
+			return self.emitRetainExistentialCall(value, range: range)
 		end 'existential'
 
 		return self.coOwnConcreteRecordForSink(value, range: range)
@@ -63288,16 +63296,17 @@ export type Parser
 			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: caseTok)
 			classes.push(class)
 
-			// ⛔⛔ **THE `__reply` SLOT'S ARGUMENT IS NOT TYPE-CHECKED, AND SINCE SV4 THAT IS LOAD-BEARING.**
+			// ⛔⛔ **THE `__reply` SLOT'S ARGUMENT IS NOT TYPE-CHECKED, AND SINCE SV4 THAT IS LOAD-BEARING.** Nor is
+			// a witness half's, which no source argument fills (`ServiceCompanions.serviceWitnessHalfSlotName`).
 			// Its field is declared `MaxonType.integer` deliberately (a raw cell pointer the P1.3 destructor
 			// cascade must not follow) while `mintServiceReplyCell` mints the value at
 			// `Promise with (T, E)` — so this check would earn an **E3005 on every reply-bearing send in the
 			// suite**, blaming the author for an argument they did not write and the compiler minted. Both
 			// sides of this slot are the compiler's, which is what makes skipping it honest rather than a
 			// hole. `moveMessagePayloads` skips the same slot for its own reason, through the same predicate.
-			if fieldIsTheServiceReplySlot(field) 'theCompilersOwnCell'
+			if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'theCompilersOwnSlot'
 				continue
-			end 'theCompilersOwnCell'
+			end 'theCompilersOwnSlot'
 
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
 			let anchorIndex = try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args")
@@ -63319,12 +63328,23 @@ export type Parser
 		self.emitUnionTagStore(box, tag: layout.tagOfIndex(caseIndex), range: range)
 
 		for i in 0 upto payloads.count() 'storeEach'
+			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloads.get OOB at {i} on a list walked to its own count")
+
+			if fieldIsAServiceWitnessHalf(field) 'storedWithItsValue'
+				continue
+			end 'storedWithItsValue'
+
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
 			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
 			let valueTok = self.tokenAt(try valueStarts.get(i) otherwise panic("emitEnumBox: valueStarts.get OOB at {i} — captured in lockstep with the args"))
 			let stored = try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: box, caseTok: caseTok, range: range, valueTok: valueTok)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
+
+			if payloadClassIsExistential(class) 'andItsWitnessHalf'
+				let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+				self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i) + InterfaceWitnessHalfOffset, value: self.widenedWitnessOf(stored, interfaceName: interfaceNameOfType(declared, typeNames: self.artifact.typeNames), range: range), storageType: MaxonType.integer, range: range)
+			end 'andItsWitnessHalf'
 		end 'storeEach'
 
 		// ⚠ **A DIAGNOSTIC NOW RESTS ON THIS LOOP.** E3129 admits `stay or walk(dir) gives dir` — a binding
@@ -63373,9 +63393,9 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count")
 			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
 
-			if fieldIsTheServiceReplySlot(field) 'theCompilersOwnCell'
+			if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'theCompilersOwnSlot'
 				continue
-			end 'theCompilersOwnCell'
+			end 'theCompilersOwnSlot'
 
 			let anchorIndex = try argAnchors.get(i) otherwise panic("moveMessagePayloads: argAnchors.get OOB at {i} — filled in lockstep with the args")
 			let destination = MessageArgumentDestination.create(serviceTypeName, message: caseTok.value, param: field.name, sendAt: sendAt)
@@ -63874,11 +63894,10 @@ export type Parser
 			typeParam then break 'c'
 			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
 
-			// An interface-typed PAYLOAD is refused at the DECLARATION (`requireStorableDeclaredType`,
-			// `DeclaredStoragePosition.unionPayload`) — a struct field carves out two slots for a fat pointer
-			// and a payload slot cannot, because every case shares one slot region. So this arm is the
-			// backstop for that refusal, not a second verdict on it (P1.7a-existentials slice 2).
-			existential then panic("requirePayloadLowerable: a union payload is declared at an interface type — `Parser.requireStorableDeclaredType` refuses that at the declaration, so a payload reaching here came through a route that refusal does not cover")
+			// An interface-typed payload is refused at a union's DECLARATION (`requireStorableDeclaredType`,
+			// `DeclaredStoragePosition.unionPayload`), so the one union holding one is a service's request union,
+			// which gives it a witness-half slot of its own (`ServiceCompanions.serviceRequestPayloads`).
+			existential then break 'c'
 
 			// A green-thread handle lowers as the one word it is, exactly as a scalar payload does — what
 			// differs is ownership, which is decided at the move-in and in the drop cascade, not here.
@@ -63928,7 +63947,7 @@ export type Parser
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break 'c'
 			floatPayload then panic("requirePayloadArgType: a float payload reached the arg check — requirePayloadLowerable rejects it first")
-			existential then panic("requirePayloadArgType: an interface-typed payload reached the arg check — an interface-typed union payload is refused at its DECLARATION (`requireStorableDeclaredType`), and a struct FIELD at one is checked by `requireStructFieldArgType`, never here")
+			existential then self.recordExistentialPayloadStore(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 
 			// ⭐ The promise's own type check, and it must NOT go through `requireScalarPayloadArg`: that door
 			// compares TAGS, and a `genericInstance` against the declared `named` alias is an E3005 about a
@@ -63937,6 +63956,15 @@ export type Parser
 			greenThread(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, placeBrand: EmptySourceText, voice: voice, anchor: argTok)
 		end 'c'
 	end 'requirePayloadArgType'
+
+	// ⭐ **A MESSAGE ARGUMENT AT AN INTERFACE-TYPED PARAMETER WIDENS AS A FIELD STORE DOES**, and whether it
+	// conforms is `SemanticCheck.checkExistentialFieldStores`' whole-program verdict for the same reason — a
+	// conformer's `implements` clause is recorded when its own file is parsed. A parameter carries no `with`
+	// claim of a record's type parameter, so the store names none.
+	function recordExistentialPayloadStore(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token)
+		let site = "'{String.from(field.name)}' of the message '{String.from(caseTok.value)}'".toByteArray()
+		self.recordExistentialStore(ExistentialFieldStore.create(value, subject: value, interfaceName: interfaceNameOfType(declared, typeNames: self.artifact.typeNames), claims: GenericInstanceIdArray.create(), fieldSite: site, place: ExistentialStorePlace.messageArgument, line: argTok.line, column: argTok.column, filePath: self.filePath))
+	end 'recordExistentialPayloadStore'
 
 	// ⚠ **THE TAG COMES OFF THE RESOLVED `declared`, NEVER OFF `field.declaredType` (A4k).** Read raw, a
 	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` met the
@@ -64742,7 +64770,7 @@ export type Parser
 			let paramName = try params.get(position) otherwise panic("spawnFactoryConstructorInstance: params.get OOB at {position} on a list walked to its own count")
 
 			match self.factoryTypeArgumentAt(inferInstanceOf, paramName: paramName, decl: decl, args: args, argLabels: argLabels) 'argument'
-				found(t) then typeArgs.push(t)
+				found(t) then typeArgs.push(try self.requireInferableTypeArgument(t, anchor: anchor))
 
 				// ⭐ **A MISS IS A REFUSAL ONLY AT A `spawn`.** There the instantiation is the whole point and
 				// nothing else can supply it; at an ORDINARY static call the value keeps the base `structRef`
@@ -64775,6 +64803,13 @@ export type Parser
 		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.filePath))
 		return ConstructorInstance.instance(gid)
 	end 'spawnFactoryConstructorInstance'
+
+	// A value held at an interface type fixes no instantiation on either road: the instance would stand a fat
+	// pointer in a one-word slot, and no descriptor or layout can be built for one.
+	function requireInferableTypeArgument(t MaxonType, anchor Token) returns MaxonType throws ParseError
+		try self.requireStorableDeclaredType(t, position: DeclaredStoragePosition.inferredTypeArgument, line: anchor.line, column: anchor.column)
+		return t
+	end 'requireInferableTypeArgument'
 
 	// ⭐ **WHAT AN INFERENCE THAT FIXED NOTHING ANSWERS — ONE HOME, because both misses answer identically on
 	// the ordinary road and differ only in the sentence the `spawn` road raises.** The reason travels as a
@@ -66222,9 +66257,9 @@ export type Parser
 		var filled = BoolArray.create()
 		var bareLocal = BoolArray.create()
 		var slotAnchors = TokenIndexArray.create()
-		self.seedMessageSlots(payloads.count(), anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
+		self.seedMessageSlots(payloads, anchor: memberIndex, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 
-		try self.slotMessageArgs(callee, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
+		try self.slotMessageArgs(callee, payloads: payloads, args: args, argLabels: argLabels, argAnchors: argAnchors, memberIndex: memberIndex, slotValues: slotValues, filled: filled, slotAnchors: slotAnchors, memberTok: memberTok)
 		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: instance, slotValues: slotValues, filled: filled, range: range)
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count(), memberTok: memberTok)
 
@@ -66285,15 +66320,18 @@ export type Parser
 	// doors that build one need all four and neither may seed three — `emitEnumBox` indexes every one of them
 	// by slot, so a column short by an entry is an out-of-bounds panic rather than a missing value.
 	//
+	// A witness-half slot is seeded FILLED: its value is the witness of the argument before it, which the box
+	// store writes beside that argument (`emitEnumBox`), so no source argument ever fills it.
+	//
 	// ⚠ **`bareLocal` IS ALL FALSE AND CANNOT BE OTHERWISE, WHICH IS WHY IT IS SEEDED HERE AND NEVER WRITTEN.**
 	// The transfer a message's payload takes is `moveIntoGreenThread`, which resolves the source binding
 	// itself; the union CONSTRUCT's per-slot bare-local column has no reader on this path
 	// (`storedPayloadValue`), and passing a column of the right SHAPE is what lets the two fills share one
 	// emitter instead of two.
-	function seedMessageSlots(count CaseIndex, anchor TokenIndex, slotValues ValueIdArray, filled BoolArray, bareLocal BoolArray, slotAnchors TokenIndexArray)
-		for _ in 0 upto count 'eachSlot'
+	function seedMessageSlots(payloads PayloadFieldArray, anchor TokenIndex, slotValues ValueIdArray, filled BoolArray, bareLocal BoolArray, slotAnchors TokenIndexArray)
+		for field in payloads 'eachSlot'
 			slotValues.push(0)
-			filled.push(false)
+			filled.push(fieldIsAServiceWitnessHalf(field))
 			bareLocal.push(false)
 			slotAnchors.push(anchor)
 		end 'eachSlot'
@@ -66363,7 +66401,7 @@ export type Parser
 		var filled = BoolArray.create()
 		var bareLocal = BoolArray.create()
 		var slotAnchors = TokenIndexArray.create()
-		self.seedMessageSlots(payloads.count(), anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
+		self.seedMessageSlots(payloads, anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
 		let reply = self.fillMessageReplySlot(payloads, callee: callee, instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
 
@@ -66408,16 +66446,18 @@ export type Parser
 	// ⚠ The names are the declaration's SOURCE-ALIGNED list (`OverloadedDecl.paramNames`, receiver excluded),
 	// which is exactly the shape a send's arguments are in: the service's state is the LOOP's receiver, not
 	// this call's, so nothing is prepended and position `i` is parameter `i`.
-	function slotMessageArgs(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argAnchors TokenIndexArray, memberIndex TokenIndex, slotValues ValueIdArray, filled BoolArray, slotAnchors TokenIndexArray, memberTok Token) throws ParseError
+	function slotMessageArgs(callee ByteArray, payloads PayloadFieldArray, args ValueIdArray, argLabels ByteArrayArray, argAnchors TokenIndexArray, memberIndex TokenIndex, slotValues ValueIdArray, filled BoolArray, slotAnchors TokenIndexArray, memberTok Token) throws ParseError
 		let paramNames = self.serviceMessageParamNames(callee)
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("slotMessageArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
-			let position = argSlotPosition(paramNames, argIndex: i, label: label)
+			let parameter = argSlotPosition(paramNames, argIndex: i, label: label)
 
-			if position >= paramNames.count() 'namesNoParameter'
+			if parameter >= paramNames.count() 'namesNoParameter'
 				throw ParseError.unknownField(String.from(callee), fieldName: String.from(label), line: memberTok.line, column: memberTok.column)
 			end 'namesNoParameter'
+
+			let position = serviceParamPayloadSlot(payloads, paramIndex: parameter)
 
 			let alreadyFilled = try filled.get(position) otherwise panic("slotMessageArgs: filled.get OOB at {position} — the columns are sized to the variant's payload count, which is the parameter count plus at most a reply slot")
 
@@ -75887,6 +75927,7 @@ export type Parser
 		match self.signatures.containerElementCascadeStrategy(giid, action: CascadeAction.clone) 'strategy'
 			direct(callee) then return self.emitRuntimeFuncAddr(callee, range: range)
 			managedElements then panic("arrayElementCloneValue: a top-level managed array element resolved to `managedElements` — requireArrayElementCopyable gates this to a `direct` element cloner")
+			throughWitness then panic("arrayElementCloneValue: a top-level managed array element is held at an interface type, which `checkGenericArgType` refuses as a type argument")
 			unsupported then panic("arrayElementCloneValue: a top-level managed array element resolved to `unsupported` — requireArrayElementCopyable rejects it at the front end")
 		end 'strategy'
 	end 'arrayElementCloneValue'
@@ -79308,9 +79349,19 @@ export type Parser
 	// file is parsed — so `SemanticCheck.checkExistentialFieldStores` asks both, whole-program.
 	function fieldStoreWitness(box ValueId, layout StructLayout, index FieldIndex, declared MaxonType, value ValueId, range SourceRange) returns ValueId
 		let interfaceName = interfaceNameOfType(declared, typeNames: self.artifact.typeNames)
-		self.existentialFieldStores = writableExistentialFieldStores(self.existentialFieldStores)
-		self.existentialFieldStores.push(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: self.signatures.fieldExistentialSites(layout, index: index), fieldSite: self.fieldSiteName(layout, index: index).toByteArray(), line: range.line, column: range.column, filePath: self.filePath))
+		self.recordExistentialStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: self.signatures.fieldExistentialSites(layout, index: index), fieldSite: self.fieldSiteName(layout, index: index).toByteArray(), place: ExistentialStorePlace.structField, line: range.line, column: range.column, filePath: self.filePath))
 
+		return self.widenedWitnessOf(value, interfaceName: interfaceName, range: range)
+	end 'fieldStoreWitness'
+
+	function recordExistentialStore(store ExistentialFieldStore)
+		self.existentialFieldStores = writableExistentialFieldStores(self.existentialFieldStores)
+		self.existentialFieldStores.push(store)
+	end 'recordExistentialStore'
+
+	// The witness half a value takes where a STORE widens it into a place declared at `interfaceName` — a
+	// struct field or a message payload.
+	function widenedWitnessOf(value ValueId, interfaceName ByteArray, range SourceRange) returns ValueId
 		if self.tagOf(value) == ValueTypeTag.interfaceRef 'forwardsItsOwnWitness'
 			return self.witnessOfValue(value)
 		end 'forwardsItsOwnWitness'
@@ -79318,7 +79369,7 @@ export type Parser
 		let witness = self.mintValueOfType(MaxonType.integer)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), range: range)
 		return witness
-	end 'fieldStoreWitness'
+	end 'widenedWitnessOf'
 
 	// ⭐ **THE ONE `storeIndirect` EMIT**, the mirror of `emitIndirectLoad` above and true on the same
 	// terms. A field write, a union tag store, a union payload store, a union's unused-slot zero-fill, a
@@ -88687,6 +88738,12 @@ export type Parser
 			value(inner) gives self.mintValueOfType(inner)
 		end 'r'
 
+		// A reply held at an interface type brings its witness half back beside it
+		// (`LowerMaxonToStd.lowerTryAwait`).
+		if self.tagOf(result) == ValueTypeTag.interfaceRef 'aFatPointer'
+			self.pairInterfaceWitness(result, witness: self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId))
+		end 'aFatPointer'
+
 		// ⭐⭐ **THE AWAIT ADOPTS THE THREAD'S REFERENCE TO A MANAGED RESULT (A2)** — the same enrolment an
 		// ordinary call's owned managed result gets, and in the same place (between the mint and the op).
 		// `__gt_await` hands back the `+1` the green thread's own `return` produced and does NOT release it
@@ -89290,8 +89347,9 @@ export type Parser
 	function proveTransferGraph(value ValueId, handOff GreenThreadHandOff, blame String, anchor Token) throws ParseError
 		match self.transferWalkOfValue(value, handOff: handOff) 'graph'
 			closed then break 'graph'
-			walkedBy(callee) then self.emitTransferWalk(value, callee: callee, range: SourceRange.ofToken(anchor))
+			walkedBy(callee) then self.emitTransferWalk(singletonArgs(value), callee: callee, range: SourceRange.ofToken(anchor))
 			walkedAlone(callee) then _ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			walkedThroughWitness(entry) then self.emitTransferWalk(pairArgs(self.witnessOfValue(value), second: value), callee: entry, range: SourceRange.ofToken(anchor))
 			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: blame, noun: noun, anchor: anchor)
 		end 'graph'
 	end 'proveTransferGraph'
@@ -89307,11 +89365,18 @@ export type Parser
 		return ParseError.serviceArgumentNotUnique(serviceUnclosedRecordTransferMessage(blame, source: self.transferredValueName(value), noun: noun), line: anchor.line, column: anchor.column)
 	end 'unwalkableTransferGraphError'
 
-	// `callee(value, NoVisitTable)` threads the visit table through the whole graph, and `__mm_walk_settle` then
+	// `callee(walked…, NoVisitTable)` threads the visit table through the whole graph, and `__mm_walk_settle` then
 	// aborts on a record with an owner the walk never met, frees the table, and does both before the hand-off.
-	function emitTransferWalk(value ValueId, callee ByteArray, range SourceRange)
-		let noVisits = self.emitLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)
-		let visits = self.emitRuntimeCall(callee, args: pairArgs(value, second: noVisits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+	// `walked` is the value, preceded by its witness half when the walk reads one.
+	function emitTransferWalk(walked ValueIdArray, callee ByteArray, range SourceRange)
+		var args = ValueIdArray.create()
+
+		for value in walked 'eachWalked'
+			args.push(value)
+		end 'eachWalked'
+
+		args.push(self.emitLiteral(NoVisitTable, valueType: MaxonType.integer, range: range))
+		let visits = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		_ = self.emitRuntimeCall(WalkSettleName, args: singletonArgs(visits), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitTransferWalk'
 

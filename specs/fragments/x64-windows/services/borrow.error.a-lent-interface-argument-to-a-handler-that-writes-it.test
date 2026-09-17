@@ -1,0 +1,49 @@
+// Test: borrow.error.a-lent-interface-argument-to-a-handler-that-writes-it
+typealias Tally = int(0 to u64.max)
+
+interface Counter
+	function bump()
+	function value() returns Tally
+end 'Counter'
+
+type Tick implements Counter
+	var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+
+	function value() returns Tally
+		return self.n
+	end 'value'
+end 'Tick'
+
+function counterOf() returns Counter
+	return Tick.create()
+end 'counterOf'
+
+type Svc
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(c Counter)
+		c.bump()
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let c = counterOf()
+	h.poke(c)
+	return c.value() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:44:2: cannot pass 'c' to function that mutates parameter 'c' (in main)

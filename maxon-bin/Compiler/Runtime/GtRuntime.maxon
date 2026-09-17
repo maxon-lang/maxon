@@ -410,6 +410,13 @@ let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 // member runs, because the taking is what starts one.
 let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 
+// ⭐ **ON A REPLY CELL ANSWERING WITH A VALUE HELD AT AN INTERFACE TYPE: THE VALUE'S WITNESS HALF.** A cell
+// carries one value word (`GtOffResult`), and a fat pointer is two, so the service loop writes the witness
+// here before `__gt_cell_complete` publishes (`ServiceLoop.storeReplyWitness`) and the awaiter takes it
+// through `__gt_reply_witness`; the reply releaser drops through it (`AsyncReleaser.asyncSlotsAt`).
+// 0 on every other green thread.
+export let GtOffReplyWitness = GtOffStrandResume + PointerFieldBytes
+
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above. Must be a
 // multiple of 8.
 //
@@ -419,7 +426,7 @@ let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 // correctly and no number is restated anywhere.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffStrandResume + PointerFieldBytes
+export let GtStructSize = GtOffReplyWitness + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -1152,6 +1159,20 @@ export let GtCellAllocName = b"__gt_cell_alloc"
 // awaiter had already renounced its promise, the runner is the second arrival and the struct is on a free
 // list.
 export let GtCellCompleteName = b"__gt_cell_complete"
+
+// ⭐⭐ **A REPLY HELD AT AN INTERFACE TYPE IS TAKEN IN TWO CALLS, AND THE CELL OUTLIVES THE FIRST.**
+// `__gt_try_await_holding(cell)` is `__gt_try_await` — the wait, its trace and scheduler event, the value and
+// the error word — without the consumer's arrival at the teardown rendezvous. `__gt_reply_witness(cell) ->
+// witness` then reads `GtOffReplyWitness` and arrives. Nothing but the consumer's arrival can free a completed
+// cell, so the read between the two calls is sound, and the wait happens once, where the trace reports it.
+export let GtTryAwaitHoldingName = b"__gt_try_await_holding"
+export let GtReplyWitnessName = b"__gt_reply_witness"
+
+// Where an await's consumer arrives at the teardown rendezvous — see `GtTryAwaitHoldingName`.
+enum GtAwaitArrival
+	inTheAwait
+	inReplyWitness
+end 'GtAwaitArrival'
 
 // `__gt_sleep` is the front-end target for `sleep(ms)`.
 export let GtSleepName = b"__gt_sleep"
@@ -2243,8 +2264,10 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitAny(module)
 	buildGtDrainAtExit(module)
 	buildGtRunMain(module, target: target)
-	buildGtAwait(module, name: GtAwaitName, throwing: false, asyncTrace: asyncTrace, tags: tags)
-	buildGtAwait(module, name: GtTryAwaitName, throwing: true, asyncTrace: asyncTrace, tags: tags)
+	buildGtAwait(module, name: GtAwaitName, throwing: false, arrival: GtAwaitArrival.inTheAwait, asyncTrace: asyncTrace, tags: tags)
+	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, asyncTrace: asyncTrace, tags: tags)
+	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, asyncTrace: asyncTrace, tags: tags)
+	buildGtReplyWitness(module)
 	buildGtPromiseDrop(module)
 
 	// The three halves of the teardown rendezvous, beside the drop and the two awaits that step it.
@@ -3802,11 +3825,12 @@ end 'buildGtRunMain'
 // `__gt_await(promise) -> result` (when `throwing` is false) / `__gt_try_await(promise) -> (result, threw)`
 // (when true): park until the promise's GT is `completed`, then extract the awaited scalar. The two differ
 // ONLY in the exit terminator (a plain `ret` vs the dual-register `errorReturn` for `try await`).
+// `__gt_try_await_holding` is the throwing one leaving its arrival to `__gt_reply_witness` (`arrival`).
 //
 // ⭐ **THE WAIT IS A LOOP ON THE STATUS**, so a wake that finds the promise still pending parks again rather
 // than reading a result nobody wrote. The registration (`__gt_register_park`'s await arm) re-reads the status
 // under `__sched_lock` and resumes at once if the promise completed after this read.
-function buildGtAwait(module StdModule, name ByteArray, throwing bool, asyncTrace bool, tags GtTraceTags)
+function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival GtAwaitArrival, asyncTrace bool, tags GtTraceTags)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -3883,11 +3907,33 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, asyncTrac
 	// list; `awaitExitTerminator` performs the `threw` load and hands back the terminator, so the last read of
 	// the struct is over before the arrival is emitted.
 	let exitTerminator = awaitExitTerminator(module, block: exit, promise: promise, result: result, throwing: throwing, ids: ids)
-	module.appendOp(exit, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(promise)))
+
+	match arrival 'arrival'
+		inTheAwait then module.appendOp(exit, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(promise)))
+		inReplyWitness then break 'arrival'
+	end 'arrival'
+
 	module.setTerminator(exit, op: exitTerminator)
 
 	module.functions.push(func)
 end 'buildGtAwait'
+
+// `__gt_reply_witness(cell) -> witness` — see `GtTryAwaitHoldingName`. The load precedes the arrival, which
+// may free the cell.
+function buildGtReplyWitness(module StdModule)
+	var func = IrFunction.createFromStd(GtReplyWitnessName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let cell = 0 as ValueId
+
+	let witness = emitLoadField(module, block: entry, record: cell, offset: GtOffReplyWitness, ids: ids)
+	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(cell)))
+	module.setTerminator(entry, op: StdOp.ret(witness))
+
+	module.functions.push(func)
+end 'buildGtReplyWitness'
 
 // ⭐⭐ **THE AWAIT'S EXIT, BUILT BEFORE THE STRUCT IS RELEASED.** The two awaits differ in exactly
 // one thing — a `try await` also carries the error flag the trampoline captured into `promise.threw`, which is

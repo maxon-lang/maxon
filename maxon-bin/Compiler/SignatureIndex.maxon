@@ -5410,17 +5410,36 @@ function structBoxDropCallee(signatures ProgramSignatures, structName ByteArray)
 	return MmDecrefName
 end 'structBoxDropCallee'
 
+// Which cascade a full-graph gate is asked about. A deep CLONE and a transfer WALK visit one field graph and
+// differ in one shape: a value held at an interface type, which a witness table walks and cannot copy.
+enum GraphCascadePurpose
+	deepClone
+	transferWalk
+end 'GraphCascadePurpose'
+
+// A transfer strategy as the `(value, visits) -> visits` word a witness table holds. `asElement: true` upstream
+// means a walkable type always answers `direct`, so an entry taking an element walk is an invariant break;
+// `unsupported` is a conformer no walk can be built for, which the table answers with the abort entry.
+function witnessWalkCalleeOf(strategy ManagedCascadeStrategy) returns ByteArray
+	match strategy 'strategy'
+		direct(callee) then return callee
+		unsupported then return MmWalkUnwalkableName
+		managedElements then panic("witnessWalkCalleeOf: a conformer's transfer walk resolved to a `managedElements` strategy, where `asElement: true` resolves to the thunk")
+		throughWitness then panic("witnessWalkCalleeOf: a conformer's transfer walk resolved to a witness-read walk — a conformer is a concrete type, never a value held at an interface")
+	end 'strategy'
+end 'witnessWalkCalleeOf'
+
 // ⭐⭐ **WHICH PER-TYPE CASCADE IS BEING ROUTED — the ONE parameter that turns this classification into one
 // per action.** The tree below answers *"what KIND of managed thing is this, and which entry serves it?"*; the
 // kind half is identical for every action and the entry half is not, so an action is threaded through rather
 // than the tree being written once per action. A second copy of it would be free to disagree about which types
 // it can route at all — and the `unsupported` arms are exactly what the front-end gate reads.
 //
-// ⭐ **THE `unsupported` ARMS ARE ACTION-INDEPENDENT BY CONSTRUCTION**, which is what lets ONE gate
-// (`typeSupportsDeepClone`) admit every action: every arm that declines does so without consulting the action, because
-// what it declines on is the absence of a per-type entry of ANY kind — an OS handle, an existential, a
-// base-layout-less instance. Keep it that way: an arm that declined for one action only would need its own
-// gate, and a gate and a strategy that disagree is a symbol nobody builds (see `managedNameCascadeStrategy`).
+// ⭐ **ONE `unsupported` ARM DEPENDS ON THE ACTION, AND THE GATE CARRIES THE SAME SPLIT.** Every other arm that
+// declines does so on the absence of a per-type entry of ANY kind — an OS handle, a base-layout-less instance.
+// A value held at an interface type has a WALK (its witness names the conformer's) and no COPY, so it declines
+// a clone and not a walk — and `typeSupportsDeepClone` asks the same question through `GraphCascadePurpose`.
+// A gate and a strategy that disagree is a symbol nobody builds (see `managedNameCascadeStrategy`).
 export enum CascadeAction
 	// The `(box) -> newBox` deep copy (P1.7 slice 3b-vi-b).
 	clone
@@ -5505,10 +5524,16 @@ export union ManagedCascadeStrategy
 	managedElements(containerEntry ByteArray, elementEntry ByteArray)
 
 	// Not deep-cloneable by this rung's mechanism — a compiler-owned aggregate (`__ManagedFile`), a
-	// base-layout-less generic instance with no runtime copy of its own (a cursor), an existential, or a
+	// base-layout-less generic instance with no runtime copy of its own (a cursor), an existential's copy, or a
 	// container whose element is not itself `direct` (an array of OS handles). The front end
 	// rejects such an element with a positioned E2015.
 	unsupported
+
+	// ⭐ An INTERFACE-TYPED field's WALK: `entry(witness, value, visits)`, the witness read from the field's
+	// second slot (`IrInterface.InterfaceWitnessHalfOffset`) — `__mm_sole_existential` / `__mm_share_existential`,
+	// which call the walk the conformer's witness table names. It needs the witness beside the value, so a FIELD
+	// position only.
+	throughWitness(entry ByteArray)
 end 'ManagedCascadeStrategy'
 
 // What a graph handed to another green thread is, as far as walking it goes.
@@ -5535,6 +5560,10 @@ export union TransferWalk
 
 	// `callee(value)` walks a graph of one record, aborting on the spot at an owner outside it.
 	walkedAlone(callee ByteArray)
+
+	// `entry(witness, value, visits)` walks a value held at an interface type through the walk its witness table
+	// names for the conformer it holds, and `__mm_walk_settle` then aborts as for `walkedBy`.
+	walkedThroughWitness(entry ByteArray)
 
 	// No walk can be built for this shape, and `noun` says what the shape is.
 	refused(noun String)
@@ -5580,9 +5609,28 @@ function transferWalkFrom(strategy ManagedCascadeStrategy, display String) retur
 	return match strategy 'strategy'
 		direct(callee) gives TransferWalk.walkedBy(callee)
 		managedElements panic("transferWalkFrom: `{display}` resolved to a two-argument `managedElements` strategy, where `asElement: true` resolves to the one-argument thunk")
+		throughWitness panic("transferWalkFrom: `{display}` resolved to a witness-read walk, which only a FIELD held at an interface type takes")
 		unsupported gives unwalkableTransfer(display)
 	end 'strategy'
 end 'transferWalkFrom'
+
+// A value held at an interface type is walked through whichever conformer it holds at run time, so no shape is
+// refused here: a conformer no walk can be built for aborts through its witness (`MmRuntime.MmWalkUnwalkableName`).
+function existentialTransferWalk(action CascadeAction, roots TransferRoots) returns TransferWalk
+	return match roots 'roots'
+		one gives TransferWalk.walkedThroughWitness(existentialWalkEntry(action))
+		several panic("existentialTransferWalk: a module `let` is walked as a root, and no module `let` is held at an interface type — its drop routes through `managedFieldDropCallee`, which has no callee for one")
+	end 'roots'
+end 'existentialTransferWalk'
+
+// `__mm_sole_existential` / `__mm_share_existential`: the entry that reads a witness table's walk word.
+function existentialWalkEntry(action CascadeAction) returns ByteArray
+	return match action 'action'
+		clone panic("existentialWalkEntry: a value held at an interface type is walked, never cloned — `existentialFieldCascadeStrategy` answers `unsupported` for a clone")
+		soleWalk gives MmSoleExistentialName
+		shareWalk gives MmShareExistentialName
+	end 'action'
+end 'existentialWalkEntry'
 
 // A byte record is walked on both hand-offs: a view counts the record its inline bytes live in, or the grown buffer
 // it owns, and neither count is visible to a compile-time question. As the whole graph it meets no record twice.
@@ -5594,7 +5642,7 @@ function byteRecordTransferWalk(action CascadeAction, roots TransferRoots) retur
 end 'byteRecordTransferWalk'
 
 function unwalkableTransfer(display String) returns TransferWalk
-	return TransferWalk.refused("a `{display}` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance")
+	return TransferWalk.refused("a `{display}` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance")
 end 'unwalkableTransfer'
 
 // The clone strategy for a managed field of declared type `fieldType`. Mirrors `managedFieldDropCallee`'s
@@ -5614,15 +5662,14 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 		return instanceCascadeStrategy(signatures, id: genericInstanceIdOf(fieldType), asElement: asElement, action: action)
 	end 'instance'
 
-	// ⛔ **AN EXISTENTIAL IS NOT DEEP-CLONEABLE, AND THE GATE AND THE STRATEGY HAVE TO SAY SO TOGETHER**
-	// (P1.7a-existentials slice 2) — this file's standing rule (see `managedNameCascadeStrategy`'s
-	// compiler-owned arm): a name the gate and the strategy disagreed about would admit a clone nobody can
-	// emit. A witness table names a DESTRUCTOR and no cloner, so there is no per-conformer `(box) -> newBox`
-	// to `callIndirect`; `typeSupportsDeepClone` refuses an existential field at the same tier (its
-	// `tagMayNameAggregate` guard), so the front end reports a positioned E2015 rather than reaching a
-	// backend panic.
+	// ⛔ **AN EXISTENTIAL IS WALKED AND NOT DEEP-CLONED, AND THE GATE AND THE STRATEGY HAVE TO SAY SO
+	// TOGETHER** — this file's standing rule (see `managedNameCascadeStrategy`'s compiler-owned arm): a name the
+	// gate and the strategy disagreed about would admit a clone nobody can emit. A witness table names the
+	// conformer's destructor and walks and no cloner, so there is no per-conformer `(box) -> newBox` to
+	// `callIndirect`; `typeSupportsDeepClone` refuses an existential field for `GraphCascadePurpose.deepClone`
+	// and admits it for `transferWalk`, which is the split below.
 	if tag == ValueTypeTag.interfaceRef 'existential'
-		return ManagedCascadeStrategy.unsupported
+		return existentialFieldCascadeStrategy(action)
 	end 'existential'
 
 	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
@@ -5635,6 +5682,14 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCascadeStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
 	return managedNameCascadeStrategy(signatures, declaredName: name, asElement: asElement, action: action)
 end 'managedFieldCascadeStrategy'
+
+function existentialFieldCascadeStrategy(action CascadeAction) returns ManagedCascadeStrategy
+	return match action 'action'
+		clone gives ManagedCascadeStrategy.unsupported
+		soleWalk or
+			shareWalk gives ManagedCascadeStrategy.throughWitness(existentialWalkEntry(action))
+	end 'action'
+end 'existentialFieldCascadeStrategy'
 
 // The clone strategy for a managed field NAMED `declaredName` — a declared struct or boxed union clones
 // through its per-type `__clone_<T>`. A scalar-only box still takes `__clone_<T>` (not the drop side's
@@ -5852,7 +5907,7 @@ function elementRecordCascadeStrategy(signatures ProgramSignatures, id GenericIn
 		// ⛔⛔ **AN OPAQUE ELEMENT REACHES THIS ARM ON A `false` THAT MEANS "CANNOT SAY", NOT "OWNS NOTHING"
 		// (W176).** `containerOpaqueElementCanBeManaged` carries the measurement; the record's copy is the
 		// word-for-word one and the instance's `element_drop@24` is live, so the copy and the source free the
-		// same elements. It is refused HERE and in `instanceSupportsDeepClone` **together** — one alone makes
+		// same elements. It is refused HERE and in `instanceGraphSupportsDeepClone` **together** — one alone makes
 		// the gate and the strategy disagree, which is `emitCloneCall`'s panic in one direction and a spurious
 		// E2015 in the other, the standing rule this file states at `managedNameCascadeStrategy`.
 		if signatures.containerOpaqueElementCanBeManaged(id) 'someInstantiationOwnsTheElement'
@@ -5870,6 +5925,7 @@ function elementRecordCascadeStrategy(signatures ProgramSignatures, id GenericIn
 		// record answers with its one-argument thunk. An answer here means the element door stopped passing the
 		// position, which would silently refuse every nested container again.
 		managedElements then panic("elementRecordCascadeStrategy: instance {id}'s element resolved to a 2-argument `managedElements` strategy at the ELEMENT position, where `asElement: true` mints the one-argument thunk (G18)")
+		throughWitness then panic("elementRecordCascadeStrategy: instance {id}'s element is held at an interface type, which `checkGenericArgType` refuses as a type argument")
 		unsupported then return ManagedCascadeStrategy.unsupported
 	end 'element'
 end 'elementRecordCascadeStrategy'
@@ -5907,6 +5963,7 @@ function directCascadeCalleeOf(strategy ManagedCascadeStrategy) returns ByteArra
 		direct(callee) then return callee
 		managedElements then panic("directCascadeCalleeOf: a `managedElements` strategy has no single-function clone callee — the caller must gate on typeSupportsDeepClone")
 		unsupported then panic("directCascadeCalleeOf: an `unsupported` strategy has no clone callee — the caller must gate on typeSupportsDeepClone")
+		throughWitness then panic("directCascadeCalleeOf: a witness-read walk has no single-argument callee — an existential is refused as an element and as a clone")
 	end 'strategy'
 end 'directCascadeCalleeOf'
 
@@ -10755,6 +10812,10 @@ export type ProgramSignatures
 	// `foldInterfaceDeclarations`, after the last file folds.
 	export var interfaceDeclSites as InterfaceDeclSiteArray
 
+	// The names `interfaceDeclSites` declare, filled in the same act — `nameDeclaresAnInterface`'s probe
+	// before `interfaces` is folded.
+	var interfaceDeclSiteNames as InterfaceNameSet
+
 	// ⭐ Where each `extension <Interface>` declaration sits, as the tolerant sweep passed it — see
 	// `ExtensionDeclSite`. Read once, by `foldExtensionDeclarations`, after the last file folds, because an
 	// extension's methods belong to conformers the per-file sweep has not necessarily met yet.
@@ -10974,6 +11035,10 @@ export type ProgramSignatures
 	// decide whether its answer may be kept. A parse-path write, exactly as the memo above is, and it carries
 	// LESS state than the map but the same obligation: see there.
 	var deepCloneWalkReadInstances as bool
+
+	// `aggregateSupportsTransferWalk`'s memo — `deepCloneAnswers` asked for the walk, kept on that memo's
+	// conditions.
+	var transferWalkAnswers as DeepCloneAnswerMap
 
 	// ⭐ Function name -> its `throws E` clause (P1.4b). `throwsOf(callee)` is the door a call site asks
 	// "does this callee throw, and what error type?". Filled by `recordThrows` from each file's scanned
@@ -11597,7 +11662,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -12381,6 +12446,7 @@ export type ProgramSignatures
 		// "noted here, performed later" split `noteWellKnownInstanceNeeds` uses.
 		for site in interfaceSites 'eachInterfaceSite'
 			self.interfaceDeclSites.push(site)
+			self.interfaceDeclSiteNames.insert(site.name)
 		end 'eachInterfaceSite'
 
 		// EXTENSION declaration sites ride beside the interface ones, carry no ids for the same reason, and
@@ -16825,7 +16891,8 @@ export type ProgramSignatures
 		return match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
 			direct gives true
 			managedElements or
-				unsupported gives false
+				unsupported or
+				throughWitness gives false
 		end 'strategy'
 	end 'structBoxHasADeepCloner'
 
@@ -16836,7 +16903,8 @@ export type ProgramSignatures
 		match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
 			direct(callee) then return callee
 			managedElements then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` copies through an element-bearing record's 2-argument entry, which no box co-own can call — a declared struct's strategy is the `direct` per-type cloner")
-			unsupported then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks the full-graph question and this same strategy before a value reaches this road")
+			unsupported or
+				throughWitness then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks the full-graph question and this same strategy before a value reaches this road")
 		end 'strategy'
 	end 'structBoxCloneCallee'
 
@@ -17931,6 +17999,7 @@ export type ProgramSignatures
 			closed panic("globalThreadReach: `{String.from(decl.name)}` needs no walk, and a lend walks every graph it hands over")
 			walkedBy(callee) gives GlobalThreadReach.everyThreadThrough(callee)
 			walkedAlone panic("globalThreadReach: `{String.from(decl.name)}` was routed a walk over one record, and the `let`s share one visit table")
+			walkedThroughWitness panic("globalThreadReach: `{String.from(decl.name)}` was routed a witness-read walk, and no module `let` is held at an interface type")
 			refused(noun) gives GlobalThreadReach.everyThreadUnwalkable(noun)
 		end 'walk'
 	end 'globalThreadReach'
@@ -26190,7 +26259,7 @@ export type ProgramSignatures
 	// a primitive, an instance) is not a `named` and is refused by the tag guard. It follows
 	// `contestScopedDeclaredType`'s shape — the other recorded-type re-tag on this index — including its
 	// "absence is a throw" convention, so both read as one kind of pass.
-	function sweptInterfaceTypeOf(declared MaxonType, readerFilePath FilePath) returns MaxonType throws MapError
+	export function sweptInterfaceTypeOf(declared MaxonType, readerFilePath FilePath) returns MaxonType throws MapError
 		if maxonTypeTag(declared) != ValueTypeTag.named 'namesNoInterface'
 			throw MapError.keyNotFound
 		end 'namesNoInterface'
@@ -26201,7 +26270,7 @@ export type ProgramSignatures
 		let name = self.nameOfId(id)
 
 		// The contest guard is `sweptStructTypeOf`'s, one registry over — see there.
-		if isInterfaceName(self.interfaces, name: name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'aBareInterfaceName'
+		if self.nameDeclaresAnInterface(name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'aBareInterfaceName'
 			return MaxonType.interfaceRef(id)
 		end 'aBareInterfaceName'
 
@@ -26227,6 +26296,13 @@ export type ProgramSignatures
 
 		return asInstance
 	end 'sweptInterfaceTypeOf'
+
+	// Does an `interface` declaration hold `name`? Asked of the declaration SITES as well as the registry,
+	// because a service's request union is synthesized before `foldInterfaceDeclarations` fills `interfaces`
+	// (`settleCrossKindContests` reads the sites for the same reason).
+	function nameDeclaresAnInterface(name ByteArray) returns bool
+		return isInterfaceName(self.interfaces, name: name) or self.interfaceDeclSiteNames.contains(name)
+	end 'nameDeclaresAnInterface'
 
 	// ⭐⭐ **RE-TAG EVERY SWEPT `named` FIELD THAT IS A BARE GENERIC NAME AS THE INSTANCE ITS DECLARING SCOPE
 	// BINDS — the field-column twin of the interface normalization above, and for the identical reason.**
@@ -27237,6 +27313,13 @@ export type ProgramSignatures
 		if tag == ValueTypeTag.typeParameter 'opaqueParam'
 			return "T{(typeNameIdOf(t) as ParsedInt):x}"
 		end 'opaqueParam'
+
+		// A `Promise` instance's result argument is the one position an interface type is interned at: a
+		// service reply held at one (`internPromiseInstanceForReply`). A promise has no descriptor, so its
+		// argument is spelled here as a name and never reaches descriptor labelling.
+		if tag == ValueTypeTag.interfaceRef 'anInterface'
+			return String.from(self.nameOfId(typeNameIdOf(t)))
+		end 'anInterface'
 
 		return primitiveTypeTagName(tag)
 	end 'mangleTypeArg'
@@ -29497,7 +29580,7 @@ export type ProgramSignatures
 		match kind 'kind'
 			consumeMoved then return self.typeArgIsOwned(t)
 			coOwnedTrivial then return self.typeArgIsCoOwnedTrivial(t)
-			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create())
+			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			managedElement then return self.typeArgIsManagedElement(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
 			nestedDeclarationViewArg then return maxonTypeTag(t) == ValueTypeTag.typeParameter
@@ -29925,7 +30008,8 @@ export type ProgramSignatures
 		match instanceCascadeStrategy(self, id: id, asElement: false, action: CascadeAction.clone) 'strategy'
 			direct(callee) then return callee
 			managedElements then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} copies through an element-bearing record's 2-argument entry, which no box co-own can call — `declaredContainerBoxIsImageData` admits no `Array`/chain box")
-			unsupported then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} has no deep cloner — `declaredContainerBoxIsImageData` requires the base layout that `__clone_<mangled>` cascades over")
+			unsupported or
+				throughWitness then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} has no deep cloner — `declaredContainerBoxIsImageData` requires the base layout that `__clone_<mangled>` cascades over")
 		end 'strategy'
 	end 'genericInstanceBoxCloneCallee'
 
@@ -30780,6 +30864,60 @@ export type ProgramSignatures
 		return retainCalleeForProtocol(self.typeOwnershipProtocol(MaxonType.genericInstance(id)))
 	end 'instanceRetainCallee'
 
+	// ⭐⭐ **WHAT A WITNESS TABLE'S `soleWalkFunc@24` / `shareWalkFunc@32` HOLD FOR CONFORMER `typeName`** — the
+	// walk a record of that type takes as a FIELD (a nested record is not proved sole by any compile-time rule,
+	// so a no-reference box is still walked), off the same `existentialOwnershipProtocol` the destroy and
+	// retain words are stamped from. EMPTY is the ANSWER for a conformer that owns nothing, exactly as it is for
+	// those two words; a conformer that owns something no walk can be built for answers the abort entry, never
+	// the empty word that would read as "owns nothing".
+	//
+	// ⚠ **A GENERIC CONFORMER'S SHARED TABLE CANNOT BE WALKED**: it is keyed by the base name, whose walk skips
+	// every slot standing at a type parameter, so walking it would miss whatever the instance put there. A
+	// spawning program keys a concrete instance's table by the instance (`LowerMaxonToStd.witnessTableInstanceFor`),
+	// so this answers only for a widening with no concrete instance in hand.
+	export function existentialWalkCallee(typeName ByteArray, action CascadeAction) returns ByteArray
+		match self.existentialOwnershipProtocol(typeName) 'protocol'
+			none then return EmptySourceText
+			byteRecord then return byteRecordCascadeCallee(action)
+			greenThread then return MmWalkUnwalkableName
+			aggregate or
+				bufferRecord or
+				serviceHandle then return self.aggregateConformerWalkCallee(self.denotedAggregateName(typeName), action: action)
+		end 'protocol'
+	end 'existentialWalkCallee'
+
+	function aggregateConformerWalkCallee(name ByteArray, action CascadeAction) returns ByteArray
+		if self.structDeclaresTypeParams(name) 'aGenericConformer'
+			return MmWalkUnwalkableName
+		end 'aGenericConformer'
+
+		if not self.aggregateSupportsTransferWalk(name) 'someNestedTypeHasNoWalk'
+			return MmWalkUnwalkableName
+		end 'someNestedTypeHasNoWalk'
+
+		return witnessWalkCalleeOf(managedNameCascadeStrategy(self, declaredName: name, asElement: true, action: action))
+	end 'aggregateConformerWalkCallee'
+
+	// The same two words for a PER-INSTANCE table, which names the instance and can therefore walk it.
+	export function instanceExistentialWalkCallee(id GenericInstanceId, action CascadeAction) returns ByteArray
+		match self.typeOwnershipProtocol(MaxonType.genericInstance(id)) 'protocol'
+			none then return EmptySourceText
+			greenThread then return MmWalkUnwalkableName
+			byteRecord or
+				aggregate or
+				bufferRecord or
+				serviceHandle then return self.instanceConformerWalkCallee(id, action: action)
+		end 'protocol'
+	end 'instanceExistentialWalkCallee'
+
+	function instanceConformerWalkCallee(id GenericInstanceId, action CascadeAction) returns ByteArray
+		if not self.instanceSupportsTransferWalk(id) 'someNestedTypeHasNoWalk'
+			return MmWalkUnwalkableName
+		end 'someNestedTypeHasNoWalk'
+
+		return witnessWalkCalleeOf(instanceCascadeStrategy(self, id: id, asElement: true, action: action))
+	end 'instanceConformerWalkCallee'
+
 	// ⭐⭐ **THE ONE ANSWER BOTH OF A DESCRIPTOR BLOCK'S OWNERSHIP WORDS ARE A SPELLING OF (found at review)** —
 	// `retainFunc@64` through `retainCalleeForProtocol`, `destroyFunc@40` through `typeParamDropCallee`. Written
 	// once so the pair is non-zero TOGETHER by construction rather than by two gates agreeing, which is what
@@ -31168,7 +31306,7 @@ export type ProgramSignatures
 		var visited = ClonerSet.create()
 
 		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
-			present(element) then return self.typeSupportsDeepClone(element, visited: visited)
+			present(element) then return self.typeSupportsDeepClone(element, visited: visited, purpose: GraphCascadePurpose.deepClone)
 			absent then return false
 		end 'element'
 	end 'genericInstanceOpaqueArrayElementIsCopyable'
@@ -31956,7 +32094,7 @@ export type ProgramSignatures
 	// whole reachable type graph must be clonable too. Precondition: `containerElementIsManaged` (a
 	// trivial-element array never needs this — its copy is a byte blit).
 	export function arrayElementSupportsDeepClone(id GenericInstanceId) returns bool
-		return self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create())
+		return self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 	end 'arrayElementSupportsDeepClone'
 
 	// ⭐ **CAN A DECLARED STRUCT BE DEEP-CLONED — the front-end gate for a SOURCE-LEVEL `p.clone()`?**
@@ -32004,7 +32142,17 @@ export type ProgramSignatures
 	// population is every consumed argument, field store and element push in the program. The cost it removes
 	// is measured in `docs/optimization-log.md`, on `tests/ladders/genclonegate.sh`.
 	export function aggregateSupportsDeepClone(aggregateName ByteArray) returns bool
-		if let walked = try self.deepCloneAnswers.get(aggregateName) 'alreadyAnswered'
+		return self.memoizedAggregateCascadeAnswer(aggregateName, purpose: GraphCascadePurpose.deepClone, answers: self.deepCloneAnswers)
+	end 'aggregateSupportsDeepClone'
+
+	// The gate above asked for a TRANSFER walk, which admits a value held at an interface type.
+	export function aggregateSupportsTransferWalk(aggregateName ByteArray) returns bool
+		return self.memoizedAggregateCascadeAnswer(aggregateName, purpose: GraphCascadePurpose.transferWalk, answers: self.transferWalkAnswers)
+	end 'aggregateSupportsTransferWalk'
+
+	// The memo the two entries above share; `answers` is the purpose's own map.
+	function memoizedAggregateCascadeAnswer(aggregateName ByteArray, purpose GraphCascadePurpose, answers DeepCloneAnswerMap) returns bool
+		if let walked = try answers.get(aggregateName) 'alreadyAnswered'
 			return walked
 		end 'alreadyAnswered'
 
@@ -32012,30 +32160,30 @@ export type ProgramSignatures
 		// that did would otherwise clear an enclosing walk's mark and let IT cache a registry-dependent answer.
 		let enclosingRead = self.deepCloneWalkReadInstances
 		self.deepCloneWalkReadInstances = false
-		let answer = self.aggregateNameSupportsDeepClone(aggregateName, visited: ClonerSet.create())
+		let answer = self.aggregateNameSupportsDeepClone(aggregateName, visited: ClonerSet.create(), purpose: purpose)
 		let thisWalkRead = self.deepCloneWalkReadInstances
 		self.deepCloneWalkReadInstances = enclosingRead or thisWalkRead
 
 		if not thisWalkRead 'restsOnDeclarationsAlone'
 			// Keyed on the memo's own copy of the name: a key the journal's restore removes stays in its slot,
 			// and the name a parse asks with is a record of that parse's artifact.
-			self.deepCloneAnswers.upsert(aggregateName.clone(), value: answer)
+			answers.upsert(aggregateName.clone(), value: answer)
 
 			if self.baseline.settled 'pastTheBaseline'
-				self.journal.noteDeepCloneAnswer(aggregateName)
+				self.journal.noteCascadeAnswer(aggregateName, purpose: purpose)
 			end 'pastTheBaseline'
 		end 'restsOnDeclarationsAlone'
 
 		return answer
-	end 'aggregateSupportsDeepClone'
+	end 'memoizedAggregateCascadeAnswer'
 
-	// The INSTANCE twin of the gate above, and the one the transfer door reads about a container. It is the
-	// same full-graph walk keyed by instance rather than by name, which is what a value tagged
+	// The INSTANCE twin of `aggregateSupportsTransferWalk`, the one the transfer door reads about a container.
+	// It is the same full-graph walk keyed by instance rather than by name, which is what a value tagged
 	// `genericInstance` has — asking it by base NAME would answer about the declaration and not about the
 	// substituted element.
-	export function instanceSupportsDeepClone(id GenericInstanceId) returns bool
-		return self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create())
-	end 'instanceSupportsDeepClone'
+	export function instanceSupportsTransferWalk(id GenericInstanceId) returns bool
+		return self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.transferWalk)
+	end 'instanceSupportsTransferWalk'
 
 	// ⭐⭐ **HOW A GRAPH IS WALKED BEFORE ANOTHER GREEN THREAD MAY HOLD IT — proved sole for a move, marked
 	// shared for a lend — OR THE NOUN FOR WHY NO WALK CAN BE BUILT.** The door a message argument, a reply and a
@@ -32050,7 +32198,7 @@ export type ProgramSignatures
 		return match subject 'subject'
 			byteRecord gives byteRecordTransferWalk(action, roots: roots)
 			instance(id) gives self.instanceTransferWalk(id, action: action)
-			existential gives TransferWalk.refused(InterfaceParameterNoun)
+			existential gives existentialTransferWalk(action, roots: roots)
 			opaqueParameter gives TransferWalk.refused("an opaque type parameter, whose slots the send site cannot see")
 			nameless gives TransferWalk.refused("a managed value whose record carries no name here, so what it holds cannot be read")
 			aggregate(name) gives self.aggregateTransferWalk(name, action: action, readerFilePath: readerFilePath)
@@ -32060,7 +32208,7 @@ export type ProgramSignatures
 	function instanceTransferWalk(id GenericInstanceId, action CascadeAction) returns TransferWalk
 		let display = String.from(self.instanceDisplayName(id))
 
-		if not self.instanceSupportsDeepClone(id) 'someNestedTypeHasNoWalk'
+		if not self.instanceSupportsTransferWalk(id) 'someNestedTypeHasNoWalk'
 			return unwalkableTransfer(display)
 		end 'someNestedTypeHasNoWalk'
 
@@ -32095,7 +32243,7 @@ export type ProgramSignatures
 			return TransferWalk.closed
 		end 'movesUnwalked'
 
-		if not self.aggregateSupportsDeepClone(name) 'someNestedTypeHasNoWalk'
+		if not self.aggregateSupportsTransferWalk(name) 'someNestedTypeHasNoWalk'
 			return unwalkableTransfer(String.from(name))
 		end 'someNestedTypeHasNoWalk'
 
@@ -32137,7 +32285,7 @@ export type ProgramSignatures
 	// `declaredInstanceSupportsDeepClone`'s header makes for `__clone_<mangled>`, generalized to the
 	// two element-bearing records. A parameter that cannot change an answer is worse than absent: it
 	// tells a later reader the two positions differ.
-	export function typeSupportsDeepClone(type MaxonType, visited ClonerSet) returns bool
+	function typeSupportsDeepClone(type MaxonType, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		let tag = maxonTypeTag(type)
 
 		if not self.typeIsManaged(type, from: self.typeNames) 'trivialLeaf'
@@ -32149,8 +32297,15 @@ export type ProgramSignatures
 		end 'byteRecord'
 
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.instanceGraphSupportsDeepClone(genericInstanceIdOf(type), visited: visited)
+			return self.instanceGraphSupportsDeepClone(genericInstanceIdOf(type), visited: visited, purpose: purpose)
 		end 'instance'
+
+		// ⭐ Walked through the witness of whatever conformer it holds at run time, and never copied — see
+		// `existentialFieldCascadeStrategy`. A conformer with no walk aborts at the crossing
+		// (`MmRuntime.MmWalkUnwalkableName`), because which conformer it is cannot be known here.
+		if tag == ValueTypeTag.interfaceRef 'anExistential'
+			return purpose == GraphCascadePurpose.transferWalk
+		end 'anExistential'
 
 		if not tagMayNameAggregate(tag) 'notManagedRef'
 			return false
@@ -32174,7 +32329,7 @@ export type ProgramSignatures
 				return true
 			end 'alreadyInFlight'
 
-			return self.instanceGraphSupportsDeepClone(live, visited: visited)
+			return self.instanceGraphSupportsDeepClone(live, visited: visited, purpose: purpose)
 		end 'genericAlias'
 
 		// ⛔ **A COMPILER-OWNED AGGREGATE IS NOT DEEP-CLONEABLE, AND THE GATE HAS TO SAY SO — its layout is
@@ -32190,7 +32345,7 @@ export type ProgramSignatures
 		//
 		// It is a REFUSAL and not a gap: an OS handle cannot be deep-copied at all — duplicating one hands two
 		// owners a descriptor whose `__mf_destruct` closes it once.
-		return self.aggregateNameSupportsDeepClone(name, visited: visited)
+		return self.aggregateNameSupportsDeepClone(name, visited: visited, purpose: purpose)
 	end 'typeSupportsDeepClone'
 
 	// ⭐⭐ **THE CLONE WALK'S CYCLE BREAK — THE ONE HOME FOR ALL THREE OF ITS ARMS**: the aggregate NAME
@@ -32233,7 +32388,7 @@ export type ProgramSignatures
 	// Receiver arms in `dispatchMethodOnReceiver` intercept those types before a clone reaches this walk, so
 	// such a divergence would be LATENT; a divergence held shut by an unrelated dispatch order is the shape
 	// this file keeps paying for.
-	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet) returns bool
+	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
 				managedDirectory or
@@ -32250,11 +32405,11 @@ export type ProgramSignatures
 		end 'alreadyInFlight'
 
 		if self.containsStructInAnyFile(name) 'struct'
-			return self.structFieldsSupportDeepClone(name, visited: visited)
+			return self.structFieldsSupportDeepClone(name, visited: visited, purpose: purpose)
 		end 'struct'
 
 		match self.enumInAnyFile(name) 'union'
-			declared(layout) then return self.unionPayloadsSupportDeepClone(layout, visited: visited)
+			declared(layout) then return self.unionPayloadsSupportDeepClone(layout, visited: visited, purpose: purpose)
 			undeclared then return false
 		end 'union'
 	end 'aggregateNameSupportsDeepClone'
@@ -32272,9 +32427,9 @@ export type ProgramSignatures
 	// `containerElementIsManaged`) so neither can admit what the other cannot emit — and it is the
 	// `__ManagedList` predicate on BOTH sides since `List` was retired (W153), because a declared `List with T`
 	// box HAS a field list and therefore belongs in the walk below.
-	function instanceGraphSupportsDeepClone(id GenericInstanceId, visited ClonerSet) returns bool
+	function instanceGraphSupportsDeepClone(id GenericInstanceId, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		if not self.isElementBearingRecordInstance(id) 'notAnElementRecord'
-			return self.declaredInstanceSupportsDeepClone(id, visited: visited)
+			return self.declaredInstanceSupportsDeepClone(id, visited: visited, purpose: purpose)
 		end 'notAnElementRecord'
 
 		if not self.containerElementIsManaged(id) 'trivialElement'
@@ -32289,7 +32444,7 @@ export type ProgramSignatures
 		// BY A PER-INSTANCE ONE-ARGUMENT THUNK** (`MmRuntime.synthesizeElementRecordCloner`), whose whole body is
 		// that 2-arg call, so the arity is no reason to refuse and this arm asks the SAME question in
 		// both positions. `elementRecordCascadeStrategy` mints the thunk's symbol on exactly this envelope.
-		return self.typeSupportsDeepClone(self.containerElementType(id), visited: visited)
+		return self.typeSupportsDeepClone(self.containerElementType(id), visited: visited, purpose: purpose)
 	end 'instanceGraphSupportsDeepClone'
 
 	// ⭐⭐ **CAN A NON-`Array` GENERIC INSTANCE BE DEEP-CLONED (W162)?** `structFieldsSupportDeepClone`'s
@@ -32318,7 +32473,7 @@ export type ProgramSignatures
 	// (see its header). The key is built BEFORE the probe and so is paid on every instance node of every clone
 	// walk, which is the one cost the shared break does not remove: a mangled name is derived from the
 	// instance and there is no cheaper key that is still disjoint from the declared names sharing the set.
-	function declaredInstanceSupportsDeepClone(id GenericInstanceId, visited ClonerSet) returns bool
+	function declaredInstanceSupportsDeepClone(id GenericInstanceId, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		if not self.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
 			return false
 		end 'noSynthesizedCloner'
@@ -32334,7 +32489,7 @@ export type ProgramSignatures
 
 			// The SUBSTITUTED type, which is what the synthesized body clones — `genericInstanceFieldDropCallee`
 			// reads the same column for the same reason: the gate and the emitter must classify one type.
-			if not self.typeSupportsDeepClone(self.substituteInstanceFieldType(id, index: i), visited: visited) 'unsupportedField'
+			if not self.typeSupportsDeepClone(self.substituteInstanceFieldType(id, index: i), visited: visited, purpose: purpose) 'unsupportedField'
 				return false
 			end 'unsupportedField'
 		end 'eachField'
@@ -32342,7 +32497,7 @@ export type ProgramSignatures
 		return true
 	end 'declaredInstanceSupportsDeepClone'
 
-	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet) returns bool
+	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		let layout = self.structLayoutOf(structName)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
@@ -32352,7 +32507,7 @@ export type ProgramSignatures
 
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structFieldsSupportDeepClone: fieldTypes.get OOB at {i}")
 
-			if not self.typeSupportsDeepClone(fieldType, visited: visited) 'unsupportedField'
+			if not self.typeSupportsDeepClone(fieldType, visited: visited, purpose: purpose) 'unsupportedField'
 				return false
 			end 'unsupportedField'
 		end 'eachField'
@@ -32360,7 +32515,7 @@ export type ProgramSignatures
 		return true
 	end 'structFieldsSupportDeepClone'
 
-	function unionPayloadsSupportDeepClone(layout EnumLayout, visited ClonerSet) returns bool
+	function unionPayloadsSupportDeepClone(layout EnumLayout, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		for ci in 0 upto layout.caseCount() 'eachCase'
 			let payloads = layout.payloadsAt(ci)
 
@@ -32371,7 +32526,7 @@ export type ProgramSignatures
 					continue
 				end 'scalar'
 
-				if not self.typeSupportsDeepClone(field.declaredType, visited: visited) 'unsupportedPayload'
+				if not self.typeSupportsDeepClone(field.declaredType, visited: visited, purpose: purpose) 'unsupportedPayload'
 					return false
 				end 'unsupportedPayload'
 			end 'eachField'
@@ -33317,6 +33472,10 @@ export type ProgramSignatures
 			_ = self.deepCloneAnswers.remove(name)
 		end 'eachDeepCloneAnswer'
 
+		for name in self.journal.transferWalkNames 'eachTransferWalkAnswer'
+			_ = self.transferWalkAnswers.remove(name)
+		end 'eachTransferWalkAnswer'
+
 		self.crossFileConstantReads.truncate(self.baseline.crossFileConstantReadCount as ElementIndex)
 		self.canonicalNamesIndexedThrough = self.baseline.canonicalNamesIndexedThrough
 		self.arrayByteInstance = self.baseline.arrayByteInstance
@@ -33547,6 +33706,7 @@ export type ProgramSignatures
 		fingerprint.note("interfaceNamesInDeclOrder", value: self.interfaceNamesInDeclOrder.count())
 		fingerprint.note("interfaceDeclIndexByName", value: self.interfaceDeclIndexByName.count())
 		fingerprint.note("interfaceDeclSites", value: self.interfaceDeclSites.count())
+		fingerprint.note("interfaceDeclSiteNames", value: self.interfaceDeclSiteNames.count() as EntryCount)
 		fingerprint.note("extensionDeclSites", value: self.extensionDeclSites.count())
 		fingerprint.note("conformanceClauseSites", value: self.conformanceClauseSites.count())
 		fingerprint.note("descriptorScanSites", value: self.descriptorScanSites.count())
@@ -33574,6 +33734,7 @@ export type ProgramSignatures
 		fingerprint.noteFlag("globalAliasReturnsClosed", flag: self.globalAliasReturnsClosed)
 		fingerprint.note("byRefBareNames", value: self.byRefBareNames.count() as EntryCount)
 		fingerprint.note("deepCloneAnswers", value: self.deepCloneAnswers.count())
+		fingerprint.note("transferWalkAnswers", value: self.transferWalkAnswers.count())
 		fingerprint.noteFlag("deepCloneWalkReadInstances", flag: self.deepCloneWalkReadInstances)
 		fingerprint.note("funcThrows", value: self.funcThrows.count())
 		fingerprint.note("disagreeingThrows", value: self.disagreeingThrows.count() as EntryCount)
@@ -33755,9 +33916,10 @@ type IndexJournal
 	export var originIds as GenericInstanceIdArray
 	export var tupleAliasWrites as TupleAliasWriteArray
 	export var deepCloneNames as ByteArrayArray
+	export var transferWalkNames as ByteArrayArray
 
 	static function create() returns IndexJournal
-		return Self{tupleNames: ByteArrayArray.create(), separatorBearingTokens: ByteArrayArray.create(), canonicalTupleNames: ByteArrayArray.create(), compiledNameIds: GenericInstanceIdArray.create(), canonicalNameIds: GenericInstanceIdArray.create(), canonicalIndexWrites: CanonicalIndexWriteArray.create(), originIds: GenericInstanceIdArray.create(), tupleAliasWrites: TupleAliasWriteArray.create(), deepCloneNames: ByteArrayArray.create()}
+		return Self{tupleNames: ByteArrayArray.create(), separatorBearingTokens: ByteArrayArray.create(), canonicalTupleNames: ByteArrayArray.create(), compiledNameIds: GenericInstanceIdArray.create(), canonicalNameIds: GenericInstanceIdArray.create(), canonicalIndexWrites: CanonicalIndexWriteArray.create(), originIds: GenericInstanceIdArray.create(), tupleAliasWrites: TupleAliasWriteArray.create(), deepCloneNames: ByteArrayArray.create(), transferWalkNames: ByteArrayArray.create()}
 	end 'create'
 
 	function noteTupleName(name ByteArray)
@@ -33792,9 +33954,12 @@ type IndexJournal
 		self.tupleAliasWrites.push(TupleAliasWrite.create(name, prior: prior))
 	end 'noteTupleAliasWrite'
 
-	function noteDeepCloneAnswer(name ByteArray)
-		self.deepCloneNames.push(name)
-	end 'noteDeepCloneAnswer'
+	function noteCascadeAnswer(name ByteArray, purpose GraphCascadePurpose)
+		match purpose 'purpose'
+			deepClone then self.deepCloneNames.push(name)
+			transferWalk then self.transferWalkNames.push(name)
+		end 'purpose'
+	end 'noteCascadeAnswer'
 
 	function noteFingerprint(fingerprint IndexFingerprint, group String)
 		fingerprint.openGroup(group)
@@ -33807,6 +33972,7 @@ type IndexJournal
 		fingerprint.note("originIds", value: self.originIds.count())
 		fingerprint.note("tupleAliasWrites", value: self.tupleAliasWrites.count())
 		fingerprint.note("deepCloneNames", value: self.deepCloneNames.count())
+		fingerprint.note("transferWalkNames", value: self.transferWalkNames.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 end 'IndexJournal'

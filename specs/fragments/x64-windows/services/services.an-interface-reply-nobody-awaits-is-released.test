@@ -1,0 +1,503 @@
+// Test: services.an-interface-reply-nobody-awaits-is-released
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Label implements Shape
+	var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function area() returns Tally
+		return self.text.byteLength()
+	end 'area'
+end 'Label'
+
+type Factory
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function make(width Tally) returns Shape
+		self.made = self.made + 1
+		return Label.create("w{width}")
+	end 'make'
+
+	export function count() returns Tally
+		return self.made
+	end 'count'
+end 'Factory'
+
+function main() returns ExitCode
+	let factory = spawn Factory.create()
+	factory.make(1234)
+	let made = try await factory.count() otherwise panic("the factory is running")
+	print("{made}\n")
+	factory.shutdown()
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_trace_counter@56 = i64 0
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 8192
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __sched_preempt_ext_lock@424 = i64 0
+  __sched_preempt_context@432 = i64 0
+  __slab_arena_list@440 = i64 0
+  __slab_arena_map_l1@448 = i64 0
+  __slab_state@456 = i64 0
+  __mrt_console_probe_stdin@464 = i8 0
+  __mrt_console_probe_stdout@465 = i8 0
+  __mrt_console_probe_stderr@466 = i8 0
+}
+
+func @Label.area {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r8, [rax + 8]
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Factory.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rdx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#2
+  __rc_ok#1:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#4
+  __rc_ok#3:
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "w"
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRegReg rax, r13, rbx
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [rbx + 0], r8
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+  __il_cont:
+    x64.leaRegRdata r10, [rip + __witness_Label.Shape]
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at services.an-interface-reply-nobody-awaits-is-released.test:27: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at services.an-interface-reply-nobody-awaits-is-released.test:28: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+  __il_body#4:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont#3:
+    x64.leaRegFunc rcx, [rip + Factory.__loop]
+    x64.leaRegFunc rax, [rip + Factory.__abandon]
+    x64.movRegReg rdx, r8
+    x64.callDirect __svc_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegImm32 rbx, 1234
+    x64.leaRegFunc rcx, [rip + __gt_reply_release_Factory.make]
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_promise_drop
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_try_await
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+  __il_body#6:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#5:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.loadRegSlot r12, slot0
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_promise_drop
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_handle_drop_box
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at services.an-interface-reply-nobody-awaits-is-released.test:40: the factory is running\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Factory.__loop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  serve:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, stopping
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=make, [2]=count] @__jumptable_13
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+  stopping:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_close
+  drain:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, abandon
+  finished:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  abandon:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
+    x64.jmp drain
+  make:
+    x64.loadRegBaseDisp.word64 rdx, [r13 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r13 + 16]
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect Factory.make
+    x64.movRegReg r14, r8
+    x64.movRegReg r15, r10
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.callDirect __mm_sole_existential
+    x64.loadRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 416], r15
+    x64.movRegReg rdx, r14
+    x64.movRegImm32 rax, 0
+    x64.callDirect __gt_cell_complete
+    x64.jmp serve
+  count:
+    x64.loadRegBaseDisp.word64 r14, [r13 + 8]
+  __il_body:
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+  __il_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __gt_cell_complete
+    x64.jmp serve
+}
+
+func @Factory.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=make, [2]=count] @__jumptable_14
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  make:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  count:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

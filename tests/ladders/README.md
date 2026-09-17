@@ -147,7 +147,7 @@ with the 128 types' own cost sitting in the intercept.
 witness tables without dispatching through them, so the two per-reloc walks could be priced with the
 per-call-site emitters held out. It cannot: **a witness table does not survive a program that never
 dispatches through it.** Change one `other int` to `other bool` and build for wasm — under `dispatch`
-the compile is REFUSED naming `__witness_P000000.Digest'+24`, under `inert` it compiles clean, and that
+the compile is REFUSED naming `__witness_P000000.Digest'+40`, under `inert` it compiles clean, and that
 silence is the reloc list reading empty. So `inert` is a whole-path control instead: byte-identical
 program size (30,298 bytes at 64×2 either way), zero tables, zero relocations, zero call sites, so
 subtracting it from `dispatch` is the entire witness cost with parse, lowering and register allocation

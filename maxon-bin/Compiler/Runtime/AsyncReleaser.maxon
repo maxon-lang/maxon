@@ -124,16 +124,16 @@ export function asyncResultConsumedFlag(disposition AsyncResultDisposition) retu
 	end 'disposition'
 end 'asyncResultConsumedFlag'
 
-// One slot of a spawn that owes a release: the byte offset it occupies inside the GT struct, and the runtime
-// entry that drops it. The offset is carried rather than the slot INDEX because the result and the error
-// live at fixed struct offsets while the arguments live in the inline region — three sources, one shape, so
-// the emitter below has one loop instead of three.
+// One slot of a spawn that owes a release: the byte offset it occupies inside the GT struct, and how it is
+// dropped. The offset is carried rather than the slot INDEX because the result and the error live at fixed
+// struct offsets while the arguments live in the inline region — three sources, one shape, so the emitter
+// below has one loop instead of three.
 type AsyncManagedSlot
 	export let offset as ByteOffset
-	export let dropCallee as ByteArray
+	export let drop as FieldDropKind
 
-	export static function create(offset ByteOffset, dropCallee ByteArray) returns AsyncManagedSlot
-		return Self{offset: offset, dropCallee: dropCallee}
+	export static function create(offset ByteOffset, drop FieldDropKind) returns AsyncManagedSlot
+		return Self{offset: offset, drop: drop}
 	end 'create'
 end 'AsyncManagedSlot'
 
@@ -330,8 +330,8 @@ function asyncReleasePlanFor(callee ByteArray, funcSignatures FuncSignatureMap, 
 		let paramType = try sig.paramTypes.get(i) otherwise panic("asyncReleasePlanFor: paramTypes.get OOB at {i}")
 		let aggregateName = try sig.paramAggregateNames.get(i) otherwise panic("asyncReleasePlanFor: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
 
-		if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName) 'managedArg'
-			argSlots.push(AsyncManagedSlot.create((GtOffArgInline + i * GtArgSlotBytes) as ByteOffset, dropCallee: asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
+		for slot in asyncSlotsAt((GtOffArgInline + i * GtArgSlotBytes) as ByteOffset, signatures: signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName) 'managedArg'
+			argSlots.push(slot)
 		end 'managedArg'
 	end 'eachParam'
 
@@ -350,18 +350,29 @@ function asyncResultSlotsOf(callee ByteArray, sig FuncSignature, signatures Prog
 
 	return match returnType 'rt'
 		void gives AsyncManagedSlotArray.create()
-		value(inner) gives asyncSlotsAt(GtOffResult as ByteOffset, signatures: signatures, typeNames: typeNames, slotType: inner, aggregateName: sig.returnAggregateName)
+		value(inner) gives asyncResultSlotsOfType(inner, signatures: signatures, typeNames: typeNames, aggregateName: sig.returnAggregateName)
 	end 'rt'
 end 'asyncResultSlotsOf'
 
-// The 0-or-1 slot list for ONE candidate word of the GT struct — the shape every arm of a plan is built
-// from, so "a managed slot is a (offset, drop callee) pair decided by `asyncSlotOwnsHeap`" is written once
-// and the three arms differ only in which word they are asking about.
+// A reply held at an interface type is the one result whose drop reads a second word: its witness half, in
+// the reply cell's `GtOffReplyWitness`. No spawned callee returns one (`tagRidesAsyncGprChannel`).
+function asyncResultSlotsOfType(resultType MaxonType, signatures ProgramSignatures, typeNames TypeNameInterner, aggregateName ByteArray) returns AsyncManagedSlotArray
+	if maxonTypeTag(resultType) != ValueTypeTag.interfaceRef 'aSingleWord'
+		return asyncSlotsAt(GtOffResult as ByteOffset, signatures: signatures, typeNames: typeNames, slotType: resultType, aggregateName: aggregateName)
+	end 'aSingleWord'
+
+	var slots = AsyncManagedSlotArray.create()
+	slots.push(AsyncManagedSlot.create(GtOffResult as ByteOffset, drop: FieldDropKind.existential((GtOffReplyWitness - GtOffResult) as ByteOffset)))
+	return slots
+end 'asyncResultSlotsOfType'
+
+// The 0-or-1 slot list for ONE single-word slot of the GT struct, so "a managed slot is an (offset, drop)
+// pair decided by `asyncSlotOwnsHeap`" is written once for the arguments and the result.
 function asyncSlotsAt(offset ByteOffset, signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncManagedSlotArray
 	var slots = AsyncManagedSlotArray.create()
 
 	if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName) 'ownsHeap'
-		slots.push(AsyncManagedSlot.create(offset, dropCallee: asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName)))
+		slots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.direct(asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName))))
 	end 'ownsHeap'
 
 	return slots
@@ -393,7 +404,7 @@ function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, e
 	var slots = AsyncManagedSlotArray.create()
 
 	if layout.isBoxed() 'boxedError'
-		slots.push(AsyncManagedSlot.create(GtOffThrew as ByteOffset, dropCallee: signatures.unionBoxDropCallee(errorName)))
+		slots.push(AsyncManagedSlot.create(GtOffThrew as ByteOffset, drop: FieldDropKind.direct(signatures.unionBoxDropCallee(errorName))))
 	end 'boxedError'
 
 	return slots
@@ -562,12 +573,13 @@ export function declareAsyncReleaserNeeds(usage RuntimeUsage, targets ByteArrayA
 	end 'eachCallee'
 end 'declareAsyncReleaserNeeds'
 
-// Each slot's drop callee declared through `RuntimeUsage.recordCallUsage` — the same routine the module scan
-// runs over every call op — so a releaser's emitted call declares exactly what a hand-written call to the
-// same entry would, and a new drop family needs no arm here.
+// Each slot's drop declared through `MmRuntime.declareDropKindNeeds`, which reaches
+// `RuntimeUsage.recordCallUsage` — the same routine the module scan runs over every call op — so a releaser's
+// emitted call declares exactly what a hand-written call to the same entry would, and a new drop family needs
+// no arm here.
 function declareSlotDropNeeds(usage RuntimeUsage, slots AsyncManagedSlotArray)
 	for slot in slots 'eachSlot'
-		recordCallUsage(slot.dropCallee, usage: usage)
+		declareDropKindNeeds(usage, kind: slot.drop)
 	end 'eachSlot'
 end 'declareSlotDropNeeds'
 
@@ -679,7 +691,7 @@ function emitSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cu
 	var block = cur
 
 	for slot in slots 'eachSlot'
-		block = emitNullGuardedDrop(module, cur: block, box: gt, offset: slot.offset, kind: FieldDropKind.direct(slot.dropCallee), ids: ids, func: func)
+		block = emitNullGuardedDrop(module, cur: block, box: gt, offset: slot.offset, kind: slot.drop, ids: ids, func: func)
 	end 'eachSlot'
 
 	return block

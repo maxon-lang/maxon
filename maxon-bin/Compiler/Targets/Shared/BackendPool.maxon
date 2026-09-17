@@ -182,9 +182,7 @@ end 'PoolDispatch'
 typealias LongestFirstKey = int(0 to u64.max)
 typealias LongestFirstKeyArray = Array with LongestFirstKey
 
-// The isel of one ISA, as a worker holds it for the whole compile. A union rather than an interface
-// value because a worker's state is MOVED at `spawn`, and a value held at an interface type cannot cross
-// (E3135); the two conversions are otherwise interchangeable here.
+// The isel of one ISA, as a worker holds it for the whole compile.
 union UnitLowering
 	x64(lowering StdToX64Lowering)
 	arm64(lowering StdToArm64Lowering)
@@ -293,6 +291,7 @@ export type BackendWorker
 	module function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
 		var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 		var iselCost = PhaseDelta.zero()
+
 		// A `var`: the allocator rewrites its module and function in place.
 		var lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, target: self.target, costs: costs, iselCost: iselCost)
 		var unitFunc = lowered.targetModule.getFunc(UnitFunctionIndex)

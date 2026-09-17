@@ -428,6 +428,22 @@ end 'shareWalkSymbol'
 export let MmSoleBoxName = b"__mm_sole_box"
 export let MmShareBoxName = b"__mm_share_box"
 
+// ⭐⭐ **`__mm_sole_existential(witness, value, visits) -> visits` / `__mm_share_existential(…)` — THE WALK OF A
+// VALUE HELD AT AN INTERFACE TYPE.** Which conformer the value half is, and therefore which per-type walk it
+// takes, is a run-time fact, so each entry reads its word out of the witness table
+// (`IrInterface.WitnessSoleWalkFuncOffset` / `WitnessShareWalkFuncOffset`) and calls it on the value — the
+// `__drop_existential` shape, and built by the same emitter (`ManagedMemoryRuntime.buildRecordGatedAction`). A
+// zero word is a conformer that owns nothing to walk.
+export let MmSoleExistentialName = b"__mm_sole_existential"
+export let MmShareExistentialName = b"__mm_share_existential"
+
+// ⭐⭐ **`__mm_walk_unwalkable(value, visits)` — WHAT A WITNESS TABLE'S WALK WORD NAMES FOR A CONFORMER NO WALK CAN BE
+// BUILT FOR** (a generic conformer, whose shared table names no instance; a record reaching an OS handle; a
+// promise). A value held at an interface type is walked through whatever conformer it holds at run time, so
+// the compile-time refusal the concrete doors make cannot be made about it; the abort is that refusal's
+// run-time form, taken before anything crosses. A zero word would read as a conformer that owns nothing.
+export let MmWalkUnwalkableName = b"__mm_walk_unwalkable"
+
 // The prefix every HEAP runtime entry point shares — the single test for "does this program touch the
 // heap at all?", which `StringRuntime.scanRuntimeUsage` reads for its `usesHeap` bit.
 let RuntimeCallPrefix = b"__mm_"
@@ -718,15 +734,18 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 	// nothing to a green thread must not carry them.
 	if usage.usesSoleWalk 'soleBox'
 		buildMmBoxWalk(module, action: CascadeAction.soleWalk)
+		buildRecordGatedAction(module, symbolName: MmSoleExistentialName, wordOffset: WitnessSoleWalkFuncOffset, action: RecordGatedAction.walkThroughWord)
 	end 'soleBox'
 
 	if usage.usesShareWalk 'shareBox'
 		buildMmBoxWalk(module, action: CascadeAction.shareWalk)
 		buildMmShareBuffer(module)
+		buildRecordGatedAction(module, symbolName: MmShareExistentialName, wordOffset: WitnessShareWalkFuncOffset, action: RecordGatedAction.walkThroughWord)
 	end 'shareBox'
 
 	if usage.usesSoleWalk or usage.usesShareWalk 'visitTable'
 		installWalkVisitTable(module)
+		buildMmWalkUnwalkable(module)
 	end 'visitTable'
 
 	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__managed_cow_detach`, under
@@ -1899,6 +1918,19 @@ let RecordWalkParamCount = 1 as ParamCount
 let WalkParamCount = 2 as ParamCount
 let ElementWalkParamCount = 3 as ParamCount
 
+// `__mm_walk_unwalkable(value, visits) -> visits` — see `MmWalkUnwalkableName`. A graph walk's signature, because a
+// witness table's walk word is called as one.
+function buildMmWalkUnwalkable(module StdModule)
+	var func = IrFunction.createFromStd(MmWalkUnwalkableName, returnType: StdReturnType.value(StdType.i64), paramCount: WalkParamCount, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(WalkParamCount)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: WalkParamCount)
+	emitRuntimeAbort(module, func: func, block: entry, abort: RuntimeAbort.transferredRecordNotSole, ids: ids)
+
+	module.functions.push(func)
+end 'buildMmWalkUnwalkable'
+
 // A walk over a graph carries exactly one value from block to block, its visit table; a walk over one record
 // carries none.
 let WalkCarriedValueCount = 1
@@ -2951,7 +2983,7 @@ function declareUnionPayloadDropNeeds(usage RuntimeUsage, layout EnumLayout, pro
 				continue
 			end 'scalar'
 
-			recordCallUsage(managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), usage: usage)
+			declareDropKindNeeds(usage, kind: payloadDropKind(signatures, typeNames: project.typeNames, field: field, class: class))
 		end 'eachField'
 	end 'eachCase'
 end 'declareUnionPayloadDropNeeds'
@@ -2996,7 +3028,7 @@ end 'declareInstanceDictionaryDropNeeds'
 
 // The runtime bits ONE released field's drop needs. `recordCallUsage` closes each family over what its own
 // body calls, and it is what turns on `usesDropTypeParam` for the bare-parameter slot.
-function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
+module function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
 	match kind 'kind'
 		direct(callee) then recordCallUsage(callee, usage: usage)
 		existential then usage.usesDropExistential = true
@@ -3075,9 +3107,8 @@ export function noteRelocatedFunctionUsage(usage RuntimeUsage, project Project, 
 		noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.clone)
 	end 'newCloneCascades'
 
-	// The two walks' twins of the arm above. A `.rdata` slot cannot name one today — the transfer doors emit a
-	// direct call and a `funcAddr` element stamp, both of which the module scan sees — but the re-entry is what
-	// keeps that a property of today's producers rather than of this walk.
+	// The two walks' twins of the arm above: a witness table's `soleWalkFunc@24`/`shareWalkFunc@32` name a
+	// conformer's walk that no call in the module may reach.
 	if usage.neededSoleWalks.count() > soleWalksBefore 'newSoleCascades'
 		noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.soleWalk)
 	end 'newSoleCascades'
@@ -3224,7 +3255,7 @@ function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, projec
 				continue
 			end 'scalar'
 
-			insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
+			noteNestedCascadeOf(usage, kind: payloadDropKind(signatures, typeNames: project.typeNames, field: field, class: class), work: work)
 		end 'eachField'
 	end 'eachCase'
 end 'addNestedUnionDestructors'
@@ -3622,6 +3653,17 @@ function dictionaryStructFieldDropKind(layout StructLayout, index FieldIndex, ty
 	return FieldDropKindOption.released(structFieldDropKind(layout, index: index, typeNames: typeNames, signatures: signatures))
 end 'dictionaryStructFieldDropKind'
 
+// HOW a payload that owes a drop is released — `structFieldDropKind`'s union twin. An interface-typed payload
+// is a SERVICE REQUEST's message argument, whose witness half the request union carries in the next slot
+// (`ServiceCompanions.serviceRequestPayloads`).
+function payloadDropKind(signatures ProgramSignatures, typeNames TypeNameInterner, field PayloadField, class PayloadClass) returns FieldDropKind
+	if payloadClassIsExistential(class) 'fatPointer'
+		return FieldDropKind.existential(InterfaceWitnessHalfOffset)
+	end 'fatPointer'
+
+	return FieldDropKind.direct(managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: field.declaredType))
+end 'payloadDropKind'
+
 // HOW struct field `index` is released — the `existential` kind for an interface-typed field
 // (P1.7a-existentials slice 2), the statically resolved callee for every other. It is asked HERE, off the
 // declared type, because the alternative is `managedFieldDropCallee` inventing a 1-argument callee for a
@@ -3629,7 +3671,7 @@ end 'dictionaryStructFieldDropKind'
 // side.
 function structFieldDropKind(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns FieldDropKind
 	if signatures.structFieldIsExistential(layout.name, index: index) 'fatPointer'
-		return FieldDropKind.existential
+		return FieldDropKind.existential(InterfaceWitnessHalfOffset)
 	end 'fatPointer'
 
 	return FieldDropKind.direct(managedStructFieldDropCallee(layout, index: index, typeNames: typeNames, signatures: signatures))
@@ -3666,7 +3708,7 @@ end 'synthesizeGenericInstanceDestructor'
 // beside its `T` — is in this list too, and substitution leaves it exactly as declared.
 function instanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceId, index FieldIndex) returns FieldDropKind
 	if signatures.genericInstanceFieldIsExistential(id, index: index) 'fatPointer'
-		return FieldDropKind.existential
+		return FieldDropKind.existential(InterfaceWitnessHalfOffset)
 	end 'fatPointer'
 
 	return FieldDropKind.direct(signatures.genericInstanceFieldDropCallee(id, index: index))
@@ -3780,11 +3822,12 @@ export union FieldDropKind
 	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
 	direct(callee ByteArray)
 
-	// ⭐ An INTERFACE-TYPED field (P1.7a-existentials slice 2): a two-slot fat pointer whose conformer — and
-	// therefore whose destructor — is a RUN-TIME fact, so no static callee exists to name. The witness half
-	// at `+InterfaceWitnessHalfOffset` is loaded beside the value half and both go to
-	// `__drop_existential(witness, value)`, which reads the table's `destroyFunc@8`.
-	existential
+	// ⭐ A value held at an INTERFACE TYPE: a fat pointer whose conformer — and therefore whose destructor — is
+	// a RUN-TIME fact, so no static callee exists to name. The witness half at `+witnessDisplacement` from the
+	// value half is loaded beside it and both go to `__drop_existential(witness, value)`, which reads the
+	// table's `destroyFunc@8`. A struct field's two slots are adjacent (`IrInterface.InterfaceWitnessHalfOffset`);
+	// a reply cell's are not (`GtRuntime.GtOffReplyWitness`).
+	existential(witnessDisplacement ByteOffset)
 
 	// ⭐⭐ **A field of a DECLARATION VIEW released through the DICTIONARY the cascade was handed (BATCH41)** —
 	// `callee(descriptor + blockOffset, value)`. Two field shapes take it and they are one act, which is why
@@ -3881,8 +3924,7 @@ function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId
 			continue
 		end 'scalarField'
 
-		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
-		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), kind: FieldDropKind.direct(callee), ids: ids, func: func)
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), kind: payloadDropKind(signatures, typeNames: project.typeNames, field: field, class: class), ids: ids, func: func)
 	end 'eachField'
 
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
@@ -3918,7 +3960,7 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 
 	match kind 'k'
 		direct(callee) then module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
-		existential then emitExistentialFieldDrop(module, block: dropBlock, box: box, offset: offset, value: ptr, dropped: dropped, ids: ids)
+		existential(witnessDisplacement) then emitExistentialFieldDrop(module, block: dropBlock, box: box, witnessOffset: offset + witnessDisplacement, value: ptr, dropped: dropped, ids: ids)
 		throughDescriptor(callee, descriptor, blockOffset) then emitDictionaryFieldDrop(module, block: dropBlock, callee: callee, descriptor: descriptor, blockOffset: blockOffset, value: ptr, dropped: dropped, ids: ids)
 	end 'k'
 
@@ -3931,9 +3973,9 @@ end 'emitNullGuardedDrop'
 // `__drop_existential(witness, value)` (P1.7a-existentials slice 2). Its own function because a `match` arm
 // carries one statement and this shape is two; `dropped` is the caller's result slot, so the two kinds mint
 // exactly one apiece.
-function emitExistentialFieldDrop(module StdModule, block IrBlock, box ValueId, offset ByteOffset, value ValueId, dropped ValueId, ids ValueMinter)
+function emitExistentialFieldDrop(module StdModule, block IrBlock, box ValueId, witnessOffset ByteOffset, value ValueId, dropped ValueId, ids ValueMinter)
 	let witness = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(witness, addrId: box, offset: offset + InterfaceWitnessHalfOffset, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.loadIndirect(witness, addrId: box, offset: witnessOffset, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.call(dropped, callee: DropExistentialName, args: twoArgs(witness, second: value)))
 end 'emitExistentialFieldDrop'
 
@@ -4152,6 +4194,10 @@ function noteFieldCascadeNeeds(usage RuntimeUsage, strategy ManagedCascadeStrate
 	match strategy 'strategy'
 		direct(callee) then noteCascadeCalleeNeeds(usage, callee: callee, work: work, action: action)
 		managedElements(containerEntry, elementEntry) then noteManagedElementsFieldNeeds(usage, containerEntry: containerEntry, elementEntry: elementEntry, work: work, action: action)
+
+		// The conformer walks the entry calls through are named by witness-table relocations, which
+		// `noteRelocatedFunctionUsage` roots; the entry itself is all this field adds.
+		throughWitness(entry) then recordCallUsage(entry, usage: usage)
 		unsupported then panic("noteFieldCascadeNeeds: an unsupported managed field strategy reached a cascade-needs closure — arrayElementSupportsDeepClone gates the front end for both actions, because the strategy's `unsupported` arms are action-independent")
 	end 'strategy'
 end 'noteFieldCascadeNeeds'
@@ -4559,9 +4605,20 @@ function emitFieldVisit(module StdModule, visit CascadeCursor, box ValueId, offs
 	match action 'action'
 		clone then return emitClonedFieldStore(module, visit: visit, box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, ids: ids)
 		soleWalk or
-			shareWalk then return CascadeCursor.create(visit.block, carried: argsOf(emitWalkCall(module, block: visit.block, ptr: oldPtr, visits: visit.visits(), strategy: strategy, ids: ids)))
+			shareWalk then return CascadeCursor.create(visit.block, carried: argsOf(emitFieldWalkCall(module, block: visit.block, box: box, offset: offset, ptr: oldPtr, visits: visit.visits(), strategy: strategy, ids: ids)))
 	end 'action'
 end 'emitFieldVisit'
+
+// A FIELD's walk: an interface-typed field reads its witness half beside the value half, and every other field
+// takes `emitWalkCall`.
+function emitFieldWalkCall(module StdModule, block IrBlock, box ValueId, offset ByteOffset, ptr ValueId, visits ValueId, strategy ManagedCascadeStrategy, ids ValueMinter) returns ValueId
+	match strategy 'strategy'
+		throughWitness(entry) then return emitWitnessReadWalk(module, block: block, box: box, offset: offset, value: ptr, visits: visits, entry: entry, ids: ids)
+		direct or
+			managedElements or
+			unsupported then return emitWalkCall(module, block: block, ptr: ptr, visits: visits, strategy: strategy, ids: ids)
+	end 'strategy'
+end 'emitFieldWalkCall'
 
 function emitClonedFieldStore(module StdModule, visit CascadeCursor, box ValueId, offset ByteOffset, oldPtr ValueId, strategy ManagedCascadeStrategy, ids ValueMinter) returns CascadeCursor
 	let newPtr = emitCloneCall(module, block: visit.block, oldPtr: oldPtr, strategy: strategy, ids: ids)
@@ -4585,7 +4642,8 @@ function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy
 	match strategy 'strategy'
 		direct(callee) then return emitDirectClone(module, block: block, oldPtr: oldPtr, callee: callee, ids: ids)
 		managedElements(containerClone, elementClone) then return emitManagedElementsFieldClone(module, block: block, oldPtr: oldPtr, containerClone: containerClone, elementClone: elementClone, ids: ids)
-		unsupported then panic("emitCloneCall: an unsupported managed field strategy reached the cloner synthesis — arrayElementSupportsDeepClone gates the front end")
+		unsupported or
+			throughWitness then panic("emitCloneCall: an uncopyable managed field strategy reached the cloner synthesis — typeSupportsDeepClone gates the front end for `GraphCascadePurpose.deepClone`")
 	end 'strategy'
 end 'emitCloneCall'
 
@@ -4679,6 +4737,13 @@ function synthesizeUnionWalk(module StdModule, layout EnumLayout, project Projec
 	finishWalkBody(module, body: body)
 end 'synthesizeUnionWalk'
 
+// An interface-typed field's walk: `entry(witness, value, visits)`, the witness read from the slot beside the value
+// half, answering the visit table the conformer's walk hands back.
+function emitWitnessReadWalk(module StdModule, block IrBlock, box ValueId, offset ByteOffset, value ValueId, visits ValueId, entry ByteArray, ids ValueMinter) returns ValueId
+	let witness = emitLoadField(module, block: block, record: box, offset: offset + InterfaceWitnessHalfOffset, ids: ids)
+	return emitRuntimeCall(module, block: block, callee: entry, args: threeArgs(witness, second: value, third: visits), ids: ids)
+end 'emitWitnessReadWalk'
+
 // Emit the walk call for a managed field's `strategy` — `emitCloneCall`'s twin — answering the visit table the
 // callee hands back. A `direct` callee takes the box and the table; a `managedElements` field also takes the
 // element's `funcAddr` and calls its container's own per-element walk entry.
@@ -4686,7 +4751,8 @@ function emitWalkCall(module StdModule, block IrBlock, ptr ValueId, visits Value
 	match strategy 'strategy'
 		direct(callee) then return emitRuntimeCall(module, block: block, callee: callee, args: twoArgs(ptr, second: visits), ids: ids)
 		managedElements(containerWalk, elementWalk) then return emitManagedElementsFieldWalk(module, block: block, ptr: ptr, visits: visits, containerWalk: containerWalk, elementWalk: elementWalk, ids: ids)
-		unsupported then panic("emitWalkCall: an unsupported managed field strategy reached a walk synthesis — typeSupportsDeepClone gates the front end for every action, the strategy's `unsupported` arms being action-independent")
+		unsupported then panic("emitWalkCall: an unsupported managed field strategy reached a walk synthesis — typeSupportsDeepClone gates the front end for `GraphCascadePurpose.transferWalk`")
+		throughWitness then panic("emitWalkCall: a witness-read walk reached a position with no witness beside it — only a FIELD holds one, and `emitFieldVisit` takes it there")
 	end 'strategy'
 end 'emitWalkCall'
 

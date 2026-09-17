@@ -5447,8 +5447,8 @@ end 'checkFunctionRef'
 //
 // The parameter's own DECLARATION stays legal, which is why the refusal is here and not at it: a direct call
 // reserves the adjacent slot and fills it, and calling the function directly is the remedy. That makes this
-// the value-use sibling of `Parser.DeclaredStoragePosition`'s eleven declared positions rather than a twelfth
-// one of them.
+// the value-use sibling of `Parser.DeclaredStoragePosition`'s declared positions rather than another one of
+// them.
 //
 // ⚠ **IT IS THIS PASS'S AND NOT THE PARSER'S BECAUSE THE ANSWER NEEDS RESOLVED PARAMETER TYPES** —
 // `parseTypeReference`'s interface arm is gated on `allFilesFolded`, so a parameter type the declaration
@@ -7423,10 +7423,24 @@ function checkOneExistentialFieldStore(project Project, func IrFunction, store E
 
 	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName) 'widening'
 		widens then checkExistentialSiteClaimAtFieldStore(project, func: func, store: store, valueTag: valueTag, valueNameId: valueNameId)
-		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot store a `float` into the field '{site}', which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the field as `float`", line: store.line, column: store.column, filePath: store.filePath)
-		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("field type mismatch for '{site}'", conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
+		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: floatIntoExistentialStoreMessage(store.place, site: site, interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
 	end 'widening'
 end 'checkOneExistentialFieldStore'
+
+function floatIntoExistentialStoreMessage(place ExistentialStorePlace, site String, interfaceName String) returns String
+	return match place 'place'
+		structField gives "Cannot store a `float` into the field '{site}', which is declared at the interface type '{interfaceName}': {floatHasNoValueHalfReason(interfaceName)}, or declare the field as `float`"
+		messageArgument gives "Cannot pass a `float` as {site}, which is declared at the interface type '{interfaceName}': {floatHasNoValueHalfReason(interfaceName)}, or take the parameter as a `float`"
+	end 'place'
+end 'floatIntoExistentialStoreMessage'
+
+function existentialStoreMismatchSubject(place ExistentialStorePlace, site String) returns String
+	return match place 'place'
+		structField gives "field type mismatch for '{site}'"
+		messageArgument gives "argument type mismatch for {site}"
+	end 'place'
+end 'existentialStoreMismatchSubject'
 
 // ⭐ **THE FIELD STORE'S HALF OF E3127.** The record the field belongs to fixes the claim where the call's instance
 // fixes an argument's: `b.t = …` on a `Box with Integer` substitutes `T`, while a store into `Self{…}` or `self`
@@ -7440,7 +7454,7 @@ function checkExistentialSiteClaimAtFieldStore(project Project, func IrFunction,
 	let declaredSite = try store.claims.get(0) otherwise return
 	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtFieldStore")
 	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: store.subject, siteInstance: declaredSite)
-	let place = WideningPlace.field(String.from(store.fieldSite))
+	let place = existentialStoreWideningPlace(store)
 
 	if valueTag != ValueTypeTag.interfaceRef 'aConcreteConformer'
 		checkConformerAgainstSiteClaim(project, signatures: signatures, func: func, site: site, conformerTag: valueTag, conformerNameId: valueNameId, interfaceName: store.interfaceName, place: place, line: store.line, column: store.column, filePath: store.filePath)
@@ -7455,6 +7469,13 @@ function checkExistentialSiteClaimAtFieldStore(project Project, func IrFunction,
 
 	checkDeferredClaimAgainstExistentialValue(project, signatures: signatures, declaredSite: declaredSite, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName, place: place, line: store.line, column: store.column, filePath: store.filePath)
 end 'checkExistentialSiteClaimAtFieldStore'
+
+function existentialStoreWideningPlace(store ExistentialFieldStore) returns WideningPlace
+	return match store.place 'place'
+		structField gives WideningPlace.field(String.from(store.fieldSite))
+		messageArgument gives WideningPlace.argument(String.from(store.fieldSite))
+	end 'place'
+end 'existentialStoreWideningPlace'
 
 // ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
 // reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument

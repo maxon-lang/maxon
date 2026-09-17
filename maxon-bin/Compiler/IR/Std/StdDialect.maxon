@@ -1559,7 +1559,7 @@ export union StdOp
 	// call band, independent of this tail position.
 	//
 	// Load-and-call in ONE op, so the loaded function pointer NEVER occupies a virtual register.
-	// `resultId = (*[witnessAddr + 24 + 8*methodIndex])(args…)`:
+	// `resultId = (*[witnessAddr + witnessMethodSlotOffset(methodIndex)])(args…)`:
 	// the callee pointer is read from witness-table slot `methodIndex` off `witnessAddr` (the threaded witness
 	// parameter, a `.rdata` table address) and called in the SAME instruction — the x64 lowering emits a
 	// memory-indirect `call qword [witnessAddr + off]`, never a load-into-register then `call reg`. Fusing it
@@ -1754,7 +1754,7 @@ export union StdOp
 	// position.
 	//
 	// ⭐ **`witnessTryCall : witnessCall :: tryCall : call`.** It is `witnessCall` — the fused
-	// load-and-call whose callee is a MEMORY OPERAND, `(*[witnessAddr + 24 + 8*methodIndex])(args…)`, so the
+	// load-and-call whose callee is a MEMORY OPERAND, `(*[witnessAddr + witnessMethodSlotOffset(methodIndex)])(args…)`, so the
 	// loaded function pointer never occupies a virtual register — plus the ONE thing `tryCall` adds to
 	// `call`: a second result, `errorFlagId`, captured from the dual-register error ABI (R10 / x9). Every
 	// other field (`resultType`, `argFloatMask`, `args`) and every metadata bit is `witnessCall`'s verbatim,

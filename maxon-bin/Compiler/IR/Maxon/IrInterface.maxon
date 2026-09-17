@@ -58,17 +58,16 @@ export typealias WitnessSlotIndex = int(0 to u16.max)
 export typealias WitnessMethodIndex = int(0 to u16.max)
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT**: a header of
-// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, then `methods[N]@24` — one 8-byte function pointer per
-// requirement of the interface's TRANSITIVE list, each stamped by a `funcAbs64InRdata` relocation. The fused
-// `witnessCall` reads method `i` from `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so
-// the emitter (the blob) and every reader (the x64, arm64 and wasm lowerings) must share these two
-// constants — which is why they are stated once, here, rather than per backend.
+// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `soleWalkFunc@24`, `shareWalkFunc@32`, then
+// `methods[N]@40` — one 8-byte function pointer per requirement of the interface's TRANSITIVE list, each
+// stamped by a `funcAbs64InRdata` relocation. The fused `witnessCall` reads method `i` from
+// `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so the emitter (the blob) and every reader
+// (the x64, arm64 and wasm lowerings) must share these two constants — which is why they are stated once,
+// here, rather than per backend.
 //
 // ⚠ **THERE IS NO PARENT-TABLE POINTER.** Parent-interface requirements are PROJECTED INTO the
-// child table by `interfaceWitnessSlots`, so there is no runtime chain to follow. Slot 8 carries
-// `destroyFunc` (see `WitnessDestroyFuncOffset`) and slot 16 its inverse (see
-// `WitnessRetainFuncOffset`).
-export let WitnessTableHeaderBytes = 24 as ByteOffset
+// child table by `interfaceWitnessSlots`, so there is no runtime chain to follow.
+export let WitnessTableHeaderBytes = 40 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF** — the conformer's
@@ -104,6 +103,15 @@ export let WitnessDestroyFuncOffset = 8 as ByteOffset
 // fresh OWNED heap record it hands back is what launders the literal.
 export let WitnessRetainFuncOffset = 16 as ByteOffset
 
+// ⭐⭐ **HOW A FAT POINTER'S VALUE HALF IS WALKED BEFORE IT CROSSES TO ANOTHER GREEN THREAD** — the conformer's
+// `__sole_<T>` (a move) and `__share_<T>` (a lend), the same per-type walks a record of that type takes as a
+// field, or **0** when the conformer owns nothing a count could be stepped on. `__mm_sole_existential` /
+// `__mm_share_existential` read these words exactly as `__drop_existential` reads `destroyFunc@8`, because
+// which conformer an interface-typed value holds is a run-time fact
+// (`ProgramSignatures.existentialWalkCallee` decides what they hold).
+export let WitnessSoleWalkFuncOffset = 24 as ByteOffset
+export let WitnessShareWalkFuncOffset = 32 as ByteOffset
+
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS.**
 // The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
 // nothing else — which is why the size is stated HERE, beside the table it points at.
@@ -123,7 +131,7 @@ export let InterfaceValueBytes = MachineWordBytes + MachineWordBytes
 // would otherwise each spell `+8` and be free to drift from the size above.
 export let InterfaceWitnessHalfOffset = MachineWordBytes
 
-// The byte offset of witness-table method slot `index` — `24 + 8*index`. The ONE place
+// The byte offset of witness-table method slot `index`. The ONE place
 // the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset
 // cannot drift.
 export function witnessMethodSlotOffset(index WitnessMethodIndex) returns ByteOffset
@@ -1180,7 +1188,7 @@ end 'interfaceNameOfType'
 // that being ONE answer:
 //
 //   • `LowerMaxonToStd.ensureWitnessTable` — which stamps slot `i`'s relocation;
-//   • `Parser.findWitnessDispatchCandidates` — which compiles `[witnessAddr + 24 + 8*i]` into the CALLER;
+//   • `Parser.findWitnessDispatchCandidates` — which compiles `[witnessAddr + witnessMethodSlotOffset(i)]` into the CALLER;
 //   • `ConformanceCheck.checkInterfaceMethods` — which decides that a conformer supplies requirement `i`
 //     at all, and files the member each slot's relocation is then stamped from.
 //

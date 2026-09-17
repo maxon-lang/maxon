@@ -82,14 +82,14 @@ step on a box one green thread holds is a plain load/add/store, so a send that p
 threads' hands without saying so would not be slow, it would corrupt the heap. Two refusals are static. A
 ROOT this frame does not solely own — a value a closure or a container also holds, or a borrowed parameter
 — is **E3138**, and a value that cannot have exactly one owner on the far side at all is **E3135**: a
-`Promise` (a handle its awaiter owns), a function value (whose captured environment is shared), a value
-held at an interface type (a fat pointer released through a witness), an opaque type parameter (no layout
-at the send). Every other aggregate — a container, a record with a managed field, a union with a managed
-payload — is admitted, moved or lent, after a runtime WALK over its graph at the send: no reachable
-refcounted record may have an owner outside the graph (a record the graph reaches twice is legal when both
-references are its owners; an immortal literal has no count and passes), a shared copy-on-write buffer is
-detached, and a RECORD with an owner outside the graph aborts the process with exit **96** rather than hand
-one box to two green threads.
+`Promise` (a handle its awaiter owns), a function value (whose captured environment is shared), an opaque
+type parameter (no layout at the send). Every other aggregate — a container, a record with a managed field,
+a union with a managed payload, a value held at an interface type — is admitted, moved or lent, after a
+runtime WALK over its graph at the send (an interface-typed value through its witness, whose table names the
+conformer's walk): no reachable refcounted record may have an owner outside the graph (a record the graph
+reaches twice is legal when both references are its owners; an immortal literal has no count and passes), a
+shared copy-on-write buffer is detached, and a RECORD with an owner outside the graph aborts the process with
+exit **96** rather than hand one box to two green threads.
 
 A lent graph is **frozen** from the send on (**E3160**): neither the binding nor any value read out of it
 may reach storage through which it could be written — a `var`, a field or union payload, a container, a
@@ -479,11 +479,9 @@ typealias Integer = int(i64.min to i64.max)
 error E3135: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, whose captured environment is a box a second thread would share, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
-<!-- test: error.message-param-interface-value-not-transferable -->
-⭐ A value held at an interface type is a fat pointer: a witness half in read-only data and a value half
-released through `__drop_existential`. The declaration sweep leaves such a parameter spelled as a bare
-name — it re-tags a struct FIELD and a RETURN type and never a parameter — so this case is what stops the
-rule from being silently blind to the one shape whose two halves the request union cannot carry.
+<!-- test: services.a-message-may-carry-a-value-at-an-interface-type -->
+A value held at an interface type crosses a message whole: its witness names the conformer's own ownership
+walk and release, so the service becomes the one owner of the conformer and dispatches through it.
 ```maxon
 interface Shape
 	function area() returns Integer
@@ -491,6 +489,10 @@ end 'Shape'
 
 type Square implements Shape
 	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
 
 	function area() returns Integer
 		return self.side * self.side
@@ -507,16 +509,25 @@ type Calc
 	export function measure(s Shape)
 		self.count = self.count + s.area()
 	end 'measure'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
 end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
+	h.measure(Square.create(3))
+	h.measure(Square.create(2))
+	let total = try await h.total() otherwise panic("the service is running")
+	print("{total}\n")
+	h.shutdown()
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3135: <fragment>:27:10: parameter `s` of the message `Calc.measure` is a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+```stdout
+13
 ```
 
 <!-- test: error.overloaded-message-refused -->
@@ -8229,7 +8240,7 @@ end 'main'
 typealias Real = float(f64.min to f64.max)
 ```
 ```maxoncstderr
-error E3140: <fragment>:15:10: the message `Box.peek` declares a reply whose value is float, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and a value held at an interface type or an opaque type parameter is released through a companion the cell does not carry, and this `spawn` makes `Box` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
+error E3140: <fragment>:15:10: the message `Box.peek` declares a reply whose value is float, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and an opaque type parameter is released through a companion the cell does not carry, and this `spawn` makes `Box` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
 ```
 
 <!-- test: error.awaiting-shutdown-is-refused -->
@@ -9787,10 +9798,10 @@ end 'main'
 96
 ```
 
-<!-- test: error.a-generic-reply-whose-instantiation-has-no-walk-is-refused -->
-A reply typed `Array with T` is fresh in the handler's generic body and walkable there. The instantiation makes
-its elements records holding a value at an interface type, which no per-type walk can prove sole — so the
-`spawn` that fixes `T` refuses it (E3138), rather than leaving a reply the loop cannot walk.
+<!-- test: services.a-reply-of-records-holding-an-interface-field-crosses -->
+A reply typed `List with Holder`, whose elements are records holding a value at an interface type, crosses and
+dispatches: the loop walks each element's `Shape` field through the witness beside it, and the caller reads
+the conformer's answer back out of the element it now owns alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -9816,31 +9827,82 @@ type Holder
 	static function create(shape Shape) returns Self
 		return Self{shape: shape}
 	end 'create'
+
+	function area() returns Integer
+		return self.shape.area()
+	end 'area'
 end 'Holder'
+
+typealias Holders = List with Holder
+
+type Maker
+	var items as Holders
+
+	static function create(side Integer) returns Self
+		var items = Holders.create()
+		items.append(Holder.create(Square.create(side)))
+		return Self{items: items}
+	end 'create'
+
+	export function drain() returns Holders
+		var out = Holders.create()
+
+		if let item = try self.items.removeFirst() 'held'
+			out.append(item)
+		end 'held'
+
+		return out
+	end 'drain'
+end 'Maker'
+
+function main() returns ExitCode
+	let h = spawn Maker.create(2)
+	let items = try await h.drain() otherwise panic("the maker is running")
+	let holder = try items.first() otherwise panic("the maker held one item")
+	print("{items.count()} {holder.area()}\n")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+1 4
+```
+
+<!-- test: error.a-generic-reply-whose-instantiation-reaches-an-os-handle-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+A reply typed `Array with T` is fresh in the handler's generic body and walkable there. The instantiation makes
+its elements `TcpListener`s, whose socket handle no per-type walk can prove sole — so the `spawn` that fixes
+`T` refuses it (E3138), rather than leaving a reply the loop cannot walk. On wasm32-wasi the socket's E3104 is
+reported first, so the case is pinned on the native lanes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
 
 type Maker uses T
 	typealias Items = Array with T
-	var made as Integer
+	var seen as Integer
 
 	static function create(seed T) returns Self
-		return Self{made: 0}
+		var first = Items.create()
+		first.push(seed)
+		return Self{seen: first.count()}
 	end 'create'
 
 	export function make() returns Items
-		self.made = self.made + 1
+		self.seen = self.seen + 1
 		return Items.create()
 	end 'make'
 end 'Maker'
 
 function main() returns ExitCode
-	let h = spawn Maker.create(Holder.create(Square.create(2)))
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let h = spawn Maker.create(listener)
 	let items = try await h.make() otherwise panic("the maker is running")
 	print("{items.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:43:10: the reply of the message `Maker.make` is a `Array_Holder` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle, a value held at an interface type, or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:22:10: the reply of the message `Maker.make` is a `Array_TcpListener` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: services.a-reply-a-sibling-builds-in-a-local-is-fresh -->
@@ -10269,4 +10331,837 @@ end 'main'
 ```
 ```exitcode
 96
+```
+
+<!-- test: services.a-service-state-may-hold-a-value-at-an-interface-type -->
+A service's own state may hold a value at an interface type: the `spawn` walks it through the conformer's
+witness, so the record the factory built crosses whole and dispatches on the service's green thread.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Surveyor
+	var shape as Shape
+
+	static function create(side Tally) returns Self
+		return Self{shape: Square.create(side)}
+	end 'create'
+
+	export function measure() returns Tally
+		return self.shape.area()
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(3)
+	let area = try await surveyor.measure() otherwise panic("the surveyor is running")
+	print("{area}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+9
+```
+
+<!-- test: services.a-reply-may-be-a-value-at-an-interface-type -->
+A reply held at an interface type is a record the handler built, handed back through its witness: the
+caller owns the conformer and dispatches through it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Factory
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function make(side Tally) returns Shape
+		self.made = self.made + 1
+		return Square.create(side)
+	end 'make'
+end 'Factory'
+
+function main() returns ExitCode
+	let factory = spawn Factory.create()
+	let shape = try await factory.make(4) otherwise panic("the factory is running")
+	print("{shape.area()}\n")
+	factory.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+16
+```
+
+<!-- test: services.a-lent-interface-argument-stays-readable-by-the-sender -->
+A `let` binding held at an interface type is LENT, exactly as a `let` record is: the send walks it through its
+witness and marks what the conformer reaches shared, and the sender keeps dispatching through it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareOf(side Tally) returns Shape
+	return Square.create(side)
+end 'squareOf'
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+
+	export function total() returns Tally
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let shape = squareOf(3)
+	h.measure(shape)
+	let total = try await h.total() otherwise panic("the service is running")
+	print("{total} {shape.area()}\n")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+9 9
+```
+
+<!-- test: services.a-second-owner-inside-a-conformer-aborts -->
+A value held at an interface type is walked through the conformer it holds, so a record it reaches that
+another owner still names is found at the send: the list's cell is co-owned by `main`, and the move aborts
+with exit **96** before the service can see it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Cell
+	export var n as Tally
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Cell'
+
+typealias Cells = List with Cell
+
+type Crate implements Shape
+	var cells as Cells
+
+	static function create(cells Cells) returns Self
+		return Self{cells: cells}
+	end 'create'
+
+	function area() returns Tally
+		return self.cells.count()
+	end 'area'
+end 'Crate'
+
+function crateOf(cells Cells) returns Shape
+	return Crate.create(cells)
+end 'crateOf'
+
+type Svc
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(s Shape)
+		self.seen = s.area()
+	end 'take'
+end 'Svc'
+
+function main() returns ExitCode
+	var cells = Cells.create()
+	var cell = Cell.create()
+	cells.append(cell)
+	let h = spawn Svc.create()
+	var shape = crateOf(cells)
+	h.take(shape)
+	return cell.n as ExitCode
+end 'main'
+```
+```exitcode
+96
+```
+
+<!-- test: services.a-conformer-holding-a-string-crosses -->
+A conformer whose record holds a `String` is walked into that record as a field of it is, and crosses whole.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Label implements Shape
+	var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function area() returns Tally
+		return self.text.byteLength()
+	end 'area'
+end 'Label'
+
+function labelOf(width Tally) returns Shape
+	return Label.create("w{width}")
+end 'labelOf'
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+
+	export function total() returns Tally
+		return self.count
+	end 'total'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	var shape = labelOf(1234)
+	h.measure(shape)
+	let total = try await h.total() otherwise panic("the service is running")
+	print("{total}\n")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+5
+```
+
+<!-- test: services.an-interface-reply-nobody-awaits-is-released -->
+A reply held at an interface type that no one awaits is released with its cell, through the witness the cell
+carries beside the value: the conformer's heap `String` is freed, so the program exits clean rather than
+leaking (exit 101).
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Label implements Shape
+	var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function area() returns Tally
+		return self.text.byteLength()
+	end 'area'
+end 'Label'
+
+type Factory
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function make(width Tally) returns Shape
+		self.made = self.made + 1
+		return Label.create("w{width}")
+	end 'make'
+
+	export function count() returns Tally
+		return self.made
+	end 'count'
+end 'Factory'
+
+function main() returns ExitCode
+	let factory = spawn Factory.create()
+	factory.make(1234)
+	let made = try await factory.count() otherwise panic("the factory is running")
+	print("{made}\n")
+	factory.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+1
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-message-argument-that-does-not-implement-the-interface -->
+<!-- unsupported-targets: wasm32-wasi -->
+A message argument at an interface-typed parameter widens as a call argument does, so a value whose type does
+not conform is refused. On wasm32-wasi the send's E3104 is reported first, so the case is pinned on the
+native lanes.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	h.measure(7 as Tally)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:12: argument type mismatch for 's' of the message 'measure': type 'Tally' does not implement interface 'Shape'
+```
+
+<!-- test: error.a-generic-service-spawned-over-an-interface-type-is-refused -->
+A `spawn` reads a generic service's type arguments off its factory's arguments, and a value held at an interface
+type cannot be one: the instance would stand a two-word fat pointer in a slot a type parameter gives one word.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareOf(side Tally) returns Shape
+	return Square.create(side)
+end 'squareOf'
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function size() returns Tally
+		return 1
+	end 'size'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(squareOf(2))
+	let n = try await h.size() otherwise panic("the box is running")
+	print("{n}\n")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:37:20: Unsupported: a type argument inferred from a factory argument declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a slot standing at a type parameter is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
+```
+
+<!-- test: services.an-interface-reply-from-a-stopped-service-answers-stopped -->
+A reply held at an interface type from a service that has stopped answers `ServiceError.stopped` like any
+other reply, and its error edge releases nothing. An interface-typed argument the stopped mailbox abandons
+is released through its witness, so the conformer's heap `String` does not leak (exit 101).
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Label implements Shape
+	var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function area() returns Tally
+		return self.text.byteLength()
+	end 'area'
+end 'Label'
+
+type Factory
+	var made as Tally
+
+	static function create() returns Self
+		return Self{made: 0}
+	end 'create'
+
+	export function make(width Tally) returns Shape
+		self.made = self.made + 1
+		return Label.create("w{width}")
+	end 'make'
+
+	export function inspect(s Shape)
+		self.made = self.made + s.area()
+	end 'inspect'
+end 'Factory'
+
+function labelOf(width Tally) returns Shape
+	return Label.create("w{width}")
+end 'labelOf'
+
+function main() returns ExitCode
+	let factory = spawn Factory.create()
+	factory.shutdown()
+	factory.make(7)
+	factory.inspect(labelOf(5))
+	let shape = try await factory.make(1234) otherwise (e) 'gone'
+		match e 'why'
+			stopped then return 9 as ExitCode
+		end 'why'
+	end 'gone'
+	return shape.area() as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: services.interface-arguments-each-take-their-own-payload-slot -->
+Each interface-typed parameter of a message takes its witness half in the payload slot after its own, so a
+scalar parameter between two of them still reads its own slot, and a lent argument and a moved one cross in
+one send.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Label implements Shape
+	var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function area() returns Tally
+		return self.text.byteLength()
+	end 'area'
+end 'Label'
+
+function squareOf(side Tally) returns Shape
+	return Square.create(side)
+end 'squareOf'
+
+function labelOf(width Tally) returns Shape
+	return Label.create("w{width}")
+end 'labelOf'
+
+type Calc
+	var calls as Tally
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function combine(a Shape, scale Tally, b Shape) returns Tally
+		self.calls = self.calls + 1
+		return a.area() * scale + b.area()
+	end 'combine'
+end 'Calc'
+
+function main() returns ExitCode
+	let h = spawn Calc.create()
+	let lent = squareOf(2)
+	let n = try await h.combine(lent, scale: 10, b: labelOf(123)) otherwise panic("the calc is running")
+	print("{n} {lent.area()}\n")
+	h.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+44 4
+```
+
+<!-- test: borrow.error.a-lent-interface-argument-to-a-handler-that-writes-it -->
+<!-- unsupported-targets: wasm32-wasi -->
+A handler that writes a lent interface-typed parameter through its witness would write the sender's graph
+from another green thread, exactly as a handler writing a lent record would.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Counter
+	function bump()
+	function value() returns Tally
+end 'Counter'
+
+type Tick implements Counter
+	var n as Tally
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+
+	function value() returns Tally
+		return self.n
+	end 'value'
+end 'Tick'
+
+function counterOf() returns Counter
+	return Tick.create()
+end 'counterOf'
+
+type Svc
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function poke(c Counter)
+		c.bump()
+	end 'poke'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let c = counterOf()
+	h.poke(c)
+	return c.value() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:44:2: cannot pass 'c' to function that mutates parameter 'c' (in main)
+```
+
+<!-- test: borrow.error.a-lent-interface-argument-may-not-be-kept-by-the-handler -->
+<!-- unsupported-targets: wasm32-wasi -->
+A handler that stores a lent interface-typed parameter in its state keeps the sender's graph, which the lend
+freezes.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+function squareOf(side Tally) returns Shape
+	return Square.create(side)
+end 'squareOf'
+
+type Keeper
+	var last as Shape
+
+	static function create() returns Self
+		return Self{last: Square.create(1)}
+	end 'create'
+
+	export function keep(s Shape)
+		self.last = s
+	end 'keep'
+end 'Keeper'
+
+function main() returns ExitCode
+	let h = spawn Keeper.create()
+	let s = squareOf(2)
+	h.keep(s)
+	return s.area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3160: <fragment>:39:9: `s` is lent to `Keeper.keep` here, so what it holds is frozen, but the handler's parameter `s` escapes at <fragment>:32:15: storing it in a field or payload would let it be written. Send a `.clone()` instead, or bind `s` with `var` so the send moves it
+```
+
+<!-- test: services.a-generic-conformer-crosses-inside-an-interface-value -->
+A value held at an interface type whose conformer is an instance of a generic type crosses and dispatches.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Wrapper uses T implements Shape
+	var item as T
+	var side as Tally
+
+	static function create(item T, side Tally) returns Self
+		return Self{item: item, side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Wrapper'
+
+typealias Wrapped = Wrapper with Tally
+
+type Surveyor
+	var shape as Shape
+
+	static function create(side Tally) returns Self
+		return Self{shape: Wrapped.create(7, side: side)}
+	end 'create'
+
+	export function measure() returns Tally
+		return self.shape.area()
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(3)
+	let area = try await surveyor.measure() otherwise panic("the surveyor is running")
+	print("{area}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+9
+```
+
+<!-- test: services.a-conformer-no-walk-reaches-aborts-when-sent-at-its-interface-type -->
+<!-- unsupported-targets: wasm32-wasi -->
+A value held at an interface type is walked through whatever conformer it holds at run time, so a conformer
+whose graph reaches an OS handle cannot be refused where it is sent: the send aborts with exit **96** before
+the service can see it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Port implements Shape
+	var listener as TcpListener
+
+	static function create(listener TcpListener) returns Self
+		return Self{listener: listener}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Port'
+
+function portOf(listener TcpListener) returns Shape
+	return Port.create(listener)
+end 'portOf'
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+end 'Calc'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let h = spawn Calc.create()
+	var shape = portOf(listener)
+	h.measure(shape)
+	return 0
+end 'main'
+```
+```exitcode
+96
+```
+
+<!-- test: error.a-conformer-no-walk-reaches-sent-at-its-own-type-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+Where the conformer is known at the send, the refusal is made at compile time: the argument widens to the
+interface at the request payload, and it is walked as the record it is.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Port implements Shape
+	var listener as TcpListener
+
+	static function create(listener TcpListener) returns Self
+		return Self{listener: listener}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Port'
+
+type Calc
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function measure(s Shape)
+		self.count = self.count + s.area()
+	end 'measure'
+end 'Calc'
+
+function main() returns ExitCode
+	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let h = spawn Calc.create()
+	h.measure(Port.create(listener))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:35:12: argument `s` of the message `Calc.measure` is a `Port` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+```
+
+<!-- test: error.a-reply-may-not-alias-an-interface-value-the-state-holds -->
+A reply held at an interface type that the service's state still holds would hand the caller a second
+reference to the conformer's box on another green thread, exactly as returning a state record would.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Surveyor
+	var shape as Shape
+
+	static function create(side Tally) returns Self
+		return Self{shape: Square.create(side)}
+	end 'create'
+
+	export function peek() returns Shape
+		return self.shape
+	end 'peek'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(3)
+	let shape = try await surveyor.peek() otherwise panic("the surveyor is running")
+	return shape.area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:28:3: `Surveyor.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Surveyor` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:33:17: the `spawn` that makes `Surveyor` a service
 ```

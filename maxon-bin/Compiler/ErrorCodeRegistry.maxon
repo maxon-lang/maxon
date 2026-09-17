@@ -1531,12 +1531,11 @@ export enum ErrorCode
 
 	// A message of a service declares a parameter whose value cannot cross to another green thread.
 	// A send moves an argument or lends it, and either way the receiving green thread must reach, count and
-	// release what it is handed through the request union's payload cascade. Four shapes cannot be reached that
+	// release what it is handed through the request union's payload cascade. Three shapes cannot be reached that
 	// way. A `Promise` is a green-thread handle its awaiter owns. A function value reaches
-	// a captured environment block, which is a box with a second referent by construction. A value held at
-	// an interface type is a fat pointer whose witness half is read-only data and whose value half is
-	// released through `__drop_existential`, a pair the request union's payload cascade cannot carry. An
+	// a captured environment block, which is a box with a second referent by construction. An
 	// opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
+	// A value held at an interface type does cross: the request carries its witness half beside it.
 	// The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
 	// from the method it names: whether a type is a service is a whole-program property, and the site that
 	// decided it is the one worth naming.
@@ -1604,10 +1603,12 @@ export enum ErrorCode
 	// the sending green thread, before anything is enqueued. An immortal `.rdata` literal passes with no count
 	// to check; a shared copy-on-write BUFFER is detached, exactly as a write to it would detach it.
 	// What this arm still REFUSES is the shape no walk can be built for, never a shape that might be
-	// shared: a value held at an interface type (a witness table names a destructor and no walk), an opaque
-	// type parameter (the site cannot see its slots), a record no declaration in scope describes, and any
-	// graph reaching a type with no per-type cascade -- an OS handle, or a base-struct-less generic
-	// instance. Containers, records with managed fields and unions with managed payloads all cross.
+	// shared: an opaque type parameter (the site cannot see its slots), a record no declaration in scope
+	// describes, and any graph reaching a type with no per-type cascade -- an OS handle, or a base-struct-less
+	// generic instance. Containers, records with managed fields, unions with managed payloads and values held
+	// at an interface type all cross. A value sent at its own type and widened at the send is refused here like
+	// any record; one already held at an interface type is walked through the conformer its witness names at
+	// run time, so a conformer no walk can be built for aborts the same way (exit 96) instead.
 	semanticServiceArgumentNotUnique = "E3138"
 
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
@@ -1632,13 +1633,12 @@ export enum ErrorCode
 
 	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
 	// cannot carry back to a sender.
-	// A reply resolves through a CELL -- a green thread that never runs -- and a cell carries exactly TWO
-	// words: the value, and one error word.
+	// A reply resolves through a CELL -- a green thread that never runs -- and a cell carries the value, one
+	// error word, and the witness half of a value held at an interface type.
 	// The VALUE word is one machine word the awaiter reads back verbatim, so it holds what a green thread's
-	// result register holds: an integer, a `bool`, a `String`, a struct, a service handle. A `float` comes
-	// back in a floating-point register the cell has no slot for; a value held at an interface type or an
-	// opaque type parameter is a pair whose second half is released through a companion the cell does not
-	// carry.
+	// result register holds: an integer, a `bool`, a `String`, a struct, a service handle, or the value half
+	// of an interface-typed value. A `float` comes back in a floating-point register the cell has no slot for;
+	// an opaque type parameter is released through a companion the cell does not carry.
 	// The ERROR word holds the FUSED ORDINAL of a two-member dispatch line -- `ServiceError` (what the
 	// transport can fail with, whatever the message declares) beneath the message's own error type -- which
 	// is what lets `match e` tell a stopped service apart from a handler that threw, using the same

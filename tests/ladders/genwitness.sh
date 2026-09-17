@@ -32,7 +32,7 @@
 #
 # ⚠ **`inert` PRODUCES ZERO RELOCATIONS, AND THAT IS MEASURED RATHER THAN INTENDED.** A witness table
 # does not survive a program that never dispatches through it: the bool-param probe below is REFUSED
-# under `dispatch` (naming `__witness_P000000.Digest'+24`) and compiles CLEAN under `inert`, which is the
+# under `dispatch` (naming `__witness_P000000.Digest'+40`) and compiles CLEAN under `inert`, which is the
 # reloc list reading empty. So `inert` is a control for the whole path and NOT a way to price the two
 # per-reloc walks with the per-call-site emitters held out — to move relocs without moving call sites,
 # turn the `<methods>` knob under `dispatch` instead. (This also means the two walks can never meet a
@@ -43,7 +43,7 @@
 # or an `ExitCode` parameter on an indirectly-reachable callee is refused at compile time by
 # `requireIndirectlyReachableParamsAreMachineWords`. That refusal doubles as the cheapest way to CONFIRM
 # the ladder is reaching the path at all: change one `other int` below to `other bool`, build
-# `--target=wasm32-wasi`, and read the slot the diagnostic names — `__witness_P0.Digest'+32` is one blob
+# `--target=wasm32-wasi`, and read the slot the diagnostic names — `__witness_P0.Digest'+48` is one blob
 # per conformer with a slot per method, which is the reloc count this generator claims.
 #
 # ⚠ Nothing here calls an opaque `scaleOpaque` the way most ladders do. It does not need one: a witness

@@ -536,7 +536,7 @@ end 'builtStructBox'
 // a folded constant is concrete, and a nested factory returning an interface is refused before an initializer
 // reaches here (`Parser.nestedFactoryReturnRefusal`), so no value already held at an interface arrives.
 function storeWidenedWitness(fn SynthesizedFunction, box ValueId, offset ByteOffset, value ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, declFilePath FilePath, range SourceRange)
-	fn.recordExistentialFieldStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, line: range.line, column: range.column, filePath: declFilePath))
+	fn.recordExistentialFieldStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, place: ExistentialStorePlace.structField, line: range.line, column: range.column, filePath: declFilePath))
 
 	let witness = fn.mintOfType(MaxonType.integer)
 	fn.emit(MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), range: range)
@@ -787,6 +787,29 @@ export type SynthesizedFunction
 		self.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
 		return addr
 	end 'emitSlotAddr'
+
+	// Pair a value held at an interface type with the value holding its witness half —
+	// `Parser.pairInterfaceWitness`'s twin over this carrier's function, whose column the lowering reads
+	// (`LowerMaxonToStd.pairedWitnessOf`).
+	export function pairWitness(value ValueId, witness ValueId)
+		while self.func.valueWitnessIds.count() <= value 'growToReachIt'
+			self.func.valueWitnessIds.push(0)
+		end 'growToReachIt'
+
+		try self.func.valueWitnessIds.set(value, value: witness) otherwise panic("SynthesizedFunction.pairWitness: value v{value} has no witness slot after the column was grown to reach it")
+	end 'pairWitness'
+
+	// The witness half paired with `value`. Unpaired is a synthesis invariant break, for
+	// `Parser.witnessOfValue`'s reason.
+	export function witnessOf(value ValueId) returns ValueId
+		let witness = try self.func.valueWitnessIds.get(value) otherwise 0 as ValueId
+
+		if witness == 0 'unpaired'
+			panic("SynthesizedFunction.witnessOf: v{value} in '{String.from(self.func.name)}' is held at an interface type with no witness half paired — every producer of one pairs it where it mints it")
+		end 'unpaired'
+
+		return witness
+	end 'witnessOf'
 
 	export function recordExistentialFieldStore(store ExistentialFieldStore)
 		self.func.existentialFieldStores = writableExistentialFieldStores(self.func.existentialFieldStores)

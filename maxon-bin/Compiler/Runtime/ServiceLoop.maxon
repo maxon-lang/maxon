@@ -423,13 +423,21 @@ function buildMessageArm(fn SynthesizedFunction, project Project, signatures Pro
 	args.push(ServiceStateParam)
 	var payloadClasses = PayloadClassArray.create()
 
-	for slot in 0 upto decl.paramTypes.count() 'eachParam'
-		let field = try payloads.get(slot) otherwise panic("buildMessageArm: `{String.from(request.name)}`'s variant `{String.from(request.caseNameAt(caseIndex))}` declares {payloads.count()} payload(s) against `{String.from(callee)}`'s {decl.paramTypes.count()} parameter(s) — `ServiceCompanions.serviceRequestPayloads` builds one payload per parameter, plus a trailing reply slot")
+	for param in 0 upto decl.paramTypes.count() 'eachParam'
+		let slot = serviceParamPayloadSlot(payloads, paramIndex: param)
+		let field = try payloads.get(slot) otherwise panic("buildMessageArm: `serviceParamPayloadSlot` answered slot {slot} of a variant holding {payloads.count()} payload(s)")
 		let declared = signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())
 		let class = classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: declared, slotScopeFilePath: request.declFilePath)
 		payloadClasses.push(class)
 		let loaded = fn.mintOfType(payloadValueTypeOf(class, declared: declared))
 		fn.emit(MaxonOp.loadIndirect(loaded, addr: req, offset: request.payloadSlotOffset(slot), valueType: payloadStorageOf(class)), range: range)
+
+		if payloadClassIsExistential(class) 'andItsWitnessHalf'
+			let witness = fn.mintOfType(MaxonType.integer)
+			fn.emit(MaxonOp.loadIndirect(witness, addr: req, offset: request.payloadSlotOffset(slot) + InterfaceWitnessHalfOffset, valueType: MaxonType.integer), range: range)
+			fn.pairWitness(loaded, witness: witness)
+		end 'andItsWitnessHalf'
+
 		args.push(loaded)
 	end 'eachParam'
 
@@ -548,7 +556,16 @@ function emitServiceHandlerCall(fn SynthesizedFunction, callee ByteArray, return
 	end 'n'
 
 	if not throwsClauseIsThrowing(signatures.throwsOf(callee)) 'nonThrowing'
-		return ServiceHandlerOutcome.answered(fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range))
+		let answered = fn.emitPositionalCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
+
+		// A handler returning an interface-typed value hands its witness half back in the secondary return
+		// register, which the lowering captures into the paired value (`LowerMaxonToStd.appendDirectCall`). Such
+		// a declaration cannot also throw, so only this edge mints one.
+		if resultTag == ValueTypeTag.interfaceRef 'aFatPointer'
+			fn.pairWitness(answered, witness: fn.mintOfType(MaxonType.integer))
+		end 'aFatPointer'
+
+		return ServiceHandlerOutcome.answered(answered)
 	end 'nonThrowing'
 
 	let result = fn.mint(resultTag, nameId: resultNameId)
@@ -631,21 +648,43 @@ end 'publishAnsweredReply'
 function publishReplyValue(fn SynthesizedFunction, project Project, signatures ProgramSignatures, callee ByteArray, replyType MaxonType, result ValueId, reply ServiceReplyTarget, threw ValueId, range SourceRange)
 	match replyTransferWalk(signatures, replyType: replyType, declFilePath: signatures.recordedReturnDeclFileOf(callee)) 'graph'
 		closed then break 'graph'
-		walkedBy(walk) then emitReplyGraphWalk(fn, walk: walk, result: result, range: range)
+		walkedBy(walk) then emitReplyGraphWalk(fn, walk: walk, walked: argsOf(result), range: range)
 		walkedAlone(walk) then fn.emitPositionalCallDiscarding(walk, args: argsOf(result), range: range)
+		walkedThroughWitness(entry) then emitReplyGraphWalk(fn, walk: entry, walked: twoArgs(fn.witnessOf(result), second: result), range: range)
 		refused(noun) then requireReplyAlreadyRefused(project, callee: callee, noun: noun)
 	end 'graph'
+
+	if maxonTypeTag(replyType) == ValueTypeTag.interfaceRef 'aFatPointer'
+		storeReplyWitness(fn, reply: reply, witness: fn.witnessOf(result), range: range)
+	end 'aFatPointer'
 
 	completeServiceReply(fn, reply: reply, result: result, threw: threw, range: range)
 end 'publishReplyValue'
 
-// `walk(result, NoVisitTable)` threads one visit table through the reply's graph, so a record two of its paths
+// `walk(walked…, NoVisitTable)` threads one visit table through the reply's graph, so a record two of its paths
 // reach is walked once, and `__mm_walk_settle` then aborts on an owner the graph does not hold and frees the table.
-function emitReplyGraphWalk(fn SynthesizedFunction, walk ByteArray, result ValueId, range SourceRange)
-	let noVisits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range)
-	let visits = fn.emitPositionalCall(walk, args: pairArgs(result, second: noVisits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+// `walked` is the reply, preceded by its witness half when the walk reads one.
+function emitReplyGraphWalk(fn SynthesizedFunction, walk ByteArray, walked ValueIdArray, range SourceRange)
+	var args = ValueIdArray.create()
+
+	for value in walked 'eachWalked'
+		args.push(value)
+	end 'eachWalked'
+
+	args.push(fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, range: range))
+	let visits = fn.emitPositionalCall(walk, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), range: range)
 end 'emitReplyGraphWalk'
+
+// ⭐ **A REPLY HELD AT AN INTERFACE TYPE CARRIES ITS WITNESS HALF IN A THIRD WORD OF THE CELL**
+// (`GtRuntime.GtOffReplyWitness`), written before `__gt_cell_complete` publishes the other two because the
+// awaiter reads it once `completed` is visible (`GtRuntime.GtReplyWitnessName`).
+function storeReplyWitness(fn SynthesizedFunction, reply ServiceReplyTarget, witness ValueId, range SourceRange)
+	match reply 'r'
+		fireAndForget then panic("storeReplyWitness: a message returning a value has no reply cell — `serviceMessageHasAReply` gives every value-returning message one")
+		cell(value) then fn.emit(MaxonOp.storeIndirect(value, offset: GtOffReplyWitness as ByteOffset, value: witness, valueType: MaxonType.integer), range: range)
+	end 'r'
+end 'storeReplyWitness'
 
 function requireReplyAlreadyRefused(project Project, callee ByteArray, noun String)
 	if not projectHasErrors(project) 'refusedNowhere'
@@ -690,19 +729,25 @@ end 'emitFusedHandlerFlag'
 function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, range SourceRange)
 	let payloads = request.payloadsAt(caseIndex)
 
-	for slot in 0 upto classes.count() 'eachPayload'
-		let class = try classes.get(slot) otherwise panic("dropUnconsumedPayloads: classes.get OOB at {slot} — one class is pushed per loaded payload")
+	for param in 0 upto classes.count() 'eachPayload'
+		let class = try classes.get(param) otherwise panic("dropUnconsumedPayloads: classes.get OOB at {param} — one class is pushed per loaded parameter")
 
 		if not payloadClassIsManaged(class) 'ownsNoHeap'
 			continue
 		end 'ownsNoHeap'
 
-		if signatures.paramIsConsumed(callee, index: (slot + ServiceReceiverArgCount) as ParamCount) 'theHandlerTookIt'
+		if signatures.paramIsConsumed(callee, index: (param + ServiceReceiverArgCount) as ParamCount) 'theHandlerTookIt'
 			continue
 		end 'theHandlerTookIt'
 
-		let field = try payloads.get(slot) otherwise panic("dropUnconsumedPayloads: payloads.get OOB at {slot} — one class was pushed per payload read out of this same list")
-		let loaded = try args.get(slot + ServiceReceiverArgCount) otherwise panic("dropUnconsumedPayloads: args.get OOB at {slot + ServiceReceiverArgCount} — `args` holds the receiver followed by one value per payload")
+		let loaded = try args.get(param + ServiceReceiverArgCount) otherwise panic("dropUnconsumedPayloads: args.get OOB at {param + ServiceReceiverArgCount} — `args` holds the receiver followed by one value per parameter")
+
+		if payloadClassIsExistential(class) 'aFatPointer'
+			fn.emitPositionalCallDiscarding(DropExistentialName, args: twoArgs(fn.witnessOf(loaded), second: loaded), range: range)
+			continue
+		end 'aFatPointer'
+
+		let field = try payloads.get(serviceParamPayloadSlot(payloads, paramIndex: param)) otherwise panic("dropUnconsumedPayloads: `serviceParamPayloadSlot` answered a slot past the variant's payloads")
 		fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())), args: argsOf(loaded), range: range)
 	end 'eachPayload'
 end 'dropUnconsumedPayloads'

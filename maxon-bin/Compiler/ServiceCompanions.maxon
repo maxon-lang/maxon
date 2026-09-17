@@ -401,7 +401,8 @@ function replyGraphRefusalOfType(signatures ProgramSignatures, replyType MaxonTy
 	match replyTransferWalk(signatures, replyType: replyType, declFilePath: declFilePath) 'graph'
 		closed or
 			walkedBy or
-			walkedAlone then throw MapError.keyNotFound
+			walkedAlone or
+			walkedThroughWitness then throw MapError.keyNotFound
 		refused(noun) then return noun
 	end 'graph'
 end 'replyGraphRefusalOfType'
@@ -434,7 +435,12 @@ function uncarriableReplyNounOfType(resolved MaxonType) returns String
 		return ""
 	end 'fitsTheWord'
 
-	return "a reply whose value is {maxonTypeTag(resolved).name}, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and a value held at an interface type or an opaque type parameter is released through a companion the cell does not carry"
+	// Its witness half rides the cell's third word (`GtRuntime.GtOffReplyWitness`).
+	if maxonTypeTag(resolved) == ValueTypeTag.interfaceRef 'aFatPointer'
+		return ""
+	end 'aFatPointer'
+
+	return "a reply whose value is {maxonTypeTag(resolved).name}, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and an opaque type parameter is released through a companion the cell does not carry"
 end 'uncarriableReplyNounOfType'
 
 // The ERROR word. It holds the FUSED ORDINAL of the reply's two-member dispatch line, so a payload-carrying
@@ -481,18 +487,19 @@ end 'serviceReturnedType'
 //     a wait token whose completer is scheduled on the first (`E3100` linear await keys on the binding);
 //   • a **function value** is a bare code pointer, and a CAPTURING one reaches its environment block —
 //     which is `shared`, i.e. a box with a second referent by construction (P1.5 escape);
-//   • an **interface value** is a fat pointer whose witness half is `.rdata` and whose value half is
-//     released through `__drop_existential`; the request union's payload cascade cannot express the pair;
 //   • an **opaque type parameter** has no layout at the send, so the sender cannot know whether it is even
 //     managed — nor does an `Array with T` or any other instance whose arguments still name one.
 //
+// A value held at an interface type crosses: its request payload carries the witness half in the slot after
+// it (`serviceRequestPayloads`), and it is walked through that witness before the send.
+//
 // ⚠ **IT IS ASKED OF THE RESOLVED TYPE.** A parameter written `Promise with (int, E)` is recorded by the
 // sweep as a bare `named` naming its alias, so testing the swept type directly would let every aliased
-// spelling through. `declaredSlotType` is the one door that resolves a swept slot type, and it is the same
+// spelling through. `serviceParamSlotType` is the one door that resolves a message parameter, and it is the
 // door the payload build uses — so the check and the payload cannot come to disagree about what a parameter
 // is.
 function untransferableParameterNoun(signatures ProgramSignatures, declared MaxonType, declFilePath FilePath) returns String
-	let resolved = signatures.declaredSlotType(declared, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
+	let resolved = serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: declFilePath)
 
 	if typeIsPromiseStorage(signatures, t: resolved) 'aPromise'
 		return PromiseParameterNoun
@@ -500,7 +507,6 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 
 	match maxonTypeTag(resolved) 'tag'
 		function then return "a function value, whose captured environment is a box a second thread would share"
-		interfaceRef then return InterfaceParameterNoun
 
 		// ⭐⭐ **THE ASYMMETRY A GENERIC SERVICE IS BUILT ON: a `T` RETURN IS LEGAL AND A `T` PARAMETER IS
 		// NOT.** The reply is produced inside the handler, where the instance's descriptor says what `T` is;
@@ -508,18 +514,11 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 		// tell that site whether what it is handing over owns heap at all.
 		typeParameter then return TypeParameterParameterNoun
 
-		// ⭐⭐ **A BARE `named` MAY STILL BE AN INTERFACE, AND THIS IS WHERE THAT IS ASKED (MEASURED).**
-		// `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an interface —
-		// but only in a struct's FIELD column and in the RETURN column, never in `OverloadedDecl.paramTypes`.
-		// `declaredSlotType` does not close the gap either: its `interfaceType` arm deliberately THROWS (see
-		// `denotedSlotType`, which argues that arm must stay a throw), so a parameter written `s Shape`
-		// arrives here as `named` and was silently accepted. Measured on a two-declaration program before this
-		// arm: `export function measure(s Shape)` on a spawned type compiled straight through to the wave-3
-		// E2015 with no transferability finding at all.
-		named then return declaredInterfaceParameterNoun(signatures, resolved: resolved)
-
-		// Every remaining tag names a value with a layout the send site knows: a scalar, an exit code, a struct
-		// box, a String, a container instance, a character. Each crosses.
+		// Every remaining tag names a value with a layout the send site knows: a scalar, an exit code, an enum, a
+		// struct box, a String, a container instance, a character, a value held at an interface type. Each
+		// crosses.
+		named or
+			interfaceRef then return ""
 		boolean or
 			integer or
 			float then return ""
@@ -542,11 +541,6 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 	end 'tag'
 end 'untransferableParameterNoun'
 
-// The noun for a value held at an interface type — one string, because the three arms that reach that verdict
-// (an `interfaceRef` the parse minted, a bare `named` the sweep left, and `ProgramSignatures.transferWalkOf`'s
-// existential arm) are one finding about one shape.
-module let InterfaceParameterNoun = "a value held at an interface type, which is a fat pointer released through a witness the request union cannot carry"
-
 // ⭐⭐ **THE PROMISE NOUN, SHARED BY THE DECLARATION RULE AND THE VALUE RULE — AND IT IS THE ONE NOUN THAT
 // NEEDED TO BE SHARED.** Every other untransferable shape is refused at the message's DECLARATION and can
 // never be an argument to an accepted one, because its TYPE would not match. A Promise is the exception:
@@ -555,7 +549,7 @@ module let InterfaceParameterNoun = "a value held at an interface type, which is
 module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
 
 // ⭐ **THE OPAQUE-LAYOUT NOUN, shared by the bare `T` and by any instance whose arguments still name one** —
-// one finding about one shape, exactly as `InterfaceParameterNoun` is.
+// one finding about one shape.
 let TypeParameterParameterNoun = "an opaque type parameter, whose layout is not known at the send"
 
 // ⭐ **THE WORDS FOR A VALUE WHOSE TYPE MAY NOT CROSS, refused at the SEND rather than at the declaration.**
@@ -565,16 +559,56 @@ module function serviceUntransferableValueMessage(blame String, noun String) ret
 	return "{blame} is {noun}, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message"
 end 'serviceUntransferableValueMessage'
 
-// Does this bare `named` name a declared INTERFACE? Asked of the same registry the field/return normalization
-// asks (`ProgramSignatures.declaredFormOf` reads `interfaces`), so a parameter and a field of one interface
-// type cannot come to different answers.
-//
-// A name no registry declares is E3011 at the declaration itself and is not this check's finding.
-function declaredInterfaceParameterNoun(signatures ProgramSignatures, resolved MaxonType) returns String
-	let name = serviceIndexTypeName(signatures, id: typeNameIdOf(resolved))
-	let form = try signatures.declaredFormInAnyFile(name) otherwise return ""
-	return InterfaceParameterNoun if form == TypeDeclKind.interfaceType else ""
-end 'declaredInterfaceParameterNoun'
+// ⭐⭐ **A MESSAGE PARAMETER'S DECLARED TYPE, RESOLVED — the one door the roster's rule and the request
+// payload both read.** `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an
+// interface in a struct's FIELD column and in the RETURN column, never in `OverloadedDecl.paramTypes`, and
+// `declaredSlotType`'s `interfaceType` arm deliberately THROWS (see `denotedSlotType`) — so a parameter written
+// `s Shape` arrives as a bare `named` and is re-tagged here through that normalization's own test.
+function serviceParamSlotType(signatures ProgramSignatures, declared MaxonType, into TypeNameInterner, declFilePath FilePath) returns MaxonType
+	if let asInterface = try signatures.sweptInterfaceTypeOf(declared, readerFilePath: declFilePath) 'namesAnInterface'
+		return signatures.adoptType(asInterface, into: into)
+	end 'namesAnInterface'
+
+	return signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath)
+end 'serviceParamSlotType'
+
+// ⭐⭐ **THE WITNESS HALF OF AN INTERFACE-TYPED MESSAGE ARGUMENT RIDES THE PAYLOAD SLOT AFTER IT.** A payload
+// slot is one machine word and a fat pointer is two, so the request union gives such a parameter a second,
+// compiler-filled slot immediately after its own — adjacent, so every reader reaches it as a struct field's
+// witness is reached (`IrInterface.InterfaceWitnessHalfOffset`), the drop and the walk cascades included. It
+// is named, as the reply slot is, because three readers skip it by that test.
+function serviceWitnessHalfSlotName(paramName ByteArray) returns ByteArray
+	return "{String.from(ServiceWitnessHalfSlotPrefix)}{String.from(paramName)}".toByteArray()
+end 'serviceWitnessHalfSlotName'
+
+let ServiceWitnessHalfSlotPrefix = b"__witness_"
+
+module function fieldIsAServiceWitnessHalf(field PayloadField) returns bool
+	return bytesStartWith(field.name, prefix: ServiceWitnessHalfSlotPrefix)
+end 'fieldIsAServiceWitnessHalf'
+
+// ⭐ **THE PAYLOAD SLOT OF A MESSAGE'S PARAMETER `paramIndex`** — its position plus one for every
+// interface-typed parameter before it, whose witness half takes the slot after it. The send slots an
+// argument through it and the loop loads one through it, so the two cannot come to name different slots.
+module function serviceParamPayloadSlot(payloads PayloadFieldArray, paramIndex ParamCount) returns CaseIndex
+	var seen = 0 as ParamCount
+
+	for slot in 0 upto payloads.count() 'eachSlot'
+		let field = try payloads.get(slot) otherwise panic("serviceParamPayloadSlot: payloads.get OOB at {slot} on a list walked to its own count")
+
+		if fieldIsAServiceWitnessHalf(field) 'aWitnessHalf'
+			continue
+		end 'aWitnessHalf'
+
+		if seen == paramIndex 'thisParameter'
+			return slot
+		end 'thisParameter'
+
+		seen = seen + 1
+	end 'eachSlot'
+
+	panic("serviceParamPayloadSlot: a variant of {payloads.count()} payload slot(s) holds no parameter {paramIndex} — `serviceRequestPayloads` gives every declared parameter a slot")
+end 'serviceParamPayloadSlot'
 
 // ⭐⭐ **THE FIRST DECLARATION WEARING A SERVICE KEY — the ONE statement of the invariant that makes every
 // `.get(0)` on this path safe.** `classifyServiceTarget`, `classifyServiceRoster`, `serviceRequestPayloads`
@@ -893,7 +927,13 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
-		payloads.push(PayloadField.create(serviceParamName(decl, index: p), declaredType: signatures.declaredSlotType(declared, into: into, slotScopeFilePath: declFilePath), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+		let paramName = serviceParamName(decl, index: p)
+		let slotType = serviceParamSlotType(signatures, declared: declared, into: into, declFilePath: declFilePath)
+		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+
+		if maxonTypeTag(slotType) == ValueTypeTag.interfaceRef 'aFatPointer'
+			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+		end 'aFatPointer'
 	end 'eachParam'
 
 	if serviceMessageHasAReply(signatures, key: key, decl: decl) 'awaitable'

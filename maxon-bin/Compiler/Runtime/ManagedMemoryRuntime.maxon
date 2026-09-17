@@ -1447,10 +1447,10 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 	end 'eachFunc'
 end 'verifyThrowingAccessorsMatchPredicate'
 
-// ⭐ **WHAT A RECORD-GATED ENTRY DOES ONCE THE WORD IS NON-ZERO** — the one thing its three instances
-// differ in. It rides a union rather than a bool because the two also differ in what they RETURN, and a
-// bool plus a second parameter would be one fact spelled twice.
-union RecordGatedAction
+// ⭐ **WHAT A RECORD-GATED ENTRY DOES ONCE THE WORD IS NON-ZERO** — the one thing its instances differ in. It
+// rides a union rather than a bool because the actions also differ in what they take and RETURN, and a bool
+// plus a second parameter would be one fact spelled twice.
+module union RecordGatedAction
 	// DESTROY `value` through the loaded word with a `callIndirect` — `__drop_type_param`,
 	// `__drop_existential`. A void `(i64, i64) -> void`, so the taken path falls into the shared exit.
 	destroyThroughWord
@@ -1462,6 +1462,11 @@ union RecordGatedAction
 	// `IrInterface.WitnessRetainFuncOffset`) and the caller must store what it was given, not what it gave.
 	// The inert path answers `value` itself, so a scalar conformer passes through unchanged.
 	retainThroughWord
+
+	// WALK `value` through the loaded word, handing it the visit table — `__mm_sole_existential`,
+	// `__mm_share_existential`. A `(i64, i64, i64) -> i64` answering the table the walk handed back; the inert
+	// path answers the table it was given.
+	walkThroughWord
 end 'RecordGatedAction'
 
 // ⭐⭐ **`<symbolName>(record, value)` — THE SINGLE-VALUE ANALOGUE of the managed-element destroy gate
@@ -1469,7 +1474,7 @@ end 'RecordGatedAction'
 // is non-zero, act on `value` as `action` says; a zero word is inert. `value` is a LIVE owner (or a live
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
-// **FOUR ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+// **SIX ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
 //   • `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
@@ -1486,23 +1491,33 @@ end 'RecordGatedAction'
 //     record over: a shared generic body taking the reference a record it BUILDS owes on a borrowed opaque
 //     `T`. The record is the LAYOUT DESCRIPTOR and the word is `retainFunc@64`, filled from the same
 //     `ExistentialOwnershipProtocol` the witness pair is (`retainCalleeForProtocol`).
+//   • `__mm_sole_existential(witness, value, visits) -> visits` / `__mm_share_existential(…)` — a value held
+//     at an interface type walked before it crosses to another green thread, through the table's
+//     `soleWalkFunc@24` / `shareWalkFunc@32`.
 //
-// All four are "a per-type fact nobody can name statically, read out of a record at run time", so one
-// emitter builds all four: the element-destructor ABI (`emitElementDestructorCall`) and the
+// All six are "a per-type fact nobody can name statically, read out of a record at run time", so one
+// emitter builds all six: the element-destructor ABI (`emitElementDestructorCall`) and the
 // zero-means-nothing-to-do convention are then stated once and cannot drift between them.
 //
-// ⚠ **THE RETAIN'S TAKEN PATH RETURNS FROM `doact` RATHER THAN FALLING INTO `done`**, so the two exits are
-// two `ret` terminators and no block-arg join is needed: `done` answers the value it was handed and `doact`
-// answers what the word handed back, which for a byte-record conformer is a DIFFERENT record.
-function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffset ByteOffset, action RecordGatedAction)
-	var func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
+// ⚠ **THE RETAIN'S AND THE WALK'S TAKEN PATHS RETURN FROM `doact` RATHER THAN FALLING INTO `done`**, so the two
+// exits are two `ret` terminators and no block-arg join is needed: `done` answers what it was handed and
+// `doact` answers what the word handed back.
+module function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffset ByteOffset, action RecordGatedAction)
+	let paramCount = recordGatedParamCount(action)
+	var paramTypes = StdTypeArray.create()
+
+	for _ in 0 upto paramCount 'eachParam'
+		paramTypes.push(StdType.i64)
+	end 'eachParam'
+
+	var func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var doAct = module.addBlock(func, label: b"doact", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: paramCount)
 	let record = 0 as ValueId
 	let value = 1 as ValueId
 
@@ -1514,11 +1529,15 @@ function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffs
 
 	match action 'act'
 		destroyThroughWord then emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: word, value: value, ids: ids)
-		retainThroughWord then emitRecordGatedRetainTail(module, doAct: doAct, done: done, word: word, value: value, ids: ids)
+		retainThroughWord then emitRecordGatedAnsweringTail(module, doAct: doAct, done: done, word: word, args: argsOf(value), inert: value, ids: ids)
+		walkThroughWord then emitRecordGatedAnsweringTail(module, doAct: doAct, done: done, word: word, args: twoArgs(value, second: RecordGatedVisitsParam), inert: RecordGatedVisitsParam, ids: ids)
 	end 'act'
 
 	module.functions.push(func)
 end 'buildRecordGatedAction'
+
+// The visit table a `walkThroughWord` entry is handed, after the record and the value.
+let RecordGatedVisitsParam = 2 as ValueId
 
 // The DESTROY tail: `callIndirect` the word on `value` for its effect, then fall into the shared VOID exit —
 // so the inert path and the taken path leave through one `retVoid`.
@@ -1528,26 +1547,34 @@ function emitRecordGatedDestroyTail(module StdModule, doAct IrBlock, done IrBloc
 	module.setTerminator(done, op: StdOp.retVoid)
 end 'emitRecordGatedDestroyTail'
 
-// The RETAIN tail: `callIndirect` the word on `value` and RETURN WHAT IT ANSWERED, which for a byte-record
-// conformer is a fresh `__str_clone` record rather than `value` itself. The two paths therefore return
-// DIFFERENT values and each terminates with its own `ret` — a join block-arg would say the same thing with a
-// phi the backend would only coalesce away.
-function emitRecordGatedRetainTail(module StdModule, doAct IrBlock, done IrBlock, word ValueId, value ValueId, ids ValueMinter)
+// The ANSWERING tail: `callIndirect` the word on `args` and RETURN WHAT IT ANSWERED, which for a retain of a
+// byte-record conformer is a fresh `__str_clone` record rather than `value` itself, and for a walk is the visit
+// table it grew. The inert path answers `inert`. The two paths return DIFFERENT values and each terminates with
+// its own `ret` — a join block-arg would say the same thing with a phi the backend would only coalesce away.
+function emitRecordGatedAnsweringTail(module StdModule, doAct IrBlock, done IrBlock, word ValueId, args ValueIdArray, inert ValueId, ids ValueMinter)
 	let taken = ids.mint()
-	module.appendOp(doAct, op: StdOp.callIndirect(taken, calleeReg: word, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(value)))
+	module.appendOp(doAct, op: StdOp.callIndirect(taken, calleeReg: word, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: args))
 	module.setTerminator(doAct, op: StdOp.ret(taken))
-	module.setTerminator(done, op: StdOp.ret(value))
-end 'emitRecordGatedRetainTail'
+	module.setTerminator(done, op: StdOp.ret(inert))
+end 'emitRecordGatedAnsweringTail'
 
-// The Std return type each action's entry declares — void for a destroy, the pointer for a retain. Split
-// out because `IrFunction.createFromStd` needs it before the body's `match` runs, and one `match` per
-// question keeps the arms exhaustive rather than a bool threaded through two.
+// The Std return type each action's entry declares — void for a destroy, the answered word for a retain and a
+// walk. Split out because `IrFunction.createFromStd` needs it before the body's `match` runs.
 function recordGatedReturnType(action RecordGatedAction) returns StdReturnType
 	return match action 'a'
 		destroyThroughWord gives StdReturnType.void
-		retainThroughWord gives StdReturnType.value(StdType.i64)
+		retainThroughWord or
+			walkThroughWord gives StdReturnType.value(StdType.i64)
 	end 'a'
 end 'recordGatedReturnType'
+
+function recordGatedParamCount(action RecordGatedAction) returns ParamCount
+	return match action 'a'
+		destroyThroughWord or
+			retainThroughWord gives 2 as ParamCount
+		walkThroughWord gives 3 as ParamCount
+	end 'a'
+end 'recordGatedParamCount'
 
 // --- The range builders: the runtime-polymorphic element_size lives HERE ---
 //
