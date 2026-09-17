@@ -85,6 +85,22 @@ export function runBuiltExample(example String, arguments StringArray = StringAr
 	return runBuilt(exampleStem(example), spelling: exampleSpelling(example), arguments: arguments)
 end 'runBuiltExample'
 
+// Write `content` at `relativePath` inside `example`'s staging directory, which is the working directory
+// `runBuiltExample` gives the program — so a case hands its fixture to the program by relative path.
+// Called after `requireExampleBuild`, which clears what a previous run staged.
+export function stageExampleFile(example String, relativePath String, content String) returns FilePath
+	let staged = stagingDir(exampleStem(example)).join(relativePath)
+	let parent = try staged.parent() otherwise panic("examples tests: the gate could not run — '{relativePath}' names no file under a staging directory.")
+
+	if not Directory.create(parent) 'couldNotCreate'
+		panic("examples tests: the gate could not run — could not create {parent.toString()}, where a fixture file is staged.")
+	end 'couldNotCreate'
+
+	try File.writeText(staged, content: content) otherwise panic("examples tests: the gate could not run — could not stage {staged.toString()}.")
+
+	return staged
+end 'stageExampleFile'
+
 // Build an example and run it once.
 export function runExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun throws TestFailure
 	try requireExampleBuild(example)

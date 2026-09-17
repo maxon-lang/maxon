@@ -1,0 +1,800 @@
+typealias LineNumber = int(1 to u64.max)
+typealias MatchCount = int(0 to u64.max)
+typealias FileCount = int(0 to u64.max)
+typealias WorkerCount = int(1 to 256)
+typealias BufferPos = int(0 to u64.max)
+typealias PieceIndex = int(0 to u64.max)
+
+typealias PathArray = Array with FilePath
+typealias NameSet = Set with String
+typealias PieceArray = Array with Piece
+typealias LineMatchArray = Array with LineMatch
+typealias ByteMembership = Vector with 256 bool
+typealias ByteFold = function(Byte) returns Byte
+typealias WalkPromise = Promise with (PathArray, WalkError)
+typealias WalkPromiseArray = Array with WalkPromise
+typealias SearcherArray = Array with Searcher.handle
+typealias ReportPromise = Promise with (FileReport, Searcher.search.errors)
+typealias ReportPromiseArray = Array with ReportPromise
+
+let programPathArgument = 0
+let firstLineNumber = 1
+let fewestWorkers = 1
+let mostWorkers = 256
+let nanosPerMillisecond = 1000000
+let jobsOptionPrefix = "--jobs="
+let standardInputLabel = "(standard input)"
+let skippedDirectoryNames = NameSet from [".git", "node_modules", ".maxon"]
+
+enum ControlByte
+	nul = 0x00
+	newline = 0x0A
+end 'ControlByte'
+
+enum Outcome
+	selected = 0
+	nothingSelected = 1
+	troubled = 2
+end 'Outcome'
+
+enum Flag
+	ignoreCase = "-i"
+	invertMatch = "-v"
+	lineNumbers = "-n"
+	countOnly = "-c"
+	filesWithMatches = "-l"
+	fixedString = "-F"
+	stats = "--stats"
+	endOfFlags = "--"
+
+	function summary() returns String
+		return match self 'describe'
+			ignoreCase gives "ignore ASCII letter case"
+			invertMatch gives "select the lines that do not match"
+			lineNumbers gives "put the line number before each line"
+			countOnly gives "print how many lines each file selected"
+			filesWithMatches gives "print only the name of each file with a selected line"
+			fixedString gives "treat PATTERN as plain text, not a regular expression"
+			stats gives "report files, selected lines, workers and time on standard error"
+			endOfFlags gives "end the flags, so PATTERN may start with -"
+		end 'describe'
+	end 'summary'
+end 'Flag'
+
+enum UsageError implements Error
+	unknownFlag
+	missingPattern
+	invalidJobs
+	invalidPath
+
+	function message() returns String
+		return match self 'describe'
+			unknownFlag gives "unknown flag"
+			missingPattern gives "no PATTERN given"
+			invalidJobs gives "--jobs needs a whole number from {fewestWorkers} to {mostWorkers}"
+			invalidPath gives "a PATH holds a character this system forbids in paths"
+		end 'describe'
+	end 'message'
+end 'UsageError'
+
+type Options
+	export var pattern as String = ""
+	export var paths as PathArray = PathArray.create()
+	export var jobs as WorkerCount = fewestWorkers
+	export var ignoreCase = false
+	export var invertMatch = false
+	export var lineNumbers = false
+	export var countOnly = false
+	export var filesWithMatches = false
+	export var fixedString = false
+	export var stats = false
+
+	static function parse(args StringArray) returns Options throws UsageError
+		var options = Self{jobs: availableWorkers()}
+		var patternSeen = false
+		var flagsEnded = false
+
+		for (argument, text) in args.withIterator() 'eachArgument'
+			if argument.index() == programPathArgument 'programPath'
+				continue
+			end 'programPath'
+
+			if patternSeen 'everyArgumentAfterThePatternIsAPath'
+				options.paths.push(try FilePath.from(text) otherwise throw UsageError.invalidPath)
+			end 'everyArgumentAfterThePatternIsAPath' else if flagsEnded or not text.startsWith("-") 'theFirstArgumentThatIsNotAFlagIsThePattern'
+				options.pattern = text
+				patternSeen = true
+			end 'theFirstArgumentThatIsNotAFlagIsThePattern' else if text.startsWith(jobsOptionPrefix) 'jobsOption'
+				options.jobs = try parseJobs(text)
+			end 'jobsOption' else 'namedFlag'
+				let flag = try Flag.fromRawValue(text) otherwise throw UsageError.unknownFlag
+
+				match flag 'apply'
+					ignoreCase then options.ignoreCase = true
+					invertMatch then options.invertMatch = true
+					lineNumbers then options.lineNumbers = true
+					countOnly then options.countOnly = true
+					filesWithMatches then options.filesWithMatches = true
+					fixedString then options.fixedString = true
+					stats then options.stats = true
+					endOfFlags then flagsEnded = true
+				end 'apply'
+			end 'namedFlag'
+		end 'eachArgument'
+
+		if not patternSeen 'noPattern'
+			throw UsageError.missingPattern
+		end 'noPattern'
+
+		return options
+	end 'parse'
+
+	static function parseJobs(argument String) returns WorkerCount throws UsageError
+		var requested = 0
+
+		try 'readNumber'
+			requested = int.fromString(CommandLine.optionValue(argument))
+		end 'readNumber' otherwise throws UsageError.invalidJobs
+
+		if requested < fewestWorkers or requested > mostWorkers 'outOfRange'
+			throw UsageError.invalidJobs
+		end 'outOfRange'
+
+		return requested
+	end 'parseJobs'
+
+	static function availableWorkers() returns WorkerCount
+		let processors = Runtime.processorCount()
+		return mostWorkers if processors > mostWorkers else processors
+	end 'availableWorkers'
+
+	function workersFor(fileCount FileCount) returns WorkerCount
+		if fileCount < self.jobs as FileCount 'fewerFiles'
+			return fileCount
+		end 'fewerFiles'
+
+		return self.jobs
+	end 'workersFor'
+
+	function searchRequest() returns SearchRequest
+		return SearchRequest.create(self.pattern, ignoreCase: self.ignoreCase, fixedString: self.fixedString, invertMatch: self.invertMatch, keepsLines: not (self.countOnly or self.filesWithMatches), stopsAtFirstSelection: self.filesWithMatches)
+	end 'searchRequest'
+
+	function outputStyle() returns OutputStyle
+		return OutputStyle.create(namesEachFile(), lineNumbers: self.lineNumbers, countOnly: self.countOnly, filesWithMatches: self.filesWithMatches)
+	end 'outputStyle'
+
+	function namesEachFile() returns bool
+		if self.paths.count() > 1 'severalPaths'
+			return true
+		end 'severalPaths'
+
+		for path in self.paths 'eachPath'
+			if Directory.isDirectory(path) 'directory'
+				return true
+			end 'directory'
+		end 'eachPath'
+
+		return false
+	end 'namesEachFile'
+end 'Options'
+
+type SearchRequest
+	export var pattern as String
+	export var ignoreCase as bool
+	export var fixedString as bool
+	export var invertMatch as bool
+	export var keepsLines as bool
+	export var stopsAtFirstSelection as bool
+
+	static function create(pattern String, ignoreCase bool, fixedString bool, invertMatch bool, keepsLines bool, stopsAtFirstSelection bool) returns Self
+		return Self{pattern: pattern, ignoreCase: ignoreCase, fixedString: fixedString, invertMatch: invertMatch, keepsLines: keepsLines, stopsAtFirstSelection: stopsAtFirstSelection}
+	end 'create'
+end 'SearchRequest'
+
+type OutputStyle
+	export var namesFiles as bool
+	export var lineNumbers as bool
+	export var countOnly as bool
+	export var filesWithMatches as bool
+
+	static function create(namesFiles bool, lineNumbers bool, countOnly bool, filesWithMatches bool) returns Self
+		return Self{namesFiles: namesFiles, lineNumbers: lineNumbers, countOnly: countOnly, filesWithMatches: filesWithMatches}
+	end 'create'
+end 'OutputStyle'
+
+enum PatternError implements Error
+	repeatWithoutAtom
+	unterminatedClass
+	trailingBackslash
+	emptyClass
+	backwardsRange
+
+	function message() returns String
+		return match self 'describe'
+			repeatWithoutAtom gives "*, + or ? has nothing before it to repeat"
+			unterminatedClass gives "[ has no closing ]"
+			trailingBackslash gives "\\ has no character after it"
+			emptyClass gives "[] names no bytes"
+			backwardsRange gives "a range in [] ends below where it starts"
+		end 'describe'
+	end 'message'
+end 'PatternError'
+
+union Atom
+	literal(value Byte)
+	anyByte
+	byteClass(members ByteMembership, negated bool)
+end 'Atom'
+
+enum Repeat
+	once
+	zeroOrMore
+	oneOrMore
+	optional
+end 'Repeat'
+
+type Piece
+	export var atom as Atom
+	export var repeat as Repeat
+
+	static function create(atom Atom, repeat Repeat) returns Self
+		return Self{atom: atom, repeat: repeat}
+	end 'create'
+end 'Piece'
+
+extension int
+	function asciiLowered() returns Byte
+		return match self 'letterCase'
+			'A' to 'Z' gives self - 'A' + 'a'
+			default gives self
+		end 'letterCase'
+	end 'asciiLowered'
+end 'int'
+
+function byteFold(ignoreCase bool) returns ByteFold
+	if ignoreCase 'foldCase'
+		return function(b Byte) gives b.asciiLowered()
+	end 'foldCase'
+
+	return function(b Byte) gives b
+end 'byteFold'
+
+function byteAt(bytes ByteArray, position BufferPos) returns Byte
+	return try bytes.get(position) otherwise panic("byteAt: every caller checks the position against count()")
+end 'byteAt'
+
+function readByte(source ByteArray, at BufferPos) returns (Byte, BufferPos) throws PatternError
+	let symbol = byteAt(source, position: at)
+
+	if symbol != '\\' 'plain'
+		return (symbol, at + 1)
+	end 'plain'
+
+	if at + 1 >= source.count() 'nothingEscaped'
+		throw PatternError.trailingBackslash
+	end 'nothingEscaped'
+
+	return (byteAt(source, position: at + 1), at + 2)
+end 'readByte'
+
+function readAtom(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, BufferPos) throws PatternError
+	match byteAt(source, position: at) 'symbol'
+		'.' then return (Atom.anyByte, at + 1)
+		'[' then return try readClass(source, at: at + 1, fold: fold)
+		'*' or
+			'+' or
+			'?' then throw PatternError.repeatWithoutAtom
+		default then break
+	end 'symbol'
+
+	let (value, next) = try readByte(source, at: at)
+	return (Atom.literal(fold(value)), next)
+end 'readAtom'
+
+function readClass(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, BufferPos) throws PatternError
+	var members = ByteMembership.create()
+	let negated = at < source.count() and byteAt(source, position: at) == '^'
+	var cursor = at + 1 if negated else at
+	var named = false
+
+	while true 'eachMember'
+		if cursor >= source.count() 'unterminated'
+			throw PatternError.unterminatedClass
+		end 'unterminated'
+
+		if byteAt(source, position: cursor) == ']' 'closed'
+			break
+		end 'closed'
+
+		let (first, afterFirst) = try readByte(source, at: cursor)
+		var last = first
+		cursor = afterFirst
+
+		if cursor + 1 < source.count() and byteAt(source, position: cursor) == '-' and byteAt(source, position: cursor + 1) != ']' 'range'
+			(last, cursor) = try readByte(source, at: cursor + 1)
+		end 'range'
+
+		if last < first 'backwards'
+			throw PatternError.backwardsRange
+		end 'backwards'
+
+		for member in first to last 'eachByte'
+			try members.set(fold(member) as ElementIndex, value: true) otherwise panic("readClass: a byte indexes a table of every byte")
+		end 'eachByte'
+
+		named = true
+	end 'eachMember'
+
+	if not named 'empty'
+		throw PatternError.emptyClass
+	end 'empty'
+
+	return (Atom.byteClass(members, negated: negated), cursor + 1)
+end 'readClass'
+
+function readRepeat(source ByteArray, at BufferPos) returns (Repeat, BufferPos)
+	if at >= source.count() 'patternEnd'
+		return (Repeat.once, at)
+	end 'patternEnd'
+
+	return match byteAt(source, position: at) 'symbol'
+		'*' gives (Repeat.zeroOrMore, at + 1)
+		'+' gives (Repeat.oneOrMore, at + 1)
+		'?' gives (Repeat.optional, at + 1)
+		default gives (Repeat.once, at)
+	end 'symbol'
+end 'readRepeat'
+
+interface Matcher
+	function matchesLine(text ByteArray, lineStart BufferPos, lineEnd BufferPos) returns bool
+end 'Matcher'
+
+type FixedMatcher implements Matcher
+	var needle as ByteArray
+	var fold as ByteFold
+
+	static function create(patternText String, fold ByteFold) returns Self
+		var needle = ByteArray.create()
+
+		for b in patternText.bytes() 'eachByte'
+			needle.push(fold(b))
+		end 'eachByte'
+
+		return Self{needle: needle, fold: fold}
+	end 'create'
+
+	function matchesLine(text ByteArray, lineStart BufferPos, lineEnd BufferPos) returns bool
+		let needleLength = self.needle.count()
+
+		if lineStart + needleLength > lineEnd 'lineTooShort'
+			return false
+		end 'lineTooShort'
+
+		for start in lineStart to lineEnd - needleLength 'eachStart'
+			if matchesAt(text, start: start) 'found'
+				return true
+			end 'found'
+		end 'eachStart'
+
+		return false
+	end 'matchesLine'
+
+	function matchesAt(text ByteArray, start BufferPos) returns bool
+		for (position, expected) in self.needle.withIterator() 'eachByte'
+			if self.fold(byteAt(text, position: start + position.index() as BufferPos)) != expected 'differs'
+				return false
+			end 'differs'
+		end 'eachByte'
+
+		return true
+	end 'matchesAt'
+end 'FixedMatcher'
+
+type RegexMatcher implements Matcher
+	var pieces as PieceArray
+	var anchoredAtStart as bool
+	var anchoredAtEnd as bool
+	var fold as ByteFold
+
+	static function compile(patternText String, fold ByteFold) returns Self throws PatternError
+		let source = patternText.toByteArray()
+		var pieces = PieceArray.create()
+		let anchoredAtStart = not source.isEmpty() and byteAt(source, position: 0) == '^'
+		var anchoredAtEnd = false
+		var cursor = 1 if anchoredAtStart else 0
+
+		while cursor < source.count() 'eachPiece'
+			if cursor == source.count() - 1 and byteAt(source, position: cursor) == '$' 'endAnchor'
+				anchoredAtEnd = true
+				break
+			end 'endAnchor'
+
+			let (atom, afterAtom) = try readAtom(source, at: cursor, fold: fold)
+			let (repeat, afterRepeat) = readRepeat(source, at: afterAtom)
+			pieces.push(Piece.create(atom, repeat: repeat))
+			cursor = afterRepeat
+		end 'eachPiece'
+
+		return Self{pieces: pieces, anchoredAtStart: anchoredAtStart, anchoredAtEnd: anchoredAtEnd, fold: fold}
+	end 'compile'
+
+	function matchesLine(text ByteArray, lineStart BufferPos, lineEnd BufferPos) returns bool
+		if self.anchoredAtStart 'anchored'
+			return matchHere(text, at: lineStart, lineEnd: lineEnd, piece: 0)
+		end 'anchored'
+
+		for start in lineStart to lineEnd 'eachStart'
+			if matchHere(text, at: start, lineEnd: lineEnd, piece: 0) 'found'
+				return true
+			end 'found'
+		end 'eachStart'
+
+		return false
+	end 'matchesLine'
+
+	function matchHere(text ByteArray, at BufferPos, lineEnd BufferPos, piece PieceIndex) returns bool
+		if piece == self.pieces.count() 'patternDone'
+			return at == lineEnd or not self.anchoredAtEnd
+		end 'patternDone'
+
+		let current = try self.pieces.get(piece) otherwise panic("matchHere: piece is below the piece count")
+		let next = piece + 1
+
+		return match current.repeat 'repetition'
+			once gives atomMatchesAt(current.atom, text: text, at: at, lineEnd: lineEnd) and matchHere(text, at: at + 1, lineEnd: lineEnd, piece: next)
+			optional gives (atomMatchesAt(current.atom, text: text, at: at, lineEnd: lineEnd) and matchHere(text, at: at + 1, lineEnd: lineEnd, piece: next)) or matchHere(text, at: at, lineEnd: lineEnd, piece: next)
+			zeroOrMore gives matchStar(current.atom, atLeastOnce: false, text: text, at: at, lineEnd: lineEnd, next: next)
+			oneOrMore gives matchStar(current.atom, atLeastOnce: true, text: text, at: at, lineEnd: lineEnd, next: next)
+		end 'repetition'
+	end 'matchHere'
+
+	function matchStar(atom Atom, atLeastOnce bool, text ByteArray, at BufferPos, lineEnd BufferPos, next PieceIndex) returns bool
+		var position = at
+
+		if atLeastOnce 'oneIsRequired'
+			if not atomMatchesAt(atom, text: text, at: position, lineEnd: lineEnd) 'atomMissing'
+				return false
+			end 'atomMissing'
+
+			position = position + 1
+		end 'oneIsRequired'
+
+		var restMatches = matchHere(text, at: position, lineEnd: lineEnd, piece: next)
+
+		while not restMatches and atomMatchesAt(atom, text: text, at: position, lineEnd: lineEnd) 'takeOneMore'
+			position = position + 1
+			restMatches = matchHere(text, at: position, lineEnd: lineEnd, piece: next)
+		end 'takeOneMore'
+
+		return restMatches
+	end 'matchStar'
+
+	function atomMatchesAt(atom Atom, text ByteArray, at BufferPos, lineEnd BufferPos) returns bool
+		if at >= lineEnd 'pastLine'
+			return false
+		end 'pastLine'
+
+		let subject = self.fold(byteAt(text, position: at))
+
+		return match atom 'kind'
+			literal(value) gives subject == value
+			anyByte gives true
+			byteClass(members, negated) gives (try members.get(subject as ElementIndex) otherwise panic("atomMatchesAt: a byte indexes a table of every byte")) != negated
+		end 'kind'
+	end 'atomMatchesAt'
+end 'RegexMatcher'
+
+type LineMatch
+	export var number as LineNumber
+	export var text as String
+
+	static function create(number LineNumber, text String) returns Self
+		return Self{number: number, text: text}
+	end 'create'
+end 'LineMatch'
+
+type FileReport
+	export var isBinary as bool
+	export var selectedCount as MatchCount = 0
+	export var lines as LineMatchArray = LineMatchArray.create()
+
+	static function create(isBinary bool) returns Self
+		return Self{isBinary: isBinary}
+	end 'create'
+end 'FileReport'
+
+enum SearchError implements Error
+	unreadable
+end 'SearchError'
+
+type Searcher
+	var matcher as Matcher
+	var request as SearchRequest
+
+	static function prepare(request SearchRequest) returns Self throws PatternError
+		let fold = byteFold(request.ignoreCase)
+
+		if request.fixedString 'fixed'
+			return Self{matcher: FixedMatcher.create(request.pattern, fold: fold), request: request}
+		end 'fixed'
+
+		return Self{matcher: try RegexMatcher.compile(request.pattern, fold: fold), request: request}
+	end 'prepare'
+
+	static function create(request SearchRequest) returns Self
+		return try prepare(request) otherwise panic("main prepares this same request before it spawns a Searcher")
+	end 'create'
+
+	export function search(path FilePath) returns FileReport throws SearchError
+		let contents = try File.readBinary(path) otherwise throw SearchError.unreadable
+		return searchBuffer(contents)
+	end 'search'
+
+	function searchBuffer(buffer ByteArray) returns FileReport
+		let isBinary = buffer.contains(ControlByte.nul)
+		var report = FileReport.create(isBinary)
+		var lineStart = 0
+		var lineNumber = firstLineNumber
+
+		while lineStart < buffer.count() 'eachLine'
+			let lineEnd = lineEndFrom(buffer, lineStart: lineStart)
+			let selected = self.matcher.matchesLine(buffer, lineStart: lineStart, lineEnd: lineEnd) != self.request.invertMatch
+
+			if selected 'selectLine'
+				report.selectedCount = report.selectedCount + 1
+
+				if self.request.keepsLines and not isBinary 'keepText'
+					let text = try buffer.slice(lineStart, endIndex: lineEnd as ElementIndex) otherwise panic("searchBuffer: a line lies inside its buffer")
+					report.lines.push(LineMatch.create(lineNumber, text: String.from(text)))
+				end 'keepText'
+
+				if self.request.stopsAtFirstSelection 'enough'
+					break
+				end 'enough'
+			end 'selectLine'
+
+			lineStart = lineEnd + 1
+			lineNumber = lineNumber + 1
+		end 'eachLine'
+
+		return report
+	end 'searchBuffer'
+end 'Searcher'
+
+function lineEndFrom(buffer ByteArray, lineStart BufferPos) returns BufferPos
+	var position = lineStart
+
+	while position < buffer.count() and byteAt(buffer, position: position) != ControlByte.newline 'scan'
+		position = position + 1
+	end 'scan'
+
+	return position
+end 'lineEndFrom'
+
+enum WalkError implements Error
+	missing
+end 'WalkError'
+
+function walkTree(root FilePath) returns PathArray throws WalkError
+	var files = PathArray.create()
+
+	if Directory.isDirectory(root) 'directory'
+		collectFiles(root, files: files)
+	end 'directory' else if File.exists(root) 'file'
+		files.push(root)
+	end 'file' else 'neither'
+		throw WalkError.missing
+	end 'neither'
+
+	files.sort(function(left FilePath, right FilePath) gives comparePaths(left, right: right))
+	return files
+end 'walkTree'
+
+function collectFiles(directory FilePath, files PathArray)
+	let entries = try Directory.list(directory) otherwise 'unlistable'
+		files.push(directory)
+		return
+	end 'unlistable'
+
+	for entry in entries 'eachEntry'
+		if not Directory.isDirectory(entry) 'file'
+			files.push(entry)
+		end 'file' else if not skippedDirectoryNames.contains(entry.filename()) 'subdirectory'
+			collectFiles(entry, files: files)
+		end 'subdirectory'
+	end 'eachEntry'
+end 'collectFiles'
+
+function comparePaths(left FilePath, right FilePath) returns Ordering
+	let leftBytes = left.path.toByteArray()
+	let rightBytes = right.path.toByteArray()
+	let sharedLength = leftBytes.count() if leftBytes.count() < rightBytes.count() else rightBytes.count()
+
+	for position in 0 upto sharedLength 'eachByte'
+		let leftByte = byteAt(leftBytes, position: position)
+		let rightByte = byteAt(rightBytes, position: position)
+
+		if leftByte != rightByte 'differs'
+			return leftByte.compare(rightByte)
+		end 'differs'
+	end 'eachByte'
+
+	return leftBytes.count().compare(rightBytes.count())
+end 'comparePaths'
+
+type RunSummary
+	export var filesSearched as FileCount = 0
+	export var linesSelected as MatchCount = 0
+	export var workers as WorkerCount = fewestWorkers
+	export var troubled = false
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function record(report FileReport)
+		self.filesSearched = self.filesSearched + 1
+		self.linesSelected = self.linesSelected + report.selectedCount
+	end 'record'
+
+	function outcome() returns Outcome
+		return Outcome.troubled if self.troubled else Outcome.selected if self.linesSelected > 0 else Outcome.nothingSelected
+	end 'outcome'
+end 'RunSummary'
+
+function renderReport(report FileReport, label String, style OutputStyle) returns String
+	var out = StringBuilder.create()
+	let prefix = "{label}:" if style.namesFiles else ""
+
+	if style.filesWithMatches 'names'
+		if report.selectedCount > 0 'matched'
+			out.append("{label}\n")
+		end 'matched'
+	end 'names' else if style.countOnly 'counts'
+		out.append("{prefix}{report.selectedCount}\n")
+	end 'counts' else if report.isBinary 'binary'
+		if report.selectedCount > 0 'matched'
+			out.append("Binary file {label} matches\n")
+		end 'matched'
+	end 'binary' else 'lines'
+		for line in report.lines 'eachLine'
+			let number = "{line.number}:" if style.lineNumbers else ""
+			out.append("{prefix}{number}{line.text}\n")
+		end 'eachLine'
+	end 'lines'
+
+	return out.build()
+end 'renderReport'
+
+function printUsage(problem UsageError)
+	printError("maxgrep: {problem.message()}\n\n")
+	printError("usage: maxgrep [flags] PATTERN [PATH...]\n")
+	printError("Searches each file PATH, every file under each directory PATH, or standard input.\n\n")
+
+	for flag in Flag.allCases 'eachFlag'
+		printError("  {flag.rawValue}\t{flag.summary()}\n")
+	end 'eachFlag'
+
+	printError("  {jobsOptionPrefix}N\tsearch with N parallel workers, {fewestWorkers} to {mostWorkers}\n\n")
+	printError("PATTERN matches bytes:\n")
+	printError("  .\tany byte\n")
+	printError("  ^ $\tthe start of the line when first, the end when last\n")
+	printError("  * + ?\tthe item before, zero or more, one or more, or zero or one times\n")
+	printError("  [abc] [a-z] [^0-9]\tone byte in, or not in, the class\n")
+	printError("  \\\tthe next byte, taken literally\n")
+end 'printUsage'
+
+function searchStandardInput(searcher Searcher, style OutputStyle, summary RunSummary)
+	let stdin = Console.stdin()
+	var buffer = ByteArray.create()
+
+	while true 'eachLine'
+		let line = try stdin.readLine() otherwise break
+		buffer.append(line.toByteArray())
+		buffer.push(ControlByte.newline)
+	end 'eachLine'
+
+	let report = searcher.searchBuffer(buffer)
+	print(renderReport(report, label: standardInputLabel, style: style))
+	summary.record(report)
+end 'searchStandardInput'
+
+function findFiles(options Options, summary RunSummary) returns PathArray
+	var walks = WalkPromiseArray.create()
+
+	for root in options.paths 'startWalks'
+		walks.push(async walkTree(root))
+	end 'startWalks'
+
+	var files = PathArray.create()
+
+	for (walk, found) in walks.withIterator() 'finishWalks'
+		let tree = try await found otherwise 'unreadable'
+			let root = try options.paths.get(walk.index()) otherwise panic("findFiles: one walk per path")
+			printError("maxgrep: {root}: cannot read\n")
+			summary.troubled = true
+			continue
+		end 'unreadable'
+
+		files.append(tree)
+	end 'finishWalks'
+
+	return files
+end 'findFiles'
+
+function searchFiles(files PathArray, request SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
+	var searchers = SearcherArray.create()
+
+	for _ in 0 upto workers 'spawnWorkers'
+		searchers.push(spawn Searcher.create(request.clone()))
+	end 'spawnWorkers'
+
+	var replies = ReportPromiseArray.create()
+	var nextWorker = 0
+
+	for path in files 'sendFiles'
+		var searcher = try searchers.get(nextWorker) otherwise panic("searchFiles: nextWorker stays below the worker count")
+		replies.push(searcher.search(path.clone()))
+		nextWorker = (nextWorker + 1) mod workers
+	end 'sendFiles'
+
+	for (received, reply) in replies.withIterator() 'receiveReports'
+		let path = try files.get(received.index()) otherwise panic("searchFiles: one reply per file")
+
+		let report = try await reply otherwise (e) 'failed'
+			match e 'why'
+				unreadable then printError("maxgrep: {path}: cannot read\n")
+				stopped then printError("maxgrep: {path}: the searcher stopped before it answered\n")
+			end 'why'
+
+			summary.troubled = true
+			continue
+		end 'failed'
+
+		print(renderReport(report, label: path.toString(), style: style))
+		summary.record(report)
+	end 'receiveReports'
+
+	for searcher in searchers 'shutDown'
+		searcher.shutdown()
+	end 'shutDown'
+end 'searchFiles'
+
+function main() returns ExitCode
+	let startedAt = Clock.nowNanos()
+
+	let options = try Options.parse(CommandLine.args()) otherwise (problem) 'badUsage'
+		printUsage(problem)
+		return Outcome.troubled
+	end 'badUsage'
+
+	let request = options.searchRequest()
+	let style = options.outputStyle()
+
+	let searcher = try Searcher.prepare(request) otherwise (problem) 'badPattern'
+		printError("maxgrep: bad PATTERN: {problem.message()}\n")
+		return Outcome.troubled
+	end 'badPattern'
+
+	var summary = RunSummary.create()
+
+	if options.paths.isEmpty() 'standardInput'
+		searchStandardInput(searcher, style: style, summary: summary)
+	end 'standardInput' else 'paths'
+		let files = findFiles(options, summary: summary)
+
+		if not files.isEmpty() 'anyFiles'
+			let workers = options.workersFor(files.count())
+			summary.workers = workers
+			searchFiles(files, request: request, style: style, workers: workers, summary: summary)
+		end 'anyFiles'
+	end 'paths'
+
+	if options.stats 'stats'
+		let elapsed = Clock.elapsedNanos(startedAt) / nanosPerMillisecond
+		printError("files searched: {summary.filesSearched}\nselected lines: {summary.linesSelected}\nworkers: {summary.workers}\nelapsed ms: {elapsed}\n")
+	end 'stats'
+
+	return summary.outcome()
+end 'main'

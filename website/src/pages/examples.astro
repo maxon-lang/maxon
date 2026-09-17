@@ -5,18 +5,37 @@ import MaxonCode from '../components/MaxonCode.astro';
 // Real, compilable programs imported verbatim from the compiler repo's examples/
 // directory (copied into src/examples). The ?raw import keeps them byte-accurate.
 import hello from '../examples/hello.maxon?raw';
+import maxgrep from '../examples/maxgrep.maxon?raw';
 import spectralNorm from '../examples/spectral-norm.maxon?raw';
 import nbody from '../examples/nbody.maxon?raw';
 import fannkuch from '../examples/fannkuch-redux.maxon?raw';
 import binaryTrees from '../examples/binary-trees.maxon?raw';
 
-const examples = [
+type Example = {
+  file: string;
+  title: string;
+  blurb: string;
+  code: string;
+  tour?: string;
+  tourLabel?: string;
+};
+
+const examples: Example[] = [
   {
     file: 'hello.maxon',
     title: 'Hello, world',
     blurb:
       'The smallest complete program. Shows the shape every Maxon program has: a main that returns an ExitCode, and a labeled end that names what it closes.',
     code: hello,
+  },
+  {
+    file: 'maxgrep.maxon',
+    title: 'maxgrep — a parallel grep',
+    blurb:
+      'A complete grep: recursive directory search, its own Pike-style regular-expression engine, and a pool of spawned services that search files in parallel while the output stays in order. Shows ranged and container aliases, raw-value enums, a union, an interface with two implementations, closures as values, async coroutines, spawn, and what ownership requires at a message boundary.',
+    tour: '/docs/getting-started/tour/',
+    tourLabel: 'Read the guided tour',
+    code: maxgrep,
   },
   {
     file: 'spectral-norm.maxon',
@@ -51,7 +70,7 @@ const examples = [
 
 <MarketingLayout
   title="Examples — Maxon"
-  description="Real, compilable Maxon programs: a spectral-norm computation, an N-body simulation, and the fannkuch-redux and binary-trees benchmarks."
+  description="Real, compilable Maxon programs: a parallel grep with its own regex engine, a spectral-norm computation, an N-body simulation, and the fannkuch-redux and binary-trees benchmarks."
   path="/examples/"
 >
   <section class="mx-auto max-w-4xl px-5 py-16">
@@ -68,6 +87,13 @@ const examples = [
           <article>
             <h2 class="text-xl font-bold text-white">{ex.title}</h2>
             <p class="mt-2 max-w-2xl text-slate-400">{ex.blurb}</p>
+            {ex.tour && (
+              <p class="mt-2">
+                <a class="font-semibold text-brand-300 hover:text-brand" href={ex.tour}>
+                  {ex.tourLabel} →
+                </a>
+              </p>
+            )}
             <div class="mt-4">
               <MaxonCode code={ex.code} title={ex.file} />
             </div>

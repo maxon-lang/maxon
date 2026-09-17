@@ -59,4 +59,5 @@ Every program has a `main()` that returns an `ExitCode`. String interpolation us
 
 - [Installation](/docs/getting-started/installation/) — install Maxon with one command.
 - [Your first program](/docs/getting-started/first-program/) — a guided walk-through.
+- [A tour: building grep](/docs/getting-started/tour/) — a whole real program, read end to end.
 - [Language Reference](/docs/language/overview/) — the complete language.

@@ -174,6 +174,7 @@ tests/
     hello.test.maxon                        prints `Hello, world!` and exits 0
     binary-trees.test.maxon                 the published n=10 checks, exit 0
     fannkuch-redux.test.maxon               the published n=7 answer and the documented n=10 one, flip count as exit code
+    maxgrep.test.maxon                      the flags, the two failing exit codes, argument order, a binary file and a skipped `.git`
     multifile.test.maxon                    the directory builds as one project and exits 5
     nbody.test.maxon                        the published n=1000 energies, exit 0
     spectral-norm.test.maxon                the published n=100 norm, exit 0
@@ -602,6 +603,16 @@ Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs fi
 `-o` keeps each build out of the tree lock. A document's program has no file of its own, so it is cut
 out of the document as it stands and written into `temp/examples/<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
 more than once. It runs at the default deadline.
+
+⭐ **AN EXAMPLE THAT READS THE FILESYSTEM IS GIVEN ITS INPUT BY `stageExampleFile(example, relativePath:,
+content:)`**, which writes one file under that example's staging directory, creating the directories the
+relative path names, and answers with the path it wrote. That directory is the working directory the run
+gets, so the case hands the program a RELATIVE path and reads a relative one back. `requireExampleBuild`
+clears what a previous run staged, so staging follows the build.
+⛔ **IT IS ALSO HOW A FIXTURE A CHECKOUT CANNOT CARRY IS BUILT** — rule 1 forbids a stored `.git`, and
+`maxgrep.test.maxon` needs a real one, plus a file holding a NUL byte.
+⚠ **A PATH THE PROGRAM PRINTS WEARS THE HOST'S SEPARATOR**; the harness folds `\r` and nothing else, so an
+expectation containing one is built from `FilePath.separator()`.
 
 ## `warm-rebuild/` — a compile that reuses memos emits what a cold one emits, and reuses what it should
 
