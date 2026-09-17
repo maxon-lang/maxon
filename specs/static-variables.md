@@ -514,22 +514,12 @@ end 'main'
 error E3005: <fragment>:14:25: cannot assign a value of type 'int' to field 'c' of 'Paint', which holds 'Color'
 ```
 
-An `interface`-typed field is refused OUTRIGHT rather than by a comparison, and the refusal is the body
-path's own sentence (`Parser.widenValueIntoExistentialField`): the second word of a fat pointer is the
-address of the conformer's witness table, which only a widening SITE can name, and a top-level initializer
-mints no values at all — so no constant this evaluator can produce carries one. Left admitted, the box got
-ONE store into a TWO-slot field and the witness half stayed whatever `__mm_alloc` left there; the first
-dispatch through it was an access violation, MEASURED.
+An `interface`-typed field is a widening site at module scope exactly as it is in a function body:
+`__module_init` stores the conformer and, beside it, the address of its witness table, which the field's
+declared interface names. Such a record is never laid down as image data, because that second word is an
+address only the lowering can name.
 
-⚠ **IT IS ANCHORED AT THE DECLARED NAME, not at the field value, and that is forced rather than chosen.**
-The constant evaluator cannot see such a field at all: a swept interface annotation is a bare `named` until
-`normalizeSweptInterfaceTypes` re-tags the column, and that runs AFTER the evaluator. The first door that
-sees the re-tagged column and has a positioned diagnostic is the real parse's own binding-failure door, and
-what it holds is the declaration's name. The same program with the value written as a conforming
-`Square.create(4)` is refused identically, in the same words and at the same position — the slot is what
-makes it impossible, not the value.
-
-<!-- test: error.static-struct-literal-interface-field -->
+<!-- test: static-struct-literal-interface-field -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -553,6 +543,61 @@ type Holder
 	export let s as Sized
 	export let tag as Integer
 
+	static var one = Holder{s: Square.create(4), tag: 77}
+
+	export static function get() returns Holder
+		return Holder.one
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{h.s.size()} {h.tag}")
+	return 0
+end 'main'
+```
+```stdout
+16 77
+```
+
+<!-- test: static-struct-literal-interface-field-holding-a-string-literal -->
+A `String` literal widened into a `Hashable` field at module scope: the record is the literal's clone, and
+its witness table names the standard library's own `String.hash`, which a program reaching no other
+`Hashable` position must still build.
+```maxon
+type Holder
+	export let key as Hashable
+
+	static var one = Holder{key: "ab1cd"}
+
+	export static function get() returns Holder
+		return Holder.one
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{h.key.hash()}\n")
+	return 0
+end 'main'
+```
+```stdout
+252765120
+```
+
+<!-- test: error.static-struct-literal-interface-field-non-conformer -->
+A value that does not conform is refused as it is in a body, by the whole-program widening check.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Holder
+	export let s as Sized
+	export let tag as Integer
+
 	static var one = Holder{s: 5, tag: 77}
 
 	export static function get() returns Holder
@@ -567,7 +612,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:24:13: Unsupported: storing a value of a CONCRETE type into the interface-typed field 'Holder.s' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type
+error E3005: <fragment>:12:19: field type mismatch for 'Holder.s': type 'int' does not implement interface 'Sized'
 ```
 
 <!-- test: static-factory-initializer -->

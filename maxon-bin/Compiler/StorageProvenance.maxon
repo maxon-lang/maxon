@@ -122,6 +122,7 @@ typealias FunctionValueBodiesMemo = Map with (ParamCount, CallLandingBodies)
 typealias ParamMaskRows = Array with ParamPositionMaskArray
 
 typealias RootRankArray = Array with RootRank
+
 // Positions into another column: its entries, or the start of each group of them.
 typealias EntryIndexArray = Array with ElementIndex
 
@@ -1296,7 +1297,8 @@ module type ProvenanceTracer
 				immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic then break 'op'
+				rawIntrinsic or
+				existentialWitness then break 'op'
 		end 'op'
 	end 'noteDispatchedArgumentsWritten'
 
@@ -1547,7 +1549,7 @@ module type ProvenanceTracer
 			compare(result, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			stringLiteral(result, _) then self.flowFromOperands(func, op: op, result: result)
 			functionRef(result, _) then self.flowFromOperands(func, op: op, result: result)
-			await(result, _) then self.flowFromOperands(func, op: op, result: result)
+			await (result, _) then self.flowFromOperands(func, op: op, result: result)
 			tryAwait(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			sizeofType(result, _) then self.flowFromOperands(func, op: op, result: result)
 			constArrayLiteral(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
@@ -1571,7 +1573,8 @@ module type ProvenanceTracer
 				panicAbort or
 				switch or
 				panicAbortValue or
-				covPoint then break 'op'
+				covPoint or
+				existentialWitness then break 'op'
 		end 'op'
 	end 'traceOp'
 
@@ -2344,7 +2347,8 @@ module type ProvenanceTracer
 				immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic then break 'term'
+				rawIntrinsic or
+				existentialWitness then break 'term'
 		end 'term'
 	end 'recordReturn'
 
@@ -2468,7 +2472,8 @@ module type ProvenanceTracer
 				immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives false
+				rawIntrinsic or
+				existentialWitness gives false
 		end 'op'
 	end 'passesAParameterAlias'
 
@@ -2907,7 +2912,8 @@ module type ProvenanceTracer
 				immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic then break 'op'
+				rawIntrinsic or
+				existentialWitness then break 'op'
 		end 'op'
 	end 'gatherCallDoorsOf'
 
@@ -3671,7 +3677,8 @@ module type ProvenanceTracer
 	// noting what may have been stored into either field?
 	function opKeepsFieldStoresInView(func IrFunction, ir MaxonModule, op MaxonOp, root ValueId, field AccessStep, otherField AccessStep, into ValueIdArray, otherInto ValueIdArray) returns bool
 		match op 'op'
-			loadIndirect then return true
+			loadIndirect or
+				existentialWitness then return true
 			storeIndirect(addr, offset, value, _) then return self.noteFieldStore(func, ir: ir, root: root, addr: addr, offset: offset as AccessStep, value: value, field: field, otherField: otherField, into: into, otherInto: otherInto)
 			call(result, callee, args, argLabels, _, _, _, _) then return self.callKeepsFieldStoresInView(func, ir: ir, result: result, callee: callee, args: args, argLabels: argLabels, root: root, into: into, otherInto: otherInto)
 			tryCall(result, _, callee, args, argLabels, _, _, _, _) then return self.callKeepsFieldStoresInView(func, ir: ir, result: result, callee: callee, args: args, argLabels: argLabels, root: root, into: into, otherInto: otherInto)
@@ -3985,7 +3992,7 @@ module type ProvenanceTracer
 			functionRef(result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			indirectCall(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			asyncCall(result, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
-			await(result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
+			await (result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			tryAwait(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			sizeofType(result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			constArrayLiteral(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
@@ -3998,6 +4005,7 @@ module type ProvenanceTracer
 			immortalStructRecord(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			immortalStringTable(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			rawIntrinsic(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
+			existentialWitness(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 
 			ret or
 				retVoid or
@@ -4540,7 +4548,8 @@ module type ProvenanceTracer
 				immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives NoProducerSubject
+				rawIntrinsic or
+				existentialWitness gives NoProducerSubject
 		end 'op'
 	end 'producerOfOp'
 
@@ -4767,7 +4776,8 @@ module type ProvenanceTracer
 				immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives singletonValue(value)
+				rawIntrinsic or
+				existentialWitness gives singletonValue(value)
 		end 'op'
 	end 'producerOperandsOf'
 
@@ -5412,7 +5422,8 @@ function opLoadsOrStoresASlot(op MaxonOp) returns bool
 			immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives false
+			rawIntrinsic or
+			existentialWitness gives false
 	end 'op'
 end 'opLoadsOrStoresASlot'
 
@@ -5453,7 +5464,8 @@ function slotReadOfOp(op MaxonOp, opIndex OpIndex) returns SlotRead
 			immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then return SlotRead.none
+			rawIntrinsic or
+			existentialWitness then return SlotRead.none
 	end 'op'
 end 'slotReadOfOp'
 
@@ -5531,7 +5543,8 @@ function opDefinesAGlobalAddress(op MaxonOp) returns bool
 			immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives false
+			rawIntrinsic or
+			existentialWitness gives false
 	end 'op'
 end 'opDefinesAGlobalAddress'
 

@@ -1072,7 +1072,11 @@ end 'main'
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
 does above: a parameter typed `Shape` accepts any conforming type, a function may return an interface,
-and a field may hold one. Where the compiler can see the concrete type, calls dispatch statically;
+and a field may hold one. A struct literal (`Self{shape: Square.create(3)}`) or an assignment
+(`self.shape = Strip.create(5)`) stores a conforming value straight into such a field, exactly as passing it
+to a `Shape` parameter would; assigning a different conformer releases the one the field held. A value that
+does not conform is **E3005**, and a conformer whose associated-type binding contradicts the field's
+`with` clause is **E3127**. Where the compiler can see the concrete type, calls dispatch statically;
 otherwise they dispatch through a witness table at run time.
 
 **The standard interfaces** (declared in the standard library):

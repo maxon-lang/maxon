@@ -91,6 +91,32 @@ export typealias ThrowsClauseArray = Array with ThrowsClause
 // `IrFunction.valueExistentialInstances`.
 export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
 
+// ⭐⭐ **ONE STORE INTO AN INTERFACE-TYPED FIELD, AS THE WHOLE-PROGRAM WIDENING CHECK READS IT.** A field store
+// widens like a call argument, and whether `value` conforms is not the parser's to decide — a conformer's
+// `implements` clause is recorded when its own file is parsed — so the store is recorded here and
+// `SemanticCheck.checkExistentialFieldStores` asks the argument position's verdict of it.
+//
+// `subject` is the record the field belongs to, whose concrete instance fixes a `with` clause the field wrote
+// over its declaring type's own parameter. `claims` is that clause's instance, or empty for a field that
+// wrote none. `fieldSite` is the `<Type>.<field>` a refusal names. The position is carried whole because
+// `__module_init` has no source file of its own to anchor one.
+export type ExistentialFieldStore
+	export let value as ValueId
+	export let subject as ValueId
+	export let interfaceName as ByteArray
+	export let claims as GenericInstanceIdArray
+	export let fieldSite as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(value ValueId, subject ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns Self
+		return Self{value: value, subject: subject, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'ExistentialFieldStore'
+
+export typealias ExistentialFieldStoreArray = Array with ExistentialFieldStore
+
 // ⛔⛔ **THE PARSER'S COLUMN IS A `ValueExistentialInstanceColumn` AND IT STOPS AT THIS BOUNDARY — an
 // `IrFunction` holds the MAP.** Two reasons, either sufficient. `createFromStd` builds one function per
 // register-allocator pool message on whichever OS thread the scheduler picked, so a placeholder shared
@@ -1015,6 +1041,20 @@ export var sharedNoMintedSole = BoolArray.create()
 let sharedEmptyDebugLocals = DebugLocalDeclArray.create()
 let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
 
+// The store column of a function that stores into no interface-typed field, shared for
+// `sharedEmptyDebugLocals`' reason and with its invariant — never pushed into, so `createFromStd` does not
+// reach for it either.
+export let sharedEmptyExistentialFieldStores = ExistentialFieldStoreArray.create()
+
+// `stores` ready to be pushed into: itself, or a fresh column in place of the shared empty.
+export function writableExistentialFieldStores(stores ExistentialFieldStoreArray) returns ExistentialFieldStoreArray
+	if stores is sharedEmptyExistentialFieldStores 'theSharedEmpty'
+		return ExistentialFieldStoreArray.create()
+	end 'theSharedEmpty'
+
+	return stores
+end 'writableExistentialFieldStores'
+
 // The per-function counter that names lifted NON-CAPTURING closure literals. A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
@@ -1272,6 +1312,11 @@ export type IrFunction
 	// Empty on a Std-phase function (`createFromStd`) and on a function that declared no parameterized
 	// existential, which is very nearly all of them.
 	export var valueExistentialInstances as ValueExistentialInstanceMap
+
+	// Every store this function makes into an interface-typed field — see `ExistentialFieldStore`. Handed over
+	// at the function's end by the parser (`Parser.publishExistentialInstances`) and appended to by
+	// `ModuleInit`, never mutated through the shared empty `create` starts it at.
+	export var existentialFieldStores as ExistentialFieldStoreArray
 
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
@@ -1650,6 +1695,7 @@ export type IrFunction
 			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
+			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -1690,12 +1736,12 @@ export type IrFunction
 	// whose frame and nesting the runtime itself bounds. The per-type CASCADES come through this same door and
 	// do not — see the field.
 	//
-	// ⛔⛔ **ITS SEVEN MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
+	// ⛔⛔ **ITS MANAGED PLACEHOLDERS ARE FRESH, WHERE `create`'s ARE THE SHARED SINGLETONS — AND THAT
 	// IS A CONCURRENCY FACT, NOT AN OVERSIGHT.** This door is on the POOL WORKER path: `extractUnitModule`
 	// builds one function per message, and a worker runs on whichever green thread the scheduler picked.
 	// Storing a module-level record into a fresh one RETAINS it, and a counted record's reference count is a
 	// plain load/add/store precisely because one green thread owns it — so sixteen workers retaining and
-	// releasing ONE singleton is a lost update. Seven small empties per call, on a door the parser never takes
+	// releasing ONE singleton is a lost update. A few small empties per call, on a door the parser never takes
 	// (`create` is the parser's, and it keeps the singletons for its thousands of functions).
 	export static function createFromStd(name ByteArray, returnType StdReturnType, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none, needsGreenThreadStackGuard bool = false) returns IrFunction
 		let declaredAt = SourcePosition.synthesized()
@@ -1723,6 +1769,7 @@ export type IrFunction
 			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
+			existentialFieldStores: ExistentialFieldStoreArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -1786,6 +1833,7 @@ export type IrFunction
 			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			valueWitnessIds: src.valueWitnessIds,
 			valueExistentialInstances: src.valueExistentialInstances,
+			existentialFieldStores: src.existentialFieldStores,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,

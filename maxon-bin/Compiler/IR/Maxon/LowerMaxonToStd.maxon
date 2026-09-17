@@ -979,6 +979,9 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 		immortalStringTable or
 			covPoint or
 			rawIntrinsic then break 'op'
+
+		// A witness table is registered by `ensureWitnessTable` when the op is lowered, as every table is.
+		existentialWitness then break 'op'
 	end 'op'
 end 'registerIfProgramLiteral'
 
@@ -1760,6 +1763,10 @@ type MaxonToStdLowering
 			// it: the parse is per-file and memoized, and the count has to be final before the counter image is
 			// laid out, which happens before this pass runs.
 			covPoint(pointId) then self.stdModule.appendOp(dstBlock, op: StdOp.covPoint(self.currentCovPointBase + pointId))
+
+			// The witness half of a concrete conformer a field store widens. Routed through a SMALL re-match so the
+			// interface NAME is bound in a single-call arm, never in this big one.
+			existentialWitness then self.lowerExistentialWitness(hlOp, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -1776,6 +1783,13 @@ type MaxonToStdLowering
 
 		self.currentCovPointBase = try self.covPointBases.get(srcFunc.sourceFilePath.toString()) otherwise panic("bindCovPointBase: '{String.from(srcFunc.name)}' is declared in {srcFunc.sourceFilePath.toString()}, which `mergeArtifact` recorded no coverage base for — every merged file records one, so this function reached the lowering without its file being folded")
 	end 'bindCovPointBase'
+
+	function lowerExistentialWitness(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 'w'
+			existentialWitness(result, interfaceName, conformer) then self.emitConformerWitness(result, conformer: conformer, interfaceName: interfaceName, dstBlock: dstBlock)
+			default panic("lowerExistentialWitness: expected an `existentialWitness` op, got a different MaxonOp variant — `lowerOp` routes only `existentialWitness` here")
+		end 'w'
+	end 'lowerExistentialWitness'
 
 	function lowerImmortalStringTable(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 't'
@@ -1960,6 +1974,7 @@ type MaxonToStdLowering
 			serviceSpawn or
 				serviceSend or
 				serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
+			existentialWitness then panic("lowerMaxonToStd: an `existentialWitness` op appeared as a block terminator (parser bug — it defines the witness half the field store after it writes, so it is a body op)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -2378,8 +2393,22 @@ type MaxonToStdLowering
 			return self.pairedWitnessOf(value, site: site)
 		end 'forwardTheFatPointersOwnWitness'
 
-		return self.materializeWitnessTableAddr(self.conformerNameOf(value), instance: self.witnessInstanceOfValue(value), interfaceName: interfaceName, dstBlock: dstBlock)
+		let addrId = self.mintStdValueId()
+		self.emitConformerWitness(addrId, conformer: value, interfaceName: interfaceName, dstBlock: dstBlock)
+		return addrId
 	end 'witnessForExistentialValue'
+
+	// ⭐ **THE TABLE A CONCRETE CONFORMER WIDENS THROUGH, INTO `result`** — the materializing half of
+	// `witnessForExistentialValue`, and the whole of an `existentialWitness` op, whose field store names its
+	// interface the way a callee's declared parameter names it for an argument. One door, so a value widened
+	// into a field and the same value widened into a parameter address one table.
+	function emitConformerWitness(result ValueId, conformer ValueId, interfaceName ByteArray, dstBlock IrBlock)
+		if self.valueTagOf(conformer) == ValueTypeTag.interfaceRef 'alreadyAnExistential'
+			panic("emitConformerWitness: v{conformer} is already held at an interface in '{String.from(self.currentFuncName)}' — its witness is forwarded (`pairedWitnessOf`), and the parser emits `existentialWitness` only for a concrete conformer")
+		end 'alreadyAnExistential'
+
+		self.emitWitnessTableAddr(result, conformerType: self.conformerNameOf(conformer), instance: self.witnessInstanceOfValue(conformer), interfaceName: interfaceName, dstBlock: dstBlock)
+	end 'emitConformerWitness'
 
 	// The witness the parser paired with an existential VALUE (`IrFunction.valueWitnessIds`). It refuses the
 	// `0` filler rather than passing it: a null table address is a wild jump at the callee's first dispatch,
@@ -4118,11 +4147,15 @@ type MaxonToStdLowering
 	// through it — `create` + `upsert` + `contains` all correct and the first `try m.get(k)` faulting with
 	// 0xC0000005.
 	function materializeWitnessTableAddr(conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
-		let label = self.ensureWitnessTable(conformerType, instance: instance, interfaceName: interfaceName)
 		let addrId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
+		self.emitWitnessTableAddr(addrId, conformerType: conformerType, instance: instance, interfaceName: interfaceName, dstBlock: dstBlock)
 		return addrId
 	end 'materializeWitnessTableAddr'
+
+	function emitWitnessTableAddr(result ValueId, conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock)
+		let label = self.ensureWitnessTable(conformerType, instance: instance, interfaceName: interfaceName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+	end 'emitWitnessTableAddr'
 
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments — the
 	// LAST argument the `__managed_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,

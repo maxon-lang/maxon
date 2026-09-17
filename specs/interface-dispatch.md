@@ -1922,6 +1922,165 @@ end 'main'
 held=252765120
 ```
 
+<!-- test: literal-conformer-stored-directly-in-an-interface-field -->
+The same laundering with no call at all: the struct literal is the widening site, so a borrowed `String`
+literal and an owned interpolation are each moved into the field by the conformer's own protocol — a clone
+of the immortal literal, the adopted heap record — and the witness half is the table of the conformer the
+store named. Both hashes agree, and the leak gate proves each record is released once, through its witness.
+```maxon
+type Holder
+	export let literal as Hashable
+	export let heap as Hashable
+
+	static function create(n Integer) returns Self
+		return Self{literal: "ab1cd", heap: "ab{n}cd"}
+	end 'create'
+end 'Holder'
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let box = Holder.create(1)
+	print("literal={box.literal.hash()} heap={box.heap.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+literal=252765120 heap=252765120
+```
+
+<!-- test: borrowed-conformer-stored-directly-in-two-interface-fields -->
+A BORROWED conformer stored directly into two interface-typed fields is co-owned by each, and a later store
+through `self` replaces one of them: the displaced value is released through its own witness before the new
+conformer is dispatched through its. Under the leak gate a reference taken or released one time too many
+fails as loudly as a wrong answer. Returns `3 + 9 = 12`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Marker implements Tagged
+	let n as Integer
+
+	function tag() returns Integer
+		return n
+	end 'tag'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Marker'
+
+type Pair
+	var first as Tagged
+	let second as Tagged
+
+	static function create(m Marker) returns Self
+		return Self{first: m, second: m}
+	end 'create'
+
+	function total() returns Integer
+		self.first = Marker.create(9)
+		return self.second.tag() + self.first.tag()
+	end 'total'
+end 'Pair'
+
+function main() returns ExitCode
+	let m = Marker.create(3)
+	var p = Pair.create(m)
+	return p.total()
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: scalar-conformer-stored-directly-in-an-interface-field -->
+An `int` conforms intrinsically and is held at an interface as its raw value, so storing one directly moves
+nothing and its witness's release is inert — the field is widened and dropped with no reference counted.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder
+	export let key as Hashable
+	export let size as Integer
+
+	static function create(size Integer) returns Self
+		return Self{key: size, size: size}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(7)
+	return h.size as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.non-conformer-stored-directly-in-an-interface-field -->
+A direct store asks the argument position's conformance verdict, naming the field.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Plain
+	let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Plain'
+
+type Holder
+	let t as Tagged
+
+	static function create(n Integer) returns Self
+		return Self{t: Plain.create(n)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(4)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:10: field type mismatch for 'Holder.t': type 'Plain' does not implement interface 'Tagged'
+```
+
+<!-- test: error.float-stored-directly-in-an-interface-field -->
+A `float` conforms and still has no way into the fat pointer's value half, so a direct store is refused with
+the argument position's reason.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+type Holder
+	let c as Comparable
+
+	static function create(r Real) returns Self
+		return Self{c: r}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(2.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3121: <fragment>:8:10: Cannot store a `float` into the field 'Holder.c', which is declared at the interface type 'Comparable': a value held at an interface type is a two-word fat pointer `(value, witness)` whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements 'Comparable', or declare the field as `float`
+```
+
 <!-- test: interface-param-checked-divide-survives-specialization -->
 ### A possibly-zero divide in an interface-param function survives specialization
 An interface-parameter function is CLONED per concrete argument type (monomorphization's

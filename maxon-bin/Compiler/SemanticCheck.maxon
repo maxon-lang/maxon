@@ -100,6 +100,9 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
 	checkReturnedValueTypes(project, module: module)
 
+	// The FIELD-STORE half, after the return half for the order a reader meets the two in a body's own statements.
+	checkExistentialFieldStores(project, module: module)
+
 	// The function-type doors the parser recorded (`PendingFunctionTypeDoor`). It runs HERE, and not beside
 	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
 	// happened when that check drains. After `checkCalls` so a program with both a bad argument and a bad
@@ -1566,6 +1569,10 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		// one: `__Raw` is callable only from `runtime/`, where a managed value may not be named at all
 		// (E3153), and this walk tracks managed values.
 		rawIntrinsic then break 'op'
+
+		// The witness half is the address of a constant table; the `storeIndirect` beside it is what persists
+		// the conformer, and it is asked above.
+		existentialWitness then break 'op'
 	end 'op'
 
 	return false
@@ -1672,7 +1679,8 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'term'
+			rawIntrinsic or
+			existentialWitness then break 'term'
 	end 'term'
 
 	return false
@@ -2139,7 +2147,8 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'op'
+			rawIntrinsic or
+			existentialWitness then break 'op'
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -2484,7 +2493,8 @@ function opConsumesAPromise(op MaxonOp) returns bool
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives false
+			rawIntrinsic or
+			existentialWitness gives false
 	end 'op'
 end 'opConsumesAPromise'
 
@@ -2569,7 +2579,8 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				immortalStructRecord or
 					immortalStringTable or
 					covPoint or
-					rawIntrinsic then break 'op'
+					rawIntrinsic or
+					existentialWitness then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -2831,7 +2842,8 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'op'
+			rawIntrinsic or
+			existentialWitness then break 'op'
 	end 'op'
 
 	return rearmRoleIfDefines(op, promise: promise)
@@ -2942,7 +2954,8 @@ module function collectMaxonBlockSuccessors(module MaxonModule, block IrBlock, i
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'term'
+			rawIntrinsic or
+			existentialWitness then break 'term'
 	end 'term'
 end 'collectMaxonBlockSuccessors'
 
@@ -3170,6 +3183,9 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// keeps a lane from meeting an op it cannot lower is that the builder forks on
 					// `TargetFacilities.machineModel` before it mints anything, not a diagnostic.
 					rawIntrinsic then break 'op'
+
+					// A witness table is `.rdata` and a `lea`, which every target carries.
+					existentialWitness then break 'op'
 				end 'op'
 
 				// A witness dispatch or a call through a function value writes the arguments its landing bodies
@@ -4177,7 +4193,8 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func 
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then return
+			rawIntrinsic or
+			existentialWitness then return
 	end 'op'
 end 'reportIfNonYielding'
 
@@ -4781,7 +4798,8 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncI
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives false
+			rawIntrinsic or
+			existentialWitness gives false
 	end 'op'
 end 'opYields'
 
@@ -5055,7 +5073,8 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 			serviceSend or
 			serviceReplyCell gives true
 		immortalStructRecord or
-			immortalStringTable gives false
+			immortalStringTable or
+			existentialWitness gives false
 
 		// ⛔ **`false`, AND IT IS THE ANSWER RATHER THAN A CONVENIENCE.** This predicate decides whether a
 		// call's result may be discarded (E3064 vs E3065). A counter is the compiler's own store, invisible
@@ -6360,7 +6379,8 @@ function closureEscapeReason(op MaxonOp) returns String
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'op'
+			rawIntrinsic or
+			existentialWitness then break 'op'
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a
@@ -6818,12 +6838,13 @@ enum ExistentialWideningVerdict
 	doesNotConform
 end 'ExistentialWideningVerdict'
 
-// ⭐⭐ **MAY A VALUE OF THIS TYPE CROSS INTO AN INTERFACE-TYPED POSITION? — THE VERDICT, ONCE, FOR BOTH
-// POSITIONS THAT WIDEN.** A call ARGUMENT (`checkOneArgType`) and a `return` into an interface-typed return
-// (`checkOneReturnedValue`, P1.7a slice 2) ask exactly the same two questions in exactly the same order, and
-// they must never come to answer them differently — one gains its witness half in an adjacent hidden argument
-// and the other in the secondary return register, which is a difference of TRANSPORT and of nothing else.
-// Each site words its own sentence, because only the site knows what to call the place.
+// ⭐⭐ **MAY A VALUE OF THIS TYPE CROSS INTO AN INTERFACE-TYPED POSITION? — THE VERDICT, ONCE, FOR EVERY
+// POSITION THAT WIDENS.** A call ARGUMENT (`checkOneArgType`), a `return` into an interface-typed return
+// (`checkOneReturnedValue`) and a store into an interface-typed field (`checkOneExistentialFieldStore`) ask
+// exactly the same two questions in exactly the same order, and they must never come to answer them
+// differently — the witness half travels in an adjacent hidden argument, the secondary return register or the
+// field's second slot, which is a difference of TRANSPORT and of nothing else. Each site words its own
+// sentence, because only the site knows what to call the place.
 //
 // ⭐ **A FLOAT IS REFUSED HERE AND NOT INSIDE THE CONFORMANCE DOOR, AND THAT IS DELIBERATE.** `float`
 // declares the intrinsic `Comparable`/`Equatable`/`Hashable` conformances, so `valueWidensToInterface`
@@ -7146,40 +7167,95 @@ function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, p
 	// `Integer` argument, and the program died `Range check failed: value outside typealias 'ExitCode'` — E3119's
 	// own recorded failure class, one indirection later, which is the hazard E3127 exists to stop.
 	if argTag == ValueTypeTag.interfaceRef 'theArgumentIsItselfAnExistential'
-		checkDeferredClaimAgainstExistentialArgument(project, signatures: signatures, declaredSite: declaredSite, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, paramName: paramName, position: position, callRange: callRange, filePath: filePath)
+		checkDeferredClaimAgainstExistentialValue(project, signatures: signatures, declaredSite: declaredSite, valueTag: argTag, valueNameId: argNameId, interfaceName: interfaceName, place: WideningPlace.argument(argParamLabel(paramName, position: position)), line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'theArgumentIsItselfAnExistential'
 
 	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: callInstanceSubject, siteInstance: declaredSite)
-	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: site, conformerTag: argTag, conformerNameId: argNameId, interfaceName: interfaceName)
-	let conformer = typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
+	checkConformerAgainstSiteClaim(project, signatures: signatures, func: func, site: site, conformerTag: argTag, conformerNameId: argNameId, interfaceName: interfaceName, place: WideningPlace.argument(argParamLabel(paramName, position: position)), line: callRange.line, column: callRange.column, filePath: filePath)
+end 'checkExistentialSiteClaimAtArgument'
+
+// ⭐ **THE TWO POSITIONS A CALL'S OWN INSTANCE OR A RECORD'S CAN FIX A CLAIM AT** — a call argument and a field
+// store — and the words each refusal names the place with. The verdict is one; what an author changes differs.
+union WideningPlace
+	argument(label String)
+	field(site String)
+end 'WideningPlace'
+
+// The place, as the object of "widen … into".
+function wideningPlaceNoun(place WideningPlace) returns String
+	return match place 'place'
+		argument(label) gives label
+		field(site) gives "the field '{site}'"
+	end 'place'
+end 'wideningPlaceNoun'
+
+// The act that fills the place, as a refusal says it fixed nothing.
+function wideningPlaceAct(place WideningPlace) returns String
+	return match place 'place'
+		argument gives "call"
+		field gives "store"
+	end 'place'
+end 'wideningPlaceAct'
+
+// The same act, as the advice that opens a sentence asks for it through a concrete instance.
+function wideningPlaceActAdvice(place WideningPlace) returns String
+	return match place 'place'
+		argument gives "Call"
+		field gives "Store"
+	end 'place'
+end 'wideningPlaceActAdvice'
+
+// How a value is handed to the place — the verb a refusal of an already-held value opens with, and the one its
+// advice repeats for the concrete conformer.
+function wideningPlaceHandOver(place WideningPlace, iface String) returns String
+	return match place 'place'
+		argument(label) gives "pass a value already held at the interface type '{iface}' as {label}"
+		field(site) gives "store a value already held at the interface type '{iface}' into the field '{site}'"
+	end 'place'
+end 'wideningPlaceHandOver'
+
+function wideningPlaceHandOverAdvice(place WideningPlace) returns String
+	return match place 'place'
+		argument gives "Pass"
+		field gives "Store"
+	end 'place'
+end 'wideningPlaceHandOverAdvice'
+
+// ⭐ **A CONCRETE CONFORMER AGAINST A CLAIM ALREADY SUBSTITUTED THROUGH ITS POSITION'S INSTANCE — E3127 for both
+// positions that have one.**
+function checkConformerAgainstSiteClaim(project Project, signatures ProgramSignatures, func IrFunction, site GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, place WideningPlace, line LineNumber, column ColumnNumber, filePath FilePath)
+	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: site, conformerTag: conformerTag, conformerNameId: conformerNameId, interfaceName: interfaceName)
+	let conformer = typeDisplayName(project, tag: conformerTag, nameId: conformerNameId, readerFilePath: func.sourceFilePath)
 	let siteText = existentialSiteClaimSentence(interfaceName, claim: claim)
 	let associated = String.from(claim.associatedName)
+	let noun = wideningPlaceNoun(place)
 
 	match claim.status 'claim'
 		agrees then break 'claim'
-		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — {existentialSiteClaimContradiction(conformer, claim: claim)}. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: callRange.line, column: callRange.column, filePath: filePath)
-		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — '{String.from(claim.siteBinding)}' is a type parameter this call fixes to nothing, so what '{conformer}' would have to bind '{associated}' to is not known here. Call through a concrete instance of the declaring type, or write the binding the conformers declare", line: callRange.line, column: callRange.column, filePath: filePath)
+		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {noun}, which is declared at {siteText} — {existentialSiteClaimContradiction(conformer, claim: claim)}. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: line, column: column, filePath: filePath)
+		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {noun}, which is declared at {siteText} — '{String.from(claim.siteBinding)}' is a type parameter this {wideningPlaceAct(place)} fixes to nothing, so what '{conformer}' would have to bind '{associated}' to is not known here. {wideningPlaceActAdvice(place)} through a concrete instance of the declaring type, or write the binding the conformers declare", line: line, column: column, filePath: filePath)
 	end 'claim'
-end 'checkExistentialSiteClaimAtArgument'
+end 'checkConformerAgainstSiteClaim'
 
-// Was the callee's claim DEFERRED — i.e. is this the one shape an already-existential argument cannot be let
-// through? Asked by putting the DECLARED, UNSUBSTITUTED site through the same verdict every other caller uses:
-// `unresolvable` there is exactly "some position's argument is the declaring type's own parameter", which is
-// E3125's deferral condition read back. Asking it this way rather than with a second predicate is what keeps
+// Was the position's claim DEFERRED — i.e. is this the one shape a value already held at the interface cannot be
+// let through? Asked by putting the DECLARED, UNSUBSTITUTED site through the same verdict every other caller
+// uses: `unresolvable` there is exactly "some position's argument is the declaring type's own parameter", which
+// is E3125's deferral condition read back. Asking it this way rather than with a second predicate is what keeps
 // the arity gate and the held-position exemption stated once.
 //
 // The `disagrees` arm cannot be reached and is not swept into the pass: the conformer lookup is keyed by the
 // ARRIVING type's name, which here is an INTERFACE's, and no `type` may share a name with an interface (E3006).
-function checkDeferredClaimAgainstExistentialArgument(project Project, signatures ProgramSignatures, declaredSite GenericInstanceId, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, paramName ByteArray, position ParamCount, callRange SourceRange, filePath FilePath)
-	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: declaredSite, conformerTag: argTag, conformerNameId: argNameId, interfaceName: interfaceName)
+function checkDeferredClaimAgainstExistentialValue(project Project, signatures ProgramSignatures, declaredSite GenericInstanceId, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, place WideningPlace, line LineNumber, column ColumnNumber, filePath FilePath)
+	let claim = existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: declaredSite, conformerTag: valueTag, conformerNameId: valueNameId, interfaceName: interfaceName)
+	let iface = String.from(interfaceName)
 
 	match claim.status 'declared'
 		agrees then break 'declared'
-		disagrees then panic("checkDeferredClaimAgainstExistentialArgument: the argument is held at interface '{String.from(interfaceName)}' and the claim reports a conformer binding — `conformerBindingThroughInstance` keys the lookup by the arriving type's name, which is that interface's, and E3006 forbids a `type` sharing it")
-		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot pass a value already held at the interface type '{String.from(interfaceName)}' as {argParamLabel(paramName, position: position)}, which is declared at {existentialSiteClaimSentence(interfaceName, claim: claim)} — '{String.from(claim.siteBinding)}' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare {argParamLabel(paramName, position: position)} at '{String.from(interfaceName)}' with no `with` clause", line: callRange.line, column: callRange.column, filePath: filePath)
+		disagrees then panic("checkDeferredClaimAgainstExistentialValue: the value is held at interface '{iface}' and the claim reports a conformer binding — `conformerBindingThroughInstance` keys the lookup by the arriving type's name, which is that interface's, and E3006 forbids a `type` sharing it")
+		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot {wideningPlaceHandOver(place, iface: iface)}, which is declared at {existentialSiteClaimSentence(interfaceName, claim: claim)} — '{String.from(claim.siteBinding)}' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the {wideningPlaceAct(place)} to settle it against. {wideningPlaceHandOverAdvice(place)} the concrete conformer, or declare {wideningPlaceNoun(place)} at '{iface}' with no `with` clause", line: line, column: column, filePath: filePath)
 	end 'declared'
-end 'checkDeferredClaimAgainstExistentialArgument'
+end 'checkDeferredClaimAgainstExistentialValue'
 
 // ⭐ **THE `return` POSITION'S HALF, AND THE ASYMMETRY WITH THE ARGUMENT IS THE WHOLE OF WHY `unresolvable`
 // EXISTS.** A `return` is checked ONCE, against the shared body's DECLARATION view, so there is no call whose
@@ -7306,7 +7382,8 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic then break 'op'
+				rawIntrinsic or
+				existentialWitness then break 'op'
 		end 'op'
 	end 'eachOp'
 end 'checkReturnsAgainstInterface'
@@ -7325,6 +7402,73 @@ function checkOneReturnedValue(project Project, func IrFunction, value ValueId, 
 		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in '{String.from(func.name)}'", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'widening'
 end 'checkOneReturnedValue'
+
+// ⭐⭐ **THE FIELD-STORE HALF OF THE WIDENING RULE.** A store into an interface-typed field widens a concrete
+// conformer exactly as a call argument does, the field's declared type naming the interface, so it asks the same
+// verdict: conformance, the float refusal, and E3127 against the field's `with` claim. Without it a
+// non-conformer reaches `ensureWitnessTable` and panics the compiler in `witnessSlotImpl`.
+//
+// ⚠ **IT IS ALSO THE THIRD DISCHARGE OF E3125's DEFERRAL.** A claim written over the declaring type's own
+// parameter (`Taker with T` inside `type Box uses T`) is checked nowhere whole-program; the argument and the
+// `return` refuse what they cannot settle, and a field store is the remaining way a value comes to be held at
+// such a claim.
+function checkExistentialFieldStores(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		if func.existentialFieldStores.count() == 0 'storesIntoNoInterfaceField'
+			continue
+		end 'storesIntoNoInterfaceField'
+
+		// A stdlib body no path from `main` reaches is dropped before the back end — `checkReturnedValueTypes`' gate.
+		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		for store in func.existentialFieldStores 'eachStore'
+			checkOneExistentialFieldStore(project, func: func, store: store)
+		end 'eachStore'
+	end 'eachFunc'
+end 'checkExistentialFieldStores'
+
+function checkOneExistentialFieldStore(project Project, func IrFunction, store ExistentialFieldStore)
+	let valueTag = try func.valueTags.get(store.value) otherwise panic("checkOneExistentialFieldStore: value v{store.value} of function '{String.from(func.name)}' has no recorded type — every SSA value is minted with its type columns")
+	let valueNameId = try func.valueNameIds.get(store.value) otherwise panic("checkOneExistentialFieldStore: value v{store.value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	let displayName = String.from(store.interfaceName)
+	let site = String.from(store.fieldSite)
+
+	match existentialWideningVerdict(project, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName) 'widening'
+		widens then checkExistentialSiteClaimAtFieldStore(project, func: func, store: store, valueTag: valueTag, valueNameId: valueNameId)
+		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot store a `float` into the field '{site}', which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the field as `float`", line: store.line, column: store.column, filePath: store.filePath)
+		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("field type mismatch for '{site}'", conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
+	end 'widening'
+end 'checkOneExistentialFieldStore'
+
+// ⭐ **THE FIELD STORE'S HALF OF E3127.** The record the field belongs to fixes the claim where the call's instance
+// fixes an argument's: `b.t = …` on a `Box with Integer` substitutes `T`, while a store into `Self{…}` or `self`
+// inside the shared body substitutes nothing.
+//
+// ⚠ **A VALUE ALREADY HELD AT THE INTERFACE IS ADMITTED WHEN IT WAS DECLARED AT THE SAME CLAIM**, which is the
+// one thing that separates a field store from an argument: `static function create(t TakerOfT)` storing its
+// parameter into its own `TakerOfT` field restates a claim the call that passed `t` already settled. Any other
+// already-held value is refused as an argument is (`checkDeferredClaimAgainstExistentialValue`).
+function checkExistentialSiteClaimAtFieldStore(project Project, func IrFunction, store ExistentialFieldStore, valueTag ValueTypeTag, valueNameId TypeNameId)
+	let declaredSite = try store.claims.get(0) otherwise return
+	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtFieldStore")
+	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: store.subject, siteInstance: declaredSite)
+	let place = WideningPlace.field(String.from(store.fieldSite))
+
+	if valueTag != ValueTypeTag.interfaceRef 'aConcreteConformer'
+		checkConformerAgainstSiteClaim(project, signatures: signatures, func: func, site: site, conformerTag: valueTag, conformerNameId: valueNameId, interfaceName: store.interfaceName, place: place, line: store.line, column: store.column, filePath: store.filePath)
+		return
+	end 'aConcreteConformer'
+
+	if let held = try func.valueExistentialInstances.get(store.value) 'declaredAtAClaim'
+		if held == site 'restatesTheFieldsClaim'
+			return
+		end 'restatesTheFieldsClaim'
+	end 'declaredAtAClaim'
+
+	checkDeferredClaimAgainstExistentialValue(project, signatures: signatures, declaredSite: declaredSite, valueTag: valueTag, valueNameId: valueNameId, interfaceName: store.interfaceName, place: place, line: store.line, column: store.column, filePath: store.filePath)
+end 'checkExistentialSiteClaimAtFieldStore'
 
 // ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
 // reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument
@@ -7364,8 +7508,8 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// ⭐⭐ **AN INTERFACE-TYPED PARAMETER IS A WIDENING POSITION, NOT AN AGREEMENT ONE
 	// (P1.7a-existentials slice 1).** A conforming concrete value gains a witness half here and becomes a fat
 	// pointer, so `TypeClass.interfaceValue` deliberately agrees with nothing and the tag check below would
-	// refuse every legal call. The verdict is `existentialWideningVerdict` — the ONE door BOTH widening
-	// positions ask (the RETURN is the other since P1.7a slice 2) — and it is asked WHOLE-PROGRAM rather than
+	// refuse every legal call. The verdict is `existentialWideningVerdict` — the ONE door every widening
+	// position asks — and it is asked WHOLE-PROGRAM rather than
 	// at the parse for the reason `checkLiteralInitConformance` states: a conformer's `implements` clause is
 	// recorded when its own file is parsed, and the two files have no ordering.
 	//

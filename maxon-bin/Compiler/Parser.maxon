@@ -2007,7 +2007,8 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives AsyncCalleeLookup.none
+			rawIntrinsic or
+			existentialWitness gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -4213,7 +4214,8 @@ function nascentOpBranchesTo(op MaxonOp, target BlockId) returns bool
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives false
+			rawIntrinsic or
+			existentialWitness gives false
 	end 'k'
 end 'nascentOpBranchesTo'
 
@@ -14568,6 +14570,10 @@ export type Parser
 	// sibling value columns, and for their reason: its keys are ids in THIS function's SSA space.
 	var valueExistentialInstance as ValueExistentialInstanceColumn
 
+	// Every store this function makes into an interface-typed field (`ExistentialFieldStore`), started at the
+	// shared empty and replaced on the first write, and swapped across a closure body for its sibling's reason.
+	var existentialFieldStores as ExistentialFieldStoreArray
+
 	// ⭐⭐ **THE RANGED TYPEALIAS EACH VALUE'S DECLARED TYPE NAMES, where the value's own type columns cannot
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
@@ -15931,6 +15937,7 @@ export type Parser
 			valueClosureEnv: ValueIdArray.create(),
 			valueBrandIds: TypeNameIdArray.create(),
 			valueExistentialInstance: noValueExistentialInstances,
+			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			valueDeclaredAlias: noValueDeclaredAliases,
 			countedValueRanges: noProvenIntRanges,
 			charLiteralOps: noCharLiteralOps,
@@ -24323,21 +24330,6 @@ export type Parser
 		// Recorded for OPEN.md.
 		let outcome = self.signatures.declaredOutcome(decl)
 
-		// ⭐⭐ **A STRUCT CONSTRUCTION FILLING AN INTERFACE-TYPED FIELD IS REFUSED HERE, AND HERE IS THE
-		// EARLIEST DOOR THAT CAN (W116 review).** The constant evaluator cannot see such a field at all — the
-		// swept column is still a bare `named` while it runs — so its slot check compared a scalar against a
-		// slot nothing had yet called an interface and admitted a box with an uninitialized witness half.
-		// `ProgramSignatures.existentialFieldOfConstConstruction` carries the measurement; the SENTENCE is the
-		// body path's own, through the one producer both doors throw it from.
-		//
-		// It reads the outcome bound just above rather than fetching its own: the settled outcome is one fact
-		// and `declaredOutcome` carries the drift guard that asserts it, so asking twice would be one lookup
-		// spent twice on a value that cannot have changed between the two lines.
-		match self.signatures.existentialFieldOfConstConstruction(outcome) 'existentialField'
-			none then break 'existentialField'
-			existentialField(layout, index) then throw self.existentialFieldStoreUnsupported(layout, index: index, line: decl.nameLine, column: decl.nameColumn)
-		end 'existentialField'
-
 		match outcome 'outcome'
 			// ⭐ **NOTHING A TOP-LEVEL BINDING CAN FOLD TO IS UNSTORABLE.** A scalar occupies its `.data` slot
 			// as a value; a MANAGED one occupies it as a POINTER that `__module_init` fills before `main` (see
@@ -29073,6 +29065,7 @@ export type Parser
 		self.declaringWitnessParamCount = witnessParamCount
 		self.valueBrandIds = TypeNameIdArray.create()
 		self.valueExistentialInstance = noValueExistentialInstances
+		self.existentialFieldStores = sharedEmptyExistentialFieldStores
 
 		// Per-function for the identical reason: a value's declared ranged alias names an id in THIS
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
@@ -30753,6 +30746,7 @@ export type Parser
 		self.declaringWitnessParamCount = 0
 		self.valueBrandIds = TypeNameIdArray.create()
 		self.valueExistentialInstance = noValueExistentialInstances
+		self.existentialFieldStores = sharedEmptyExistentialFieldStores
 		self.valueDeclaredAlias = noValueDeclaredAliases
 		self.countedValueRanges = noProvenIntRanges
 
@@ -34097,7 +34091,8 @@ export type Parser
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives DiscardedCallee.notACall
+				rawIntrinsic or
+				existentialWitness gives DiscardedCallee.notACall
 		end 'producer'
 	end 'tryCallAt'
 
@@ -36244,6 +36239,8 @@ export type Parser
 			entries(byValue) then func.valueExistentialInstances = byValue
 		end 'function'
 
+		func.existentialFieldStores = self.existentialFieldStores
+
 		// ⭐ **W117's per-value marks travel to SemanticCheck the same way, at the same moment, for the same
 		// reason**: they name ids in THIS function's SSA space, so they must be handed over while that space is
 		// still the current one. The call-site half of the rule cannot run in the parser — whether `bump(a)` is
@@ -37352,7 +37349,7 @@ export type Parser
 		// `ConformanceCheck.valueWidensToInterface`, which takes the whole `Project` — and the parser holds
 		// none, because a conformer's `implements` clause is recorded when its OWN file is parsed and the two
 		// files have no ordering. `SemanticCheck.checkOneReturnedValue` asks it whole-program through the
-		// SAME door the argument position asks, so the two widening positions cannot come to disagree about
+		// SAME door the argument position asks, so the widening positions cannot come to disagree about
 		// what conforms — nor about a `float`, which conforms and still has no way into the fat pointer.
 		//
 		// The P1.9 ranged-return site below is not skipped by returning early: it is gated on
@@ -38544,7 +38541,8 @@ export type Parser
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives false
+				rawIntrinsic or
+				existentialWitness gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -38618,7 +38616,8 @@ export type Parser
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives DiscardedCallee.notACall
+				rawIntrinsic or
+				existentialWitness gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -38731,7 +38730,8 @@ export type Parser
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic gives try self.rejectTryTarget(tryTok)
+				rawIntrinsic or
+				existentialWitness gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -43163,12 +43163,14 @@ export type Parser
 		return retained
 	end 'retainBorrowedByteRecord'
 
-	// ⭐ **AN EXISTENTIAL'S FRESH NAME KEEPS THE SOURCE'S WITNESS.** A retain
-	// takes a second owner of the conformer's record — or, for a byte record, a CLONE of it — and in neither
-	// case does the conformer change, so the co-owner dispatches through the same table. But it is a different
-	// ValueId, and the witness column is keyed by ValueId, so the pairing has to be carried or the first
-	// dispatch on the result panics in `witnessOfValue`. A non-existential source has no witness half and
-	// pairs nothing, which is what lets the two retain doors share this step.
+	// ⭐ **AN EXISTENTIAL'S FRESH NAME KEEPS THE SOURCE'S WITNESS AND THE `with` CLAIM IT WAS DECLARED AT.** A
+	// retain takes a second owner of the conformer's record — or, for a byte record, a CLONE of it — and in
+	// neither case does the conformer change, so the co-owner dispatches through the same table and binds what
+	// the source bound. But it is a different ValueId, and both columns are keyed by ValueId, so both have to be
+	// carried: without the witness the first dispatch on the result panics in `witnessOfValue`, and without the
+	// claim a field store of the result is refused as though its binding had never been settled
+	// (`SemanticCheck.checkExistentialSiteClaimAtFieldStore`). A non-existential source has neither and carries
+	// nothing, which is what lets the two retain doors share this step.
 	//
 	// ⚠ Single-sourced because `retainBorrowedAggregate` and `coOwnBorrowedForConsume` are two callers of ONE
 	// retain: spelled at either door it looks like a property of that door rather than of the retain.
@@ -43178,6 +43180,10 @@ export type Parser
 		end 'notAnExistential'
 
 		self.pairInterfaceWitness(retained, witness: self.witnessOfValue(from))
+
+		if let instance = try self.existentialInstanceOfValue(from) 'declaredAtAClaim'
+			self.recordValueExistentialInstance(retained, instance: instance)
+		end 'declaredAtAClaim'
 	end 'carryInterfaceWitness'
 
 	// ⭐⭐ **A PROMOTION'S FRESH NAME KEEPS THE SOURCE'S DECLARED SURFACE (W41)** — `carryInterfaceWitness`'s
@@ -46708,7 +46714,8 @@ export type Parser
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
-				rawIntrinsic then return false
+				rawIntrinsic or
+				existentialWitness then return false
 		end 'op'
 	end 'sourceCameFromAnIterationThrowingCall'
 
@@ -60930,49 +60937,23 @@ export type Parser
 		return false
 	end 'isRepeatedOwningMove'
 
-	// ⭐⭐ **WHAT MAY STAND IN AN INTERFACE-TYPED FIELD (P1.7a-existentials slice 2).** `emitFieldStore` writes
-	// BOTH halves of the fat pointer and reads the witness off the value's own column (`witnessOfValue`), so
-	// every value reaching that store must already carry one. Exactly one kind does: an EXISTENTIAL, which
-	// forwards the witness it was given.
+	// ⭐⭐ **WHAT MAY STAND IN AN INTERFACE-TYPED FIELD.** A value already held at an interface must be held at
+	// THIS one, EXACTLY, and deliberately not by the `extends`-transitive rule: a `Derived` witness addresses
+	// `Derived`'s table, whose slot ORDER is not `Base`'s, so forwarding one into a `Base` slot is a wrong
+	// function pointer rather than a widening (`aggregateNameOf`'s existential arm carries the measurement).
+	// `requireManagedValueMatches` decides that, over the DECLARED interface type.
 	//
-	// Same-interface is EXACT, and deliberately not the `extends`-transitive rule: a `Derived` witness
-	// addresses `Derived`'s table, whose slot ORDER is not `Base`'s, so forwarding one into a `Base` slot is a
-	// wrong function pointer rather than a widening (`aggregateNameOf`'s existential arm carries the
-	// measurement). `requireManagedValueMatches` decides that, over the DECLARED interface type — which is why
-	// this door does not restate the comparison.
-	//
-	// ⛔ **A CONCRETE CONFORMER IS REFUSED HERE, AND THE REASON IS A TIER BOUNDARY RATHER THAN A MISSING
-	// WIDTH.** Widening one needs its witness table NAMED at the Maxon tier — the call ARGUMENT never has to,
-	// because lowering reads the CALLEE's declared parameter types and materializes it there
-	// (`appendExistentialWitnessArgs`), and a field store has no callee to read a signature off. Naming it
-	// here would need two things this tier does not have: a Maxon op carrying `(conformer, interface)`, and
-	// the conformance VERDICT — `ConformanceCheck.valueWidensToInterface` takes the whole `Project`, and the
-	// parser writes only into a `FileParseArtifact` (it holds no `Project` at all). Without that verdict a
-	// non-conformer would reach `ensureWitnessTable` and PANIC in `witnessSlotImpl`, which is the one
-	// unacceptable outcome. So it is refused with the position of the value and the workaround the ABI
-	// already supports — pass it through a named function's interface PARAMETER, which is what every widening
-	// in the corpus does.
+	// A CONCRETE value is admitted and widened at the store (`fieldStoreWitness`). Whether it conforms is
+	// decided whole-program, for the reason `parseReturnStatement` gives at the other widening position the
+	// parser admits unjudged.
 	function widenValueIntoExistentialField(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
 		if self.tagOf(value) != ValueTypeTag.interfaceRef 'aConcreteConformer'
-			throw self.existentialFieldStoreUnsupported(layout, index: index, line: anchor.line, column: anchor.column)
+			return value
 		end 'aConcreteConformer'
 
 		try self.requireManagedValueMatches(fieldType, isString: false, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: layout.name, placeBrand: self.declaredBrand(layout.fieldDeclaredBrand(index), resolved: fieldType), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		return value
 	end 'widenValueIntoExistentialField'
-
-	// ⭐ **THE ONE SPELLING OF "NOTHING THIS TIER CAN PRODUCE MAY FILL AN INTERFACE-TYPED FIELD" (W116
-	// review)** — raised by the BODY's literal, where the value is a concrete conformer, and by a TOP-LEVEL
-	// struct construction, where there is no value at all because a constant evaluator mints none. The two
-	// doors have different reasons for arriving and the identical reason for being refused, which is the
-	// whole of what the sentence says; written twice it would be one wall described two ways, free to drift
-	// into two.
-	//
-	// It takes a POSITION rather than a token because its second caller has no token to offer: a top-level
-	// binding is refused at its declared NAME, which the decl carries as a line and a column.
-	function existentialFieldStoreUnsupported(layout StructLayout, index FieldIndex, line LineNumber, column ColumnNumber) returns ParseError
-		return ParseError.unsupported("storing a value of a CONCRETE type into the interface-typed field '{self.fieldSiteName(layout, index: index)}' — {ExistentialIsFatPointerReason}, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type", line: line, column: column)
-	end 'existentialFieldStoreUnsupported'
 
 	// The `<Struct>.<field>` label a managed-field type mismatch names.
 	// The declared name of one field — the single `get` that both the dotted prose name below and the
@@ -63437,12 +63418,29 @@ export type Parser
 			return arg
 		end 'aGreenThread'
 
+		// ⭐ **A CONCRETE CONFORMER WIDENED INTO AN INTERFACE-TYPED SLOT MOVES IN BY ITS OWN TYPE'S PROTOCOL.** The
+		// slot's class says only "existential", while an `int` conformer owns nothing and a `String` one is a byte
+		// record whose borrowed literal cannot take a reference.
+		if payloadClassIsExistential(class) and self.tagOf(arg) != ValueTypeTag.interfaceRef 'aConcreteConformer'
+			return try self.moveConcreteValueInto(arg, argBareLocal: argBareLocal, range: range)
+		end 'aConcreteConformer'
+
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
 
 		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), range: range)
 	end 'moveInPayload'
+
+	// A value whose own type is concrete, moved into durable storage by that type's protocol: nothing for a value
+	// that owns no heap, a byte record's retain for a String or Character, and a reference for an aggregate.
+	function moveConcreteValueInto(arg ValueId, argBareLocal bool, range SourceRange) returns ValueId throws ParseError
+		if not self.valueIsManagedHeap(arg) 'ownsNoHeap'
+			return arg
+		end 'ownsNoHeap'
+
+		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), range: range)
+	end 'moveConcreteValueInto'
 
 	// ⭐⭐ **MOVE A VALUE INTO A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER (W41-opaque)** —
 	// `moveManagedValueInto`'s twin for the one slot kind whose protocol is not a compile-time fact. The split
@@ -63457,11 +63455,7 @@ export type Parser
 	// than through the descriptor so that a body which knows the type never pays a run-time dispatch for it.
 	function moveOpaqueValueInto(arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if self.tagOf(arg) != ValueTypeTag.typeParameter 'substitutedToAConcreteType'
-			if not self.valueIsManagedHeap(arg) 'trivialConcrete'
-				return arg
-			end 'trivialConcrete'
-
-			return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), range: range)
+			return try self.moveConcreteValueInto(arg, argBareLocal: argBareLocal, range: range)
 		end 'substitutedToAConcreteType'
 
 		if self.opaqueSlotTakesItsOwnReference(arg) 'referenceThroughTheDescriptor'
@@ -79060,16 +79054,44 @@ export type Parser
 	function emitFieldStore(box ValueId, layout StructLayout, index FieldIndex, value ValueId, range SourceRange)
 		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 		let offset = layout.offsetOfField(index)
-		self.emitIndirectStore(box, offset: offset, value: value, storageType: self.fieldStorageType(declared), range: range)
 
-		// ⭐ **THE WITNESS HALF, STORED BESIDE THE VALUE (P1.7a-existentials slice 2)** — the exact mirror of
-		// `emitFieldLoad`'s second load, at the same offset, and the write that makes the read's answer a fact
-		// about the box rather than a guess. Both the `Self{…}` fill and the assignment statement land here,
-		// so a literal that recorded the conformer and an assignment that did not is unrepresentable.
-		if maxonTypeTag(declared) == ValueTypeTag.interfaceRef 'existentialField'
-			self.emitIndirectStore(box, offset: offset + InterfaceWitnessHalfOffset, value: self.witnessOfValue(value), storageType: MaxonType.integer, range: range)
-		end 'existentialField'
+		if maxonTypeTag(declared) != ValueTypeTag.interfaceRef 'oneWordSlot'
+			self.emitIndirectStore(box, offset: offset, value: value, storageType: self.fieldStorageType(declared), range: range)
+			return
+		end 'oneWordSlot'
+
+		// ⭐ **THE WITNESS HALF, STORED BESIDE THE VALUE** — the exact mirror of `emitFieldLoad`'s second load, at
+		// the same offset, and the write that makes the read's answer a fact about the box rather than a guess.
+		// Both the `Self{…}` fill and the assignment statement land here, so a literal that recorded the
+		// conformer and an assignment that did not is unrepresentable.
+		let witness = self.fieldStoreWitness(box, layout: layout, index: index, declared: declared, value: value, range: range)
+		self.emitIndirectStore(box, offset: offset, value: value, storageType: self.fieldStorageType(declared), range: range)
+		self.emitIndirectStore(box, offset: offset + InterfaceWitnessHalfOffset, value: witness, storageType: MaxonType.integer, range: range)
 	end 'emitFieldStore'
+
+	// ⭐⭐ **A STORE INTO AN INTERFACE-TYPED FIELD IS A WIDENING SITE, AND THE FIELD'S DECLARED TYPE NAMES THE
+	// WITNESS** — as a callee's declared parameter names it for an argument. A value already held at the
+	// interface forwards the witness it was paired with; a concrete conformer gains
+	// `__witness_<conformer>.<Iface>` through an `existentialWitness` op, which lowering materializes through
+	// the argument position's own door.
+	//
+	// ⚠ **EVERY STORE IS RECORDED, FORWARDED OR NOT.** A conformer owes the conformance verdict and the field's
+	// `with` claim; a forwarded value owes the claim when the field wrote it over its declaring type's own
+	// parameter. Neither is this tier's to decide — a conformer's `implements` clause is recorded when its own
+	// file is parsed — so `SemanticCheck.checkExistentialFieldStores` asks both, whole-program.
+	function fieldStoreWitness(box ValueId, layout StructLayout, index FieldIndex, declared MaxonType, value ValueId, range SourceRange) returns ValueId
+		let interfaceName = interfaceNameOfType(declared, typeNames: self.artifact.typeNames)
+		self.existentialFieldStores = writableExistentialFieldStores(self.existentialFieldStores)
+		self.existentialFieldStores.push(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: self.signatures.fieldExistentialSites(layout, index: index), fieldSite: self.fieldSiteName(layout, index: index).toByteArray(), line: range.line, column: range.column, filePath: self.filePath))
+
+		if self.tagOf(value) == ValueTypeTag.interfaceRef 'forwardsItsOwnWitness'
+			return self.witnessOfValue(value)
+		end 'forwardsItsOwnWitness'
+
+		let witness = self.mintValueOfType(MaxonType.integer)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), range: range)
+		return witness
+	end 'fieldStoreWitness'
 
 	// ⭐ **THE ONE `storeIndirect` EMIT**, the mirror of `emitIndirectLoad` above and true on the same
 	// terms. A field write, a union tag store, a union payload store, a union's unused-slot zero-fill, a
@@ -80651,6 +80673,7 @@ export type Parser
 		let savedValueWitnessIds = self.valueWitnessIds
 		let savedValueBrandIds = self.valueBrandIds
 		let savedValueExistentialInstance = self.valueExistentialInstance
+		let savedExistentialFieldStores = self.existentialFieldStores
 		let savedValueDeclaredAlias = self.valueDeclaredAlias
 		let savedCountedValueRanges = self.countedValueRanges
 
@@ -80878,6 +80901,7 @@ export type Parser
 		// to save either — the pair is absent from all three lists, on purpose.
 		self.valueBrandIds = TypeNameIdArray.create()
 		self.valueExistentialInstance = noValueExistentialInstances
+		self.existentialFieldStores = sharedEmptyExistentialFieldStores
 		self.valueDeclaredAlias = noValueDeclaredAliases
 		self.countedValueRanges = noProvenIntRanges
 		self.charLiteralOps = noCharLiteralOps
@@ -81163,6 +81187,7 @@ export type Parser
 		self.valueWitnessIds = savedValueWitnessIds
 		self.valueBrandIds = savedValueBrandIds
 		self.valueExistentialInstance = savedValueExistentialInstance
+		self.existentialFieldStores = savedExistentialFieldStores
 		self.valueDeclaredAlias = savedValueDeclaredAlias
 		self.countedValueRanges = savedCountedValueRanges
 		self.charLiteralOps = savedCharLiteralOps
@@ -82172,9 +82197,7 @@ export type Parser
 
 		// ⛔⛔ **A FOLD THAT BUYS NO IMAGE MUST NOT HAPPEN, AND THIS IS WHAT KEEPS THE REWRITE FROM CHANGING
 		// WHAT A PROGRAM MEANS.** The two nodes are not interchangeable outside the imaged case: a `construct`
-		// is built INLINE by `__module_init` from a layout, so it inherits that node's own rules — among them
-		// the refusal of a construction with an interface-typed field
-		// (`ProgramSignatures.existentialFieldOfConstConstruction`, a measured access violation) — while a
+		// is built INLINE by `__module_init` from a layout, so it inherits that node's own rules, while a
 		// `call` runs the factory, which has none of them. Folding unconditionally would refuse programs that
 		// compile today and would move where several diagnostics are blamed. Bounded to the case the fold
 		// exists for, the rewrite is invisible except that the global stops being built at all.

@@ -15,14 +15,14 @@
 //
 // It is asked HERE for `FormatterSelfTest`'s stated reason — a spec case cannot reach `IrFunction`, which
 // lives in `Compiler/`, where the corpus's vocabulary does not go — and it costs two function records and
-// six reference comparisons.
+// one reference comparison per placeholder.
 //
 // ⚠ **IT ASKS ABOUT `createFromStd` AND MUST NOT BE POINTED AT `create`.** The parser's door keeps the
 // shared singletons deliberately, for its thousands of functions, and nothing reaches it off a worker.
 
 typealias AliasedPlaceholderNames = Array with String
 
-// The six placeholders `createFromStd` allocates, asked as one question. A name lands in the report for
+// The placeholders `createFromStd` allocates, asked as one question. A name lands in the report for
 // each pair that came back the SAME box; an empty report is the invariant holding.
 export function requireWorkerFunctionPlaceholdersAreFresh()
 	let first = IrFunction.createFromStd(b"__selfTestPlaceholdersFirst", returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
@@ -33,6 +33,10 @@ export function requireWorkerFunctionPlaceholdersAreFresh()
 	if first.valueExistentialInstances is second.valueExistentialInstances 'existentialInstances'
 		aliased.push("valueExistentialInstances")
 	end 'existentialInstances'
+
+	if first.existentialFieldStores is second.existentialFieldStores 'existentialFieldStores'
+		aliased.push("existentialFieldStores")
+	end 'existentialFieldStores'
 
 	if first.immutableGlobalAliasValues is second.immutableGlobalAliasValues 'globalAliasValues'
 		aliased.push("immutableGlobalAliasValues")

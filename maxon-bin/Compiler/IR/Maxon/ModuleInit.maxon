@@ -456,10 +456,27 @@ function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields Glo
 	for field in fields 'eachField'
 		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, range: range)
 		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: field.storageType), range: range)
+
+		match field.slot 'slot'
+			oneWord then continue
+			existential(interfaceName, claims, fieldSite, declFilePath) then storeWidenedWitness(fn, box: box, offset: field.offset, value: value, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, declFilePath: declFilePath, range: range)
+		end 'slot'
 	end 'eachField'
 
 	return box
 end 'builtStructBox'
+
+// ⭐ **THE WITNESS HALF OF AN INTERFACE-TYPED FIELD AT MODULE SCOPE** — the store a body's literal makes
+// (`Parser.fieldStoreWitness`), recorded for the same whole-program check. The witness is always materialized:
+// a folded constant is concrete, and a nested factory returning an interface is refused before an initializer
+// reaches here (`Parser.nestedFactoryReturnRefusal`), so no value already held at an interface arrives.
+function storeWidenedWitness(fn SynthesizedFunction, box ValueId, offset ByteOffset, value ValueId, interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, declFilePath FilePath, range SourceRange)
+	fn.recordExistentialFieldStore(ExistentialFieldStore.create(value, subject: box, interfaceName: interfaceName, claims: claims, fieldSite: fieldSite, line: range.line, column: range.column, filePath: declFilePath))
+
+	let witness = fn.mintOfType(MaxonType.integer)
+	fn.emit(MaxonOp.existentialWitness(witness, interfaceName: interfaceName, conformer: value), range: range)
+	fn.emit(MaxonOp.storeIndirect(box, offset: offset + InterfaceWitnessHalfOffset, value: witness, valueType: MaxonType.integer), range: range)
+end 'storeWidenedWitness'
 
 // Release every argument record the callee did not take. AFTER the call, never before: the callee reads
 // through the borrow, so the record has to outlive the body it was lent to.
@@ -707,6 +724,11 @@ export type SynthesizedFunction
 		self.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
 		return addr
 	end 'emitSlotAddr'
+
+	export function recordExistentialFieldStore(store ExistentialFieldStore)
+		self.func.existentialFieldStores = writableExistentialFieldStores(self.func.existentialFieldStores)
+		self.func.existentialFieldStores.push(store)
+	end 'recordExistentialFieldStore'
 
 	// Append a body op, recording its span and the origin of the value it defines — the choke point
 	// `FileParseArtifact.emitOp` is for parsed code, and it keeps the identical two invariants.

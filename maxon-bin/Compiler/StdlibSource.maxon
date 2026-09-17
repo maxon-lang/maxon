@@ -312,6 +312,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	// Built once, here, and handed to both walks below: the short-circuit and the precise walk ask
 	// different questions of the same list, and a second build would be the same arena walked twice.
 	let initCallees = signatures.globalInitCallees()
+	let initWitnessInterfaces = signatures.globalInitWitnessInterfaces()
 
 	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code REACHES stdlib, no stdlib function is
 	// reachable at all — so an EMPTY reached set is the exact answer to hand `classifyLibraryReach`,
@@ -321,7 +322,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	// memory cost of loading stdlib source into a program that never touches it, so skipping it keeps the
 	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
 	// function referenced by nothing is reachable from nothing.
-	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
+	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces) 'noneReferenced'
 		let noneReached = classifyLibraryReach(roster, reachable: FunctionNameSet.create())
 
 		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached)
@@ -330,7 +331,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
 	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
 	// actually uses stdlib.
-	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
+	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces)
 	let split = classifyLibraryReach(roster, reachable: reachable)
 
 	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached)
@@ -371,15 +372,16 @@ export function growStdlibBodyDemand(project Project, module MaxonModule, signat
 	end 'seed'
 
 	let initCallees = signatures.globalInitCallees()
+	let initWitnessInterfaces = signatures.globalInitWitnessInterfaces()
 
 	// The same short-circuit `deriveLibraryFacts` opens with, and it is the whole saving: nothing this
 	// program reaches — no op in its code, and no root on either list — names a stdlib function, so no
 	// stdlib body can be reached and the walk's O(functions) name->index map is never built.
-	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees) 'noneReferenced'
+	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces) 'noneReferenced'
 		return false
 	end 'noneReferenced'
 
-	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees)
+	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces)
 
 	// ⚠ **THE ANSWER IS RECORDED AS A SET OF FILES, NOT OF NAMES, AND THAT IS WHAT SURVIVES THE MEMO
 	// DROP.** `queryAllModule` clears `parseCache` before it re-folds, so nothing may ask a later round
@@ -728,7 +730,7 @@ end 'classifyLibraryReach'
 // resolution, keys on the real callee, and prunes it there. What this costs is only that
 // `scanRuntimeUsage` may read an unreached sibling overload's body — and only in a program that already
 // calls that stdlib name.
-function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray) returns FunctionNameSet throws CompileError
+function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray, initWitnessInterfaces ByteArrayArray) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	var reached = BoolArray.create()
@@ -793,6 +795,11 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var witnessInterfaceOrder = ByteArrayArray.create()
 	var interfacesSeeded = 0 as FieldIndex
 	var creditedServices = CreditedServiceSet.create()
+
+	// The interfaces `__module_init` widens into, which it names from no function this walk can reach.
+	for interfaceName in initWitnessInterfaces 'eachInitializerWidening'
+		noteInterfaceName(interfaceName, into: witnessInterfaces, order: witnessInterfaceOrder)
+	end 'eachInitializerWidening'
 
 	while true 'seedRounds'
 		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices)
@@ -984,9 +991,10 @@ end 'drainReachableWorklist'
 // the callee is what this walk holds and a caller's demand implies it:
 //
 //   • An interface-typed PARAMETER or RETURN: `appendExistentialWitnessArgs` materializes a table for a
-//     concrete argument crossing into the parameter, and `lowerReturn` for one crossing into the return. A
-//     struct FIELD of interface type needs no arm of its own — a value reaches one only through a
-//     constructor or a setter, which is a call with an interface-typed parameter.
+//     concrete argument crossing into the parameter, and `lowerReturn` for one crossing into the return.
+//   • A store into an interface-typed FIELD: the store is the widening site and names no callee, so its
+//     evidence is the function's own `IrFunction.existentialFieldStores`, which the parser records beside the
+//     `existentialWitness` op it emits.
 //   • A `where` CONSTRAINT the method carries: `appendWitnessArgs` materializes one table per constraint at
 //     every call to it. Asked through `witnessConstraintsOfMethod` — `LowerMaxonToStd.witnessParamCountForCallee`'s
 //     own source — so the list this gate tests and the list that pass fills are one answer, and a conditional
@@ -1029,6 +1037,10 @@ function collectWitnessPositionInterfaces(func IrFunction, project Project, sign
 	for constraint in witnessConstraintsOfReachedFunction(func, signatures: signatures, funcSignatures: funcSignatures) 'eachConstraint'
 		noteInterfaceName(constraint.interfaceName, into: into, order: order)
 	end 'eachConstraint'
+
+	for store in func.existentialFieldStores 'eachFieldStore'
+		noteInterfaceName(store.interfaceName, into: into, order: order)
+	end 'eachFieldStore'
 end 'collectWitnessPositionInterfaces'
 
 // The interface an `interfaceRef` position names, filed once. The ids of a MERGED module's signature types
@@ -1047,10 +1059,10 @@ function noteWitnessPositionInterfaceIfExistential(t MaxonType, project Project,
 	noteWitnessPositionInterface(t, project: project, into: into, order: order)
 end 'noteWitnessPositionInterfaceIfExistential'
 
-// ⭐ **THE SHORT-CIRCUIT SCAN'S HALF OF THE PAIR — THE SAME THREE SOURCES, ASKED AS A YES/NO.**
+// ⭐ **THE SHORT-CIRCUIT SCAN'S HALF OF THE PAIR — THE SAME SOURCES, ASKED AS A YES/NO.**
 // `userCodeDemandsAWitnessTable` walks EVERY user function before the demand walk runs and needs no names,
 // so it must not pay for a set and an array per function. The two readers stay one answer by construction:
-// every source below is one of the collector's, and neither may grow a fourth alone (W17's measured defect
+// every source below is one of the collector's, and neither may grow a source alone (W17's measured defect
 // is exactly a source added to one side).
 function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns bool
 	for paramType in func.maxonParamTypes 'eachParam'
@@ -1062,6 +1074,10 @@ function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSig
 	if not maxonReturnTypeIsVoid(func.maxonReturnType) and maxonReturnTypeTag(func.maxonReturnType) == ValueTypeTag.interfaceRef 'existentialReturn'
 		return true
 	end 'existentialReturn'
+
+	if func.existentialFieldStores.count() > 0 'storesIntoAnInterfaceField'
+		return true
+	end 'storesIntoAnInterfaceField'
 
 	return witnessConstraintsOfReachedFunction(func, signatures: signatures, funcSignatures: funcSignatures).count() > 0
 end 'functionDeclaresAWitnessPosition'
@@ -1337,13 +1353,14 @@ end 'markServiceLoopHandlers'
 // disagree exactly as `requireUnreachableLibraryStayedDead` says.
 //
 // ⭐⭐ **THE KEY IS THE CONFORMER, AND THAT IS WHAT MAKES IT NARROW.** `LowerMaxonToStd.ensureWitnessTable`
-// has THREE callers and none of them is one op shape: an existential WIDENING at a call argument
-// (`appendExistentialWitnessArgs`) or at a RETURN (`witnessForExistentialValue`), and a `where T is Iface`
-// CONSTRAINT witness (`materializeWitnessArg`). Rather than predict all three from signatures, this asks the
-// question they all share — **a witness table for `T` can only be built if a `T` VALUE EXISTS, and a `T`
-// value can only be produced by a function OF `T`.** A type cannot be constructed from outside its own
-// methods (E3076), so reaching some `T.<method>` is a precondition for every one of the three, and it is a
-// precondition this walk already computes.
+// is reached from no single op shape: an existential WIDENING at a call argument
+// (`appendExistentialWitnessArgs`), at a RETURN (`witnessForExistentialValue`) or at a store into an
+// interface-typed field (`existentialWitness`), and a `where T is Iface` CONSTRAINT witness
+// (`materializeWitnessArg`). Rather than predict each from signatures, this asks the question they all
+// share — **a witness table for `T` can only be built if a `T` VALUE EXISTS, and a `T` value can only be
+// produced by a function OF `T`.** A type cannot be constructed from outside its own methods (E3076), so
+// reaching some `T.<method>` is a precondition for every one of them, and it is a precondition this walk
+// already computes.
 //
 // ⇒ Reaching any function of a conforming type credits THAT type's requirement impls, and no others.
 //
@@ -1567,7 +1584,7 @@ end 'markCorpusSlotInitCallees'
 // while its witness table still named it. It is now a MARKING on both sides, driven by the pair of
 // predicates this scan asks below and the drain asks of reached code — see `functionDeclaresAWitnessPosition`,
 // which carries the argument in full and the measurement of both failures.
-function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray) returns bool
+function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray, initWitnessInterfaces ByteArrayArray) returns bool
 	// ⭐ **A ROOT THE PRECISE WALK SEEDS IS A CROSSING NO BODY CARRIES, WHICH IS WHY IT CANNOT BE FOUND BY THE
 	// OP SCAN BELOW.** `var sep = FilePath.separator()` reaches stdlib without any function of this module
 	// naming it — the call belongs to `__module_init`, which does not exist yet. Missing it would answer "all
@@ -1583,7 +1600,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// scan below is: with no user edge into stdlib, the reached set IS a subset of user code. Gated on the
 	// corpus actually DECLARING one of the seed's conformances, so an unlisted declaring module leaves this
 	// scan — and every program's answer — exactly as it was.
-	if corpusDeclaresASeededConformance(project, signatures: signatures) and userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
+	if corpusDeclaresASeededConformance(project, signatures: signatures) and (initWitnessInterfaces.count() > 0 or userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib)) 'widensOrThreadsOne'
 		return true
 	end 'widensOrThreadsOne'
 
@@ -2015,6 +2032,9 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		// symbol between it and the machine, so without this arm a lane missing the facility reached
 		// instruction selection with nothing said.
 		rawIntrinsic(_, intrinsic, _, _) then noteSubstrateRawIntrinsic(intrinsic, callerNode: callerNode, state: state)
+
+		// A witness table's impls are reached through the conformer, never through an edge this op names.
+		existentialWitness then break 'op'
 	end 'op'
 end 'noteSubstrateEdge'
 

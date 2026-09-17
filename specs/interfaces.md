@@ -616,3 +616,102 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:6:1: Mismatched end label: expected 'Sized', got 'Size'
 ```
+
+<!-- test: a-struct-literal-stores-a-conformer-into-an-interface-typed-field -->
+A field declared at an interface type is filled straight from a conformer's value: the struct literal is
+the widening site, so the stored value carries the conformer's witness and dispatches through it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Holder
+	export var shape as Shape
+
+	static function create(side Tally) returns Self
+		return Self{shape: Square.create(side)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(3)
+	print("{holder.shape.area()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9
+```
+
+<!-- test: an-assignment-replaces-an-interface-typed-field-with-another-conformer -->
+An assignment is a widening site too, and it may store a DIFFERENT conformer than the one the field held:
+the old value is released through its own witness and the new one dispatches through its own.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Square implements Shape
+	var side as Tally
+
+	static function create(side Tally) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Tally
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Strip implements Shape
+	var length as Tally
+
+	static function create(length Tally) returns Self
+		return Self{length: length}
+	end 'create'
+
+	function area() returns Tally
+		return self.length
+	end 'area'
+end 'Strip'
+
+type Holder
+	export var shape as Shape
+
+	static function create(side Tally) returns Self
+		return Self{shape: Square.create(side)}
+	end 'create'
+
+	function useStrip(length Tally)
+		self.shape = Strip.create(length)
+	end 'useStrip'
+end 'Holder'
+
+function main() returns ExitCode
+	var holder = Holder.create(3)
+	print("{holder.shape.area()}\n")
+	holder.useStrip(5)
+	print("{holder.shape.area()}\n")
+	return 0
+end 'main'
+```
+```stdout
+9
+5
+```

@@ -139,6 +139,9 @@ export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
 		// A raw intrinsic DEFINES its result for the reason a void `call`'s does: every op in this dialect a
 		// statement can be names its result, and a void row's is simply never read.
 		rawIntrinsic(result, _, _, _) gives MaxonOpResult.value(result)
+
+		// The witness half a widening store writes is a value the parser pairs with the conformer.
+		existentialWitness(result, _, _) gives MaxonOpResult.value(result)
 	end 'result'
 end 'maxonOpResultValue'
 
@@ -175,6 +178,7 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		panicAbortValue(messagePtr) then into.push(messagePtr)
 		errorFlagEncode(_, errorValue, _) then into.push(errorValue)
 		serviceSpawn(_, _, state) then into.push(state)
+		existentialWitness(_, _, conformer) then into.push(conformer)
 		literal or
 			retVoid or
 			branch or

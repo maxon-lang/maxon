@@ -2677,12 +2677,12 @@ error E3127: specs/fragments/associated-types/error.existential-return-claim-can
 ```
 
 <!-- test: associated-types.existential-field-at-an-opaque-claim-is-filled-through-a-checked-parameter -->
-⭐ **THE FIELD POSITION, WHICH IS THE THIRD PLACE A VALUE COULD BECOME AN EXISTENTIAL.** The deferral admits
-`Taker with T` as a FIELD type as well as a parameter one, and a field store is checked by nobody — so this
-case and the one below it are the pair that says the deferral opened no hole. This half is the legal route:
-the field is filled from a PARAMETER, which the widening check reaches, and the call goes through a STATIC
-constructor rather than an instance method — a different subject for `callInstanceSubject` to resolve the
-instantiation from, and the one `stdlib` shapes are built out of. Returns `31`.
+⭐ **THE FIELD POSITION, WHICH IS THE THIRD PLACE A VALUE BECOMES AN EXISTENTIAL.** The deferral admits
+`Taker with T` as a FIELD type as well as a parameter one, and a store into such a field is a widening site of
+its own. This is the route that restates a settled claim: the field is filled from a PARAMETER declared at the
+same `TakerOfT`, whose claim the widening check already discharged at the call — through a STATIC constructor
+rather than an instance method, a different subject for `callInstanceSubject` to resolve the instantiation
+from, and the one `stdlib` shapes are built out of. Returns `31`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2731,14 +2731,13 @@ end 'main'
 31
 ```
 
-<!-- test: error.existential-field-at-an-opaque-claim-cannot-be-stored-into-directly -->
-⭐⭐ **AND THE OTHER HALF: THE ROUTE THAT WOULD BYPASS THE WIDENING CHECK DOES NOT EXIST.** The same field,
-filled by a struct literal inside the shared body — no callee, no parameter, nothing for E3127 to be asked at.
-It is refused, and it was refused before this rung existed: E2015 already required every widening to name a
-SITE, for the fat pointer's own reason. **That is the argument the E3125 deferral rests on** — the widening
-positions E3127 covers (a call argument and a `return`) are ALL of them, so a claim deferred out of the
-whole-program check cannot slip through a third door. Pinned as a case rather than left as reasoning, because
-the day a direct field store becomes legal is the day the deferral needs a third discharge.
+<!-- test: error.existential-field-at-an-opaque-claim-cannot-be-filled-inside-the-shared-body -->
+⭐⭐ **THE THIRD DISCHARGE OF THE DEFERRAL: A DIRECT STORE INTO THE FIELD IS A WIDENING SITE, CHECKED BY
+E3127.** The same field, filled by a struct literal inside the shared body with a concrete `Runner`. The E3125
+deferral rests on every widening position discharging a claim it defers, and a field store is the third such
+position beside a call argument and a `return`. Inside the shared body nothing fixes `T` — the record is the
+body's own `Self{…}`, not a concrete instance — so, exactly as a `return` there is, the store is refused rather
+than admitted for a `Box with String` whose `Runner` binds `Element` to `Integer`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2784,7 +2783,165 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/associated-types/error.existential-field-at-an-opaque-claim-cannot-be-stored-into-directly.test:35:15: Unsupported: storing a value of a CONCRETE type into the interface-typed field 'Box.t' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type
+error E3127: <fragment>:35:10: cannot widen 'Runner' into the field 'Box.t', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter this store fixes to nothing, so what 'Runner' would have to bind 'Element' to is not known here. Store through a concrete instance of the declaring type, or write the binding the conformers declare
+```
+
+<!-- test: associated-types.existential-field-at-an-opaque-claim-is-filled-directly-through-a-concrete-instance -->
+⭐⭐ **THE POSITIVE TWIN: A STORE THROUGH A CONCRETE INSTANCE FIXES `T`, SO THE CLAIM IS SETTLED AND THE STORE
+IS LEGAL.** `box` is a `Box with Integer`, so `box.t`'s `Taker with T` is `Taker with Integer` at this store,
+and a `Runner` binds exactly that. The store replaces the conformer the constructor put there, and the dispatch
+through `take` reaches the new one with an `Integer` argument. Returns `31`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	export var t as TakerOfT
+
+	static function create(t TakerOfT) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	var box = IntBox.create(Runner.create(1))
+	box.t = Runner.create(21)
+	return box.t.take(10) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: error.existential-field-store-through-a-concrete-instance-disagrees-with-the-claim -->
+⭐ **AND THROUGH A CONCRETE INSTANCE THE CLAIM CAN DISAGREE.** `box` is a `Box with String`, so the store's
+`Taker with T` is `Taker with String`, and `Runner` binds `Element` to `Integer`: the argument position's
+refusal, naming the field.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Reader implements Taker with String
+	function take(e String) returns Integer
+		return e.count() as Integer
+	end 'take'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Reader'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	export var t as TakerOfT
+
+	static function create(t TakerOfT) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	var box = StrBox.create(Reader.create())
+	box.t = Runner.create(21)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3127: <fragment>:44:2: cannot widen 'Runner' into the field 'Box.t', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'String' — 'Runner' binds 'Element' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Element' to 'String'
+```
+
+<!-- test: error.a-deferred-claim-field-cannot-be-filled-from-a-value-already-held-at-the-interface -->
+⭐ **A VALUE ALREADY HELD AT THE BARE INTERFACE CANNOT FILL THE FIELD EITHER.** `t` is a `Taker`, which says
+nothing about which conformer is inside it, so the field's deferred claim has nothing to be settled against —
+the argument position's refusal of the same value, at the store. Without it a `Box with String` would hold a
+`Runner` and hand `take` a `String` where it reads an `Integer`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+	function label() returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	function label() returns Integer
+		return base
+	end 'label'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let t as TakerOfT
+
+	export function run() returns Integer
+		return self.t.label()
+	end 'run'
+
+	static function create(t Taker) returns Self
+		return Self{t: t}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function relay(t Taker) returns StrBox
+	return StrBox.create(t)
+end 'relay'
+
+function main() returns ExitCode
+	return relay(Runner.create(31)).run() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: <fragment>:35:10: cannot store a value already held at the interface type 'Taker' into the field 'Box.t', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the store to settle it against. Store the concrete conformer, or declare the field 'Box.t' at 'Taker' with no `with` clause
 ```
 <!-- test: associated-types.a-generic-conformers-binding-is-resolved-through-its-own-instance -->
 ⭐⭐ **THE CONFORMER'S SIDE IS A SOURCE SPELLING TOO, AND A GENERIC CONFORMER'S NAMES ITS OWN PARAMETER.**

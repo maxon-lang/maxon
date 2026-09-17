@@ -390,7 +390,8 @@ function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures Prog
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'op'
+			rawIntrinsic or
+			existentialWitness then break 'op'
 	end 'op'
 end 'noteDispatchedSlot'
 
@@ -1393,17 +1394,14 @@ end 'declaredConformanceIndex'
 // ⭐⭐ **MAY A VALUE OF `valueType` STAND WHERE AN `interfaceRef` IS DECLARED? — THE WIDENING DOOR
 // (P1.7a-existentials slice 1).**
 //
-// ⚠ **ONE CALLER, AND IT SERVES BOTH WIDENING POSITIONS: `SemanticCheck.existentialWideningVerdict`.** A
-// call ARGUMENT and a `return` into an interface-typed return both reach this through that one verdict —
-// see its header for why they may never answer differently. The second word of the fat pointer is the
-// address of `__witness_<conformer>.<Iface>`, and a DECLARED type at the position is what names the
-// interface half of that symbol; the two differ only in where the word travels (an adjacent hidden argument,
-// the secondary return register).
+// ⚠ **ONE CALLER, AND IT SERVES EVERY WIDENING POSITION: `SemanticCheck.existentialWideningVerdict`.** A
+// call ARGUMENT, a `return` into an interface-typed return and a store into an interface-typed FIELD all
+// reach this through that one verdict — see its header for why they may never answer differently. The second
+// word of the fat pointer is the address of `__witness_<conformer>.<Iface>`, and a DECLARED type at the
+// position is what names the interface half of that symbol; the positions differ only in where the word
+// travels (an adjacent hidden argument, the secondary return register, the field's second slot).
 //
-// A struct FIELD declared at an interface type is ORDINARY and stored — the record carries both words — and
-// it is not a third widening position, because the value reaching one is already an existential: a concrete
-// store into an interface-typed field is E2015, which says so and sends the author to a parameter. The
-// declared places that cannot carry the second word at all are refused at the DECLARATION instead
+// The declared places that cannot carry the second word at all are refused at the DECLARATION instead
 // (`Parser.requireStorableDeclaredType`); `Parser.DeclaredStoragePosition` is the roster of them and the one
 // place that stays complete, so nothing is listed here.
 //

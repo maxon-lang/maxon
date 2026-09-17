@@ -1,0 +1,26 @@
+// Test: error.static-struct-literal-interface-field-non-conformer
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Holder
+	export let s as Sized
+	export let tag as Integer
+
+	static var one = Holder{s: 5, tag: 77}
+
+	export static function get() returns Holder
+		return Holder.one
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{h.s.size()} {h.tag}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:12:19: field type mismatch for 'Holder.s': type 'int' does not implement interface 'Sized'

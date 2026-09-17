@@ -1741,6 +1741,20 @@ export union MaxonOp
 	// `OpCategory.plain` — it is an instruction, not a call to a function this program contains, so it is no
 	// edge in any call graph.
 	rawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt) = MaxonOpMeta{category: OpCategory.plain}
+
+	// ⭐⭐ **THE WITNESS HALF A CONCRETE CONFORMER GAINS WHERE A STORE WIDENS IT INTO AN INTERFACE-TYPED FIELD.**
+	// `result` is the address of `__witness_<conformer>.<interfaceName>`, the second word the store writes
+	// beside `conformer`. A call argument and a `return` have no such op because lowering reads the callee's
+	// declared type there; a field store's declared type is known only to the parser, so it names the
+	// interface here and `LowerMaxonToStd` materializes the table through the same door those two use.
+	//
+	// ⚠ **IT IS EMITTED ONLY FOR A CONCRETE `conformer`.** A value already held at the interface forwards the
+	// witness it was paired with and needs no op. Whether the conformer conforms, and binds what the field's
+	// `with` clause claims, is `SemanticCheck.checkExistentialFieldStores`' verdict over
+	// `IrFunction.existentialFieldStores`, which records every store into such a field — this op included.
+	//
+	// `OpCategory.plain` — it takes the address of a constant and calls nothing.
+	existentialWitness(result ValueId, interfaceName ByteArray, conformer ValueId) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1899,6 +1913,9 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		// A raw intrinsic names an INSTRUCTION. That is the whole of what `__Raw` means: it lowers to a Std op
 		// and never to a call, so there is no callee for a reachability walk to follow.
 		rawIntrinsic gives MaxonCalleeKind.noCallee
+
+		// A witness table's slots name impls through relocations, not through a call this op makes.
+		existentialWitness gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 
@@ -1956,7 +1973,8 @@ export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
 			immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic gives false
+			rawIntrinsic or
+			existentialWitness gives false
 	end 'op'
 end 'maxonOpIsServiceSpawn'
 

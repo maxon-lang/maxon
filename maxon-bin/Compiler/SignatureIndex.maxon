@@ -1487,10 +1487,23 @@ module type GlobalStructField
 	export let value as GlobalInitArgumentValue
 	export let valueType as MaxonType
 
-	export static function create(offset ByteOffset, storageType MaxonType, value GlobalInitArgumentValue, valueType MaxonType) returns GlobalStructField
-		return Self{offset: offset, storageType: storageType, value: value, valueType: valueType}
+	// Whether the slot is one word, or the value half of an interface-typed field whose witness half
+	// `ModuleInit.builtStructBox` stores beside it.
+	export let slot as GlobalStructSlot
+
+	export static function create(offset ByteOffset, storageType MaxonType, value GlobalInitArgumentValue, valueType MaxonType, slot GlobalStructSlot = GlobalStructSlot.oneWord) returns GlobalStructField
+		return Self{offset: offset, storageType: storageType, value: value, valueType: valueType, slot: slot}
 	end 'create'
 end 'GlobalStructField'
+
+// ⭐ **WHAT A STRUCT-LITERAL SLOT AT MODULE SCOPE WRITES BEYOND ITS VALUE** — nothing, or an interface-typed
+// field's witness half, which is widened there exactly as a body's store widens it (`Parser.fieldStoreWitness`)
+// and so carries what that store records: the interface, the field's `with` claim and the `<Type>.<field>` a
+// refusal names, plus the declaring file, because `__module_init` has none of its own.
+module union GlobalStructSlot
+	oneWord
+	existential(interfaceName ByteArray, claims GenericInstanceIdArray, fieldSite ByteArray, declFilePath FilePath)
+end 'GlobalStructSlot'
 
 export typealias GlobalStructFieldArray = Array with GlobalStructField
 
@@ -2236,9 +2249,6 @@ export union ConstStructFieldCheck
 	mismatch(got String, expected String)
 end 'ConstStructFieldCheck'
 
-// ⭐ **A SLOT A TOP-LEVEL STRUCT CONSTRUCTION CANNOT FILL, OR THE ABSENCE OF ONE (W116 review)** — a union
-// rather than a nullable pair, for `ConstScalarLookup`'s reason one door over: "there is none" is the answer
-// for every program in the corpus and not a lookup that failed.
 // ⭐ **WHAT A STRUCT-LITERAL SLOT HOLDS, OR THE ADMISSION THAT THIS TIER CANNOT SAY (W116 review)** — see
 // `ProgramSignatures.constSlotTypeOf`, and `ConstStructFieldCheck` for what the second arm buys: a door
 // that cannot resolve a name must DECLINE rather than name a type nobody wrote.
@@ -2256,11 +2266,6 @@ function slotTypeHeld(lookup ConstFieldSlotLookup) returns MaxonType throws MapE
 		unresolvableHere then throw MapError.keyNotFound
 	end 'lookup'
 end 'slotTypeHeld'
-
-export union ConstConstructionFieldLookup
-	none
-	existentialField(layout StructLayout, index FieldIndex)
-end 'ConstConstructionFieldLookup'
 
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
@@ -15968,11 +15973,32 @@ export type ProgramSignatures
 	// by the walk above and by nothing else — the two doors a field's value can arrive through are the two
 	// arms of `ConstFactoryArgumentValue`, and both are classified here.
 	function constFieldImageSlot(field ConstFactoryArgumentValue, calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, below InitializerCallId, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstFieldImageSlot
+		if self.fieldSlotMayHoldAnExistential(layout, index: index) 'aWitnessHalfHasNoBytes'
+			return ConstFieldImageSlot.notImageable
+		end 'aWitnessHalfHasNoBytes'
+
 		match field 'value'
 			folded(value) then return self.foldedFieldImageSlot(value, nodes: nodes)
 			call(id) then return self.nodeFieldImageSlot(id, calls: calls, layout: layout, index: index, below: below, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
 		end 'value'
 	end 'constFieldImageSlot'
+
+	// ⭐ **AN INTERFACE-TYPED SLOT HAS NO IMAGE**: its witness half is the address of a table only the lowering
+	// can name, so the record is built by `__module_init` instead. Before `Queries.foldInterfaceDeclarations`
+	// runs, such a field is a name no registry this tier holds — `constSlotTypeOf`'s `unresolvableHere` — so that
+	// answer declines the image too; the other names it covers are refused later whatever this says.
+	function fieldSlotMayHoldAnExistential(layout StructLayout, index FieldIndex) returns bool
+		let declared = self.fieldTypeOf(layout, index: index, into: self.typeNames)
+
+		if maxonTypeTag(declared) == ValueTypeTag.interfaceRef 'anExistentialSlot'
+			return true
+		end 'anExistentialSlot'
+
+		match self.constSlotTypeOf(declared, slotScopeFilePath: layout.declFilePath) 'slot'
+			holds then return false
+			unresolvableHere then return true
+		end 'slot'
+	end 'fieldSlotMayHoldAnExistential'
 
 	// ⭐ **A FOLDED FIELD VALUE'S SLOT.** A number goes into the box; an empty container and a payload-free
 	// union case are image objects the box can address.
@@ -16931,95 +16957,6 @@ export type ProgramSignatures
 		end 'state'
 	end 'declInitializerCall'
 
-	// ⭐⭐ **DOES THIS DECLARATION CONSTRUCT A STRUCT WITH AN INTERFACE-TYPED FIELD? (W116 review)** — asked by
-	// the REAL PARSE, which is the FIRST door that can answer it and the first that can report it.
-	//
-	// ⛔ **THE CONSTANT EVALUATOR STRUCTURALLY CANNOT SEE ONE, WHICH IS WHY THE REFUSAL IS NOT THERE.** A
-	// swept field annotated with an interface is a bare `named` until `normalizeSweptInterfaceTypes` re-tags
-	// the COLUMN, and `Queries` runs that AFTER `evaluateInitializers` — `RecordedReturnTypeRule`'s header
-	// states that ordering and why neither half of it is free. So the evaluator's field check compared a
-	// SCALAR against a slot nothing had yet called an interface, `Holder{s: 5}` "agreed", and the box got ONE
-	// store into a TWO-slot field: the witness half stayed whatever `__mm_alloc` left there and the first
-	// dispatch through it was an ACCESS VIOLATION (MEASURED, exit 0xC0000005). By the real parse the column is
-	// re-tagged and `raiseBindingFailure` already has the positioned channel, so nothing new is invented —
-	// the refusal is the BODY path's own sentence, through the one producer both throw it from.
-	//
-	// It answers for the WHOLE arena rather than for the root, because a nested construction fills a box the
-	// same way (`Outer{inner: Inner{…}}` is refused earlier by E3076 today, but nothing about THIS rule may
-	// depend on that staying true).
-	//
-	// ⚠ **IT TAKES THE SETTLED OUTCOME AND NOT THE DECL, WHICH IS NOT AN ECONOMY.** The real parse hands its
-	// binding door a decl it has just READ from the tokens, and that one's own `outcome` field is the
-	// `pending` every freshly-read binding carries — the settled one lives on the SWEEP's record. A parameter
-	// that cannot be given the wrong one is worth more here than one that reads convenient.
-	export function existentialFieldOfConstConstruction(outcome TopLevelConstant) returns ConstConstructionFieldLookup
-		match outcome 'state'
-			// Every outcome that builds no box from a layout: unevaluated, failed, a folded scalar, a
-			// materialized record, a container. ONE range, ending where the arena-carrying arm begins — it was
-			// three arms while `characterSetValue` sat past `factoryValue` and could not join a range (W129
-			// deleted it). The arena arm is the only thing this question parts on.
-			pending or
-				evaluating or
-				value or
-				failed or
-				poisoned or
-				managedValue or
-				arrayValue or
-				containerValue then return ConstConstructionFieldLookup.none
-			factoryValue(calls, _, _) then return self.existentialFieldOfArena(calls)
-
-			// ⚠ **AND IT IS THREE ARMS AGAIN, for exactly the reason the note above records.** A boxed union's
-			// payload-free case builds a box from a layout and yet has NO field to be existential — a
-			// payload-free case has no slot a value could be stored in — so it answers `none` with the range
-			// above and cannot join it, being appended past the arena arm that splits them.
-			boxedUnionValue then return ConstConstructionFieldLookup.none
-		end 'state'
-	end 'existentialFieldOfConstConstruction'
-
-	// The walk of the question above, split out because a `match` arm may not open one.
-	function existentialFieldOfArena(calls ConstFactoryCallArray) returns ConstConstructionFieldLookup
-		for call in calls 'eachNode'
-			match call 'node'
-				call then continue
-				construct(typeName, _) then return self.existentialFieldOfStruct(typeName)
-
-				// A map literal constructs no struct of its own; a struct among its keys or values is its OWN
-				// arena entry, which this same loop reaches on its own pass.
-				mapLiteral then continue
-
-				// A union case's box is not built from a struct layout, and no payload of it can be existential
-				// anyway: a conformer takes TWO slots and a payload slot region has one, which
-				// `Parser.requireStorableDeclaredType` refuses at the DECLARATION. An array literal constructs no
-				// struct either. Both reach a nested struct through their own arena entries, as the map does.
-				unionCase or
-					arrayLiteral then continue
-			end 'node'
-		end 'eachNode'
-
-		return ConstConstructionFieldLookup.none
-	end 'existentialFieldOfArena'
-
-	// The first interface-typed slot of one constructed layout. `structOf` is asked rather than
-	// `constStructLayoutOf` because a MISS here is not this door's to panic on: the same name is resolved
-	// again, with the panic, where the box is actually built (`globalStructConstruct`).
-	function existentialFieldOfStruct(typeName ByteArray) returns ConstConstructionFieldLookup
-		match self.structInAnyFile(typeName) 'declared'
-			undeclared then return ConstConstructionFieldLookup.none
-			declared(layout) then return self.existentialFieldOfLayout(layout)
-		end 'declared'
-	end 'existentialFieldOfStruct'
-
-	// The tail of the question above, split out for its sibling's reason.
-	function existentialFieldOfLayout(layout StructLayout) returns ConstConstructionFieldLookup
-		for i in 0 upto layout.fieldCount() 'eachField'
-			if maxonTypeTag(self.fieldTypeOf(layout, index: i, into: self.typeNames)) == ValueTypeTag.interfaceRef 'aFatPointerSlot'
-				return ConstConstructionFieldLookup.existentialField(layout, index: i)
-			end 'aFatPointerSlot'
-		end 'eachField'
-
-		return ConstConstructionFieldLookup.none
-	end 'existentialFieldOfLayout'
-
 	// ⭐ **EVERY FACTORY IN THE TREE AND EVERY DECLARED GENERIC AMONG THEIR ARGUMENTS (W41)** — the calls
 	// `ModuleInit.calledFactoryRecord` emits. The list is built from the SAME arena `globalInitCalls` resolves
 	// into materialization instructions, so what is rooted and what is emitted are two readings of one outcome
@@ -17212,6 +17149,61 @@ export type ProgramSignatures
 
 		return callees
 	end 'globalInitCallees'
+
+	// ⭐ **THE INTERFACES A TOP-LEVEL INITIALIZER WIDENS A VALUE INTO** — every interface-typed field of every
+	// struct an initializer constructs. `__module_init` stores those fields through a witness table, and is
+	// built after the reach walk that decides which impl bodies a table's slots may name, so the walk is handed
+	// the names here as `globalInitCallees` hands it the calls. Corpus declarations are included: a name
+	// seeded for a slot nothing reads costs bytes, while one missing is a table naming a body never built.
+	export function globalInitWitnessInterfaces() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+
+		for i in 0 upto self.decls.count() 'each'
+			match self.declAt(i).outcome 'state'
+				pending or
+					evaluating or
+					value or
+					failed or
+					poisoned or
+					managedValue or
+					arrayValue or
+					containerValue then continue
+				factoryValue(calls, _, _) then self.appendConstructedFieldInterfaces(names, calls: calls)
+				boxedUnionValue then continue
+			end 'state'
+		end 'each'
+
+		return names
+	end 'globalInitWitnessInterfaces'
+
+	// The walk of the question above, split out because a `match` arm may not open one. A union case, a map and
+	// an array literal build no struct of their own; a struct among their values is its own arena entry.
+	function appendConstructedFieldInterfaces(names ByteArrayArray, calls ConstFactoryCallArray)
+		for call in calls 'eachNode'
+			match call 'node'
+				construct(typeName, _) then self.appendFieldInterfacesOf(names, typeName: typeName)
+				call or
+					mapLiteral or
+					unionCase or
+					arrayLiteral then continue
+			end 'node'
+		end 'eachNode'
+	end 'appendConstructedFieldInterfaces'
+
+	function appendFieldInterfacesOf(names ByteArrayArray, typeName ByteArray)
+		let layout = match self.structInAnyFile(typeName) 'declared'
+			undeclared panic("ProgramSignatures.appendFieldInterfacesOf: an initializer constructs `{String.from(typeName)}`, which no file declares — the fold tier builds a `construct` only from a layout it resolved")
+			declared(found) gives found
+		end 'declared'
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldType = self.fieldTypeOf(layout, index: i, into: self.typeNames)
+
+			if maxonTypeTag(fieldType) == ValueTypeTag.interfaceRef 'widensIntoAnInterface'
+				names.push(interfaceNameOfType(fieldType, typeNames: self.typeNames))
+			end 'widensIntoAnInterface'
+		end 'eachField'
+	end 'appendFieldInterfacesOf'
 
 	// ⭐ **WHAT THE CORPUS SLOT `label` NAMES CALLS**, or nothing when `label` names no corpus slot or one
 	// initialized by no call. The half of the root set `globalInitCallees` deliberately does not carry; see
@@ -17561,11 +17553,20 @@ export type ProgramSignatures
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldType = self.fieldTypeOf(layout, index: i, into: self.typeNames)
 			let produced = self.globalInitValue(try fields.get(i) otherwise panic("ProgramSignatures.globalStructConstruct: fields.get OOB at {i} below the count this loop was just held to"), calls: calls, declName: declName, elementFilePath: elementFilePath)
-			resolved.push(GlobalStructField.create(layout.offsetOfField(i), storageType: slotStorageType(self, declared: fieldType, typeNames: self.typeNames, readerFilePath: layout.declFilePath), value: produced.value, valueType: produced.valueType))
+			resolved.push(GlobalStructField.create(layout.offsetOfField(i), storageType: slotStorageType(self, declared: fieldType, typeNames: self.typeNames, readerFilePath: layout.declFilePath), value: produced.value, valueType: produced.valueType, slot: self.globalStructSlotOf(layout, index: i, fieldType: fieldType, elementFilePath: elementFilePath)))
 		end 'eachField'
 
 		return GlobalInitCall.construct(layout.sizeBytes(), fields: resolved)
 	end 'globalStructConstructOf'
+
+	function globalStructSlotOf(layout StructLayout, index FieldIndex, fieldType MaxonType, elementFilePath FilePath) returns GlobalStructSlot
+		if maxonTypeTag(fieldType) != ValueTypeTag.interfaceRef 'oneWord'
+			return GlobalStructSlot.oneWord
+		end 'oneWord'
+
+		let fieldName = try layout.fieldNames.get(index) otherwise panic("ProgramSignatures.globalStructSlotOf: fieldNames.get OOB at {index} for `type {String.from(layout.name)}` — every index handed out came from the layout's own count")
+		return GlobalStructSlot.existential(interfaceNameOfType(fieldType, typeNames: self.typeNames), claims: self.fieldExistentialSites(layout, index: index), fieldSite: joinQualifiedName(layout.name, member: fieldName), declFilePath: elementFilePath)
+	end 'globalStructSlotOf'
 
 	// ⭐⭐ **A MAP LITERAL'S RECORD, RESOLVED** — the instance's `create` description plus one resolved pair per
 	// entry. The description comes from `containerCreateCall`, the SAME router a `MapAlias.create()` global's
@@ -17694,8 +17695,9 @@ export type ProgramSignatures
 	// an unresolvable name was `integer`, and a rendered mismatch then said the slot held `'int'` for a field
 	// declared `Sized` — a diagnostic naming a type the program does not contain. `unresolvableHere` says so
 	// instead, and the two things that name IS reach it with the positions and the registries this door
-	// lacks: `TypeResolution`'s E3011 for a name no file declares, and
-	// `existentialFieldOfConstConstruction`'s E2015 for the interface case, at the real parse.
+	// lacks: `TypeResolution`'s E3011 for a name no file declares, and for an interface-typed field the
+	// whole-program widening check `__module_init`'s store is recorded for
+	// (`SemanticCheck.checkExistentialFieldStores`).
 	//
 	// ⛔⛔ **THE COMPARISON IS THE FULL `(tag, id)` IDENTITY, AND A TAG-ONLY ONE WAS THREE MISCOMPILES.**
 	// `named` covers every declared enum AND every boxed union, so `Status.idle` "agreed" with a `Colour`
@@ -17813,10 +17815,10 @@ export type ProgramSignatures
 			// POINT.** `self.interfaces` is filled by `Queries.foldInterfaceDeclarations`, which runs AFTER
 			// `evaluateInitializers` — `RecordedReturnTypeRule.declaredStruct`'s header states that ordering
 			// and why neither position is free — so an interface name is answered by NO form at all here and
-			// takes the `unresolvableHere` arm above. That is exactly why an interface-typed field is refused
-			// at the REAL PARSE instead (`existentialFieldOfConstConstruction`). Should this door ever gain an
-			// asker on the far side of that fold, DECLINING is still the right answer and not a second-best
-			// one: the refusal that names a fat pointer belongs to the door that can see one.
+			// takes the `unresolvableHere` arm above. That is exactly why an interface-typed field is judged by
+			// the whole-program widening check instead (`SemanticCheck.checkExistentialFieldStores`). Should this
+			// door ever gain an asker on the far side of that fold, DECLINING is still the right answer and not a
+			// second-best one: the verdict on a fat pointer belongs to the door that can see one.
 			interfaceType then return ConstFieldSlotLookup.unresolvableHere
 
 			// An INTEGER ranged alias, the one alias form the cascade deliberately leaves bare: its NAME
@@ -29705,6 +29707,30 @@ export type ProgramSignatures
 
 		return self.declaredSlotType(declared, into: into, slotScopeFilePath: layout.declFilePath)
 	end 'fieldTypeOf'
+
+	// ⭐ **THE `Base with Args` INSTANCE AN INTERFACE-TYPED FIELD WAS DECLARED AT** — the field's twin of
+	// `Parser.paramExistentialSitesOf`, read off the declared SPELLING the layout keeps, because the field's
+	// type says only `interfaceRef(Base)`. An inner alias of the declaring type shadows a file-scope one of the
+	// same spelling, the order `Parser.declaredExistentialInstanceAt` resolves a parameter's by. Empty for a
+	// field that named no generic alias, which is every field but a parameterized existential's.
+	export function fieldExistentialSites(layout StructLayout, index FieldIndex) returns GenericInstanceIdArray
+		let spelled = layout.fieldDeclaredBrand(index)
+
+		if spelled.isEmpty() 'noSpelledName'
+			return sharedEmptyReturnExistentialSites
+		end 'noSpelledName'
+
+		let inner = joinQualifiedName(layout.name, member: spelled)
+		let key = inner if self.declaresInnerAlias(inner) else spelled
+
+		if not self.isGenericAliasFor(key, readerFilePath: layout.declFilePath) 'namesNoInstance'
+			return sharedEmptyReturnExistentialSites
+		end 'namesNoInstance'
+
+		var sites = GenericInstanceIdArray.create()
+		sites.push(self.genericAliasInstanceFrom(key, readerFilePath: layout.declFilePath))
+		return sites
+	end 'fieldExistentialSites'
 
 	// ⭐ **THE UNION-PAYLOAD TWIN OF `fieldTypeOf` (A4k)** — a payload slot's DECLARED type, resolved and
 	// ADOPTED into `into`, scoped to the union's own declaring file for the reason `declaredSlotType`'s
