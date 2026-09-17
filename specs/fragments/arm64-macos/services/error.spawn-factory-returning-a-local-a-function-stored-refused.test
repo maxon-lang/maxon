@@ -1,0 +1,34 @@
+// Test: error.spawn-factory-returning-a-local-a-function-stored-refused
+typealias Tally = int(0 to u64.max)
+typealias WorkerArray = Array with Worker
+
+var registry = WorkerArray.create()
+
+function remember(worker Worker)
+	registry.push(worker)
+end 'remember'
+
+type Worker
+	var scale as Tally
+
+	static function create(scale Tally) returns Self
+		let worker = Self{scale: scale}
+		remember(worker)
+		return worker
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * self.scale
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create(2)
+	let total = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{total} {registry.count()}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name

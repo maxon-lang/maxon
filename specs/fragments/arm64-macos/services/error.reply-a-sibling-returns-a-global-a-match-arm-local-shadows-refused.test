@@ -1,0 +1,45 @@
+// Test: error.reply-a-sibling-returns-a-global-a-match-arm-local-shadows-refused
+typealias Tally = int(0 to 1000000)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+let report = Report.create(7)
+
+type Worker
+	var scale as Tally
+
+	static function create() returns Self
+		return Self{scale: 2}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		match n 'pick'
+			0 then let report = Report.create(n)
+			default then return report
+		end 'pick'
+
+		return Report.create(n * self.scale)
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let got = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{got.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:22:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:36:15: the `spawn` that makes `Worker` a service

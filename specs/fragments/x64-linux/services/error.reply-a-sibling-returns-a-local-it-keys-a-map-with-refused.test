@@ -1,0 +1,50 @@
+// Test: error.reply-a-sibling-returns-a-local-it-keys-a-map-with-refused
+typealias Tally = int(0 to 1000000)
+typealias ReportRanks = Map with (Report, Tally)
+
+type Report implements Hashable, Equatable
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+
+	export function hash() returns HashValue
+		return total
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return total == other.total
+	end 'equals'
+end 'Report'
+
+type Worker
+	var ranks as ReportRanks
+
+	static function create() returns Self
+		return Self{ranks: ReportRanks.create()}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return summarize(n)
+	end 'measure'
+
+	function summarize(n Tally) returns Report
+		let first = Report.create(n)
+		let report = Report.create(n * 2)
+		self.ranks = [first: 1, report: 2]
+		return report
+	end 'summarize'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:29:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:41:15: the `spawn` that makes `Worker` a service
