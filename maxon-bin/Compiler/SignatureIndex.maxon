@@ -447,6 +447,13 @@ let DeclShapeReturnsFreshRecord = 109 as HashDigest
 // that could not tell the two apart would serve the old answer.
 let DeclShapeFreshReturnForward = 113 as HashDigest
 
+// The four `FreshReturnForward` spellings, as distinct marks: one call written two ways can reach two
+// different declarations.
+let FreshForwardUnqualifiedShape = 120 as HashDigest
+let FreshForwardSelfReceiverShape = 121 as HashDigest
+let FreshForwardSelfTypeShape = 122 as HashDigest
+let FreshForwardNamedTypeShape = 123 as HashDigest
+
 // ⭐ A static factory whose whole body is `return Self{p: p, …}` over its own parameters (W197) — the four
 // above's sibling, and its own tag for their reason one fact over: a callee that gains or loses the property
 // changes whether a top-level `let X = T.create(…)` FOLDS to a construction and is therefore imaged, so a
@@ -4880,13 +4887,13 @@ typealias DisagreeingThrowsNameSet = Set with ByteArray
 // so the second and third cost no second parameter on the eight routines the first is threaded through;
 // `foldFile` splits them onto their own registries at the one point the key is minted.
 //
-// ⚠ **THERE IS NO PAYLOAD, BECAUSE PRESENCE *IS* THE VALUE.** `scanBodyFacts` pushes one of these only for a
-// body its walk PROVED the fact of, so a name with no entry has none of them — the "absence is the answer"
-// convention `funcThrows` and `funcParamConsumes` both rest on, and the safe direction for all three: an
-// unmarked function is compiled exactly as it was before the fact existed, while a wrongly MARKED one would
-// stop emitting the edge control really takes, or move a box a second owner still holds. `takesReceiver`
-// rides for `ThrowsClauseEntry`'s reason (W75) — it is half of the registration key.
-export enum SweptBodyFact
+// ⚠ **PRESENCE IS THE VALUE.** `scanBodyFacts` pushes one of these only for a body its walk PROVED the fact
+// of, so a name with no entry has none of them — the "absence is the answer" convention `funcThrows` and
+// `funcParamConsumes` both rest on, and the safe direction for all of them: an unmarked function is compiled
+// as though the fact did not exist, while a wrongly MARKED one would stop emitting the edge control really
+// takes, or move a box a second owner still holds. The one payload is the call a conditional claim waits on.
+// `takesReceiver` rides for `ThrowsClauseEntry`'s reason (W75) — it is half of the registration key.
+export union SweptBodyFact
 	// G17: the body's tail is a `panic(…)` and nothing in it can return.
 	leavesByPanicking
 
@@ -4900,13 +4907,13 @@ export enum SweptBodyFact
 	// that and nothing wider.
 	returnsAFreshRecord
 
-	// ⭐⭐ SV1's HOP: every `return` in the body hands back a record literal OR the result of a bare call to
-	// `forwardCallee`, and at least one is the call. The claim is CONDITIONAL — it becomes
-	// `returnsAFreshRecord` exactly when every callee forwarded to publishes that fact itself, which only the
-	// whole-program close can decide (`ProgramSignatures.closeFreshReturnForwards`). A frame that returns a
-	// fresh record it did not build still hands its caller the sole reference: it bound the value to nothing,
-	// so no statement stands between the callee's hand-off and its own.
-	returnsAFreshRecordIfCalleeDoes
+	// ⭐⭐ SV1's HOP: every `return` in the body hands back a record literal OR the result of a call, and
+	// `forward` is one such call — one entry per forwarding `return`. The claim is CONDITIONAL: it becomes
+	// `returnsAFreshRecord` exactly when every declaration those calls reach publishes that fact itself, which
+	// only the whole-program close can decide (`ProgramSignatures.closeFreshReturnForwards`). A frame that
+	// returns a fresh record it did not build still hands its caller the sole reference: it bound the value to
+	// nothing, so no statement stands between the callee's hand-off and its own.
+	returnsAFreshRecordIfCalleeDoes(forward FreshReturnForward)
 
 	// ⭐⭐ W197: the body is ONE statement, `return <Name>{p0: p0, p1: p1, …}`, naming this declaration's own
 	// parameters in declaration order and nothing else. A call to it is therefore the CONSTRUCTION it
@@ -4921,27 +4928,65 @@ export type SweptBodyFactEntry
 	export let name as ByteArray
 	export let takesReceiver as bool
 
-	// Which of the four the sweep proved. See the header — each is read by a different door and no two share
-	// a registry.
+	// Which fact the sweep proved. See the header — each is read by a different door and no two share a
+	// registry.
 	export let fact as SweptBodyFact
 
-	// The callee a `returnsAFreshRecordIfCalleeDoes` entry is conditional on, ALREADY KEYED as the target's own
-	// registration name. Empty for every other fact, which state no condition. One entry per forwarding
-	// `return`, so a body with two of them pushes two.
-	export let forwardCallee as ByteArray
-
-	export static function create(name ByteArray, takesReceiver bool, fact SweptBodyFact, forwardCallee ByteArray = EmptySourceText) returns SweptBodyFactEntry
-		return Self{name: name, takesReceiver: takesReceiver, fact: fact, forwardCallee: forwardCallee}
+	export static function create(name ByteArray, takesReceiver bool, fact SweptBodyFact) returns SweptBodyFactEntry
+		return Self{name: name, takesReceiver: takesReceiver, fact: fact}
 	end 'create'
 end 'SweptBodyFactEntry'
 
 export typealias SweptBodyFactEntryArray = Array with SweptBodyFactEntry
 typealias DeclaredBodyFactNameSet = Set with ByteArray
 
-// Declaration key → the callee keys its forwarding `return`s depend on. A LIST and not a single name because
-// a body may return through two different callees and the claim is universal over its returns: every one of
-// them must be fresh, so one unfresh target retracts the whole declaration's claim.
-typealias FreshReturnForwardMap = Map with (ByteArray, ByteArrayArray)
+// ⭐⭐ **A FORWARDING `return`'s CALL, AS WRITTEN.** The sweep runs before every declaration is folded, so it
+// cannot yet say which declaration a spelling reaches; `ProgramSignatures.freshReturnForwardTarget` answers
+// that at the close, the way the real parse resolves the same spelling.
+export union FreshReturnForward
+	// `name(…)`: the enclosing type's member when that type declares one, else the free function the
+	// writing file's directory means. `enclosingType` is empty outside a type body.
+	unqualified(enclosingType ByteArray, name ByteArray)
+
+	// `self.name(…)` (`takesReceiver`) or `Self.name(…)` — a member of the enclosing type.
+	ofEnclosingType(typeName ByteArray, name ByteArray, takesReceiver bool)
+
+	// `Type.name(…)` with the type written by name. The sweep has already refused a head that a local, a
+	// parameter, a type parameter or an inner alias of the enclosing type could be.
+	ofNamedType(typeName ByteArray, name ByteArray)
+end 'FreshReturnForward'
+
+export typealias FreshReturnForwardArray = Array with FreshReturnForward
+
+// One forwarding call and the directory of the file that wrote it, which an unqualified call to a contested
+// free function resolves against (`freeCallCallee`).
+type FreshReturnDependency
+	export let forward as FreshReturnForward
+	export let moduleDirectory as String
+
+	static function create(forward FreshReturnForward, moduleDirectory String) returns FreshReturnDependency
+		return Self{forward: forward, moduleDirectory: moduleDirectory}
+	end 'create'
+end 'FreshReturnDependency'
+
+typealias FreshReturnDependencyArray = Array with FreshReturnDependency
+
+// Declaration key → the calls its forwarding `return`s depend on. A LIST because a body may return through
+// two different callees and the claim is universal over its returns: one unfresh target retracts it.
+typealias FreshReturnForwardMap = Map with (ByteArray, FreshReturnDependencyArray)
+
+// The declaration a forwarding call reaches, or none this index can name — a spelling whose target the close
+// cannot resolve exactly, which retracts the forwarder's claim.
+union FreshReturnForwardTarget
+	declaration(key ByteArray)
+	unnameable
+end 'FreshReturnForwardTarget'
+
+// The close's worklist state: a key → the forwarders waiting on it (once per dependency, so a forwarder that
+// names one key twice is released only by the second decrement), and a forwarder → how many are still unmet.
+typealias FreshReturnWaiterMap = Map with (ByteArray, ByteArrayArray)
+typealias FreshReturnUnmetCount = int(0 to u32.max)
+typealias FreshReturnUnmetMap = Map with (ByteArray, FreshReturnUnmetCount)
 
 // The `<T>.handle` names one program mints (SV1) — see `ProgramSignatures.serviceHandleNames`. Keyed by NAME
 // for `DisagreeingThrowsNameSet`'s reason: a companion has a nominal identity and nothing finer to compare.
@@ -12114,7 +12159,7 @@ export type ProgramSignatures
 				leavesByPanicking then self.recordSweptBodyFact(factKey, marked: self.funcDiverges, counts: self.funcDivergingDeclarationCounts, shape: DeclShapeDiverges)
 				leavesByThrowing then self.recordSweptBodyFact(factKey, marked: self.funcAlwaysThrows, counts: self.funcAlwaysThrowingDeclarationCounts, shape: DeclShapeAlwaysThrows)
 				returnsAFreshRecord then self.recordSweptBodyFact(factKey, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts, shape: DeclShapeReturnsFreshRecord)
-				returnsAFreshRecordIfCalleeDoes then self.recordFreshReturnForward(factKey, forwardCallee: entry.forwardCallee)
+				returnsAFreshRecordIfCalleeDoes(forward) then self.recordFreshReturnForward(factKey, dependency: FreshReturnDependency.create(forward, moduleDirectory: moduleDirectory))
 				constructsSelfFromItsParameters then self.recordSweptBodyFact(factKey, marked: self.funcConstructsFromParams, counts: self.funcConstructingDeclarationCounts, shape: DeclShapeConstructsFromParams)
 			end 'which'
 		end 'eachProvedBodyFact'
@@ -13661,13 +13706,9 @@ export type ProgramSignatures
 	// second green thread while this one still holds it, which the plain refcount cannot survive. Every
 	// uncertainty in `Parser.noteFreshReturnShape` therefore resolves to recording nothing.
 	//
-	// ⭐⭐ **IT CLOSES OVER A HOP, AND THE COST OF NOT DOING SO IS MEASURED.** `return other()` states
-	// nothing here without the fixpoint, even where `other` is itself fresh-returning — and one hop is exactly
-	// what `stdlib/String.maxon`'s `clone` needs (`return sliceBytes(…)`).
-	// The paragraph above prices a missed `true` as *"a SEND the refusal E3138 already teaches the cure for
-	// (`.clone()`)"*, which is the same gap from the other side: **MEASURED, `.clone()` at a send is
-	// itself E3138**, so the cure the refusal names costs exactly this claim. `closeFreshReturnForwards` is the
-	// fixpoint; the SEND's guarantee stops where a body binds what it returns.
+	// ⭐⭐ **IT CLOSES OVER FORWARDING CALLS (`closeFreshReturnForwards`).** `return other()` is fresh exactly
+	// when `other` is, and the cure E3138 names depends on it: `String.clone` is `return sliceBytes(…)`. The
+	// guarantee stops where a body binds what it returns.
 	export function returnsFreshValue(callee ByteArray) returns bool
 		self.closeFreshReturnForwards()
 		return self.everyDeclarationOfThisNamePublishes(callee, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
@@ -13685,19 +13726,33 @@ export type ProgramSignatures
 
 	// One forwarding `return`'s dependency, appended to its declaration's list. The hash rides for
 	// `recordSweptBodyFact`'s reason: a body that starts forwarding somewhere else is a different program.
-	function recordFreshReturnForward(name ByteArray, forwardCallee ByteArray)
-		var targets = try self.funcFreshReturnForwards.get(name) otherwise ByteArrayArray.create()
-		targets.push(forwardCallee)
-		self.funcFreshReturnForwards.upsert(name, value: targets)
-		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: DeclShapeFreshReturnForward), bytes: name), bytes: forwardCallee)
+	function recordFreshReturnForward(name ByteArray, dependency FreshReturnDependency)
+		var dependencies = try self.funcFreshReturnForwards.get(name) otherwise FreshReturnDependencyArray.create()
+		dependencies.push(dependency)
+		self.funcFreshReturnForwards.upsert(name, value: dependencies)
+		self.hash = mixBytes(Hasher.combined(self.hash, value: DeclShapeFreshReturnForward), bytes: name)
+
+		match dependency.forward 'shape'
+			unqualified(enclosingType, callee) then self.mixUnqualifiedFreshReturnForward(enclosingType, callee: callee, moduleDirectory: dependency.moduleDirectory)
+			ofEnclosingType(typeName, callee, takesReceiver) then self.mixFreshReturnForward(FreshForwardSelfReceiverShape if takesReceiver else FreshForwardSelfTypeShape, typeName: typeName, callee: callee)
+			ofNamedType(typeName, callee) then self.mixFreshReturnForward(FreshForwardNamedTypeShape, typeName: typeName, callee: callee)
+		end 'shape'
 	end 'recordFreshReturnForward'
 
-	// ⭐⭐⭐ **THE LEAST FIXPOINT THAT CLOSES `returnsAFreshRecord` OVER A HOP.** A declaration whose every
-	// `return` hands back a record literal OR the result of a bare call publishes a CONDITION rather than the
-	// fact; this is where the condition is discharged, against callees whose own answer the whole-program
-	// merge finally knows. Seeded implicitly: the unconditional publishers are already in
-	// `funcReturnsFreshRecord` when this runs, so the first sweep resolves every one-hop forwarder, the second
-	// every two-hop one, and so on until a sweep changes nothing.
+	function mixFreshReturnForward(shape HashDigest, typeName ByteArray, callee ByteArray)
+		self.hash = mixBytes(mixBytes(Hasher.combined(self.hash, value: shape), bytes: typeName), bytes: callee)
+	end 'mixFreshReturnForward'
+
+	// Only an unqualified call's target turns on the directory, through a contested free function's key.
+	function mixUnqualifiedFreshReturnForward(enclosingType ByteArray, callee ByteArray, moduleDirectory String)
+		self.mixFreshReturnForward(FreshForwardUnqualifiedShape, typeName: enclosingType, callee: callee)
+		self.hash = mixBytes(self.hash, bytes: moduleDirectory.toByteArray())
+	end 'mixUnqualifiedFreshReturnForward'
+
+	// ⭐⭐⭐ **THE LEAST FIXPOINT THAT CLOSES `returnsAFreshRecord` OVER FORWARDING CALLS, AT ANY DEPTH.** A
+	// declaration whose every `return` hands back a record literal OR a call's result publishes a CONDITION;
+	// this discharges it against the declarations those calls reach, which only the whole-program merge knows.
+	// The unconditional publishers seed it, and a forwarder is published once its last unmet dependency is.
 	//
 	// ⛔⛔ **A WRONG `true` HERE IS A MOVED BOX A SECOND OWNER STILL HOLDS, NOT A REFUSAL** — the direction
 	// `everyDeclarationOfThisNamePublishes`' header names. What makes the hop sound is that the forwarding
@@ -13705,13 +13760,15 @@ export type ProgramSignatures
 	// hand-off and its own, so the reference it passes on is the one it received and nobody else names it.
 	// That is the identical argument the record-literal criterion rests on, one frame out.
 	//
-	// ⚠ **A KEY THAT FORWARDS FROM TWO DECLARATIONS PUBLISHES ONCE**, so its tally falls one short of its
-	// declaration count and `everyDeclarationOfThisNamePublishes` answers `false`. That is a missed `true` —
-	// the safe direction — and it is stated rather than fixed because the shape (two overloads of one name,
-	// both forwarding, both fresh) buys a refusal at worst.
+	// ⚡ **A WORKLIST, NOT ROUNDS.** Each dependency is resolved once and decremented at most once, so the
+	// close is linear in the forwards however deep the chains run. A cycle keeps its members waiting on each
+	// other and publishes none of them — a missed `true`, the safe direction.
 	//
-	// ⚡ The map is empty for every program whose bodies build the records they return, so the guard is one
-	// `count()` and no sweep runs at all.
+	// ⚠ **A KEY THAT FORWARDS FROM TWO DECLARATIONS PUBLISHES ONCE**, so its tally falls one short of its
+	// declaration count and `everyDeclarationOfThisNamePublishes` answers `false` — another missed `true`.
+	//
+	// ⚠ It reads `funcReturnsFreshRecord` DIRECTLY rather than through `returnsFreshValue`, whose first act is
+	// to run this close.
 	function closeFreshReturnForwards()
 		if self.freshReturnForwardsClosed 'alreadySettled'
 			return
@@ -13723,42 +13780,122 @@ export type ProgramSignatures
 			return
 		end 'nothingForwards'
 
-		var changed = true
+		var waiters = FreshReturnWaiterMap.create()
+		var unmet = FreshReturnUnmetMap.create()
+		var ready = ByteArrayArray.create()
+		var keys = ByteArrayArray.create()
 
-		while changed 'sweepUntilStable'
-			changed = false
+		for (name, dependencies) in self.funcFreshReturnForwards 'eachForwarder'
+			keys.clear()
 
-			for (name, targets) in self.funcFreshReturnForwards 'eachForwarder'
-				if self.funcReturnsFreshRecord.contains(name) 'alreadyPublished'
+			if not self.resolveFreshReturnDependencies(dependencies, into: keys) 'someCallReachesNoNameableDeclaration'
+				continue
+			end 'someCallReachesNoNameableDeclaration'
+
+			var unmetHere = 0 as FreshReturnUnmetCount
+
+			for key in keys 'eachKey'
+				if self.everyDeclarationOfThisNamePublishes(key, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts) 'alreadyFresh'
 					continue
-				end 'alreadyPublished'
+				end 'alreadyFresh'
 
-				if not self.everyForwardTargetIsFresh(targets) 'notYet'
-					continue
-				end 'notYet'
+				var waiting = try waiters.get(key) otherwise ByteArrayArray.create()
+				waiting.push(name)
+				waiters.upsert(key, value: waiting)
+				unmetHere = unmetHere + 1
+			end 'eachKey'
 
-				self.publishSweptBodyFact(name, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
-				changed = true
-			end 'eachForwarder'
-		end 'sweepUntilStable'
+			if unmetHere == 0 'everyDependencyIsAlreadyFresh'
+				ready.push(name)
+			end 'everyDependencyIsAlreadyFresh' else 'waitsOnSome'
+				unmet.upsert(name, value: unmetHere)
+			end 'waitsOnSome'
+		end 'eachForwarder'
+
+		while ready.count() > 0 'drain'
+			let name = try ready.pop() otherwise panic("closeFreshReturnForwards: pop on a worklist whose count was just tested non-zero")
+			self.publishSweptBodyFact(name, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts)
+
+			if not self.everyDeclarationOfThisNamePublishes(name, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts) 'aSiblingDeclarationIsNotFresh'
+				continue
+			end 'aSiblingDeclarationIsNotFresh'
+
+			let released = try waiters.get(name) otherwise continue
+
+			for waiter in released 'eachWaiter'
+				let left = (try unmet.get(waiter) otherwise panic("closeFreshReturnForwards: '{String.from(waiter)}' waits on '{String.from(name)}' but has no unmet count — every waiter is counted where it is filed")) - 1
+				unmet.upsert(waiter, value: left)
+
+				if left == 0 'released'
+					ready.push(waiter)
+				end 'released'
+			end 'eachWaiter'
+		end 'drain'
 	end 'closeFreshReturnForwards'
 
-	// Does every callee this declaration forwards to publish the fact? Asked through the SAME door a call site
-	// asks — including its every-declaration-of-this-name half — so a forwarder can never be admitted on a
-	// claim a caller would then be refused on.
-	//
-	// ⚠ It reads `funcReturnsFreshRecord` DIRECTLY rather than through `returnsFreshValue`, whose first act is
-	// to run this close: the recursion would re-enter mid-fixpoint and the memo flag would stop the inner run
-	// having any effect. The two halves are the same test with the close removed.
-	function everyForwardTargetIsFresh(targets ByteArrayArray) returns bool
-		for target in targets 'eachTarget'
-			if not self.everyDeclarationOfThisNamePublishes(target, marked: self.funcReturnsFreshRecord, counts: self.funcFreshReturningDeclarationCounts) 'thisOneIsNot'
-				return false
-			end 'thisOneIsNot'
-		end 'eachTarget'
+	// Every dependency's declaration key, or `false` once one call reaches nothing a key names exactly.
+	function resolveFreshReturnDependencies(dependencies FreshReturnDependencyArray, into ByteArrayArray) returns bool
+		for dependency in dependencies 'eachDependency'
+			match self.freshReturnForwardTarget(dependency) 'target'
+				unnameable then return false
+				declaration(key) then into.push(key)
+			end 'target'
+		end 'eachDependency'
 
 		return true
-	end 'everyForwardTargetIsFresh'
+	end 'resolveFreshReturnDependencies'
+
+	// ⭐⭐ **WHICH DECLARATION A FORWARDING CALL REACHES — the real parse's resolution of the same spelling,
+	// asked once every declaration is folded.** It is re-derived rather than read off the parsed call because
+	// `returnsFreshValue` is asked while bodies are still being parsed, in any file order. `unnameable` wherever
+	// that resolution could reach something no key here names exactly; a wrong key would lend one declaration's
+	// freshness to a call that reaches another.
+	//
+	//   • `name(…)` is `Parser.parseCall`: the enclosing type's member when it declares one
+	//     (`isImplicitSelfMethod`), else `freeCallCallee`'s answer.
+	//   • `self.name(…)` / `Self.name(…)` name the enclosing type's instance / static member.
+	//   • `Type.name(…)` is `Parser.qualifiedStaticCallee` for a head that names a plain `type` and nothing
+	//     else: no alias, enum, union or other kind shares the name, it is outside the reserved `__` space whose
+	//     members the parser intercepts by name, and the member is not a namespace-qualified free function. A
+	//     user type that displaces a stdlib one needs no refusal: every stdlib spelling of that name is rewritten
+	//     into the reserved space (`Parser.shadowRenamedTokens`), so the bare name is the user's alone.
+	function freshReturnForwardTarget(dependency FreshReturnDependency) returns FreshReturnForwardTarget
+		return match dependency.forward 'shape'
+			unqualified(enclosingType, name) gives self.unqualifiedForwardTarget(enclosingType, name: name, moduleDirectory: dependency.moduleDirectory)
+			ofEnclosingType(typeName, name, takesReceiver) gives self.declaredForwardTarget(self.memberRegistrationKey(qualifiedMethodName(typeName, methodName: name), takesReceiver: takesReceiver))
+			ofNamedType(typeName, name) gives self.namedTypeForwardTarget(typeName, name: name)
+		end 'shape'
+	end 'freshReturnForwardTarget'
+
+	function unqualifiedForwardTarget(enclosingType ByteArray, name ByteArray, moduleDirectory String) returns FreshReturnForwardTarget
+		if not enclosingType.isEmpty() 'insideAType'
+			let member = qualifiedMethodName(enclosingType, methodName: name)
+
+			if self.declaresCallee(member) 'aSiblingMember'
+				return FreshReturnForwardTarget.declaration(member)
+			end 'aSiblingMember'
+		end 'insideAType'
+
+		return self.declaredForwardTarget(self.freeCallCallee(name, moduleDirectory: moduleDirectory))
+	end 'unqualifiedForwardTarget'
+
+	function namedTypeForwardTarget(typeName ByteArray, name ByteArray) returns FreshReturnForwardTarget
+		if not self.containsStructInAnyFile(typeName) or self.crossKindContested(typeName) or self.isGenericAliasInAnyFile(typeName) or self.containsEnumInAnyFile(typeName) or bytesStartWith(typeName, prefix: ReservedTypeNamePrefix) 'notOnlyAType'
+			return FreshReturnForwardTarget.unnameable
+		end 'notOnlyAType'
+
+		let written = qualifiedMethodName(typeName, methodName: name)
+
+		if self.resolvesAsNamespaceQualifiedFunction(written) 'aDirectoryQualifiedFreeCall'
+			return FreshReturnForwardTarget.unnameable
+		end 'aDirectoryQualifiedFreeCall'
+
+		return self.declaredForwardTarget(self.memberRegistrationKey(written, takesReceiver: false))
+	end 'namedTypeForwardTarget'
+
+	function declaredForwardTarget(key ByteArray) returns FreshReturnForwardTarget
+		return FreshReturnForwardTarget.declaration(key) if self.declaresCallee(key) else FreshReturnForwardTarget.unnameable
+	end 'declaredForwardTarget'
 
 	// The shared body of the three doors above — somebody published the fact for this key, and EVERY
 	// declaration wearing the key did. Written once for `recordSweptBodyFact`'s reason: the collide half is the
@@ -14806,6 +14943,38 @@ export type ProgramSignatures
 
 		return namespaceQualifiedName(namespaceForModuleDirectory(moduleDirectory), name: bareName)
 	end 'freeFunctionRegistrationName'
+
+	// ⭐⭐ **THE DECLARATION A BARE FREE CALL WRITTEN IN `moduleDirectory` REACHES: A CONTESTED NAME MEANS THIS
+	// DIRECTORY'S DECLARATION, IF THERE IS ONE** — the "local namespace wins" tier, and the reason a file in
+	// `alpha/` goes on calling `duplicate()` unqualified after `beta/` declares one too. Asked by the call door
+	// (`Parser.parseCall`) and by `closeFreshReturnForwards`, which must resolve the same spelling the same way.
+	//
+	// ⚠ **IT IS APPLIED AT THE FREE-CALL DOOR AND NOT INSIDE `Parser.parseCallNamed`.** That funnel also carries
+	// a sibling method (already mangled `Type.method`), a static call, a primitive-static mint and a receiver
+	// call, and a rewrite there is one condition away from moving one of them. The input here is a bare
+	// identifier the author wrote with nothing to its left — the only shape this rule is about.
+	//
+	// ⛔ **IT MUST ASK THE MERGE REGISTRY AND NOT THE SWEEP'S.** A guard on `not declaresCallee(bare)` — "rewrite
+	// only a name that resolves to nothing" — reads `true` forever, because the SWEEP's bare entry SURVIVES a
+	// contest by design (`refileContestedFreeFunction` copies rather than moves, so E3095 can be told from
+	// E3004), while the name a call must actually reach is decided by the MERGE registry.
+	//
+	// ⚠ **THE PROBE IS ONE LEVEL AND DOES NOT WALK UP THE DIRECTORY CHAIN**: a file in `alpha/sub/` does not see
+	// `alpha/`'s contested declaration bare and must qualify.
+	//
+	// ⭐⭐ **A ROOT READER'S LOCAL NAME IS THE BARE NAME, SO BOTH ARMS RETURN THE SAME BYTES — AND THAT IS
+	// PRECISELY WHY THE BARE ENTRY HAS TO BE THE ROOT DECLARATION'S.** A root reader has no other key to be
+	// routed to, so every sweep fact its call reads comes off the bare key, and a contest that left another
+	// directory's declaration there would answer a call it never selected. `refileContestedFreeFunction` is
+	// where that is guaranteed.
+	export function freeCallCallee(bareName ByteArray, moduleDirectory String) returns ByteArray
+		if not self.isContestedFreeFunction(bareName) 'oneMeaningEverywhere'
+			return bareName
+		end 'oneMeaningEverywhere'
+
+		let local = self.freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory)
+		return local if self.declaresCallee(local) else bareName
+	end 'freeCallCallee'
 
 	// ⭐⭐ **MOVE THE *INCUMBENT'S* ALREADY-FOLDED SWEEP ENTRIES FROM THE BARE KEY TO ITS QUALIFIED ONE
 	// (N1c).** ONE caller now: `foldFile`'s contest pass, at the moment a SECOND directory declares the name

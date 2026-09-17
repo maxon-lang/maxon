@@ -7205,3 +7205,440 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: services.a-reply-built-by-a-sibling-method-is-fresh -->
+A message that returns what a private sibling method built returns a record nothing but the reply names:
+the sibling constructs it and keeps no reference, so it crosses to the caller as its one owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+type Worker
+	var scale as Tally
+
+	static function create() returns Self
+		return Self{scale: 2}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return build(n)
+	end 'measure'
+
+	function build(n Tally) returns Report
+		return Report.create(n * self.scale)
+	end 'build'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+
+<!-- test: services.a-reply-built-by-a-free-function-is-fresh -->
+The same through a free function: a callee that returns a record it just constructed hands back a fresh one.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+function buildReport(n Tally) returns Report
+	return Report.create(n * 2)
+end 'buildReport'
+
+type Worker
+	var calls as Tally
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		self.calls = self.calls + 1
+		return buildReport(n)
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+
+<!-- test: services.a-spawn-factory-may-delegate-to-another-factory -->
+The factory a `spawn` names may return what another static factory of the type built, including through
+`try … otherwise panic`: the delegate constructs the record and keeps nothing, so the service still
+becomes its one owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+enum SetupError implements Error
+	zeroScale
+end 'SetupError'
+
+type Worker
+	var scale as Tally
+
+	static function prepare(scale Tally) returns Self throws SetupError
+		if scale == 0 'zero'
+			throw SetupError.zeroScale
+		end 'zero'
+
+		return Self{scale: scale}
+	end 'prepare'
+
+	static function create(scale Tally) returns Self
+		return try prepare(scale) otherwise panic("main checks the scale before it spawns a Worker")
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * self.scale
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create(2)
+	let total = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+
+<!-- test: error.reply-forwarded-from-a-sibling-that-returns-state-refused -->
+A reply forwarded from a sibling is only as fresh as what the sibling returns, and `current` returns the
+service's own `report` — the caller would hold a second reference to it.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+type Worker
+	var report as Report
+
+	static function create() returns Self
+		return Self{report: Report.create(42)}
+	end 'create'
+
+	export function measure() returns Report
+		return current()
+	end 'measure'
+
+	function current() returns Report
+		return self.report
+	end 'current'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure() otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:20:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:29:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.reply-forwarded-through-a-function-returning-its-parameter-refused -->
+`pass` builds nothing: it hands back the record it was given, which is the service's own `report`.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+function pass(report Report) returns Report
+	return report
+end 'pass'
+
+type Worker
+	var report as Report
+
+	static function create() returns Self
+		return Self{report: Report.create(42)}
+	end 'create'
+
+	export function measure() returns Report
+		return pass(self.report)
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure() otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:24:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:29:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.reply-forwarded-from-a-sibling-that-keeps-the-record-refused -->
+`build` constructs the record but also stores it in the service's `history`, so the record it returns has
+a second owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias ReportArray = Array with Report
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+type Worker
+	var history as ReportArray
+
+	static function create() returns Self
+		return Self{history: ReportArray.create()}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return build(n)
+	end 'measure'
+
+	function build(n Tally) returns Report
+		let report = Report.create(n * 2)
+		self.history.push(report)
+		return report
+	end 'build'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:21:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:32:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.reply-forwarded-to-a-local-closure-named-like-a-fresh-function-refused -->
+The `buildReport` that `build` calls is its own local closure, which hands back the service's `report`,
+not the free function of that name that builds one — so `build` is not fresh, and neither is the reply.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Report'
+
+function buildReport(n Tally) returns Report
+	return Report.create(n * 2)
+end 'buildReport'
+
+type Worker
+	var report as Report
+
+	static function create() returns Self
+		return Self{report: buildReport(21)}
+	end 'create'
+
+	export function measure(n Tally) returns Report
+		return build(n)
+	end 'measure'
+
+	function build(n Tally) returns Report
+		let saved = self.report
+		let buildReport = function(_ Tally) gives saved
+		return buildReport(n)
+	end 'build'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:24:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:35:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: error.spawn-factory-delegating-to-a-factory-that-returns-its-parameter-refused -->
+`create` delegates to `adopt`, which builds nothing: it returns the `Worker` it was handed, which `main`
+still holds.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Worker
+	var scale as Tally
+
+	static function make(scale Tally) returns Self
+		return Self{scale: scale}
+	end 'make'
+
+	static function adopt(seed Worker) returns Self
+		return seed
+	end 'adopt'
+
+	static function create(seed Worker) returns Self
+		return adopt(seed)
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * self.scale
+	end 'measure'
+end 'Worker'
+
+function main() returns ExitCode
+	let seed = Worker.make(2)
+	let worker = spawn Worker.create(seed)
+	let total = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{total} {seed.scale}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a closure capture, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands (only a `let` local that solely owns its graph is lent instead). Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: error.reply-forwarded-through-a-local-named-like-a-type-refused -->
+Inside `build`, `Report` is a local holding the service's own record, so `Report.echo(1)` calls the INSTANCE
+`echo` on it — which returns that record — and not the static `echo` that builds one.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Report
+	export var total as Tally
+
+	static function echo(amount Tally) returns Self
+		return Self{total: amount}
+	end 'echo'
+
+	function echo(amount Tally) returns Report
+		self.total = self.total + amount
+		return self
+	end 'echo'
+end 'Report'
+
+type Worker
+	var report as Report
+
+	static function create() returns Self
+		return Self{report: Report.echo(41)}
+	end 'create'
+
+	export function measure() returns Report
+		return build()
+	end 'measure'
+
+	function build() returns Report
+		let Report = self.report
+		return Report.echo(1)
+	end 'build'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let report = try await worker.measure() otherwise panic("the worker is running")
+	print("{report.total}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:25:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:35:15: the `spawn` that makes `Worker` a service
+```
+
+<!-- test: services.a-reply-built-by-a-user-type-named-like-a-stdlib-type-is-fresh -->
+A program's own `type Clock` moves the stdlib `Clock` out of its way, so `Clock.make` here is the program's
+factory and nothing else: the reply `build` forwards is still one it just constructed.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Clock
+	export var ticks as Tally
+
+	static function make(ticks Tally) returns Self
+		return Self{ticks: ticks}
+	end 'make'
+end 'Clock'
+
+type Worker
+	var scale as Tally
+
+	static function create() returns Self
+		return Self{scale: 2}
+	end 'create'
+
+	export function measure(n Tally) returns Clock
+		return build(n)
+	end 'measure'
+
+	function build(n Tally) returns Clock
+		return Clock.make(n * self.scale)
+	end 'build'
+end 'Worker'
+
+function main() returns ExitCode
+	let worker = spawn Worker.create()
+	let clock = try await worker.measure(21) otherwise panic("the worker is running")
+	print("{clock.ticks}\n")
+	worker.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```

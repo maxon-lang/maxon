@@ -8803,6 +8803,14 @@ enum MemberSurface
 	cursor
 end 'MemberSurface'
 
+// Which compiler-owned record's roster serves a member of the enclosing type — `Parser.enclosingRosterServing`'s
+// answer, read by the implicit-self call and by the fresh-return sweep.
+enum EnclosingRoster
+	none
+	byteRecord
+	array
+end 'EnclosingRoster'
+
 // ⭐ **WHICH ACCESS ASKED FOR A BASE'S LAYOUT** — `Parser.structLayoutOfType`'s two kinds of caller, carried
 // so the refusal it can raise names the construct the author actually wrote. A field walk and a member
 // dispatch both need a `StructLayout`, and a base that has none is the same fact about the TYPE with two
@@ -13409,6 +13417,14 @@ function markBoundHead(returnedHeads ByteArrayArray, bound BoolArray, returnedAt
 	end 'eachCandidate'
 end 'markBoundHead'
 
+// A forward whose target is looked up by a written name, with that name and its position on the parallel
+// columns `Parser.noForwardHeadIsBoundHere` filters — pushed together so the columns cannot desynchronize.
+function noteForwardResolvedByName(forwards FreshReturnForwardArray, forward FreshReturnForward, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn, headAt TokenIndex, head ByteArray)
+	forwards.push(forward)
+	forwardHeads.push(head)
+	forwardHeadsAt.push(headAt)
+end 'noteForwardResolvedByName'
+
 // Record a forwarding edge, de-duplicated. The list is per BODY and a body forwards to a handful of names,
 // so a linear membership test beats a set's allocation — the same trade `captureSlotFor` makes one column over.
 //
@@ -17442,9 +17458,12 @@ export type Parser
 		// `return` at all (a `void` function, a diverging one) states nothing rather than vacuously everything.
 		var everyReturnIsAFreshRecord = true
 
-		// The callees a forwarding `return` hands its answer straight back from, one per such return. Empty on
-		// every body that returns only record literals, which is every body this fact reached before the hop.
-		var freshReturnForwards = ByteArrayArray.create()
+		// The calls a forwarding `return` hands its answer straight back from, one per such return, and the
+		// written NAME each one's resolution could lose to a binding of this body (`forwardHeads`, positioned by
+		// `forwardHeadsAt`). Empty on every body that returns only record literals.
+		var freshReturnForwards = FreshReturnForwardArray.create()
+		var forwardHeads = ByteArrayArray.create()
+		var forwardHeadsAt = TokenIndexColumn.create()
 		var atStatementStart = false
 		var lastTopLevelStatement = bodyStart
 		var sawATopLevelStatement = false
@@ -17513,9 +17532,9 @@ export type Parser
 				// ⚡ **ASKED ONLY WHILE THE CLAIM IS STILL ALIVE.** It is UNIVERSAL over the body's returns and only
 				// ever cleared, so one unreadable return settles the declaration and every later probe is a token
 				// walk whose answer nothing reads — and the probe is not free: it scans a record literal's or a
-				// call's whole argument region looking for the match. Most bodies return something that is
-				// neither, and they now pay one token compare each.
-				if everyReturnIsAFreshRecord and not self.noteFreshReturnShape((q + 1) as TokenIndex, funcName: funcName, takesReceiver: takesReceiver, forwards: freshReturnForwards) 'notAFreshRecord'
+				// call's whole argument region looking for the match. A body returning something that is neither
+				// pays one token compare.
+				if everyReturnIsAFreshRecord and not self.noteFreshReturnShape((q + 1) as TokenIndex, forwards: freshReturnForwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt) 'notAFreshRecord'
 					everyReturnIsAFreshRecord = false
 				end 'notAFreshRecord'
 			end 'returnStatement'
@@ -17719,9 +17738,9 @@ export type Parser
 			// a condition on the same declaration, and the unconditional one would win.
 			if freshReturnForwards.count() == 0 'everyReturnBuiltItsOwn'
 				bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecord))
-			end 'everyReturnBuiltItsOwn' else 'someReturnHandedTheCalleesBack'
+			end 'everyReturnBuiltItsOwn' else if self.noForwardHeadIsBoundHere(forwardHeads, forwardHeadsAt: forwardHeadsAt, bodyStart: bodyStart, paramNames: paramNames) 'someReturnHandedTheCalleesBack'
 				for forwarded in freshReturnForwards 'eachForward'
-					bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecordIfCalleeDoes, forwardCallee: forwarded))
+					bodyFacts.push(SweptBodyFactEntry.create(funcName, takesReceiver: takesReceiver, fact: SweptBodyFact.returnsAFreshRecordIfCalleeDoes(forwarded)))
 				end 'eachForward'
 			end 'someReturnHandedTheCalleesBack'
 		end 'returnsAFreshRecord'
@@ -17777,48 +17796,8 @@ export type Parser
 		end 'returnedANameOrACall'
 	end 'scanBodyFacts'
 
-	// ⭐⭐ **W117's SEED AND EDGE, READ OFF ONE VALUE EXPRESSION.** Exactly four shapes are recognised, and
-	// the region must hold nothing BUT the shape — its own end after a name, an opening `(` for a call:
-	//
-	//   • `<name>`            — a seed candidate, the name as written;
-	//   • `<Type>.<member>`   — a seed candidate under the JOINED spelling, which is the key a static
-	//                           member is looked up under (`parseStaticMemberAccess`);
-	//   • `<name>(…)`         — a forwarding edge, bare;
-	//   • `<recv>.<name>(…)`  — a forwarding edge through a receiver, or through `self` inside a type.
-	//   • `<name> if <cond> else <arm>` — the INLINE CONDITIONAL, whose BOTH arms are candidates
-	//                           because either may be the value. See below.
-	//
-	// ⭐⭐ **TWO DOORS ASK IT, AND THE ONLY THING THEY DIFFER IN IS WHERE THE REGION ENDS (`SweptValueRegionEnd`).**
-	// A `return` statement is the obvious one. The other is a captured PARAMETER DEFAULT, which is a value
-	// expression the compiler turns into a nullary helper whose entire body is `return <that expression>`
-	// (`parseDefaultHelperBody`) — so `f(p T = A)` hands its caller exactly what `f(A)` hands it, and the
-	// question "may this call's argument alias a `let` global's record?" has to have the same answer for both
-	// spellings or a default stops being sugar for writing the argument out. It did not: MEASURED before this
-	// rung, a `grow(names Names = shared())` whose body pushes silently mutated the global while the written-out
-	// `grow(shared())` beside it was refused E3019.
-	//
-	// ⭐⭐ **THE CONDITIONAL ARM WAS ADDED BECAUSE IT WAS REACHED — by the compiler's own source, in a shape
-	// this list's own tail predicted.** `return sharedEmptyDeclaredConformances if
-	// boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames`
-	// (`ConformanceCheck.pairableAssociatedTypeNames`) is a `return` whose value IS a global's record
-	// on one path, and it recorded nothing — so the bit stays clear and the return is refused on a
-	// legal program. BOTH arms are seeded, never one: the shape says the value is one of two records
-	// and the sweep cannot know which, so recording only the half it happened to read first would be a
-	// fact about the parser rather than about the program.
-	//
-	// ⚠⚠ **ANYTHING ELSE RECORDS NOTHING, AND THAT IS SOUND BECAUSE OF THE FALLBACK RATHER THAN BECAUSE THE
-	// LIST IS COMPLETE.** A value this does not recognise leaves the function's bit clear, and a clear bit
-	// is precisely the condition under which `ownedFormOfBorrowedValue` keeps the ORIGINAL E2015 refusal at the
-	// return — so a missed shape costs a REFUSAL, never a silent acceptance. The hazard runs the other way:
-	// recording a shape whose value is not really the global's record would taint a caller's value and refuse a
-	// write on a legal program. ⇒ **Every ambiguity resolves toward recording NOTHING**, which is why the
-	// shape test is exact rather than "a value mentioning a name somewhere".
-	//
-	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
-	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
-	// can name.
 	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD THE `return` ITSELF BUILDS? — SV1's whole freshness proof,
-	// and it is a proof rather than a heuristic.** Exactly one shape is recognised:
+	// and it is a proof rather than a heuristic.** Exactly one shape is recognised as fresh by itself:
 	//
 	//   `return <Name>{ … }`  — a struct literal, with the matching `}` the last token on the line.
 	//
@@ -17835,51 +17814,109 @@ export type Parser
 	// the whole-program aliasing analysis this compiler has deferred. The shape test is what keeps the claim
 	// derivable from tokens alone.
 	//
-	// ⭐⭐ **`return f(…)` IS RECOGNISED — AS A CONDITION, NOT A CLAIM — AND IT IS THE HOP `String.clone` NEEDED.**
-	// `stdlib/String.maxon:267` is `return sliceBytes(…)`, whose callee IS fresh by the literal criterion one
-	// line down, so the claim died one hop short: **MEASURED, `h.keep(s.clone())` and `let c = s.clone()` +
-	// `h.keep(c)` were BOTH E3138** — a send refusing the very cure its own diagnostic named. The forward is
-	// pushed and the caller ANDs it with the rest; `ProgramSignatures.closeFreshReturnForwards` decides it
-	// whole-program, where the callee's own fact is known.
+	// ⭐⭐ **`return <call>` IS RECOGNISED — AS A CONDITION, NOT A CLAIM.** The callee's own freshness decides
+	// it, which only the whole-program close knows (`ProgramSignatures.closeFreshReturnForwards`), so the call
+	// is pushed as WRITTEN and the caller ANDs it with the rest. Four spellings, each one a call whose target
+	// the close can resolve the way the real parse does:
 	//
-	// ⚠ **ONLY A BARE `name(…)`, BECAUSE ONLY A BARE NAME HAS A DERIVABLE KEY HERE.** Inside a method it is
-	// `<enclosing type>.<name>`; in a free function it is the bare name. A qualified `Foo.make(…)` or a
-	// receiver call `x.m(…)` states nothing — the first needs the contest's mint and the second needs `x`'s
-	// TYPE, neither of which this token scan holds — so both resolve toward recording nothing, which is this
-	// family's rule and the direction whose cost is a refusal rather than a moved box.
+	//   `name(…)`   `self.name(…)`   `Self.name(…)`   `Type.name(…)`
 	//
-	// ⚠⚠ **THE MATCHING `}` MUST END THE LINE, AND THAT TEST IS NOT DECORATION.** `return Self{…} if c else s`
-	// hands back the record on one path and a bound name on the other; `return wrap(Self{…})` hands back
-	// whatever `wrap` chose to do with it. Both open with the admitted tokens and neither is fresh, so the
-	// region-end test is what parts them — `noteReturnedGlobalOrForward`'s own "and nothing follows it"
-	// discipline, one probe over.
+	// optionally under `try`, alone or with `otherwise panic(…)` — the handler diverges, so the value is still
+	// the call's. A receiver call `x.m(…)` states nothing: its target is `x`'s TYPE, which no token here holds.
+	// A written name a body binding could take is filtered after the walk (`noForwardHeadIsBoundHere`).
+	//
+	// ⚠ **A MEMBER A COMPILER-OWNED RECORD'S ROSTER SERVES STATES NOTHING.** Inside `String`, `Character` or
+	// the corpus `Array`, `self.m()` and a bare `m()` dispatch to the synthesized arm ahead of the declaration
+	// a key would name — asked through `enclosingRosterServing`, the predicate `parseCall` dispatches on.
+	//
+	// ⚠⚠ **THE MATCHING `}` OR `)` MUST END THE LINE, AND THAT TEST IS NOT DECORATION.** `return Self{…} if c
+	// else s` hands back the record on one path and a bound name on the other; `return wrap(Self{…})` hands
+	// back whatever `wrap` chose to do with it. Both open with the admitted tokens and neither is fresh, so the
+	// region-end test is what parts them.
 	//
 	// ⚠ It answers about ONE return; the caller ANDs it across every return in the body, so an unreadable
 	// shape costs the whole declaration its claim. That is this family's rule (*"every ambiguity resolves
 	// toward recording NOTHING"*) and here the wrong direction is a heap-corrupting move rather than a refusal.
-	function noteFreshReturnShape(valueStart TokenIndex, funcName ByteArray, takesReceiver bool, forwards ByteArrayArray) returns bool
+	function noteFreshReturnShape(valueStart TokenIndex, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn) returns bool
+		let tryWrapped = self.kindAt(valueStart) == TokenKind.try
+		let callStart = (valueStart + 1) as TokenIndex if tryWrapped else valueStart
+
 		// `tokenCanBeAName` admits `Self` along with every keyword-spelled type name (D8), which is the SAME
 		// admission the two `spawn` halves make — a factory writing `return Self{…}` and one writing
 		// `return Calc{…}` are one declaration spelled two ways.
-		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
+		if not tokenCanBeAName(self.tokenAt(callStart)) 'notANameAtAll'
 			return false
 		end 'notANameAtAll'
 
-		if self.kindAt((valueStart + 1) as TokenIndex) == TokenKind.leftBrace 'aRecordLiteral'
-			return self.recordLiteralEndsTheLine((valueStart + 1) as TokenIndex)
+		let head = self.tokenAt(callStart)
+
+		if not tryWrapped and self.kindAt((callStart + 1) as TokenIndex) == TokenKind.leftBrace 'aRecordLiteral'
+			return self.groupEndsTheLine((callStart + 1) as TokenIndex, closer: TokenKind.rightBrace)
 		end 'aRecordLiteral'
 
-		if self.kindAt((valueStart + 1) as TokenIndex) != TokenKind.leftParen 'notACallEither'
-			return false
-		end 'notACallEither'
+		if self.kindAt((callStart + 1) as TokenIndex) == TokenKind.leftParen 'anUnqualifiedCall'
+			if not self.callEndsTheReturn((callStart + 1) as TokenIndex, tryWrapped: tryWrapped) or self.enclosingRosterServing(head.value, unfoldedTypeIsTheRecord: true) != EnclosingRoster.none 'notAResolvableForward'
+				return false
+			end 'notAResolvableForward'
 
-		if not self.groupEndsTheLine((valueStart + 1) as TokenIndex, closer: TokenKind.rightParen) 'somethingFollowsTheCall'
-			return false
-		end 'somethingFollowsTheCall'
+			noteForwardResolvedByName(forwards, forward: FreshReturnForward.unqualified(self.enclosingType, name: head.value), forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, headAt: callStart, head: head.value)
+			return true
+		end 'anUnqualifiedCall'
 
-		forwards.push(freshReturnForwardKey(self.tokenAt(valueStart).value, funcName: funcName, takesReceiver: takesReceiver))
+		let member = (callStart + 2) as TokenIndex
+		let openParen = (callStart + 3) as TokenIndex
+
+		if self.kindAt((callStart + 1) as TokenIndex) != TokenKind.dot or not tokenCanBeAName(self.tokenAt(member)) or self.kindAt(openParen) != TokenKind.leftParen or not self.callEndsTheReturn(openParen, tryWrapped: tryWrapped) 'notADottedCallEndingTheReturn'
+			return false
+		end 'notADottedCallEndingTheReturn'
+
+		let name = self.tokenAt(member).value
+
+		if receiverIsTheEnclosingType(head.kind) 'ofTheEnclosingType'
+			if self.enclosingType.isEmpty() or self.enclosingRosterServing(name, unfoldedTypeIsTheRecord: true) != EnclosingRoster.none 'notAResolvableForward'
+				return false
+			end 'notAResolvableForward'
+
+			forwards.push(FreshReturnForward.ofEnclosingType(self.enclosingType, name: name, takesReceiver: head.kind == TokenKind.self))
+			return true
+		end 'ofTheEnclosingType'
+
+		if head.kind != TokenKind.identifier or self.typeParamPositionOf(head.value) < self.enclosingTypeParams.count() or self.namesInnerAliasHere(head.value) 'headMayNotNameAType'
+			return false
+		end 'headMayNotNameAType'
+
+		noteForwardResolvedByName(forwards, forward: FreshReturnForward.ofNamedType(head.value, name: name), forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt, headAt: callStart, head: head.value)
 		return true
 	end 'noteFreshReturnShape'
+
+	// Does the call opening at `openParen` end the `return`? Its `)` ends the line, or — under `try` — is
+	// followed by `otherwise panic(…)` that does.
+	function callEndsTheReturn(openParen TokenIndex, tryWrapped bool) returns bool
+		let closer = self.groupCloserAt(openParen)
+
+		if self.kindAt(closer) != TokenKind.rightParen 'notClosedByItsParen'
+			return false
+		end 'notClosedByItsParen'
+
+		let after = (closer + 1) as TokenIndex
+
+		if self.kindAt(after) == TokenKind.newline 'endsTheLine'
+			return true
+		end 'endsTheLine'
+
+		return tryWrapped and self.kindAt(after) == TokenKind.otherwise and self.kindAt((after + 1) as TokenIndex) == TokenKind.panic and self.kindAt((after + 2) as TokenIndex) == TokenKind.leftParen and self.groupEndsTheLine((after + 2) as TokenIndex, closer: TokenKind.rightParen)
+	end 'callEndsTheReturn'
+
+	// Does any written name a forwarding `return` resolves by name denote a parameter or a local of this body
+	// instead? Then it is a VALUE at that call — a closure, or an instance method's receiver — and no
+	// declaration key describes what it hands back.
+	function noForwardHeadIsBoundHere(forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexColumn, bodyStart TokenIndex, paramNames ByteArrayArray) returns bool
+		if forwardHeads.count() == 0 'nothingResolvedByName'
+			return true
+		end 'nothingResolvedByName'
+
+		return self.returnedNamesNotBoundHere(forwardHeads, returnedHeads: forwardHeads, returnedAt: forwardHeadsAt, bodyStart: bodyStart, paramNames: paramNames).count() == forwardHeads.count()
+	end 'noForwardHeadIsBoundHere'
 
 	// ⭐⭐⭐ **DOES THIS `return` HAND BACK A RECORD BUILT OUT OF THIS DECLARATION'S OWN PARAMETERS, AND NOTHING
 	// ELSE? — W197's whole substitution proof.** Exactly one shape is recognised:
@@ -17914,7 +17951,7 @@ export type Parser
 			return false
 		end 'notARecordLiteral'
 
-		if not self.recordLiteralEndsTheLine(openBrace) 'somethingFollowsTheLiteral'
+		if not self.groupEndsTheLine(openBrace, closer: TokenKind.rightBrace) 'somethingFollowsTheLiteral'
 			return false
 		end 'somethingFollowsTheLiteral'
 
@@ -17923,7 +17960,7 @@ export type Parser
 
 		while self.kindAt(q) != TokenKind.rightBrace 'eachField'
 			// A malformed body runs the scan to the file's `eof`; answering false there is the safe direction,
-			// exactly as `groupEndsTheLine`'s own unclosed-literal arm is.
+			// exactly as `groupEndsTheLine` answers for an unclosed group.
 			if self.kindAt(q) == TokenKind.eof 'unclosedLiteral'
 				return false
 			end 'unclosedLiteral'
@@ -17968,40 +18005,21 @@ export type Parser
 		return self.tokenAt(at).value.equals(wanted)
 	end 'tokenIsTheName'
 
-	// The registration key a bare `name(…)` forward names. Inside a METHOD it is the enclosing type's member —
-	// an implicit-self call resolves there — and in a free function it is the bare name. Both are the key the
-	// merge files a declaration under, so `closeFreshReturnForwards` compares like with like.
-	//
-	// ⚠ A method whose enclosing type cannot be read off its own qualified name states the BARE name instead,
-	// which is a key that either names a free function (right) or names nothing (a miss, and a missed `true`).
-	// Neither can name the wrong body: a key that resolves to no declaration publishes nothing.
-	function freshReturnForwardKey(callee ByteArray, funcName ByteArray, takesReceiver bool) returns ByteArray
-		if not takesReceiver 'aFreeFunction'
-			return callee
-		end 'aFreeFunction'
-
-		return match splitQualifiedName(funcName) 'q'
-			parts(typeName, _) gives qualifiedMethodName(typeName, methodName: callee)
-			notQualified gives callee
-		end 'q'
-	end 'freshReturnForwardKey'
-
-	// Walk from a record literal's opening `{` to its match, and answer whether the token after it ends the
-	// line. Split from the shape test above so the bracket bookkeeping is one loop rather than a condition
-	// inside one — and it counts all three bracket kinds, because a nested call or subscript inside a field
-	// value carries braces of its own it must not stop at (`Self{items: f(Inner{…})}`).
-	//
-	// A literal left unclosed by a malformed body runs to the file's `eof` and answers `false`, which is the
-	// safe direction: the tolerant sweep must never publish a fact about tokens the real parse will reject.
-	function recordLiteralEndsTheLine(openBrace TokenIndex) returns bool
-		return self.groupEndsTheLine(openBrace, closer: TokenKind.rightBrace)
-	end 'recordLiteralEndsTheLine'
-
-	// The walk itself, over whichever bracket the caller opened. ⚠ **THE CLOSER IS CHECKED AND NOT ASSUMED,
-	// which is the whole reason it is a parameter**: a `return f(…)` forward's match is a `)` and a record
-	// literal's is a `}`, and a walk that asserted one closer for both would answer `false` for every call —
-	// MEASURED, as `String.clone` staying unfresh after the hop was built and its forward pushed.
+	// Does the group `openBracket` opens close with `closer`, and is that closer the last token on the line?
+	// ⚠ **THE CLOSER IS CHECKED AND NOT ASSUMED, which is the whole reason it is a parameter**: a `return f(…)`
+	// forward's match is a `)` and a record literal's is a `}`, and a walk that asserted one closer for both
+	// would answer `false` for every call. A group a malformed body leaves unclosed answers `false`, the safe
+	// direction: the tolerant sweep must never publish a fact about tokens the real parse will reject.
 	function groupEndsTheLine(openBracket TokenIndex, closer TokenKind) returns bool
+		let closing = self.groupCloserAt(openBracket)
+		return self.kindAt(closing) == closer and self.kindAt((closing + 1) as TokenIndex) == TokenKind.newline
+	end 'groupEndsTheLine'
+
+	// The bracket that returns the group `openBracket` opens to depth zero, of whichever kind — or the file's
+	// `eof`, where a malformed body leaves the group unclosed. Both are real tokens, so a caller comparing the
+	// kind it expects answers `false` at the `eof` without a case of its own. It counts all three bracket
+	// kinds, because a nested call or subscript carries brackets of its own (`Self{items: f(Inner{…})}`).
+	function groupCloserAt(openBracket TokenIndex) returns TokenIndex
 		var depth = 0
 		var q = openBracket
 
@@ -18016,16 +18034,52 @@ export type Parser
 				depth = depth - 1
 
 				if depth == 0 'theMatch'
-					return kind == closer and self.kindAt((q + 1) as TokenIndex) == TokenKind.newline
+					return q
 				end 'theMatch'
 			end 'closesGroup'
 
 			q = q + 1
 		end 'scanForTheMatch'
 
-		return false
-	end 'groupEndsTheLine'
+		return q
+	end 'groupCloserAt'
 
+	// ⭐⭐ **W117's SEED AND EDGE, READ OFF ONE VALUE EXPRESSION.** Exactly five shapes are recognised, and
+	// the region must hold nothing BUT the shape — its own end after a name, an opening `(` for a call:
+	//
+	//   • `<name>`            — a seed candidate, the name as written;
+	//   • `<Type>.<member>`   — a seed candidate under the JOINED spelling, which is the key a static
+	//                           member is looked up under (`parseStaticMemberAccess`);
+	//   • `<name>(…)`         — a forwarding edge, bare;
+	//   • `<recv>.<name>(…)`  — a forwarding edge through a receiver, or through `self` inside a type;
+	//   • `<name> if <cond> else <arm>` — the INLINE CONDITIONAL, whose BOTH arms are candidates
+	//                           because either may be the value. See below.
+	//
+	// ⭐⭐ **TWO DOORS ASK IT, AND THE ONLY THING THEY DIFFER IN IS WHERE THE REGION ENDS (`SweptValueRegionEnd`).**
+	// A `return` statement is the obvious one. The other is a captured PARAMETER DEFAULT, which is a value
+	// expression the compiler turns into a nullary helper whose entire body is `return <that expression>`
+	// (`parseDefaultHelperBody`) — so `f(p T = A)` hands its caller exactly what `f(A)` hands it, and the
+	// question "may this call's argument alias a `let` global's record?" has to have the same answer for both
+	// spellings or a default stops being sugar for writing the argument out: `grow(names Names = shared())`
+	// must be refused E3019 exactly where `grow(shared())` is.
+	//
+	// ⭐⭐ **BOTH ARMS OF THE CONDITIONAL ARE SEEDED, NEVER ONE.** `return sharedEmptyDeclaredConformances if
+	// boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames`
+	// (`ConformanceCheck.pairableAssociatedTypeNames`) is a `return` whose value IS a global's record on one
+	// path, and the sweep cannot know which, so recording only the half it happened to read first would be a
+	// fact about the parser rather than about the program.
+	//
+	// ⚠⚠ **ANYTHING ELSE RECORDS NOTHING, AND THAT IS SOUND BECAUSE OF THE FALLBACK RATHER THAN BECAUSE THE
+	// LIST IS COMPLETE.** A value this does not recognise leaves the function's bit clear, and a clear bit
+	// is precisely the condition under which `ownedFormOfBorrowedValue` keeps the ORIGINAL E2015 refusal at the
+	// return — so a missed shape costs a REFUSAL, never a silent acceptance. The hazard runs the other way:
+	// recording a shape whose value is not really the global's record would taint a caller's value and refuse a
+	// write on a legal program. ⇒ **Every ambiguity resolves toward recording NOTHING**, which is why the
+	// shape test is exact rather than "a value mentioning a name somewhere".
+	//
+	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
+	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
+	// can name.
 	function noteReturnedGlobalOrForward(valueStart TokenIndex, regionEnd SweptValueRegionEnd, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnedAt TokenIndexColumn, returnCalls ForwardCallArray)
 		if not tokenCanBeAName(self.tokenAt(valueStart)) 'notANameAtAll'
 			return
@@ -83862,48 +83916,45 @@ export type Parser
 		return self.signatures.declaresCallee(qualifiedMethodName(self.enclosingType, methodName: name))
 	end 'isImplicitSelfMethod'
 
-	// Is this bare call a member of the roster the enclosing declaration's OWN record serves? See `parseCall`'s
-	// arm for why it outranks the implicit-self resolution. It must decide WITHOUT resolving anything: a name
-	// the roster does not carry answers no, and only then is a receiver materialized.
+	// ⭐⭐ **WHICH COMPILER-OWNED ROSTER SERVES MEMBER `name` OF THE ENCLOSING TYPE — the ONE spelling of it.**
+	// `parseCall` asks it for an implicit-self call (see its arm for why the roster outranks the declaration) and
+	// the fresh-return sweep asks it for the same reason from the other side: a member the roster serves is a
+	// synthesized arm, not the declaration a key names. A second spelling would let one door admit a member the
+	// other refuses. It resolves nothing, so no receiver is materialized for a name no roster carries.
 	//
-	// ⚠ **THE RECEIVER TEST IS PART OF THE QUESTION AND NOT AN OPTIMISATION.** A `static` method of `type
-	// String` writing a bare `byteLength()` has no instance to dispatch on, and the answer there is the arity
-	// error the ordinary resolution words, not a dispatch on nothing.
-	//
-	// Written once because the two surfaces below differ only in WHICH roster the enclosing type names — and
-	// a second copy of "self is in scope and the roster carries it" is exactly how one of them comes to admit
-	// a member the other refuses.
-	function implicitSelfTakesTheRoster(surface MemberSurface, calleeTok Token) returns bool
-		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
-			return false
-		end 'noReceiver'
-
-		return namesInclude(self.surfaceMemberNames(surface), name: calleeTok.value)
-	end 'implicitSelfTakesTheRoster'
-
-	// The BYTE RECORD half of the test above — `String` and `Character`, told from every other enclosing type
-	// by the tag their name denotes.
-	function implicitSelfTakesTheByteRecordRoster(calleeTok Token) returns bool
-		let enclosing = byteRecordTagOfTypeName(self.enclosingType)
-
-		if enclosing == ValueTypeTag.unresolved 'notInsideAByteRecord'
-			return false
-		end 'notInsideAByteRecord'
-
-		return self.implicitSelfTakesTheRoster(byteRecordSurface(enclosing), calleeTok: calleeTok)
-	end 'implicitSelfTakesTheByteRecordRoster'
-
-	// ⭐⭐ **THE `Array` HALF (W59) — THE SAME RULE ONE GENERICITY UP.** The enclosing declaration is told from
-	// every other by the SHAPE that makes its record the compiler's (`declarationIsTheManagedRecord`), never by the
-	// name alone: `Array` is not a name the compiler reserves, and a user container of that name declaring
+	// The BYTE RECORD half — `String` and `Character` — is told by the tag their name denotes. The `Array` half
+	// (W59) is told by the SHAPE that makes a record the compiler's (`declarationIsTheManagedRecord`), never by
+	// the name alone: `Array` is not a name the compiler reserves, and a user container of that name declaring
 	// anything else has no synthesized roster to win with.
-	function implicitSelfTakesTheArrayRoster(calleeTok Token) returns bool
-		if not self.signatures.declarationIsTheManagedRecord(self.enclosingType) 'notInsideTheOwnRecordArray'
-			return false
-		end 'notInsideTheOwnRecordArray'
+	//
+	// `unfoldedTypeIsTheRecord` is the sweep's: it reads a type body before that type's layout is folded, so a
+	// type the index does not hold yet may still be the record, and counting it served is a missed claim rather
+	// than a wrong one.
+	function enclosingRosterServing(name ByteArray, unfoldedTypeIsTheRecord bool) returns EnclosingRoster
+		if self.enclosingType.isEmpty() 'notInAType'
+			return EnclosingRoster.none
+		end 'notInAType'
 
-		return self.implicitSelfTakesTheRoster(MemberSurface.array, calleeTok: calleeTok)
-	end 'implicitSelfTakesTheArrayRoster'
+		let byteRecord = byteRecordTagOfTypeName(self.enclosingType)
+
+		if byteRecord != ValueTypeTag.unresolved and namesInclude(self.surfaceMemberNames(byteRecordSurface(byteRecord)), name: name) 'aByteRecordMember'
+			return EnclosingRoster.byteRecord
+		end 'aByteRecordMember'
+
+		let mayBeTheRecord = self.signatures.declarationIsTheManagedRecord(self.enclosingType) or (unfoldedTypeIsTheRecord and not self.signatures.containsStructInAnyFile(self.enclosingType))
+
+		if mayBeTheRecord and namesInclude(self.surfaceMemberNames(MemberSurface.array), name: name) 'anArrayMember'
+			return EnclosingRoster.array
+		end 'anArrayMember'
+
+		return EnclosingRoster.none
+	end 'enclosingRosterServing'
+
+	// Can an implicit-self call dispatch on a receiver here — `self` bound in this frame, or captured into a
+	// closure inside it?
+	function implicitSelfIsInScope() returns bool
+		return self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)
+	end 'implicitSelfIsInScope'
 
 	// `self`, shaped as the receiver the roster dispatchers take. It carries no immutable name and no borrow
 	// subject for `implicitSelfReceiver`'s stated reason — a bare sibling call names no ONE storage — and the
@@ -84091,7 +84142,14 @@ export type Parser
 		// arm below would have sent to a corpus body that duplicates one. A member the roster does NOT serve
 		// falls through and reaches the corpus exactly as it should — the same split
 		// `memberBelongsToTheCorpus` makes one door over, from the other side.
-		if self.implicitSelfTakesTheByteRecordRoster(calleeTok) 'byteRecordRosterMember'
+		//
+		// ⚠ **THE RECEIVER TEST IS THIS DOOR'S AND NOT THE ROSTER'S.** A `static` method of `type String` writing
+		// a bare `byteLength()` has no instance to dispatch on, and the answer there is the arity error the
+		// ordinary resolution words, not a dispatch on nothing.
+		let roster = self.enclosingRosterServing(calleeTok.value, unfoldedTypeIsTheRecord: false)
+		let rosterTakesTheCall = roster != EnclosingRoster.none and self.implicitSelfIsInScope()
+
+		if rosterTakesTheCall and roster == EnclosingRoster.byteRecord 'byteRecordRosterMember'
 			let recv = try self.implicitSelfRosterReceiver(calleeTok, tag: byteRecordTagOfTypeName(self.enclosingType), nameId: UnnamedTypeId)
 
 			if recv.tag == ValueTypeTag.character 'aCharacter'
@@ -84110,7 +84168,7 @@ export type Parser
 		// `E3004 call to undefined function 'get'`, a diagnostic no reader ever saw: the untyped result then
 		// raised a THROWN `E3005` about the `!=` two lines later, and a thrown `ParseError` discards the
 		// file's recorded diagnostics (`abortedParseArtifact`). The visible complaint named the comparison.
-		if self.implicitSelfTakesTheArrayRoster(calleeTok) 'arrayRosterMember'
+		if rosterTakesTheCall 'arrayRosterMember'
 			let recv = try self.implicitSelfRosterReceiver(calleeTok, tag: ValueTypeTag.genericInstance, nameId: self.signatures.ownRecordSelfInstance(self.enclosingType) as TypeNameId)
 			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId as GenericInstanceId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName), viaManagedField: false)
 		end 'arrayRosterMember'
@@ -84124,45 +84182,8 @@ export type Parser
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
 		// a generic type is instantiated only through a `Type.method` qualified call.
-		return try self.parseCallNamed(func, callee: self.freeCallCallee(calleeTok.value), anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.parseCallNamed(func, callee: self.signatures.freeCallCallee(calleeTok.value, moduleDirectory: self.signatures.moduleDirectoryOf(self.filePath)), anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseCall'
-
-	// ⭐⭐ **A BARE FREE CALL TO A CONTESTED NAME MEANS THIS DIRECTORY'S DECLARATION, IF THERE IS ONE**
-	// — the "local namespace wins" tier, and the reason a file in `alpha/` goes on calling
-	// `duplicate()` unqualified after `beta/` declares one too.
-	//
-	// ⚠ **IT IS APPLIED AT THE FREE-CALL DOOR AND NOT INSIDE `parseCallNamed`.** That funnel also carries a
-	// sibling method (already mangled `Type.method`), a static call, a
-	// primitive-static mint and a receiver call, and a rewrite there is one condition away from moving one of
-	// them. Here the input is a bare identifier the author wrote with nothing to its left — the only shape
-	// this rule is about.
-	//
-	// ⛔ **IT MUST ASK THE MERGE REGISTRY AND NOT THE SWEEP'S.** A guard on `not declaresCallee(bare)` —
-	// "rewrite only a name that resolves to nothing" — reads `true` forever, because the SWEEP's bare entry
-	// SURVIVES a contest by design (`refileContestedFreeFunction` copies rather than moves, so E3095 can be
-	// told from E3004), while the name a call must actually reach is decided by the MERGE registry. The
-	// rewrite then never runs and a bare `pick()` inside `alpha/`, next to `alpha/`'s own
-	// `export function pick`, is reported AMBIGUOUS. One fact, two indexes, two answers.
-	//
-	// ⚠ **THE PROBE IS ONE LEVEL AND DOES NOT WALK UP THE DIRECTORY CHAIN**: a file in `alpha/sub/`
-	// does not see `alpha/`'s contested declaration bare and must qualify. Widening that is a
-	// resolution rule no case pins.
-	//
-	// ⭐⭐ **A ROOT READER'S LOCAL NAME IS THE BARE NAME, SO BOTH ARMS RETURN THE SAME BYTES — AND THAT IS
-	// PRECISELY WHY THE BARE ENTRY HAS TO BE THE ROOT DECLARATION'S.** The coincidence is not a licence to
-	// leave a stale bare entry standing: a root reader has no other key to be routed to, so every sweep
-	// fact this call site reads — its return type, its `throws` clause, its parameter defaults — comes off
-	// the bare key, and a contest that left another directory's declaration sitting there would answer a
-	// call it never selected. `SignatureIndex.refileContestedFreeFunction` is where that is guaranteed;
-	// here there is nothing to do about it, because there is nothing to rewrite.
-	function freeCallCallee(bareName ByteArray) returns ByteArray
-		if not self.signatures.isContestedFreeFunction(bareName) 'oneMeaningEverywhere'
-			return bareName
-		end 'oneMeaningEverywhere'
-
-		let local = self.signatures.freeFunctionRegistrationName(bareName, moduleDirectory: self.signatures.moduleDirectoryOf(self.filePath))
-		return local if self.signatures.declaresCallee(local) else bareName
-	end 'freeCallCallee'
 
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
 	// syntaxes produce one call, and only the name differs. `greet()` is its own token's text;
