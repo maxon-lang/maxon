@@ -382,11 +382,11 @@ Measured, for the two globals below:
     mm_alloc ArrayRecord #2 size=48      values
     mm_alloc ArrayRecord #3 size=48      states
     mm_alloc ArrayRecord #4 size=48      hashes
-    mm_alloc Map #5 size=48
+    mm_alloc Map #5 size=56
     mm_alloc ArrayRecord #6 size=48
     mm_alloc ArrayRecord #7 size=48
     mm_alloc ArrayRecord #8 size=48
-    mm_alloc Set #9 size=40
+    mm_alloc Set #9 size=48
 
 **Nine records, freed nine times, in a program that reads two counts.** The compiler's own source declares
 22 such maps and 18 such sets, so this shape alone is 182 allocations before `main` and 182 frees after it.

@@ -476,7 +476,7 @@ mm_alloc ArrayRecord #1 size=48
 mm_alloc ArrayRecord #2 size=48
 mm_alloc ArrayRecord #3 size=48
 mm_alloc ArrayRecord #4 size=48
-mm_alloc Map #5 size=48
+mm_alloc Map #5 size=56
 mm_alloc ArrayRecord #6 size=48
 mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1

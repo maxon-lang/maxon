@@ -321,3 +321,39 @@ end 'main'
 ```exitcode
 2
 ```
+
+## A set under insert/remove churn stays flat
+
+⛔⛔ **A REMOVED MEMBER LEAVES A TOMBSTONE, AND A PROBE STOPS ONLY AT AN EMPTY SLOT** — `Map`'s defect in
+the same table, and the same cure: the load factor counts tombstones as occupancy, so a table that is
+inserted into and removed from in turn rehashes to clear them instead of spending its empty slots until
+every miss probes the whole capacity. `specs/map.md`'s churn case states it in full.
+
+<!-- test: churn.insert-and-remove-stays-flat -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallySet = Set with Tally
+
+let Live = 2000 as Tally
+let Rounds = 2000 as Tally
+
+function main() returns ExitCode
+	var s = TallySet.create()
+
+	for i in 0 upto Live 'seed'
+		s.insert(i)
+	end 'seed'
+
+	for round in 1 to Rounds 'eachRound'
+		for i in 0 upto Live 'eachKey'
+			s.insert(round * Live + i)
+			_ = s.remove((round - 1) * Live + i)
+		end 'eachKey'
+	end 'eachRound'
+
+	return 7 if s.count() == Live and s.contains(Rounds * Live + 1) else 1
+end 'main'
+```
+```exitcode
+7
+```

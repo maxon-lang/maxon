@@ -23,6 +23,10 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	var count = 0  // Number of occupied entries
 	var capacity = 0  // Total slots
 
+	/// Slots a removal emptied, which a probe walks over rather than stopping at — `Map.tombstones`
+	/// states what reading them as occupancy is for, and `insert` below reads occupancy the same way.
+	var tombstones = 0
+
 	/// Create an empty set
 	public static function create() returns Self
 		return Self{}
@@ -68,12 +72,17 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	// reach here — the empty slot it landed on, and the first tombstone on the probe path — and both
 	// masked their index with `capacity - 1`, so both hand over an index in [0, capacity).
 	// `Map.insertAtSlot` is the same helper over the same table for the same reason.
-	function insertAtSlot(slotIndex TableSlotIndex, element Element, hash HashValue)
+	function insertAtSlot(slotIndex TableSlotIndex, element Element, hash HashValue, takesATombstone bool)
+		if takesATombstone 'one_tombstone_fewer'
+			tombstones = tombstones - 1
+		end 'one_tombstone_fewer'
+
 		try elements.set(slotIndex, value: element) otherwise panic("Set.insertAtSlot: elements.set OOB — slot from the probe is always in-bounds")
 		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Set.insertAtSlot: states.set OOB — slot from the probe is always in-bounds")
 		try hashes.set(slotIndex, value: hash) otherwise panic("Set.insertAtSlot: hashes.set OOB — slot from the probe is always in-bounds")
 		count = count + 1
 	end 'insertAtSlot'
+
 
 	/// Insert an element into the set
 	/// If the element already exists, this is a no-op
@@ -93,12 +102,15 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 			capacity = 16
 		end 'init_empty'
 
-		// Check load factor and grow if needed (75% threshold)
+		// Check occupancy and rehash if needed (75% threshold). A tombstone counts, for the reason
+		// `tombstones` states; the capacity the LIVE count needs is the one a churning set is rebuilt at.
 		let loadLimit = trunc((capacity * 3) / 4)
 
-		if count >= loadLimit 'grow'
-			grow()
-		end 'grow'
+		if count >= loadLimit 'full_of_members'
+			rehash(capacity * 2)
+		end 'full_of_members' else if count + tombstones >= loadLimit 'full_of_tombstones'
+			rehash(capacity if count * 2 < loadLimit else capacity * 2)
+		end 'full_of_tombstones'
 
 		let hash = element.hash()
 
@@ -136,7 +148,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				insertAtSlot(insertIndex, element: element, hash: hash)
+				insertAtSlot(insertIndex, element: element, hash: hash, takesATombstone: firstDeleted >= 0)
 				return
 			end 'empty'
 
@@ -178,7 +190,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// Every slot probed without finding the element or an empty one. A tombstone is still a
 		// vacancy an insert can take, so it is a perfectly good answer.
 		if firstDeleted >= 0 'fallback'
-			insertAtSlot(firstDeleted, element: element, hash: hash)
+			insertAtSlot(firstDeleted, element: element, hash: hash, takesATombstone: true)
 			return
 		end 'fallback'
 
@@ -294,6 +306,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 							try elements.clearSlot(index as ElementIndex) otherwise panic("Set.remove: elements.clearSlot OOB — probe index is in-bounds")
 							try states.set(index, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
 							count = count - 1
+							tombstones = tombstones + 1
 							return true
 						end 'found'
 					end 'get_existing'
@@ -323,10 +336,11 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		return capacity
 	end 'getCapacity'
 
-	// Internal: grow the table when load factor exceeds threshold
-	function grow()
+	// Internal: rebuild the table at `wantedCapacity` — twice the current one when the members have
+	// filled it, the current one when only tombstones have. The fresh table holds none of them.
+	function rehash(wantedCapacity TableCapacity)
 		let oldCapacity = capacity
-		var newCapacity = oldCapacity * 2
+		var newCapacity = wantedCapacity
 
 		if newCapacity == 0 'handle_zero'
 			newCapacity = 16
@@ -349,14 +363,15 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		hashes = newHashes
 		capacity = newCapacity
 		count = 0
+		tombstones = 0
 
 		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
-		let mask = newCapacity - 1
+		let mask = capacity - 1
 
 		// Rehash all occupied entries from old arrays, reusing the cached hash
 		// instead of re-calling element.hash().
-		for i in 0 upto oldCapacity 'rehash'
+		for i in 0 upto oldCapacity 'eachOldSlot'
 			let state = try oldStates.get(i) otherwise SlotState.Empty
 
 			let isOccupied = match state 'so1'
@@ -389,14 +404,14 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 						end 'se2'
 					end 'find_slot'
 
-					try elements.set(index, value: element) otherwise panic("Set.grow: elements.set OOB — rehash slot is in-bounds")
-					try states.set(index, value: SlotState.Occupied) otherwise panic("Set.grow: states.set OOB — rehash slot is in-bounds")
-					try hashes.set(index, value: hash) otherwise panic("Set.grow: hashes.set OOB — rehash slot is in-bounds")
+					try elements.set(index, value: element) otherwise panic("Set.rehash: elements.set OOB — rehash slot is in-bounds")
+					try states.set(index, value: SlotState.Occupied) otherwise panic("Set.rehash: states.set OOB — rehash slot is in-bounds")
+					try hashes.set(index, value: hash) otherwise panic("Set.rehash: hashes.set OOB — rehash slot is in-bounds")
 					count = count + 1
 				end 'get_elem'
 			end 'occupied'
-		end 'rehash'
-	end 'grow'
+		end 'eachOldSlot'
+	end 'rehash'
 end 'Set'
 
 /// Iterator for Set — scans hash table slots for occupied entries.

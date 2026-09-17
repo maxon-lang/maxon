@@ -1385,3 +1385,47 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:7:16: Unsupported: a `Kind` case as a top-level map literal's value — a `Map`'s column type has to be nameable from the whole-program index, and an enum case folded at file scope carries its enum's name as BYTES rather than as an id this tier can put in `Map with (…)`. Build the map inside a function, where the literal's instance is interned from the file's own parse artifact
 ```
+
+## A table under insert/remove churn stays flat
+
+⛔⛔ **A REMOVED ENTRY LEAVES A TOMBSTONE, AND A PROBE STOPS ONLY AT AN EMPTY SLOT.** So a table that is
+inserted into and removed from in turn spends its empty slots one at a time — an insert takes one when no
+tombstone lies before it on the probe path, and a removal never gives one back — until a lookup for an
+absent key probes every slot in the table. The live count never moves, so a load factor that counts only
+`count` never grows or rehashes, and the table's cost per operation ends up its CAPACITY rather than a
+constant. `ensureCapacity` therefore counts tombstones as occupancy and rehashes to clear them.
+
+The case is a COST case and it reads as one: 2,000 live keys and 2,000 rounds of one insert and one
+removal each is 8,000,000 operations, which finish in well under a second at constant cost and take
+minutes at a cost per operation of 4,096 probes. Nothing else here is new — the assertion is the count the
+churn leaves behind.
+
+<!-- test: churn.insert-and-remove-stays-flat -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyMap = Map with (Tally, Tally)
+
+let Live = 2000 as Tally
+let Rounds = 2000 as Tally
+
+function main() returns ExitCode
+	var m = TallyMap.create()
+
+	for i in 0 upto Live 'seed'
+		m.upsert(i, value: i)
+	end 'seed'
+
+	for round in 1 to Rounds 'eachRound'
+		for i in 0 upto Live 'eachKey'
+			m.upsert(round * Live + i, value: i)
+			_ = m.remove((round - 1) * Live + i)
+		end 'eachKey'
+	end 'eachRound'
+
+	let survivor = try m.get(Rounds * Live + 1) otherwise 0
+	return 7 if m.count() == Live and survivor == 1 else 1
+end 'main'
+```
+```exitcode
+7
+```
