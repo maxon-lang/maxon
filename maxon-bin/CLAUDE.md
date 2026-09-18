@@ -393,6 +393,9 @@ Four doors are still standing open rather than shut:
   release:** the stdlib may call a `__Builtins` intrinsic once a published release has it, so an older
   seed fails the first build with E3004. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
+  ⛔ **A DECLARATION NO PUBLISHED RELEASE KNOWS IS REFUSED BY EVERY SEED THERE IS** — E2015 on a
+  `__Managed*` entry this tree adds, which no re-fetch can cure. `scripts/build-from-seed.sh` stages
+  `scripts/seed-shim/` over the first build for exactly that; `docs/RELEASING.md` owns the rule.
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```
   ./.bootstrap/maxon.exe build maxon-bin -o maxon-bin/.maxon/maxon
