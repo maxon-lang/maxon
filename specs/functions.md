@@ -363,6 +363,91 @@ end 'main'
 error E3004: <fragment>:3:9: call to undefined function 'frobnicate'
 ```
 
+<!-- test: unknown-function-result-in-arithmetic -->
+The undefined call is named wherever its result goes. Bound to a `let` and added to, the
+diagnostic is still E3004 at the CALL — not a complaint about the addition.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	return c + 1
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-interpolated -->
+Interpolating the result names the CALL, not the hole. The parser types an undefined
+callee's result `unresolved` and defers, so a consumer that refuses the tag would report a
+symptom one line below the mistake and abort the file before E3004 could be reached.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	print("c={c}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-field-access -->
+A field read off the result names the CALL, not the field.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	print("{c.width}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-method-call -->
+A method called on the result names the CALL, not the member.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	_ = c.describe()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-captured-by-a-closure -->
+A closure capturing the result names the CALL, not the capture.
+```maxon
+function main() returns ExitCode
+	let c = frobnicate(2)
+	let peek = function(_ Tally) gives c.width
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-is-a-closures-whole-body -->
+A closure's return type is INFERRED from its body, so an undefined call as the whole body is
+the one place a deferred call result reaches a SIGNATURE rather than a value column. It is
+still E3004 at the call, and the compiler does not abort.
+```maxon
+function main() returns ExitCode
+	let peek = function(_ Tally) gives frobnicate(2)
+	_ = peek(1)
+	return 0
+end 'main'
+typealias Tally = int(0 to u64.max)
+```
+```maxoncstderr
+error E3004: <fragment>:3:37: call to undefined function 'frobnicate'
+```
+
 <!-- test: unknown-label -->
 A `name:` label that matches no parameter is E3037.
 ```maxon

@@ -34025,6 +34025,34 @@ export type Parser
 		return tokenCanBeAName(tok) and self.scope.contains(tok.value)
 	end 'rhsIsABareBinding'
 
+	// A member chain off a deferred call result was SKIPPED rather than emitted
+	// (`deferredUnresolvedMemberResult`), so `statementCallsOrAwaits` sees no call op for `_ = c.describe()`
+	// and the discard door would refuse the statement instead of letting E3004 be reported. The spelling is
+	// what is left to go on, which is why this scans the tokens for a `(` rather than asking the ops.
+	function rhsIsADeferredCallMemberAccess(rhsStart TokenIndex) returns bool
+		let tok = self.tokenAt(rhsStart)
+
+		if not tokenCanBeAName(tok) or not self.scope.contains(tok.value) 'notABoundBase'
+			return false
+		end 'notABoundBase'
+
+		if not self.baseBindingIsADeferredCallResult(self.scope.getInfo(tok.value)) 'notADeferredCallResult'
+			return false
+		end 'notADeferredCallResult'
+
+		var q = rhsStart
+
+		while q < self.pos 'scanForACallSpelling'
+			if self.kindAt(q) == TokenKind.leftParen 'aCallWasWritten'
+				return true
+			end 'aCallWasWritten'
+
+			q = (q + 1) as TokenIndex
+		end 'scanForACallSpelling'
+
+		return false
+	end 'rhsIsADeferredCallMemberAccess'
+
 	// ⭐⭐ **WHICH CALL PRODUCED THE RIGHT-HAND SIDE — the half of E3064's door the PARSER can answer.**
 	// `(_, _) = makePair(10, b: 32)` uses nothing the call produced, so the statement is a call written for an
 	// effect; whether the callee HAS one is a whole-program question, judged by
@@ -34603,7 +34631,7 @@ export type Parser
 			// ⚠ A `void` right-hand side cannot reach here — `_ = f()` on a void callee is E2004 from the
 			// expression itself — so the void guard `recordDiscardedCallResult` carries for the bare-statement
 			// door would be dead weight.
-			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) 'nothingWasCalled'
+			if not self.statementCallsOrAwaits(discardOpFloor) and not self.rhsIsABareBinding(rhsStart) and not self.rhsIsADeferredCallMemberAccess(rhsStart) 'nothingWasCalled'
 				throw ParseError.discardExpectsACall(nameTok.line, column: nameTok.column)
 			end 'nothingWasCalled'
 
@@ -60045,6 +60073,10 @@ export type Parser
 			return
 		end 'structPart'
 
+		if tagIsUnresolved(tag) 'deferredCallError'
+			return
+		end 'deferredCallError'
+
 		// ⚠ NAMES WHAT IS UNSUPPORTED, NOT WHAT IS SUPPORTED. A message enumerating the handled types goes
 		// stale every time an arm is added above — which is exactly how its predecessor came to promise
 		// float and struct interpolation as future work while both arms sat directly above it.
@@ -65436,6 +65468,11 @@ export type Parser
 	// conformances instead of the String method table.
 	function dispatchMethodOnReceiver(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
 		self.noteMethodCallMutabilityUses(recv)
+
+		if tagIsUnresolved(recv.tag) 'deferredCallError'
+			return self.deferredUnresolvedMemberResult()
+		end 'deferredCallError'
+
 		try self.consume(TokenKind.dot)
 		self.noteMemberDispatch(recv)
 
@@ -67196,6 +67233,11 @@ export type Parser
 	// reached by any case at this rung).
 	function capturedMethodCall(func IrFunction, baseTok Token, enclosing Scope, resultUsed bool) returns ValueId throws ParseError
 		self.advance()
+
+		if self.baseBindingIsADeferredCallResult(enclosing.getInfo(self.baseBindingName(baseTok))) 'deferredCallError'
+			return self.deferredUnresolvedMemberResult()
+		end 'deferredCallError'
+
 		try self.consume(TokenKind.dot)
 		return try self.dispatchMethodOnBase(func, base: try self.capturedStructBase(baseTok, enclosing: enclosing), baseTok: baseTok, resultUsed: resultUsed)
 	end 'capturedMethodCall'
@@ -76960,6 +77002,14 @@ export type Parser
 	// is keyed by. So `p.x` resolves through the same two steps a human does — which type is `p`,
 	// and which slot does that type call `x`.
 	function parseFieldAccess() returns ValueId throws ParseError
+		let baseIsADeferredCall = try self.chainBaseIsADeferredCallResult()
+
+		if baseIsADeferredCall 'deferredCallError'
+			self.advance()
+
+			return self.deferredUnresolvedMemberResult()
+		end 'deferredCallError'
+
 		let step = try self.resolveFieldChain()
 		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
 		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
@@ -77765,6 +77815,16 @@ export type Parser
 	// The READ path asks the same chain minus its middle: it has no instance to write through, so
 	// resolution is followed directly by visibility (`parseFieldAccess`).
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
+		let baseIsADeferredCall = try self.chainBaseIsADeferredCallResult()
+
+		if baseIsADeferredCall 'deferredCallError'
+			self.advance()
+			self.skipDeferredMemberChain()
+			try self.consume(TokenKind.equals)
+			_ = try self.parseExpression(func, block: block)
+			return
+		end 'deferredCallError'
+
 		// The base's own token index, taken before the chain walk moves the cursor, so the E3070 subject below
 		// comes through the shared `borrowSubjectNameAt` — ONE derivation of "which storage does this write go
 		// through", asked identically at every door (`parseAssignment` captures it for the same reason).
@@ -81433,7 +81493,11 @@ export type Parser
 		// closure-bound local (`closureReturns`, read by `functionValueReturnType`). The signature keeps the
 		// USER parameters only — an indirect call is positional and never slot-validates against it, and the
 		// `__env` is a lowering-level detail the caller supplies from `valueClosureEnv`, not a source arg.
-		let returnType = MaxonReturnType.value(bodyType)
+		// ⚠ A body that is a call to an undefined callee has no type yet, and `MaxonReturnType.value` has no
+		// spelling for that — so `integer` stands in. It is sound ONLY because such a program is refused:
+		// `SemanticCheck.validateCall` reports E3004 for the callee. `requireNoUnresolvedTagsSurvivedTheMaxonTier`
+		// is the gate that catches the day it is not, because this stand-in is exactly what would hide it.
+		let returnType = MaxonReturnType.value(MaxonType.integer if tagIsUnresolved(maxonTypeTag(bodyType)) else bodyType)
 		lifted.maxonReturnType = returnType.clone()
 
 		// A closure's return type is INFERRED from its body expression, never spelled, so no declared
@@ -89776,6 +89840,56 @@ export type Parser
 			undeclared then return self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
 		end 'callee'
 	end 'mintCallResult'
+
+	// ⛔ **`unresolved` IS A DEFERRAL AND NEVER A SENTINEL, WHICH IS WHY EVERY DOOR THAT MEETS ONE ANSWERS
+	// HERE RATHER THAN REFUSING.** The parser's token sweep is the tolerant half of a pair: whether a callee
+	// is declared anywhere in the program is `SemanticCheck.validateCall`'s question, and it reports E3004 at
+	// the call. A door that threw instead would end the file before that ran, so the author would be shown a
+	// symptom at an unrelated line — and a sweep that had merely MISSED a declaration would refuse a correct
+	// program.
+	//
+	// ⚠ **THE ONE POSITION STILL MISSING: `for … in` over a deferred call result reports E2015.** Its
+	// refusal stands in front of a loop the parser must still emit, and deferring there needs a way to
+	// abandon a half-emitted construct that this parser has not got.
+	function deferredUnresolvedMemberResult() returns ValueId
+		self.skipDeferredMemberChain()
+
+		return self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+	end 'deferredUnresolvedMemberResult'
+
+	function skipDeferredMemberChain()
+		while self.at(TokenKind.dot) 'chain'
+			self.advance()
+			self.advance()
+
+			if self.at(TokenKind.leftParen) 'anArgumentList'
+				self.pos = (self.groupCloserAt(self.pos) + 1) as TokenIndex
+			end 'anArgumentList'
+		end 'chain'
+	end 'skipDeferredMemberChain'
+
+	function baseBindingIsADeferredCallResult(binding VarInfo) returns bool
+		return tagIsUnresolved(maxonTypeTag(binding.varType))
+	end 'baseBindingIsADeferredCallResult'
+
+	function chainBaseIsADeferredCallResult() returns bool throws ParseError
+		let baseTok = self.current()
+
+		if not self.baseNamesAValueInScope(baseTok) 'notAValueBase'
+			return false
+		end 'notAValueBase'
+
+		let baseName = self.baseBindingName(baseTok)
+
+		if self.scope.contains(baseName) 'localBase'
+			return self.baseBindingIsADeferredCallResult(self.scope.getInfo(baseName))
+		end 'localBase'
+
+		match try self.captureScopeOf(baseName, anchor: baseTok) 'captured'
+			found(enclosing) then return self.baseBindingIsADeferredCallResult(enclosing.getInfo(baseName))
+			notCaptured then return false
+		end 'captured'
+	end 'chainBaseIsADeferredCallResult'
 
 	// The result of a call to a callee some file DOES declare — where the void/value split is
 	// finally a split and not a sentinel.
