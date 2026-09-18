@@ -628,14 +628,9 @@ function requireNoVendorAbove(dir FilePath)
 			panic("CliHarness: the gate could not run - {vendor.toString()} sits above {dir.toString()}, which a case stages there precisely to have none of.")
 		end 'vendorFound'
 
+		// The root is the last level probed: it has no parent, so the walk stops there rather than
+		// stepping past it onto a relative path the checkout would answer for.
 		let above = try level.parent() otherwise break
-
-		// ⚠ A top-level absolute path's parent is EMPTY under POSIX where Windows throws, and joining
-		// onto an empty path gives a RELATIVE one - which `isDirectory` resolves against the checkout,
-		// where `vendor/` does exist. The walk stops at the root rather than stepping past it.
-		if above.toString().isEmpty() 'reachedTheRoot'
-			break
-		end 'reachedTheRoot'
 
 		level = above
 	end 'eachLevel'

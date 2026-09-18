@@ -101,7 +101,7 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `filename()` | `String` | The last component (the whole path when there is no separator). |
 | `fileExtension()` | `String` | The extension with its dot, or `""`. A leading dot is not an extension (`.gitignore` has none). |
 | `stem()` | `String` | The filename without its extension. |
-| `parent()` | `FilePath` | Throws `FilePathError.noParent`. |
+| `parent()` | `FilePath` | The containing directory. A path directly under a root gives that root, spelled as one (`/foo` gives `/`, `C:\foo` gives `C:\`), so walking upwards keeps answering absolute paths. Throws `FilePathError.noParent` for a root and for a relative path with no separator. |
 
 ### Building paths
 

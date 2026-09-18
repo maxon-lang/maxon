@@ -177,12 +177,12 @@ export union CompileError implements Error
 
 	// A `build` naming several paths this compiler cannot root — either they genuinely share no
 	// directory (two absolute paths on different Windows drives), or their common directory is a
-	// FILESYSTEM ROOT, which no `FilePath` can hold: `parent` cuts the separator off, so the step past
-	// the top yields `"C:"` / `""` rather than `"C:\"` / `"/"`. `Compiler.commonAncestorOf` derives the
-	// project ROOT from that shared directory (and `Queries.namespaceAnchorFor` measures every file's
-	// namespace from the root), so both causes leave the build with no anchor it could be given: it is
-	// refused rather than rooted at a string `isAbsolute` disowns. Carries both ends of the
-	// disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
+	// FILESYSTEM ROOT, which `isInside` cannot answer for: it tests the prefix `dir` + separator and a
+	// root already ends in one, so the narrowing walk keeps climbing and runs out of parents at the top.
+	// `Compiler.commonAncestorOf` derives the project ROOT from that shared directory (and
+	// `Queries.namespaceAnchorFor` measures every file's namespace from the root), so both causes leave
+	// the build with no anchor it could be given: it is refused rather than rooted. Carries both ends of
+	// the disagreement, because naming only one of them leaves the reader to guess which pair failed to meet.
 	noCommonRoot(first FilePath, other FilePath)
 
 	// A directory built without `-o` whose executable has no name to take: the directory is a filesystem

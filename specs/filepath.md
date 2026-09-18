@@ -281,6 +281,163 @@ end 'main'
 caught noParent
 ```
 
+<!-- test: filepath-parent-under-root -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "/foo"
+	let parent = try p.parent() otherwise panic("no parent")
+	print("{parent}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+\
+```
+```stdout
+/
+```
+
+<!-- test: filepath-parent-of-root-throws -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "/"
+	try p.parent() otherwise 'noParent'
+		print("caught noParent\n")
+		return 0
+	end 'noParent'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught noParent
+```
+
+<!-- test: filepath-parent-under-drive-root -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "C:\\foo"
+	let parent = try p.parent() otherwise panic("no parent")
+	print("{parent}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+C:\
+```
+```stdout
+C:
+```
+
+<!-- test: filepath-parent-of-drive-root-throws -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "C:\\"
+	if let parent = try p.parent() 'hasParent'
+		print("{parent}\n")
+	end 'hasParent' else 'noParent'
+		print("caught noParent\n")
+	end 'noParent'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+caught noParent
+```
+```stdout
+C:
+```
+
+<!-- test: filepath-parent-under-unc-root -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "\\\\server\\share\\foo"
+	let parent = try p.parent() otherwise panic("no parent")
+	print("{parent}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+\\server\share\
+```
+```stdout
+//server/share
+```
+
+<!-- test: filepath-parent-drive-relative-throws -->
+```maxon
+function main() returns ExitCode
+	let p = FilePath from "C:foo"
+	try p.parent() otherwise 'noParent'
+		print("caught noParent\n")
+		return 0
+	end 'noParent'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught noParent
+```
+
+<!-- test: filepath-parent-walk-up-terminates -->
+```maxon
+function main() returns ExitCode
+	var level = FilePath from "/a/b/c"
+	var steps = 0
+
+	while steps < 10 'upwards'
+		let above = try level.parent() otherwise 'atTheTop'
+			print("top after {steps}\n")
+			return 0
+		end 'atTheTop'
+
+		if above.isEmpty() 'empty'
+			print("empty parent at {steps}\n")
+			return 1
+		end 'empty'
+
+		print("{above}\n")
+		level = above
+		steps = steps + 1
+	end 'upwards'
+
+	print("did not terminate\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```Stdout:x64-windows
+\a\b
+\a
+\
+top after 3
+```
+```stdout
+/a/b
+/a
+/
+top after 3
+```
+
 <!-- test: filepath-join -->
 ```maxon
 function main() returns ExitCode

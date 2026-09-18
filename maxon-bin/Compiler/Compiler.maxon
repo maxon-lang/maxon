@@ -313,9 +313,10 @@ end 'compileMeasured'
 function siblingImagePath(outputPath FilePath, infix String) returns FilePath
 	let name = "{outputPath.stem()}{infix}{outputPath.fileExtension()}"
 
-	let dir = try outputPath.parent() otherwise 'noParent'
+	// An output path with no directory part: its siblings are bare names in the working directory too.
+	let dir = try outputPath.parent() otherwise 'noDirectoryPart'
 		return try FilePath.from(name) otherwise panic("siblingImagePath: a sibling of a valid path is valid")
-	end 'noParent'
+	end 'noDirectoryPart'
 
 	return dir.join(name)
 end 'siblingImagePath'
@@ -535,13 +536,10 @@ end 'refuseUnreplaceableOutput'
 // Runs before `vacateRunningImage`, which renames within this directory: there is nothing to vacate
 // in a directory that does not exist, but the order removes the question.
 function ensureOutputDirectory(project Project, outputPath FilePath) throws CompileError
-	let parent = try outputPath.parent() otherwise 'noParent'
+	// Nothing to create: a path with no parent names something in the working directory, or is a root.
+	let parent = try outputPath.parent() otherwise 'noDirectoryToCreate'
 		return
-	end 'noParent'
-
-	if parent.isEmpty() 'currentDirectory'
-		return
-	end 'currentDirectory'
+	end 'noDirectoryToCreate'
 
 	if Directory.create(parent) 'created'
 		return
@@ -1785,53 +1783,39 @@ end 'loadSourceFiles'
 // `Queries.namespaceAnchorFor` measures every file's MODULE DIRECTORY from (N1), so getting it wrong
 // re-anchors namespaces silently rather than failing.
 //
-// ⚠ **ONE PATH IS ITS OWN ANCESTOR, and that identity is why nothing moves for the builds that
-// existed before A3m.** The narrowing loop's first comparison is `first` against itself, which
-// `isInside` answers true for, so a lone `build <file>` or `build <directory>` keeps the root it has
-// always had — the spelling the caller TYPED, unresolved. Every downstream reader resolves it against
-// the cwd for itself (`namespaceAnchorFor`, `rootIsUnderStdlibDirectory`), and `resolveOutputPath`
-// derives a default output name from it, so resolving it here would silently rewrite that name for
-// every single-file build in the tree.
+// ⚠ **ONE PATH IS ITS OWN ANCESTOR, and that identity is what leaves a single-path build's root
+// untouched.** The narrowing loop's first comparison is `first` against itself, which `isInside` answers
+// true for, so a lone `build <file>` or `build <directory>` keeps the spelling the caller TYPED,
+// unresolved. Every downstream reader resolves it against the cwd for itself (`namespaceAnchorFor`,
+// `rootIsUnderStdlibDirectory`), and `resolveOutputPath` derives a default output name from it, so
+// resolving it here would silently rewrite that name for every single-file build in the tree.
 //
 // ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT** — the same
 // trap `Queries.isStdlibSourceFile` records: an absolute path and a relative one naming one file are
-// two different strings, and a root that misses its own members would narrow all the way to the drive.
+// two different strings, and a root that misses its own members would narrow all the way to the
+// filesystem root.
 //
-// ⛔⛔ **AND WHEN IT DOES NARROW ALL THE WAY TO THE DRIVE, IT REFUSES — because `FilePath.parent()`
-// CANNOT EXPRESS A FILESYSTEM ROOT, so the step past the top yields a string that is not a directory
-// and not even absolute** (BATCH10 review). `lastSepPlusOne` returns the index AFTER the separator and
-// `parent` slices `(0, that - 1)`, so on Windows `parent("C:\\a")` is **`"C:"`** — two bytes, which
-// `isAbsolute` denies (its drive arm needs `len >= 3` with a separator at byte 2) — and on POSIX
-// `parent("/a")` is **`""`**.
-//
-// MEASURED on this tree before the guard below: `maxon build C:\a C:\b` answered
-// `error: no source files under C:`. That `"C:"` was becoming `Project.rootPath`, and because
-// `isAbsolute` says it is RELATIVE every downstream `.resolve(cwd)` — `namespaceAnchorFor`,
-// `rootIsUnderStdlibDirectory` — joined it onto the working directory as `<cwd>\C:`. The namespace
-// happened to come back right through `deriveModuleDirectory`'s not-under-root fallback, which is luck
-// and not a mechanism: the value handed downstream named a drive where a directory was promised.
-//
-// ⇒ **The narrowing stops where the path stops being ABSOLUTE**, which is the one property that marks
-// having walked off the top, and the same test answers for both spellings (`"C:"` and `""`). The two
-// platforms now agree: POSIX already refused here — `isInside("")` is false, so it narrowed once more
-// and `parent("")` threw — and Windows silently did not.
+// ⛔⛔ **AND WHEN IT DOES NARROW ALL THE WAY TO THE ROOT, IT REFUSES.** `FilePath.parent()` answers the
+// root itself for a path directly under one and throws for a root, so the narrowing walk runs out at the
+// top and reports `noCommonRoot` there. Every `resolvedRoot` it publishes is therefore an absolute
+// directory — which is what the downstream `.resolve(cwd)` readers (`namespaceAnchorFor`,
+// `rootIsUnderStdlibDirectory`) need, since a relative one would be joined onto the working directory.
 //
 // ⚠ **THE RESIDUAL IS THAT A ROOT-ROOTED BUILD IS REFUSED RATHER THAN ROOTED, and it is REFUSED
 // rather than left wrong on purpose.** `C:\` really is the common directory of `C:\a\x` and `C:\b\y`,
-// so the honest answer is that root — but no `FilePath` in this tree can hold it, since `parent` cuts
-// the separator off and nothing reconstructs it. Modelling filesystem roots is `stdlib/FilePath`'s to
-// do and touches every path consumer; until it happens, a loud refusal naming both ends beats a
-// `Project.rootPath` that `isAbsolute` disowns. Nothing in the harness reaches this: a spec case's
-// paths are all under its own `testDir` (`SpecTestRunner.stageSourceFiles` names it last), and every
-// other caller passes exactly one path.
+// but `isInside` tests the prefix `dir` + separator and a root already ends in one, so nothing reads as
+// inside its own root and the loop narrows once more. A loud refusal naming both ends beats a
+// `Project.rootPath` that no containment test agrees with. Nothing in the harness reaches this: a spec
+// case's paths are all under its own `testDir` (`SpecTestRunner.stageSourceFiles` names it last), and
+// every other caller passes exactly one path.
 export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath throws CompileError
 	let first = try paths.get(0) otherwise panic("commonAncestorOf: an empty path list — `Main.runBuild` refuses a `build` with no positional argument before any of this runs, and every other caller names exactly one path")
 	let cwd = Directory.currentPath()
 
 	// Absolute by construction — `resolve` returns the path itself when it is already absolute and
 	// joins it onto the cwd otherwise, and `Directory.currentPath()` is absolute. That is what makes
-	// "stopped being absolute" below mean "walked off the top" rather than "was never rooted". A clone,
-	// because `resolve` may hand back `first` itself and this name is rebound.
+	// `parent()`'s throw below mean "reached the root" rather than "was never rooted". A clone, because
+	// `resolve` may hand back `first` itself and this name is rebound.
 	var resolvedRoot = first.resolve(cwd).clone()
 	var narrowed = false
 
@@ -1842,11 +1826,6 @@ export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath th
 			// Monotone, so the paths already checked stay inside: `resolvedRoot` only ever becomes an
 			// ancestor of what it was, and each of them was inside it.
 			let candidate = try resolvedRoot.parent() otherwise throw CompileError.noCommonRoot(first, other: path)
-
-			if not candidate.isAbsolute() 'walkedOffTheTop'
-				throw CompileError.noCommonRoot(first, other: path)
-			end 'walkedOffTheTop'
-
 			resolvedRoot = candidate
 			narrowed = true
 		end 'narrow'
@@ -1997,9 +1976,9 @@ export function isIgnoredDirectory(dir FilePath) returns bool
 	//
 	// ⚠ The cost is ONE `Directory.currentPath()` per WALK — not per file, and not per directory, which
 	// is the whole reason the ancestry question is asked here and not inside the recursion. Skipping it
-	// for an already-absolute `dir` was written and then taken back out: `resolve` returns the receiver
-	// unchanged in that case, so the saving is the ARGUMENT alone, and buying two allocations with a
-	// `var` bound directly to a managed parameter is the wrong trade in a walk this shared.
+	// for an already-absolute `dir` buys nothing: `resolve` returns the receiver unchanged in that case,
+	// so the saving is the ARGUMENT alone, against the two allocations a `var` bound directly to a
+	// managed parameter costs in a walk this shared.
 	var current = dir.resolve(Directory.currentPath())
 
 	while true 'upwards'
@@ -2007,17 +1986,10 @@ export function isIgnoredDirectory(dir FilePath) returns bool
 			return true
 		end 'ignored'
 
-		let above = try current.parent() otherwise 'noParentLeft'
+		// The root is the last level probed: it has no parent, so the walk ends there.
+		let above = try current.parent() otherwise 'atTheRoot'
 			break
-		end 'noParentLeft'
-
-		// `FilePath.parent()` cannot express a filesystem root — it cuts the separator off, so on
-		// Windows `parent("C:\\x")` is `"C:"` and on POSIX `parent("/x")` is `""`. Neither names a
-		// directory, and `isAbsolute` denies both, which is the one test that marks having walked off
-		// the top on BOTH platforms. `commonAncestorOf` carries the measurement this is taken from.
-		if not above.isAbsolute() 'walkedOffTheTop'
-			break
-		end 'walkedOffTheTop'
+		end 'atTheRoot'
 
 		current = above
 	end 'upwards'

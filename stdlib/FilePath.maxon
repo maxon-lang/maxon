@@ -25,12 +25,6 @@ let ParentDirectoryComponent = ".."
 
 typealias PathComponentArray = Array with String
 
-// An offset into the path's own `String` bytes, so `String.BytePos`'s bound holds here too: one
-// `__ManagedMemory`, a signed machine word long.
-typealias PathByteOffset = int(0 to u64.max)
-
-// Caller guarantees index is in bounds
-
 public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
 	public let path as String
 
@@ -297,7 +291,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 
 	/// Scan backwards for the last path separator.
 	/// Returns the byte index + 1, or 0 if none found.
-	function lastSepPlusOne() returns PathByteOffset
+	function lastSepPlusOne() returns BytePos
 		let len = path.byteLength()
 
 		if len == 0 'empty'
@@ -389,13 +383,30 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		return name
 	end 'stem'
 
-	/// Get the parent directory path. Throws if no parent exists.
+	/// The containing directory. A path directly under a root gives that root, spelled as one
+	/// (`/foo` -> `/`, `C:\foo` -> `C:\`, `\\server\share\foo` -> `\\server\share\`), so a walk upwards
+	/// keeps answering absolute paths until it reaches the top.
+	///
+	/// A root has no parent, and neither does a relative path with no separator; both throw
+	/// `FilePathError.noParent`, which is what ends such a walk.
 	public function parent() returns FilePath throws FilePathError
 		let sepPlusOne = lastSepPlusOne()
 
+		// Asked before the root reckoning below, which counts a drive-relative `C:` as a root: `C:foo` names
+		// the drive's working directory, not the drive, so it has no parent to answer.
 		if sepPlusOne == 0 'noSep'
 			throw FilePathError.noParent
 		end 'noSep'
+
+		let rootLength = rootByteLength()
+
+		if path.byteLength() == rootLength 'isARoot'
+			throw FilePathError.noParent
+		end 'isARoot'
+
+		if sepPlusOne <= rootLength 'directlyUnderTheRoot'
+			return FilePath{path: rootSpelling(rootLength)}
+		end 'directlyUnderTheRoot'
 
 		let parentManaged = try path.addressableBytes().slice(0, sepPlusOne - 1) otherwise 'parentSliceErr'
 			panic("FilePath.parent: slice — sepPlusOne > 0 guaranteed, so sepPlusOne-1 >= 0")
