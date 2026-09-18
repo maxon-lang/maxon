@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     runs-on: macos-15
     timeout-minutes: 350
     defaults:
@@ -30,30 +30,34 @@ jobs:
       - name: Build
         run: ./scripts/build-from-seed.sh
 
-      - name: Run the suite until it crashes
-        run: |
-          set -uo pipefail
-          crashes=0
-          for run in $(seq 1 8); do
-            log="suite-$run.log"
-            ./maxon-bin/.maxon/maxon spec-test > "$log" 2>&1
-            rc=$?
-            line="$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$log" | tail -1)"
-            if grep -qE 'DIED|panic:' "$log"; then
-              crashes=$((crashes + 1))
-              echo "::error::shard ${{ matrix.shard }} run $run CRASHED (exit $rc) | $line"
-              grep -nE 'DIED|panic:|last step started|^  in |^FAIL ' "$log" | head -40
-              cp "$log" "crash-shard${{ matrix.shard }}-run$run.log"
-            else
-              echo "shard ${{ matrix.shard }} run $run clean (exit $rc) | $line"
-            fi
-          done
-          echo "shard ${{ matrix.shard }}: $crashes crash(es) in 8 runs"
+      - name: Suite 1
+        if: always()
+        run: ./.github/suite-once.sh 1 ${{ matrix.shard }}
+
+      - name: Suite 2
+        if: always()
+        run: ./.github/suite-once.sh 2 ${{ matrix.shard }}
+
+      - name: Suite 3
+        if: always()
+        run: ./.github/suite-once.sh 3 ${{ matrix.shard }}
+
+      - name: Suite 4
+        if: always()
+        run: ./.github/suite-once.sh 4 ${{ matrix.shard }}
+
+      - name: Suite 5
+        if: always()
+        run: ./.github/suite-once.sh 5 ${{ matrix.shard }}
+
+      - name: Suite 6
+        if: always()
+        run: ./.github/suite-once.sh 6 ${{ matrix.shard }}
 
       - name: Upload the crash logs
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: macos-repro-shard${{ matrix.shard }}
-          path: crash-shard*.log
+          name: macos-repro2-shard${{ matrix.shard }}
+          path: crash-*.log
           if-no-files-found: ignore
