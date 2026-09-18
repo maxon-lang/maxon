@@ -1,0 +1,59 @@
+name: macos-repro
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [debug/macos-crash-repro]
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: macos-15
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Seed from the last release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/fetch-seed.sh arm64-macos
+
+      - name: Build
+        run: ./scripts/build-from-seed.sh
+
+      - name: Run the suite until it crashes
+        run: |
+          set -uo pipefail
+          crashes=0
+          for run in $(seq 1 8); do
+            log="suite-$run.log"
+            ./maxon-bin/.maxon/maxon spec-test > "$log" 2>&1
+            rc=$?
+            line="$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$log" | tail -1)"
+            if grep -qE 'DIED|panic:' "$log"; then
+              crashes=$((crashes + 1))
+              echo "::error::shard ${{ matrix.shard }} run $run CRASHED (exit $rc) | $line"
+              grep -nE 'DIED|panic:|last step started|^  in |^FAIL ' "$log" | head -40
+              cp "$log" "crash-shard${{ matrix.shard }}-run$run.log"
+            else
+              echo "shard ${{ matrix.shard }} run $run clean (exit $rc) | $line"
+            fi
+          done
+          echo "shard ${{ matrix.shard }}: $crashes crash(es) in 8 runs"
+
+      - name: Upload the crash logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-repro-shard${{ matrix.shard }}
+          path: crash-shard*.log
+          if-no-files-found: ignore
