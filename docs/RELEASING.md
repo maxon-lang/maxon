@@ -19,6 +19,26 @@ workflow. `release.yml` says so and refuses rather than failing obscurely.
 The same fact makes `ci.yml` inert until the first release exists. Its seed step skips the run and
 writes a notice; it becomes real the moment a release is published, with no edit to the file.
 
+### ⛔ A tree can declare something its own seed refuses, and a shim is how it is still built
+
+`stdlib/` is parsed by every compile, so a `__Managed*` entry the previous release has never heard of
+fails the seed's FIRST build with E2015 — not only in this tree but on every CI lane and every release
+runner, none of which has another compiler to reach for. Nothing later on `main` can fix that: the
+compiler that accepts the entry is the one the release has not shipped yet.
+
+`scripts/seed-shim/` closes it. Each patch there withdraws one such declaration, and
+`scripts/build-from-seed.sh` stages them only when a plain seed build has already been refused, then
+restores every file before `C1` builds `C2`.
+
+⭐ **A patch withdraws the DECLARATION and never the compiler source that implements the entry**, which
+is what makes this sound rather than a way of shipping a hobbled compiler: the seed accepts the
+compiler's own tables, so `C1` knows the builtin, and `C1` compiles the unshimmed tree. Only `C1`'s own
+copy of the withdrawn function is stubbed, and nothing in a build calls it.
+
+⛔ **Delete the patch in the release after the one that ships the entry.** It is inert from the moment a
+published seed accepts the declaration — the plain build succeeds and the directory is never read — and
+a patch left to rot no longer applies, turning the next genuine refusal into a confusing failure.
+
 ---
 
 ## The version lives in the binary

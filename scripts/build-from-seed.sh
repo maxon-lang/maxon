@@ -18,6 +18,18 @@
 # writes the compiler to a default of its own choosing — MEASURED: `maxon-bin/Profile/ProfileSampler`
 # — and exits 0. `-o` is correct under both readings. `C1` builds by NAME, so it runs the manifest.
 #
+# ⛔ **A TREE DECLARING A BUILTIN THE PREVIOUS RELEASE DOES NOT KNOW CANNOT BE BUILT BY ITS OWN SEED**,
+# and the seed is the one compiler nothing here can regenerate — every CI lane and every release runner
+# starts with this script, so a refusal is four red lanes that no later commit can fix.
+# `scripts/seed-shim/` holds the patches that withdraw such a declaration; they are staged only after a
+# plain build has been tried and refused, so the fallback falls silent by itself once a published
+# release carries the entry.
+#
+# ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch
+# withdraws the STDLIB declaration alone and never the compiler source implementing the entry, so `C1`
+# knows the builtin and compiles the unshimmed tree. Left in place for the second build it would ship a
+# compiler whose withdrawn stdlib function is the one that runs.
+#
 # Usage:
 #   scripts/build-from-seed.sh
 
@@ -29,9 +41,73 @@ cd "$repo_root"
 
 seed="$(maxon_downloaded_path)"
 built="$(maxon_compiler_path)"
+shim_dir="scripts/seed-shim"
 
 [ -x "$seed" ] || { echo "build-from-seed.sh: no seed at $seed — run scripts/fetch-seed.sh" >&2; exit 1; }
 
-"$seed" build maxon-bin -o maxon-bin/.maxon/maxon
+shim_staged=""
+
+withdraw_shim() {
+	[ -n "$shim_staged" ] || return 0
+
+	local staged="$shim_staged"
+	local file
+	shim_staged=""
+
+	while IFS= read -r file; do
+		[ -n "$file" ] || continue
+		git checkout -- "$file"
+	done < <(printf '%s' "$staged")
+}
+
+trap withdraw_shim EXIT
+
+stage_shim() {
+	local patches
+	local patch
+	local file
+	local touched=""
+
+	patches=""
+	if [ -d "$shim_dir" ]; then
+		patches="$(find "$shim_dir" -name '*.patch' -type f | LC_ALL=C sort)"
+	fi
+
+	if [ -z "$patches" ]; then
+		echo "build-from-seed.sh: the seed refused this tree and $shim_dir holds no patch withdrawing what it does not know" >&2
+		exit 1
+	fi
+
+	while IFS= read -r patch; do
+		[ -n "$patch" ] || continue
+
+		while IFS= read -r file; do
+			[ -n "$file" ] || continue
+
+			if ! git diff --quiet -- "$file"; then
+				echo "build-from-seed.sh: $file is modified — a seed shim is staged over a clean file and withdrawn by restoring it" >&2
+				exit 1
+			fi
+
+			touched="$touched$file"$'\n'
+		done < <(git apply --numstat -- "$patch" | cut -f3)
+	done < <(printf '%s\n' "$patches")
+
+	echo "build-from-seed.sh: the seed refused this tree — staging $shim_dir over the first build only" >&2
+
+	while IFS= read -r patch; do
+		[ -n "$patch" ] || continue
+		git apply -- "$patch"
+	done < <(printf '%s\n' "$patches")
+
+	shim_staged="$touched"
+}
+
+if ! "$seed" build maxon-bin -o "$built"; then
+	stage_shim
+	"$seed" build maxon-bin -o "$built"
+	withdraw_shim
+fi
+
 "$built" build maxon-bin
 "$built" version
