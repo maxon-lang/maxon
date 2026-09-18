@@ -1,0 +1,38 @@
+let CaseDirName = "run-refuses-when-no-root-can-be-created"
+
+// Numbered, never named after the variable each blocks — `variablesUnnamedIn` owns the reason.
+let BlockingFilePrefix = "a-file-where-a-directory-would-go-"
+
+let ProgramFileName = "unbuildable.maxon"
+let ProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+let Succeeded = 0
+
+test 'run refuses when no candidate root can be created, and names every variable it consulted'
+	let dir = freshCaseDir(CaseDirName)
+
+	var naming = EnvMap.create()
+
+	var blockedSoFar = 0
+
+	for variable in confinableCacheVariables() 'eachCandidate'
+		let blocked = dir.join("{BlockingFilePrefix}{blockedSoFar}")
+		blockCacheRootAt(blocked)
+
+		naming.upsert(variable, value: blocked.toString())
+		blockedSoFar = blockedSoFar + 1
+	end 'eachCandidate'
+
+	let program = dir.join(ProgramFileName)
+	try File.writeText(program, content: ProgramSource) otherwise panic("{CaseDirName}: the gate could not run - could not write {program.toString()}, the program the driver is asked to run.")
+
+	let run = runWithCacheRoots([RunCommandWord, program.toString()], naming: naming, workingDirectory: dir)
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	try Expect.notEqual(run.exitCode() as AssertedInt, expected: Succeeded, message: "`maxon {RunCommandWord}` succeeded with every candidate cache root on this host named at a regular file, so there is nowhere its build could have been kept. {said}")
+
+	let unnamed = variablesUnnamedIn(run.stderr)
+
+	try Expect.isEmpty(unnamed, message: "`maxon {RunCommandWord}` refused without naming {unnamed}. Every candidate root was tried and every one of them failed, so a refusal quoting one directory describes a smaller thing than what happened and points the reader at whichever root the walk stopped on. The reader is owed the variables that were consulted and the one that overrides them all. {said}")
+end 'run refuses when no candidate root can be created, and names every variable it consulted'
+

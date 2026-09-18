@@ -32,6 +32,11 @@ The golden is normalized so it is stable across runs and machines:
 - Allocation ids (`#<id>`) are densely renumbered `1, 2, 3, …` by first
   appearance, so the runtime's monotonic counter never leaks into the golden.
 
+⛔ Event ORDER is not normalized and is not stable on its own. Every green thread writes into one
+shared ring under one lock, so the decoded order is the order producers took that lock — which two
+threads running at once decide between them. A case whose events come from more than one green thread
+therefore pins `<!-- procs: 1 -->`: one processor is one producer, and the order becomes the program's.
+
 Regenerate the golden with `--update-required`.
 
 ## Tests
@@ -614,6 +619,7 @@ mm_free Facts #1
 ```
 
 <!-- test: a-cloned-service-handle-box-carries-its-tag -->
+<!-- procs: 1 -->
 ⭐⭐ **THE ONE `__mm_alloc` A Std-TIER BODY ASKS FOR WITH NO TYPE TO NAME, AND THE TAG IS WHAT SAYS THE
 TRACED CALL WAS SPELLED WHOLE.** `handle.clone()` mints a SECOND handle box through
 `__mbox_handle_clone_box` — one Std-tier entry serving every service, so it has no layout to name and its

@@ -372,7 +372,16 @@ mm_free String #1
 The trace is normalized so goldens are stable across runs and machines:
 timestamps and depth indentation are stripped, and allocation ids (`#<id>`) are
 densely renumbered `1, 2, 3, …` by first appearance. Regenerate the golden with
-`--update-required`. An ` ```exitcode ` block may accompany it (checked against
+`--update-required`.
+
+**Event order is not normalized, and is not stable once a second green thread
+produces events.** The debug stream is one shared ring carrying no sequence
+number and no thread id, so with two producers the decoded order is the order
+they took the lock rather than the order the program ran — and the golden is
+compared by exact string equality. A case that traces concurrent work must
+therefore pin `<!-- procs: 1 -->`: one processor is one producer, which makes
+ring order program order and the committed golden the only order the program
+can produce. An ` ```exitcode ` block may accompany it (checked against
 the monitor's returned child exit code); an ` ```stdout ` block, if present, is
 checked via a separate untraced run since the monitor interleaves trace lines
 with the child's own stdout. mm-trace assertions are enforced by the spec

@@ -91,7 +91,7 @@ built from changes:
   and `a/../x.maxon` get three cache slots. That costs an extra compile, never a wrong binary.
 
 `<cache>` is the directory Maxon owns on this host. It is the first of these whose variable names a
-directory:
+directory this compiler can create:
 
 | Windows | macOS and Linux |
 |---------|-----------------|
@@ -102,14 +102,21 @@ directory:
 
 Your home directory comes before the host's temp area because `<home>/.maxon` is where the install
 script puts `bin/` and `stdlib/`: the cache sits beside the install it was built by, and survives a host
-that sweeps its temp area. **Every row is a directory a variable names, and a host that sets none of them
-is refused by name** rather than sent to an invented path — a cache under a world-writable directory such
-as `/tmp` would be shared with every other user of the machine.
+that sweeps its temp area. **Every row is a directory a variable names, and a host where no row can be
+used — none of the variables set, or every directory they name refused — is refused by name** rather than
+sent to an invented path: a cache under a world-writable directory such as `/tmp` would be shared with
+every other user of the machine.
+
+**A row that cannot be created does not take the cache from a row that would have worked.** Maxon tries to
+create each row in turn and keeps the build under the first one it gets. A `HOME` that exists but cannot be
+written under — which is what a container run with a numeric `--user` that has no passwd entry gets, since
+Docker hands it `HOME=/` — therefore costs a run nothing as long as some lower row works.
 
 Everything under `<cache>` is Maxon's, and everything beside it is not — which is what
-[`maxon cache clear`](#maxon-cache) removes and what it leaves alone. A run uses the first row only;
+[`maxon cache clear`](#maxon-cache) removes and what it leaves alone. A run uses one row;
 [`maxon cache`](#maxon-cache) reports every row and `clear` sweeps every row this host resolves, because a
-build published while another row ranked first is otherwise stranded where nothing looks again.
+build published while another row ranked first — or while a row that is now unusable still worked — is
+otherwise stranded where nothing looks again.
 
 ### Scripts and the shebang line
 
@@ -261,7 +268,11 @@ Total: 4 builds, 1.3 MB
 ```
 
 `(in use)` marks the row the next `run` or path-less `build` will fill; the others may still hold builds
-nothing looks for again. **A build is the executable** — the `.mxdbg` debug sidecar beside it is not one,
+nothing looks for again. Reporting it creates that directory if it is not there yet, because finding the
+row a run uses is the same act as using it. **Where no row can be created nothing is marked**, and the
+report ends with the sentence [`maxon run`](#maxon-run) refuses with, naming every variable this host
+consults — still on stdout, still exit 0, because "none, and here is why" answers the question the report
+was asked. **A build is the executable** — the `.mxdbg` debug sidecar beside it is not one,
 and neither is a build still being written. The size is everything under the directory, **sidecars
 included**, because that is what `clear` gives back. The `Total:` line appears when more than one row
 holds something.
@@ -281,9 +292,9 @@ directory a row of the table under [The run cache](#the-run-cache) names, and st
 you named, and everything else in it, is left exactly as it was.
 
 **It sweeps every row of that table, not just the one in use.** A run caches under the first row whose
-variable names a directory, so a build made before `MAXON_RUN_CACHE_ROOT` was set — or under a `TMPDIR`
-that has since changed — sits where nothing looks again, and only a clear that visits every row can
-still reach it. Two variables naming one directory are one cache, cleared once and counted once.
+variable names a directory it can create, so a build made before `MAXON_RUN_CACHE_ROOT` was set — or under
+a `TMPDIR` that has since changed, or under a row that has since stopped being creatable — sits where
+nothing looks again, and only a clear that visits every row can still reach it. Two variables naming one directory are one cache, cleared once and counted once.
 
 - **A cache holding nothing is not an error.** A fresh machine and a second `clear` both find nothing;
   both say so on stdout and exit 0.
@@ -565,10 +576,10 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | Variable | Read by | Effect |
 |----------|---------|--------|
 | `MAXON_RUN_CACHE_ROOT` | `run`, `build` (manifest), `cache` | Maxon caches under `<value>/maxon`. Consulted first |
-| `USERPROFILE` | `run`, `build` (manifest), `cache` on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset |
-| `HOME` | `run`, `build` (manifest), `cache` elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset |
-| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (manifest), `cache` on Windows | Last resort, under `<value>\maxon`, when neither of the two above names a directory |
-| `TMPDIR` | `run`, `build` (manifest), `cache` elsewhere | Last resort, under `<value>/maxon`, when neither of the two above names a directory |
+| `USERPROFILE` | `run`, `build` (manifest), `cache` on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `HOME` | `run`, `build` (manifest), `cache` elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (manifest), `cache` on Windows | Last resort, under `<value>\maxon`, when neither of the two above names a directory Maxon can create |
+| `TMPDIR` | `run`, `build` (manifest), `cache` elsewhere | Last resort, under `<value>/maxon`, when neither of the two above names a directory Maxon can create |
 | `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
 | `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
 | `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |

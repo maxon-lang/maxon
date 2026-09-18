@@ -49,7 +49,7 @@ export let OutputFlag = "-o"
 // The command that fills the cache, the command that empties it, and the variable naming the directory
 // the cache is kept under. Respelled here because this corpus is a separate program and cannot read the
 // driver's own constants.
-let RunCommandWord = "run"
+export let RunCommandWord = "run"
 export let CacheCommandWord = "cache"
 export let CacheClearVerb = "clear"
 export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
@@ -398,6 +398,43 @@ export function homeCacheRoot(home FilePath) returns FilePath
 	return home.join(MaxonUserDirName).join(UserCacheDirName)
 end 'homeCacheRoot'
 
+// A regular file rather than a permission bit: no permission survives a checkout, a copy or a
+// foreign host, while a path that is a file refuses a directory create on every operating system
+// there is.
+let BlockedRootFileContent = "a regular file, so nothing can be created at this path or under it\n"
+
+export function blockCacheRootAt(path FilePath)
+	try File.writeText(path, content: BlockedRootFileContent) otherwise panic("CliHarness: the gate could not run - could not write {path.toString()}, the regular file that blocks a cache root.")
+end 'blockCacheRootAt'
+
+let BlockedRootFileName = "a-file-where-a-directory-would-go"
+let FallThroughRootDirName = "fall-through"
+
+export function rosterWithHighestRootBlocked(dir FilePath) returns EnvMap
+	let blocked = blockedHighestRoot(dir)
+	blockCacheRootAt(blocked)
+
+	let fallThrough = dir.join(FallThroughRootDirName)
+
+	if not Directory.create(fallThrough) and not Directory.isDirectory(fallThrough) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {fallThrough.toString()}, the writable root a case leaves for the driver to fall through to.")
+	end 'couldNotCreate'
+
+	var naming = EnvMap.create()
+	naming.upsert(HomeDirectoryVariable, value: blocked.toString())
+	naming.upsert(rootRankedBelowHomeVariable(), value: fallThrough.toString())
+
+	return naming
+end 'rosterWithHighestRootBlocked'
+
+export function blockedHighestRoot(dir FilePath) returns FilePath
+	return dir.join(BlockedRootFileName)
+end 'blockedHighestRoot'
+
+export function fallThroughCacheRoot(dir FilePath) returns FilePath
+	return dir.join(FallThroughRootDirName).join(CacheVendorDirName)
+end 'fallThroughCacheRoot'
+
 // ⭐⭐ **ONE DRIVER RUN WITH EVERY CANDIDATE CACHE ROOT INSIDE THE CASE'S OWN TREE.** `maxon cache clear`
 // sweeps every root this host names rather than only the one in use, so a child left looking at the
 // developer's home or temp area would have a case in this corpus delete the developer's own cache.
@@ -459,7 +496,7 @@ end 'confinedCacheEnvironment'
 // ⭐ **THE CANDIDATES A CASE MAY POINT SOMEWHERE ELSE.** The override is not one of them: a case that
 // names nothing must reach a child that sees none, which is the only way to fill the cache a lower-ranked
 // candidate keeps.
-function confinableCacheVariables() returns ListedWordArray
+export function confinableCacheVariables() returns ListedWordArray
 	#if os(Windows)
 		let variables = [HomeDirectoryVariable, WindowsCacheRootVariable, HostTempVariable]
 	#else
@@ -468,6 +505,49 @@ function confinableCacheVariables() returns ListedWordArray
 
 	return variables
 end 'confinableCacheVariables'
+
+function variablesACallerCanSet() returns ListedWordArray
+	var variables = ListedWordArray.create()
+
+	for variable in confinableCacheVariables() 'eachCandidate'
+		variables.push(variable)
+	end 'eachCandidate'
+
+	variables.push(CacheRootVariable)
+
+	return variables
+end 'variablesACallerCanSet'
+
+// Callers must not name a fixture after a cache variable. The driver quotes the paths it walked, so
+// a file called `TEMP` puts that spelling in the text and this reads the case's own fixture back as
+// the driver naming the variable — a green answer about a refusal that named nothing. The blocking
+// files are numbered for that reason.
+export function variablesUnnamedIn(text String) returns String
+	var missing = ""
+
+	for variable in variablesACallerCanSet() 'eachVariable'
+		if text.contains(variable) 'named'
+			continue
+		end 'named'
+
+		missing.append("{variable} ")
+	end 'eachVariable'
+
+	return missing.trim()
+end 'variablesUnnamedIn'
+
+// Ranked directly below the home directory on the driver's own roster. A reordering there leaves
+// this naming a root the driver reaches first, and a fall-through case then passes without falling
+// through.
+export function rootRankedBelowHomeVariable() returns String
+	#if os(Windows)
+		let variable = WindowsCacheRootVariable
+	#else
+		let variable = HostTempVariable
+	#endif
+
+	return variable
+end 'rootRankedBelowHomeVariable'
 
 function namesACacheRoot(name String) returns bool
 	if foldedVariable(name) == foldedVariable(CacheRootVariable) 'theOverride'
@@ -696,13 +776,15 @@ function stagingDir(spelled String) returns FilePath
 	return path.resolve(Directory.currentPath())
 end 'stagingDir'
 
-// Delete every file under a case's staging directory, leaving the directories.
+// The directories go too, not only the files: a case asserting a directory is absent is only
+// correct if no previous run left one standing.
 function clearStagedFiles(dir FilePath)
 	let entries = try Directory.list(dir) otherwise panic("CliHarness: the gate could not run - could not list {dir.toString()}")
 
 	for entry in entries 'eachEntry'
 		if Directory.isDirectory(entry) 'aDirectory'
 			clearStagedFiles(entry)
+			try Directory.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear {entry.toString()}, a directory a previous run staged.")
 			continue
 		end 'aDirectory'
 

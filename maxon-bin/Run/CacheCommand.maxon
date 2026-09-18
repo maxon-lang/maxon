@@ -45,10 +45,6 @@ let InUseMark = " (in use)"
 let EmptyRootState = "empty"
 let TotalLabel = "Total:"
 
-// `hostCacheRoots` answers in roster order and a run uses the first entry that resolved; the rest may
-// still hold builds nothing else will ever look for.
-let RootARunUses = 0
-
 // One root is what almost every machine has. Past it a stranded cache was found, and the reader is owed
 // the directories it is in and a total they cannot add up off the rows at a glance.
 let OneRoot = 1
@@ -190,14 +186,16 @@ function reportCache() returns ExitCode
 		return OwnFailureExit
 	end 'noCacheRoot'
 
+	let inUse = cacheRootARunUses(roots)
+
 	var report = "{RosterHeading}\n"
 	var total = CacheCensus.create()
 	var holding = 0
 	var trouble = FirstFailure.create()
 
-	for (iter, root) in roots.withIterator() 'eachRoot'
+	for root in roots 'eachRoot'
 		let census = censusOf(readCacheTree(root))
-		let mark = InUseMark if iter.index() == RootARunUses else ""
+		let mark = InUseMark if isRootInUse(root, inUse: inUse) else ""
 
 		trouble.note(census.failure.reason)
 		report.append("{RootLineIndent}{root.toString()}{mark}: {rootState(census)}\n")
@@ -214,6 +212,8 @@ function reportCache() returns ExitCode
 		report.append("{TotalLabel} {counted(total.builds, word: BuildWord)}, {inReadableUnits(total.bytes)}\n")
 	end 'severalHold'
 
+	report.append(noUsableRootNotice(inUse))
+
 	print(report)
 
 	if not trouble.reason.isEmpty() 'somethingUnread'
@@ -223,6 +223,23 @@ function reportCache() returns ExitCode
 
 	return 0
 end 'reportCache'
+
+// Appended to the report on stdout, with the command still exiting 0: the reader asked which
+// directory the next run fills, and "none, and here is why" answers that question. Refusing is
+// `maxon run`'s job.
+function noUsableRootNotice(inUse CacheRootInUse) returns String
+	return match inUse 'decided'
+		usable gives ""
+		noneUsable gives "{noCacheRootMessage()}\n"
+	end 'decided'
+end 'noUsableRootNotice'
+
+function isRootInUse(root FilePath, inUse CacheRootInUse) returns bool
+	return match inUse 'decided'
+		usable(directory) gives root.equals(directory)
+		noneUsable gives false
+	end 'decided'
+end 'isRootInUse'
 
 // What one root's line says after its path: why it could not be read, else what it holds, else that it
 // holds nothing.

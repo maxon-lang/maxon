@@ -416,15 +416,13 @@ function cacheRootCandidates() returns CacheRootCandidateArray
 	return candidates
 end 'cacheRootCandidates'
 
-// ⭐⭐ **EVERY DIRECTORY THIS HOST COULD BE KEEPING A CACHE IN, in roster order and each named once.** Only
-// the first is in use, so a build published while a different variable ranked highest — a `TMPDIR` that has
-// since changed, a run made with `MAXON_RUN_CACHE_ROOT` set — sits under a root nothing consults again. It
-// is still Maxon's, and `maxon cache clear` is what reaches it, so the roster answers as a LIST rather than
-// as one winner.
+// Every root stays on the roster, including one no run can use. A build published while a different
+// variable ranked highest, or while a root that is now unusable still worked, is still on disk and
+// `maxon cache clear` is the only thing that reaches it — so filtering the roster by what a run
+// can create would hide exactly the disk a reader needs to reclaim.
 //
-// ⛔ **A DIRECTORY IS NAMED ONCE HOWEVER MANY VARIABLES POINT AT IT.** `TEMP` and `TMPDIR` routinely hold
-// one path and an override may be aimed at the home directory, and a caller acting per entry would act on
-// that directory twice.
+// One entry per directory however many variables name it: `TEMP` and `TMPDIR` routinely hold one
+// path, and a caller acting per entry would act on that directory twice.
 export function hostCacheRoots() returns CacheRootArray throws RunCacheError
 	var roots = CacheRootArray.create()
 
@@ -457,25 +455,51 @@ function noteRoot(roots CacheRootArray, root FilePath)
 	roots.push(root)
 end 'noteRoot'
 
-// ⭐ **THE DIRECTORY MAXON OWNS ON THIS HOST, spelled once.** The run cache keeps compiled programs under
-// it and the MCP server stages inline snippets under it, so everything below it is Maxon's and everything
-// beside it is somebody else's — which is what lets `maxon cache clear` know where to stop. A second
-// derivation of the roster is a second answer to that.
+// The run cache keeps compiled programs under this directory and the MCP server stages inline
+// snippets under it, so everything below it is Maxon's and everything beside it is somebody
+// else's — which is what lets `maxon cache clear` know where to stop. A second derivation of it is
+// a second answer to that.
 export function hostCacheRoot() returns FilePath throws RunCacheError
 	let roots = try hostCacheRoots()
-	return try roots.get(0) otherwise panic("hostCacheRoot: an empty roster is refused by hostCacheRoots, so its first entry is there")
+
+	match cacheRootARunUses(roots) 'decided'
+		usable(directory) then return directory
+		noneUsable then throw RunCacheError.unavailable(noCacheRootMessage())
+	end 'decided'
 end 'hostCacheRoot'
+
+module union CacheRootInUse
+	usable(directory FilePath)
+	noneUsable
+end 'CacheRootInUse'
+
+// Creating the root is the probe because it is the only question stdlib answers: `Directory.create`
+// folds a path that is a file, a permission, a full disk and a lost race into one bare `false`. It
+// is also exactly what the next run does, and nothing more.
+//
+// It answers true for a directory that already exists, so a root that exists and cannot be written
+// under passes here, and the run fails later in `slotDirectory` about that one directory. Closing
+// that needs a write probe on every run.
+module function cacheRootARunUses(roots CacheRootArray) returns CacheRootInUse
+	for root in roots 'eachRoot'
+		if Directory.create(root) 'created'
+			return CacheRootInUse.usable(root)
+		end 'created'
+	end 'eachRoot'
+
+	return CacheRootInUse.noneUsable
+end 'cacheRootARunUses'
 
 // The refusal names the variables THIS host consults, read off the same roster that consulted them: a
 // sentence naming a variable nothing reads sends its reader to set something that changes nothing.
-function noCacheRootMessage() returns String
+module function noCacheRootMessage() returns String
 	var named = ""
 
 	for candidate in cacheRootCandidates() 'eachCandidate'
 		named = candidate.variable if named.isEmpty() else "{named}, {candidate.variable}"
 	end 'eachCandidate'
 
-	return "no directory to keep compiled programs in: none of {named} names one. Set {RunCacheRootVariable} to a writable directory."
+	return "no directory to keep compiled programs in: none of {named} names one this compiler can create. Set {RunCacheRootVariable} to a writable directory."
 end 'noCacheRootMessage'
 
 // Where a reader is told to look for the cache, read off the same roster that decides it. `export`

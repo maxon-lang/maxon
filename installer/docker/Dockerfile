@@ -11,6 +11,10 @@
 #
 # ⭐ THE IMAGE IS BUILT FROM THE RELEASE'S OWN ARCHIVE, CHECKED AGAINST ITS SHA256SUMS, so the compiler
 # inside is byte-for-byte the one `install.sh` and Homebrew install.
+#
+# Both set TMPDIR because a container run with a numeric `--user` that has no passwd entry gets
+# HOME=/, which nothing can be created under — leaving the compiler no directory to keep a build in,
+# so `maxon run` refuses every program.
 
 ARG VERSION
 
@@ -65,7 +69,8 @@ COPY --from=fetch /opt/maxon /opt/maxon
 # MAXON_IMAGE tells `maxon upgrade` it is in an image, and names the newest image of this variant, which
 # is what upgrades it.
 ENV PATH=/opt/maxon/bin:$PATH \
-    MAXON_IMAGE=ghcr.io/maxon-lang/maxon:latest
+    MAXON_IMAGE=ghcr.io/maxon-lang/maxon:latest \
+    TMPDIR=/tmp
 RUN useradd --create-home --uid 1000 maxon
 WORKDIR /app
 CMD ["maxon"]
@@ -76,6 +81,7 @@ LABEL org.opencontainers.image.source="https://github.com/maxon-lang/maxon" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --from=fetch /opt/maxon /opt/maxon
 ENV PATH=/opt/maxon/bin:$PATH \
-    MAXON_IMAGE=ghcr.io/maxon-lang/maxon:distroless
+    MAXON_IMAGE=ghcr.io/maxon-lang/maxon:distroless \
+    TMPDIR=/tmp
 WORKDIR /app
 CMD ["maxon"]
