@@ -364,27 +364,6 @@ export union SlabTrafficEvent
 	free
 end 'SlabTrafficEvent'
 
-// ⚠ **WHAT `runtime/SlabRuntime.maxon` DERIVES FOR THE SAME REGION, RESTATED HERE SO IT CAN BE CHECKED.**
-// The tier file cannot read this one's class count, shard count or column count, so it restates them and
-// derives the head and the total itself; `checkSlabRuntimeGeometry` is where the two derivations are made
-// to meet. Written as numbers rather than as a second copy of the formula, because a formula restated
-// agrees with itself by construction and says nothing about the file this pins.
-let TierStateLockOffset = 40
-let TierStateBytes = 152208
-let TierStateChunks = 19
-
-// The two array bases, the census word past them, and the three mspan fields the tier's census walk reads.
-// Numbers rather than formulas for the reason above: a restated formula agrees with itself.
-let TierStateMcentralOffset = 104
-let TierStateMcacheOffset = 648
-let TierStateOsDirectBytesOffset = 152200
-let TierMspanFreeCountOffset = 16
-let TierMspanClassIdxOffset = 32
-let TierMspanOwningPOffset = 48
-let TierMspanSlotBytes = 80
-let TierMspanRemoteHeadOffset = 56
-let TierMspanRemoteCountOffset = 64
-
 // The value the state `.data` word holds until the region is committed. Named rather than left a bare 0
 // because `emitSlabStateBase`'s probe TESTS it while `runtime/SlabRuntime.maxon` both tests and CLEARS it,
 // and a literal at each site is a chance for one to stop meaning the same thing as the others.
@@ -543,7 +522,7 @@ let OsDirectPrefixBytes = 16
 //
 // The bodies read no usage bit: every heap program carries the sharded allocator, and the one fork is the
 // target's `MachineModel`, read once here and handed down.
-export function installSlabRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, target Target)
+export function installSlabRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, target Target, signatures ProgramSignatures, tierPath FilePath)
 	if not usage.usesHeap 'noAllocator'
 		return
 	end 'noAllocator'
@@ -553,7 +532,7 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	// breakage still fails the next compile that allocates anything; and a program with no allocator carries
 	// no size-class table, no reverse lookup and no span, so no geometry of theirs can be wrong for it. It
 	// builds both reverse tables and walks the ladder, which is why it is worth asking who it protects.
-	checkSlabRuntimeGeometry()
+	checkSlabRuntimeGeometry(signatures, tierPath: tierPath)
 
 	_ = globalData.registerRdataConstantLabeled(SlabSizeToClass8Label, bytes: slabSizeToClass8Table(), kind: RdataPayloadKind.slabTable)
 	_ = globalData.registerRdataConstantLabeled(SlabSizeToClass128Label, bytes: slabSizeToClass128Table(), kind: RdataPayloadKind.slabTable)
@@ -594,7 +573,7 @@ end 'slabRuntimeGlobals'
 // table whose source changed shape produces a working-LOOKING allocator that indexes past its own bounds.
 // It panics rather than returning a verdict, for those checks' reason — a broken layout cannot produce a
 // working allocator, so no caller could sensibly continue.
-function checkSlabRuntimeGeometry()
+function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePath)
 	// Reading the ladder here is what makes the derived strides below statements about THIS table rather
 	// than about whatever table happened to be generated when they were written.
 	checkSlabClassTable()
@@ -639,36 +618,7 @@ function checkSlabRuntimeGeometry()
 		panic("slab runtime: {slabStateBytes()} bytes of allocator state do not fit {slabStateChunks()} chunk(s) of {SlabPageBytes}")
 	end 'stateOverflowsChunks'
 
-	// ⛔⛔ **AND THE TIER'S COPY OF THAT ARITHMETIC MUST AGREE, BECAUSE NOTHING AT RUN TIME WOULD NOTICE.**
-	// `runtime/SlabRuntime.maxon`'s `__slab_state_base` is the one body that asks the arena for this region and
-	// zeroes it, and it derives the request from its OWN restated head layout, class count and shard count —
-	// no name crosses the tier boundary, so a regenerated ladder moves the numbers here and leaves the numbers
-	// there. Too small a request and the mcache runs off the end of the chunk run into whatever the arena hands
-	// out next; too large and the arena is asked for chunks it may not have. Both are silent.
-	if (SlabStateLockOffset as ParsedInt) != TierStateLockOffset 'tierLockOffsetDisagrees'
-		panic("slab runtime: the lock sits at {SlabStateLockOffset as ParsedInt} and `runtime/SlabRuntime.maxon` derives {TierStateLockOffset} — a head word moved on one side only")
-	end 'tierLockOffsetDisagrees'
-
-	if slabStateBytes() != TierStateBytes 'tierStateBytesDisagree'
-		panic("slab runtime: the state region is {slabStateBytes()} bytes and `runtime/SlabRuntime.maxon` derives {TierStateBytes} — update `SlabClassCount`/`SlabMaxShards`/`SlabTrafficColumns` there, and this constant")
-	end 'tierStateBytesDisagree'
-
-	if slabStateChunks() != TierStateChunks 'tierStateChunksDisagree'
-		panic("slab runtime: the state region is {slabStateChunks()} chunk(s) and `runtime/SlabRuntime.maxon` derives {TierStateChunks} — update `SlabClassCount`/`SlabMaxShards`/`SlabTrafficColumns` there, and this constant")
-	end 'tierStateChunksDisagree'
-
-	// The tier's census walk computes addresses off offsets it restates, and nothing at run time would
-	// notice a drift — a class index read as a free count is a plausible number to a reader with no second
-	// source. The pins are individual so the sentence names the field that moved.
-	requireTierOffsetAgrees("the mcentral heads", here: SlabStateMcentralOffset as ParsedInt, tier: TierStateMcentralOffset)
-	requireTierOffsetAgrees("the mcache rows", here: slabStateMcacheOffset(), tier: TierStateMcacheOffset)
-	requireTierOffsetAgrees("the OS-direct census word", here: slabStateOsDirectBytesOffset(), tier: TierStateOsDirectBytesOffset)
-	requireTierOffsetAgrees("an mspan's free count", here: MspanFreeCountOffset as ParsedInt, tier: TierMspanFreeCountOffset)
-	requireTierOffsetAgrees("an mspan's class index", here: MspanClassIdxOffset as ParsedInt, tier: TierMspanClassIdxOffset)
-	requireTierOffsetAgrees("an mspan's owner", here: MspanOwningPOffset as ParsedInt, tier: TierMspanOwningPOffset)
-	requireTierOffsetAgrees("an mspan's metadata slot", here: MspanSlotBytes, tier: TierMspanSlotBytes)
-	requireTierOffsetAgrees("an mspan's remote free list", here: MspanRemoteHeadOffset as ParsedInt, tier: TierMspanRemoteHeadOffset)
-	requireTierOffsetAgrees("an mspan's remote free count", here: MspanRemoteCountOffset as ParsedInt, tier: TierMspanRemoteCountOffset)
+	requireTierGeometryAgrees(slabTierPins(), signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Runtime/SlabRuntime.maxon", layer: "slab runtime")
 
 	// ⭐⭐ **AND THE TWO REQUESTS THIS FILE MAKES OF THE PAGE LAYER MUST BE SATISFIABLE ON BOTH LANES.**
 	// `slabStateChunks()` is 19 chunks and the non-reserving arena has 63
@@ -685,13 +635,54 @@ function checkSlabRuntimeGeometry()
 	requireArenaCanServe("the widest class's span", chunks: slabWidestSpanChunks())
 end 'checkSlabRuntimeGeometry'
 
-// One helper rather than a `panic` per field, so a seventh restated offset cannot arrive carrying a
-// sentence that names the sixth.
-function requireTierOffsetAgrees(what String, here ParsedInt, tier ParsedInt)
-	if here != tier 'disagrees'
-		panic("slab runtime: {what} is at {here} and `runtime/SlabRuntime.maxon` restates {tier} — the two sides of the tier boundary have drifted")
-	end 'disagrees'
-end 'requireTierOffsetAgrees'
+function slabTierPins() returns TierGeometryPinArray
+	var out = TierGeometryPinArray.create()
+
+	out.push(TierGeometryPin.create("the chunk granularity", here: SlabPageBytes, named: "SlabPageBytes"))
+	out.push(TierGeometryPin.create("an OS-direct mapping's prefix", here: OsDirectPrefixBytes, named: "OsDirectPrefixBytes"))
+	out.push(TierGeometryPin.create("the exit code for a pointer the OS-direct road never handed out", here: RuntimeAbort.slabOsDirectPointerNotOurs.rawValue as ParsedInt, named: "SlabOsDirectPointerNotOursExit"))
+
+	out.push(TierGeometryPin.create("the state region's word stride", here: WordBytes, named: "SlabWordBytes"))
+	out.push(TierGeometryPin.create("the metadata slab's bump cursor", here: SlabStateMetaBumpOffset as ParsedInt, named: "SlabStateMetaBumpOffset"))
+	out.push(TierGeometryPin.create("the metadata slab's limit", here: SlabStateMetaEndOffset as ParsedInt, named: "SlabStateMetaEndOffset"))
+	out.push(TierGeometryPin.create("the metadata slab's free list", here: SlabStateMetaFreeOffset as ParsedInt, named: "SlabStateMetaFreeOffset"))
+	out.push(TierGeometryPin.create("the scheduler word", here: SlabStateSchedulerOffset as ParsedInt, named: "SlabStateSchedulerOffset"))
+	out.push(TierGeometryPin.create("the lock-depth sink", here: SlabStateLockDepthSinkOffset as ParsedInt, named: "SlabStateLockDepthSinkOffset"))
+	out.push(TierGeometryPin.create("the slow-path lock", here: SlabStateLockOffset as ParsedInt, named: "SlabStateLockOffset"))
+	out.push(TierGeometryPin.create("an OS lock's width", here: OsLockBytes, named: "OsLockBytes"))
+
+	out.push(TierGeometryPin.create("the size-class count", here: slabClassCount() as ParsedInt, named: "SlabClassCount"))
+	out.push(TierGeometryPin.create("the shard count", here: SlabMaxShards, named: "SlabMaxShards"))
+	out.push(TierGeometryPin.create("a row's traffic columns", here: SlabTrafficColumn.allCases.count() as ParsedInt, named: "SlabTrafficColumns"))
+
+	out.push(TierGeometryPin.create("the mcentral heads", here: SlabStateMcentralOffset as ParsedInt, named: "SlabStateMcentralOffset"))
+	out.push(TierGeometryPin.create("the mcache rows", here: slabStateMcacheOffset(), named: "SlabStateMcacheOffset"))
+	out.push(TierGeometryPin.create("the OS-direct census word", here: slabStateOsDirectBytesOffset(), named: "SlabStateOsDirectBytesOffset"))
+	out.push(TierGeometryPin.create("the state region's size", here: slabStateBytes(), named: "SlabStateBytes"))
+	out.push(TierGeometryPin.create("the state region's chunk run", here: slabStateChunks(), named: "SlabStateChunks"))
+	out.push(TierGeometryPin.create("the uncommitted-state sentinel", here: SlabStateUncommitted, named: "SlabStateUncommitted"))
+
+	out.push(TierGeometryPin.create("an mspan's metadata slot", here: MspanSlotBytes, named: "MspanSlotBytes"))
+	out.push(TierGeometryPin.create("an mspan's base address", here: MspanBaseAddrOffset as ParsedInt, named: "MspanBaseAddrOffset"))
+	out.push(TierGeometryPin.create("an mspan's free count", here: MspanFreeCountOffset as ParsedInt, named: "MspanFreeCountOffset"))
+	out.push(TierGeometryPin.create("an mspan's class index", here: MspanClassIdxOffset as ParsedInt, named: "MspanClassIdxOffset"))
+	out.push(TierGeometryPin.create("an mspan's owner", here: MspanOwningPOffset as ParsedInt, named: "MspanOwningPOffset"))
+	out.push(TierGeometryPin.create("an mspan's remote free list", here: MspanRemoteHeadOffset as ParsedInt, named: "MspanRemoteHeadOffset"))
+	out.push(TierGeometryPin.create("an mspan's remote free count", here: MspanRemoteCountOffset as ParsedInt, named: "MspanRemoteCountOffset"))
+	out.push(TierGeometryPin.create("a destroyed span's owner sentinel", here: MspanOwningPFreed, named: "MspanOwningPFreed"))
+	out.push(TierGeometryPin.create("a parked span's owner sentinel", here: MspanStatePartial, named: "MspanStatePartial"))
+
+	out.push(TierGeometryPin.create("the packed geometry's slot-count shift", here: SlabClassGeomSlotShift, named: "SlabClassGeomSlotShift"))
+	out.push(TierGeometryPin.create("the packed geometry's slot-size mask", here: SlabClassGeomSlotMask, named: "SlabClassGeomSlotMask"))
+
+	out.push(TierGeometryPin.create("the census kind for live bytes", here: SlabCensusLiveBytes, named: "SlabCensusLiveBytes"))
+	out.push(TierGeometryPin.create("the census kind for free bytes", here: SlabCensusFreeBytes, named: "SlabCensusFreeBytes"))
+	out.push(TierGeometryPin.create("the census kind for parked bytes", here: SlabCensusParkedBytes, named: "SlabCensusParkedBytes"))
+	out.push(TierGeometryPin.create("the census kind for cached free bytes", here: SlabCensusCachedFreeBytes, named: "SlabCensusCachedFreeBytes"))
+	out.push(TierGeometryPin.create("the census kind for committed bytes", here: SlabCensusCommittedBytes, named: "SlabCensusCommittedBytes"))
+
+	return out
+end 'slabTierPins'
 
 // A chunk run this file will ask `__slab_arena_alloc_chunks` for, checked against what an arena can serve on
 // each lane. One helper rather than two pairs of `if`s, so a third request cannot arrive checked against one

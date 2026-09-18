@@ -546,6 +546,21 @@ function runtimeTierFileIsCompilerCalled(path FilePath) returns bool
 	return filename == SlabArenaTierFileName or filename == SlabRuntimeTierFileName or filename == ManagedGeometryTierFileName
 end 'runtimeTierFileIsCompilerCalled'
 
+// The roster is walked rather than the path rebuilt from `project.runtimeDir`, because a constant is filed
+// under the identical `FilePath` the loader handed the parser. A path that differs only by a separator or a
+// normalisation misses every declaration in the file, and the lookup then accuses it of declaring nothing.
+export function runtimeTierSourcePath(project Project, tierFileName String) returns FilePath
+	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
+		let path = try project.librarySourcePaths.get(fileIndex) otherwise panic("runtimeTierSourcePath: fileIndex {fileIndex} is below project.librarySourcePaths.count()")
+
+		if path.filename() == tierFileName 'itIsTheTierFile'
+			return path
+		end 'itIsTheTierFile'
+	end 'eachFile'
+
+	panic("runtimeTierSourcePath: no library source is named '{tierFileName}' — `StdlibLoader.loadLibrarySources` loads the whole of `runtime/` before anything reads it, and throws `CompileError.runtimeNotFound` when that root contributes nothing")
+end 'runtimeTierSourcePath'
+
 // The two answers `classifyLibraryReach` splits one walk into. One record because they partition one
 // question over one roster, and separate derivations could come to disagree about which names each holds.
 type LibraryReachSplit

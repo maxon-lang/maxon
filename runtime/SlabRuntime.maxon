@@ -25,9 +25,11 @@
 // source simply spells. What it costs is one Maxon helper taking a `bool` parameter where the builder has
 // two emissions of one emitter, which is a cost and not a blocker.
 //
-// ⛔⛔ **THE CONSTANTS BELOW ARE RESTATED FROM `Compiler/Runtime/SlabRuntime.maxon` BECAUSE NO NAME CROSSES
-// THE TIER BOUNDARY**, the rule `runtime/SlabArena.maxon` states in full for its own geometry. Each names
-// the fact it restates; a seed that drifts here is a wrong offset with nothing to catch it.
+// The constants below are restated from `Compiler/Runtime/SlabRuntime.maxon` because no name crosses the
+// tier boundary — the rule `runtime/SlabArena.maxon` states in full for its own geometry. Each names the
+// fact it restates, and `checkSlabRuntimeGeometry` reads them back out of this file by these identifiers and
+// compares each against the emitter's copy, so a seed that drifts here fails the next compile rather than
+// becoming a wrong offset.
 
 // ⭐ **SIGNED AND FULL-RANGE, AND THE SIGN IS WHAT MAKES `__slab_assert_os_alloc`'s TEST WORK.** A raw
 // POSIX page syscall answers a small NEGATIVE errno in the result register; read unsigned that is the
@@ -113,11 +115,11 @@ end 'slabStepOsDirectBytes'
 
 // --- The state region, restated ---
 //
-// ⛔⛔ **`Compiler/Runtime/SlabRuntime.maxon` HOLDS THE OTHER COPY OF EVERY NUMBER BELOW, AND THE TWO ARE
-// MADE TO MEET AT `checkSlabRuntimeGeometry`.** That function pins the region's total size and chunk count
-// against `TierStateBytes`/`TierStateChunks` on every compile of every allocating program, which is the only
-// thing standing between a regenerated class ladder and a request one chunk too small — an mcache running
-// off the end of its run into whatever the arena hands out next, silently.
+// ⚠ `Compiler/Runtime/SlabRuntime.maxon` holds the other copy of every number below, and the two are made to
+// meet at `checkSlabRuntimeGeometry`, which reads each constant here by name and compares it against the
+// emitter's on every compile of every allocating program. That is the only thing standing between a
+// regenerated class ladder and a request one chunk too small — an mcache running off the end of its run into
+// whatever the arena hands out next, silently.
 
 // The stride of the region's head words and of both arrays past the lock.
 let SlabWordBytes = 8

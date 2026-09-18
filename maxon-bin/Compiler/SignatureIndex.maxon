@@ -17249,6 +17249,24 @@ export type ProgramSignatures
 		end 'lookup'
 	end 'constantValueOf'
 
+	export function integerConstantIn(name String, filePath FilePath) returns ParsedInt
+		match self.constantValueOf(name.toByteArray(), readerFilePath: filePath) 'lookup'
+			found(payload, tag, _) then return self.integerConstantPayload(payload, tag: tag, name: name, filePath: filePath)
+			foundManaged or
+				foundImageRecord or
+				foundImageBox then panic("ProgramSignatures.integerConstantIn: '{name}' in {filePath.toString()} is a managed or imaged constant, and the caller asked for a number")
+			notFound then panic("ProgramSignatures.integerConstantIn: {filePath.toString()} declares no constant '{name}' that file can read")
+		end 'lookup'
+	end 'integerConstantIn'
+
+	function integerConstantPayload(payload ParsedInt, tag ValueTypeTag, name String, filePath FilePath) returns ParsedInt
+		if tag != ValueTypeTag.integer 'notAnInteger'
+			panic("ProgramSignatures.integerConstantIn: '{name}' in {filePath.toString()} folded to a {tag.name} constant, and the caller asked for a number")
+		end 'notAnInteger'
+
+		return payload
+	end 'integerConstantPayload'
+
 	// ⭐⭐ **THE ONE PLACE A CROSS-FILE CONSTANT READ LEAVES A TRACE, AND IT HAS TO BE HERE BECAUSE
 	// NOWHERE ELSE KEEPS ONE.** A `let` with no storage is INLINED at its use site — it becomes a
 	// `literal` op carrying the number — so unlike a `var` (which emits a `globalAddr` naming its

@@ -270,11 +270,16 @@ Four doors are still standing open rather than shut:
   the refill stays a builder. `emitSpanChunkCount`'s own header is the rule: the CUT and the DESTRUCTION must
   agree TO THE CHUNK, or a span is released one chunk short and a chunk stays claimed forever. ⇒ **THE
   SECOND-SPELLING TEST IS A SEPARATE GATE FROM THE BUILD-TIME-ARGUMENT ONE AND IS ASKED AFTER IT.**
-  ⚠ **THE STATE REGION'S GEOMETRY IS NOW WRITTEN TWICE AND PINNED ONCE.** The tier file cannot read the
+  ⚠ **THE STATE REGION'S GEOMETRY IS WRITTEN TWICE AND PINNED AT EVERY SEED.** The tier file cannot read the
   class ladder, so it restates the head layout, the class count and the shard count and derives the region's
-  size itself; `checkSlabRuntimeGeometry` compares that derivation against `TierStateBytes`/`TierStateChunks`
-  on every compile of every allocating program. Without it a regenerated ladder is a request one chunk too
-  small — an mcache running off the end of its run, silently. **A RESTATED DERIVATION OWES A PIN.**
+  size itself; `checkSlabRuntimeGeometry` reads each of those constants BACK OUT OF THE TIER SOURCE — by name,
+  through `ProgramSignatures.integerConstantIn`, folded by the compile that is compiling it — and compares it
+  against the emitter's, on every compile of every allocating program. `checkSlabArenaGeometry` does the same
+  for the page layer, on every compile of every program. Reading the tier's own value is what makes the
+  comparison a statement about the two TREES; a check over an expected value declared in the emitter's own
+  file is a pin against itself, and a stale tier file changes nothing it can see. Without it a regenerated
+  ladder is a request one chunk too small — an mcache running off the end of its run, silently.
+  **A RESTATED DERIVATION OWES A PIN.**
   ⛔ **THE REVERSE MAP'S READ SIDE IS NOT AN ENTRY POINT AT ALL, AND THAT IS NOT DEBT**: `__slab_free`
   splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads and three
   tests is overhead on the path of every free in the language. It had a behind-a-frame twin for as long as

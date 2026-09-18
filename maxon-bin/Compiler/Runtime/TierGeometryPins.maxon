@@ -1,0 +1,29 @@
+export type TierGeometryPin
+	export let what as String
+	export let here as ParsedInt
+	export let named as String
+
+	export static function create(what String, here ParsedInt, named String) returns TierGeometryPin
+		return Self{what: what, here: here, named: named}
+	end 'create'
+end 'TierGeometryPin'
+
+export typealias TierGeometryPinArray = Array with TierGeometryPin
+
+// ⚠ A drift between the two sides is invisible at run time: an emitter and a tier that disagree about a
+// field offset or a slot width compute addresses into the same records, and one field read as another is a
+// plausible number to a reader with no second source.
+//
+// The tier's number is read out of the tier file, folded by the compile that is reading it, so a
+// disagreement can only be between the emitter and the tier. An expected value declared on this side would
+// be a third copy and a pin against itself, which is what a check that reads only its own tree amounts to.
+// The tier's geometry constants are file-private, which is why the tier file is also its own reader path.
+export function requireTierGeometryAgrees(pins TierGeometryPinArray, signatures ProgramSignatures, tierPath FilePath, emitterFile String, layer String)
+	for pin in pins 'eachPin'
+		let there = signatures.integerConstantIn(pin.named, filePath: tierPath)
+
+		if pin.here != there 'disagrees'
+			panic("{layer}: {pin.what} is {pin.here} in `{emitterFile}` and `{pin.named}` is {there} in {tierPath.toString()} — the two sides of the tier boundary have drifted")
+		end 'disagrees'
+	end 'eachPin'
+end 'requireTierGeometryAgrees'

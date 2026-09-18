@@ -257,6 +257,10 @@ type SlabArenaGeometry
 	end 'fromChunkCount'
 end 'SlabArenaGeometry'
 
+export function targetHasPageReservation(target Target) returns bool
+	return target.cpu != CpuArch.wasm32
+end 'targetHasPageReservation'
+
 // ⭐⭐ **THE ROOM AN ARENA'S ALIGN-UP NEEDS, AND WHY THE ONE LANE THAT CANNOT AFFORD IT DOES NOT NEED IT.**
 // `osReservePages` answers a base aligned to whatever the LANE'S page source hands out and nothing more —
 // x64-linux's is 4 KiB, HALF a chunk — so `__slab_arena_new` raises it to the next commit granule and the
@@ -439,30 +443,31 @@ export function slabArenaRuntimeGlobals() returns DataSectionEntryArray
 	return out
 end 'slabArenaRuntimeGlobals'
 
-// ⭐⭐ **THE GEOMETRY IS INTERNALLY COHERENT — asserted, not trusted.** `checkSlabClassTable` beside it makes
-// the same argument for the size-class ladder and states it in full: a table whose source changed shape
-// produces a working-looking allocator that indexes past its own bounds. Every number below is either
-// derived from another or checked against the one it must agree with; the file declares nothing that agrees
-// with nothing.
+// The geometry is internally coherent — asserted, not trusted. `checkSlabClassTable` beside it makes the
+// same argument for the size-class ladder and states it in full: a table whose source changed shape produces
+// a working-looking allocator that indexes past its own bounds. Every number below is either derived from
+// another or checked against the one it must agree with; the file declares nothing that agrees with nothing.
 //
-// ⭐ **IT RUNS ON EVERY COMPILE AND IS GATED ON NOTHING, WHICH IS DELIBERATE.** The compiles it must NOT
-// skip are the heapless ones: a geometry that stops satisfying its own rule has to fail the first compile
-// after the change, and a check that only runs when a program happens to allocate is a check that reports
-// the breakage to whoever comes next. It is two dozen integer comparisons against a compile that emits
-// megabytes, and a gate is what would let it stop running.
+// It runs on every compile and is gated on nothing, deliberately. The compiles it must not skip are the
+// heapless ones: a geometry that stops satisfying its own rule has to fail the first compile after the
+// change, and a check that only runs when a program happens to allocate is a check that reports the breakage
+// to whoever comes next. It costs a few dozen integer comparisons, the tier constants the pins read, and one
+// walk of the library source roster, against a compile that emits megabytes — and a gate is what would let
+// it stop running.
 //
-// ⭐ **AND IT CHECKS BOTH LANES' GEOMETRIES, NOT THIS BUILD'S.** A wasm-only breakage found only by a wasm
-// compile is the same skipped check one axis over, and both geometries are compile-time constants.
+// Every derivation check below is asked of both lanes' geometries rather than this build's: a wasm-only
+// breakage found only by a wasm compile is the same skipped check one axis over, and both geometries are
+// compile-time constants.
 //
-// ⛔ **THE CHECK IS OVER THIS FILE'S OWN COPY OF THE GEOMETRY, AND THE TIER RESTATES THE SEED CONSTANTS
-// RATHER THAN SHARING THEM** — no name crosses the tier boundary. What it asserts is that the DERIVATION
-// loses nothing on either lane, which is the half a drifted seed cannot fake: an arena whose bitmap is short
-// or whose granule overruns it fails the next compile, on both sides, because the tier writes the same
-// derivation over the same seeds.
+// The tier restates this file's seed constants rather than sharing them, and `arenaTierPins` pins each of
+// them against the tier's own folded value. What the rest of this function asserts is that the derivation
+// over those seeds loses nothing on either lane.
 //
 // It panics rather than returning a verdict: a broken arena geometry cannot produce a working allocator, so
 // there is no caller who could sensibly continue.
-export function checkSlabArenaGeometry()
+export function checkSlabArenaGeometry(signatures ProgramSignatures, tierPath FilePath, target Target)
+	requireTierGeometryAgrees(arenaTierPins(target), signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Runtime/SlabArena.maxon", layer: "slab arena")
+
 	requireShiftMatchesWidth("bitmap word", shift: BitmapBitsPerWordShift, width: BitmapBitsPerWord)
 	requireShiftMatchesWidth("map level", shift: ArenaMapLevelBits, width: ArenaMapLevelEntries)
 	requireShiftMatchesWidth("map L1", shift: ArenaMapL1Bits, width: ArenaMapL1Entries)
@@ -535,6 +540,48 @@ export function checkSlabArenaGeometry()
 	checkArenaGeometryForLane(SlabArenaGeometry.forReservation(true))
 	checkArenaGeometryForLane(SlabArenaGeometry.forReservation(false))
 end 'checkSlabArenaGeometry'
+
+// The first two pins are this build's lane alone, and necessarily so: the tier forks them on
+// `#if arch(wasm32)`, which resolves from the compile's target, so the tier holds exactly one value to read.
+// The derivation over them is still asserted for both lanes, by `checkArenaGeometryForLane`.
+function arenaTierPins(target Target) returns TierGeometryPinArray
+	let lane = SlabArenaGeometry.forReservation(targetHasPageReservation(target))
+	var out = TierGeometryPinArray.create()
+
+	out.push(TierGeometryPin.create("this lane's arena in chunks", here: lane.chunkCount as ParsedInt, named: "ArenaChunkCount"))
+	out.push(TierGeometryPin.create("this lane's align-up slack", here: arenaAlignSlackBytes(targetHasPageReservation(target)), named: "ArenaAlignSlackBytes"))
+
+	out.push(TierGeometryPin.create("the chunk shift", here: SlabPageShift, named: "SlabPageShift"))
+	out.push(TierGeometryPin.create("the chunk granularity", here: SlabPageBytes, named: "SlabPageBytes"))
+
+	out.push(TierGeometryPin.create("a bitmap word's bits", here: BitmapBitsPerWord, named: "BitmapBitsPerWord"))
+	out.push(TierGeometryPin.create("a bitmap word's shift", here: BitmapBitsPerWordShift, named: "BitmapBitsPerWordShift"))
+	out.push(TierGeometryPin.create("a bitmap word's mask", here: BitmapBitsPerWordMask, named: "BitmapBitsPerWordMask"))
+	out.push(TierGeometryPin.create("a bitmap word's stride", here: ArenaWordBytes, named: "ArenaWordBytes"))
+
+	out.push(TierGeometryPin.create("the arena's own metadata chunks", here: ArenaMetadataChunks, named: "ArenaMetadataChunks"))
+	out.push(TierGeometryPin.create("the chunk bitmap's offset", here: ArenaBitmapOffset as ParsedInt, named: "ArenaBitmapOffset"))
+
+	out.push(TierGeometryPin.create("a commit granule's bytes", here: SlabArenaCommitGranuleBytes, named: "SlabArenaCommitGranuleBytes"))
+	out.push(TierGeometryPin.create("a commit granule's chunks", here: SlabArenaCommitGranuleChunks, named: "SlabArenaCommitGranuleChunks"))
+	out.push(TierGeometryPin.create("a commit granule's chunk shift", here: SlabArenaCommitGranuleChunksShift, named: "SlabArenaCommitGranuleChunksShift"))
+	out.push(TierGeometryPin.create("a commit granule's byte shift", here: SlabArenaCommitGranuleShift, named: "SlabArenaCommitGranuleShift"))
+
+	out.push(TierGeometryPin.create("a reverse-map level's entries", here: ArenaMapLevelEntries, named: "ArenaMapLevelEntries"))
+	out.push(TierGeometryPin.create("a reverse-map level's mask", here: ArenaMapLevelMask, named: "ArenaMapLevelMask"))
+	out.push(TierGeometryPin.create("the reverse map's L1 entries", here: ArenaMapL1Entries, named: "ArenaMapL1Entries"))
+	out.push(TierGeometryPin.create("the reverse map's L1 mask", here: ArenaMapL1Mask, named: "ArenaMapL1Mask"))
+	out.push(TierGeometryPin.create("the reverse map's L2 shift", here: ArenaMapL2Shift, named: "ArenaMapL2Shift"))
+	out.push(TierGeometryPin.create("the reverse map's L1 shift", here: ArenaMapL1Shift, named: "ArenaMapL1Shift"))
+
+	out.push(TierGeometryPin.create("the exit code for a refused OS page call", here: RuntimeAbort.slabOsAllocFailed.rawValue as ParsedInt, named: "SlabOsAllocFailedExit"))
+	out.push(TierGeometryPin.create("the exit code for a chunk run no arena can serve", here: RuntimeAbort.slabChunkRunUnsatisfiable.rawValue as ParsedInt, named: "SlabChunkRunUnsatisfiableExit"))
+	out.push(TierGeometryPin.create("the exit code for a chunk range outside its arena", here: RuntimeAbort.slabChunkRangeOutOfArena.rawValue as ParsedInt, named: "SlabChunkRangeOutOfArenaExit"))
+	out.push(TierGeometryPin.create("the exit code for an address inside no arena", here: RuntimeAbort.slabAddressOutsideEveryArena.rawValue as ParsedInt, named: "SlabAddressOutsideEveryArenaExit"))
+	out.push(TierGeometryPin.create("the exit code for an arena base off its commit granule", here: RuntimeAbort.slabArenaBaseNotGranuleAligned.rawValue as ParsedInt, named: "SlabArenaBaseNotGranuleAlignedExit"))
+
+	return out
+end 'arenaTierPins'
 
 // ⭐⭐ **WHAT ONE LANE'S ARENA MUST SATISFY, ASKED OF BOTH — because a rule that stops applying to the lane
 // nobody happens to be compiling is the "check that never runs" one signature up, wearing a target's
