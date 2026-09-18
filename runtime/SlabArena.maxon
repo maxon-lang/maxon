@@ -52,6 +52,11 @@ typealias BitmapBitPosition = int(0 to 63)
 // `x xor -1` is the same answer.
 let AllOnesWord = -1 as ArenaWord
 
+let PopCountPairMask = 0x5555555555555555 as ArenaWord
+let PopCountNibbleMask = 0x3333333333333333 as ArenaWord
+let PopCountByteMask = 0x0F0F0F0F0F0F0F0F as ArenaWord
+let PopCountResultMask = 127 as ArenaWord
+
 // ⭐ **THE CHUNK IS GO'S 8 KiB PAGE, AND IT IS THE SEED THE REVERSE MAP'S BOTTOM FIELD IS ALSO CUT FROM.**
 // `SlabClasses.SlabPageShift` is the compiler's copy; the map indexes by `addr shr SlabPageShift`, so the
 // two halves of one address split must be this same number.
@@ -122,6 +127,10 @@ let ArenaBitmapWords = ArenaChunkCount shr BitmapBitsPerWordShift
 let ArenaBitmapBytes = ArenaBitmapWords * ArenaWordBytes
 let ArenaGranuleCount = ArenaChunkCount shr SlabArenaCommitGranuleChunksShift
 let ArenaCommitBitmapOffset = ArenaBitmapOffset + ArenaBitmapBytes
+
+// Rounded up: the wasm lane has 8 granules, which do not fill one bitmap word, and a truncating divide
+// would walk none of them and report the arena as holding nothing.
+let ArenaCommitBitmapWords = (ArenaGranuleCount + BitmapBitsPerWord - 1) shr BitmapBitsPerWordShift
 let ArenaBytes = ArenaChunkCount * SlabPageBytes
 let ArenaReservationBytes = ArenaBytes + ArenaAlignSlackBytes
 let ArenaAllocatableChunks = ArenaChunkCount - ArenaMetadataChunks
@@ -456,6 +465,47 @@ module function __slab_arena_scavenge() returns ArenaWord
 
 	return released
 end '__slab_arena_scavenge'
+
+// Precondition: the caller holds `__slab_lock`. Every claim and every scavenge writes these bitmaps, so
+// an unlocked walk reads a granule mid-transition.
+//
+// ⚠ The bitmap is popcounted rather than a running total being kept. A counter stepped at the commit and
+// the decommit is a second copy of what the bitmap already holds, and a path that moved a bit without the
+// counter would leave the two disagreeing with nothing to notice.
+module function __slab_arena_committed_bytes() returns ArenaWord
+	var granules = 0 as ArenaWord
+	var arena = __Raw.loadWord(__Raw.slabArenaListAddr(), offset: 0) as ArenaWord
+
+	while arena != 0 'arenas'
+		var word = 0 as ArenaWord
+
+		while word < ArenaCommitBitmapWords 'words'
+			granules = granules + slabArenaPopCount(__Raw.loadWord((arena + (word * ArenaWordBytes)) as MachineWord, offset: ArenaCommitBitmapOffset) as ArenaWord)
+			word = word + 1
+		end 'words'
+
+		arena = __Raw.loadWord(arena as MachineWord, offset: ArenaNextOffset) as ArenaWord
+	end 'arenas'
+
+	return granules * SlabArenaCommitGranuleBytes
+end '__slab_arena_committed_bytes'
+
+// Every shift count here is a literal. `Parser.emitGuardedShift` saturates a count it can neither fold nor
+// bound, so a per-bit loop would pay eight ops per bit where this fold pays six shifts for a whole word.
+//
+// ⚠ The first two masks absorb an arithmetic shift's sign fill: `ArenaWord` is signed, so `word shr 1`
+// replicates bit 63, and both masks have their top bits clear. From the third line the value is
+// non-negative. A wider mask here silently miscounts any word with bit 63 set.
+function slabArenaPopCount(word ArenaWord) returns ArenaWord
+	var folded = word - ((word shr 1) and PopCountPairMask)
+	folded = (folded and PopCountNibbleMask) + ((folded shr 2) and PopCountNibbleMask)
+	folded = (folded + (folded shr 4)) and PopCountByteMask
+	folded = folded + (folded shr 8)
+	folded = folded + (folded shr 16)
+	folded = folded + (folded shr 32)
+
+	return folded and PopCountResultMask
+end 'slabArenaPopCount'
 
 // `__slab_arena_map_ensure(addr) -> slotAddr` — the address of the reverse map's slot for the page holding
 // `addr`, lazy-allocating whichever of the three levels do not exist yet.

@@ -1,0 +1,192 @@
+// Test: slab-census.the-walk-reaches-every-metadata-chunk
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+let Population = 60000
+let PayloadBytes = 96
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(PayloadBytes)
+	for i in 0 upto PayloadBytes 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var bufs = Bufs.create()
+	for k in 0 upto Population 'alloc'
+		bufs.push(build((k mod 65536) as Seed))
+	end 'alloc'
+
+	let live = __Builtins.slabLiveBytes()
+
+	if live < (Population * PayloadBytes) 'theWalkMissedSpans'
+		return 1
+	end 'theWalkMissedSpans'
+
+	if bufs.count() != Population 'populationLost'
+		return 2
+	end 'populationLost'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  alloc:
+    x64.movRegReg rax, r12
+    x64.sarRegImm8 rax, r12, 63
+    x64.shrRegImm8 rax, rax, 48
+    x64.leaRegRegReg rax, r12, rax
+    x64.sarRegImm8 rax, rax, 16
+    x64.imulRegRegImm32 rax, rax, 65536
+    x64.movRegReg r13, r12
+    x64.subRegReg r13, r12, rax
+  __rc_ok#18:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.movRegImm32 r15, 96
+  __rc_ok#30:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 96
+    x64.jcc greaterEqual, __il_cont#24
+  grow:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#24
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#24:
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr#14
+  fill:
+    x64.leaRegRegReg rax, r13, r15
+    x64.movRegImm32 rcx, 251
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#21:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_push
+  forstep#16:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr#14:
+    x64.cmpRegImm32 r15, 96
+    x64.jcc less, fill
+  __il_cont#12:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 60000
+    x64.jcc less, alloc
+  forexit:
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegImm32 r8, 5760000
+    x64.jcc greaterEqual, ifcont#6
+  theWalkMissedSpans:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 60000
+    x64.jcc equal, ifcont#8
+  populationLost:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.the-walk-reaches-every-metadata-chunk.test:14: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,307 @@
+// Test: slab-census.a-scavenge-lowers-committed-and-leaves-live-alone
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(96)
+	for i in 0 upto 96 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var kept = Bufs.create()
+	for k in 0 upto 200 'keep'
+		kept.push(build(k as Seed))
+	end 'keep'
+
+	var bufs = Bufs.create()
+	for k in 0 upto 16000 'alloc'
+		bufs.push(build(k as Seed))
+	end 'alloc'
+	bufs = Bufs.create()
+
+	let committedBefore = __Builtins.slabCommittedBytes()
+	let parkedBefore = __Builtins.slabParkedBytes()
+	let liveBefore = __Builtins.slabLiveBytes()
+
+	_ = __Builtins.scavengeMemory()
+	_ = __Builtins.scavengeMemory()
+
+	if __Builtins.slabCommittedBytes() >= committedBefore 'nothingDecommitted'
+		return 1
+	end 'nothingDecommitted'
+
+	if __Builtins.slabParkedBytes() >= parkedBefore 'parkedSpansSurvived'
+		return 2
+	end 'parkedSpansSurvived'
+
+	if __Builtins.slabLiveBytes() < liveBefore 'liveSlotsWereReclaimed'
+		return 3
+	end 'liveSlotsWereReclaimed'
+
+	if kept.count() != 200 'populationLost'
+		return 4
+	end 'populationLost'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @build {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#6
+  __rc_chk#7:
+    x64.cmpRegImm32 rbx, 65536
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 96
+  __rc_ok#17:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 96
+    x64.jcc greaterEqual, __il_cont
+  grow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  fill:
+    x64.leaRegRegReg rax, rbx, r13
+    x64.movRegImm32 rcx, 251
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#9
+  __rc_chk#10:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#9
+  __rc_ok#8:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 96
+    x64.jcc less, fill
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at slab-census.a-scavenge-lowers-committed-and-leaves-live-alone.test:7: Range check failed: value outside typealias 'Seed'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.a-scavenge-lowers-committed-and-leaves-live-alone.test:11: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  keep:
+    x64.movRegReg rcx, r12
+    x64.callDirect build
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 200
+    x64.jcc less, keep
+  forexit#4:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#5
+  alloc:
+    x64.movRegReg rcx, r13
+    x64.callDirect build
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#7:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#5:
+    x64.cmpRegImm32 r13, 16000
+    x64.jcc less, alloc
+  forexit#8:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.callDirect __slab_committed_bytes
+    x64.movRegReg r12, r8
+    x64.callDirect __slab_parked_bytes
+    x64.movRegReg r14, r8
+    x64.callDirect __slab_live_bytes
+    x64.movRegReg r15, r8
+    x64.callDirect __slab_scavenge
+    x64.callDirect __slab_scavenge
+    x64.callDirect __slab_committed_bytes
+    x64.cmpRegReg r8, r12
+    x64.jcc less, ifcont#10
+  nothingDecommitted:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.callDirect __slab_parked_bytes
+    x64.cmpRegReg r8, r14
+    x64.jcc less, ifcont#12
+  parkedSpansSurvived:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg r8, r15
+    x64.jcc greaterEqual, ifcont#14
+  liveSlotsWereReclaimed:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 200
+    x64.jcc equal, ifcont#16
+  populationLost:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

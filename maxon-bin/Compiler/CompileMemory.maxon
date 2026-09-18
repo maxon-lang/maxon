@@ -36,6 +36,8 @@ let MemFreesWidth = 12 as ColumnWidth
 let MemBytesWidth = 14 as ColumnWidth
 let MemRuleWidth = (MemPhaseNameWidth + MemAllocsWidth + MemFreesWidth + MemBytesWidth) as ColumnWidth
 
+let ResidencyRuleWidth = (MemPhaseNameWidth + 5 * MemBytesWidth) as ColumnWidth
+
 let MemRowIndent = "  "
 let MemSubPhaseIndent = "    "
 
@@ -163,12 +165,101 @@ export type RegAllocMemory
 	end 'deltaOf'
 end 'RegAllocMemory'
 
+// What the heap holds at one instant, which the three columns above structurally cannot report: they are
+// deltas of counters that only rise, so a phase that allocates a gigabyte and frees it moves them exactly
+// as far as one that keeps it. `free - cachedFree` is what no processor can reach and
+// `committed - (live + free)` is the allocator's own overhead, which is what makes this a diagnosis rather
+// than a number. `SlabRuntime.SlabLiveBytesName` owns what each figure counts.
+export type PhaseResidency
+	export var liveBytes as HeapByteCount
+	export var freeBytes as HeapByteCount
+	export var cachedFreeBytes as HeapByteCount
+	export var parkedBytes as HeapByteCount
+	export var committedBytes as HeapByteCount
+
+	export static function zero() returns PhaseResidency
+		return Self{liveBytes: 0, freeBytes: 0, cachedFreeBytes: 0, parkedBytes: 0, committedBytes: 0}
+	end 'zero'
+
+	export static function create(liveBytes HeapByteCount, freeBytes HeapByteCount, cachedFreeBytes HeapByteCount, parkedBytes HeapByteCount, committedBytes HeapByteCount) returns PhaseResidency
+		return Self{liveBytes: liveBytes, freeBytes: freeBytes, cachedFreeBytes: cachedFreeBytes, parkedBytes: parkedBytes, committedBytes: committedBytes}
+	end 'create'
+
+	// Five separate walks rather than one: a shared record would have to live between the calls, which is
+	// state a second thread could read half-written.
+	export static function sample() returns PhaseResidency
+		return Self{
+			liveBytes: __Builtins.slabLiveBytes() as HeapByteCount,
+			freeBytes: __Builtins.slabFreeBytes() as HeapByteCount,
+			cachedFreeBytes: __Builtins.slabCachedFreeBytes() as HeapByteCount,
+			parkedBytes: __Builtins.slabParkedBytes() as HeapByteCount,
+			committedBytes: __Builtins.slabCommittedBytes() as HeapByteCount
+		}
+	end 'sample'
+end 'PhaseResidency'
+
+// Indexed by the phase enum's ordinal, the dense shape `PhaseMemoryColumns` has, so a new `CompilePhase`
+// extends both identically.
+//
+// ⚠ A phase that ran twice keeps its highest reading, not its last. These are levels rather than deltas,
+// so they cannot be summed.
+export type PhaseResidencyColumns
+	export var live as ByteCountArray
+	export var free as ByteCountArray
+	export var cachedFree as ByteCountArray
+	export var parked as ByteCountArray
+	export var committed as ByteCountArray
+
+	export static function create(phaseCount PhaseIndex) returns PhaseResidencyColumns
+		return Self{
+			live: residencyColumn(phaseCount),
+			free: residencyColumn(phaseCount),
+			cachedFree: residencyColumn(phaseCount),
+			parked: residencyColumn(phaseCount),
+			committed: residencyColumn(phaseCount)
+		}
+	end 'create'
+
+	export function raiseTo(index PhaseIndex, reading PhaseResidency)
+		raiseColumn(self.live, index: index, value: reading.liveBytes)
+		raiseColumn(self.free, index: index, value: reading.freeBytes)
+		raiseColumn(self.cachedFree, index: index, value: reading.cachedFreeBytes)
+		raiseColumn(self.parked, index: index, value: reading.parkedBytes)
+		raiseColumn(self.committed, index: index, value: reading.committedBytes)
+	end 'raiseTo'
+
+	export function at(index PhaseIndex) returns PhaseResidency
+		return PhaseResidency.create(readColumn(self.live, index: index), freeBytes: readColumn(self.free, index: index), cachedFreeBytes: readColumn(self.cachedFree, index: index), parkedBytes: readColumn(self.parked, index: index), committedBytes: readColumn(self.committed, index: index))
+	end 'at'
+end 'PhaseResidencyColumns'
+
+function residencyColumn(phaseCount PhaseIndex) returns ByteCountArray
+	var column = ByteCountArray.create()
+	column.resize(phaseCount)
+	return column
+end 'residencyColumn'
+
+function raiseColumn(column ByteCountArray, index PhaseIndex, value HeapByteCount)
+	let current = try column.get(index) otherwise panic("PhaseResidencyColumns.raiseTo: phase index {index} OOB — the columns hold {column.count()}, so they were not sized to their phase enum")
+
+	if value > current 'higher'
+		try column.set(index, value: value) otherwise panic("PhaseResidencyColumns.raiseTo: set({index}) failed at an index get just accepted")
+	end 'higher'
+end 'raiseColumn'
+
+function readColumn(column ByteCountArray, index PhaseIndex) returns HeapByteCount
+	return try column.get(index) otherwise panic("PhaseResidencyColumns.at: phase index {index} OOB — the columns hold {column.count()}, so they were not sized to their phase enum")
+end 'readColumn'
+
 // Per-compile memory attribution, owned by `Project` beside `timings` — for the same
 // reason: Project is already threaded through every phase, so no pass needs a new
 // parameter merely to be metered, and each compile gets its own table instead of the
 // per-file fan-out driver contending on a global.
 export type CompileMemory
 	export var columns as PhaseMemoryColumns
+
+	// Zero unless `Project.samplesResidency`.
+	export var residency as PhaseResidencyColumns
 
 	// The whole compile's memory, stamped once by `compile` — the denominator every
 	// phase's share is taken against, and the total the phases must reconcile to. Zero
@@ -180,6 +271,7 @@ export type CompileMemory
 	export static function create() returns CompileMemory
 		return Self{
 			columns: PhaseMemoryColumns.create(CompilePhase.allCases.count()),
+			residency: PhaseResidencyColumns.create(CompilePhase.allCases.count()),
 			total: PhaseDelta.zero(),
 			regAlloc: RegAllocMemory.create()
 		}
@@ -188,6 +280,14 @@ export type CompileMemory
 	export function addPhase(phase CompilePhase, delta PhaseDelta)
 		self.columns.add(phase.ordinal, delta: delta)
 	end 'addPhase'
+
+	export function recordResidency(phase CompilePhase, reading PhaseResidency)
+		self.residency.raiseTo(phase.ordinal, reading: reading)
+	end 'recordResidency'
+
+	export function residencyOf(phase CompilePhase) returns PhaseResidency
+		return self.residency.at(phase.ordinal)
+	end 'residencyOf'
 
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
 		let allocs = self.columns.allocsAt(phase.ordinal)
@@ -291,8 +391,54 @@ export function compileMemoryReport(memory CompileMemory, timings CompileTimings
 	msg.append(memoryRow("{MemRowIndent}TOTAL", delta: total))
 	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.attributed(poolRows)))
 	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed(poolRows)))
+	msg.append(compileResidencyReport(memory))
 	return msg.build()
 end 'compileMemoryReport'
+
+// Empty for a build that did not sample, rather than a table of zeroes that reads as an allocation-free
+// compile.
+function compileResidencyReport(memory CompileMemory) returns String
+	var peak = PhaseResidency.zero()
+	var peakCommittedPhase = ""
+	var peakLive = 0 as HeapByteCount
+	var peakLivePhase = ""
+	var msg = StringBuilder.create()
+
+	msg.append("\ncompile residency — the heap's LEVEL at each phase boundary, in bytes\n")
+	msg.append("{padRight("{MemRowIndent}phase", width: MemPhaseNameWidth)}{padLeft("live", width: MemBytesWidth)}{padLeft("free", width: MemBytesWidth)}{padLeft("cachedFree", width: MemBytesWidth)}{padLeft("parked", width: MemBytesWidth)}{padLeft("committed", width: MemBytesWidth)}\n")
+	msg.append(horizontalRule(ResidencyRuleWidth))
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		let reading = memory.residencyOf(phase)
+		let committed = reading.committedBytes
+		let live = reading.liveBytes
+
+		msg.append(residencyRow("{MemRowIndent}{phase.name}", reading: reading))
+
+		if committed > peak.committedBytes 'highestCommitted'
+			peak = memory.residencyOf(phase)
+			peakCommittedPhase = phase.name
+		end 'highestCommitted'
+
+		if live > peakLive 'highestLive'
+			peakLive = live
+			peakLivePhase = phase.name
+		end 'highestLive'
+	end 'eachPhase'
+
+	if peakCommittedPhase.isEmpty() 'neverSampled'
+		return ""
+	end 'neverSampled'
+
+	msg.append(horizontalRule(ResidencyRuleWidth))
+	msg.append(residencyRow("{MemRowIndent}PEAK committed", reading: peak))
+	msg.append("{MemRowIndent}peak committed {peak.committedBytes} at {peakCommittedPhase}; peak live {peakLive} at {peakLivePhase}; held-not-live {peak.committedBytes - peak.liveBytes}\n")
+	return msg.build()
+end 'compileResidencyReport'
+
+function residencyRow(label String, reading PhaseResidency) returns String
+	return "{padRight(label, width: MemPhaseNameWidth)}{padLeft("{reading.liveBytes}", width: MemBytesWidth)}{padLeft("{reading.freeBytes}", width: MemBytesWidth)}{padLeft("{reading.cachedFreeBytes}", width: MemBytesWidth)}{padLeft("{reading.parkedBytes}", width: MemBytesWidth)}{padLeft("{reading.committedBytes}", width: MemBytesWidth)}\n"
+end 'residencyRow'
 
 function regAllocSubPhaseMemoryRows(memory CompileMemory) returns String
 	var msg = StringBuilder.create()

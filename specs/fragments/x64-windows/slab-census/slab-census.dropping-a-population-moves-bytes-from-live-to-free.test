@@ -1,0 +1,231 @@
+// Test: slab-census.dropping-a-population-moves-bytes-from-live-to-free
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(96)
+	for i in 0 upto 96 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var bufs = Bufs.create()
+	for k in 0 upto 16000 'alloc'
+		bufs.push(build(k as Seed))
+	end 'alloc'
+
+	let liveFull = __Builtins.slabLiveBytes()
+	let freeFull = __Builtins.slabFreeBytes()
+
+	bufs = Bufs.create()
+
+	let liveEmpty = __Builtins.slabLiveBytes()
+	let freeEmpty = __Builtins.slabFreeBytes()
+
+	if liveFull <= 0 'nothingLive'
+		return 1
+	end 'nothingLive'
+
+	if liveEmpty >= liveFull 'dropDidNotLowerLive'
+		return 2
+	end 'dropDidNotLowerLive'
+
+	if freeEmpty <= freeFull 'dropDidNotRaiseFree'
+		return 3
+	end 'dropDidNotRaiseFree'
+
+	if (liveEmpty + freeEmpty) != (liveFull + freeFull) 'slotsLeftTheAccounting'
+		return 4
+	end 'slotsLeftTheAccounting'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  __rc_ok#19:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 96
+  __rc_ok#31:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 96
+    x64.jcc greaterEqual, __il_cont#25
+  grow:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#25
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#25:
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr#15
+  fill:
+    x64.leaRegRegReg rax, r12, r14
+    x64.movRegImm32 rcx, 251
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#22:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_push
+  forstep#17:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr#15:
+    x64.cmpRegImm32 r14, 96
+    x64.jcc less, fill
+  __il_cont#13:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 16000
+    x64.jcc less, __rc_ok#19
+  forexit:
+    x64.callDirect __slab_live_bytes
+    x64.movRegReg r12, r8
+    x64.callDirect __slab_free_bytes
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.callDirect __slab_live_bytes
+    x64.movRegReg rbx, r8
+    x64.callDirect __slab_free_bytes
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greater, ifcont#6
+  nothingLive:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.cmpRegReg rbx, r12
+    x64.jcc less, ifcont#8
+  dropDidNotLowerLive:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.cmpRegReg r8, r13
+    x64.jcc greater, ifcont#10
+  dropDidNotRaiseFree:
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.leaRegRegReg rax, rbx, r8
+    x64.leaRegRegReg rcx, r12, r13
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, ifcont#12
+  slotsLeftTheAccounting:
+    x64.movRegImm32 rbx, 4
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.dropping-a-population-moves-bytes-from-live-to-free.test:11: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

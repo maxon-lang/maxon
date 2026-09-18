@@ -995,6 +995,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'scavenge'
 
+	// The census, on the scavenger's argument exactly: each figure walks the allocator's own structures, so
+	// a program whose only heap contact is one of these five still needs every layer under it, and none
+	// needs a bit of its own.
+	if isSlabCensusCallee(callee) 'census'
+		usage.usesHeap = true
+	end 'census'
+
 	// The THREAD-CPU clock. It carries nothing beside itself, exactly as the wall clock two families up does
 	// and for the identical reason: `__thread_cpu_ticks`'s Std body reads one host word into a frame slot and
 	// returns it, calling nothing this Maxon-module scan cannot see.

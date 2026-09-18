@@ -81,6 +81,7 @@ module function __slab_os_direct_alloc(size MachineWord) returns MachineWord
 
 	__Raw.storeWord(base as MachineWord, offset: OsDirectTotalBytesOffset, value: total as MachineWord)
 	__Raw.storeWord(base as MachineWord, offset: OsDirectMagicOffset, value: OsDirectMagic)
+	slabStepOsDirectBytes(total)
 
 	// The pages are fresh from the OS, so the payload past the prefix is already zero — the zeroing
 	// contract costs this tier nothing at all, and an OS-direct mapping is never recycled through us.
@@ -96,13 +97,20 @@ module function __slab_os_direct_free(ptr MachineWord)
 	let base = (ptr as SlabWord) - OsDirectPrefixBytes
 
 	if __Raw.loadWord(base as MachineWord, offset: OsDirectMagicOffset) == OsDirectMagic 'ours'
-		__Raw.osFreePages(base as MachineWord, size: __Raw.loadWord(base as MachineWord, offset: OsDirectTotalBytesOffset))
+		let total = __Raw.loadWord(base as MachineWord, offset: OsDirectTotalBytesOffset)
+
+		__Raw.osFreePages(base as MachineWord, size: total)
+		slabStepOsDirectBytes(-(total as SlabWord))
 
 		return
 	end 'ours'
 
 	__Raw.osExit(SlabOsDirectPointerNotOursExit)
 end '__slab_os_direct_free'
+
+function slabStepOsDirectBytes(delta SlabWord)
+	_ = __Raw.atomicAddWord((__slab_state_base() as SlabWord + SlabStateOsDirectBytesOffset) as MachineWord, delta: delta as MachineWord)
+end 'slabStepOsDirectBytes'
 
 // --- The state region, restated ---
 //
@@ -125,6 +133,7 @@ let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + SlabWordBytes
 let SlabStateSchedulerOffset = SlabStateMetaFreeOffset + SlabWordBytes
 let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + SlabWordBytes
 
+
 // ⭐ **THE SLOW-PATH LOCK SITS IN THE REGION RATHER THAN IN A `.data` WORD**, because a new `.data` label
 // shifts every label after it and re-mints every heap program's golden. `MmRuntime.OsLockBytes` is the other
 // copy of the width, and it is the MAXIMUM over the five lanes (a Darwin `pthread_mutex_t`) rather than any
@@ -139,7 +148,25 @@ let SlabClassCount = 68
 let SlabMaxShards = 256
 let SlabTrafficColumns = 6
 
-let SlabStateBytes = SlabStateLockOffset + OsLockBytes + SlabClassCount * SlabWordBytes + SlabMaxShards * SlabClassCount * SlabWordBytes + SlabMaxShards * SlabTrafficColumns * SlabWordBytes
+// `SlabRuntime.SlabStateMcentralOffset` and `slabStateMcacheOffset()` are the other copies, pinned at
+// `checkSlabRuntimeGeometry`.
+let SlabStateMcentralOffset = SlabStateLockOffset + OsLockBytes
+let SlabStateMcacheOffset = SlabStateMcentralOffset + SlabClassCount * SlabWordBytes
+
+// A request above `SlabMaxSmallSize` is its own mapping, which no arena bitmap describes, so a
+// committed-bytes census read off the arenas alone reports a program whose working set is large buffers as
+// holding nothing. `SlabRuntime.slabStateOsDirectBytesOffset()` is the other copy.
+//
+// A word added here must go past the last array and never into the head. A head word shifts the lock and
+// both arrays, and the compiler that builds the next compiler still emits the old offsets while reading
+// this file for the tier — so that intermediate binary initialises the lock at one address and takes it at
+// another. Past everything a builder addresses, only the region's total grows, and the total is the tier's
+// own request.
+//
+// ⚠ The step is atomic because neither OS-direct door takes `__slab_lock`; they call the OS and return.
+let SlabStateOsDirectBytesOffset = SlabStateMcacheOffset + SlabMaxShards * SlabClassCount * SlabWordBytes + SlabMaxShards * SlabTrafficColumns * SlabWordBytes
+
+let SlabStateBytes = SlabStateOsDirectBytesOffset + SlabWordBytes
 let SlabStateChunks = (SlabStateBytes + SlabPageMask) / SlabPageBytes
 
 // ⭐ **ZERO IS THE STATE THE `.data` IMAGE ALREADY EXPRESSES, so there is nothing to initialise and nothing
@@ -156,6 +183,33 @@ let MspanSlotBytes = 64
 // back out — so the free list costs no storage of its own and a recycled header needs no clearing.
 // `SlabRuntime.MspanBaseAddrOffset` is the other copy.
 let MspanBaseAddrOffset = 0
+
+// `SlabRuntime.MspanFreeCountOffset`, `MspanClassIdxOffset` and `MspanOwningPOffset` are the other copies,
+// pinned at `checkSlabRuntimeGeometry`. A field that moves on one side only reads a class index as a free
+// count, with nothing at run time to notice.
+let MspanFreeCountOffset = 16
+let MspanClassIdxOffset = 32
+let MspanOwningPOffset = 48
+
+// A carved-and-returned metadata slot holds stale fields rather than zeroes, so nothing but this sentinel
+// tells the census walk apart from a live span. No allocator path tests it: a free that reaches a dead
+// header is the double free `MspanOwningPParked` catches one state earlier.
+// `SlabRuntime.MspanOwningPFreed` is the other copy.
+let MspanOwningPFreed = -2
+
+// `SlabRuntime.MspanOwningPParked` is the other copy.
+let MspanOwningPParked = -1
+
+// A chunk's first slot links it to its predecessor, which is the only thing that makes the slab walkable:
+// the bump cursor and its limit describe the chunk being filled and nothing before it.
+let MetaChunkNextOffset = 0
+
+// The packed class geometry is `slot_size | (objects_per_span << 32)`, reached by address through
+// `__Raw.slabClassGeomAddr`. `SlabRuntime.SlabClassGeomSlotShift` and `SlabClassGeomSlotMask` are the other
+// copies. A shift of 32 keeps the high field's top bit clear, which is what lets an arithmetic `shr`
+// extract it.
+let SlabClassGeomSlotShift = 32
+let SlabClassGeomSlotMask = 0xFFFFFFFF
 
 // `__slab_state_base() -> base` — the allocator's mutable state, committed on first use.
 //
@@ -234,10 +288,15 @@ module function __slab_meta_alloc() returns MachineWord
 
 		let chunk = __slab_arena_alloc_chunks(1 as SlabWord) as SlabWord
 
-		__Raw.storeWord(state, offset: SlabStateMetaBumpOffset, value: (chunk + MspanSlotBytes) as MachineWord)
+		// Slot 0 is the link, so the first header is slot 1 and the cursor starts past both.
+		let previous = __Raw.loadWord(state, offset: SlabStateMetaEndOffset) as SlabWord
+		let head = slabMetaChunkOf(previous)
+
+		__Raw.storeWord(chunk as MachineWord, offset: MetaChunkNextOffset, value: head as MachineWord)
+		__Raw.storeWord(state, offset: SlabStateMetaBumpOffset, value: (chunk + MspanSlotBytes + MspanSlotBytes) as MachineWord)
 		__Raw.storeWord(state, offset: SlabStateMetaEndOffset, value: (chunk + SlabPageBytes) as MachineWord)
 
-		return chunk as MachineWord
+		return (chunk + MspanSlotBytes) as MachineWord
 	end 'bump'
 
 	// The link lives in the dead header's FIRST word, so unlinking is one load and one store and the slot
@@ -261,5 +320,119 @@ module function __slab_meta_free(span MachineWord)
 	let state = __slab_state_base()
 
 	__Raw.storeWord(span, offset: MspanBaseAddrOffset, value: __Raw.loadWord(state, offset: SlabStateMetaFreeOffset))
+	__Raw.storeWord(span, offset: MspanOwningPOffset, value: MspanOwningPFreed as MachineWord)
 	__Raw.storeWord(state, offset: SlabStateMetaFreeOffset, value: span)
 end '__slab_meta_free'
+
+// The limit word is `chunk + SlabPageBytes`, so the chunk list needs no head of its own.
+function slabMetaChunkOf(metaEnd SlabWord) returns SlabWord
+	if metaEnd == 0 'none'
+		return 0
+	end 'none'
+
+	return metaEnd - SlabPageBytes
+end 'slabMetaChunkOf'
+
+// --- The census ---
+//
+// `specs/slab-census.md` owns what each figure counts. Two facts bind here: `live + free` is every slot of
+// every live span, which is the identity that case asserts, and `live` counts a slot sitting on a
+// remote-free queue, because `free_count` does not credit one until its owner drains it.
+//
+// ⚠ Nothing below is stepped at an allocation or a free. A figure derived at the door instead would put
+// this walk's cost on every free in the language.
+
+// `SlabRuntime.SlabCensusLiveBytes` and its four neighbours are the other copies. A drift swaps two
+// figures over, which no run would notice.
+let SlabCensusLiveBytes = 0
+let SlabCensusFreeBytes = 1
+let SlabCensusParkedBytes = 2
+let SlabCensusCachedFreeBytes = 3
+let SlabCensusCommittedBytes = 4
+
+// Precondition: the caller holds `__slab_lock`. The metadata slab, the mcache rows and the arena bitmaps
+// are all written by a P inside it, so an unlocked walk reads a span header between `__slab_meta_alloc` and
+// the refill that fills it in. `SlabRuntime.buildSlabCensusEntry` is the caller that takes it.
+module function __slab_census(kind MachineWord) returns MachineWord
+	if (kind as SlabWord) == SlabCensusCommittedBytes 'committed'
+		return ((__slab_arena_committed_bytes() as SlabWord) + (__Raw.loadWord(__slab_state_base(), offset: SlabStateOsDirectBytesOffset) as SlabWord)) as MachineWord
+	end 'committed'
+
+	if (kind as SlabWord) == SlabCensusCachedFreeBytes 'cached'
+		return slabCensusMcache() as MachineWord
+	end 'cached'
+
+	return slabCensusSpans(kind as SlabWord) as MachineWord
+end '__slab_census'
+
+// The first chunk stops at the bump cursor and every other one at its end: the chunk the limit word
+// describes is the one being filled, and every chunk behind it on the link is full.
+function slabCensusSpans(kind SlabWord) returns SlabWord
+	let state = __slab_state_base()
+	var chunk = slabMetaChunkOf(__Raw.loadWord(state, offset: SlabStateMetaEndOffset) as SlabWord)
+	var limit = __Raw.loadWord(state, offset: SlabStateMetaBumpOffset) as SlabWord
+	var total = 0 as SlabWord
+
+	while chunk != 0 'chunks'
+		var slot = chunk + MspanSlotBytes
+
+		while slot < limit 'slots'
+			total = total + slabCensusSpan(slot, kind: kind)
+			slot = slot + MspanSlotBytes
+		end 'slots'
+
+		chunk = __Raw.loadWord(chunk as MachineWord, offset: MetaChunkNextOffset) as SlabWord
+		limit = chunk + SlabPageBytes
+	end 'chunks'
+
+	return total
+end 'slabCensusSpans'
+
+// Walked from the rows rather than from the spans, which is why it is a second walk: asking a span whether
+// any row points at it is 17,408 words per span, where asking each row is 17,408 words for the whole heap.
+function slabCensusMcache() returns SlabWord
+	let base = (__slab_state_base() as SlabWord) + SlabStateMcacheOffset
+	let entries = SlabMaxShards * SlabClassCount
+	var entry = 0 as SlabWord
+	var total = 0 as SlabWord
+
+	while entry < entries 'entries'
+		let span = __Raw.loadWord((base + entry * SlabWordBytes) as MachineWord, offset: 0) as SlabWord
+
+		if span != 0 'cached'
+			total = total + slabCensusSpan(span, kind: SlabCensusFreeBytes)
+		end 'cached'
+
+		entry = entry + 1
+	end 'entries'
+
+	return total
+end 'slabCensusMcache'
+
+// A destroyed slot contributes nothing; every other field it holds is stale.
+function slabCensusSpan(span SlabWord, kind SlabWord) returns SlabWord
+	let owner = __Raw.loadWord(span as MachineWord, offset: MspanOwningPOffset) as SlabWord
+
+	if owner == MspanOwningPFreed 'destroyed'
+		return 0
+	end 'destroyed'
+
+	let geom = __Raw.loadWord((__Raw.slabClassGeomAddr() as SlabWord + (__Raw.loadWord(span as MachineWord, offset: MspanClassIdxOffset) as SlabWord) * SlabWordBytes) as MachineWord, offset: 0) as SlabWord
+	let slotSize = geom and SlabClassGeomSlotMask
+	let totalSlots = geom shr SlabClassGeomSlotShift
+	let freeCount = __Raw.loadWord(span as MachineWord, offset: MspanFreeCountOffset) as SlabWord
+
+	if kind == SlabCensusFreeBytes 'free'
+		return freeCount * slotSize
+	end 'free'
+
+	if kind == SlabCensusParkedBytes 'parked'
+		if owner == MspanOwningPParked 'onAnMcentralList'
+			return totalSlots * slotSize
+		end 'onAnMcentralList'
+
+		return 0
+	end 'parked'
+
+	return (totalSlots - freeCount) * slotSize
+end 'slabCensusSpan'

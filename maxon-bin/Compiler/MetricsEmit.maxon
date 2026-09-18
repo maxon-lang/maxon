@@ -66,7 +66,7 @@ export let MetricsCommentPrefix = "#"
 // not a second copy of the contract: no reader parses them — both are skipped by their comment
 // prefix, and the column names in the second are a label for a human, not a schema anything matches.
 // (A top-level `let` must also be a constant expression, so it could not be interpolated regardless.)
-let MetricsHeader = "# maxon compile metrics\n# kind\tname\tnanos\tallocs\tfrees\tbytes\tcputicks\n"
+let MetricsHeader = "# maxon compile metrics\n# kind\tname\tnanos\tallocs\tfrees\tbytes\tcputicks\tlivebytes\tfreebytes\tcachedfreebytes\tparkedbytes\tcommittedbytes\n"
 
 // The column positions, 0-based, in the order `metricsRow` writes them.
 //
@@ -75,13 +75,23 @@ let MetricsHeader = "# maxon compile metrics\n# kind\tname\tnanos\tallocs\tfrees
 // CPU ticks count only the compiling thread and can be. A row is still REQUIRED to carry all
 // seven fields (that is what `MetricsFieldCount` checks), because the shape is the contract — but
 // a named index for the clock would be an invitation to read it.
-export let MetricsFieldCount = 7
+export let MetricsFieldCount = 12
 export let MetricsKindField = 0
 export let MetricsNameField = 1
 export let MetricsAllocsField = 3
 export let MetricsFreesField = 4
 export let MetricsBytesField = 5
 export let MetricsCpuTicksField = 6
+
+// The five residency columns are appended for `cputicks`' reason, so every existing field keeps its index.
+// `CompileMemory.PhaseResidency` owns what each counts.
+//
+// ⚠ They are zero on every row but a `phase` one, and zero on any build that did not sample
+// (`Project.samplesResidency`), so a 0 here does not mean the heap was empty.
+//
+// They have no named index because they have no reader, and a constant exported to nobody is refused
+// (E3092). Their positions are 7 through 11 in the order `metricsRow` writes them; the first reader that
+// acts on one adds its constant beside the six above.
 
 // The `kind` column's vocabulary. A format contract shared with the readers above, so they are
 // named here rather than spelled inline at each end.
@@ -135,26 +145,26 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 
 	var out = StringBuilder.create()
 	out.append("{MetricsHeader}")
-	out.append(metricsRow(MetricsKindTotal, name: MetricsNoName, cost: timings.total, delta: memory.total))
+	out.append(metricsRow(MetricsKindTotal, name: MetricsNoName, cost: timings.total, delta: memory.total, residency: PhaseResidency.zero()))
 
 	for phase in CompilePhase.allCases 'eachPhase'
-		out.append(metricsRow(MetricsKindPhase, name: phase.name, cost: timings.costOf(phase), delta: memory.deltaOf(phase)))
+		out.append(metricsRow(MetricsKindPhase, name: phase.name, cost: timings.costOf(phase), delta: memory.deltaOf(phase), residency: memory.residencyOf(phase)))
 	end 'eachPhase'
 
 	// Nested INSIDE the `regalloc` phase above, never alongside it. A consumer that summed the
 	// `phase` rows AND these would double-count the allocator — which is the whole reason the two
 	// carry different kinds instead of being one flat list.
 	for sub in RegAllocPhase.allCases 'eachSub'
-		out.append(metricsRow(MetricsKindRegAlloc, name: sub.name, cost: timings.regAlloc.costOf(sub), delta: memory.regAlloc.deltaOf(sub)))
+		out.append(metricsRow(MetricsKindRegAlloc, name: sub.name, cost: timings.regAlloc.costOf(sub), delta: memory.regAlloc.deltaOf(sub), residency: PhaseResidency.zero()))
 	end 'eachSub'
 
 	// What no phase claimed. Emitted so the gap is VISIBLE to the harness rather than implicit in
 	// a subtraction it would have to know to perform — and so the two reconciliation panics
 	// (CompileTimings.unattributedCost, CompileMemory.unattributed) run on every metrics build,
 	// which is what makes them a tripwire rather than a comment.
-	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, cost: timings.unattributedCost(), delta: memory.unattributed(timings.poolRowMask())))
+	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, cost: timings.unattributedCost(), delta: memory.unattributed(timings.poolRowMask()), residency: PhaseResidency.zero()))
 
-	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: codeBytes as HeapByteCount)))
+	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: codeBytes as HeapByteCount), residency: PhaseResidency.zero()))
 	return out.build()
 end 'metricsText'
 
@@ -165,6 +175,6 @@ end 'metricsText'
 // because for every row but `code` they come from DIFFERENT tables — CompileMemory stores
 // only the memory triple and returns its deltas with the time fields zeroed. Reading the
 // time out of `delta` here would print zero for every phase.
-function metricsRow(kind String, name String, cost PhaseCost, delta PhaseDelta) returns String
-	return "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{cost.nanos}{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}{MetricsColumnSep}{cost.cpuTicks}{MetricsRowSep}"
+function metricsRow(kind String, name String, cost PhaseCost, delta PhaseDelta, residency PhaseResidency) returns String
+	return "{kind}{MetricsColumnSep}{name}{MetricsColumnSep}{cost.nanos}{MetricsColumnSep}{delta.allocs}{MetricsColumnSep}{delta.frees}{MetricsColumnSep}{delta.bytes}{MetricsColumnSep}{cost.cpuTicks}{MetricsColumnSep}{residency.liveBytes}{MetricsColumnSep}{residency.freeBytes}{MetricsColumnSep}{residency.cachedFreeBytes}{MetricsColumnSep}{residency.parkedBytes}{MetricsColumnSep}{residency.committedBytes}{MetricsRowSep}"
 end 'metricsRow'

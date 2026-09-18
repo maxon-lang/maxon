@@ -43,6 +43,17 @@ public static class MaxonJob {
     public static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int len, IntPtr ret);
     [DllImport("kernel32.dll", SetLastError=true)]
     public static extern bool CloseHandle(IntPtr h);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_MEMORY_COUNTERS {
+        public uint cb;
+        public uint PageFaultCount;
+        public UIntPtr PeakWorkingSetSize, WorkingSetSize;
+        public UIntPtr QuotaPeakPagedPoolUsage, QuotaPagedPoolUsage;
+        public UIntPtr QuotaPeakNonPagedPoolUsage, QuotaNonPagedPoolUsage;
+        public UIntPtr PagefileUsage, PeakPagefileUsage;
+    }
+    [DllImport("psapi.dll", SetLastError=true)]
+    public static extern bool GetProcessMemoryInfo(IntPtr h, out PROCESS_MEMORY_COUNTERS c, uint cb);
     // JOBOBJECT_EXTENDED_LIMIT_INFORMATION. Only PeakProcessMemoryUsed is read; the rest is
     // laid out exactly so that field lands at the right offset.
     [StructLayout(LayoutKind.Sequential)]
@@ -90,7 +101,8 @@ $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 
 $p = [System.Diagnostics.Process]::Start($psi)
-[void][MaxonJob]::AssignProcessToJobObject($job, $p.Handle)
+$childHandle = $p.Handle
+[void][MaxonJob]::AssignProcessToJobObject($job, $childHandle)
 
 # Read both pipes to completion BEFORE waiting. A child that fills a pipe buffer blocks
 # forever if nobody drains it, and the wait would then never return.
@@ -108,7 +120,16 @@ try {
 		exit 3
 	}
 	$info = [System.Runtime.InteropServices.Marshal]::PtrToStructure($buf, [type][MaxonJob+EXTENDED_LIMIT_INFORMATION])
-	Write-Output ("PEAK=" + [uint64]$info.PeakProcessMemoryUsed)
+	Write-Output ("COMMIT=" + [uint64]$info.PeakProcessMemoryUsed)
+
+	$pmc = New-Object MaxonJob+PROCESS_MEMORY_COUNTERS
+	$pmcSize = [System.Runtime.InteropServices.Marshal]::SizeOf([type][MaxonJob+PROCESS_MEMORY_COUNTERS])
+	if ([MaxonJob]::GetProcessMemoryInfo($childHandle, [ref]$pmc, $pmcSize)) {
+		Write-Output ("WORKINGSET=" + [uint64]$pmc.PeakWorkingSetSize)
+	} else {
+		Write-Output ("ERROR=GetProcessMemoryInfo failed")
+	}
+
 	Write-Output ("EXIT=" + $p.ExitCode)
 } finally {
 	[System.Runtime.InteropServices.Marshal]::FreeHGlobal($buf)

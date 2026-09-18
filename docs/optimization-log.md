@@ -1059,3 +1059,46 @@ you that 150 of them came from `emitFixedToken`.
 
 `ArrayIterator` (once the single biggest allocating scope, at 102,845) and `EnumDummy` (once ~20% of
 all allocations) no longer appear.
+
+## Residency — what the heap HOLDS, and why a peak was never attributable before
+
+Every table above is a **delta of counters that only rise**: what a phase *asked the allocator for*. A
+phase that allocates a gigabyte and frees it moves them exactly as far as one that allocates a gigabyte
+and keeps it. So a self-compile that peaked at 5.8 GB of process memory was a number with no
+attribution — the compiler's own instruments could not say whether the compiler was holding it or the
+allocator was.
+
+`__Builtins.slabLiveBytes` / `slabFreeBytes` / `slabCachedFreeBytes` / `slabParkedBytes` /
+`slabCommittedBytes` are five **levels** that close that gap, sampled at every phase boundary under
+`--metrics` or `--log=compiler:debug` (`CompileMemory.PhaseResidency`, columns 7–11 of the metrics TSV).
+`live + free` is every slot of every live span, so the pair is checkable rather than merely plausible.
+
+### Baseline — 2026-09-17, `maxon build maxon-bin` at `e00cf30f32`
+
+`scripts/peak-rss.sh` on the same build: **peak commit 6,135,508,992 B (5,851 MB), peak working set
+6,101,692,416 B (5,819 MB)**. The two agree to within 0.6%, which settles a question that was open:
+the memory is genuinely **resident**, not merely committed, so the Windows job object's figure was not
+the misleading half of the report.
+
+Peak committed falls at `link`; peak live falls at `inlineLeaves`:
+
+| figure | bytes | share of peak committed |
+| --- | ---: | ---: |
+| committed (at `link`) | 6,142,951,424 | 100% |
+| live | 3,099,318,616 | 50.5% |
+| free — on some span's free list | 2,652,568,672 | 43.2% |
+| …of which **reachable by an mcache row** | 2,505,080 | **0.04%** |
+| …of which whole spans parked on mcentral | 560,698,712 | 9.1% |
+| peak live (at `inlineLeaves`) | 3,643,822,952 | — |
+
+**The headline is the fourth row.** Of 2.65 GB of free slots at the peak, 2.5 MB — one part in a
+thousand — is in a span some processor's mcache still points at. The rest is in spans that ran out of
+slots, were dropped from the mcache, and then had almost all their slots freed: a span is only ever
+reused once it becomes *entirely* free, so one surviving object pins every other slot in it for the
+life of the process. 535 MB more is in spans that did become entirely free and are parked on their own
+size class's mcentral list, where no other class can take their chunks and where nothing decommits them
+because the compiler never calls `scavengeMemory()`.
+
+So the 5.8 GB splits roughly in half: **~3.1 GB the compiler is genuinely holding** and **~2.65 GB the
+allocator is holding and cannot hand back**. `live + free` is 5.75 GB against 6.14 GB committed, so
+fragmentation and metadata are under 7% — essentially all of it is object slots.

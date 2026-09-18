@@ -34,9 +34,8 @@
 #         scripts/peak-rss.sh --repeat N <command> [args...]   # reports the MAX across N runs
 #
 # Output (stable and greppable; the child's own stdout/stderr pass through unchanged):
-#         peak_rss_bytes=<n>
-#         peak_rss_mb=<n.nn>
-#         exit=<code>
+#   Windows:  peak_commit_bytes/_mb, peak_working_set_bytes/_mb, exit=<code>
+#   POSIX:    peak_rss_bytes/_mb, exit=<code>
 #
 # Exit status: this script exits with the CHILD's status, so it composes in a pipeline.
 set -u
@@ -54,13 +53,32 @@ fi
 
 uname_s="$(uname -s)"
 best=0
+best_commit=0
 child_exit=0
 
 # Single-quote a string for embedding in a PowerShell literal ('' escapes a quote).
 psq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
+# A figure that is missing or not a decimal integer is a BROKEN measurement, never a 0.
+require_bytes() {
+	case "${2:-}" in
+	''|*[!0-9]*|0)
+		echo "peak-rss.sh: could not read $1 for '$3' (got '${2:-}')." >&2
+		echo "peak-rss.sh: refusing rather than reporting 0, which would read as a perfect result." >&2
+		exit 3
+		;;
+	esac
+}
+
+# Two decimals without bc: integer MiB arithmetic, exact at any size this reports.
+report() {
+	printf '%s_bytes=%s\n' "$1" "$2"
+	printf '%s_mb=%d.%02d\n' "$1" "$(( $2 / 1048576 ))" "$(( ($2 % 1048576) * 100 / 1048576 ))"
+}
+
 for _ in $(seq 1 "$repeat"); do
 	bytes=0
+	commit_bytes=0
 	case "$uname_s" in
 	MINGW*|MSYS*|CYGWIN*)
 		# Windows: a JOB OBJECT, because every spelling of `$p.PeakWorkingSet64` reads EMPTY once
@@ -84,11 +102,12 @@ for _ in $(seq 1 "$repeat"); do
 			-ArgsFile "$(cygpath -m "$tmpdir/args.txt")" 2>&1 | tr -d '\r')"
 		[ -f "$tmpdir/out.txt" ] && cat "$tmpdir/out.txt"
 		[ -f "$tmpdir/err.txt" ] && cat "$tmpdir/err.txt" >&2
-		bytes="$(printf '%s' "$out" | sed -n 's/^PEAK=//p' | tail -1)"
+		commit_bytes="$(printf '%s' "$out" | sed -n 's/^COMMIT=//p' | tail -1)"
+		bytes="$(printf '%s' "$out" | sed -n 's/^WORKINGSET=//p' | tail -1)"
 		child_exit="$(printf '%s' "$out" | sed -n 's/^EXIT=//p' | tail -1)"
 		# Surface the helper's own diagnostics when it produced no figure — otherwise a broken
 		# measurement is indistinguishable from a quiet one.
-		[ -z "${bytes:-}" ] && printf '%s\n' "$out" >&2
+		{ [ -z "${bytes:-}" ] || [ -z "${commit_bytes:-}" ]; } && printf '%s\n' "$out" >&2
 		set -- "$exe" "$@"
 		rm -rf "$tmpdir"
 		;;
@@ -117,19 +136,25 @@ for _ in $(seq 1 "$repeat"); do
 		;;
 	esac
 
-	case "${bytes:-}" in
-	''|*[!0-9]*)
-		echo "peak-rss.sh: could not read a peak-RSS figure for '$*' (got '${bytes:-}')." >&2
-		echo "peak-rss.sh: refusing rather than reporting 0, which would read as a perfect result." >&2
-		exit 3
+	require_bytes "a peak working-set figure" "${bytes:-}" "$*"
+	[ "$bytes" -gt "$best" ] && best="$bytes"
+
+	case "$uname_s" in
+	MINGW*|MSYS*|CYGWIN*)
+		require_bytes "a peak commit figure" "${commit_bytes:-}" "$*"
+		[ "$commit_bytes" -gt "$best_commit" ] && best_commit="$commit_bytes"
 		;;
 	esac
-
-	[ "$bytes" -gt "$best" ] && best="$bytes"
 done
 
-# Two decimals without bc: integer MiB arithmetic, exact at any size this reports.
-printf 'peak_rss_bytes=%s\n' "$best"
-printf 'peak_rss_mb=%d.%02d\n' "$(( best / 1048576 ))" "$(( (best % 1048576) * 100 / 1048576 ))"
+case "$uname_s" in
+MINGW*|MSYS*|CYGWIN*)
+	report peak_commit "$best_commit"
+	report peak_working_set "$best"
+	;;
+*)
+	report peak_rss "$best"
+	;;
+esac
 printf 'exit=%s\n' "$child_exit"
 exit "$child_exit"

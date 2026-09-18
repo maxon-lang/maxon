@@ -172,6 +172,15 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	project.productVersion = productVersion
 	project.defines = defines
 
+	// Set before the first `recordPhase*`, which is the next statement: the census is sampled by the phase
+	// recorder, so a flag raised later leaves the compile's largest phase with no reading.
+	//
+	// ⚠ `--metrics` deliberately does not raise it. The census costs a quarter of a self-compile, and
+	// `run_scale_test` passes `--metrics` on every rung — riding that flag would put the instrument's own
+	// cost into the `unattributed` row of every trend datapoint recorded from then on. A harness that wants
+	// the TSV's residency columns asks for `--log=compiler:debug` as well.
+	project.samplesResidency = effectiveLogLevelOf(LogCategory.compiler).ordinal >= LogLevel.DEBUG.ordinal
+
 	// EXCLUDING the runtime tier's own bracket, which `loadLibrarySources` opened inside this one: a phase
 	// that absorbs a neighbour's cost is the defect CompileTimings exists to prevent, and the rows must
 	// stay a disjoint partition of the compile.

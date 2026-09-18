@@ -179,6 +179,11 @@ let MspanSlotBytes = 64
 let MspanOwningPNone = 0
 let MspanOwningPParked = -1
 
+// A destroyed header's other fields are stale rather than zero, so only this sentinel tells one from a
+// live span. `runtime/SlabRuntime.maxon`'s `__slab_meta_free` is the only writer and its census walk the
+// only reader; no allocator path tests it.
+let MspanOwningPFreed = -2
+
 // --- Sharding ---
 //
 // ⭐⭐ **THE mcache WAS BUILT AT FULL SHARD WIDTH BEFORE ANY ROW BUT ONE WAS USED, AND S5 IS THE RUNG THAT
@@ -299,6 +304,7 @@ let SlabStateSchedulerOffset = ((SlabStateMetaFreeOffset as ParsedInt) + WordByt
 // word's reason. Nothing reads it; it is an address that is not zero.
 let SlabStateLockDepthSinkOffset = ((SlabStateSchedulerOffset as ParsedInt) + WordBytes) as ByteOffset
 
+
 // ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD — WHICH IS A
 // GOLDEN-FRAGMENT ARGUMENT, NOT A TIDINESS ONE.** Every committed fragment under `specs/fragments/`
 // renders the whole `data { … }` table with each label's byte OFFSET, so one new `.data` word shifts every
@@ -369,8 +375,18 @@ end 'SlabTrafficEvent'
 // to meet. Written as numbers rather than as a second copy of the formula, because a formula restated
 // agrees with itself by construction and says nothing about the file this pins.
 let TierStateLockOffset = 40
-let TierStateBytes = 152200
+let TierStateBytes = 152208
 let TierStateChunks = 19
+
+// The two array bases, the census word past them, and the three mspan fields the tier's census walk reads.
+// Numbers rather than formulas for the reason above: a restated formula agrees with itself.
+let TierStateMcentralOffset = 104
+let TierStateMcacheOffset = 648
+let TierStateOsDirectBytesOffset = 152200
+let TierMspanFreeCountOffset = 16
+let TierMspanClassIdxOffset = 32
+let TierMspanOwningPOffset = 48
+let TierMspanSlotBytes = 64
 
 // The value the state `.data` word holds until the region is committed. Named rather than left a bare 0
 // because `emitSlabStateBase`'s probe TESTS it while `runtime/SlabRuntime.maxon` both tests and CLEARS it,
@@ -456,6 +472,38 @@ export let SlabScavengeName = b"__slab_scavenge"
 // it.
 export let SlabRemoteFreeCountName = b"__slab_remote_free_count"
 
+// The five census doors, on the family's argumentless-integer shape. What each counts:
+//
+//   * `live` — slots handed out, including a slot queued for a remote free, which `free_count` does not
+//     credit until its owner drains it.
+//   * `free` — slots on some span's free list. `live + free` is every slot of every live span.
+//   * `cachedFree` — the subset of `free` an mcache row can still reach.
+//   * `parked` — whole spans sitting on an mcentral list.
+//   * `committed` — arena granules backed by physical memory, plus the OS-direct road's live mappings.
+//
+// `runtime/SlabRuntime.maxon` owns the walks; what is built here is the lock around each.
+// `specs/slab-census.md` owns the contract.
+export let SlabLiveBytesName = b"__slab_live_bytes"
+export let SlabFreeBytesName = b"__slab_free_bytes"
+export let SlabCachedFreeBytesName = b"__slab_cached_free_bytes"
+export let SlabParkedBytesName = b"__slab_parked_bytes"
+export let SlabCommittedBytesName = b"__slab_committed_bytes"
+
+// `runtime/SlabRuntime.maxon` holds the other copy of every kind below. A drift swaps two figures over,
+// which no run would notice.
+let SlabCensusName = b"__slab_census"
+
+// One membership, so `RuntimeUsage.recordCallUsage` reads a roster this file owns rather than keeping a
+// second list free to drift from it.
+export function isSlabCensusCallee(callee ByteArray) returns bool
+	return callee.equals(SlabLiveBytesName) or callee.equals(SlabFreeBytesName) or callee.equals(SlabCachedFreeBytesName) or callee.equals(SlabParkedBytesName) or callee.equals(SlabCommittedBytesName)
+end 'isSlabCensusCallee'
+let SlabCensusLiveBytes = 0
+let SlabCensusFreeBytes = 1
+let SlabCensusParkedBytes = 2
+let SlabCensusCachedFreeBytes = 3
+let SlabCensusCommittedBytes = 4
+
 // --- The OS-direct tier ---
 //
 // ⛔ **ITS TWO BODIES ARE `runtime/SlabRuntime.maxon` SOURCE.** What stays here is the SHAPE they and
@@ -527,6 +575,12 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabScavenge(module, model: model)
 	buildSlabFreeToSpan(module)
 	buildSlabFree(module, model: model)
+
+	buildSlabCensusEntry(module, name: SlabLiveBytesName, kind: SlabCensusLiveBytes, model: model)
+	buildSlabCensusEntry(module, name: SlabFreeBytesName, kind: SlabCensusFreeBytes, model: model)
+	buildSlabCensusEntry(module, name: SlabCachedFreeBytesName, kind: SlabCensusCachedFreeBytes, model: model)
+	buildSlabCensusEntry(module, name: SlabParkedBytesName, kind: SlabCensusParkedBytes, model: model)
+	buildSlabCensusEntry(module, name: SlabCommittedBytesName, kind: SlabCensusCommittedBytes, model: model)
 end 'installSlabRuntime'
 
 // The one `.data` slot the object layer owns. `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only
@@ -607,6 +661,17 @@ function checkSlabRuntimeGeometry()
 		panic("slab runtime: the state region is {slabStateChunks()} chunk(s) and `runtime/SlabRuntime.maxon` derives {TierStateChunks} — update `SlabClassCount`/`SlabMaxShards`/`SlabTrafficColumns` there, and this constant")
 	end 'tierStateChunksDisagree'
 
+	// The tier's census walk computes addresses off offsets it restates, and nothing at run time would
+	// notice a drift — a class index read as a free count is a plausible number to a reader with no second
+	// source. The pins are individual so the sentence names the field that moved.
+	requireTierOffsetAgrees("the mcentral heads", here: SlabStateMcentralOffset as ParsedInt, tier: TierStateMcentralOffset)
+	requireTierOffsetAgrees("the mcache rows", here: slabStateMcacheOffset(), tier: TierStateMcacheOffset)
+	requireTierOffsetAgrees("the OS-direct census word", here: slabStateOsDirectBytesOffset(), tier: TierStateOsDirectBytesOffset)
+	requireTierOffsetAgrees("an mspan's free count", here: MspanFreeCountOffset as ParsedInt, tier: TierMspanFreeCountOffset)
+	requireTierOffsetAgrees("an mspan's class index", here: MspanClassIdxOffset as ParsedInt, tier: TierMspanClassIdxOffset)
+	requireTierOffsetAgrees("an mspan's owner", here: MspanOwningPOffset as ParsedInt, tier: TierMspanOwningPOffset)
+	requireTierOffsetAgrees("an mspan's metadata slot", here: MspanSlotBytes, tier: TierMspanSlotBytes)
+
 	// ⭐⭐ **AND THE TWO REQUESTS THIS FILE MAKES OF THE PAGE LAYER MUST BE SATISFIABLE ON BOTH LANES.**
 	// `slabStateChunks()` is 19 chunks and the non-reserving arena has 63
 	// allocatable ones; nothing asserted the pair, so raising `SlabMaxShards` or regenerating a longer class
@@ -621,6 +686,14 @@ function checkSlabRuntimeGeometry()
 	// time; the bound is what says every value that formula can produce is one the arena will serve.
 	requireArenaCanServe("the widest class's span", chunks: slabWidestSpanChunks())
 end 'checkSlabRuntimeGeometry'
+
+// One helper rather than a `panic` per field, so a seventh restated offset cannot arrive carrying a
+// sentence that names the sixth.
+function requireTierOffsetAgrees(what String, here ParsedInt, tier ParsedInt)
+	if here != tier 'disagrees'
+		panic("slab runtime: {what} is at {here} and `runtime/SlabRuntime.maxon` restates {tier} — the two sides of the tier boundary have drifted")
+	end 'disagrees'
+end 'requireTierOffsetAgrees'
 
 // A chunk run this file will ask `__slab_arena_alloc_chunks` for, checked against what an arena can serve on
 // each lane. One helper rather than two pairs of `if`s, so a third request cannot arrive checked against one
@@ -668,8 +741,15 @@ function slabStateTrafficOffset() returns ParsedInt
 	return slabStateMcacheOffset() + SlabMaxShards * slabMcacheRowStride()
 end 'slabStateTrafficOffset'
 
-function slabStateBytes() returns ParsedInt
+// Nothing here reads the word. The derivation exists so `slabStateBytes()` covers it and
+// `checkSlabRuntimeGeometry` can pin it; `runtime/SlabRuntime.maxon` owns the step, the read, and the rule
+// that keeps a word added to this region past the last array rather than in the head.
+function slabStateOsDirectBytesOffset() returns ParsedInt
 	return slabStateTrafficOffset() + SlabMaxShards * slabTrafficRowBytes()
+end 'slabStateOsDirectBytesOffset'
+
+function slabStateBytes() returns ParsedInt
+	return slabStateOsDirectBytesOffset() + WordBytes
 end 'slabStateBytes'
 
 function slabStateChunks() returns ParsedInt
@@ -2307,6 +2387,32 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 
 	module.functions.push(func)
 end 'buildSlabScavenge'
+
+// The walk is tier source and only the lock is built here, because `emitSlabLockDepthAddr` forks on the
+// machine model and a tier body has no knob for that. `__slab_census` carries why a read-only walk still
+// needs the lock.
+function buildSlabCensusEntry(module StdModule, name ByteArray, kind ParsedInt, model MachineModel)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	let state = ids.mint()
+	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+
+	let depthAddr = ids.mint()
+	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
+	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
+
+	let kindValue = emitConst(module, block: locked, value: kind, ids: ids)
+	let answer = ids.mint()
+	module.appendOp(locked, op: StdOp.call(answer, callee: SlabCensusName, args: argsOf(kindValue)))
+
+	emitSlabLockLeave(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
+	module.setTerminator(locked, op: StdOp.ret(answer))
+
+	module.functions.push(func)
+end 'buildSlabCensusEntry'
 
 // `__slab_free_to_span(slot, span)` — put one slot back on its span's free list, and hand the span to
 // mcentral if that was its last live one.

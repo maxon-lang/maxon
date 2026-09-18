@@ -6146,6 +6146,18 @@ let BuiltinsSlabRemoteFreeCountName = b"__Builtins.slabRemoteFreeCount"
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
 let SlabRemoteFreeCountArity = 0 as ParamCount
 
+// The five allocator census figures. Unlike the twelve traffic counters below, which are cumulative, these
+// are LEVELS — what the heap holds at the instant they are asked. `SlabRuntime.SlabLiveBytesName` owns what
+// each answers; this file only routes the names.
+let BuiltinsSlabLiveBytesName = b"__Builtins.slabLiveBytes"
+let BuiltinsSlabFreeBytesName = b"__Builtins.slabFreeBytes"
+let BuiltinsSlabCachedFreeBytesName = b"__Builtins.slabCachedFreeBytes"
+let BuiltinsSlabParkedBytesName = b"__Builtins.slabParkedBytes"
+let BuiltinsSlabCommittedBytesName = b"__Builtins.slabCommittedBytes"
+
+// One constant for the five, for `MmCounterArity`'s reason: the shape is the fact.
+let SlabCensusArity = 0 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedProcessorCount()` — THE FOURTH SCHEDULER QUERY, AND THE ONLY ONE WHOSE ANSWER IS
 // NOT AN OUTCOME.** It reports how many Ps `MAXON_MAX_PROCS` resolved to — `min(requested, cpuCount())`,
 // settled once in `__sched_init_procs` before any green thread runs. Its two SCHEDULER band-mates both
@@ -85214,6 +85226,28 @@ export type Parser
 			if callee.equals(BuiltinsSlabRemoteFreeCountName) 'slabRemoteFreeCount'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabRemoteFreeCountName, runtimeName: SlabRemoteFreeCountName, arity: SlabRemoteFreeCountArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'slabRemoteFreeCount'
+
+			// The five census figures, on the same door. Unlike the count above they set `usesHeap` rather than
+			// `usesGt`: each walks the allocator's own structures and needs no scheduler.
+			if callee.equals(BuiltinsSlabLiveBytesName) 'slabLiveBytes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabLiveBytesName, runtimeName: SlabLiveBytesName, arity: SlabCensusArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'slabLiveBytes'
+
+			if callee.equals(BuiltinsSlabFreeBytesName) 'slabFreeBytes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabFreeBytesName, runtimeName: SlabFreeBytesName, arity: SlabCensusArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'slabFreeBytes'
+
+			if callee.equals(BuiltinsSlabCachedFreeBytesName) 'slabCachedFreeBytes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabCachedFreeBytesName, runtimeName: SlabCachedFreeBytesName, arity: SlabCensusArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'slabCachedFreeBytes'
+
+			if callee.equals(BuiltinsSlabParkedBytesName) 'slabParkedBytes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabParkedBytesName, runtimeName: SlabParkedBytesName, arity: SlabCensusArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'slabParkedBytes'
+
+			if callee.equals(BuiltinsSlabCommittedBytesName) 'slabCommittedBytes'
+				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabCommittedBytesName, runtimeName: SlabCommittedBytesName, arity: SlabCensusArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+			end 'slabCommittedBytes'
 
 			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
 			// the outcome: how many Ps `MAXON_MAX_PROCS` resolved to. Same door again — an `int` answer, no

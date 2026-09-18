@@ -191,7 +191,7 @@ with no `build.maxon` prints a usage line and exits 1.
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](/docs/cli/debugging/). |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
-| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. `--log=compiler:debug` prints the same numbers as a table. |
+| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary, rather than what the phase asked for. The TSV's five residency columns are filled only when both are given; on their own they are zero. |
 
 `--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**. Without the flag, none of
 that machinery is emitted.

@@ -324,6 +324,13 @@ end 'recordPhaseExcluding'
 function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
+
+	// Read after the delta rather than inside the bracket: the census costs time proportional to the heap,
+	// which inside the bracket is billed to the phase it is measuring.
+	if project.samplesResidency 'census'
+		project.memory.recordResidency(phase, reading: PhaseResidency.sample())
+	end 'census'
+
 	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
 
 	// A CLOSED PHASE IS THE PROOF OF PROGRESS THE TREE LOCK'S HEARTBEAT NEEDS, and this is the only
