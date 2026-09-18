@@ -417,16 +417,28 @@ let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 // 0 on every other green thread.
 export let GtOffReplyWitness = GtOffStrandResume + PointerFieldBytes
 
+let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
+
+let GtPromiseHeld = 0 as ParsedInt
+let GtPromiseGivenUp = 1 as ParsedInt
+
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above. Must be a
 // multiple of 8.
 //
-// ⚠ **EVERY GROWTH IS APPEND-ONLY, WHICH IS WHY NOTHING ALREADY PLACED EVER MOVES.** Every field of the
-// portable layout (0x00–0xA8) and every offset a hand-assembled chunk spells is BELOW 0xC8, and `SchedRuntime`'s
-// M fields after the inline GT are each DERIVED from the one before — so a growth walks them all along
-// correctly and no number is restated anywhere.
+// Growth is append-only, which is why nothing already placed ever moves: every field of the
+// portable layout (0x00–0xA8) and every offset a hand-assembled chunk spells is below 0xC8, and
+// `SchedRuntime`'s M fields after the inline GT are each derived from the one before, so a growth
+// walks them all along correctly.
+//
+// ⚠ This line is the one number a growth must restate, because it names the last field rather
+// than following it. A field appended without re-deriving the size sits one slot past the record,
+// and nothing refuses it: a store through that offset writes the first word of the next object in
+// the scheduler arena — an M's `MOffCurrentP` when the neighbour is an M — and it surfaces as a
+// nil-pointer panic in `__sched_runq_next`, intermittently, in programs that never touch the new
+// field at all.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffReplyWitness + PointerFieldBytes
+export let GtStructSize = GtOffRenounced + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -4837,6 +4849,12 @@ function buildGtPromiseDrop(module StdModule)
 	// consumer's half. The status word decides nothing about ownership — only whether a store has to be
 	// emptied first.
 	let isReplyCell = emitGtIsReplyCell(module, block: entry, gt: gt, ids: ids)
+
+	// The renounce mark is stored ahead of every arm below, because each of them readies the
+	// thread (`emitGtRenouncePark`): a mark written past that point races the coroutine's own
+	// resumption, and what slips through the window is a far-end wait this one-shot call can no
+	// longer end. `__gt_io_park` reads it.
+	emitStoreField(module, block: entry, record: gt, offset: GtOffRenounced, value: emitConst(module, block: entry, value: GtPromiseGivenUp, ids: ids))
 	module.setTerminator(entry, op: StdOp.condBranch(isReplyCell, thenBlockId: queuedArm.id, elseBlockId: notAReplyCell.id))
 
 	let status = emitLoadField(module, block: notAReplyCell, record: gt, offset: GtOffStatus, ids: ids)
@@ -6113,7 +6131,7 @@ function buildGtIoPark(module StdModule)
 		paramTypes = twoI64Params()
 	end 'suffixParams'
 
-	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var func = IrFunction.createFromStd(GtIoParkName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -6150,7 +6168,9 @@ function buildGtIoPark(module StdModule)
 	// the runtime reaches from its OWN teardown path.
 	let stackBase = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffStackBase, ids: ids)
 	let onGreenStack = emitCmp(module, block: entry, a: stackBase, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let noPromiseToGiveUp = emitConst(module, block: entry, value: GtPromiseHeld, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(onGreenStack, thenBlockId: yielding.id, elseBlockId: doneBlock.id))
+	entry.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(noPromiseToGiveUp)))
 
 	// The trace pair BRACKETS the park: the yield line is emitted on the way down, the resume line after the
 	// scheduler has switched back into us. Both read the id afresh — see `emitCurrentGtTraceId`.
@@ -6172,8 +6192,17 @@ function buildGtIoPark(module StdModule)
 
 	resumed = emitCurrentGtSchedEvent(module, func: func, block: resumed, eventType: DsEvIoResume, ids: ids)
 
+	// Read after the park and never before it: the park is a full trip through `__sched_lock`,
+	// which is what publishes a mark stored on another machine. A load ahead of the yield is
+	// unsynchronised and reads stale as soon as more than one processor runs, so every refusal
+	// built on it silently stops happening.
+	let renounced = emitLoadField(module, block: resumed, record: emitLoadCurrentGt(module, block: resumed, ids: ids), offset: GtOffRenounced, ids: ids)
 	module.setTerminator(resumed, op: StdOp.branch(doneBlock.id))
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	resumed.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(renounced)))
+
+	let answer = ids.mint()
+	doneBlock.blockArgs.push(IrBlockArg.create(answer, argType: StdType.i64))
+	module.setTerminator(doneBlock, op: StdOp.ret(answer))
 
 	module.functions.push(func)
 end 'buildGtIoPark'
@@ -6207,8 +6236,6 @@ end 'buildGtIoPark'
 // read/write/writeExecutable, `buildManagedFilePathOperation` for delete/rename), so the emitted
 // `__mf_*`/`__md_*` band is three larger than its fourteen sites. Say which noun is being counted wherever
 // either number is quoted.
-//
-// A void call mints an unread result id.
 export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
 	// ⭐ **A TARGET WITH NO SCHEDULER EMITS NO PARK.** The park exists to let OTHER green threads run while
 	// this one waits; a lane `targetProvidesFacility` denies `greenThreads` has exactly one thread of
@@ -6220,6 +6247,52 @@ export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperat
 		return
 	end 'noScheduler'
 
+	_ = emitIoParkCall(module, block: block, operation: operation, ids: ids)
+end 'emitIoPark'
+
+// The yield is where a renounced coroutine is refused, because of where it sits: ahead of the
+// kernel call, and ahead of `__np_pd_op_begin` at every send, recv and accept. A refusal here
+// issues nothing the kernel must later complete and publishes no waiter, so `__np_waiters` never
+// rises and the exit's drain still meets. Refusing any later leaves that count standing at one
+// and the process in the poller for good — `__sched_checkdead` short-circuits on the same term,
+// so nothing reports it.
+export function emitIoParkBranchOnRenounced(module StdModule, cur IrBlock, operation GtIoOperation, proceed IrBlock, renounced IrBlock, ids ValueMinter)
+	if not (module.parksOnIo and ioParkRefusesARenouncedCoroutine(operation)) 'carriesOn'
+		emitIoPark(module, block: cur, operation: operation, ids: ids)
+		module.setTerminator(cur, op: StdOp.branch(proceed.id))
+		return
+	end 'carriesOn'
+
+	let answer = emitIoParkCall(module, block: cur, operation: operation, ids: ids)
+	let givenUp = emitCmp(module, block: cur, a: answer, b: emitConst(module, block: cur, value: GtPromiseHeld, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(givenUp, thenBlockId: renounced.id, elseBlockId: proceed.id))
+end 'emitIoParkBranchOnRenounced'
+
+// A coroutine whose promise has been given up may not begin an operation that waits on a far end.
+// The two `false` answers are a safety rule and not an exemption: a renounced frame's unwind runs
+// `__ms_close` and `__mf_close`, and every file and directory site shares the `fileExists` tag,
+// so refusing either would abandon the descriptor and the heap it owns — and a leaked descriptor
+// is invisible to the exit-101 gate, because a socket is not memory.
+//
+// `netListen` is refusable for a reason only some lanes show. `emitResolveHostIp` is one park
+// site serving both the dial and the bind, and where `socketResolveShape` answers
+// `builtinResolver` the name road opens a socket of its own on the poller; the `getaddrinfo`
+// shapes make a bounded syscall instead, so a reading taken from one of those alone says this
+// could be `false`. Only a name parks at all — a dotted quad short-circuits above the yield, so a
+// bind to one is untouched.
+function ioParkRefusesARenouncedCoroutine(operation GtIoOperation) returns bool
+	return match operation 'operation'
+		fileExists gives false
+		netConnect gives true
+		netListen gives true
+		netAccept gives true
+		netSend gives true
+		netRecv gives true
+		netClose gives false
+	end 'operation'
+end 'ioParkRefusesARenouncedCoroutine'
+
+function emitIoParkCall(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter) returns ValueId
 	// The suffix travels as `(rdata address, byte length)`, and an untraced build's park has no suffix
 	// parameters to fill, so the call carries no arguments at all.
 	//
@@ -6244,7 +6317,8 @@ export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperat
 
 	let parked = ids.mint()
 	module.appendOp(block, op: StdOp.call(parked, callee: GtIoParkName, args: args))
-end 'emitIoPark'
+	return parked
+end 'emitIoParkCall'
 
 // `__gt_resched()` — the cooperative yield: a park the strand runner places rather than registers. See
 // `GtReschedName`.

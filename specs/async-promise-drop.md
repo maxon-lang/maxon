@@ -16,7 +16,9 @@ the green thread and renounces its result. This is the ownership dual of the lin
 `await` is the consuming move, and any path with no consuming await drops the thread exactly once.
 
 Dropping is not an exit-time drain: a thread that has not STARTED is **cancelled** and its body **never
-runs**, while a thread that has started runs to completion and only its RESULT is renounced. A started
+runs**, while a thread that has started carries on and only its RESULT is renounced — except that it may
+no longer BEGIN an operation that waits on a far end, which answers that operation's own failure variant
+at once rather than parking for a wake-up the spent drop will never send. A started
 thread parked on a wait (a `sleep` timer, a `runProcess` child) has that wait ended early — it is readied,
 resumes, unwinds its own frame, and its strand's runner reclaims it — because nothing can unwind a suspended
 frame from outside, and freeing its stack would strand every heap value its locals own. Because

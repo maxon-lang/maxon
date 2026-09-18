@@ -1665,6 +1665,11 @@ end 'NetworkError'
 | `bindFailed` | The address or port could not be bound |
 | `acceptFailed` | No connection could be accepted |
 
+These also arise without any OS error: a coroutine whose promise has been dropped or `cancel()`ed throws the
+variant of the next operation that would wait on a far end rather than starting it — see
+[Cancellation and Dropped Promises](LANGUAGE_REFERENCE.md#cancellation-and-dropped-promises). `close()` is
+unaffected.
+
 ## TcpListener
 
 `TcpListener` is a listening socket. It has no `send` or `recv`; `accept()` returns a `TcpClient` for each

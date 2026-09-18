@@ -588,6 +588,50 @@ dropped=true
 0
 ```
 
+<!-- test: netpoll-socket.a-renounced-reader-does-not-start-a-read-nothing-can-end -->
+<!-- procs: 1 -->
+**A RENOUNCED COROUTINE MAY NOT OPEN A READ NOTHING CAN END.** The drop is one-shot: it reaches the thread in
+whatever state it is in and is then spent. A coroutine dropped while it is on a TIMER — a `sleep`, or the I/O
+yield every blocking operation takes, which is a timer park with a deadline of `now` — is renounced and simply
+carries on, which is the ruling a dropped `sleep` already has. Here it carries on into a `recv` on a peer that
+never writes, and the wait it then opens has no ender left: the dropper has already spent itself.
+
+⚠ **THE HANG IS SILENT, WHICH IS WHY THE VERDICT IS A TIMEOUT.** The read publishes a waiter, so
+`__np_waiters` stands at one for good; the exit's drain reads that count and never meets, and
+`__sched_checkdead` short-circuits on the same term, so nothing reports it. The process sits in the poller
+until the harness kills it.
+
+⚠ **`sleep(1000)` IS LONGER THAN `main`'s ON PURPOSE.** It puts the reader on the timer arm at the instant of
+the drop with no race at all, which is the one road that reaches this defect on every lane and every run.
+```maxon
+function stall(listener TcpListener) returns ExitCode throws NetworkError
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+	sleep(1000)
+	_ = try client.recv(1024)
+
+	return 0
+end 'stall'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
+	let before = __Builtins.schedNetpollBlockCount()
+	let reader = async stall(listener)
+	sleep(200)
+	let parked = __Builtins.schedNetpollBlockCount() - before
+	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
+
+	print("dropped={parked > 0 and stillWaiting}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+dropped=true
+```
+```exitcode
+0
+```
+
 <!-- test: netpoll-socket.a-parked-reader-survives-its-owner-closing-the-socket -->
 <!-- procs: 1 -->
 **AN `async` ARGUMENT CO-OWNS THE SOCKET BOX, SO THE OWNER CAN CLOSE IT WHILE THE COROUTINE IS PARKED ON IT.**
@@ -1110,6 +1154,48 @@ function main() returns ExitCode
 	let stillBound = listener.port() == port
 
 	print("dropped={parked > 0 and stillWaiting} bound={stillBound}\n")
+	return cleanExit as ExitCode
+end 'main'
+```
+```stdout
+dropped=true bound=true
+```
+```exitcode
+42
+```
+
+<!-- test: netpoll-socket.a-renounced-acceptor-does-not-start-an-accept-nothing-can-end -->
+<!-- procs: 1 -->
+**AN ACCEPT A RENOUNCED COROUTINE OPENS IS THE SAME UNENDABLE WAIT A READ IS.** A listener registers on the
+poller for readability exactly as a socket does, so a coroutine renounced on a timer and left free to carry on
+into `accept` publishes a waiter nothing will ever end — and the exit's join then waits on it forever.
+
+⚠ **THE COROUTINE TOUCHES THE POLLER ONLY AFTER IT IS RENOUNCED.** It sleeps and then accepts, so there is no
+park before the drop to read a count from: the peek is what says the acceptor was still alive when the drop
+landed, and the exit code is what says the program ended at all.
+
+⚠ **THE EXIT CODE IS DISTINCTIVE ON PURPOSE.** It is produced at exactly one place, the end of `main`, so a
+leaked box (101), a named abort, or a hang cannot be mistaken for the clean exit this case is about.
+```maxon
+let cleanExit = 42
+
+function stall(listener TcpListener) returns ExitCode throws NetworkError
+	sleep(1000)
+	_ = try listener.accept()
+
+	return 0
+end 'stall'
+
+function main() returns ExitCode
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let port = listener.port()
+
+	let acceptor = async stall(listener)
+	sleep(200)
+	let stillWaiting = __Builtins.gtIsComplete(acceptor.inner) == 0
+	let stillBound = listener.port() == port
+
+	print("dropped={stillWaiting} bound={stillBound}\n")
 	return cleanExit as ExitCode
 end 'main'
 ```

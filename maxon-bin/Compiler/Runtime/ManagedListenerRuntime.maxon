@@ -186,7 +186,7 @@ function buildManagedListenerBind(module StdModule, target Target)
 	// ⭐ **A NAME'S RESOLVE IS THIS FUNCTION'S ONLY WAIT**, so it is the only road that parks, and
 	// `emitResolveHostIp` takes the park there. `socket`, `bind` and `listen` each allocate or rearrange a kernel
 	// object and return, which is not a wait — see `emitIoPark`'s once-per-blocking-operation invariant.
-	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), park: GtIoOperation.netListen, ids: ids)
+	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, renounced: noWinsock, host: host, shape: socketResolveShape(target), park: GtIoOperation.netListen, ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedListenerResolveFailedFlag, ids: ids)
 
 	let socket = ids.mint()
@@ -290,6 +290,7 @@ function buildManagedListenerAccept(module StdModule, target Target)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var ready = module.addBlock(func, label: b"mlready", heat: BlockHeat.normal)
+	var accepting = module.addBlock(func, label: b"mlacceptgo", heat: BlockHeat.normal)
 	var attempt = module.addBlock(func, label: b"mlattempt", heat: BlockHeat.normal)
 	var accepted = module.addBlock(func, label: b"mlaccepted", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"mlacceptfail", heat: BlockHeat.normal)
@@ -308,10 +309,10 @@ function buildManagedListenerAccept(module StdModule, target Target)
 	// The accept begins on the record here, ahead of the retry ring: the generation its waits carry is the
 	// listener's life at this point, so a listener closed and reopened under a parked accept ends the accept
 	// rather than publishing it into the next owner's word.
-	emitIoPark(module, block: ready, operation: GtIoOperation.netAccept, ids: ids)
-	let pollKey = emitNetpollDescriptorIndex(module, block: ready, target: target, fd: listener, ids: ids)
-	let gen = emitNetpollPdOpBegin(module, block: ready, source: pollKey, ids: ids)
-	module.setTerminator(ready, op: StdOp.branch(attempt.id))
+	emitIoParkBranchOnRenounced(module, cur: ready, operation: GtIoOperation.netAccept, proceed: accepting, renounced: failed, ids: ids)
+	let pollKey = emitNetpollDescriptorIndex(module, block: accepting, target: target, fd: listener, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: accepting, source: pollKey, ids: ids)
+	module.setTerminator(accepting, op: StdOp.branch(attempt.id))
 
 	match socketWaitShape(target) 'shape'
 		polled then emitListenerPolledAccept(module, func: func, ids: ids, attempt: attempt, listener: listener, pollKey: pollKey, gen: gen, accepted: accepted, failed: failed, target: target)

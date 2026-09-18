@@ -4016,8 +4016,12 @@ name the slot, and otherwise aborts the program with exit code **118**.
 when it goes out of scope (or is overwritten), which has the same effect.
 
 - A coroutine that has **not started** never runs.
-- A coroutine that has **already started** is not interrupted: it runs to the end of its body, and its
-  result is discarded.
+- A coroutine that has **already started** is not interrupted where it stands: it resumes and runs on, and
+  its result is discarded. What it may no longer do is **begin** an operation that waits on a far end. Its
+  next `TcpClient.connect`, `TcpListener.accept`, `send`, `sendFrom`, `recv`, or `TcpListener.bind` to a
+  host **name** throws that operation's own [`NetworkError`](STDLIB_REFERENCE.md#tcpclient) variant at once
+  instead of parking for a wake-up nothing will send. `close()` still completes, and so does a `bind` to a
+  numeric address.
 - A promise held in an array or a field is dropped with its container.
 
 ### Yielding

@@ -626,18 +626,22 @@ export function socketResolveShape(target Target) returns SocketResolveShape
 	end 'os'
 end 'socketResolveShape'
 
-// ⭐ **RESOLVE `host` INTO A NETWORK-ORDER `sin_addr`, OR ROUTE TO `resolveFailed`.** The two roads meet at
-// `resolved` with the address as its block argument, and every edge RELEASES the host cstring, so neither
-// `resolved` nor `resolveFailed` has it to release.
+// Resolve `host` into a network-order `sin_addr`, or route to `resolveFailed`. The two roads meet
+// at `resolved` with the address as its block argument, and every edge releases the host cstring,
+// so neither `resolved` nor `resolveFailed` has it to release. The `renounced` edge is the
+// exception: it is taken before the lookup runs, so that block still owns the cstring and must
+// release it itself.
 //
-// ⭐⭐ **A DOTTED-QUAD LITERAL IS ANSWERED BY `__ms_ipv4` ON EVERY SHAPE, AND ONLY A NAME PARKS.** A literal
-// already carries its answer, so it waits on nothing: handed to `getaddrinfo` it would hold the machine, and a
-// park on it would report a wait that never happens. A name waits on a resolver that may speak DNS, so it
-// takes the `park` operation's `io_yield`/`io_resume` pair before the shape's resolver runs. This is the one
-// place that decision is made, for every caller and every lane.
-export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, shape SocketResolveShape, park GtIoOperation, ids ValueMinter) returns ValueId
+// A dotted-quad literal is answered by `__ms_ipv4` on every shape, and only a name parks. A
+// literal already carries its answer, so it waits on nothing: handed to `getaddrinfo` it would
+// hold the machine, and a park on it would report a wait that never happens. A name waits on a
+// resolver that may speak DNS, so it takes the `park` operation's `io_yield`/`io_resume` pair
+// before the shape's resolver runs. This is the one place that decision is made, for every caller
+// and every lane.
+export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, renounced IrBlock, host ValueId, shape SocketResolveShape, park GtIoOperation, ids ValueMinter) returns ValueId
 	var literal = module.addBlock(func, label: b"msiplit", heat: BlockHeat.normal)
 	var name = module.addBlock(func, label: b"msname", heat: BlockHeat.normal)
+	var lookup = module.addBlock(func, label: b"msnamego", heat: BlockHeat.normal)
 
 	let ip = ids.mint()
 	resolved.blockArgs.push(IrBlockArg.create(ip, argType: StdType.i64))
@@ -651,11 +655,11 @@ export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrB
 	module.setTerminator(literal, op: StdOp.branch(resolved.id))
 	literal.branchEdges.push(BranchEdge.create(resolved.id, argIds: argsOf(numeric)))
 
-	emitIoPark(module, block: name, operation: park, ids: ids)
+	emitIoParkBranchOnRenounced(module, cur: name, operation: park, proceed: lookup, renounced: renounced, ids: ids)
 
 	match shape 'shape'
-		addrInfoList then emitResolveThroughAddrInfo(module, func: func, lookup: name, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
-		builtinResolver then emitResolveThroughBuiltinResolver(module, lookup: name, resolved: resolved, resolveFailed: resolveFailed, host: host, hostLength: hostLength, ids: ids)
+		addrInfoList then emitResolveThroughAddrInfo(module, func: func, lookup: lookup, resolved: resolved, resolveFailed: resolveFailed, host: host, ids: ids)
+		builtinResolver then emitResolveThroughBuiltinResolver(module, lookup: lookup, resolved: resolved, resolveFailed: resolveFailed, host: host, hostLength: hostLength, ids: ids)
 	end 'shape'
 
 	return ip
@@ -739,6 +743,7 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	var noSocket = module.addBlock(func, label: b"msnosock", heat: BlockHeat.normal)
 	var registerSource = module.addBlock(func, label: b"msregister", heat: BlockHeat.normal)
 	var dial = module.addBlock(func, label: b"msdial", heat: BlockHeat.normal)
+	var dialing = module.addBlock(func, label: b"msdialgo", heat: BlockHeat.normal)
 	var dialPending = module.addBlock(func, label: b"msdialwait", heat: BlockHeat.normal)
 	var closeAndFail = module.addBlock(func, label: b"msconnclose", heat: BlockHeat.normal)
 	var connected = module.addBlock(func, label: b"msok", heat: BlockHeat.normal)
@@ -760,7 +765,7 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	emitErrorReturn(module, block: noWinsock, flag: ManagedSocketConnectFailedFlag, ids: ids)
 
 	// The resolve's park is reported as `net_connect` so a name's resolve and its dial print the same pair.
-	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, host: host, shape: socketResolveShape(target), park: GtIoOperation.netConnect, ids: ids)
+	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, renounced: noWinsock, host: host, shape: socketResolveShape(target), park: GtIoOperation.netConnect, ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedSocketResolveFailedFlag, ids: ids)
 
 	let testNet = emitConst(module, block: resolved, value: TestNet1NetOrder, ids: ids)
@@ -785,17 +790,22 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	emitSocketPollerOpen(module, block: registerSource, pollKey: pollKey, socket: socket, ids: ids)
 	module.setTerminator(registerSource, op: StdOp.branch(dial.id))
 
-	// ⭐ **THE DIAL'S PARK.** A handshake with a host that may never answer suspends the green thread whether the
-	// host was a literal or a name; `socket()` before it does not, because it allocates a descriptor and returns.
-	// The TEST-NET-1 edge never reaches here, so that address parks for nothing at all.
-	emitIoPark(module, block: dial, operation: GtIoOperation.netConnect, ids: ids)
-	let addr = emitRawAlloc(module, block: dial, byteCount: emitConst(module, block: dial, value: SockaddrInBytes, ids: ids), ids: ids)
-	let addrWord = emitSockaddrInWord(module, block: dial, port: port, ip: ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
-	emitStoreField(module, block: dial, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
+	// The dial's park. A handshake with a host that may never answer suspends the green thread
+	// whether the host was a literal or a name; `socket()` before it does not, because it
+	// allocates a descriptor and returns. The TEST-NET-1 edge never reaches here, so that address
+	// parks for nothing at all.
+	//
+	// The `sockaddr_in` scratch is allocated past the refusal and not before it: the two dial
+	// builders free it on every road they own, and `closeAndFail` — which the refusal shares with
+	// a connect the OS turned down — releases the poll record and the descriptor but no scratch.
+	emitIoParkBranchOnRenounced(module, cur: dial, operation: GtIoOperation.netConnect, proceed: dialing, renounced: closeAndFail, ids: ids)
+	let addr = emitRawAlloc(module, block: dialing, byteCount: emitConst(module, block: dialing, value: SockaddrInBytes, ids: ids), ids: ids)
+	let addrWord = emitSockaddrInWord(module, block: dialing, port: port, ip: ip, familyHalfword: sockaddrFamilyHalfword(target), ids: ids)
+	emitStoreField(module, block: dialing, record: addr, offset: SockaddrFamilyPortAddrOffset, value: addrWord)
 
 	match socketWaitShape(target) 'dialShape'
-		polled then emitSocketPolledDial(module, func: func, ids: ids, dial: dial, dialPending: dialPending, socket: socket, pollKey: pollKey, addr: addr, connected: connected, failed: closeAndFail, target: target)
-		overlapped then emitSocketWatchedDial(module, func: func, ids: ids, dial: dial, dialPending: dialPending, socket: socket, addr: addr, connected: connected, failed: closeAndFail)
+		polled then emitSocketPolledDial(module, func: func, ids: ids, dial: dialing, dialPending: dialPending, socket: socket, pollKey: pollKey, addr: addr, connected: connected, failed: closeAndFail, target: target)
+		overlapped then emitSocketWatchedDial(module, func: func, ids: ids, dial: dialing, dialPending: dialPending, socket: socket, addr: addr, connected: connected, failed: closeAndFail)
 	end 'dialShape'
 
 	// A refused connect leaves an OPEN socket, which no box will ever own — so it is closed here or it leaks
@@ -1017,6 +1027,7 @@ function buildManagedSocketSendFrom(module StdModule, target Target)
 	var checkCap = module.addBlock(func, label: b"mschkcap", heat: BlockHeat.normal)
 	var outOfBounds = module.addBlock(func, label: b"msoob", heat: BlockHeat.normal)
 	var doSend = module.addBlock(func, label: b"mssend", heat: BlockHeat.normal)
+	var sending = module.addBlock(func, label: b"mssendgo", heat: BlockHeat.normal)
 	var sendAttempt = module.addBlock(func, label: b"mssendtry", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"msfail", heat: BlockHeat.normal)
 	var ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
@@ -1081,12 +1092,12 @@ function buildManagedSocketSendFrom(module StdModule, target Target)
 	// ⚠ **THE PARK IS ABOVE THE RING AND THE ADDRESS ARITHMETIC WITH IT.** `__gt_io_park` is what the async
 	// trace reports as one `io_yield`/`io_resume` pair per blocking operation, and a send the descriptor makes
 	// re-issue is still ONE operation — so the park may not sit where a retry can reach it.
-	emitIoPark(module, block: doSend, operation: GtIoOperation.netSend, ids: ids)
-	let pollKey = emitNetpollDescriptorIndex(module, block: doSend, target: target, fd: socket, ids: ids)
-	let gen = emitNetpollPdOpBegin(module, block: doSend, source: pollKey, ids: ids)
-	let buffer = emitLoadField(module, block: doSend, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
-	let sendStart = emitBin(module, block: doSend, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(doSend, op: StdOp.branch(sendAttempt.id))
+	emitIoParkBranchOnRenounced(module, cur: doSend, operation: GtIoOperation.netSend, proceed: sending, renounced: failed, ids: ids)
+	let pollKey = emitNetpollDescriptorIndex(module, block: sending, target: target, fd: socket, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: sending, source: pollKey, ids: ids)
+	let buffer = emitLoadField(module, block: sending, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let sendStart = emitBin(module, block: sending, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(sending, op: StdOp.branch(sendAttempt.id))
 
 	emitSocketTransfer(module, func: func, ids: ids, attempt: sendAttempt, socket: socket, pollKey: pollKey, gen: gen, buffer: sendStart, length: length, direction: SocketTransferDirection.sending, failureFlag: ManagedSocketSendFailedFlag, failed: failed, ok: ok, shape: socketWaitShape(target), target: target)
 
@@ -1109,6 +1120,7 @@ function buildManagedSocketRecv(module StdModule, target Target)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkCap = module.addBlock(func, label: b"mschkcap", heat: BlockHeat.normal)
 	var doRecv = module.addBlock(func, label: b"msrecv", heat: BlockHeat.normal)
+	var receiving = module.addBlock(func, label: b"msrecvgo", heat: BlockHeat.normal)
 	var recvAttempt = module.addBlock(func, label: b"msrecvtry", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"msfail", heat: BlockHeat.normal)
 	var ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
@@ -1139,12 +1151,12 @@ function buildManagedSocketRecv(module StdModule, target Target)
 
 	// The buffer is OWNED here, so `capacity@16` is a real count and its byte extent is non-negative.
 	// The park brackets the whole receive, retries included — see the send's note for why it is above the ring.
-	emitIoPark(module, block: doRecv, operation: GtIoOperation.netRecv, ids: ids)
-	let pollKey = emitNetpollDescriptorIndex(module, block: doRecv, target: target, fd: socket, ids: ids)
-	let gen = emitNetpollPdOpBegin(module, block: doRecv, source: pollKey, ids: ids)
-	let buffer = emitLoadField(module, block: doRecv, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
-	let byteCapacity = emitArrayByteExtent(module, block: doRecv, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
-	module.setTerminator(doRecv, op: StdOp.branch(recvAttempt.id))
+	emitIoParkBranchOnRenounced(module, cur: doRecv, operation: GtIoOperation.netRecv, proceed: receiving, renounced: failed, ids: ids)
+	let pollKey = emitNetpollDescriptorIndex(module, block: receiving, target: target, fd: socket, ids: ids)
+	let gen = emitNetpollPdOpBegin(module, block: receiving, source: pollKey, ids: ids)
+	let buffer = emitLoadField(module, block: receiving, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let byteCapacity = emitArrayByteExtent(module, block: receiving, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
+	module.setTerminator(receiving, op: StdOp.branch(recvAttempt.id))
 
 	emitSocketTransfer(module, func: func, ids: ids, attempt: recvAttempt, socket: socket, pollKey: pollKey, gen: gen, buffer: buffer, length: byteCapacity, direction: SocketTransferDirection.receiving, failureFlag: ManagedSocketRecvFailedFlag, failed: failed, ok: ok, shape: socketWaitShape(target), target: target)
 
