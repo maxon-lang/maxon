@@ -536,11 +536,41 @@ __ms_send_from
 <!-- test: netpoll-socket.drop-a-parked-reader -->
 <!-- procs: 1 -->
 **A PROMISE DROPPED WHILE ITS COROUTINE IS PARKED IN `recv` DOES NOT HANG THE EXIT.** `main` spawns a reader
-that connects and then reads from a peer that never writes, sleeps long enough for the reader to reach the
-read, and lets the promise drop at scope exit without ever awaiting it. The drop must unregister the
-reader from the poller and RENOUNCE it: a reader still registered when its stack is gone is a use-after-free
-the next readiness event walks into, and a reader the drop cannot reach at all leaves the exit's join waiting
-forever — the case TIMES OUT rather than failing.
+that connects and then reads from a peer that never writes, waits until that reader is observably parked on
+the poller INSIDE the read, and lets the promise drop at scope exit without ever awaiting it. The drop must
+unregister the reader from the poller and RENOUNCE it: a reader still registered when its stack is gone is a
+use-after-free the next readiness event walks into, and a reader the drop cannot reach at all leaves the
+exit's join waiting forever — the case TIMES OUT rather than failing.
+
+⭐ **THE READER NAMES THE COUNT ITS OWN PARK WILL REACH, SO NO SLEEP HAS TO BE LONG ENOUGH.** `stall`
+publishes `parkedFrom` in the one statement before its `recv`: the count as it stood with the connect already
+behind it, plus one. `parkedInRecv()` is then a READING rather than a wait — the count has arrived at that
+mark — and only a netpoll commit can move it there. `main` parks on a timer, which this counter does not see;
+the listener never accepts and the bind parks nothing; so the reader's read is the one park left to move it.
+The count steps where the thread goes onto the direction word and before the suspension returns, so a count
+that has arrived says PUBLISHED and not merely about to be.
+
+⭐ **ONE WORD, PUBLISHED ONCE.** A mark and a separate flag would be two stores, and a reader that saw the
+flag before the mark would answer about a count that had not been written yet. `parkedFrom` carries both
+facts — `0` says the read was never announced, anything else is the count to wait for — so there is no order
+between them to get right.
+
+⚠ **THE COUNT MUST BE TAKEN FROM THE READ, BECAUSE THE CONNECT PARKS TOO.** A delta measured from before the
+spawn is satisfied by the dial alone, which says a coroutine parked SOMEWHERE and not that this one is in its
+read. Nor is the difference cosmetic: a connect park carries no aimed operation and is deregistered and
+renounced, where a read park on the overlapped lane holds a transfer the kernel is still serving and is
+renounced in place behind a cancel. Pinning the reader into its read is what fixes which of the two roads
+this case drops.
+
+⚠ **`settleTurns` IS A HANG GUARD, NOT A MARGIN.** Exhausting it prints the same `dropped=false` a lost park
+prints, and never a green line, so the bound cannot buy a pass the reading did not. It is a bound in turns
+rather than in milliseconds because what a turn costs is the host's timer resolution, which is not this
+case's subject.
+
+⚠ **`procs: 1` IS LOAD-BEARING HERE, AND NOT ONLY FOR DETERMINISM.** `parkedFrom` is written by the
+coroutine and read by `main`, and one processor is what makes those two never run at once: a handoff goes
+through the scheduler's lock, so the write is published before the read can see the thread that made it. At
+more than one processor the same two lines would be an unsynchronised word shared by two machines.
 
 ⚠ **THE LISTENER IS THE PEER, AND IT NEVER ACCEPTS.** The kernel completes the handshake into the backlog, so
 the connection is ESTABLISHED and the reader's `recv` genuinely parks — while nothing on the other side can
@@ -552,17 +582,32 @@ socket, the receive buffer, the client. The drop therefore EXPIRES the wait and 
 answers `timedOut`, unwinds its own frame, and its runner reclaims it. The exit code is the witness — a leaked
 box reports 101.
 
-⚠ **`parked > 0` IS WHAT MAKES THIS A POLLER CASE.** A reader that merely yielded at the I/O point ahead of
-its kernel call is also "not complete" and is also reachable by the drop, so the `gtIsComplete` peek alone
-reads GREEN against a runtime with no poller at all — MEASURED, by running exactly that program. Only the
-counter separates a promise dropped off the POLLER from one dropped at a plain I/O yield.
+⚠ **`parked` IS WHAT MAKES THIS A POLLER CASE.** A reader that merely yielded at the I/O point ahead of its
+kernel call is also "not complete" and is also reachable by the drop, so the `gtIsComplete` peek alone reads
+GREEN against a runtime with no poller at all — MEASURED, by running exactly that program. Only the counter
+separates a promise dropped off the POLLER from one dropped at a plain I/O yield.
 
-⚠ **`reader` MUST BE BOUND.** `_ = async stall()` discards the promise at its own statement, before `main`
-sleeps: `stall` never runs, never opens a socket, and the drop takes the never-ran arm. The peek pins that
-the reader really was still parked when it was dropped — a completed thread reads `1`.
+⚠ **`reader` MUST BE BOUND.** `_ = async stall()` discards the promise at its own statement: `stall` never
+runs, never opens a socket, `parkedFrom` stays `0` through every turn of the budget, and the drop takes the
+never-ran arm. The peek pins that the reader really was still parked when it was dropped — a completed thread
+reads `1`.
 ```maxon
+let settleTurns = 1000
+
+var parkedFrom = 0
+
+function parkedInRecv() returns bool
+	if parkedFrom == 0 'notYet'
+		return false
+	end 'notYet'
+
+	return __Builtins.schedNetpollBlockCount() >= parkedFrom
+end 'parkedInRecv'
+
 function stall(listener TcpListener) returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+
+	parkedFrom = __Builtins.schedNetpollBlockCount() + 1
 	_ = try client.recv(1024)
 
 	return 0
@@ -571,13 +616,20 @@ end 'stall'
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 
-	let before = __Builtins.schedNetpollBlockCount()
 	let reader = async stall(listener)
-	sleep(200)
-	let parked = __Builtins.schedNetpollBlockCount() - before
+
+	var parked = parkedInRecv()
+	var turns = 0
+
+	while turns < settleTurns and not parked 'untilParkedInRecv'
+		sleep(1)
+		turns = turns + 1
+		parked = parkedInRecv()
+	end 'untilParkedInRecv'
+
 	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
 
-	print("dropped={parked > 0 and stillWaiting}\n")
+	print("dropped={parked and stillWaiting}\n")
 	return 0 as ExitCode
 end 'main'
 ```
@@ -603,6 +655,13 @@ until the harness kills it.
 
 ⚠ **`sleep(1000)` IS LONGER THAN `main`'s ON PURPOSE.** It puts the reader on the timer arm at the instant of
 the drop with no race at all, which is the one road that reaches this defect on every lane and every run.
+
+⚠ **`parked` HERE IS THE DIAL AND NOT THE READ, AND IT IS NOT THIS CASE'S VERDICT.** At the peek the reader
+is inside its `sleep`, which is a timer park this counter does not see, so the only park in the window is the
+connect's — the term says the coroutine really ran and reached the network, nothing more. What this case
+turns on is the TIMEOUT above: the read it must not open is opened after the peek, and a program that opens
+it never prints at all. `drop-a-parked-reader` is the case that pins a reader INTO its read, and it has to
+wait for the count to move to do it.
 ```maxon
 function stall(listener TcpListener) returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())

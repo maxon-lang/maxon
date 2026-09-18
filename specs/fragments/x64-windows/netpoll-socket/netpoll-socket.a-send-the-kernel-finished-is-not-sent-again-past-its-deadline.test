@@ -590,7 +590,7 @@ func @__ms_send_from {
   msviewb:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
-  __il_body#33:
+  __il_body#34:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
     x64.movRegReg rsi, rdx
@@ -601,16 +601,16 @@ func @__ms_send_from {
     x64.andRegReg rdi, rdi, rdx
     x64.andRegReg rcx, rcx, rsi
     x64.orRegReg rdi, rdi, rcx
-  __il_cont#32:
+  __il_cont#33:
     x64.imulRegReg rax, rax, rdi
-  __il_body#34:
+  __il_body#35:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
     x64.jmp mschkcap
   msownb:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
-  __il_body#39:
+  __il_body#40:
     x64.movRegReg rdx, rcx
     x64.sarRegImm8 rdx, rcx, 63
     x64.movRegReg rsi, rdx
@@ -621,9 +621,9 @@ func @__ms_send_from {
     x64.andRegReg rdi, rdi, rdx
     x64.andRegReg rcx, rcx, rsi
     x64.orRegReg rdi, rdi, rcx
-  __il_cont#38:
+  __il_cont#39:
     x64.imulRegReg rax, rax, rdi
-  __il_body#40:
+  __il_body#41:
     x64.leaRegRegImm32 rax, rax, 7
     x64.shrRegImm8 rax, rax, 3
   mschkcap:
@@ -643,6 +643,9 @@ func @__ms_send_from {
     x64.ret
   mssend:
     x64.callDirect __gt_io_park
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, msfail
+  mssendgo:
     x64.movRegReg r15, r14
     x64.shlRegImm8 r15, r14, 1
     x64.movRegReg rcx, r15
@@ -694,7 +697,7 @@ func @__ms_send_from {
     x64.movRegReg rdx, r12
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r9, 0
-    x64.iatCall 89
+    x64.iatCall 91
     x64.movRegReg rbx, rax
     x64.iatCall 24
     x64.cmpRegImm32 rbx, 0
@@ -728,7 +731,7 @@ func @__ms_send_from {
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, mslatecollected
-  mscollect#23:
+  mscollect#24:
     x64.movRegReg rcx, rbx
     x64.callDirect __np_pd_op_begin
     x64.movRegImm32 rdx, 1
@@ -736,12 +739,12 @@ func @__ms_send_from {
     x64.movRegReg rax, r8
     x64.callDirect __np_pd_wait
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mscollectbad#25
-  mscollected#24:
+    x64.jcc notEqual, mscollectbad#26
+  mscollected#25:
     x64.movRegReg rcx, rbx
     x64.callDirect __np_op_close
     x64.jmp mslatecollected
-  mscollectbad#25:
+  mscollectbad#26:
     x64.movRegImm32 rcx, 111
     x64.movReg32Reg32 rcx, rcx
     x64.callDirect __gt_exit_process
@@ -788,7 +791,7 @@ func @__ms_send_from {
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 rbx, 0
     x64.jcc equal, mscompleted
-  mscollect#26:
+  mscollect#27:
     x64.movRegReg rcx, rbx
     x64.callDirect __np_pd_op_begin
     x64.movRegImm32 rdx, 1
@@ -796,12 +799,12 @@ func @__ms_send_from {
     x64.movRegReg rax, r8
     x64.callDirect __np_pd_wait
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, mscollectbad#28
-  mscollected#27:
+    x64.jcc notEqual, mscollectbad#29
+  mscollected#28:
     x64.movRegReg rcx, rbx
     x64.callDirect __np_op_close
     x64.jmp mscompleted
-  mscollectbad#28:
+  mscollectbad#29:
     x64.movRegImm32 rcx, 111
     x64.movReg32Reg32 rcx, rcx
     x64.callDirect __gt_exit_process
