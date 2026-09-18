@@ -1,0 +1,389 @@
+// Test: slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+let SmallPayload = 96
+let LargePayload = 500
+
+function build(seed Seed, n Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(n as ElementIndex)
+	for i in 0 upto n 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var small = Bufs.create()
+	for k in 0 upto 16000 'allocSmall'
+		small.push(build(k as Seed, n: SmallPayload as Seed))
+	end 'allocSmall'
+	small = Bufs.create()
+
+	// The one door reclamation is reached through: it destroys the spans the drop emptied and puts their
+	// chunks back in the arena's bitmap, where any class can reach them.
+	_ = __Builtins.scavengeMemory()
+
+	let committedAfterDrop = __Builtins.slabCommittedBytes()
+
+	if committedAfterDrop <= 0 'nothingCommitted'
+		return 1
+	end 'nothingCommitted'
+
+	var large = Bufs.create()
+	for k in 0 upto 600 'allocLarge'
+		large.push(build(k as Seed, n: LargePayload as Seed))
+	end 'allocLarge'
+
+	if __Builtins.slabCommittedBytes() > committedAfterDrop 'theSecondClassGrewTheHeap'
+		return 2
+	end 'theSecondClassGrewTheHeap'
+
+	var bad = 0
+	for k in 0 upto 600 'check'
+		let b = try large.get(k) otherwise return 3
+		if b.count() != LargePayload 'length'
+			bad = bad + 1
+		end 'length'
+	end 'check'
+
+	if bad != 0 'corrupted'
+		return 4
+	end 'corrupted'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @build {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#6
+  __rc_chk#7:
+    arm64.cmp x19, 65536
+    arm64.b.gt __rc_panic#6
+  __rc_ok#5:
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic#9
+  __rc_chk#10:
+    arm64.cmp x20, 65536
+    arm64.b.gt __rc_panic#9
+  __rc_ok#8:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+  __rc_ok#20:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_capacity
+    arm64.cmp x20, x0
+    arm64.b.le __il_cont
+  grow:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_mem_grow
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __il_cont:
+    arm64.movImm x22, 0
+    arm64.b forhdr
+  fill:
+    arm64.add x0, x19, x22
+    arm64.movImm x1, 251
+    arm64.udiv x16, x0, x1
+    arm64.msub x1, x16, x1, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#12
+  __rc_chk#13:
+    arm64.cmp x1, 255
+    arm64.b.gt __rc_panic#12
+  __rc_ok#11:
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x22, x22, 1
+  forhdr:
+    arm64.cmp x22, x20
+    arm64.b.lt fill
+  forexit:
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge.test:10: Range check failed: value outside typealias 'Seed'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge.test:10: Range check failed: value outside typealias 'Seed'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#12:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge.test:14: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x22
+    arm64.storeSlotReg slot6, x21
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr#1
+  allocSmall:
+    arm64.movImm x1, 96
+    arm64.movRegReg x0, x20
+    arm64.bl build
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+  forhdr#1:
+    arm64.movImm x16, 16000
+    arm64.cmp x20, x16
+    arm64.b.lt allocSmall
+  forexit#4:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.bl __slab_scavenge
+    arm64.bl __slab_committed_bytes
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.gt ifcont#6
+  nothingCommitted:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x22, 0
+    arm64.b forhdr#7
+  allocLarge:
+    arm64.movImm x1, 500
+    arm64.movRegReg x0, x22
+    arm64.bl build
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_push
+  forstep#9:
+    arm64.add x22, x22, 1
+  forhdr#7:
+    arm64.cmp x22, 600
+    arm64.b.lt allocLarge
+  forexit#10:
+    arm64.bl __slab_committed_bytes
+    arm64.cmp x0, x19
+    arm64.b.le ifcont#12
+  theSecondClassGrewTheHeap:
+    arm64.movImm x19, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#12:
+    arm64.movImm x0, 0
+    arm64.movImm x1, 0
+  __us_test:
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+    arm64.loadRegBaseDisp.word64 x3, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 40]
+    arm64.cmp x4, 0
+    arm64.b.ne forhdr#13
+    arm64.b forhdr#27
+  check#14:
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 8]
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#24
+  __im_load#25:
+    arm64.loadRegBaseDisp.word64 x2, [x21 + 0]
+    arm64.loadRegBaseIndexScale.word64 x2, [x2 + x1*8 + 0]
+    arm64.movImm x3, 0
+    arm64.loadRegBaseDisp.word64 x4, [x21 + 40]
+    arm64.cmp x4, 0
+    arm64.b.eq critsplit#41
+  __im_empty:
+    arm64.cmp x2, 0
+    arm64.b.eq __im_slow#24
+  critsplit#42:
+    arm64.movRegReg x9, x3
+    arm64.b __im_cont#23
+  critsplit#41:
+    arm64.movRegReg x9, x3
+  __im_cont#23:
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok#17:
+    arm64.loadRegBaseDisp.word64 x2, [x2 + 8]
+    arm64.cmp x2, 500
+    arm64.b.eq forstep#15
+  length#19:
+    arm64.add x0, x0, 1
+  forstep#15:
+    arm64.add x1, x1, 1
+  forhdr#13:
+    arm64.cmp x1, 600
+    arm64.b.lt check#14
+    arm64.b forexit#16
+  check#36:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#33
+  __im_load#34:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x1*8 + 0]
+    arm64.movImm x5, 0
+    arm64.movRegReg x9, x5
+  __im_cont#32:
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#30
+  tryerr:
+    arm64.movImm x19, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
+    arm64.ret
+  tryok#30:
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 8]
+    arm64.cmp x4, 500
+    arm64.b.eq forstep#28
+  length#31:
+    arm64.add x0, x0, 1
+  forstep#28:
+    arm64.add x1, x1, 1
+  forhdr#27:
+    arm64.cmp x1, 600
+    arm64.b.lt check#36
+  forexit#16:
+    arm64.cmp x0, 0
+    arm64.b.eq ifcont#22
+  corrupted:
+    arm64.movImm x19, 4
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#22:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
+    arm64.ret
+  __im_slow#24:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x2, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.b __im_cont#23
+  __im_slow#33:
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_get
+    arm64.movRegReg x4, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.b __im_cont#32
+}

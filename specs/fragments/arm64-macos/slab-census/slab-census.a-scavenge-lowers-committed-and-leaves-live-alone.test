@@ -1,0 +1,292 @@
+// Test: slab-census.a-scavenge-lowers-committed-and-leaves-live-alone
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(96)
+	for i in 0 upto 96 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var kept = Bufs.create()
+	for k in 0 upto 200 'keep'
+		kept.push(build(k as Seed))
+	end 'keep'
+
+	var bufs = Bufs.create()
+	for k in 0 upto 16000 'alloc'
+		bufs.push(build(k as Seed))
+	end 'alloc'
+	bufs = Bufs.create()
+
+	let committedBefore = __Builtins.slabCommittedBytes()
+	let parkedBefore = __Builtins.slabParkedBytes()
+	let liveBefore = __Builtins.slabLiveBytes()
+
+	_ = __Builtins.scavengeMemory()
+	_ = __Builtins.scavengeMemory()
+
+	if __Builtins.slabCommittedBytes() >= committedBefore 'nothingDecommitted'
+		return 1
+	end 'nothingDecommitted'
+
+	if __Builtins.slabParkedBytes() >= parkedBefore 'parkedSpansSurvived'
+		return 2
+	end 'parkedSpansSurvived'
+
+	if __Builtins.slabLiveBytes() != liveBefore 'theLiveSetMoved'
+		return 3
+	end 'theLiveSetMoved'
+
+	if kept.count() != 200 'populationLost'
+		return 4
+	end 'populationLost'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @build {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic#6
+  __rc_chk#7:
+    arm64.cmp x19, 65536
+    arm64.b.gt __rc_panic#6
+  __rc_ok#5:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 96
+  __rc_ok#17:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_capacity
+    arm64.cmp x0, 96
+    arm64.b.ge __il_cont
+  grow:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_mem_grow
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __il_cont:
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  fill:
+    arm64.add x0, x19, x21
+    arm64.movImm x1, 251
+    arm64.udiv x16, x0, x1
+    arm64.msub x1, x16, x1, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#9
+  __rc_chk#10:
+    arm64.cmp x1, 255
+    arm64.b.gt __rc_panic#9
+  __rc_ok#8:
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, 96
+    arm64.b.lt fill
+  forexit:
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#6:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at slab-census.a-scavenge-lowers-committed-and-leaves-live-alone.test:7: Range check failed: value outside typealias 'Seed'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic#9:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at slab-census.a-scavenge-lowers-committed-and-leaves-live-alone.test:11: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr#1
+  keep:
+    arm64.movRegReg x0, x20
+    arm64.bl build
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+  forhdr#1:
+    arm64.cmp x20, 200
+    arm64.b.lt keep
+  forexit#4:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.b forhdr#5
+  alloc:
+    arm64.movRegReg x0, x21
+    arm64.bl build
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+  forstep#7:
+    arm64.add x21, x21, 1
+  forhdr#5:
+    arm64.movImm x16, 16000
+    arm64.cmp x21, x16
+    arm64.b.lt alloc
+  forexit#8:
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.bl __slab_committed_bytes
+    arm64.movRegReg x20, x0
+    arm64.bl __slab_parked_bytes
+    arm64.movRegReg x22, x0
+    arm64.bl __slab_live_bytes
+    arm64.movRegReg x23, x0
+    arm64.bl __slab_scavenge
+    arm64.bl __slab_scavenge
+    arm64.bl __slab_committed_bytes
+    arm64.cmp x0, x20
+    arm64.b.lt ifcont#10
+  nothingDecommitted:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#10:
+    arm64.bl __slab_parked_bytes
+    arm64.cmp x0, x22
+    arm64.b.lt ifcont#12
+  parkedSpansSurvived:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#12:
+    arm64.bl __slab_live_bytes
+    arm64.cmp x0, x23
+    arm64.b.eq ifcont#14
+  theLiveSetMoved:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#14:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.cmp x0, 200
+    arm64.b.eq ifcont#16
+  populationLost:
+    arm64.movImm x20, 4
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#16:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

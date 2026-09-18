@@ -1,0 +1,183 @@
+// Test: slab-census.the-walk-reaches-every-metadata-chunk
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+let Population = 60000
+let PayloadBytes = 96
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(PayloadBytes)
+	for i in 0 upto PayloadBytes 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var bufs = Bufs.create()
+	for k in 0 upto Population 'alloc'
+		bufs.push(build((k mod 65536) as Seed))
+	end 'alloc'
+
+	let live = __Builtins.slabLiveBytes()
+
+	if live < (Population * PayloadBytes) 'theWalkMissedSpans'
+		return 1
+	end 'theWalkMissedSpans'
+
+	if bufs.count() != Population 'populationLost'
+		return 2
+	end 'populationLost'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __managed_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b forhdr#1
+  alloc:
+    arm64.asr x0, x20, 63
+    arm64.lsr x0, x0, 48
+    arm64.add x0, x20, x0
+    arm64.asr x0, x0, 16
+    arm64.lsl x0, x0, 16
+    arm64.sub x21, x20, x0
+  __rc_ok#18:
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x22, x0
+    arm64.movImm x23, 96
+  __rc_ok#30:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_capacity
+    arm64.cmp x0, 96
+    arm64.b.ge __il_cont#24
+  grow:
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x23
+    arm64.bl __managed_mem_grow
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#24
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __il_cont#24:
+    arm64.movImm x23, 0
+    arm64.b forhdr#14
+  fill:
+    arm64.add x0, x21, x23
+    arm64.movImm x1, 251
+    arm64.udiv x16, x0, x1
+    arm64.msub x1, x16, x1, x0
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x1, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#21:
+    arm64.movRegReg x0, x22
+    arm64.bl __managed_push
+  forstep#16:
+    arm64.add x23, x23, 1
+  forhdr#14:
+    arm64.cmp x23, 96
+    arm64.b.lt fill
+  __il_cont#12:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x22
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x20, x20, 1
+  forhdr#1:
+    arm64.movImm x16, 60000
+    arm64.cmp x20, x16
+    arm64.b.lt alloc
+  forexit:
+    arm64.bl __slab_live_bytes
+    arm64.movImm x16, 5760000
+    arm64.cmp x0, x16
+    arm64.b.ge ifcont#6
+  theWalkMissedSpans:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#6:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movImm x16, 60000
+    arm64.cmp x0, x16
+    arm64.b.eq ifcont#8
+  populationLost:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at slab-census.the-walk-reaches-every-metadata-chunk.test:14: Range check failed: value outside typealias 'Byte'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
