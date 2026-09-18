@@ -291,7 +291,7 @@ end 'rebaseJumpTableReloc'
 // start. `codeEnd` is `funcStart + chunk.code.count()` — exact and O(1), where a search of the symbol
 // table for the next function would be neither.
 export function foldChunkDebugInfo(chunk FunctionCodeChunk, funcStart CodeOffset, functions DebugFunctionRangeArray, lineRows DebugLineRowArray, covPointOffsets CovPointOffsetArray)
-	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount))
+	functions.push(DebugFunctionRange.create(chunk.funcName, codeStart: funcStart, codeEnd: funcStart + chunk.code.count(), frameSize: chunk.frameSize, paramCount: chunk.paramCount, spillSlotBase: chunk.spillSlotBase))
 
 	for row in chunk.lineRows 'eachRow'
 		lineRows.push(DebugLineRow.create(funcStart + row.codeOffset, spanId: row.spanId))
@@ -414,8 +414,14 @@ export type DebugFunctionRange
 	export var frameSize as StackSize
 	export var paramCount as ParamCount
 
-	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount) returns DebugFunctionRange
-		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount}
+	// Carried on the range so the debug sidecar can place a stack slot without the Target module: deriving
+	// it there asked "does this function make a call?" by walking every op, which is the one thing the
+	// sidecar still needed the module's ops for. ⚠ It is 0 on arm64, whose displacement is frame-relative
+	// and needs no per-function base — a reader must go through `mxdbgFrameDisplacement`, which forks.
+	export var spillSlotBase as StackSize
+
+	export static function create(name ByteArray, codeStart CodeOffset, codeEnd CodeOffset, frameSize StackSize, paramCount ParamCount, spillSlotBase StackSize) returns DebugFunctionRange
+		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, spillSlotBase: spillSlotBase}
 	end 'create'
 end 'DebugFunctionRange'
 
@@ -432,10 +438,7 @@ export typealias DebugFunctionRangeArray = Array with DebugFunctionRange
 // epilogue). `callFixups` records intra-module call sites to patch once every
 // chunk's placement is known. `rdataRelocs` records code→rdata references
 // (chunk-local `codeOffset`, shifted at concat time). `iatRelocs` mirrors that
-// for Windows IAT entries. `rdataConstants` captures the rdata constants this
-// chunk's code registered lazily during emission (float/mask constants), so a
-// cache HIT that skips op emission still re-registers them; empty for the
-// `return 42` slice. `funcAdrpRelocs` records this chunk's arm64 `leaFuncAddr`
+// for Windows IAT entries. `funcAdrpRelocs` records this chunk's arm64 `leaFuncAddr`
 // address pairs (chunk-local `codeOffset`, rebased at concat like `callFixups`);
 // empty for every x64 chunk and for any arm64 chunk that takes no function value.
 export type FunctionCodeChunk
@@ -445,7 +448,6 @@ export type FunctionCodeChunk
 	export var callFixups as CallFixupArray
 	export var rdataRelocs as RdataRelocationArray
 	export var iatRelocs as RelocationArray
-	export var rdataConstants as GlobalDataTable
 	export var funcAdrpRelocs as Arm64FuncAdrpRelocArray
 
 	// This chunk's jump-table block-address relocations (chunk-local `targetTextOffsets`, rebased at concat
@@ -466,6 +468,8 @@ export type FunctionCodeChunk
 	// chunk, which has no `IrFunction` behind it.
 	export var frameSize as StackSize
 	export var paramCount as ParamCount
+
+	export var spillSlotBase as StackSize
 
 	// The function's inline-site table and the CHUNK-LOCAL code range of every run of blocks under one
 	// site (`BacktraceFormat`'s `__inlframes`), rebased and folded at concat like `lineRows`. Both empty
@@ -497,12 +501,12 @@ export type FunctionCodeChunk
 			callFixups: CallFixupArray.create(),
 			rdataRelocs: RdataRelocationArray.create(),
 			iatRelocs: RelocationArray.create(),
-			rdataConstants: GlobalDataTable.create(),
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			jumpTableRelocs: JumpTableRelocArray.create(),
 			lineRows: DebugLineRowArray.create(),
 			covPointOffsets: CovPointOffsetArray.create(),
 			frameSize: 0,
+			spillSlotBase: 0,
 			paramCount: 0,
 			inlineSites: InlineSiteArray.create(),
 			inlineRanges: InlineRangeArray.create(),
@@ -517,7 +521,7 @@ export type FunctionCodeChunk
 	// `funcAdrpRelocs` starts empty and is assigned by the arm64 encoder after the
 	// fact (only its chunks carry any), so this signature — shared by both x64
 	// runtimes — stays unchanged.
-	export static function createWith(funcName ByteArray, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, rdataConstants GlobalDataTable) returns FunctionCodeChunk
+	export static function createWith(funcName ByteArray, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
 			code: code,
@@ -525,12 +529,12 @@ export type FunctionCodeChunk
 			callFixups: callFixups,
 			rdataRelocs: rdataRelocs,
 			iatRelocs: iatRelocs,
-			rdataConstants: rdataConstants,
 			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
 			jumpTableRelocs: JumpTableRelocArray.create(),
 			lineRows: DebugLineRowArray.create(),
 			covPointOffsets: CovPointOffsetArray.create(),
 			frameSize: 0,
+			spillSlotBase: 0,
 			paramCount: 0,
 			inlineSites: InlineSiteArray.create(),
 			inlineRanges: InlineRangeArray.create(),

@@ -183,24 +183,16 @@ export enum RuntimeAbort
 	// founding rule: that one is a bad RANGE inside a real arena, this one is no arena at all.
 	slabAddressOutsideEveryArena = 88
 
-	// ⛔⛔ `__slab_free`: a free reached a span carrying `MspanOwningPParked` — the span is on an mcentral
-	// list, which means EVERY one of its slots is already free. So the pointer handed in is a DOUBLE FREE, or
-	// a slot that outlived the span it came from. It cannot be a benign race: a slot in flight on a remote
-	// queue has not yet been counted into `free_count`, so a span cannot reach `total_slots` — the only way
-	// it gets parked — while anybody still holds one of its slots.
+	// ⛔⛔ `__slab_free`: a free reached a span carrying `MspanOwningPFreed` — the span has been destroyed and
+	// its header is on the metadata free list, so the pointer handed in is a DOUBLE FREE or a slot that
+	// outlived the span it came from. It cannot be a benign race: a span is destroyed only under
+	// `__slab_lock` after its remote chain has been collected and every one of its slots accounted free, so
+	// nobody who holds a live slot can see this sentinel. Left to continue, the free would CAS-push onto a
+	// record another span is about to be handed.
 	//
-	// ⚠ It aborts for ANY caller, on a real P or on a raw OS thread: the counting argument above does
-	// not depend on who is asking. Letting a raw OS thread through instead lands on an out-of-bounds
-	// array read and then a push onto a parked span.
+	// ⚠ It aborts for ANY caller, on a real P or on a raw OS thread: the counting argument does not depend
+	// on who is asking.
 	slabFreeOfParkedSpan = 89
-
-	// `__slab_drain_remote`: a slot on a P's remote-free queue whose page maps to NO span. Every slot that
-	// reaches a queue came through `__slab_free`, which routes a map miss to the OS-direct tier before the
-	// queue exists as an option, and a span is never unregistered while one of its slots is live — so this is
-	// heap corruption that has already happened, caught one step before it is compounded. Unguarded, the
-	// replay would push the slot onto a span pointer of `ArenaMapNoSpan`, i.e. store through address 0 and
-	// then increment the word at 16.
-	slabRemoteFreeSlotHasNoSpan = 90
 
 	// ⛔⛔ `__slab_arena_new`: the arena's base is not a multiple of `SlabArenaCommitGranuleBytes`.
 	//

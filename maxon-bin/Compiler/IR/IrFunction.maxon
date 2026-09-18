@@ -1108,6 +1108,16 @@ let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
 // reach for it either.
 export let sharedEmptyExistentialFieldStores = ExistentialFieldStoreArray.create()
 
+// The columns `IrFunction.releaseMaxonTierData` points a lowered function's Maxon-tier fields at. Shared
+// for `sharedEmptyDebugLocals`' reason and with its invariant, and reached only from the main thread once
+// the Maxon tier is behind the compile.
+let sharedReleasedMaxonParamTypes = MaxonTypeArray.create()
+let sharedReleasedValueTags = ValueTypeTagArray.create()
+let sharedReleasedTypeNameIds = TypeNameIdArray.create()
+let sharedReleasedValueFlags = BoolArray.create()
+let sharedReleasedValueIds = ValueIdArray.create()
+let sharedReleasedExistentialInstances = ValueExistentialInstanceMap.create()
+
 // `stores` ready to be pushed into: itself, or a fresh column in place of the shared empty.
 export function writableExistentialFieldStores(stores ExistentialFieldStoreArray) returns ExistentialFieldStoreArray
 	if stores is sharedEmptyExistentialFieldStores 'theSharedEmpty'
@@ -2032,10 +2042,6 @@ export type IrFunction
 		return relocated
 	end 'relocateFunction'
 
-	// Drop the front-end `Scope` symbol table once lowering has snapshotted the
-	// per-slot data it needs. No Std/backend pass reads `scope`, so resetting
-	// it frees the internal `vars` map + frame stacks while leaving a valid
-	// (empty) Scope in place.
 	// Record one emitted parameter cascade. COPY-ON-WRITE off the shared empty, exactly as the parser's
 	// value columns are and for their reason: the overwhelming majority of functions declare no narrowed
 	// parameter and must not pay an allocation to say so. Keyed on EMPTINESS rather than on one anchor's
@@ -2139,9 +2145,34 @@ export type IrFunction
 		return sites
 	end 'provenanceSitesForWrite'
 
+	// Drop the front-end `Scope` symbol table once lowering has snapshotted the
+	// per-slot data it needs. No Std/backend pass reads `scope`, so resetting
+	// it frees the internal `vars` map + frame stacks while leaving a valid
+	// (empty) Scope in place.
 	export function releaseScope()
 		self.scope.reset()
 	end 'releaseScope'
+
+	export function releaseMaxonTierData()
+		// ⛔ `maxonReturnType` is NOT released, and it is the one field here that may not be.
+		// `irFunctionUsesSecondaryReturnSlot` reads it for wasm's `funcSignatureResultValTypes`, which runs in
+		// the BACKEND — so a released reading of `void` declares a functype with one result for a body that
+		// writes two, and the module fails validation. It answers `void` rather than failing, so nothing
+		// catches it on a target whose ABI never asks: x64 passes the pair in registers and stays green.
+		self.maxonParamTypes = sharedReleasedMaxonParamTypes
+		self.valueTags = sharedReleasedValueTags
+		self.valueNameIds = sharedReleasedTypeNameIds
+		self.valueBrandIds = sharedReleasedTypeNameIds
+		self.valueMintedSole = sharedReleasedValueFlags
+		self.valueIsCapturingClosure = sharedReleasedValueFlags
+		self.valueClosureEnv = sharedReleasedValueIds
+		self.valueWitnessIds = sharedReleasedValueIds
+		self.valueExistentialInstances = sharedReleasedExistentialInstances
+		self.existentialFieldStores = sharedEmptyExistentialFieldStores
+		self.filedProvenance = FiledProvenance.none
+		self.valueColumnsArePrivate = false
+		self.releaseScope()
+	end 'releaseMaxonTierData'
 end 'IrFunction'
 
 export typealias IrFunctionArray = Array with IrFunction

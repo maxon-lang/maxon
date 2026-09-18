@@ -807,4 +807,17 @@ export type PassPipeline
 
 		recordPhase(self.project, phase: compilePhaseOfPass(pass), probe: probe)
 	end 'dispatch'
+
+	// The per-function loop is not covered by the module drop below, and that is the whole point of it.
+	// There is ONE `IrFunction` per function for the entire compile: lowering transfers the same objects
+	// into the Std module and `assembleTargetModule` transfers them again, so dropping the Maxon module
+	// frees its ops, blocks and spans and nothing else. The Maxon-tier COLUMNS ride on functions the back
+	// end still holds.
+	export function releaseMaxonTier()
+		for func in self.stdModule.functions 'eachFunc'
+			func.releaseMaxonTierData()
+		end 'eachFunc'
+
+		self.maxonModule.releaseWholly()
+	end 'releaseMaxonTier'
 end 'PassPipeline'

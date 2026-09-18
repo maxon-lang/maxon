@@ -18,7 +18,7 @@ program, which is what the cases below drive:
 |---|---|
 | **the shard row** | the P read (`emitSlabResolveShard`, emitted inline into `__slab_alloc`/`__slab_free`) walks the scheduler word to the running M and to the P it holds; that P's clamped `id` is the mcache row, and a thread that holds NO P gets the dedicated RAW row (255), never row 0 |
 | **the ownership stamp** | every span carries the P that owns it; a cached span owned by somebody else is a MISS, not something to pop |
-| **the remote-free queue** | a free by a P that does not own the slot's span CAS-pushes it onto the OWNER's Treiber stack, and the owner replays the chain on its next allocation slow path |
+| **the remote-free queue** | a free by a P that does not hold the slot's span cached CAS-pushes it onto the SPAN's own Treiber stack; the chain is collected when a P takes that span off its class's list, when an exhausted span is relisted, and by the scavenger |
 
 ⛔⛔ **THIS PARAGRAPH SAID A SPEC CASE COULD NOT SET `MAXON_MAX_PROCS`, AND THAT HAS EXPIRED** — the harness
 gained a per-case processor marker (`specs/sched-default-procs.md` owns it), and the default is now the
@@ -49,10 +49,11 @@ What a ONE-processor program CAN reach, and what each case below is for:
   with no P at all, so those spans are owned by nobody and live on the raw row. Freeing one of them
   AFTER the scheduler exists takes the serialised path — the one arm of the lock an ordinary
   single-threaded program reaches, and it reaches it on **every** green-thread program.
-* **the parked sentinel.** A span whose last slot comes back is parked on mcentral with its owner
-  cleared to a sentinel that is neither a P nor "no P"; the next refill re-stamps it. A free that
-  observed that sentinel would be a double free, and the runtime aborts (`slabFreeOfParkedSpan`, exit
-  89) rather than pushing onto a span that is already fully free.
+* **the uncached sentinels.** A span a processor has drained is stamped with a sentinel that is neither a
+  P nor "no P" and reaches its class's mcentral list on the next free into it; the next refill re-stamps
+  it. A free that observed the DEAD sentinel would be a double free — the span's last slot has already
+  come back and the header is on the metadata free list — and the runtime aborts
+  (`slabFreeOfParkedSpan`, exit 89) rather than writing through a recycled record.
 
 ⚠ **WHAT IS NOT REACHABLE FROM HERE, STATED SO NOBODY READS SILENCE AS COVERAGE**: the ownership gate
 actually REJECTING a span, two threads contending for the raw row, and — since EC8 — whether the traffic
@@ -235,22 +236,24 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-parked-span-is-taken-back-and-re-owned -->
-**THE PARKED SENTINEL, ROUND-TRIPPED.** A span whose last slot comes back is unlinked from its owner's
-mcache row, parked on mcentral and stamped with an owner that is neither a processor nor "no
-processor". The next refill takes it back and re-stamps it. This case empties a class's spans wholesale
-and then re-fills the same class, twice over, so every span in it makes that round trip several times.
+**THE UNCACHED SENTINELS, ROUND-TRIPPED.** A span whose last slot is handed OUT is unlinked from its
+owner's mcache row and stamped with an owner that is neither a processor nor "no processor"; the first
+free back into it lists it on mcentral, and the next refill takes it back and re-stamps it. This case
+empties a class's spans wholesale and then re-fills the same class, twice over, so every span in it
+makes that round trip several times.
 
-⛔ **THE FAILURE IS AN ABORT, NOT A WRONG ANSWER.** A free that reached a span still carrying the parked
-sentinel would be a double free of a span already fully returned, and `__slab_free` exits **89** rather
-than pushing onto it — so a refill that forgot to re-stamp the owner cannot pass this case by accident.
-A refill that stamped the WRONG owner is caught by the survivors instead.
+⛔ **THE FAILURE IS AN ABORT, NOT A WRONG ANSWER.** A free that reached a span carrying the DEAD sentinel
+would be a double free of a span whose header has already gone back to the metadata slab, and
+`__slab_free` exits **89** rather than writing through it — so a refill that forgot to re-stamp the owner
+cannot pass this case by accident. A refill that stamped the WRONG owner is caught by the survivors
+instead.
 
 ⚠⚠ **THE `async` IS LOAD-BEARING AND IS NOT DECORATION — WITHOUT IT THIS CASE READS A DIFFERENT ARM OF
 `__slab_free`.** The allocator is one shape in every heap program, but WHICH arm a free takes is decided by
 the span's owner, and a program with no scheduler allocates with no P: every span it cuts is stamped
-`MspanOwningPNone`, so every free of one goes down the raw arm, which compares no owner and never reads the
-parked sentinel. A real P is what stamps a span with a real owner, and the parked/mine/remote routing this
-case is about begins there.
+`MspanOwningPNone`, so every free of one goes down the raw arm, which compares no owner and never reads an
+uncached sentinel. A real P is what stamps a span with a real owner, and the uncached/mine/remote routing
+this case is about begins there.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -322,19 +325,19 @@ end 'main'
 ```
 
 <!-- test: slab-sharding.a-parked-span-still-reaches-the-scavenger -->
-**THE OWNER STAMP AND THE SCAVENGER, TOGETHER.** The scavenger destroys spans off the mcentral lists,
-and since S5 every one of those carries the parked sentinel in the field the mcache eviction is derived
-from. This is the two-pass grace case run through a GREEN THREAD, so the spans it empties were owned by
-a real processor before they parked — the combination the single-threaded scavenger cases cannot make.
+**THE OWNER STAMP AND THE SCAVENGER, TOGETHER.** The scavenger destroys spans off the mcentral lists, and
+every one of those carries an uncached sentinel in the field the mcache eviction wrote. This is the
+two-pass grace case run through a GREEN THREAD, so the spans it destroys were owned by a real processor
+before they were emptied — the combination the single-threaded scavenger cases cannot make.
 
-⚠ Two calls, because the grace guard releases nothing on the first: that is `slab-scavenger`'s rule, and
-it is restated here only to say that sharding did not change it.
+⚠ Two calls, because the granule grace releases nothing on the first: that is `slab-scavenger`'s rule,
+and it is restated here only to say that sharding did not change it.
 
 ⚠ **THIS ONE IS COVERAGE, NOT A DISCRIMINATOR, AND SAYING SO IS THE POINT.** MEASURED against a compiler
 whose refill had been stripped of its owner stamp, the three cases above exit 89 and this one still PASSES
 — its population is large enough that almost every span it touches is freshly CUT rather than taken back
 off mcentral, and a freshly cut span's header is zeroed, which reads as a valid "no owner". It earns its
-place by driving the scavenger over spans a processor owned; it does not stand in for the cases above.
+place by driving the destruction over spans a processor owned; it does not stand in for the cases above.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -487,7 +490,8 @@ end 'main'
 <!-- procs: 1 -->
 ⭐ **`__Builtins.slabRemoteFreeCount()` EXISTS BECAUSE THE CROSS-P FREE HAD PRODUCERS AND NO OBSERVER.** A
 box `main` allocates and a `spawn`ed service drops is released by whichever machine ran that receiver —
-`SlabRuntime`'s remote-free road, a CAS push onto the owning P's Treiber stack. `service-torture` and
+`SlabRuntime`'s remote-free road, a CAS push onto the SPAN's own Treiber stack, credited to the PUSHER. So
+what it counts is frees PERFORMED across processors rather than frees received. `service-torture` and
 `service-fanin-torture` drive thousands of those, and `multicore-stress/README.md` said what that was worth: the road
 was **exercised but not observed**. This counter is the observation; it is per-P and summed like
 `schedStealCount()`, so it costs no `.data` word and no golden churn.

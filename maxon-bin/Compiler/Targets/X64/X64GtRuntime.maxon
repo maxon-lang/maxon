@@ -271,7 +271,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 
 	code.push(OpcodeRet)
 
-	return FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
 end 'buildGtContextSwitchChunk'
 
 // `__gt_trampoline` — the entry a FRESH green thread `ret`s into on its first switch-in. NOT a normal call:
@@ -334,7 +334,7 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtSwitchFromReg, src: GtTrampGtReg, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtContextSwitchName)
 
-	return FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
 end 'buildGtTrampolineChunk'
 
 // --- The Win32 syscall shim ---
@@ -1093,7 +1093,7 @@ function buildGtShimEnterChunk(target Target) returns FunctionCodeChunk
 	emitShimLockDepthStep(code, m: X64Register.rax, delta: OneMore)
 	code.push(OpcodeRet)
 
-	return FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create())
 end 'buildGtShimEnterChunk'
 
 function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
@@ -1528,7 +1528,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: true, target: target)
 	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)
 
-	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 end 'buildGtMorestackChunk'
 
 // The registers `__gt_stack_relocate` works in. The five persistent ones are callee-saved in the internal ABI, which
@@ -1629,7 +1629,7 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	end 'pop'
 
 	code.push(OpcodeRet)
-	return FunctionCodeChunk.createWith(GtStackRelocateName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtStackRelocateName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs)
 end 'buildGtStackRelocateChunk'
 
 // The guard word of the GT in `gt` set to its stack's base plus the guard height — where every stack the thread
@@ -1762,7 +1762,7 @@ function buildGtGuardTrippedChunk() returns FunctionCodeChunk
 	encodeJmpDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 	resolveChunkRel32Fixups(code, labelOffsets: labels, rel32Fixups: fixups)
 
-	return FunctionCodeChunk.createWith(GtGuardTrippedName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(GtGuardTrippedName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
 end 'buildGtGuardTrippedChunk'
 
 // ⭐⭐ **THE PREEMPT ARM: A REQUEST IS HONOURED ON THE GREEN THREAD's OWN STACK — Go's `newstack` preempt arm**,
@@ -2102,7 +2102,7 @@ function buildGtAsyncPreemptChunk() returns FunctionCodeChunk
 
 	_ = emitAsyncPreemptBody(code, callFixups: callFixups)
 
-	return FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
 end 'buildGtAsyncPreemptChunk'
 
 // The trampoline's bytes, and the answer `x64GtAsyncPreemptStackBytes` measures itself with — one emitter, so

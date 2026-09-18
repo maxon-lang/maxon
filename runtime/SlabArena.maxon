@@ -91,7 +91,7 @@ let SlabArenaCommitGranuleChunksShift = 3
 let SlabArenaCommitGranuleShift = 16
 
 // The metadata chunk's layout: the arena-list link, then the chunk bitmap, then the granule COMMIT bitmap
-// immediately past it at the derived offset below.
+// and the granule SEEN-FREE bitmap, each immediately past the last at the derived offsets below.
 let ArenaNextOffset = 0
 let ArenaBitmapOffset = 8
 
@@ -131,6 +131,16 @@ let ArenaCommitBitmapOffset = ArenaBitmapOffset + ArenaBitmapBytes
 // Rounded up: the wasm lane has 8 granules, which do not fill one bitmap word, and a truncating divide
 // would walk none of them and report the arena as holding nothing.
 let ArenaCommitBitmapWords = (ArenaGranuleCount + BitmapBitsPerWord - 1) shr BitmapBitsPerWordShift
+
+// ⭐⭐ **THE SCAVENGER'S GRACE BITMAP, ONE BIT PER GRANULE BESIDE THE COMMIT ONE.** A set bit means *"this
+// granule was entirely free when a scavenge last looked"*, which is what makes a release take TWO calls: the
+// first marks, the second decommits what is still marked and still free. `slabArenaCommitGranulesFor` clears
+// the bit for every granule a chunk run touches, so a granule that was reused between two calls starts its
+// grace again and a heap that cycles a population pays neither a decommit nor the re-commit after it.
+//
+// It is the same width as the commit bitmap and it needs no initialisation, for that bitmap's reason: a
+// fresh reservation is zero and a zero bit MEANS "not seen free".
+let ArenaSeenFreeBitmapOffset = ArenaCommitBitmapOffset + ArenaCommitBitmapWords * ArenaWordBytes
 let ArenaBytes = ArenaChunkCount * SlabPageBytes
 let ArenaReservationBytes = ArenaBytes + ArenaAlignSlackBytes
 let ArenaAllocatableChunks = ArenaChunkCount - ArenaMetadataChunks
@@ -406,7 +416,13 @@ module function __slab_arena_of(addr ArenaWord) returns ArenaWord
 end '__slab_arena_of'
 
 // `__slab_arena_scavenge() -> bytesDecommitted` — drop the physical backing of every commit granule, in
-// every arena, whose chunks are ALL free, and answer how many bytes that was.
+// every arena, whose chunks have been ALL free across two calls, and answer how many bytes that was.
+//
+// ⭐⭐ **THE TWO-EPOCH GRACE LIVES HERE, AT THE GRANULE.** The first call over a newly free granule only
+// MARKS it (`ArenaSeenFreeBitmapOffset`); the second decommits one still free and still marked; and a chunk
+// claim clears the mark. That is what keeps a cycling working set off the syscall — and it is asked of the
+// granule rather than of a span because a span is what the layer above destroys the instant its last slot
+// comes back, so by the time this runs there is no idleness left up there to measure.
 //
 // ⭐⭐ **THE UNIT IS THE GRANULE AND NOT THE SPAN, AND THAT IS A CORRECTNESS ARGUMENT RATHER THAN A BATCHING
 // ONE.** A span's own footprint is chunk-granular, and on a 16 KiB-page lane such a range is neither aligned
@@ -434,6 +450,18 @@ module function __slab_arena_scavenge() returns ArenaWord
 			let commitWord = __Raw.loadWord(commitWordAddr as MachineWord, offset: ArenaCommitBitmapOffset) as ArenaWord
 			let commitBitPos = (granule and BitmapBitsPerWordMask) as BitmapBitPosition
 
+			// ⭐ **A COMMIT WORD OF 0 IS 64 GRANULES NOTHING BACKS, AND IT IS SKIPPED WHOLE.** The bitmap is
+			// 16 words where the granule index runs to 1024, so walking granule by granule re-reads the same
+			// word 63 times out of 64 to reach a decision the word already made — and the reserving lane's
+			// arena is mostly unbacked, which is the case this skip is for.
+			// `__slab_arena_committed_bytes` walks the same bitmap the same way.
+			if commitBitPos == 0 'atWordStart'
+				if commitWord == 0 'wholeWordUnbacked'
+					granule = granule + BitmapBitsPerWord
+					continue
+				end 'wholeWordUnbacked'
+			end 'atWordStart'
+
 			if ((commitWord shr commitBitPos) and 1) == 0 'notBacked'
 				granule = granule + 1
 				continue
@@ -449,7 +477,14 @@ module function __slab_arena_scavenge() returns ArenaWord
 				continue
 			end 'inUse'
 
+			if not slabArenaGranuleWasSeenFree(commitWordAddr, bitPos: commitBitPos) 'firstPass'
+				slabArenaMarkGranuleSeenFree(commitWordAddr, bitPos: commitBitPos, seen: true)
+				granule = granule + 1
+				continue
+			end 'firstPass'
+
 			__Raw.osDecommitPages((arena + (granule shl SlabArenaCommitGranuleShift)) as MachineWord, size: SlabArenaCommitGranuleBytes as MachineWord)
+			slabArenaMarkGranuleSeenFree(commitWordAddr, bitPos: commitBitPos, seen: false)
 
 			// The bit falls only after the OS has been told, so a granule can never be marked unbacked while
 			// its pages are still resident — the direction that matters, since the opposite marking is what a
@@ -465,6 +500,38 @@ module function __slab_arena_scavenge() returns ArenaWord
 
 	return released
 end '__slab_arena_scavenge'
+
+// ⚠ **BOTH TAKE THE WORD ADDRESS AND THE BIT POSITION THE CALLER ALREADY HOLDS, RATHER THAN A GRANULE
+// INDEX.** The grace bitmap is indexed exactly as the commit bitmap is, so every caller has computed that
+// address one line earlier; deriving it a second time here would be the word-and-bit pair written twice
+// that `slabArenaMarkChunkRun` exists to prevent, and a multiply and a shift per granule on the claim path.
+
+// Has a scavenge already found this granule entirely free, with nothing claimed in it since?
+function slabArenaGranuleWasSeenFree(wordAddr ArenaWord, bitPos BitmapBitPosition) returns bool
+	let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaSeenFreeBitmapOffset) as ArenaWord
+
+	return ((word shr bitPos) and 1) != 0
+end 'slabArenaGranuleWasSeenFree'
+
+// Raise or drop one granule's grace bit. One writer for both directions, so the two cannot describe
+// different bits.
+//
+// ⚠ **THE CLEAR STORES ONLY WHEN THE BIT WAS SET**, because its hot caller is the claim path, where the bit
+// is already clear for every granule of an arena nothing has scavenged.
+function slabArenaMarkGranuleSeenFree(wordAddr ArenaWord, bitPos BitmapBitPosition, seen bool)
+	let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaSeenFreeBitmapOffset) as ArenaWord
+	let bit = 1 shl bitPos
+
+	if seen 'raise'
+		__Raw.storeWord(wordAddr as MachineWord, offset: ArenaSeenFreeBitmapOffset, value: (word or bit) as MachineWord)
+
+		return
+	end 'raise'
+
+	if (word and bit) != 0 'wasMarked'
+		__Raw.storeWord(wordAddr as MachineWord, offset: ArenaSeenFreeBitmapOffset, value: (word and (bit xor AllOnesWord)) as MachineWord)
+	end 'wasMarked'
+end 'slabArenaMarkGranuleSeenFree'
 
 // Precondition: the caller holds `__slab_lock`. Every claim and every scavenge writes these bitmaps, so
 // an unlocked walk reads a granule mid-transition.
@@ -605,6 +672,12 @@ function slabArenaCommitGranulesFor(arenaBase ArenaWord, firstChunk ArenaWord, p
 			// rather than leaving the arena claiming pages it does not have.
 			__Raw.storeWord(wordAddr as MachineWord, offset: ArenaCommitBitmapOffset, value: (word or (1 shl bitPos)) as MachineWord)
 		end 'unbacked'
+
+		// ⛔ **THE CLAIM IS WHAT RESTARTS THE SCAVENGER'S GRACE, AND IT IS ASKED OF EVERY GRANULE THE RUN
+		// TOUCHES RATHER THAN ONLY THE ONES COMMITTED HERE.** A granule marked free by one scavenge, reused,
+		// and released again before the next would otherwise be decommitted on that next call with no grace
+		// at all — the working set paying a syscall and a re-commit for having been busy.
+		slabArenaMarkGranuleSeenFree(wordAddr, bitPos: bitPos, seen: false)
 
 		granule = granule + 1
 	end 'granules'

@@ -206,6 +206,37 @@ end 'countTokens'
 A type cannot contain itself (**E4014**), so reference cycles between records cannot be built and reference
 counting reclaims everything.
 
+### Returning Memory to the Operating System
+
+Freeing a record returns its slot to the allocator, not to the operating system. The allocator hands the
+slot back to the size class it came from, so the next record of that size reuses it — but a program's
+resident set otherwise stays at its high-water mark for the life of the process.
+
+`__Builtins.scavengeMemory()` is the one call that changes that. It returns the number of bytes whose
+physical backing was handed back, and it does two things no other road does:
+
+- **Chunks go back to the page layer, where any size class can take them.** A size class the program has
+  finished with is holding memory nothing else can use until this call releases it.
+- **Whole 64 KiB granules that nothing is using are decommitted.**
+
+```maxon
+// after a burst has been allocated and released
+_ = __Builtins.scavengeMemory()            // chunks return to the page layer; nothing is decommitted yet
+let released = __Builtins.scavengeMemory() // granules still free are decommitted; `released` is the bytes
+```
+
+⚠ **The first call after a population is dropped returns 0.** A granule is released only if it was
+already entirely free when the previous call looked at it, so a program that reuses its memory between two
+calls never pays a decommit and a re-commit for having been busy. **A caller that wants memory back after a
+burst therefore calls it twice.**
+
+The address space is not returned and the reservation is not shrunk — only the physical backing goes. What
+the operating system then reports as the process's resident set is its own answer, which is why the figure
+here is bytes the allocator asked it to drop rather than bytes observed to leave.
+
+The five `__Builtins.slab*Bytes()` readings report what the heap holds at any moment, including how much of
+it is the backlog this call would return.
+
 ### The Leak Checker
 
 Every program that uses the heap checks, when `main` returns, that every allocation was released. If any

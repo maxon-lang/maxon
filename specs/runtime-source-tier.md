@@ -76,9 +76,9 @@ but the walk to "which processor am I" is a `tlsSlotLoad` on four lanes and a co
 (`TargetFacilities.machineModel`), and tier source is compiled once for every lane.
 
 ⇒ **A FAMILY'S PARTITION IS DECIDED BY ITS BUILD-TIME ARGUMENTS BEFORE ITS CALL GRAPH IS EVEN CONSULTED, AND
-THE SECOND-SPELLING TEST IS ASKED AFTER BOTH.** Nine of the object layer's fourteen entry points are blocked
-by the machine model; three more by the second-spelling rule (`__slab_drain_remote`, `__slab_rounded_size` and
-`__slab_span_destroy` each share a walk with a body that stays); and the five that move take neither.
+THE SECOND-SPELLING TEST IS ASKED AFTER BOTH.** Most of the object layer's entry points are blocked by the
+machine model; two more by the second-spelling rule (`__slab_rounded_size` and `__slab_span_destroy` each
+share a walk with a body that stays); and the ones that moved take neither.
 
 ## Tests
 
@@ -255,11 +255,13 @@ the `.data` slot is laid out where a surviving body names it, and the call site 
 
 ⚠ **THAT LAST ARGUMENT IS THE CPU-PARALLEL QUERIES' AND NOT EVERY FAMILY'S.** The slab arena's two words
 (`slabArenaListAddr`, `slabArenaMapL1Addr`) are read by tier bodies whose callers are `StdOp.call` sites an
-INSTALLER mints, so there is no call site in any Maxon body to set a bit from. Their slot rides a DECLARED
-bit instead (`RuntimeUsage.closeSlabNeeds`), and what makes that sound is that the only minter of a call
-into the family — `SlabRuntime.installSlabRuntime` — reads the same `usesHeap` the declaration does.
-⇒ **a family whose entry points the compiler reaches by minting a call owes that declaration, not this
-paragraph's coincidence.**
+INSTALLER mints, so there is no call site in any Maxon body to set a bit from. Their slot rides no bit at
+all: each is `DataReach.walked` and is laid out exactly where a SURVIVING arena body names it, which is a
+fact about the emitted module rather than about the usage record. What makes that sound is that the only
+minter of a call into the family — `SlabRuntime.installSlabRuntime` — returns before emitting anything
+unless `usesHeap`, so a program that cannot allocate keeps neither the bodies nor the words.
+⇒ **a family whose entry points the compiler reaches by minting a call cannot be gated by a DISCOVERED
+bit, and owes an argument of its own — not this paragraph's coincidence.**
 ```maxon
 // --- runtime-file: Probe.maxon
 function probeProcessorCount() returns MachineWord

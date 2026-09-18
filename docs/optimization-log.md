@@ -1071,7 +1071,10 @@ allocator was.
 `__Builtins.slabLiveBytes` / `slabFreeBytes` / `slabCachedFreeBytes` / `slabParkedBytes` /
 `slabCommittedBytes` are five **levels** that close that gap, sampled at every phase boundary under
 `--metrics` or `--log=compiler:debug` (`CompileMemory.PhaseResidency`, columns 7–11 of the metrics TSV).
-`live + free` is every slot of every live span, so the pair is checkable rather than merely plausible.
+`live + free` is every slot of every live span, so the pair is a relation a walk can be checked against
+rather than merely plausible. It is a bound and not an equation: a span destroyed by `scavengeMemory()`
+takes its slots out of the accounting altogether, and a cross-processor free in flight is counted free from
+the moment its count is stepped rather than from the moment it is chained.
 
 ### Baseline — 2026-09-17, `maxon build maxon-bin` at `e00cf30f32`
 
@@ -1092,13 +1095,75 @@ Peak committed falls at `link`; peak live falls at `inlineLeaves`:
 | peak live (at `inlineLeaves`) | 3,643,822,952 | — |
 
 **The headline is the fourth row.** Of 2.65 GB of free slots at the peak, 2.5 MB — one part in a
-thousand — is in a span some processor's mcache still points at. The rest is in spans that ran out of
-slots, were dropped from the mcache, and then had almost all their slots freed: a span is only ever
-reused once it becomes *entirely* free, so one surviving object pins every other slot in it for the
-life of the process. 535 MB more is in spans that did become entirely free and are parked on their own
-size class's mcentral list, where no other class can take their chunks and where nothing decommits them
-because the compiler never calls `scavengeMemory()`.
+thousand — was in a span some processor's mcache still pointed at. The rest was in spans that ran out of
+slots, were dropped from the mcache, and then had almost all their slots freed: **at this commit** a span
+was only ever reused once it became *entirely* free, so one surviving object pinned every other slot in it
+for the life of the process. 535 MB more was in spans that did become entirely free and were parked on
+their own size class's mcentral list, where no other class could take their chunks and where nothing
+decommitted them because the compiler never calls `scavengeMemory()`. The Result section below is what
+changed both of those.
 
-So the 5.8 GB splits roughly in half: **~3.1 GB the compiler is genuinely holding** and **~2.65 GB the
-allocator is holding and cannot hand back**. `live + free` is 5.75 GB against 6.14 GB committed, so
+So the 5.8 GB split roughly in half: **~3.1 GB the compiler was genuinely holding** and **~2.65 GB the
+allocator was holding and could not hand back**. `live + free` is 5.75 GB against 6.14 GB committed, so
 fragmentation and metadata are under 7% — essentially all of it is object slots.
+
+### Result — 2026-09-18, the peak roughly halved, and what it cost
+
+Four changes land together: the allocator adopts Go's ownership shape (a span is owned only while
+cached, exhausted spans go on a per-class partial list any processor may take from, each span carries
+its own remote-free stack); a fully free span's chunks return to the arena class-agnostically, reached
+through `__Builtins.scavengeMemory()`; eight compiler structures are released as soon as they are dead;
+and the backend pool bounds in-flight work by estimated size.
+
+**Measured interleaved, `MAXON_MAX_PROCS=16`, alternating arms, in two sittings.** ⚠ The MEMORY figure is
+exact — the new arm reads within 0.01% across every run, because reclamation is now deterministic. The
+WALL figure is a RANGE and is quoted as one on purpose: the baseline itself measured 31.7 s in one
+sitting and 29.5 s in another, so the ratio moves by three points between sittings while the change
+stays put. A single-sitting number here would read as more precise than this machine can support.
+
+| | peak commit | peak working set | wall | objects alive at teardown |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 5,775–5,846 MB | 5,706–5,816 MB | 29.5–31.7 s | 36,124,215 |
+| this change | **3,242 MB** | **3,231 MB** | 34.0–35.4 s | **4,156,656** |
+| | **−44%** | **−44%** | **+12% to +15%** | **−88.5%** |
+
+⚠ **THE CPU COST IS REAL, IT WAS PAID DELIBERATELY, AND IT IS NOT A DEFECT TO BE FOUND LATER.** Every
+mechanism here lowers the peak by doing work earlier: reusing a partially free span is allocator work on
+the free path, and releasing dead structures moves 34.0M frees onto the critical path instead of leaving
+them to process exit. A separate `releaseIr` phase row exists so that work is attributed rather than
+landing in `unattributedCost`.
+
+Decomposed across the four compilers, same input, same sitting:
+
+| compiler | wall | vs baseline |
+| --- | ---: | ---: |
+| baseline | 31.7 s | — |
+| + span ownership | 33.8 s | +6.7% |
+| + compiler lifetimes | 34.9 s | +10.3% |
+| + class-agnostic return, gates | 35.4 s | +11.6% |
+
+⭐ **THE ALLOCATOR HALF COSTS MORE THAN THE COMPILER HALF AND RETURNS LESS PER POINT.** Span ownership
+buys ~21% of the peak for 6.7% of the wall; the lifetime releases buy ~23% more for 3.6%.
+
+**What the census says the heap now looks like**, same phase as the baseline table above:
+
+| figure | baseline | after |
+| --- | ---: | ---: |
+| live | 3,099 MB | unmoved |
+| free — on some span's free list | 2,653 MB | 1,645 MB |
+| …of which whole spans with no live slot | 535 MB | 721 MB |
+| committed | 6,143 MB | 2,456 MB |
+
+**The fourth row is the one that changed character.** A span with one survivor no longer pins its other
+slots: any processor may take that span off the partial list and allocate from it. What remains parked
+is a bounded backlog — spans whose class nobody has refilled — and `scavengeMemory()` is the one door
+that returns their chunks to the page layer for any class to use.
+
+**Scale ladder: linear.** Allocations per doubling 1.39, 1.54, 1.71, 1.84, 1.92 — converging on ×2 from
+below, so nothing here is superlinear in program size. ⚠ The run's `allocsDelta` column is not
+attributable: the previous row was minted from a different corpus on another path and reports
+`bytesComparable: false`.
+
+**Correctness, since this is allocator work:** 900 swept stress runs across 1/2/4/7/16 processors with
+no allocator abort, three generation-2 self-compiles, a byte-identical two-generation fixpoint, and
+29 of 29 `slab-*` spec cases.

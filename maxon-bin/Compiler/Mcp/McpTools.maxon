@@ -314,7 +314,7 @@ end 'InProcessCompile'
 // program rather than producing or running one, so there is no binary, no `.ir` file and no child whose
 // output has to be read back: the pipeline stops at a `CodeResult`, exactly as `maxon lsp-server` compiles
 // a buffer. The capture keeps the pipeline's diagnostics off this server's own streams.
-function compileInProcess(reqDoc JsonDoc, args OptionalNode) returns InProcessCompile
+function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool) returns InProcessCompile
 	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: "")
 	beginDiagnosticCapture()
 
@@ -330,6 +330,8 @@ function compileInProcess(reqDoc JsonDoc, args OptionalNode) returns InProcessCo
 		reportCompileError(e)
 		return InProcessCompile.refused(endDiagnosticCapture())
 	end 'notLoaded'
+
+	project.rendersTargetIr = rendersTargetIr
 
 	return match checkWithoutWriting(project) 'compile'
 		compiled(codeResult) gives InProcessCompile.compiled(project, codeResult: codeResult, diagnostics: endDiagnosticCapture())
@@ -352,7 +354,7 @@ end 'addCompileOutcome'
 export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
-	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args))
+	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false))
 
 	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeCheckTool'
@@ -361,7 +363,7 @@ end 'executeCheckTool'
 export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
-	let compile = compileInProcess(reqDoc, args: args)
+	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true)
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compile)
 
 	let irText = match compile 'ir'

@@ -14,23 +14,35 @@ this call. It is the only door onto the allocator's reclamation path, and the nu
 a Maxon program can see of it — `slab-allocator.md` explains why a program can never name a span, a
 class or a chunk.
 
-Everything below `__slab_free` recycles WITHIN the process: a slot goes back to its span's free list,
-and a span whose every slot is free parks on its class's mcentral list for the next refill. That is
-where reclamation stopped before this rung, and the consequence was that **a program's resident set
-was its high-water mark, for the life of the process.**
+Everything below `__slab_free` recycles WITHIN the process, and only within a SIZE CLASS: a slot goes back
+to its span's free list, and a span a processor has drained reaches that class's list, where any processor
+may take it back and allocate from it again. ⛔ **Nothing on that road destroys a span** — a refill hands
+even a fully free one back to its own class, which is what keeps the free path lock-free and costs the
+allocator nothing per free. So a chunk never reaches a different class, a page never goes back to the
+OPERATING SYSTEM, and without those two **a program's resident set is its high-water mark, for the life of
+the process.**
 
-The scavenger is what closes it, in three steps that happen in one call:
+⛔ **THE SCAVENGER IS THE ONLY ROAD TO EITHER, AND A PROGRAM THAT NEVER CALLS IT RECLAIMS NEITHER.** Three
+steps happen in one call:
 
 | Step | What moves |
 |---|---|
-| **1. grace** | every span parked on an mcentral list is marked `SEEN_FREE`. Nothing is released. |
-| **2. release** | a span that was ALREADY `SEEN_FREE` — it stayed idle across two calls — is destroyed: its pages are unregistered from the reverse map, its chunk run goes back to the arena's bitmap, and its mspan header goes on the metadata free list. |
-| **3. decommit** | every 64 KiB commit granule of every arena whose chunks are now ALL free has its physical backing dropped (`osDecommitPages`) and its commit bit cleared. |
+| **1. sweep** | every span on every mcentral list whose slots have ALL come back is destroyed: its pages are unregistered from the reverse map, its chunk run goes back to the arena's bitmap, and its mspan header goes on the metadata free list. This is what lets a different size class claim those chunks. |
+| **2. grace** | every 64 KiB commit granule whose chunks are now ALL free is MARKED. Nothing is released. |
+| **3. decommit** | a granule that was ALREADY marked — all free across two calls — has its physical backing dropped (`osDecommitPages`), its commit bit cleared and its mark cleared with it. |
 
-⭐⭐ **THE TWO-EPOCH GRACE IS WHY STEP 1 AND STEP 2 ARE SEPARATE CALLS.** A span that empties and refills
-between two scavenges never reaches step 2, so a workload that cycles a population does not pay a
-release, a memzero and a syscall per cycle. **The first call after a population is dropped therefore
-returns exactly 0** — that is the grace working, not a failure — and the second returns the bytes.
+A chunk claim clears the mark for every granule the run touches, which is what makes steps 2 and 3 a
+grace rather than a delay.
+
+⭐⭐ **THE TWO-EPOCH GRACE IS WHY STEP 2 AND STEP 3 ARE SEPARATE CALLS.** A granule that is reused
+between two scavenges never reaches step 3, so a workload that cycles a population pays neither the
+syscall nor the re-commit after it. **The first call after a population is dropped therefore returns
+exactly 0** — that is the grace working, not a failure — and the second returns the bytes.
+
+⚠ **THE GRACE IS ASKED OF THE GRANULE AND NOT OF THE SPAN, AND THAT IS WHERE IT MOVED.** It used to be a
+two-pass idleness test on each parked span, which a sweep that destroys every idle span in step 1 has
+nothing left to measure. The question *"has this memory stayed unused?"* belongs to the unit that can still
+answer it — the committed granule — and the cases below did not change.
 
 ⭐ **THE DECOMMIT IS AT THE ARENA'S GRANULE, NOT AT THE SPAN.** A span's chunk run is 8 KiB-granular and
 `madvise` REFUSES an address that is not page-aligned — on arm64-macOS a page is **16 KiB**, twice a
@@ -65,12 +77,13 @@ one cuts, because a spec that would pass against the previous allocator proves n
 
 ⛔ **THAT SECOND RECLASSIFICATION IS A MEASUREMENT, NOT A HEDGE, AND IT IS WORTH THE PARAGRAPH.** The
 liveness case was written to catch a scavenger that reaches a span still holding live slots. The break that
-would cause that is `__slab_free` parking a span that is NOT fully free — and with exactly that break in
-place, **all six cases stayed GREEN**. The reason is the allocator's own shape: `__slab_refill` takes the
-HEAD of an mcentral list, and a wrongly-parked live span is the head, so the very next allocation pulls it
-straight back and `install` resets its grace state to `ACTIVE`. A scavenge never sees it. ⇒ the property
-"only fully-free spans reach the scavenger" is enforced by `__slab_free`'s test and by nothing this file
-can observe, and saying the case catches it would have been a claim with a measurement against it.
+would cause that is a span reaching an mcentral list while it is NOT fully free — and with exactly that
+break in place, **all six cases stayed GREEN**. The reason is the allocator's own shape: `__slab_refill`
+takes the HEAD of an mcentral list, and the wrongly-listed live span is the head, so the very next
+allocation pulls it straight back and the sweep never sees it. ⇒ the property "only fully-free spans are
+destroyed" is enforced by the `free_count == total_slots` test in `__slab_scavenge`'s own walk and by
+nothing this file can observe, and saying the case catches it would have been a claim with a measurement
+against it.
 
 ⚠ **All six fail against a compiler with no scavenger at all** — `E3004`, the builtin does not exist —
 which is the RED this file was written against before a line of the mechanism was in the tree.
@@ -84,11 +97,16 @@ run and the sources restored and re-hashed against their pristine copies between
 | The break | What went RED |
 |---|---|
 | `__slab_arena_free_chunks` fills the released run with `0x3F` instead of 0 — **INV-4 gone** | `released-chunks-come-back-zeroed` **139 (segfault)**, `a-released-chunk-serves-a-different-class` **101 (the leak gate)** |
-| the grace test inverted, so a span is destroyed the FIRST time it is seen idle | `two-passes-…` **1 = `graceSkipped`**; both reuse cases 1, having nothing left to reuse |
+| the grace test inverted, so a run is released the FIRST time it is seen idle | `two-passes-…` **1 = `graceSkipped`**; both reuse cases 1, having nothing left to reuse |
 | `__slab_arena_free_chunks` RE-CLAIMS the run instead of releasing it | `two-passes-…` **2 = `nothingReleased`**; both reuse cases 1 |
 | the decommit leaves the granule's COMMIT bit SET, so a later claim never re-backs it | both reuse cases **139** — the access violation the commit bitmap exists to prevent |
 | the "is every chunk of this granule free?" test inverted, so a granule is decommitted while it is IN USE | **all six 139** — the first one starts by decommitting the granule holding the arena's own bitmap |
-| `__slab_free` parks a span that is NOT fully free | **nothing** — see the reclassification above; this is the row that changed what this file claims |
+| a span reaches an mcentral list while it is NOT fully free | **nothing** — see the reclassification above; this is the row that changed what this file claims |
+
+⚠ **THE GRACE ROWS WERE MEASURED WHILE THE GRACE WAS A TWO-PASS IDLENESS TEST ON A PARKED SPAN.** It is a
+two-pass test on a COMMIT GRANULE now, and the sighting is unchanged in both directions — the same
+inversion releases on the first call and reddens `two-passes-…` at `graceSkipped`, and the same case
+asserts it. What moved is which bitmap the test reads, not what it decides.
 
 ⭐ **The breaks are told apart by WHICH case goes red and WITH WHAT CODE**, which is the property that makes
 them a net rather than one alarm: a single red case would say the scavenger is broken, and these say *where*.
@@ -382,7 +400,7 @@ end 'main'
 <!-- test: slab-scavenger.an-os-direct-mapping-is-not-a-span -->
 **THE BOUNDARY CASE — REGRESSION-ONLY.** A 300 KB buffer is past `SlabMaxSmallSize`, so it is its own
 mapping and is registered in NO arena and NO reverse-map slot: a map MISS *is* the OS-direct sentinel.
-The scavenger walks mcentral lists and arena bitmaps, so it must never see this mapping at all — while
+The scavenger walks the classes' lists and the arena bitmaps, so it must never see this mapping at all — while
 it is live, and after it is freed, when its pages have gone back to the OS whole rather than to a
 chunk bitmap.
 

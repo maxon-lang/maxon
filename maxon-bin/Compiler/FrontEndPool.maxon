@@ -169,9 +169,15 @@ type FrontEndWorker
 		self.state.hold(index)
 	end 'adopt'
 
-	export function report() returns FrontEndWorkerReport
+	// ⚠ The index is released HERE, on the worker's own thread and awaited, rather than left to the drop of
+	// the last handle to this service. Dropping a handle only lets the service's green thread finish when
+	// the scheduler next runs it, and the whole back end can pass before that — leaving one private index
+	// copy per worker alive across the backend peak. This is the one point where no later drain can want
+	// the copy back.
+	export function retire() returns FrontEndWorkerReport
+		self.state.releaseIndex()
 		return FrontEndWorkerReport.of(self.state.costs)
-	end 'report'
+	end 'retire'
 end 'FrontEndWorker'
 
 // ⭐⭐ **WHAT A WORKER HOLDS AND DOES: its own keyword table, the build facts the `#if` filter reads, its private
@@ -199,6 +205,10 @@ type FrontEndWorkerState
 		self.ownIndex.clear()
 		self.ownIndex.push(index)
 	end 'hold'
+
+	export function releaseIndex()
+		self.ownIndex.clear()
+	end 'releaseIndex'
 
 	// ⛔ **POPPED, NOT READ** — see `FrontEndJob`.
 	export function ran(job FrontEndJob) returns FrontEndOutcome
@@ -372,7 +382,7 @@ module type FrontEndPool
 
 		for slot in 0 upto self.workers.count() 'eachReport'
 			var worker = try self.workers.get(slot) otherwise panic("FrontEndPool.close: workers.get OOB at {slot} below count {self.workers.count()}")
-			let report = try await worker.report() otherwise panic("{workerGoneMessage("FrontEndPool.close", subject: "worker {slot}")}")
+			let report = try await worker.retire() otherwise panic("{workerGoneMessage("FrontEndPool.close", subject: "worker {slot}")}")
 			self.foldCosts(project, costs: report.costs)
 		end 'eachReport'
 

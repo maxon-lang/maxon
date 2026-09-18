@@ -101,7 +101,7 @@
 // processor can reach.
 // ⚠⚠ **ITS PREMISE IS *"A P HAS AT MOST ONE M AT ANY INSTANT"*, WHICH IS WEAKER THAN A BINDING FOR AN M's
 // LIFE AND IS ALL THE SHARD NEEDS.** Only the M HOLDING a P allocates from that P's mcache row
-// (`SlabRuntime.emitSlabShardRow` keys on `M->currentP->id`, and an M holding no P takes the raw shard under
+// (`SlabRuntime.emitSlabResolveShard` keys on `M->currentP->id`, and an M holding no P takes the raw shard under
 // the lock), so the row has exactly one writer at a time however many Ms hold the P over its life. A
 // processor really does move between machines, and the weaker sentence is what carries it across the move: a
 // processor on the idle list is held by nobody and is taken off it by exactly one machine, under
@@ -820,13 +820,10 @@ let POffFreeListLen = 0x68 as ByteOffset
 // The stack belongs to the M that is EXECUTING. Reserved, not reused, for `POffReservedCurrentGt`'s reason.
 let POffReservedSystemStackSP = 0x70 as ByteOffset
 
-// ⭐ **THE HEAD OF THIS P's MPSC REMOTE-FREE QUEUE — a Treiber stack, and it is LIVE.** An M that frees a
-// slot whose span another P owns CAS-pushes it here, and the owner drains it on its next slow path
-// (`SlabRuntime.maxon`'s header for the mechanism, and its two readers at the push and the drain).
-//
-// ⛔ **A P CARRIES CROSS-THREAD STATE AND THIS SLOT IS IT** — nothing reasoning about P migration may assume
-// otherwise.
-export let POffRemoteFreeHead = 0x78 as ByteOffset
+// Reserved, not reused, for `POffReservedCurrentGt`'s reason. A remote-free queue belongs to the SPAN
+// (`SlabRuntime.MspanRemoteHeadOffset`), so a processor holds no queue of its own and going idle strands
+// nothing.
+let POffReservedRemoteFreeHead = 0x78 as ByteOffset
 
 // ⭐ **THIS P's SCHEDULE COUNTER — Go's `schedtick`, and the reading `__Builtins.schedSliceCount()` sums.** One
 // up per call of `__sched_find_runnable` that starts a SLICE, and every 61st consults the GLOBAL queue before
@@ -859,7 +856,7 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 // steps it, and a reader that wants it exact reads it after its work has finished, which is when it is.
 let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 
-// ⭐⭐⭐ **HOW MANY SLOTS HAVE BEEN FREED ONTO THIS PROCESSOR'S REMOTE-FREE QUEUE BY SOMEBODY ELSE — the
+// ⭐⭐⭐ **HOW MANY SLOTS THIS PROCESSOR HAS QUEUED AGAINST A SPAN IT DOES NOT HOLD CACHED — the
 // reading `__Builtins.slabRemoteFreeCount()` sums, and the ONE way a program can observe that the
 // cross-processor free road was TAKEN rather than merely built.** `multicore-stress/service-torture` and
 // `multicore-stress/service-fanin-torture` push thousands of heap boxes across machines in each direction, and
@@ -872,28 +869,28 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 // state. It sits beside the two counters above because it is the same shape asked of the same array, which
 // is why all three are summed by ONE parameterised body (`buildSchedPerProcSum`).
 //
-// ⛔⛔ **IT IS CREDITED TO THE **TARGET** P — THE ONE WHOSE QUEUE RECEIVES THE SLOT — AND NOT TO THE FREEING
-// P. THE CHOICE IS FORCED, NOT A PREFERENCE.** The sum is over every P either way, so the total is the same
-// number whenever both parties have a P; what differs is the case where the FREEING side has none.
-// `SlabRuntime.emitSlabResolveShard` answers `MspanOwningPNone` for three real situations — before
-// `__sched_init_procs` has run, on an OS thread holding no M,
-// and on an M holding no P — and every one of those can free a box whose span a live P owns. That IS a
-// cross-processor free and it takes this road; crediting the pusher would have to store through a sentinel,
-// so it would need a guard, and the guard would DROP exactly those frees from the count. The target, by
-// contrast, is a live P by construction: `buildSlabFree` has already ruled out both `MspanOwningPNone` and
-// `MspanOwningPParked` before it reaches the push. ⇒ target-credit needs no branch and loses no free.
+// ⛔⛔ **IT IS CREDITED TO THE FREEING P, BECAUSE THE SPAN HAS NO OWNING P TO CREDIT.** The queue belongs to
+// the SPAN (`SlabRuntime.MspanRemoteHeadOffset`), and a span reaches the remote road precisely when no
+// processor holds it cached — so there is no target side to step. What this counts is therefore frees
+// PERFORMED across processors rather than frees received; the total is the same whenever both parties have
+// a P.
 //
-// ⚠⚠ **AND THAT IS WHY IT IS THE ONE PER-P COUNTER STEPPED WITH AN `atomicRmw` RATHER THAN A PLAIN
-// LOAD/ADD/STORE.** Its two neighbours are single-writer — a P counts its OWN steals, and sysmon is the only
-// party that retakes — so each may use a plain read-modify-write. This one is MPSC by construction, the same
-// many-producers property that makes the queue beside it a Treiber stack: every other machine in the process
-// may be crediting one P at the same instant, and a plain step would lose exactly the counts a contended run
-// exists to produce. One `lock xadd` on a path that already executes a CAS loop.
-// ⚠ All three step through `MmRuntime.emitFieldAccumulate`, whose `multiM` argument HAS NO DEFAULT for
-// `emitGlobalAccumulate`'s stated reason: the wrong answer here is a count that is merely TOO SMALL, which no
-// suite, no leak gate and no fixpoint can see — so the sequence is shared and the decision is not.
+// ⚠ **A FREER THAT HOLDS NO P IS NOT COUNTED, AND THE GAP IS DELIBERATE.**
+// `SlabRuntime.emitSlabResolveShard` answers `MspanOwningPNone` before `__sched_init_procs` has run, on an
+// OS thread holding no M, and on an M holding no P; crediting one of those would store through a sentinel,
+// so `emitSlabRemotePush` branches past the step instead. A reading of 0 does not prove the road was never
+// taken.
+//
+// ⚠⚠ **IT IS THE ONE PER-P COUNTER STEPPED WITH AN `atomicRmw` RATHER THAN A PLAIN LOAD/ADD/STORE.** Its
+// two neighbours are written by a party that cannot be two — a P counts its OWN steals, and sysmon is the
+// only one that retakes. This word is written by whichever machine currently holds the P, which is one
+// machine at a time and not one machine, so a plain step is not the same argument. It is one `lock xadd` on
+// a path that already executes a CAS loop, against a wrong answer that is merely TOO SMALL — which no
+// suite, no leak gate and no fixpoint can see. All three step through `MmRuntime.emitFieldAccumulate`,
+// whose `multiM` argument HAS NO DEFAULT for `emitGlobalAccumulate`'s stated reason: the sequence is shared
+// and the decision is not.
 // EXPORTED, unlike its two neighbours, because its one WRITER is in another file: the credit happens at
-// `SlabRuntime.emitSlabRemotePush`, where the slot is handed over. The sum stays here with the walk.
+// `SlabRuntime.emitSlabRemotePush`, where the slot is queued. The sum stays here with the walk.
 export let POffRemoteFreeCount = POffRetakeCount + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐⭐ **`__sched_pidle`'s LINK — Go's `p.link` as `pidleput`/`pidleget` use it (`proc.go:7425`/`:7454`),
@@ -5526,7 +5523,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// that queue next and takes a processor to run it, so a program with nothing else running does not start a
 	// machine for work this one is about to do. ⚠ **THIS IS THE PRODUCER FOR `emitSlabResolveShard`'s P-LESS-M
 	// ARM**: anything the two walks allocate is allocated with `M->currentP` at 0, so
-	// `SlabRuntime.emitSlabShardRow` routes it to the raw row under the slab's own lock. The walks take
+	// `SlabRuntime.emitSlabResolveShard` routes it to the raw row under the slab's own lock. The walks take
 	// `__sched_lock` again, recursively.
 	emitSchedLockEnter(module, block: polled, ids: ids)
 	emitStoreGlobalWord(module, block: polled, label: SchedLastPollLabel, value: emitGtNowNs(module, block: polled, ids: ids), ids: ids)

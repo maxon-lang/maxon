@@ -753,6 +753,20 @@ export type IrModule uses Op
 			self.functions.push(IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset))
 		end 'eachFunc'
 	end 'merge'
+
+	// The module's SHELL survives: its function list and the dozen or so flags `PeWriter` and the link step
+	// read after the encode. Only what the ops, blocks and spans hold goes.
+	export function releaseBody()
+		self.ops = OpArray.create()
+		self.blocks = IrBlockArray.create()
+		self.blockSourceInfo = BlockSourceInfoArray.create()
+		self.spans.releaseRows()
+	end 'releaseBody'
+
+	export function releaseWholly()
+		self.functions = IrFunctionArray.create()
+		self.releaseBody()
+	end 'releaseWholly'
 end 'IrModule'
 
 // THE SLOTS ONE FUNCTION'S OPS MAY BE PLACED BACK INTO (`IrModule.placeOp`): the function's own live

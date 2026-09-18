@@ -2660,11 +2660,9 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 
 	arm64ResolveBlockBranches(code, blockOffsets: blockOffsets, fixups: branchFixups)
 
-	// The scalar core registers no rdata constants inside a function chunk (float islands are
-	// registered upstream by the lowering); the field stays empty, exactly as x64's does this rung.
 	// `funcAdrpRelocs` is assigned after the fact so `createWith`'s signature — shared with the x64
 	// runtimes — stays unchanged (only arm64 chunks carry any).
-	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
@@ -2861,7 +2859,10 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	// The chunks' own PRE-LINK bytes, for the one reader `code` cannot serve: a ```RequiredRuntime
 	// golden over a hand-assembled chunk (here, the entry stub — arm64 builds it as bytes, not as a
 	// Target function). See `CodeResult.codeChunks`.
-	result.codeChunks = chunks
+	if project.rendersTargetIr 'thePrinterWillWalkThem'
+		result.codeChunks = chunks
+	end 'thePrinterWillWalkThem'
+
 	result.debugFunctions = debugFunctions
 	result.debugLineRows = debugLineRows
 
@@ -3003,6 +3004,8 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
+	releaseAllocatedStdModule(project, stdModule: stdModule)
+
 	// The Target-tier CFG cleanup must run HERE — after the allocator's `applyAllocation` and before the
 	// frame pass.
 	// A block whose only op is an `arm64Branch` is genuinely empty only once SSA destruction has placed
@@ -3074,6 +3077,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	end 'gtChunks'
 
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
 	let codeResult = try concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)

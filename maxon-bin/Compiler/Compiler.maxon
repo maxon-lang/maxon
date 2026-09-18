@@ -168,6 +168,8 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	project.asyncTrace = asyncTrace
 	project.debugInfo = debugInfo
 	project.requestedRuntimeBodies = runtimeIrNames
+	project.rendersTargetIr = emitIr
+	project.compilesOnceAndExits = true
 	project.coverage = coverage
 	project.productVersion = productVersion
 	project.defines = defines
@@ -617,6 +619,10 @@ end 'checkWithoutWriting'
 // The Target IR text of a finished compile: what `--emit-ir` writes and `maxon/generateIR` answers. What it
 // shows and withholds is stated at the render in `compileMeasured`.
 module function renderTargetIr(project Project, codeResult CodeResult) returns String
+	if not project.rendersTargetIr 'nothingWasKeptToRender'
+		panic("renderTargetIr: this compile left `project.rendersTargetIr` false, so `releaseEncodedTargetModule` released the Target module's body after the encode and the backend kept no `codeChunks` — the render would be silently EMPTY. A caller that wants this text must set `project.rendersTargetIr` before `compileToCodeResult` runs.")
+	end 'nothingWasKeptToRender'
+
 	return printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, runtimeNames: project.requestedRuntimeBodies, codeChunks: codeResult.codeChunks, libraryFunctions: project.libraryFacts.libraryFunctions, runtimeTier: project.libraryFacts.runtimeTier)
 end 'renderTargetIr'
 
@@ -747,6 +753,23 @@ function reportDefineProblems(project Project)
 		reportDiagnostic(project, diagnostic: Diagnostic.create(problem.code, message: problem.message))
 	end 'eachProblem'
 end 'reportDefineProblems'
+
+// Asked at the seam between the Maxon tier and the lowering pipeline, which is the last point the value
+// columns are readable — `releaseMaxonTier` swaps them for shared empties — and the first point past every
+// legitimate refusal, because `PassPipeline.run` re-checks for diagnostics after every pass.
+//
+// ⚠ It reads `valueTags` and NOT the signature columns. `resolveType` already panics on those, and the
+// closure lift publishes `MaxonType.integer` in place of an `unresolved` body type — so the signature is
+// exactly where the lie would be invisible.
+function requireNoUnresolvedTagsSurvivedTheMaxonTier(module MaxonModule)
+	for func in module.functions 'eachFunc'
+		for (iter, tag) in func.valueTags.withIterator() 'eachValue'
+			if tagIsUnresolved(tag) 'anUnresolvedSurvived'
+				panic("requireNoUnresolvedTagsSurvivedTheMaxonTier: v{iter.index()} of '{String.from(func.name)}' still carries an `unresolved` type tag past `semanticCheck`. An `unresolved` is minted only for a call whose callee `ProgramSignatures.returnTypeOf` reported UNDECLARED, and `SemanticCheck.validateCall` must have refused that program with E3004 before this line. A tag surviving here means some undeclared callee escapes that refusal — and a closure whose body type is this value publishes `MaxonType.integer` as its return type (Parser's closure lift), so the program would be EMITTED returning an int from a body that returns something else.")
+			end 'anUnresolvedSurvived'
+		end 'eachValue'
+	end 'eachFunc'
+end 'requireNoUnresolvedTagsSurvivedTheMaxonTier'
 
 // Drive the query spine + mid/lowering pipeline + backend for an already-loaded
 // `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
@@ -1040,6 +1063,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		try refuseCompile(project)
 	end 'maxonTierFailed'
 
+	requireNoUnresolvedTagsSurvivedTheMaxonTier(module)
+
+	if project.compilesOnceAndExits 'noLaterQueryWillAsk'
+		let frontEndReleaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
+		project.db.releaseFrontEndCaches()
+		recordPhase(project, phase: CompilePhase.releaseIr, probe: frontEndReleaseProbe)
+	end 'noLaterQueryWillAsk'
+
 	let scanProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deriveRuntimeNeeds)
 
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT. A `return 42` program allocates nothing,
@@ -1154,13 +1185,6 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// each allocate inside a body synthesized after the pipeline, so each declares the heap from its own
 	// walk. A reader that ran before them would miss exactly those programs.
 	//
-	// ⭐ **THE HEAP CARRIES THE ARENA WITH IT, AND THAT DECLARATION IS WHAT OPENS `usesSlabArena`.**
-	// `__slab_alloc` cuts its spans out of the chunk arena and `__slab_free` asks the reverse map who owns a
-	// pointer — both from SYNTHESIZED Std bodies the Maxon-module walk structurally cannot see, which is rule
-	// 2 of `RuntimeUsage`'s header (a synthesized body's calls are DECLARED, never discovered). A bit unset
-	// while the allocator ships is a `globalAddr` on a slot nothing laid out.
-	closeSlabNeeds(usage)
-
 	// Every plain function used as a first-class value (`let f = triple`, `apply(triple, …)`) is called
 	// through the uniform `(userargs, env)` indirect ABI, whose signature its own `(userargs) -> R` shape does
 	// not match. Its `__fnref_` env-thunk targets are collected from the MAXON module — which the pipeline
@@ -1222,6 +1246,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	try pipeline.run(buildLoweringPasses()) otherwise 'loweringFailed'
 		try refuseCompile(project)
 	end 'loweringFailed'
+
+	// ⚠ After the WHOLE lowering list and not after `lowerMaxonToStd`: `ValueTupleReturn` is the last pass
+	// that reads `func.maxonReturnType`, and a released column answers `void` rather than failing.
+	let maxonReleaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
+	pipeline.releaseMaxonTier()
+	recordPhase(project, phase: CompilePhase.releaseIr, probe: maxonReleaseProbe)
 
 	// ⭐ **`Ordering`'s DECLARATION, READ ONCE FOR THE WHOLE BACK END (W3).** The two runtime installs below
 	// that emit a `compare` — the builtin-conformance impls and the grapheme runtime's `__char_cmp` — turn
@@ -1389,16 +1419,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		installMmRuntime(pipeline.stdModule, usage: usage, target: project.target)
 	end 'installMm'
 
-	// The slab's PAGE LAYER (`__slab_arena_*` + `__slab_assert_os_alloc`) — the chunk arena the spans above
-	// it are cut from, installed the same already-lowered way on its OWN `usesSlabArena` bit. It sits
-	// beside the allocator because it is the layer BENEATH it, and the call is unconditional for a second
-	// reason: `installSlabArena` also runs the arena-geometry check, which must not be gated on an install
-	// (see its header).
-	installSlabArena(pipeline.stdModule, usage: usage)
+	// The slab's page layer builds nothing: every `__slab_arena_*` entry is `runtime/SlabArena.maxon`
+	// source, and the one walk a builder still emits is spliced inline into `__slab_free`. What is left is
+	// the geometry check, which runs on every compile rather than only where a program allocates — see its
+	// header for why a check gated on an install is a check that reports a breakage to whoever comes next.
+	checkSlabArenaGeometry()
 
 	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
-	// the allocator `__mm_alloc` takes its boxes from. Unconditional for `installSlabArena`'s reason (it
-	// runs the record-layout and size-class checks ahead of its own `usesHeap` gate), and it takes
+	// the allocator `__mm_alloc` takes its boxes from. Called unconditionally and gated inside, because it
+	// runs the record-layout and size-class checks as well as emitting, and it takes
 	// `globalData` because it REGISTERS as well as emits: its three `.rdata` tables must be in the table
 	// before the backend lays that section out, exactly as `installUnicodeCategoryRuntime`'s two are.
 	installSlabRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, target: project.target)

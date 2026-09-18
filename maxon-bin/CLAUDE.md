@@ -262,9 +262,8 @@ Four doors are still standing open rather than shut:
   `__slab_os_direct_alloc`/`__slab_os_direct_free`, the whole of the above-32 KiB road, plus
   `__slab_state_base` and the metadata slab's `__slab_meta_alloc`/`__slab_meta_free`. NINE of the rest are
   emitted DIFFERENTLY per TARGET off the machine model — the TLS read that answers *"which P am I"* is a
-  constant on wasm. The other two are blocked the arena's way: `__slab_drain_remote` calls
-  `__slab_arena_map_get`, and `__slab_rounded_size` shares `emitSlabClassIndex` with `__slab_alloc`, so
-  porting either alone would be a second spelling of one walk.
+  constant on wasm. `__slab_rounded_size` is blocked a different way: it shares `emitSlabClassIndex` with
+  `__slab_alloc`, so porting it alone would be a second spelling of one walk.
   ⛔⛔ **AND `__slab_span_destroy` IS BLOCKED THAT SAME WAY, WHICH IS NOT WHERE ITS BLOCKER WAS PREDICTED.**
   It reads no usage record and every callee it names is now tier source, so the closure argument really does
   reach it — but it and `__slab_refill` compute a span's chunk run from the same packed class geometry, and
@@ -276,10 +275,11 @@ Four doors are still standing open rather than shut:
   size itself; `checkSlabRuntimeGeometry` compares that derivation against `TierStateBytes`/`TierStateChunks`
   on every compile of every allocating program. Without it a regenerated ladder is a request one chunk too
   small — an mcache running off the end of its run, silently. **A RESTATED DERIVATION OWES A PIN.**
-  ⛔ **THE NINTH — `__slab_arena_map_get` — STAYS A BUILDER, AND THAT IS NOT DEBT**:
-  `__slab_free` splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads
-  and three tests is overhead on the path of every free in the language, so porting it would be a SECOND
-  spelling of one walk. The atomics are still spelled only by UNREACHED probe cases, and the caveat below is
+  ⛔ **THE REVERSE MAP'S READ SIDE IS NOT AN ENTRY POINT AT ALL, AND THAT IS NOT DEBT**: `__slab_free`
+  splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads and three
+  tests is overhead on the path of every free in the language. It had a behind-a-frame twin for as long as
+  something replayed a queue of slots whose spans it did not know; each slot now carries its span, so the
+  inline splice is the only spelling and porting it would be a SECOND one. The atomics are still spelled only by UNREACHED probe cases, and the caveat below is
   theirs: **WHAT A PROBE CASE PROVES STOPS AT THE PARSER AND THE Maxon→Std LOWERING** — the probe is
   uncalled, so dead-function elimination drops the body before instruction selection and no lane's isel is
   consulted.
@@ -291,13 +291,12 @@ Four doors are still standing open rather than shut:
   ⭐⭐ **AND THE ARENA'S TWO `.data` WORDS ARE ADDRESSED BY ROWS OF THEIR OWN** —
   `slabArenaListAddr` and `slabArenaMapL1Addr`, lowering to a `globalAddr` on
   `SlabArena.SlabArenaListLabel`/`SlabArenaMapL1Label`, and laid out as `DataReach.walked` words exactly
-  where a surviving arena body names them. `RuntimeUsage.usesSlabArena` still gates the one builder-built
-  entry (`installSlabArena`) and is DECLARED (`closeSlabNeeds`) because the arena's callers are `StdOp.call`
-  sites an INSTALLER mints, so there is no Maxon call site to discover it from; what makes that sound is
-  that the ONLY minter of a call into the family, `installSlabRuntime`, returns before emitting anything
-  unless `usesHeap` — the same bit the declaration reads, and `closeSlabNeeds` runs after every producer
-  of it.
-  ⛔⛔ **THE FAMILY HAS NO DISCOVERED ARM, AND ADDING ONE BACK WOULD SET THE BIT IN EVERY PROGRAM.** Its
+  where a surviving arena body names them. **THE FAMILY CARRIES NO USAGE BIT AND NO INSTALLER AT ALL**: every
+  `__slab_arena_*` entry is tier source, so there is no builder-built body for a bit to gate and nothing for
+  an installer to mint. What remains at the install site is the geometry check, which therefore runs on every
+  compile rather than only where a program allocates — a check gated on an install is a check that reports a
+  breakage to whoever comes next.
+  ⛔⛔ **THE FAMILY HAS NO DISCOVERED ARM, AND A PREFIX ARM WOULD BE WORSE THAN REDUNDANT.** Its
   entry points are tier SOURCE, so its bodies are in the walked Maxon module and call each other; no file
   outside the tier may name one, so a `__slab_arena_*` callee the walk can SEE is always the family talking
   to itself. ⇒ **once a family's bodies move into the tier, its prefix arm in `recordCallUsage` stops being

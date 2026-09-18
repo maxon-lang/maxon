@@ -35,8 +35,8 @@
 // with no scheduler and the same program after its first `async`. On a `singleMachine` target (wasm) the
 // walk that reads that word is a constant, because the backend has no TLS slot to read.
 //
-// ⚠ **THE SCAVENGER DESTROYS THE SPAN RATHER THAN DECOMMITTING ITS FOOTPRINT.** Its chunks go back to the
-// arena and the decommit happens at the arena's 64 KiB commit granule. The reason is not taste: a span's
+// ⚠ **A FULLY FREE SPAN IS DESTROYED RATHER THAN HAVING ITS FOOTPRINT DECOMMITTED.** Its chunks go back to
+// the arena and the decommit happens at the arena's 64 KiB commit granule. The reason is not taste: a span's
 // footprint is 8 KiB-granular, `madvise` refuses an address that is not page-aligned, and arm64-macOS's
 // page is 16 KiB — see `SlabArena.buildSlabArenaScavenge` for the two ways a per-span decommit goes wrong
 // there and for why Go answers the same question at the page layer too.
@@ -118,71 +118,67 @@ let MspanNextSpanOffset = 24 as ByteOffset
 let MspanClassIdxOffset = 32 as ByteOffset
 let MspanBumpNextOffset = 40 as ByteOffset
 
-// ⭐⭐ **WHO OWNS THIS SPAN — the P pointer, `MspanOwningPNone`, or `MspanOwningPParked`.** It answers two
-// questions no other field can, and both of them are corruption when guessed:
+// Who owns this span: a P pointer, or one of the negative states below.
 //
-//   * **MAY I POP FROM IT?** A span recycled to another P keeps `free_count != 0`, so a depletion test
-//     cannot tell a span this row still owns from one it merely still points at.
-//   * **WHERE DOES A FREE OF ONE OF ITS SLOTS GO?** To this P's own free list if it is mine, and onto the
-//     OWNER's remote queue otherwise — which is the whole of `buildSlabFree`'s routing.
+// A span recycled to another P keeps `free_count != 0`, so nothing but this field tells a span an mcache
+// row still owns from one it merely still points at — and popping from the second hands one slot to two
+// processors.
 //
-// ⭐ **IT IS A P POINTER AND NOT A P *ID*.** An id has to be turned back into a P on every cross-P free,
-// which costs two loads and needs a bounded array lookup to be safe against a sentinel id. A pointer needs
-// no array, no bound and no second export from `SchedRuntime`. The one thing the id buys — the mcache
-// ROW — is one load away (`POffId`), on the alloc path that needs the row anyway.
-//
-// ⭐ **AND IT REPLACES the `cached_shard` word rather than joining it, so the record stays 64 bytes.** The
-// owner's row answers "which row still points at this span?" in O(1), because a span can only ever be
-// cached in its OWNER's row — `__slab_refill` installs it and stamps the owner in one block, and it
-// reaches mcentral only through the return below, which clears that row first.
+// It holds a P POINTER rather than a P id, because a cross-processor free would otherwise turn the id
+// back into a P through a bounded array lookup on every free. The one thing an id buys — the mcache row —
+// is one load away (`POffId`), on the alloc path that needs the row anyway.
 let MspanOwningPOffset = 48 as ByteOffset
 
-// ⭐⭐ **THE TWO-EPOCH GRACE GUARD (S6) — ONE WORD, AND IT IS WHAT KEEPS AN ACTIVE WORKING SET RESIDENT.**
-// The scavenger only destroys a span it has already SEEN idle on an mcentral list once before, so a span
-// that empties and refills between two calls never reaches the release path and pays neither the chunk-free
-// memzero nor a syscall. Without it a workload that cycles a population pays both, per cycle, forever.
-let MspanScavStateOffset = 56 as ByteOffset
-
-// ⭐ **THE STATES, AND WHY THERE ARE ONLY TWO.** A `DECOMMITTED` state would drop a span's pages and KEEP
-// the span, so a later reuse would have to re-back it. The span's CHUNKS are released instead — to the
-// arena, where any class can take them and where whole granules become decommittable — and a span with no
-// chunks is not a state, it is gone. So the machine is
-// `ACTIVE → SEEN_FREE → destroyed`, and the terminal transition has no value to store because it has no
-// record to store one in.
+// Slots freed by a thread that does not hold this span cached. A Treiber stack anyone may CAS-push and
+// only the caching P pops, which is what lets the owner's own free list stay a single-writer structure
+// while a span is reachable from every processor at once.
 //
-// ⚠ **`ACTIVE` IS 0, WHICH IS NOT AN ACCIDENT AND IS NOT LOAD-BEARING EITHER.** `__slab_refill` writes it
-// explicitly on both paths (see the `install` block), because a recycled mspan header holds STALE DATA
-// rather than zero — the rule `runtime/SlabRuntime.maxon`'s `__slab_meta_alloc` states in full.
-let MspanScavActive = 0
-let MspanScavSeenFree = 1
+// The span carries this rather than the P, so a span can move between processors without stranding the
+// frees queued against it. A per-P queue is drained only by that P, so a worker that goes idle holds every
+// slot the main thread later frees into its spans.
+let MspanRemoteHeadOffset = 56 as ByteOffset
+
+// How many slots are on that list. `free_count` cannot answer, because only the caching processor writes
+// it and a queued slot arrived from a thread that was not it — so a census reading `total - free_count`
+// alone reports a queued slot as live, and a span whose queue nobody has collected as fully in use.
+//
+// ⚠ It is stepped by the same push that moves the head, so the two are consistent for any reader holding
+// `__slab_lock`. A reader without the lock can see the count and the chain disagree by one.
+let MspanRemoteCountOffset = 64 as ByteOffset
 
 // ⭐ **THE RECORD'S WIDTH, DERIVED FROM ITS LAST FIELD — and stated HERE rather than at the check that
 // reads it.** A width spelled over there as `<last field> + WordBytes` stops being the width the moment a
 // field is appended past it, and the guard against overlapping headers then silently measures 56 bytes of a
 // 64-byte record. Naming the width once, beside the field that determines it, is what makes the next
 // appended field move it.
-let MspanRecordBytes = (MspanScavStateOffset as ParsedInt) + WordBytes
+let MspanRecordBytes = (MspanRemoteCountOffset as ParsedInt) + WordBytes
 
-// One mspan header's slot in the metadata slab. The record occupies 0x00..0x40 exactly, and 64 keeps
-// successive headers 16-byte aligned inside the 8 KiB metadata chunk. `checkSlabRuntimeGeometry` asserts the
-// record fits rather than trusting this number: a stale value here silently OVERLAPS adjacent mspan
-// headers. The record is full, so the next field to be added is the one that has to move this constant.
-let MspanSlotBytes = 64
+// One mspan header's slot in the metadata slab. 80 keeps successive headers 16-byte aligned inside the
+// 8 KiB metadata chunk, which holds 102 of them. `checkSlabRuntimeGeometry` asserts the record fits rather
+// than trusting this number: a stale value here silently overlaps adjacent mspan headers.
+let MspanSlotBytes = 80
 
-// ⭐ **THE TWO NON-POINTER VALUES `owning_p` TAKES, and they are different facts rather than two spellings
-// of "nobody".** `None` is a REAL owner — the shared raw row, whose spans belong to whichever P-less OS
-// thread reaches them and whose accesses serialise under the lock. `Parked` means the span is on an mcentral
-// list, owned by no one and holding no live slot; a free that observes it is a double free or a slot that
-// outlived its span, which is why `buildSlabFree` aborts on it rather than picking an arm.
+// A span is owned only while it is cached, and this word is the whole state machine. A P pointer means the
+// span sits in that P's mcache row and only that P pops its free list; every other value is a state it is
+// in while no processor holds it.
 //
-// ⚠ `-1` cannot be a P pointer, cannot be `None`, and needs no array lookup to be recognised.
+//   `None`     the shared raw row — a real owner, whose spans belong to whichever P-less OS thread
+//              reaches them and whose accesses serialise under `__slab_lock`.
+//   `Full`     exhausted, on no list. The first free back into one links it onto its class's partial
+//              list.
+//   `Partial`  on its class's partial list, with at least one slot free or queued. Any P may take it.
+//   `Freed`    the header is on the metadata free list. Only the census walk reads this.
+//
+// `Full` is a state rather than an absence because `__slab_refill` takes the partial list's HEAD and hands
+// it straight to its caller without testing whether it has a slot. An exhausted span left on that list
+// would be handed out with nothing to allocate from; giving the refill a search instead would make every
+// refill in an allocate-heavy program walk a list of spans it cannot use.
+//
+// ⚠ Every negative value is outside the P-pointer domain and needs no array lookup to be recognised.
 let MspanOwningPNone = 0
-let MspanOwningPParked = -1
-
-// A destroyed header's other fields are stale rather than zero, so only this sentinel tells one from a
-// live span. `runtime/SlabRuntime.maxon`'s `__slab_meta_free` is the only writer and its census walk the
-// only reader; no allocator path tests it.
+let MspanStatePartial = -1
 let MspanOwningPFreed = -2
+let MspanStateFull = -3
 
 // --- Sharding ---
 //
@@ -222,7 +218,7 @@ let SlabMaxShards = 256
 // through one walk, so the third needs no arm of its own and cannot be forgotten when it first becomes
 // reachable.
 //
-// ⭐ **AND WHAT THE ROW BUYS IS THE ALLOCATOR'S HALF OF THE RESTATED SHARD INVARIANT.** `emitSlabShardRow`
+// ⭐ **AND WHAT THE ROW BUYS IS THE ALLOCATOR'S HALF OF THE RESTATED SHARD INVARIANT.** `emitSlabResolveShard`
 // keys `mcache[row]` on `P->id` and every span carries `MspanOwningPOffset`, and that rests on **"a P has
 // at most one M at any instant, and only the M HOLDING a P allocates from that P's row"** — weaker than
 // *"a P is bound to one M for life"*, and what the lockless pop actually needs. A thread between Ps has no row of its own to race; it comes here, where the rule is the
@@ -280,8 +276,8 @@ export let SlabStateLabel = b"__slab_state"
 // The region's fixed head, then the three arrays. `SlabStateMcentralOffset` onwards are DERIVED from the
 // class count so a regenerated ladder moves them rather than leaving a stale stride behind.
 //
-// ⭐ **`metaFree` EXISTS BECAUSE SOMETHING FINALLY DESTROYS SPANS — the scavenger.** Without it every span
-// the scavenger reclaims would leak its 64-byte header for the life of the process.
+// ⭐ **`metaFree` EXISTS BECAUSE SOMETHING DESTROYS SPANS — the free that returns a span's last slot.**
+// Without it every span reclaimed that way would leak its header for the life of the process.
 // ⚠ **THE THREE ARE `runtime/SlabRuntime.maxon`'s TO READ AND WRITE, AND ARE DECLARED HERE BECAUSE THE
 // LOCK OFFSET BELOW IS DERIVED FROM THEM.** The tier restates the head; `checkSlabRuntimeGeometry` pins
 // the lock offset and the totals both sides derive, which is what a drift moves.
@@ -303,7 +299,6 @@ let SlabStateSchedulerOffset = ((SlabStateMetaFreeOffset as ParsedInt) + WordByt
 // twin of `SchedRuntime.SchedLockDepthSinkLabel`, in the region rather than in `.data` for the scheduler
 // word's reason. Nothing reads it; it is an address that is not zero.
 let SlabStateLockDepthSinkOffset = ((SlabStateSchedulerOffset as ParsedInt) + WordBytes) as ByteOffset
-
 
 // ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD — WHICH IS A
 // GOLDEN-FRAGMENT ARGUMENT, NOT A TIDINESS ONE.** Every committed fragment under `specs/fragments/`
@@ -386,7 +381,9 @@ let TierStateOsDirectBytesOffset = 152200
 let TierMspanFreeCountOffset = 16
 let TierMspanClassIdxOffset = 32
 let TierMspanOwningPOffset = 48
-let TierMspanSlotBytes = 64
+let TierMspanSlotBytes = 80
+let TierMspanRemoteHeadOffset = 56
+let TierMspanRemoteCountOffset = 64
 
 // The value the state `.data` word holds until the region is committed. Named rather than left a bare 0
 // because `emitSlabStateBase`'s probe TESTS it while `runtime/SlabRuntime.maxon` both tests and CLEARS it,
@@ -429,8 +426,14 @@ let SlabMetaAllocName = b"__slab_meta_alloc"
 let SlabMetaFreeName = b"__slab_meta_free"
 let SlabRefillName = b"__slab_refill"
 let SlabFreeToSpanName = b"__slab_free_to_span"
-let SlabDrainRemoteName = b"__slab_drain_remote"
-let SlabSpanReturnName = b"__slab_span_return"
+
+// Collect one span's remote free list onto the free list its caching P pops. Called where a P caches a
+// span and where a cached span looks empty, so a slot another thread queued is never invisible to the P
+// that owns the span now.
+let SlabCollectRemoteName = b"__slab_collect_remote"
+
+// Return a slot to an EXHAUSTED span and relist it, under `__slab_lock`. Once per span, not once per free.
+let SlabFreeToFullName = b"__slab_free_to_full"
 let SlabSpanDestroyName = b"__slab_span_destroy"
 
 // ⭐⭐ **THE FIVE THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
@@ -451,19 +454,16 @@ export let SlabRuntimeTierFileName = "SlabRuntime.maxon"
 // still needs every layer under it.
 export let SlabScavengeName = b"__slab_scavenge"
 
-// ⭐⭐ `__slab_remote_free_count() -> i64` — how many slots have been freed onto a processor's remote-free
-// queue by a machine that did not own their span, summed over every P. `__Builtins.slabRemoteFreeCount()`
-// lowers straight to it, and it is the ONLY way a program can observe that the cross-processor free road was
-// TAKEN. `multicore-stress/service-torture` and `multicore-stress/service-fanin-torture` drive thousands of boxes down it in each
-// direction and nothing read a number that would move if it stopped being taken — the road was exercised but
-// not observed, and a regression routing every free down the LOCAL arm would have kept the suite green.
+// `__slab_remote_free_count() -> i64` — how many slots have been queued onto a span this processor does not
+// hold cached, summed over every P. `__Builtins.slabRemoteFreeCount()` lowers straight to it, and it is the
+// only way a program can observe that the cross-processor free road was TAKEN: a regression routing every
+// free down the local arm keeps the suite green otherwise.
 //
-// ⚠ **IT WEARS THE `__slab_` PREFIX BUT ITS BODY IS BUILT BY `SchedRuntime.installSchedRuntime`, AND THE
-// SPLIT IS THE SAME ONE `__sched_steal_count` MAKES IN THE OPPOSITE DIRECTION.** The NUMBER is the
-// allocator's, so the name is; the STORAGE is a per-P word (`SchedRuntime.POffRemoteFreeCount`, which carries
-// why it is not a `.data` counter and why the target rather than the pusher is credited) and the walk that
-// sums it is `buildSchedPerProcSum`, shared with the scheduler's own two counters. Putting a third copy of
-// that loop in `installSlabRuntime` to keep a prefix tidy is one fact written twice.
+// ⚠ It wears the `__slab_` prefix but its body is built by `SchedRuntime.installSchedRuntime`. The NUMBER is
+// the allocator's, so the name is; the STORAGE is a per-P word (`SchedRuntime.POffRemoteFreeCount`, which
+// carries why it is not a `.data` counter and which side is credited) and the walk that sums it is
+// `buildSchedPerProcSum`, shared with the scheduler's own two counters. A third copy of that loop in
+// `installSlabRuntime` to keep a prefix tidy would be one fact written twice.
 //
 // ⚠ **AND THAT IS WHY `RuntimeUsage.recordCallUsage` ROUTES IT TO `usesGt` AND NOT TO `usesHeap`**, unlike
 // every other name in this band: the question is answered by walking `__sched_procs`, an array only
@@ -474,11 +474,12 @@ export let SlabRemoteFreeCountName = b"__slab_remote_free_count"
 
 // The five census doors, on the family's argumentless-integer shape. What each counts:
 //
-//   * `live` — slots handed out, including a slot queued for a remote free, which `free_count` does not
-//     credit until its owner drains it.
-//   * `free` — slots on some span's free list. `live + free` is every slot of every live span.
+//   * `live` — slots handed out and not yet given back by any road.
+//   * `free` — slots on some span's free list, plus the slots queued against it for a collector that has
+//     not run. `live + free` is every slot of every live span.
 //   * `cachedFree` — the subset of `free` an mcache row can still reach.
-//   * `parked` — whole spans sitting on an mcentral list.
+//   * `parked` — whole spans on a class's list with no live slot: the backlog only `__slab_scavenge`
+//     returns to the arena.
 //   * `committed` — arena granules backed by physical memory, plus the OS-direct road's live mappings.
 //
 // `runtime/SlabRuntime.maxon` owns the walks; what is built here is the lock around each.
@@ -498,6 +499,7 @@ let SlabCensusName = b"__slab_census"
 export function isSlabCensusCallee(callee ByteArray) returns bool
 	return callee.equals(SlabLiveBytesName) or callee.equals(SlabFreeBytesName) or callee.equals(SlabCachedFreeBytesName) or callee.equals(SlabParkedBytesName) or callee.equals(SlabCommittedBytesName)
 end 'isSlabCensusCallee'
+
 let SlabCensusLiveBytes = 0
 let SlabCensusFreeBytes = 1
 let SlabCensusParkedBytes = 2
@@ -546,17 +548,11 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 		return
 	end 'noAllocator'
 
-	// ⭐⭐ **THE GEOMETRY CHECK SITS BEHIND THE GATE, WHICH IS THE OPPOSITE OF `installSlabArena`'s
-	// PLACEMENT — AND THE ARGUMENT THAT PUT IT THERE IS EXACTLY WHAT DOES NOT APPLY HERE.** That check is
-	// ahead of its gate because NOTHING set `usesSlabArena` when it was written: behind the gate it would
-	// have been a check that never ran, which is this project's own recurring failure wearing a different
-	// name. This bit is `usesHeap`, which every program that allocates a single box sets — so the check
-	// runs constantly, and running it for the handful that allocate NOTHING buys nothing: a program with no
-	// allocator carries no size-class table, no reverse lookup and no span, so no geometry of theirs can be
-	// wrong for it.
-	//
-	// ⚠ It is not free, either. It builds both reverse tables and walks the ladder, which is why it is worth
-	// asking who it protects rather than running it at every compile in the suite by reflex.
+	// This check sits BEHIND the gate where the arena's runs ahead of every compile, and the difference is
+	// the gate rather than the check. `usesHeap` is set by every program that allocates a single box, so a
+	// breakage still fails the next compile that allocates anything; and a program with no allocator carries
+	// no size-class table, no reverse lookup and no span, so no geometry of theirs can be wrong for it. It
+	// builds both reverse tables and walks the ladder, which is why it is worth asking who it protects.
 	checkSlabRuntimeGeometry()
 
 	_ = globalData.registerRdataConstantLabeled(SlabSizeToClass8Label, bytes: slabSizeToClass8Table(), kind: RdataPayloadKind.slabTable)
@@ -565,13 +561,13 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 
 	let model = machineModel(target)
 
-	buildSlabDrainRemote(module)
+	buildSlabCollectRemote(module)
 	buildSlabRoundedSize(module)
 	buildSlabRefill(module, model: model)
 	buildSlabAllocEntry(module, name: SlabAllocName, zeroed: true, model: model)
 	buildSlabAllocEntry(module, name: SlabAllocRawName, zeroed: false, model: model)
-	buildSlabSpanReturn(module, model: model)
 	buildSlabSpanDestroy(module)
+	buildSlabFreeToFull(module)
 	buildSlabScavenge(module, model: model)
 	buildSlabFreeToSpan(module)
 	buildSlabFree(module, model: model)
@@ -671,6 +667,8 @@ function checkSlabRuntimeGeometry()
 	requireTierOffsetAgrees("an mspan's class index", here: MspanClassIdxOffset as ParsedInt, tier: TierMspanClassIdxOffset)
 	requireTierOffsetAgrees("an mspan's owner", here: MspanOwningPOffset as ParsedInt, tier: TierMspanOwningPOffset)
 	requireTierOffsetAgrees("an mspan's metadata slot", here: MspanSlotBytes, tier: TierMspanSlotBytes)
+	requireTierOffsetAgrees("an mspan's remote free list", here: MspanRemoteHeadOffset as ParsedInt, tier: TierMspanRemoteHeadOffset)
+	requireTierOffsetAgrees("an mspan's remote free count", here: MspanRemoteCountOffset as ParsedInt, tier: TierMspanRemoteCountOffset)
 
 	// ⭐⭐ **AND THE TWO REQUESTS THIS FILE MAKES OF THE PAGE LAYER MUST BE SATISFIABLE ON BOTH LANES.**
 	// `slabStateChunks()` is 19 chunks and the non-reserving arena has 63
@@ -1241,46 +1239,9 @@ function emitSlabRowClamp(module StdModule, block IrBlock, p ValueId, ids ValueM
 	return SlabRowClamp.create(id, beyond: emitCmp(module, block: block, a: id, b: firstSharedRow, pred: StdCmpPred.ge, ids: ids))
 end 'emitSlabRowClamp'
 
-// ⭐⭐ **THE mcache ROW FOR A SPAN's OWNER — `clamp(P->id)`, with NO P mapping to `SlabRawShardRow` AND NEVER
-// TO 0.** `SlabRawShardRow`'s own note carries the reason for the second half.
-//
-// It terminates `cur` and answers in `rowId`, the merge block's single argument — the branching-emitter
-// shape this runtime uses everywhere, the Std tier having no select.
-//
-// ⚠⚠ **`<= MspanOwningPNone` RATHER THAN `==`, WHICH MAKES THIS PREDICATE TOTAL.** The caller —
-// `__slab_span_return` — passes an mspan's `owning_p`, whose third value is `MspanOwningPParked` (-1).
-// Under `==` that value would fall through to the `POffId` load and read address 0x1F. It is unreachable
-// by construction (every caller of `__slab_free_to_span` has established the span is not parked), but a
-// predicate that answers for all three values costs the same one compare and cannot be broken by a future
-// caller — and "parked" answering the RAW row is harmless there, because the row is then only used for a
-// `== span` test that cannot match.
-function emitSlabShardRow(module StdModule, func IrFunction, cur IrBlock, myP ValueId, rowId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var havePid = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var capped = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	merge.blockArgs.push(IrBlockArg.create(rowId, argType: StdType.i64))
-
-	let rawRow = emitConst(module, block: cur, value: SlabRawShardRow, ids: ids)
-	let noneOwner = emitConst(module, block: cur, value: MspanOwningPNone, ids: ids)
-	let noProc = emitCmp(module, block: cur, a: myP, b: noneOwner, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(noProc, thenBlockId: merge.id, elseBlockId: havePid.id))
-	cur.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(rawRow)))
-
-	// A `BranchEdge` is keyed by its TARGET, so the capped arm needs a block of its own rather than a second
-	// edge to `merge` — two edges naming one target cannot be told apart by the argument lookup.
-	let clamp = emitSlabRowClamp(module, block: havePid, p: myP, ids: ids)
-	module.setTerminator(havePid, op: StdOp.condBranch(clamp.beyond, thenBlockId: capped.id, elseBlockId: merge.id))
-	havePid.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(clamp.id)))
-
-	let sharedRow = emitConst(module, block: capped, value: SlabRawShardRow, ids: ids)
-	module.setTerminator(capped, op: StdOp.branch(merge.id))
-	capped.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(sharedRow)))
-
-	return merge
-end 'emitSlabShardRow'
-
 // ⭐ **WHERE THIS THREAD KEEPS ITS LOCK DEPTH, FOR A BODY THAT HOLDS NO MACHINE IN HAND** — the three
-// cold bodies that take `__slab_lock` whole (`__slab_refill`, `__slab_span_return`, `__slab_scavenge`).
+// cold bodies that take `__slab_lock` whole (`__slab_refill`, `__slab_scavenge`, and `__slab_free`'s two
+// serialised arms).
 // Terminates `cur` and answers in `addrId`, the merge block's single argument.
 function emitSlabLockDepthAddr(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, addrId ValueId, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns IrBlock
 	var merge = module.addBlock(func, label: label, heat: heat)
@@ -1526,37 +1487,46 @@ function emitSlabRowDisjoint(module StdModule, block IrBlock, rowBase ValueId, r
 	return answer
 end 'emitSlabRowDisjoint'
 
-// ⭐⭐ **CAS-PUSH `slot` ONTO P `target`'s REMOTE-FREE QUEUE — a Treiber stack at `POffRemoteFreeHead`, many
-// producers and exactly one consumer.** The link rides in the slot's own first word, which is the same word
-// the span free list threads its links through and the same word the allocation pop overwrites when it
-// hands the slot back out, so the queue costs no storage of its own.
+// CAS-push `slot` onto `span`'s remote free list — a Treiber stack at `MspanRemoteHeadOffset`, many
+// producers and one consumer at a time. The link rides in the slot's own first word, the same word the span
+// free list threads its links through and the same word the allocation pop overwrites when it hands the slot
+// back out, so the queue costs no storage of its own.
 //
-// ⛔⛔ **NO FENCE IS NEEDED HERE AND NONE MAY BE ADDED "TO BE SAFE".** The store of the old head into
-// `[slot]` must be visible to the DRAINER before the CAS publishes `slot`, and on both lanes the compiler emits the
-// CAS on, the CAS *is* that barrier: x64's `lock cmpxchg` is a full barrier by architecture, and arm64's
-// `StLXR` (`TargetOp.arm64AtomicCas`'s LL/SC pair) is a store-RELEASE, which orders every prior store before
-// it. A speculative `mfence`/`dmb` would be a cost with no property to buy.
+// ⛔ The CAS is the last thing this body does to the span, and that is a correctness rule rather than a
+// shape. Once the slot is on the chain a collector holding `__slab_lock` may credit it into `free_count`,
+// find the span complete and destroy it — recycling this header — so any span access after the CAS would be
+// a write through a recycled record. Before the CAS the slot is live and uncounted, so no completion is
+// possible; `buildSlabScavenge` carries the count that makes that exact.
 //
-// ⚠ `StdOp.atomicCas`'s result is the SUCCESS BOOLEAN, not the prior value — the op's own header states the
-// convention, and a loop written for the other one spins forever on its first success.
+// No fence is needed and none may be added to be safe. The store of the old head into `[slot]` must be
+// visible to the collector before the CAS publishes `slot`, and on both lanes the compiler emits the CAS on,
+// the CAS is that barrier: x64's `lock cmpxchg` is a full barrier by architecture and arm64's `StLXR` pair
+// (`TargetOp.arm64AtomicCas`) is a store-release. `StdOp.atomicCas` answers the SUCCESS BOOLEAN and not the
+// prior value, and a loop written for the other convention spins forever on its first success.
 //
-// ⭐⭐ **IT ALSO CREDITS THE TARGET'S REMOTE-FREE COUNTER, WHICH IS THE ONE OBSERVATION THIS ROAD HAD NONE
-// OF.** `SchedRuntime.POffRemoteFreeCount` carries why the TARGET is credited rather than the pusher and why
-// the step is atomic; the step itself is `MmRuntime.emitFieldAccumulate`, shared with the two single-writer
-// per-P counters, and `multiM: true` is this site's whole half of that decision. What belongs here is WHERE
-// the step goes. It is emitted in `cur`, ahead of the
-// retry loop, and NOT inside `retry`: a contended push runs the loop body several times for ONE free, so a
-// credit in there would count CAS attempts and turn a cross-processor-free counter into a contention meter.
-// The prior value has no reader — the sum is taken later, by a walk over every P.
-function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, target ValueId, slot ValueId, ids ValueMinter) returns IrBlock
+// `myP` is credited rather than the span's owner, because an uncached span has no owning processor to credit.
+// What `__slab_remote_free_count` reports is therefore frees PERFORMED across processors, and a freer that
+// holds no P at all is not counted — a reading of 0 does not mean the road was never taken. The credit is
+// emitted in `cur` rather than inside `retry`, because a contended push runs the loop body several times for
+// one free and a credit in there would count CAS attempts.
+function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span ValueId, slot ValueId, myP ValueId, ids ValueMinter) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpush", heat: BlockHeat.normal)
+	var credited = module.addBlock(func, label: b"rcredit", heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
 
-	let credit = emitConst(module, block: cur, value: OneMore, ids: ids)
-	_ = emitFieldAccumulate(module, block: cur, record: target, offset: POffRemoteFreeCount, delta: credit, multiM: true, ids: ids)
+	// Stepped before the head moves, so a reader holding `__slab_lock` that sees the chain also sees a count
+	// that covers it. The other order leaves a window where the chain is longer than the count.
+	let queued = emitConst(module, block: cur, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: cur, record: span, offset: MspanRemoteCountOffset, delta: queued, multiM: true, ids: ids)
 
-	let headAddr = emitFieldAddr(module, block: cur, record: target, offset: POffRemoteFreeHead, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(retry.id))
+	let noProc = emitConst(module, block: cur, value: MspanOwningPNone, ids: ids)
+	let holdsNoProc = emitCmp(module, block: cur, a: myP, b: noProc, pred: StdCmpPred.eq, ids: ids)
+	let headAddr = emitFieldAddr(module, block: cur, record: span, offset: MspanRemoteHeadOffset, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(holdsNoProc, thenBlockId: retry.id, elseBlockId: credited.id))
+
+	let credit = emitConst(module, block: credited, value: OneMore, ids: ids)
+	_ = emitFieldAccumulate(module, block: credited, record: myP, offset: POffRemoteFreeCount, delta: credit, multiM: true, ids: ids)
+	module.setTerminator(credited, op: StdOp.branch(retry.id))
 
 	let head = emitLoadField(module, block: retry, record: headAddr, offset: 0, ids: ids)
 	emitStoreField(module, block: retry, record: slot, offset: 0, value: head)
@@ -1731,6 +1701,22 @@ function buildSlabRoundedSize(module StdModule)
 	module.functions.push(func)
 end 'buildSlabRoundedSize'
 
+// Put `span` at the head of the mcentral list `mcentralSlot` names, and stamp it `Partial`.
+//
+// ⛔ The stamp is a RELEASE and is the LAST store: a freer that observes `Partial` without the lock CAS-pushes
+// onto the span, so publishing the state before the link would advertise a span that is not yet reachable.
+//
+// ⭐ **THE LIST IS SINGLY LINKED AND NEEDS NOTHING MORE, BECAUSE NOTHING IS EVER REMOVED FROM THE MIDDLE OF
+// IT.** `__slab_refill` pops the HEAD, and `__slab_scavenge` detaches the WHOLE list and rebuilds it out of
+// the survivors — the idiom that needs no `prev` carried through the walk.
+function emitMcentralLink(module StdModule, block IrBlock, span ValueId, mcentralSlot ValueId, ids ValueMinter)
+	let head = emitLoadField(module, block: block, record: mcentralSlot, offset: 0, ids: ids)
+	emitStoreField(module, block: block, record: span, offset: MspanNextSpanOffset, value: head)
+	emitStoreField(module, block: block, record: mcentralSlot, offset: 0, value: span)
+	let partial = emitConst(module, block: block, value: MspanStatePartial, ids: ids)
+	module.appendOp(block, op: StdOp.storeRelease(span, offset: MspanOwningPOffset, valueId: partial, valueType: StdType.i64))
+end 'emitMcentralLink'
+
 // `__slab_refill(classIdx, myP, row) -> span` — put a span with free slots in `row`'s mcache entry, stamp it
 // as `myP`'s, and answer it.
 //
@@ -1750,7 +1736,9 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var popPartial = module.addBlock(func, label: b"poppartial", heat: BlockHeat.normal)
 	var takePartial = module.addBlock(func, label: b"partial", heat: BlockHeat.normal)
+	var unlock = module.addBlock(func, label: b"unlock", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
 	var emptyClass = module.addBlock(func, label: b"emptyclass", heat: BlockHeat.normal)
 	var cut = module.addBlock(func, label: b"cut", heat: BlockHeat.normal)
@@ -1768,16 +1756,22 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 	let mcentralSlot = emitStateSlotAddr(module, block: locked, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
 	let mcacheSlot = emitMcacheSlotAddr(module, block: locked, mcacheRow: mcacheRow, classIdx: classIdx, ids: ids)
-	let partial = emitLoadField(module, block: locked, record: mcentralSlot, offset: 0, ids: ids)
 	let none = emitConst(module, block: locked, value: 0, ids: ids)
-	let noPartial = emitCmp(module, block: locked, a: partial, b: none, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(locked, op: StdOp.condBranch(noPartial, thenBlockId: grow.id, elseBlockId: takePartial.id))
+	module.setTerminator(locked, op: StdOp.branch(popPartial.id))
 
-	// Unlink the head. Its free list and its unconsumed bump region both survive the park (see the header's
-	// "the case that looks wrong"), so there is nothing here to rebuild.
+	// The head is taken and used whatever state it is in, and a fully free one is NOT destroyed here. It is
+	// the best span this caller could be handed — warm, registered, header live — and destroying it to cut a
+	// replacement out of the arena costs a first-fit scan over every arena's bitmap, a reverse-map
+	// registration per page and a memzero, to arrive at what was just thrown away. Reclamation belongs to
+	// the spans nobody is about to use, which is `__slab_scavenge`'s walk and the only road to it.
+	let partial = emitLoadField(module, block: popPartial, record: mcentralSlot, offset: 0, ids: ids)
+	let noPartial = emitCmp(module, block: popPartial, a: partial, b: none, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(popPartial, op: StdOp.condBranch(noPartial, thenBlockId: grow.id, elseBlockId: takePartial.id))
+
 	let following = emitLoadField(module, block: takePartial, record: partial, offset: MspanNextSpanOffset, ids: ids)
 	emitStoreField(module, block: takePartial, record: mcentralSlot, offset: 0, value: following)
 	emitStoreField(module, block: takePartial, record: partial, offset: MspanNextSpanOffset, value: none)
+	module.appendOp(takePartial, op: StdOp.call(ids.mint(), callee: SlabCollectRemoteName, args: argsOf(partial)))
 	module.setTerminator(takePartial, op: StdOp.branch(install.id))
 	takePartial.branchEdges.push(BranchEdge.create(install.id, argIds: argsOf(partial)))
 
@@ -1806,6 +1800,8 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	emitStoreField(module, block: cut, record: span, offset: MspanNextSpanOffset, value: none)
 	emitStoreField(module, block: cut, record: span, offset: MspanClassIdxOffset, value: classIdx)
 	emitStoreField(module, block: cut, record: span, offset: MspanBumpNextOffset, value: pageBase)
+	emitStoreField(module, block: cut, record: span, offset: MspanRemoteHeadOffset, value: none)
+	emitStoreField(module, block: cut, record: span, offset: MspanRemoteCountOffset, value: none)
 
 	// Every page of the run maps to this span, which is what lets a free of a pointer anywhere INSIDE it
 	// find its owner (`SlabArena.buildSlabArenaMapSet`). Chunks and pages are the same 8 KiB unit.
@@ -1817,20 +1813,17 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	install.blockArgs.push(IrBlockArg.create(installed, argType: StdType.i64))
 	emitStoreField(module, block: install, record: mcacheSlot, offset: 0, value: installed)
 
-	// ⭐⭐ **THE OWNER IS STAMPED HERE AND NOWHERE ELSE.** A span off mcentral carries `MspanOwningPParked`
-	// and a freshly cut one carries whatever its RECYCLED header held, so both arms need it — and the pair
-	// "installed in `row`, owned by `myP`" must be established together or a free of one of its slots routes
-	// somewhere the alloc side is not looking.
-	emitStoreField(module, block: install, record: installed, offset: MspanOwningPOffset, value: myP)
+	// The owner is stamped here and nowhere else. A span off the partial list carries `MspanStatePartial` and
+	// a freshly cut one carries whatever its recycled header held, so both arms need it.
+	//
+	// ⚠ It is a release, and the mcache entry above it a plain store. A freer that observes this stamp must
+	// see the free list and the free count the arms above wrote; observing a stale free list through a fresh
+	// owner hands one slot to two callers.
+	module.appendOp(install, op: StdOp.storeRelease(installed, offset: MspanOwningPOffset, valueId: myP, valueType: StdType.i64))
+	module.setTerminator(install, op: StdOp.branch(unlock.id))
 
-	// ⭐ **THE GRACE RESETS HERE, AT THE ONE PLACE BOTH PATHS MEET** — a span taken off mcentral was almost
-	// certainly `SEEN_FREE` (that is what the scavenger left it as), and a span cut from a fresh chunk run is
-	// in a header that may be RECYCLED and hold whatever the previous occupant's state was. One store answers
-	// both, and putting it in either arm instead would leave the other arm to be remembered.
-	let active = emitConst(module, block: install, value: MspanScavActive, ids: ids)
-	emitStoreField(module, block: install, record: installed, offset: MspanScavStateOffset, value: active)
-	emitSlabLockLeave(module, block: install, state: state, depthAddr: depthAddr, ids: ids)
-	module.setTerminator(install, op: StdOp.ret(installed))
+	emitSlabLockLeave(module, block: unlock, state: state, depthAddr: depthAddr, ids: ids)
+	module.setTerminator(unlock, op: StdOp.ret(installed))
 
 	module.functions.push(func)
 end 'buildSlabRefill'
@@ -1857,22 +1850,15 @@ end 'buildSlabRefill'
 // into the entry doors that differ by exactly that bit, so no program carries the arm it never takes and no
 // allocation tests for it.
 //
-// ⭐⭐ **THE MISS PATH IS TWO-PHASE, AND THE SECOND PHASE IS NOT AN OPTIMISATION.**
-// A miss first DRAINS this P's remote-free queue and probes again: slots other Ps freed back to us are put
-// on their spans' free lists by the drain, so a refill that skipped it would cut a fresh span while this P's
-// own reclaimed memory sat unreplayed. The re-probe is also required for CORRECTNESS rather than thrift — a
-// replayed slot can complete a span, and `__slab_span_return` then clears the very mcache entry the first
-// probe read.
-//
 // ⚠ **NOTHING HERE TAKES THE LOCK.** Every word this emits belongs to a span `myP` solely owns
 // (`emitSlabProbe`'s ownership gate is what establishes that) or to `row`'s own mcache entry. The one caller
 // whose row is NOT solely owned — a thread on the shared raw row — is serialised by `buildSlabAllocEntry`
 // before it ever gets here.
 function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, classIdx ValueId, myP ValueId, mcacheRow ValueId, zeroed bool, slotId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	// ⭐ **THE MISS PATH IS COLD, AND WHAT THAT BUYS IS THE HIT PATH'S REGISTERS.** A value live across
-	// `__slab_drain_remote` or `__slab_refill` in a NORMAL block has to sit in a callee-saved register, so
-	// every hit pays the push and the pop for a call it never makes; in a cold block the bracket saves it to
-	// a slot instead (`RegisterAllocator`'s cold-run rule) and the hit path is free to use the whole pool.
+	// The miss path is cold, and what that buys is the hit path's registers. A value live across
+	// `__slab_refill` in a NORMAL block has to sit in a callee-saved register, so every hit pays the push
+	// and the pop for a call it never makes; in a cold block the bracket saves it to a slot instead
+	// (`RegisterAllocator`'s cold-run rule) and the hit path is free to use the whole pool.
 	var refill = module.addBlock(func, label: label, heat: BlockHeat.cold)
 	var ready = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	var recycled = module.addBlock(func, label: label, heat: BlockHeat.normal)
@@ -1889,15 +1875,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 
 	let mcacheSlot = emitMcacheSlotAddr(module, block: cur, mcacheRow: mcacheRow, classIdx: classIdx, ids: ids)
 
-	var drain = module.addBlock(func, label: label, heat: BlockHeat.cold)
-	var reprobe = module.addBlock(func, label: label, heat: BlockHeat.cold)
-
-	emitSlabProbe(module, func: func, cur: cur, mcacheSlot: mcacheSlot, myP: myP, hit: ready, miss: drain, ids: ids, label: label)
-
-	module.appendOp(drain, op: StdOp.call(ids.mint(), callee: SlabDrainRemoteName, args: argsOf(myP)))
-	module.setTerminator(drain, op: StdOp.branch(reprobe.id))
-
-	emitSlabProbe(module, func: func, cur: reprobe, mcacheSlot: mcacheSlot, myP: myP, hit: ready, miss: refill, ids: ids, label: label)
+	emitSlabProbe(module, func: func, cur: cur, mcacheSlot: mcacheSlot, myP: myP, hit: ready, miss: refill, ids: ids, label: label)
 
 	let fresh = ids.mint()
 	module.appendOp(refill, op: StdOp.call(fresh, callee: SlabRefillName, args: threeArgs(classIdx, second: myP, third: mcacheRow)))
@@ -1960,13 +1938,14 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	module.setTerminator(consumed, op: StdOp.condBranch(drainedNow, thenBlockId: evict.id, elseBlockId: done.id))
 	consumed.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(slot)))
 
-	// Drop a drained span from the mcache so the next call refills cleanly.
-	//
-	// ⚠ **THE SPAN KEEPS ITS OWNER.** It is out of the cache but not out of `myP`'s hands: its slots are
-	// still live and every one of their frees must route to this P, which is exactly what `owning_p` decides.
-	// The owner is cleared once — in `__slab_span_return`, when the last slot comes back.
+	// The span leaves the cache and its owner in one step. The store that publishes `Full` is what the
+	// first remote free into it tests for, and it must not be observable before the mcache entry is clear:
+	// a freer that saw `Full` while the entry still pointed here would list a span this processor is about
+	// to pop from again.
 	let uncached = emitConst(module, block: evict, value: 0, ids: ids)
 	emitStoreField(module, block: evict, record: mcacheSlot, offset: 0, value: uncached)
+	let nowFull = emitConst(module, block: evict, value: MspanStateFull, ids: ids)
+	module.appendOp(evict, op: StdOp.storeRelease(span, offset: MspanOwningPOffset, valueId: nowFull, valueType: StdType.i64))
 	module.setTerminator(evict, op: StdOp.branch(done.id))
 	evict.branchEdges.push(BranchEdge.create(done.id, argIds: argsOf(slot)))
 
@@ -2040,8 +2019,8 @@ end 'emitSlabProbe'
 // ⭐⭐ **THE WHOLE HIT PATH IS THIS ONE BODY: the class lookup, the shard walk, the state region and
 // the pop, with a call left only where the path is COLD.** What survives as a `call` is exactly what a hit
 // never reaches — `__slab_os_direct_alloc` (a mapping of its own), `__slab_state_base`'s commit (once per
-// process), `__slab_refill` (a fresh span) and `__slab_drain_remote` (a miss). Everything else is emitted
-// here, so an allocation that hits its mcache entry enters ONE frame and leaves it.
+// process) and `__slab_refill` (a miss). Everything else is emitted here, so an allocation that hits its
+// mcache entry enters ONE frame and leaves it.
 //
 // ⭐⭐ **THIS IS WHERE "WHICH P AM I" IS ANSWERED, ONCE PER ALLOCATION, AND HANDED DOWN.** The pop and
 // `__slab_refill` both need the P and its row and neither re-derives them. Reading the TLS slot in the
@@ -2153,85 +2132,81 @@ function buildSlabOsDirectArm(module StdModule, func IrFunction, cur IrBlock, si
 	module.setTerminator(osCall, op: StdOp.ret(mapped))
 end 'buildSlabOsDirectArm'
 
-// `__slab_span_return(span)` — park a fully-emptied span on its class's mcentral list so a later refill can
-// take it back.
+// `__slab_free_to_full(slot, span) -> handled` — return a slot to an EXHAUSTED span and put that span back
+// on its class's partial list, which is the one event per span that makes it reachable again.
 //
-// ⛔ **NO WALK OF THE 256 mcache ROWS: ONE LOAD ANSWERS IT, AND IT IS THE OWNER'S ROW.** A span is only
-// ever installed in its OWNER's mcache entry (`__slab_refill` does both in one block) and only ever reaches
-// mcentral through here, so `clamp(owning_p->id)` names the one row that can possibly hold it. The compare
-// against `span` is what makes the eviction complete.
+// This is the only arm of `__slab_free` that takes a lock for a slot, and it is paid once per span rather
+// than once per free. A span is `Full` only between the allocation that took its last slot and the first
+// free that brings one back; every later free of that span sees `Partial` and takes the lock-free CAS.
+// Routing `Partial` here as well would put one global lock — every class, every processor — on essentially
+// every free in a drop-heavy program, which is what the per-span queue exists to avoid.
 //
-// ⚠ **THE OWNER MUST BE READ BEFORE IT IS OVERWRITTEN.** The parked stamp below is the last thing this
-// function writes for that reason: reading it afterwards would clamp `MspanOwningPParked` and evict the raw
-// row on every return.
+// ⚠ Precondition: the caller holds `__slab_lock`. An exhausted span has no owning processor, so the lock is
+// what makes this thread its sole writer for the free list, the free count and the class list.
 //
-// ⚠ **THE FREE LIST AND THE BUMP CURSOR ARE LEFT ALONE.** A parked span keeps both, and the next taker
-// keeps using both — see the file header's "the case that looks wrong". Resetting either here would either
-// lose recycled slots or, worse, re-virginise a region that is no longer zero and break INV-3.
+// ⛔ The state is re-read under the lock and the answer is `0` when it has moved. Between the caller's
+// unlocked load and the lock another freer may have listed the span, or a refill may have cached it — and
+// writing its free list from here would then race that processor's lockless pop. The caller falls back to
+// the remote queue, which is legal against any owner.
 //
-// ⚠ **AND SO IS THE SCAVENGE GRACE STATE**, which is `ACTIVE` by the time a span gets here because
-// `__slab_refill`'s install wrote it when this span was handed out. Writing it a second time here would be
-// the same fact stated at two sites, and the site that would eventually go missing is this one — a span can
-// reach mcentral only through the install that already answered.
-//
-// ⭐⭐ **IT TAKES `__slab_lock`, AND ITS CALLERS DELIBERATELY DO NOT.** The mcentral head is shared by every
-// P; a span's own free list is not. Locking HERE rather than at the three `__slab_free_to_span` call sites
-// keeps the common free — which never empties a span — entirely lock-free, and is why the lock has to be
-// recursive: the shared-raw-row free path is already inside it when it gets here.
-function buildSlabSpanReturn(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabSpanReturnName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+// ⛔ Nothing is destroyed here. `__slab_scavenge` is the only caller of `__slab_span_destroy`, and it
+// reaches a span through the class list rather than through one of its slots — so no thread is ever inside
+// a free of a span at the moment it is taken apart. Keeping the destroy off this path is what lets every
+// other free stay lock-free.
+function buildSlabFreeToFull(module StdModule)
+	var func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var evict = module.addBlock(func, label: b"evict", heat: BlockHeat.normal)
-	var park = module.addBlock(func, label: b"park", heat: BlockHeat.normal)
+	var exhausted = module.addBlock(func, label: b"exhausted", heat: BlockHeat.normal)
+	var notFull = module.addBlock(func, label: b"notfull", heat: BlockHeat.cold)
+	var doubleFree = module.addBlock(func, label: b"doublefree", heat: BlockHeat.cold)
+	var moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
 
-	emitParams(module, block: entry, count: 1)
-	let span = 0 as ValueId
+	emitParams(module, block: entry, count: 2)
+	let slot = 0 as ValueId
+	let span = 1 as ValueId
+
+	let owner = emitLoadField(module, block: entry, record: span, offset: MspanOwningPOffset, ids: ids)
+	let full = emitConst(module, block: entry, value: MspanStateFull, ids: ids)
+	let stillExhausted = emitCmp(module, block: entry, a: owner, b: full, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(stillExhausted, thenBlockId: exhausted.id, elseBlockId: notFull.id))
+
+	let gone = emitConst(module, block: notFull, value: MspanOwningPFreed, ids: ids)
+	let isGone = emitCmp(module, block: notFull, a: owner, b: gone, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notFull, op: StdOp.condBranch(isGone, thenBlockId: doubleFree.id, elseBlockId: moved.id))
+
+	emitRuntimeAbort(module, func: func, block: doubleFree, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
+
+	let notHandled = emitConst(module, block: moved, value: 0, ids: ids)
+	module.setTerminator(moved, op: StdOp.ret(notHandled))
 
 	let state = ids.mint()
-	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
-	let depthAddr = ids.mint()
-	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
-	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
-	let classIdx = emitLoadField(module, block: locked, record: span, offset: MspanClassIdxOffset, ids: ids)
-	let mcentralSlot = emitStateSlotAddr(module, block: locked, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
-	let owner = emitLoadField(module, block: locked, record: span, offset: MspanOwningPOffset, ids: ids)
+	module.appendOp(exhausted, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let classIdx = emitLoadField(module, block: exhausted, record: span, offset: MspanClassIdxOffset, ids: ids)
+	let mcentralSlot = emitStateSlotAddr(module, block: exhausted, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
 
-	let ownerRow = ids.mint()
-	var rowReady = emitSlabShardRow(module, func: func, cur: locked, myP: owner, rowId: ownerRow, ids: ids, label: b"ownerrow")
+	// The queue is collected first, so a span whose slots came back across processors while it was
+	// unreachable arrives on the list carrying them rather than needing a second visit to notice.
+	module.appendOp(exhausted, op: StdOp.call(ids.mint(), callee: SlabCollectRemoteName, args: argsOf(span)))
+	module.appendOp(exhausted, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(slot, second: span)))
+	emitMcentralLink(module, block: exhausted, span: span, mcentralSlot: mcentralSlot, ids: ids)
 
-	let ownerMcacheRow = emitMcacheRowBase(module, block: rowReady, state: state, row: ownerRow, ids: ids)
-	let mcacheSlot = emitMcacheSlotAddr(module, block: rowReady, mcacheRow: ownerMcacheRow, classIdx: classIdx, ids: ids)
-	let cached = emitLoadField(module, block: rowReady, record: mcacheSlot, offset: 0, ids: ids)
-	let stillCached = emitCmp(module, block: rowReady, a: cached, b: span, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(rowReady, op: StdOp.condBranch(stillCached, thenBlockId: evict.id, elseBlockId: park.id))
-
-	let uncached = emitConst(module, block: evict, value: 0, ids: ids)
-	emitStoreField(module, block: evict, record: mcacheSlot, offset: 0, value: uncached)
-	module.setTerminator(evict, op: StdOp.branch(park.id))
-
-	let head = emitLoadField(module, block: park, record: mcentralSlot, offset: 0, ids: ids)
-	emitStoreField(module, block: park, record: span, offset: MspanNextSpanOffset, value: head)
-	emitStoreField(module, block: park, record: mcentralSlot, offset: 0, value: span)
-	let parked = emitConst(module, block: park, value: MspanOwningPParked, ids: ids)
-	emitStoreField(module, block: park, record: span, offset: MspanOwningPOffset, value: parked)
-	emitSlabLockLeave(module, block: park, state: state, depthAddr: depthAddr, ids: ids)
-	module.setTerminator(park, op: StdOp.retVoid)
+	let done = emitConst(module, block: exhausted, value: 1, ids: ids)
+	module.setTerminator(exhausted, op: StdOp.ret(done))
 
 	module.functions.push(func)
-end 'buildSlabSpanReturn'
+end 'buildSlabFreeToFull'
 
 // `__slab_span_destroy(span)` — take a span apart: unregister its pages, hand its chunk run back to the
 // arena, and put its header on the metadata free list.
 //
-// ⚠ **THE CALLER MUST HAVE UNLINKED IT FROM ITS MCENTRAL LIST ALREADY, MUST HOLD `__slab_lock`, AND MUST
-// HAVE ESTABLISHED THAT NO SLOT IN IT IS LIVE.** `__slab_scavenge` is the only caller and all three facts
-// are structural there: a span on an mcentral list is fully free by construction (`__slab_span_return` only
-// ever parks an emptied one, and `__slab_refill` removes one before handing it to a caller), the scavenger
-// detaches the whole list before it walks, and it holds the lock across its entire body.
+// ⚠ The caller must have unlinked it from its class list already, must hold `__slab_lock`, and must have
+// established that no slot in it is live. `__slab_scavenge` is the only caller and all three facts are
+// structural there: it detaches the whole list before it walks, it holds the lock across its entire body,
+// and it reaches this call only where `free_count == total_slots` after a collect.
 //
-// ⭐ **THE REVERSE MAP IS CLEARED, AND IT IS NOT MERELY TIDINESS.** Left registered, a stale slot points at
+// The reverse map is cleared, and it is not merely tidiness. Left registered, a stale slot points at
 // an mspan header that `__slab_meta_free` is about to recycle for an unrelated span at an unrelated address
 // — so a `__slab_free` of a dangling pointer into the released region would push that pointer onto a LIVE
 // span's free list and hand it out as a slot. Cleared, the same free takes the map's MISS route and hits
@@ -2275,17 +2250,28 @@ end 'buildSlabSpanDestroy'
 // `__slab_scavenge() -> bytesDecommitted` — the whole reclamation pass, and the public door
 // `__Builtins.scavengeMemory()` lowers to.
 //
-// **Three steps, in one call:** every idle span on every mcentral list is marked `SEEN_FREE`; every span
-// that was ALREADY `SEEN_FREE` is destroyed, returning its chunks to the arena; and then
-// `__slab_arena_scavenge` drops the backing of every commit granule those releases have left entirely free.
-// The answer is that last step's byte count — the only number this layer can honestly report, because
-// whether the pages left the RESIDENT SET is the OS's answer and not the allocator's.
+// **Two steps, in one call:** every fully free span on every mcentral list is destroyed, returning its
+// chunks to the arena; then `__slab_arena_scavenge` drops the backing of every commit granule those releases
+// have left entirely free. The answer is that second step's byte count — the only number this layer can
+// honestly report, because whether the pages left the RESIDENT SET is the OS's answer and not the
+// allocator's.
 //
-// ⭐⭐ **THE TWO-EPOCH GRACE IS THE WHOLE POINT AND IT IS WHY NOTHING COMES BACK ON THE FIRST CALL.** A span
-// that empties and refills between two scavenges is reset to `ACTIVE` by `__slab_refill`'s install, so it
-// never reaches the destroy arm — the active working set is never released, never memzeroed and never
-// decommitted. A caller that wants memory back
-// after a burst therefore calls this TWICE, which the spec says out loud.
+// ⛔ **THIS IS THE ONLY ROAD TO RECLAMATION.** No free and no refill destroys a span: a refill hands a fully
+// free span back to its own class, so a program that never calls this keeps every emptied span on the list
+// of the class that emptied it. That is a deliberate trade — it is what keeps the free path lock-free and
+// costs the allocator nothing per free — and it is why a class a program has finished with holds its memory
+// until somebody asks here.
+//
+// ⭐⭐ **THE TWO-EPOCH GRACE IS AT THE GRANULE, NOT AT THE SPAN.** `__slab_arena_scavenge` marks an all-free
+// granule on one call and decommits it on the next, and a chunk claim clears the mark — so a heap that
+// cycles a population pays neither a syscall nor a re-commit, and a caller that wants memory back after a
+// burst still calls this TWICE, which the spec says out loud.
+//
+// ⭐ **THE LIST IS DETACHED AND REBUILT RATHER THAN SPLICED.** Removing a span from the middle of a singly
+// linked list needs a `prev` carried through the walk, and a `prev` that is not updated on exactly the
+// surviving arm is how a walk drops the rest of its own list. Taking the whole list, walking it and pushing
+// the survivors onto a fresh head has no such variable — and it is what lets the mspan record keep the word
+// a `prev` field would have cost it.
 //
 // ⛔ **NO BACKGROUND SCAVENGER, AND THAT IS A PROPERTY OF THIS RUNTIME RATHER THAN A PREFERENCE.** Go's is a
 // goroutine paced against the GC's heap goal at 1% of mutator time (`mgcscavenge.go`), and neither half of
@@ -2295,16 +2281,9 @@ end 'buildSlabSpanDestroy'
 // design contributes and this does take is the SHAPE UNDERNEATH the pacing — release at the page layer, in
 // physical-page-aligned units, gated on a run having stayed idle — which is `__slab_arena_scavenge`.
 //
-// ⭐ **THE LIST IS DETACHED AND REBUILT RATHER THAN SPLICED.** Removing a span from the middle of a singly
-// linked list needs a `prev` carried through the walk, and a `prev` that is not updated on exactly the
-// surviving arm is how a walk drops the rest of its own list. Taking the whole list, walking it and pushing
-// the survivors onto a fresh head has no such variable. It reverses the order, which nothing depends on:
-// mcentral is a pool, not a queue.
-//
-// ⭐⭐ **THE WHOLE PASS RUNS UNDER `__slab_lock`, WHICH IS WHY EVERYTHING IT CALLS NEEDS NONE.** It reads and
-// rewrites every mcentral head, destroys spans (returning chunks to the arena and headers to the metadata
-// slab) and then walks the arena's commit bitmaps — four shared structures, and a refill racing any one of
-// them could hand a P a span this pass is in the middle of taking apart.
+// ⭐⭐ **THE PASS RUNS UNDER `__slab_lock`, WHICH IS WHY THE ARENA WALK NEEDS NONE.** Both arena bitmaps are
+// written by every claim and every chunk release, each of which already runs inside this lock, so an
+// unlocked walk would read a granule mid-transition and decommit one a claim had just taken.
 function buildSlabScavenge(module StdModule, model MachineModel)
 	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
@@ -2315,7 +2294,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	var classStart = module.addBlock(func, label: b"classstart", heat: BlockHeat.normal)
 	var spanLoop = module.addBlock(func, label: b"spanloop", heat: BlockHeat.normal)
 	var spanBody = module.addBlock(func, label: b"spanbody", heat: BlockHeat.normal)
-	var markSeen = module.addBlock(func, label: b"markseen", heat: BlockHeat.normal)
+	var keepSpan = module.addBlock(func, label: b"keepspan", heat: BlockHeat.normal)
 	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.normal)
 	var classDone = module.addBlock(func, label: b"classdone", heat: BlockHeat.normal)
 
@@ -2360,18 +2339,34 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 
 	// The successor is read BEFORE either arm, because the destroy arm hands the header to the metadata free
 	// list, which writes its own link over the span's first word — and a walk that read `next` afterwards
-	// would follow the free list instead of the mcentral one.
+	// would follow the free list instead of the class's.
 	let following = emitLoadField(module, block: spanBody, record: span, offset: MspanNextSpanOffset, ids: ids)
-	let scavState = emitLoadField(module, block: spanBody, record: span, offset: MspanScavStateOffset, ids: ids)
-	let active = emitConst(module, block: spanBody, value: MspanScavActive, ids: ids)
-	let firstSeen = emitCmp(module, block: spanBody, a: scavState, b: active, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(spanBody, op: StdOp.condBranch(firstSeen, thenBlockId: markSeen.id, elseBlockId: destroy.id))
 
-	let seenFree = emitConst(module, block: markSeen, value: MspanScavSeenFree, ids: ids)
-	emitStoreField(module, block: markSeen, record: span, offset: MspanScavStateOffset, value: seenFree)
-	emitStoreField(module, block: markSeen, record: span, offset: MspanNextSpanOffset, value: kept)
-	module.setTerminator(markSeen, op: StdOp.branch(spanLoop.id))
-	markSeen.branchEdges.push(BranchEdge.create(spanLoop.id, argIds: twoArgs(following, second: span)))
+	// ⛔ The collect runs first, and `free_count == total_slots` under the lock afterwards is what makes the
+	// destroy below safe. Write `free` for the span's free list, `queued` for slots CAS'd onto its stack,
+	// `inflight` for a slot whose free has begun but is on neither, and `live` for the rest:
+	// `free + queued + inflight + live == total_slots`, every term non-negative. The collect drains the
+	// chain, so at the instant the test passes `queued`, `inflight` and `live` are all 0 — no thread is
+	// anywhere inside a free of this span and none can start one. That holds only because the CAS in
+	// `emitSlabRemotePush` is the LAST touch a freer makes to the span; a post-CAS touch would let this walk
+	// credit a pusher's slot and recycle the header while that pusher was still arriving. It does not cover
+	// a genuine double free, which drives `live` negative — `slabFreeOfParkedSpan` catches only the common
+	// shape of that.
+	//
+	// The test reads `free_count` and never `remote_count`: a slot reaches `free_count` only through a push,
+	// while `remote_count` is stepped BEFORE the CAS and so counts slots staged but not yet chained.
+	module.appendOp(spanBody, op: StdOp.call(ids.mint(), callee: SlabCollectRemoteName, args: argsOf(span)))
+
+	let spanGeom = emitClassGeometry(module, block: spanBody, classIdx: classIdx, ids: ids)
+	let spanSlots = emitGeomTotalSlots(module, block: spanBody, geom: spanGeom, ids: ids)
+	let spanFree = emitLoadField(module, block: spanBody, record: span, offset: MspanFreeCountOffset, ids: ids)
+	let idle = emitCmp(module, block: spanBody, a: spanFree, b: spanSlots, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spanBody, op: StdOp.condBranch(idle, thenBlockId: destroy.id, elseBlockId: keepSpan.id))
+
+	// A span still holding live slots goes back on the rebuilt list, still `Partial`.
+	emitStoreField(module, block: keepSpan, record: span, offset: MspanNextSpanOffset, value: kept)
+	module.setTerminator(keepSpan, op: StdOp.branch(spanLoop.id))
+	keepSpan.branchEdges.push(BranchEdge.create(spanLoop.id, argIds: twoArgs(following, second: span)))
 
 	module.appendOp(destroy, op: StdOp.call(ids.mint(), callee: SlabSpanDestroyName, args: argsOf(span)))
 	module.setTerminator(destroy, op: StdOp.branch(spanLoop.id))
@@ -2414,30 +2409,25 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, kind ParsedInt, 
 	module.functions.push(func)
 end 'buildSlabCensusEntry'
 
-// `__slab_free_to_span(slot, span)` — put one slot back on its span's free list, and hand the span to
-// mcentral if that was its last live one.
+// `__slab_free_to_span(slot, span)` — put one slot back on its span's free list.
 //
 // **PUSH: `[slot] = free_list; free_list = slot; free_count += 1`** — the other half of INV-1.
 //
-// ⭐⭐ **THE COMMON SINK FOR EVERY FREE THAT REACHES A SPAN, AND IT IS ONE EMITTER BECAUSE IT HAS THREE
-// CALLERS THAT CANNOT SHARE A BLOCK.** `__slab_free`'s own local push, its serialised push for a slot on the
-// shared raw row (which must run inside the lock), and the remote-queue replay in `__slab_drain_remote`;
-// spelling the sequence at each would be three copies of one push.
+// ⭐⭐ **THE COMMON SINK FOR EVERY FREE THAT REACHES A SPAN, AND IT IS ONE EMITTER BECAUSE IT HAS CALLERS
+// THAT CANNOT SHARE A BLOCK.** `__slab_free`'s own local push, its serialised push for a slot on the shared
+// raw row, `__slab_free_to_full`'s push, and the remote-queue replay in `__slab_collect_remote`; spelling
+// the sequence at each would be four copies of one push.
 //
 // ⭐ **THE HOT CALLER EMITS IT INLINE AND THE COLD ONES STILL CALL `__slab_free_to_span` (EC8).** A local
 // push is ~12 ops — less than the frame that reached it — and it is the arm every free of a program with
-// one thread takes. The two cold arms (a slot on the shared raw row, which runs under `__slab_lock`, and
-// the drain's replay loop, which runs the push once per queued slot) keep the call, so the function still
+// one thread takes. The cold arms all run under `__slab_lock` and keep the call, so the function still
 // exists and this is one spelling emitted twice, not two spellings.
 //
 // ⚠⚠ **EVERY CALLER MUST BE THE SPAN'S SOLE WRITER, AND EACH ESTABLISHES THAT DIFFERENTLY** — that is the
 // contract this cannot check and its callers exist to satisfy. `__slab_free`'s local arm has compared
-// `owning_p` against its own P; its raw arm holds `__slab_lock`; the drain runs on the owner by
-// construction, because a remote push targets the owner's queue and nobody else's.
+// `owning_p` against its own P; its raw arm and `__slab_free_to_full` hold `__slab_lock`; the collect runs
+// either on the owner or inside the lock, which is the same rule its own callers carry.
 function emitSlabFreeToSpan(module StdModule, func IrFunction, cur IrBlock, slot ValueId, span ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	// A span empties once for the many frees that fill it, so the return is cold and its call is laid out
-	// away from the push every free runs.
-	var fullyFree = module.addBlock(func, label: label, heat: BlockHeat.cold)
 	let done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let head = emitLoadField(module, block: cur, record: span, offset: MspanFreeListOffset, ids: ids)
@@ -2448,22 +2438,15 @@ function emitSlabFreeToSpan(module StdModule, func IrFunction, cur IrBlock, slot
 	let released = emitBin(module, block: cur, a: live, b: one, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: cur, record: span, offset: MspanFreeCountOffset, value: released)
 
-	let classIdx = emitLoadField(module, block: cur, record: span, offset: MspanClassIdxOffset, ids: ids)
-	let geom = emitClassGeometry(module, block: cur, classIdx: classIdx, ids: ids)
-	let totalSlots = emitGeomTotalSlots(module, block: cur, geom: geom, ids: ids)
-	let spanIsEmpty = emitCmp(module, block: cur, a: released, b: totalSlots, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(spanIsEmpty, thenBlockId: fullyFree.id, elseBlockId: done.id))
-
-	module.appendOp(fullyFree, op: StdOp.call(ids.mint(), callee: SlabSpanReturnName, args: argsOf(span)))
-	module.setTerminator(fullyFree, op: StdOp.branch(done.id))
+	module.setTerminator(cur, op: StdOp.branch(done.id))
 
 	return done
 end 'emitSlabFreeToSpan'
 
-// `__slab_free_to_span(slot, span)` — the same push behind a frame, for the two COLD arms: the serialised
-// one (a slot on the shared raw row, freed once a scheduler exists) and `__slab_drain_remote`'s replay
-// loop. Neither is on any program's hot path, so the frame costs them nothing they would notice and saves
-// the push being written into the emitted image two more times.
+// `__slab_free_to_span(slot, span)` — the same push behind a frame, for the COLD arms: the serialised raw-row
+// one, `__slab_free_to_full`, and `__slab_collect_remote`'s replay loop. None is on any program's hot path,
+// so the frame costs them nothing they would notice and saves the push being written into the emitted image
+// three more times.
 function buildSlabFreeToSpan(module StdModule)
 	var func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -2480,63 +2463,52 @@ function buildSlabFreeToSpan(module StdModule)
 	module.functions.push(func)
 end 'buildSlabFreeToSpan'
 
-// `__slab_drain_remote(p)` — replay every slot other Ps have CAS-pushed onto `p`'s queue back onto the spans
-// that own them.
+// `__slab_collect_remote(span)` — move every slot queued against `span` onto the free list its caching
+// processor pops.
 //
-// ⭐⭐ **ONE CAS DETACHES THE WHOLE CHAIN.** Swapping the head for 0 gives this P private ownership of every
-// node at once, so the walk that follows touches nothing another thread can see — which is what lets the
-// per-span pushes be the ordinary single-writer ones. Popping node by node would need a CAS per slot and
-// would reintroduce the ABA problem the whole-chain detach does not have.
+// One CAS detaches the whole chain, so the walk that follows touches nothing another thread can see and
+// the per-slot pushes are the ordinary single-writer ones. Popping node by node would need a CAS per slot
+// and would reintroduce the ABA problem a whole-chain detach does not have.
 //
-// ⚠ **`next` IS READ BEFORE THE SPAN PUSH, because that push writes the free-list link over the node's first
-// word** — the same word the queue's link lives in. A walk that read it afterwards would follow the span's
-// free list out of its own chain.
+// ⚠ `next` is read before the push, because the push writes the free-list link over the node's first word
+// — the same word the queue's link lives in. Reading it afterwards follows the span's free list out of the
+// chain being walked.
 //
-// ⚠ **CALLED ONLY BY THE OWNER, on its alloc slow path.** That is what makes it a single-CONSUMER queue and
-// the per-span pushes lock-free. A `p` of `MspanOwningPNone` — an OS thread with no P — has no queue and
-// returns at once; the caller does not test for it, because the test belongs where the fact is.
+// ⚠ **ONE CONSUMER AT A TIME, ESTABLISHED TWO WAYS.** A span that a processor holds cached is collected by
+// that processor and nobody else; a span no processor holds is collected under `__slab_lock`. Both callers
+// carry their half, and the two cannot overlap because a span is in exactly one of those two conditions.
 //
-// ⚠ **A MAP MISS HERE IS CORRUPTION, NOT A ROUTE.** `__slab_free` sends map-misses to the OS-direct tier
-// before anything can reach a queue, and a span is never unregistered while one of its slots is live — so a
-// node whose page maps to no span means something has already gone wrong, and pushing onto a span pointer of
-// `ArenaMapNoSpan` would store through address 0.
-function buildSlabDrainRemote(module StdModule)
-	var func = IrFunction.createFromStd(SlabDrainRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+// The emptiness test precedes the CAS: on a program with no cross-processor traffic the queue is empty
+// every time, and a CAS of zero for zero would put an uncontended atomic on every refill.
+function buildSlabCollectRemote(module StdModule)
+	var func = IrFunction.createFromStd(SlabCollectRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
 	var swap = module.addBlock(func, label: b"swap", heat: BlockHeat.normal)
 	var walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
 	var replay = module.addBlock(func, label: b"replay", heat: BlockHeat.normal)
-	var orphan = module.addBlock(func, label: b"orphan", heat: BlockHeat.normal)
-	var push = module.addBlock(func, label: b"push", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let p = 0 as ValueId
+	let span = 0 as ValueId
 
-	let noProc = emitConst(module, block: entry, value: MspanOwningPNone, ids: ids)
-	let hasNoQueue = emitCmp(module, block: entry, a: p, b: noProc, pred: StdCmpPred.eq, ids: ids)
-	let headAddr = emitFieldAddr(module, block: entry, record: p, offset: POffRemoteFreeHead, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(hasNoQueue, thenBlockId: done.id, elseBlockId: detach.id))
+	let headAddr = emitFieldAddr(module, block: entry, record: span, offset: MspanRemoteHeadOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(swap.id))
 
-	// ⚠ **THE EMPTINESS TEST COMES BEFORE THE CAS, AND THAT IS WHAT KEEPS THE COMMON CASE FREE.** This runs
-	// on EVERY alloc miss, and on a program with no cross-P traffic the queue is empty every single time; a
-	// CAS of 0-for-0 would be correct but would put an uncontended `lock cmpxchg` on every refill for a
-	// chain that is not there. `detach` is the retry target, so a lost race re-reads rather than re-using a
-	// head another producer has already replaced.
-	let head = emitLoadField(module, block: detach, record: headAddr, offset: 0, ids: ids)
-	let emptyQueue = emitConst(module, block: detach, value: 0, ids: ids)
-	let nothingQueued = emitCmp(module, block: detach, a: head, b: emptyQueue, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(detach, op: StdOp.condBranch(nothingQueued, thenBlockId: done.id, elseBlockId: swap.id))
+	let head = emitLoadField(module, block: swap, record: headAddr, offset: 0, ids: ids)
+	let emptyQueue = emitConst(module, block: swap, value: 0, ids: ids)
+	let nothingQueued = emitCmp(module, block: swap, a: head, b: emptyQueue, pred: StdCmpPred.eq, ids: ids)
+
+	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
+	module.setTerminator(swap, op: StdOp.condBranch(nothingQueued, thenBlockId: done.id, elseBlockId: detach.id))
 
 	let won = ids.mint()
-	module.appendOp(swap, op: StdOp.atomicCas(won, addrId: headAddr, expectedId: head, replacementId: emptyQueue))
-	let lostRace = emitConst(module, block: swap, value: 0, ids: ids)
-	let contended = emitCmp(module, block: swap, a: won, b: lostRace, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(swap, op: StdOp.condBranch(contended, thenBlockId: detach.id, elseBlockId: walk.id))
-	swap.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(head)))
+	module.appendOp(detach, op: StdOp.atomicCas(won, addrId: headAddr, expectedId: head, replacementId: emptyQueue))
+	let lostRace = emitConst(module, block: detach, value: 0, ids: ids)
+	let contended = emitCmp(module, block: detach, a: won, b: lostRace, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(detach, op: StdOp.condBranch(contended, thenBlockId: swap.id, elseBlockId: walk.id))
+	detach.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(head)))
 
 	let node = ids.mint()
 	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
@@ -2545,24 +2517,18 @@ function buildSlabDrainRemote(module StdModule)
 	module.setTerminator(walk, op: StdOp.condBranch(walked, thenBlockId: done.id, elseBlockId: replay.id))
 
 	let following = emitLoadField(module, block: replay, record: node, offset: 0, ids: ids)
-	let span = ids.mint()
-	module.appendOp(replay, op: StdOp.call(span, callee: SlabArenaMapGetName, args: argsOf(node)))
-	let unmapped = emitConst(module, block: replay, value: ArenaMapNoSpan, ids: ids)
-	let noOwner = emitCmp(module, block: replay, a: span, b: unmapped, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(replay, op: StdOp.condBranch(noOwner, thenBlockId: orphan.id, elseBlockId: push.id))
-
-	emitRuntimeAbort(module, func: func, block: orphan, abort: RuntimeAbort.slabRemoteFreeSlotHasNoSpan, ids: ids)
-
-	module.appendOp(push, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(node, second: span)))
-	module.setTerminator(push, op: StdOp.branch(walk.id))
-	push.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(following)))
+	let oneFewer = emitConst(module, block: replay, value: OneFewer, ids: ids)
+	_ = emitFieldAccumulate(module, block: replay, record: span, offset: MspanRemoteCountOffset, delta: oneFewer, multiM: true, ids: ids)
+	module.appendOp(replay, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(node, second: span)))
+	module.setTerminator(replay, op: StdOp.branch(walk.id))
+	replay.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(following)))
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildSlabDrainRemote'
+end 'buildSlabCollectRemote'
 
-// `__slab_free(ptr)` — return a slot to its span, to its owner's remote queue, or a mapping to the OS.
+// `__slab_free(ptr)` — return a slot to its span, onto that span's remote stack, or a mapping to the OS.
 //
 // ⭐⭐ **BOTH TIERS DEBIT THE RAW LIVE COLUMN**, because a mapping and a slot are one free each — but each
 // on the road that reaches it, because the reverse-map walk needs nothing but the pointer and holding the
@@ -2576,25 +2542,25 @@ end 'buildSlabDrainRemote'
 // span; a MISS is the OS-direct sentinel (`SlabArena.ArenaMapNoSpan`), which is why nothing may ever
 // register an OS-direct mapping's pages in that map.
 //
-// ⭐⭐ **THE SECOND IS WHO OWNS THE SPAN, AND IT HAS FOUR ANSWERS**, every arm of which is a fact about
-// which thread may write the span's free list rather than a preference:
+// ⭐⭐ **THE SECOND IS WHO OWNS THE SPAN**, every arm of which is a fact about which thread may write the
+// span's free list rather than a preference:
 //
 //   * **`MspanOwningPNone` — the shared raw row.** Any P-less OS thread may hold slots of this span and any
 //     thread at all may free one, so the push is serialised under `__slab_lock` — but ONLY once a scheduler
 //     exists. Before that the lone main thread is the only writer and the lock would guard nothing.
-//   * **`MspanOwningPParked` — the span is on an mcentral list.** ⛔ Every one of its slots is already free,
-//     so a free that reaches here is a DOUBLE FREE or a slot that outlived its span: it aborts.
-//   * **the P running me.** The ordinary case: a lock-free push onto a list I am the sole writer of.
-//   * **another P.** CAS-push onto that P's queue and leave; the owner replays it.
-//
-// ⭐ **THE PARKED ARM ABORTS FOR EVERY CALLER, RAW THREAD INCLUDED.** The counting argument is the same for
-// both, so there is no reason for two answers: a slot in flight on a remote queue has NOT been counted into
-// `free_count`, so a span cannot reach `total_slots` while one of its slots is unaccounted for, so the
-// sentinel is unreachable for anybody who holds a live slot.
+//   * **the P running me.** The ordinary case, and the one asked first of the four: a lock-free push onto a
+//     list I am the sole writer of.
+//   * **`MspanStateFull` — exhausted and on no list.** `__slab_free_to_full` takes `__slab_lock` and relists
+//     it. The one slot road that locks, and a span is in this state once per cycle.
+//   * **`MspanOwningPFreed` — the header is already back on the metadata slab.** A double free, and it
+//     aborts rather than CAS-pushing through a recycled record.
+//   * **anything else — another P, or `MspanStatePartial`.** CAS-push onto the SPAN's own stack and leave;
+//     whoever collects it next puts the slot on the free list.
 //
 // ⚠ **A NULL TARGET CANNOT HAPPEN AND IS NOT GUARDED, WHICH IS THE OTHER HALF OF STORING A POINTER.**
 // Reconstructing the P from an id and an array that may not be populated would need the guard; here the
-// pointer IS the one a live P stamped, so a non-`None`, non-`Parked` owner is a P that exists.
+// pointer IS the one a live P stamped, so an owner that is neither `None` nor one of the negative states is
+// a P that exists.
 //
 // ⚠ **`ptr` MUST BE A SLOT BASE, and nothing here can check it.** The free list is threaded through the
 // slot's first word, so an INTERIOR pointer would corrupt the slot it lands in and then be handed out as a
@@ -2634,12 +2600,15 @@ function buildSlabFree(module StdModule, model MachineModel)
 	var rawOwned = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
 	var rawSerialised = module.addBlock(func, label: b"rawlocked", heat: BlockHeat.cold)
 	var notRaw = module.addBlock(func, label: b"notraw", heat: BlockHeat.normal)
-	var parked = module.addBlock(func, label: b"parked", heat: BlockHeat.cold)
+	var uncached = module.addBlock(func, label: b"uncached", heat: BlockHeat.cold)
 	var mine = module.addBlock(func, label: b"mine", heat: BlockHeat.normal)
+	var notDead = module.addBlock(func, label: b"notdead", heat: BlockHeat.normal)
+	var parked = module.addBlock(func, label: b"parked", heat: BlockHeat.cold)
 	var local = module.addBlock(func, label: b"local", heat: BlockHeat.normal)
 	var remote = module.addBlock(func, label: b"remote", heat: BlockHeat.normal)
 
-	let owner = emitLoadField(module, block: routed, record: span, offset: MspanOwningPOffset, ids: ids)
+	let owner = ids.mint()
+	module.appendOp(routed, op: StdOp.loadAcquire(owner, addrId: span, offset: MspanOwningPOffset, valueType: StdType.i64))
 	let noProc = emitConst(module, block: routed, value: MspanOwningPNone, ids: ids)
 	let onRawRow = emitCmp(module, block: routed, a: owner, b: noProc, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(routed, op: StdOp.condBranch(onRawRow, thenBlockId: rawOwned.id, elseBlockId: notRaw.id))
@@ -2657,19 +2626,67 @@ function buildSlabFree(module StdModule, model MachineModel)
 	emitSlabLockLeave(module, block: locked, state: lockState, depthAddr: depthAddr, ids: ids)
 	module.setTerminator(locked, op: StdOp.retVoid)
 
-	let parkedOwner = emitConst(module, block: notRaw, value: MspanOwningPParked, ids: ids)
-	let alreadyReturned = emitCmp(module, block: notRaw, a: owner, b: parkedOwner, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notRaw, op: StdOp.condBranch(alreadyReturned, thenBlockId: parked.id, elseBlockId: mine.id))
+	// ⭐⭐ **`myP` IS ASKED FIRST OF THE FOUR, BECAUSE IT IS THE ANSWER IN A PROGRAM WITH ONE PROCESSOR AND
+	// THE COMMON ONE IN EVERY OTHER.** The two sentinels below it are a state a span is in once per cycle,
+	// and `Freed` is a program error; putting either ahead of the ownership test would pay a compare on
+	// every free to reach a case almost no free takes.
+	let isMine = emitCmp(module, block: notRaw, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notRaw, op: StdOp.condBranch(isMine, thenBlockId: local.id, elseBlockId: mine.id))
+
+	let full = emitConst(module, block: mine, value: MspanStateFull, ids: ids)
+	let wasExhausted = emitCmp(module, block: mine, a: owner, b: full, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(mine, op: StdOp.condBranch(wasExhausted, thenBlockId: uncached.id, elseBlockId: notDead.id))
+
+	// ⛔ A span whose header has gone back to the metadata slab is a DOUBLE FREE, and a CAS onto it would
+	// write through a recycled record. It is tested before the queue push and not after.
+	let dead = emitConst(module, block: notDead, value: MspanOwningPFreed, ids: ids)
+	let spanIsGone = emitCmp(module, block: notDead, a: owner, b: dead, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notDead, op: StdOp.condBranch(spanIsGone, thenBlockId: parked.id, elseBlockId: remote.id))
 
 	emitRuntimeAbort(module, func: func, block: parked, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
 
-	let isMine = emitCmp(module, block: mine, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(mine, op: StdOp.condBranch(isMine, thenBlockId: local.id, elseBlockId: remote.id))
+	// ⛔ **THE ONE SLOT ROAD THAT TAKES THE LOCK, AND IT IS TAKEN ONCE PER SPAN.** An exhausted span is on no
+	// list, so the freer that brings the first slot back is the one that has to relist it — and it takes the
+	// lock BEFORE touching the span, which is what keeps the destroy out of reach of an in-flight freer.
+	//
+	// ⚠ **THE LOCK IS THE RAW ARM'S BARGAIN, NOT A SECOND ONE.** Before a scheduler exists the lone main
+	// thread is the only writer of anything, so the two arms are one call with and without the bracket
+	// around it.
+	var relistLocked = module.addBlock(func, label: b"relistlock", heat: BlockHeat.cold)
+	var relistPlain = module.addBlock(func, label: b"relistplain", heat: BlockHeat.cold)
+	var relistDone = module.addBlock(func, label: b"relistdone", heat: BlockHeat.cold)
+
+	let othersPossible = emitSlabSchedulerExists(module, block: uncached, schedulerWord: arms.schedulerWord, ids: ids)
+	module.setTerminator(uncached, op: StdOp.condBranch(othersPossible, thenBlockId: relistLocked.id, elseBlockId: relistPlain.id))
+
+	let plainAnswer = ids.mint()
+	module.appendOp(relistPlain, op: StdOp.call(plainAnswer, callee: SlabFreeToFullName, args: twoArgs(ptr, second: span)))
+	module.setTerminator(relistPlain, op: StdOp.branch(relistDone.id))
+	relistPlain.branchEdges.push(BranchEdge.create(relistDone.id, argIds: argsOf(plainAnswer)))
+
+	let relistState = emitSlabStateCommitted(module, block: relistLocked, ids: ids)
+	let relistDepth = ids.mint()
+	var relistReady = emitSlabLockDepthAddr(module, func: func, cur: relistLocked, state: relistState, model: model, addrId: relistDepth, ids: ids, label: b"relist", heat: BlockHeat.cold)
+	emitSlabLockEnter(module, block: relistReady, state: relistState, depthAddr: relistDepth, ids: ids)
+	let lockedAnswer = ids.mint()
+	module.appendOp(relistReady, op: StdOp.call(lockedAnswer, callee: SlabFreeToFullName, args: twoArgs(ptr, second: span)))
+	emitSlabLockLeave(module, block: relistReady, state: relistState, depthAddr: relistDepth, ids: ids)
+	module.setTerminator(relistReady, op: StdOp.branch(relistDone.id))
+	relistReady.branchEdges.push(BranchEdge.create(relistDone.id, argIds: argsOf(lockedAnswer)))
+
+	var relistReturned = module.addBlock(func, label: b"relistret", heat: BlockHeat.cold)
+	let tookIt = ids.mint()
+	relistDone.blockArgs.push(IrBlockArg.create(tookIt, argType: StdType.i64))
+	let missed = emitConst(module, block: relistDone, value: 0, ids: ids)
+	let listedMeanwhile = emitCmp(module, block: relistDone, a: tookIt, b: missed, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(relistDone, op: StdOp.condBranch(listedMeanwhile, thenBlockId: remote.id, elseBlockId: relistReturned.id))
+
+	module.setTerminator(relistReturned, op: StdOp.retVoid)
 
 	var locallyPushed = emitSlabFreeToSpan(module, func: func, cur: local, slot: ptr, span: span, ids: ids, label: b"push")
 	module.setTerminator(locallyPushed, op: StdOp.retVoid)
 
-	var pushed = emitSlabRemotePush(module, func: func, cur: remote, target: owner, slot: ptr, ids: ids)
+	var pushed = emitSlabRemotePush(module, func: func, cur: remote, span: span, slot: ptr, myP: myP, ids: ids)
 	module.setTerminator(pushed, op: StdOp.retVoid)
 
 	// ⚠ **NO LOCK** — see `buildSlabOsDirectArm`: the OS-direct tier keeps its length in the mapping's own

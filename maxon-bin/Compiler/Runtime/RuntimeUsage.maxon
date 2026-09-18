@@ -480,36 +480,6 @@ export type RuntimeUsage
 	// the POSIX substrate floor (`PosixRuntime.posixReadsMonotonicClock`).
 	export var usesUptimeClock as bool
 
-	// ⭐⭐ **THE PROGRAM REACHES THE SLAB'S PAGE LAYER** — the chunk arena, its bitmap and the pointer→span
-	// reverse map (`SlabArena.maxon`). Its own bit, and the one here that declares the LEAST: the family
-	// calls only itself and `osAllocPages`, so it pulls in no heap, no scheduler and no leak gate. It is
-	// emphatically NOT folded into `usesHeap` — the arena sits BENEATH the allocator, and a heap program
-	// carries the allocator for its own reasons; folding would install the whole page layer, and lay out its
-	// two `.data` words, in every program that allocates a single box.
-	//
-	// ⭐⭐ **IT IS DECLARED FROM `usesHeap` AND THERE IS NO DISCOVERED ARM AT ALL (`closeSlabNeeds`).**
-	// `__slab_alloc` cuts its spans from the arena's chunks and `__slab_free` asks its reverse map who owns a
-	// pointer; every one of those calls lives in a SYNTHESIZED Std body, which is rule 2 of this file's
-	// header — what a synthesized body calls is declared, never discovered.
-	//
-	// ⛔⛔ **AND A PREFIX ARM BESIDE THE CLOCK'S WOULD NOW BE WORSE THAN REDUNDANT: IT WOULD SET THE BIT IN
-	// EVERY PROGRAM.** The family's entry points are `runtime/SlabArena.maxon` source, so its bodies are in
-	// the walked Maxon module and they call each other — and no file outside the tier may name one (E3004),
-	// so a `__slab_arena_*` callee the walk can SEE is always the family talking to itself, which is no
-	// evidence about the program at all. Read as evidence it installs the page layer's builder-built entry
-	// in a program that cannot allocate.
-	//
-	// ⇒ **WHAT KEEPS THAT ENTRY PRESENT WHEREVER THE BODIES SHIP IS THAT THE ONLY MINTER OF A CALL TO THEM
-	// READS THE SAME BIT**: `SlabRuntime.installSlabRuntime` returns before emitting anything unless
-	// `usesHeap`, and `closeSlabNeeds` runs after every producer of `usesHeap`. (`SchedRuntime`'s GT-record
-	// carve mints `__slab_assert_os_alloc` off `usesGt` instead, and that body reads no `.data` word — it is
-	// a compare and an exit.) The family's two `.data` words ride no bit: `SlabArena.slabArenaRuntimeGlobals`
-	// lays each out where a surviving body names it.
-	//
-	// ⚠ It stays a bit of its OWN rather than being folded into `usesHeap` at every reader, because that is
-	// what keeps the whole page layer out of a program that reaches neither.
-	export var usesSlabArena as bool
-
 	// The program creates or maps a NAMED SHARED SECTION (`stdlib/SharedMemory.maxon` ⇒ `__shm_*`). Its own
 	// bit, so a program that never maps one carries neither the entries nor the two kernel32 imports behind
 	// them. It declares `usesHeap` and `usesManagedMemory` transitively for the directory family's reasons —
@@ -561,7 +531,7 @@ export type RuntimeUsage
 	export var parksOnIo as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSlabArena: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesBackgroundPriority: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -595,25 +565,6 @@ export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, 
 
 	return usage
 end 'scanRuntimeUsage'
-
-// ⭐ **WHAT THE ALLOCATOR NEEDS UNDERNEATH IT, DECLARED IN ONE PLACE.** A program that touches the heap
-// carries `__slab_alloc`, which cuts spans out of the chunk arena, registers each span in the pointer→span
-// reverse map, and asks that map who owns a pointer on every `__slab_free`. None of those calls exists in
-// the Maxon module — they are emitted into synthesized Std bodies long after the walk — so the dependency is
-// DECLARED here rather than discovered, which is rule 2 of this file's header.
-//
-// ⚠ It is a CLOSURE over the whole usage record rather than an arm inside `recordCallUsage`, because
-// `usesHeap` has more than a dozen producers and SIX of them run in `Compiler.compileToCodeResult` after the
-// walk has finished — the two flags (`--async-trace`, `--debugstream`), the two destructor/clone cascades,
-// the soleness walk and the boxed-enum lookup helper. An arm would answer for the walk's producers and
-// silently miss the rest — a program that allocates only through one of them would then emit
-// `__slab_arena_alloc_chunks` calls into a module carrying neither the function nor its `.data` slots.
-// ⛔ **SO THIS MUST BE CALLED PAST THE LAST OF THEM**, which is where its one call site sits.
-export function closeSlabNeeds(usage RuntimeUsage)
-	if usage.usesHeap 'allocatorNeedsTheArena'
-		usage.usesSlabArena = true
-	end 'allocatorNeedsTheArena'
-end 'closeSlabNeeds'
 
 function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'

@@ -1,0 +1,406 @@
+// Test: slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+let SmallPayload = 96
+let LargePayload = 500
+
+function build(seed Seed, n Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(n as ElementIndex)
+	for i in 0 upto n 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var small = Bufs.create()
+	for k in 0 upto 16000 'allocSmall'
+		small.push(build(k as Seed, n: SmallPayload as Seed))
+	end 'allocSmall'
+	small = Bufs.create()
+
+	// The one door reclamation is reached through: it destroys the spans the drop emptied and puts their
+	// chunks back in the arena's bitmap, where any class can reach them.
+	_ = __Builtins.scavengeMemory()
+
+	let committedAfterDrop = __Builtins.slabCommittedBytes()
+
+	if committedAfterDrop <= 0 'nothingCommitted'
+		return 1
+	end 'nothingCommitted'
+
+	var large = Bufs.create()
+	for k in 0 upto 2000 'allocLarge'
+		large.push(build(k as Seed, n: LargePayload as Seed))
+	end 'allocLarge'
+
+	if __Builtins.slabCommittedBytes() > committedAfterDrop 'theSecondClassGrewTheHeap'
+		return 2
+	end 'theSecondClassGrewTheHeap'
+
+	var bad = 0
+	for k in 0 upto 2000 'check'
+		let b = try large.get(k) otherwise return 3
+		if b.count() != LargePayload 'length'
+			bad = bad + 1
+		end 'length'
+	end 'check'
+
+	if bad != 0 'corrupted'
+		return 4
+	end 'corrupted'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @build {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#6
+  __rc_chk#7:
+    x64.cmpRegImm32 rbx, 65536
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#9
+  __rc_chk#10:
+    x64.cmpRegImm32 r12, 65536
+    x64.jcc greater, __rc_panic#9
+  __rc_ok#8:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+  __rc_ok#20:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_capacity
+    x64.cmpRegReg r12, r8
+    x64.jcc lessEqual, __il_cont
+  grow:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont:
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  fill:
+    x64.leaRegRegReg rax, rbx, r14
+    x64.movRegImm32 rcx, 251
+    x64.movRegImm32 rdx, 0
+    x64.divReg rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#12
+  __rc_chk#13:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#12
+  __rc_ok#11:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr:
+    x64.cmpRegReg r14, r12
+    x64.jcc less, fill
+  forexit:
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge.test:10: Range check failed: value outside typealias 'Seed'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge.test:10: Range check failed: value outside typealias 'Seed'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.a-dropped-class-serves-a-different-one-after-a-scavenge.test:14: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 64
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  allocSmall:
+    x64.movRegImm32 rdx, 96
+    x64.movRegReg rcx, r12
+    x64.callDirect build
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 16000
+    x64.jcc less, allocSmall
+  forexit#4:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.callDirect __slab_scavenge
+    x64.callDirect __slab_committed_bytes
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greater, ifcont#6
+  nothingCommitted:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr#7
+  allocLarge:
+    x64.movRegImm32 rdx, 500
+    x64.movRegReg rcx, r14
+    x64.callDirect build
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#9:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr#7:
+    x64.cmpRegImm32 r14, 2000
+    x64.jcc less, allocLarge
+  forexit#10:
+    x64.callDirect __slab_committed_bytes
+    x64.cmpRegReg r8, rbx
+    x64.jcc lessEqual, ifcont#12
+  theSecondClassGrewTheHeap:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
+    x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rdi, [r13 + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc notEqual, forhdr#13
+    x64.jmp forhdr#27
+  check#14:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#24
+  __im_load#25:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [r13 + 40]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, critsplit#41
+  __im_empty:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#24
+  critsplit#42:
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rsi
+    x64.jmp __im_cont#23
+  critsplit#41:
+    x64.movRegReg r8, rcx
+    x64.movRegReg r10, rsi
+  __im_cont#23:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok#17:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.cmpRegImm32 rcx, 500
+    x64.jcc equal, forstep#15
+  length#19:
+    x64.leaRegRegImm32 rax, rax, 1
+  forstep#15:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#13:
+    x64.cmpRegImm32 rdx, 2000
+    x64.jcc less, check#14
+    x64.jmp forexit#16
+  check#36:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#33
+  __im_load#34:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rdx*8 + 0]
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r8
+    x64.movRegReg r8, rdi
+  __im_cont#32:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#30
+  tryerr:
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#30:
+    x64.loadRegBaseDisp.word64 rdi, [r8 + 8]
+    x64.cmpRegImm32 rdi, 500
+    x64.jcc equal, forstep#28
+  length#31:
+    x64.leaRegRegImm32 rax, rax, 1
+  forstep#28:
+    x64.leaRegRegImm32 rdx, rdx, 1
+  forhdr#27:
+    x64.cmpRegImm32 rdx, 2000
+    x64.jcc less, check#36
+  forexit#16:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont#22
+  corrupted:
+    x64.movRegImm32 rbx, 4
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#22:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#24:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rdx
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.jmp __im_cont#23
+  __im_slow#33:
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot2, rcx
+    x64.storeSlotReg slot1, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rdx, slot1
+    x64.loadRegSlot rsi, slot3
+    x64.jmp __im_cont#32
+}

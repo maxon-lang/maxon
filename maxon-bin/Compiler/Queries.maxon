@@ -1180,6 +1180,10 @@ function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule
 	var merged = try foldEveryFileIntoAModule(project, pool: pool)
 
 	while try growStdlibBodyDemand(project, module: merged, signatures: try queryProgramSignatures(project)) 'demandGrew'
+		// Released before the next round rather than left to the reassignment below, which drops it only
+		// after the replacement is fully built — two whole-program modules alive at once, at the peak.
+		merged.releaseWholly()
+
 		// Nothing is invalidated here, and that is the point: only the files whose bodies this round
 		// newly demanded have a moved parse key, so a round costs one re-parse of the files that changed
 		// plus a fold, not a re-parse of the whole cone.
@@ -1223,6 +1227,7 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 		// A new index when the one before it was settled without a type this fold filed; the same one otherwise.
 		signatures = try queryProgramSignatures(project)
 		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
+		merged.releaseWholly()
 		merged = MaxonModule.create()
 	end 'untilTheFoldStands'
 

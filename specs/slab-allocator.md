@@ -30,7 +30,7 @@ The pieces, and what each of the cases below can actually see of them:
 | **reverse map** | a three-level radix map from a page to the span that owns it; a MISS means OS-direct |
 | **size classes** | Go's 68-class ladder, reached in O(1) through two derived reverse tables |
 | **spans** | one chunk run cut into equal slots, with a free list AND a virgin bump region |
-| **mcache / mcentral** | one cached span per (shard, class); a fully-emptied span parks for reuse |
+| **mcache / mcentral** | one cached span per (shard, class); a drained span reaches its class's list, where any processor may take it back |
 | **OS-direct** | above 32 KiB a request is its own mapping, its length in a 16-byte prefix |
 
 ### ⭐⭐ Why these cases are STRESS programs and not assertions about the allocator
@@ -70,11 +70,12 @@ Four of the layer's behaviours have no Maxon-visible consequence today, and sayi
 
 - ~~The arena's chunk FREE path (`__slab_arena_free_chunks`).~~ **OBSERVABLE SINCE S6, AND IT HAS ITS
   OWN FILE.** This entry said the function had no reachable path and that its first caller would be
-  the scavenger, which was true and is not any more: `__slab_scavenge` calls it for every span that
-  stays idle across two passes, and `__Builtins.scavengeMemory()` returns the bytes that produced.
-  The cases that drive it — including the one that proves a recycled chunk is handed back ZEROED,
-  which is what the release path now owes — are in `slab-scavenger.md`. Nothing in THIS file calls
-  it, so every case below still describes an allocator that only ever grows.
+  the scavenger, which was true and is not any more: `__slab_scavenge` calls it for every span on a
+  class's list with no live slot, and `__Builtins.scavengeMemory()` reports what the OS then took back.
+  The cases that drive it — including the one that proves a recycled chunk is handed back ZEROED, which
+  is what the release path now owes — are in `slab-scavenger.md` and `slab-census.md`. **No case in
+  THIS file calls `scavengeMemory()`**, and no free and no refill destroys a span, so every case below
+  still describes an allocator that only ever grows.
 - **INV-1's trap** (`RuntimeAbort.slabSpanExhaustedPastItsEnd`). It fires only when the span's three
   accounts of its own free slots disagree, which no legal sequence of allocations can produce. It is
   verified by SABOTAGE — breaking the bump cursor's bound turns these cases red — not by a case.

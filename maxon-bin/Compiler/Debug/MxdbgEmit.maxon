@@ -22,11 +22,6 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		return
 	end 'nothingToDescribe'
 
-	// The whole-module twin of the check the allocator's private module runs: this is where the Target
-	// module stops being appended to, and the prologue pass and the runtime band both mint ops after the
-	// allocator has handed everything back.
-	codeResult.targetModule.spans.requireParallelTo(codeResult.targetModule.ops.count(), what: "at the sidecar")
-
 	var writer = MxdbgWriter.create()
 
 	// ⭐ **A COVERAGE POINT'S FILE IS REGISTERED BEFORE THE TABLE IS WALKED.** A point OUTLIVES its function
@@ -64,7 +59,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
 			none then break 'itsIr'
-			found(func) then writeFunctionLocals(project, writer: writer, types: types, module: codeResult.targetModule, func: func, range: fn)
+			found(func) then writeFunctionLocals(project, writer: writer, types: types, func: func, range: fn)
 		end 'itsIr'
 	end 'eachFunction'
 
@@ -266,7 +261,7 @@ end 'closeLocalTypes'
 // ⛔ **AND NEVER A GUESSED SLOT.** A name whose several values disagree about where they live has no one
 // location that is true at every PC of the function, and a record's scope range IS the whole function —
 // so the honest answer there is `optimizedOut` too.
-function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTypeTable, module TargetModule, func IrFunction, range DebugFunctionRange)
+function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTypeTable, func IrFunction, range DebugFunctionRange)
 	if func.debugLocals.count() == 0 'noBindings'
 		return
 	end 'noBindings'
@@ -277,7 +272,7 @@ function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTyp
 	var at = 0 as ElementIndex
 
 	for local in func.debugLocals 'eachBinding'
-		let placement = mxdbgAgreedPlacement(project, module: module, func: func, frameSize: range.frameSize, local: local, first: at)
+		let placement = mxdbgAgreedPlacement(project, func: func, frameSize: range.frameSize, spillSlotBase: range.spillSlotBase, local: local, first: at)
 		at = at + local.valueIds.count()
 		records.push(MxdbgLocalDraft.create(local.name, placement: placement, typeId: types.idOf(mxdbgTypeNameOf(project, ref: local.declaredType))))
 	end 'eachBinding'
@@ -324,7 +319,7 @@ let MxdbgOptimizedOutPlacement = MxdbgPlacement.create(MxdbgLocKindOptimizedOut,
 // The ONE location a name can be stated at, or `optimizedOut`. A name owns a sequence of values, and the
 // record covers the whole function — so a location is stated only where every value of the name agrees on
 // it, which is the only reading that is true wherever the debugger stops.
-function mxdbgAgreedPlacement(project Project, module TargetModule, func IrFunction, frameSize StackSize, local DebugLocalDecl, first ElementIndex) returns MxdbgPlacement
+function mxdbgAgreedPlacement(project Project, func IrFunction, frameSize StackSize, spillSlotBase StackSize, local DebugLocalDecl, first ElementIndex) returns MxdbgPlacement
 	// The name denotes a CELL ADDRESS, and the format has no indirect kind to say so with.
 	if local.heldInACell 'nothingToState'
 		return MxdbgOptimizedOutPlacement
@@ -363,7 +358,7 @@ function mxdbgAgreedPlacement(project Project, module TargetModule, func IrFunct
 		return MxdbgPlacement.create(MxdbgLocKindRegister, locValue: number as MxdbgLocValue)
 	end 'aRegister'
 
-	return MxdbgPlacement.create(MxdbgLocKindStackSlot, locValue: mxdbgFrameDisplacement(project, module: module, func: func, frameSize: frameSize, slot: number as SpillSlot))
+	return MxdbgPlacement.create(MxdbgLocKindStackSlot, locValue: mxdbgFrameDisplacement(project, frameSize: frameSize, spillSlotBase: spillSlotBase, slot: number as SpillSlot))
 end 'mxdbgAgreedPlacement'
 
 function mxdbgLocationAt(func IrFunction, at ElementIndex) returns DebugValueLocation
@@ -378,10 +373,10 @@ end 'mxdbgLocationAt'
 // just past it. x64's is rsp-relative and call-dependent — a caller's slots sit above the shadow space and
 // its outgoing arguments — so it is rebased by the frame the prologue reserves, which puts a slot BELOW
 // the notional frame pointer exactly as the reference driver renders it.
-function mxdbgFrameDisplacement(project Project, module TargetModule, func IrFunction, frameSize StackSize, slot SpillSlot) returns MxdbgLocValue
+function mxdbgFrameDisplacement(project Project, frameSize StackSize, spillSlotBase StackSize, slot SpillSlot) returns MxdbgLocValue
 	return match project.target.cpu 'isa'
 		arm64 gives arm64SlotDisplacement(slot) as MxdbgLocValue
-		x64 gives mxdbgX64FrameDisplacement(module, func: func, frameSize: frameSize, slot: slot)
+		x64 gives mxdbgX64FrameDisplacement(frameSize, spillSlotBase: spillSlotBase, slot: slot)
 		wasm32 gives panicNoFrameOnWasm()
 	end 'isa'
 end 'mxdbgFrameDisplacement'
@@ -390,8 +385,8 @@ end 'mxdbgFrameDisplacement'
 // hold a negative number, and a slot inside the frame the prologue reserved is BELOW the notional frame
 // pointer — so computing it there would trap on the range check for the ordinary case rather than the
 // exotic one.
-function mxdbgX64FrameDisplacement(module TargetModule, func IrFunction, frameSize StackSize, slot SpillSlot) returns MxdbgLocValue
-	let fromStackPointer = (spillSlotBaseDisp(module, func: func) + (slot as StackSize) * SpillSlotBytes) as MxdbgLocValue
+function mxdbgX64FrameDisplacement(frameSize StackSize, spillSlotBase StackSize, slot SpillSlot) returns MxdbgLocValue
+	let fromStackPointer = (spillSlotBase + (slot as StackSize) * SpillSlotBytes) as MxdbgLocValue
 
 	return fromStackPointer - (frameSize as MxdbgLocValue)
 end 'mxdbgX64FrameDisplacement'

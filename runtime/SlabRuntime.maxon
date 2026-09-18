@@ -8,12 +8,11 @@
 // BLOCKER IS THE TARGET.** The allocation doors, the free door and the lock pair read the target's
 // `MachineModel`: on wasm the walk to *"which processor am I"* is a constant because the backend has no
 // `tlsSlotLoad`, and on every other lane it is a TLS read. Tier source is compiled once and has no such
-// knob. Two more are blocked for a different reason, and it is the one `runtime/SlabArena.maxon`'s ninth
-// entry gives: `__slab_drain_remote` calls `__slab_arena_map_get`, whose walk `__slab_free` splices INLINE,
-// and `__slab_rounded_size` shares `SlabRuntime.emitSlabClassIndex` with `__slab_alloc` — so porting either
-// alone would be a SECOND SPELLING of one walk.
+// knob. One more is blocked for a different reason: `__slab_rounded_size` shares
+// `SlabRuntime.emitSlabClassIndex` with `__slab_alloc`, so porting it alone would be a SECOND SPELLING of
+// one walk.
 //
-// ⛔ **AND `__slab_span_destroy` IS EXCLUDED ON THAT SAME RULE, WHICH IS NOT WHERE ITS BLOCKER WAS EXPECTED.**
+// ⛔ **AND `__slab_span_destroy` IS EXCLUDED ON THE SAME RULE, WHICH IS NOT WHERE ITS BLOCKER WAS EXPECTED.**
 // It reads no usage record at all and every callee it names is here, so the machine model above does not
 // touch it; what stops it is that it and `__slab_refill` compute a span's chunk run from the same packed
 // class geometry, and the refill stays. `SlabRuntime.emitSpanChunkCount` states why that must be ONE
@@ -133,7 +132,6 @@ let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + SlabWordBytes
 let SlabStateSchedulerOffset = SlabStateMetaFreeOffset + SlabWordBytes
 let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + SlabWordBytes
 
-
 // ⭐ **THE SLOW-PATH LOCK SITS IN THE REGION RATHER THAN IN A `.data` WORD**, because a new `.data` label
 // shifts every label after it and re-mints every heap program's golden. `MmRuntime.OsLockBytes` is the other
 // copy of the width, and it is the MAXIMUM over the five lanes (a Darwin `pthread_mutex_t`) rather than any
@@ -177,7 +175,7 @@ let SlabStateUncommitted = 0
 
 // The metadata slab's slot. `SlabRuntime.MspanSlotBytes` is the other copy and is checked there against the
 // mspan record's own width.
-let MspanSlotBytes = 64
+let MspanSlotBytes = 80
 
 // A dead header's link rides in its FIRST word — `base_addr`, which `__slab_refill` overwrites on the way
 // back out — so the free list costs no storage of its own and a recycled header needs no clearing.
@@ -190,15 +188,17 @@ let MspanBaseAddrOffset = 0
 let MspanFreeCountOffset = 16
 let MspanClassIdxOffset = 32
 let MspanOwningPOffset = 48
+let MspanRemoteHeadOffset = 56
+let MspanRemoteCountOffset = 64
 
 // A carved-and-returned metadata slot holds stale fields rather than zeroes, so nothing but this sentinel
-// tells the census walk apart from a live span. No allocator path tests it: a free that reaches a dead
-// header is the double free `MspanOwningPParked` catches one state earlier.
-// `SlabRuntime.MspanOwningPFreed` is the other copy.
+// tells the census walk apart from a live span. `SlabRuntime.MspanOwningPFreed` is the other copy, and
+// `__slab_free` aborts on a free that reaches one.
 let MspanOwningPFreed = -2
 
-// `SlabRuntime.MspanOwningPParked` is the other copy.
-let MspanOwningPParked = -1
+// The state a span is in while it sits on its class's partial list, holding no processor.
+// `SlabRuntime.MspanStatePartial` is the other copy.
+let MspanStatePartial = -1
 
 // A chunk's first slot links it to its predecessor, which is the only thing that makes the slab walkable:
 // the bump cursor and its limit describe the chunk being filled and nothing before it.
@@ -254,8 +254,8 @@ end '__slab_state_base'
 // `__slab_meta_alloc() -> span` — one mspan header, off the free list if there is one and off the metadata
 // slab's bump cursor otherwise.
 //
-// ⭐ **THE FREE LIST'S PRODUCER IS THE SCAVENGER.** It destroys a span, and without a list to put the
-// header on, every span it reclaims would leak 64 bytes of metadata slab for the life of the process.
+// ⭐ **THE FREE LIST'S PRODUCER IS `__slab_scavenge`**, the one road that destroys a span. Without a list to
+// put the header on, every span it reclaims would leak its metadata slot for the life of the process.
 //
 // ⚠⚠ **THE SLOT IS NOT ASSUMED ZERO, AND THE FREE LIST IS WHY THAT RULE BITES.** `__slab_refill` writes
 // every mspan field regardless — an uninitialised field here is STALE DATA, not zero — which is what keeps
@@ -264,8 +264,8 @@ end '__slab_state_base'
 // describing a chunk run that belongs to somebody else.
 //
 // ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`.** The bump cursor and the free list are shared by every
-// P; both callers (`__slab_refill`, `__slab_span_destroy`) are already inside it, so taking it here would be
-// a recursive re-entry paying for a fact the caller has established.
+// P, and every caller is already inside the lock — so taking it here would be a recursive re-entry paying
+// for a fact the caller has established.
 module function __slab_meta_alloc() returns MachineWord
 	let state = __slab_state_base()
 
@@ -310,9 +310,9 @@ end '__slab_meta_alloc'
 //
 // ⚠ **THE HEADER'S CHUNK IS NEVER RELEASED, ONLY ITS SLOTS ARE REUSED.** The metadata slab bump-allocates
 // out of whole chunks and this list hands the SLOTS back; the chunks stay claimed for the life of the
-// process. A metadata chunk holds up to 128 headers belonging to unrelated spans, so it can only be released
-// when every one of them is dead — a second free-list-of-chunks problem for a structure that is 0.8% of the
-// heap it describes.
+// process. One chunk holds a hundred-odd headers belonging to unrelated spans, so it could only be released
+// when every one of them is dead — a second free-list-of-chunks problem for a structure that is under 1% of
+// the heap it describes.
 //
 // ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`** — see `__slab_meta_alloc`, whose cursor this list
 // shares.
@@ -336,8 +336,8 @@ end 'slabMetaChunkOf'
 // --- The census ---
 //
 // `specs/slab-census.md` owns what each figure counts. Two facts bind here: `live + free` is every slot of
-// every live span, which is the identity that case asserts, and `live` counts a slot sitting on a
-// remote-free queue, because `free_count` does not credit one until its owner drains it.
+// every live span, which is the relation that case asserts, and a slot queued against a span is counted
+// FREE — it is on no free list and is not handed out either, so `free_count` alone would report it live.
 //
 // ⚠ Nothing below is stepped at an allocation or a free. A figure derived at the door instead would put
 // this walk's cost on every free in the language.
@@ -376,7 +376,9 @@ function slabCensusSpans(kind SlabWord) returns SlabWord
 	while chunk != 0 'chunks'
 		var slot = chunk + MspanSlotBytes
 
-		while slot < limit 'slots'
+		// The slot's END must fit, which is the bound `__slab_meta_alloc` bumps against. A slot size that
+		// does not divide the chunk leaves a tail too short for a header, and `slot < limit` walks into it.
+		while (slot + MspanSlotBytes) <= limit 'slots'
 			total = total + slabCensusSpan(slot, kind: kind)
 			slot = slot + MspanSlotBytes
 		end 'slots'
@@ -420,16 +422,23 @@ function slabCensusSpan(span SlabWord, kind SlabWord) returns SlabWord
 	let geom = __Raw.loadWord((__Raw.slabClassGeomAddr() as SlabWord + (__Raw.loadWord(span as MachineWord, offset: MspanClassIdxOffset) as SlabWord) * SlabWordBytes) as MachineWord, offset: 0) as SlabWord
 	let slotSize = geom and SlabClassGeomSlotMask
 	let totalSlots = geom shr SlabClassGeomSlotShift
-	let freeCount = __Raw.loadWord(span as MachineWord, offset: MspanFreeCountOffset) as SlabWord
+
+	// A queued slot is on no free list and is not handed out either, so it is counted with the free ones.
+	// Reading it here rather than walking the chain keeps the census proportional to SPANS.
+	let freeCount = (__Raw.loadWord(span as MachineWord, offset: MspanFreeCountOffset) as SlabWord) + (__Raw.loadWord(span as MachineWord, offset: MspanRemoteCountOffset) as SlabWord)
 
 	if kind == SlabCensusFreeBytes 'free'
 		return freeCount * slotSize
 	end 'free'
 
 	if kind == SlabCensusParkedBytes 'parked'
-		if owner == MspanOwningPParked 'onAnMcentralList'
+		if freeCount != totalSlots 'stillHoldsLiveSlots'
+			return 0
+		end 'stillHoldsLiveSlots'
+
+		if owner == MspanStatePartial 'idleOnThePartialList'
 			return totalSlots * slotSize
-		end 'onAnMcentralList'
+		end 'idleOnThePartialList'
 
 		return 0
 	end 'parked'

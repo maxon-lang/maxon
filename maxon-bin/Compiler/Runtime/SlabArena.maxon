@@ -4,10 +4,10 @@
 // ⭐⭐ **THE EIGHT ENTRY POINTS ARE `runtime/SlabArena.maxon` SOURCE.** `__slab_assert_os_alloc`,
 // `__slab_arena_new`, `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`,
 // `__slab_arena_scavenge`, `__slab_arena_map_ensure` and `__slab_arena_map_set` are written over the
-// `__Raw` floor and arrive through the ordinary pipeline. ⛔ **THE NINTH — `__slab_arena_map_get` — STAYS,
-// and its staying is not debt.** `__slab_free` splices the walk INLINE (`emitSlabArenaMapGet`), because a
-// frame around four loads and three tests is pure overhead on the path of every free in the language; the
-// framed twin here is `__slab_drain_remote`'s. Porting it would be a SECOND spelling of one walk.
+// `__Raw` floor and arrive through the ordinary pipeline. ⛔ **THE NINTH — the reverse-map lookup — IS NOT
+// AN ENTRY POINT AT ALL AND HAS NO FRAME.** `__slab_free` is its one reader and splices the walk INLINE
+// (`emitSlabArenaMapGet`), because a frame around four loads and three tests is pure overhead on the path
+// of every free in the language. A tier body for it would be a SECOND spelling of one walk.
 //
 // ⛔⛔ **THE ARENA'S BODIES ARE REACHED BY CALLS THE COMPILER MINTS, SO THE REACH IS DECLARED RATHER THAN
 // DISCOVERED** — `StdlibSource.runtimeTierFileIsCompilerCalled`, which is what stops the from-`main` walk
@@ -115,11 +115,11 @@
 // and `__slab_span_destroy` state the same requirement as a documented precondition rather than
 // re-acquiring it.
 //
-// ⚠ **ONE ENTRY POINT IS REACHED WITHOUT THE LOCK: `__slab_arena_map_get`, from
-// `SlabRuntime.__slab_drain_remote`'s walk**, which is a cross-P path and therefore exactly where a second M
-// is. It is a READ of the reverse map, and it is named here because "the caller holds the lock" is the
-// sentence above and this is its one exception — not because the exception has been shown to be safe. It
-// has not been measured either way.
+// ⚠ **ONE WALK IS REACHED WITHOUT THE LOCK: the reverse-map lookup `SlabRuntime.__slab_free` splices
+// inline**, which every free in the language takes and which is therefore exactly where a second M is. It
+// is a READ of the reverse map, and it is named here because "the caller holds the lock" is the sentence
+// above and this is its one exception — not because the exception has been shown to be safe. It has not
+// been measured either way.
 //
 // ⚠ **AND THERE IS NO `__slab_init` / `__slab_init_done` HERE FOR A SECOND REASON THAT SURVIVES THE LOCK.**
 // The `.data` image IS the initialization, exactly as `MmRuntime`'s slab cursor's zero means "no arena yet":
@@ -210,6 +210,11 @@ type SlabArenaGeometry
 	// table.
 	export let commitBitmapOffset as ByteOffset
 
+	// Where the scavenger's grace bitmap sits: one bit per granule, the commit bitmap's own width, and
+	// immediately past it. Carried for the same reason the commit offset is, and read by the metadata
+	// overflow check — the tier owns the table and this is the side that says it fits.
+	export let seenFreeBitmapOffset as ByteOffset
+
 	// The arena's own span — the address range its chunk grid covers, measured from the ALIGNED base
 	// `__slab_arena_new` starts it at. `__slab_arena_of` tests an address against it.
 	export let bytes as ParsedInt
@@ -246,8 +251,9 @@ type SlabArenaGeometry
 		let granuleCount = chunks shr SlabArenaCommitGranuleChunksShift
 		let commitBitmapWords = (granuleCount + BitmapBitsPerWordMask) shr BitmapBitsPerWordShift
 		let commitBitmapOffset = ((ArenaBitmapOffset as ParsedInt) + bitmapWords * ArenaWordBytes) as ByteOffset
+		let seenFreeBitmapOffset = ((commitBitmapOffset as ParsedInt) + commitBitmapWords * ArenaWordBytes) as ByteOffset
 		let bytes = chunks * SlabPageBytes
-		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, bytes: bytes, reservationBytes: bytes + arenaAlignSlackBytes(hasPageReservation), hasPageReservation: hasPageReservation}
+		return Self{chunkCount: chunkCount, bitmapWords: bitmapWords, granuleCount: granuleCount, commitBitmapWords: commitBitmapWords, commitBitmapOffset: commitBitmapOffset, seenFreeBitmapOffset: seenFreeBitmapOffset, bytes: bytes, reservationBytes: bytes + arenaAlignSlackBytes(hasPageReservation), hasPageReservation: hasPageReservation}
 	end 'fromChunkCount'
 end 'SlabArenaGeometry'
 
@@ -394,7 +400,6 @@ export let SlabArenaFreeChunksName = b"__slab_arena_free_chunks"
 export let SlabArenaOfName = b"__slab_arena_of"
 export let SlabArenaScavengeName = b"__slab_arena_scavenge"
 export let SlabArenaMapSetName = b"__slab_arena_map_set"
-export let SlabArenaMapGetName = b"__slab_arena_map_get"
 
 // ⚠ **THE OS-ALLOCATION GUARD IS THE FAMILY'S AND ITS CALLERS ARE NOT.** It guards `osAllocPages` rather
 // than the arena — the OS-direct path in `SlabRuntime` and the GT record carve in `SchedRuntime` are its
@@ -434,14 +439,17 @@ export function slabArenaRuntimeGlobals() returns DataSectionEntryArray
 	return out
 end 'slabArenaRuntimeGlobals'
 
-// Install the one entry point of the page layer that is still built here — `__slab_arena_map_get`. The
-// other eight are `runtime/SlabArena.maxon` source and arrive through the ordinary pipeline.
+// ⭐⭐ **THE GEOMETRY IS INTERNALLY COHERENT — asserted, not trusted.** `checkSlabClassTable` beside it makes
+// the same argument for the size-class ladder and states it in full: a table whose source changed shape
+// produces a working-looking allocator that indexes past its own bounds. Every number below is either
+// derived from another or checked against the one it must agree with; the file declares nothing that agrees
+// with nothing.
 //
-// ⭐ **THE GEOMETRY CHECK RUNS BEFORE THE GATE, AND THAT IS DELIBERATE.** The compiles it must NOT skip are
-// the heapless ones: a geometry that stops satisfying its own rule has to fail the first compile after the
-// change, and a check that only runs when a program happens to allocate is a check that reports the
-// breakage to whoever comes next. It is two dozen integer comparisons against a compile that emits
-// megabytes, and a flag is what would let it stop running.
+// ⭐ **IT RUNS ON EVERY COMPILE AND IS GATED ON NOTHING, WHICH IS DELIBERATE.** The compiles it must NOT
+// skip are the heapless ones: a geometry that stops satisfying its own rule has to fail the first compile
+// after the change, and a check that only runs when a program happens to allocate is a check that reports
+// the breakage to whoever comes next. It is two dozen integer comparisons against a compile that emits
+// megabytes, and a gate is what would let it stop running.
 //
 // ⭐ **AND IT CHECKS BOTH LANES' GEOMETRIES, NOT THIS BUILD'S.** A wasm-only breakage found only by a wasm
 // compile is the same skipped check one axis over, and both geometries are compile-time constants.
@@ -451,25 +459,10 @@ end 'slabArenaRuntimeGlobals'
 // loses nothing on either lane, which is the half a drifted seed cannot fake: an arena whose bitmap is short
 // or whose granule overruns it fails the next compile, on both sides, because the tier writes the same
 // derivation over the same seeds.
-export function installSlabArena(module StdModule, usage RuntimeUsage)
-	checkSlabArenaGeometry()
-
-	if not usage.usesSlabArena 'noArena'
-		return
-	end 'noArena'
-
-	buildSlabArenaMapGet(module)
-end 'installSlabArena'
-
-// ⭐⭐ **THE GEOMETRY IS INTERNALLY COHERENT — asserted, not trusted.** `checkSlabClassTable` beside it makes
-// the same argument for the size-class ladder and states it in full: a table whose source changed shape
-// produces a working-looking allocator that indexes past its own bounds. Every number below is either
-// derived from another or checked against the one it must agree with; the file declares nothing that agrees
-// with nothing.
 //
-// It panics rather than returning a verdict, for that check's reason: a broken arena geometry cannot
-// produce a working allocator, so there is no caller who could sensibly continue.
-function checkSlabArenaGeometry()
+// It panics rather than returning a verdict: a broken arena geometry cannot produce a working allocator, so
+// there is no caller who could sensibly continue.
+export function checkSlabArenaGeometry()
 	requireShiftMatchesWidth("bitmap word", shift: BitmapBitsPerWordShift, width: BitmapBitsPerWord)
 	requireShiftMatchesWidth("map level", shift: ArenaMapLevelBits, width: ArenaMapLevelEntries)
 	requireShiftMatchesWidth("map L1", shift: ArenaMapL1Bits, width: ArenaMapL1Entries)
@@ -585,10 +578,10 @@ function checkArenaGeometryForLane(geometry SlabArenaGeometry)
 		panic("slab arena ({lane}): a {largestMapTableRun}-chunk reverse-map level does not fit the {payloadChunks} chunks an arena has after its {ArenaMetadataChunks} metadata chunk(s), so `__slab_arena_map_ensure` would abort on the first lookup")
 	end 'mapTableRunUnsatisfiable'
 
-	// The list link and the two bitmaps are the whole of the metadata chunk — the commit bitmap is last, so
+	// The list link and the three bitmaps are the whole of the metadata chunk — the grace bitmap is last, so
 	// its end is what can overflow — and nothing may silently start overlapping the payload of chunk 0 if
-	// either widens.
-	let metadataBytes = (geometry.commitBitmapOffset as ParsedInt) + geometry.commitBitmapWords * ArenaWordBytes
+	// any of them widens.
+	let metadataBytes = (geometry.seenFreeBitmapOffset as ParsedInt) + geometry.commitBitmapWords * ArenaWordBytes
 
 	if metadataBytes > ArenaMetadataChunks * SlabPageBytes 'metadataOverflowsChunk'
 		panic("slab arena ({lane}): {metadataBytes} bytes of metadata do not fit in {ArenaMetadataChunks} chunk(s) of {SlabPageBytes}")
@@ -700,6 +693,7 @@ function emitMapSlotAddr(module StdModule, block IrBlock, tableBase ValueId, add
 	let index = emitBin(module, block: block, a: raw, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitWordSlotAddr(module, block: block, base: tableBase, index: index, ids: ids)
 end 'emitMapSlotAddr'
+
 // **THE SPAN REGISTERED FOR THE PAGE HOLDING `ptr`, or `ArenaMapNoSpan`** — emitted INTO the caller's
 // blocks, answering in `spanId`, the merge block's single argument.
 //
@@ -748,25 +742,6 @@ export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlo
 
 	return merge
 end 'emitSlabArenaMapGet'
-
-// `__slab_arena_map_get(ptr) -> span` — the same walk behind a frame, for `__slab_drain_remote`, whose
-// replay loop asks it once per queued slot. That loop is a MISS path, so a frame there costs a program
-// nothing it would notice and saves the walk being written into the emitted image a second time.
-function buildSlabArenaMapGet(module StdModule)
-	var func = IrFunction.createFromStd(SlabArenaMapGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
-
-	let span = ids.mint()
-	var answered = emitSlabArenaMapGet(module, func: func, cur: entry, ptr: ptr, spanId: span, ids: ids, label: b"map")
-	module.setTerminator(answered, op: StdOp.ret(span))
-
-	module.functions.push(func)
-end 'buildSlabArenaMapGet'
 
 // Continue into `present` when `pointer` is non-zero, else into `absent`. The lookup's three level tests are
 // the same three ops, and writing them out per level is how one of the three ends up comparing the wrong

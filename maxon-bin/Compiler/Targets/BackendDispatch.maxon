@@ -176,6 +176,28 @@ function dataSectionRoster(userGlobals DataSectionEntryArray, usage RuntimeUsage
 	return roster
 end 'dataSectionRoster'
 
+module function releaseAllocatedStdModule(project Project, stdModule StdModule)
+	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
+	stdModule.releaseBody()
+	recordPhase(project, phase: CompilePhase.releaseIr, probe: probe)
+end 'releaseAllocatedStdModule'
+
+// The span/op parity check lives here because this is the last moment it can be asked: the release below
+// drops the column it reads. It is the whole-module twin of the check the allocator's private module runs,
+// and it sits after the encode because the prologue pass and the runtime band both mint ops once the
+// allocator has handed everything back.
+module function releaseEncodedTargetModule(project Project, targetModule TargetModule)
+	targetModule.spans.requireParallelTo(targetModule.ops.count(), what: "after the encode")
+
+	if project.rendersTargetIr 'thePrinterStillWalksIt'
+		return
+	end 'thePrinterStillWalksIt'
+
+	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
+	targetModule.releaseBody()
+	recordPhase(project, phase: CompilePhase.releaseIr, probe: probe)
+end 'releaseEncodedTargetModule'
+
 function appendDataSectionEntries(roster DataSectionEntryArray, entries DataSectionEntryArray)
 	for entry in entries 'each'
 		roster.push(entry)
@@ -215,6 +237,8 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
 	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
+
+	releaseAllocatedStdModule(project, stdModule: stdModule)
 
 	// The Target-tier CFG cleanup must run HERE — after the allocator's `applyAllocation` and before the
 	// frame pass.
@@ -288,6 +312,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	end 'gtChunks'
 
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
 	let codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)

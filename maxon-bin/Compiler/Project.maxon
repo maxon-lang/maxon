@@ -7901,6 +7901,17 @@ export type Project
 	// is dropped by dead-function elimination, and the printer then has no body to render.
 	export var requestedRuntimeBodies as RuntimeFunctionNameArray
 
+	// A caller that wants the Target IR text must set this before `compileToCodeResult` runs; the backends
+	// keep their `codeChunks` and `releaseEncodedTargetModule` keeps the module's body only where it holds.
+	// `renderTargetIr` panics rather than rendering an empty module to a caller that forgot.
+	export var rendersTargetIr as bool
+
+	// This process compiles once and exits, so `compileToCodeResult` may drop the front-end caches the
+	// moment the Maxon module is folded. ⚠ A driver that re-queries after a compile — the LSP, the MCP
+	// check, `run`'s cache, any recheck — must leave it false: the next query silently re-parses the cone
+	// it paid to memoize.
+	export var compilesOnceAndExits as bool
+
 	// Every plain function used as a first-class VALUE (`collectFnRefThunkTargets`). Its `__fnref_` thunk is
 	// installed after the pipeline and `call`s it directly, so the inliner's census must count that call
 	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
@@ -8254,6 +8265,8 @@ export type Project
 			debugStream: debugStream,
 			debugInfo: false,
 			requestedRuntimeBodies: RuntimeFunctionNameArray.create(),
+			rendersTargetIr: false,
+			compilesOnceAndExits: false,
 			functionValueTargets: ByteArrayArray.create(),
 			entryStubCalls: EntryStubCalls.none(),
 			coverage: false,

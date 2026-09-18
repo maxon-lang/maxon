@@ -108,6 +108,11 @@ export type LandingSlots
 	end 'slotOf'
 end 'LandingSlots'
 
+union InFlightSizeBound
+	unbounded
+	upTo(size PoolJobSize)
+end 'InFlightSizeBound'
+
 // ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for every drain: this pool's,
 // `StdPassPool`'s and `FrontEndPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs per
 // worker longest-first, then serves whichever reply `awaitAny` answers and hands its worker the next job in
@@ -121,25 +126,91 @@ end 'LandingSlots'
 // catches a caller that pushed without taking or took without pushing.
 export type PoolDispatch
 	var order as PoolJobArray
+	var sizeInDispatchOrder as PoolJobSizeArray
 	var jobCount as PoolSize
 	var workerCount as PoolSize
 	var dispatched as PoolSlot
 	var replyJob as PoolJobArray
 	var replyWorker as PoolSlotArray
+	var replySize as PoolJobSizeArray
+	var outstandingPerWorker as PoolSlotArray
+	var inFlightSize as PoolJobSize
+	var sizeBound as InFlightSizeBound
 
 	// One size per job, in job order; the caller has already answered for an empty pool.
 	export static function create(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolDispatch
-		let jobCount = sizes.count() as PoolSize
-		return Self{order: jobsLongestFirst(sizes, jobCount: jobCount), jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create()}
+		return Self.withBound(sizes, workerCount: workerCount, sizeBound: InFlightSizeBound.unbounded)
 	end 'create'
+
+	// A job in flight holds a worker's whole intermediate state, which is proportional to the function's op
+	// count — so a count-only pipeline puts the LONGEST functions in flight together, the dispatch order
+	// being longest-first, and the peak is set by the largest functions rather than by the average one. The
+	// budget is what an average-sized job set would occupy at full pipeline depth.
+	export static function boundedByInFlightSize(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolDispatch
+		return Self.withBound(sizes, workerCount: workerCount, sizeBound: InFlightSizeBound.upTo(uniformPipelineSize(sizes, workerCount: workerCount)))
+	end 'boundedByInFlightSize'
+
+	static function withBound(sizes PoolJobSizeArray, workerCount PoolSize, sizeBound InFlightSizeBound) returns PoolDispatch
+		let jobCount = sizes.count() as PoolSize
+		var order = PoolJobArray.create()
+		var sizeInDispatchOrder = PoolJobSizeArray.create()
+		fillLongestFirstOrder(sizes, jobCount: jobCount, order: order, sizeInDispatchOrder: sizeInDispatchOrder)
+		var outstandingPerWorker = PoolSlotArray.create()
+		outstandingPerWorker.refill(workerCount as ElementIndex, value: 0 as PoolSlot)
+		return Self{order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create(), replySize: PoolJobSizeArray.create(), outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
+	end 'withBound'
 
 	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
 	// fewer.
 	export function initialInFlight() returns PoolSlot
+		match self.sizeBound 'bound'
+			unbounded then break 'bound'
+			upTo(budget) then panic("PoolDispatch.initialInFlight: this dispatch is bounded at {budget} op(s) in flight, which a count-only fill cannot honour — fill it for as long as `fillAdmitsAnother` says so")
+		end 'bound'
+
 		let pipeline = self.workerCount * JobsInFlightPerWorker
 		let inFlight = pipeline if pipeline < self.jobCount else self.jobCount
 		return inFlight as PoolSlot
 	end 'initialInFlight'
+
+	export function fillAdmitsAnother() returns bool
+		return self.admitsAJobFor(self.fillWorker())
+	end 'fillAdmitsAnother'
+
+	export function admitsAJobFor(worker PoolSlot) returns bool
+		if not self.hasUndispatched() 'nothingLeftToHandOut'
+			return false
+		end 'nothingLeftToHandOut'
+
+		let held = self.outstandingOf(worker)
+
+		// ⛔ An idle worker is admitted whatever the budget says. One function larger than the whole budget
+		// is ordinary — it is the first job in longest-first order — and a bound that could refuse it while
+		// nothing was running would leave the drain with no reply to await and no job dispatched.
+		if held == 0 'theWorkerHoldsNothing'
+			return true
+		end 'theWorkerHoldsNothing'
+
+		if held >= JobsInFlightPerWorker as PoolSlot 'itsPipelineIsFull'
+			return false
+		end 'itsPipelineIsFull'
+
+		return match self.sizeBound 'bound'
+			unbounded gives true
+			upTo(budget) gives self.inFlightSize < budget
+		end 'bound'
+	end 'admitsAJobFor'
+
+	export function inFlightSizeBudget() returns PoolJobSize
+		return match self.sizeBound 'bound'
+			unbounded panic("PoolDispatch.inFlightSizeBudget: this dispatch carries no in-flight size bound — only a pool built by `boundedByInFlightSize` has one to report")
+			upTo(budget) gives budget
+		end 'bound'
+	end 'inFlightSizeBudget'
+
+	function outstandingOf(worker PoolSlot) returns PoolSlot
+		return try self.outstandingPerWorker.get(worker) otherwise panic("PoolDispatch.outstandingOf: worker {worker} is not one of the {self.workerCount} this pool holds")
+	end 'outstandingOf'
 
 	// The worker the fill's next job goes to: round-robin over the pool.
 	export function fillWorker() returns PoolSlot
@@ -154,9 +225,14 @@ export type PoolDispatch
 	// slot these columns just gained.
 	export function nextJob(worker PoolSlot) returns PoolJob
 		let job = try self.order.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {self.dispatched} is past the end — ask `hasUndispatched` first")
+		let size = try self.sizeInDispatchOrder.get(self.dispatched) otherwise panic("PoolDispatch.nextJob: the size column holds {self.sizeInDispatchOrder.count()} entry(ies) against {self.order.count()} job(s) — one walk fills both")
+		let held = self.outstandingOf(worker)
 		self.dispatched = self.dispatched + 1
 		self.replyJob.push(job)
 		self.replyWorker.push(worker)
+		self.replySize.push(size)
+		self.inFlightSize = self.inFlightSize + size
+		try self.outstandingPerWorker.set(worker, value: held + 1) otherwise panic("PoolDispatch.nextJob: outstandingPerWorker.set OOB at worker {worker} below {self.workerCount}")
 		return job
 	end 'nextJob'
 
@@ -173,10 +249,30 @@ export type PoolDispatch
 			panic("PoolDispatch.land: the caller holds {outstanding} reply(ies) against {self.replyJob.count()} job(s) in flight — a reply was pushed without `nextJob`, or a job taken without its reply being pushed")
 		end 'columnsOutOfStep'
 
-		_ = try self.replyWorker.remove(ready) otherwise panic("PoolDispatch.land: replyWorker.remove({ready}) — the two columns are pushed and removed together")
+		let worker = try self.replyWorker.remove(ready) otherwise panic("PoolDispatch.land: replyWorker.remove({ready}) — the two columns are pushed and removed together")
+		let held = self.outstandingOf(worker)
+
+		if held == 0 'theWorkerHeldNothing'
+			panic("PoolDispatch.land: worker {worker} landed a reply while holding none — a job is counted onto its worker at `nextJob` and off it here")
+		end 'theWorkerHeldNothing'
+
+		try self.outstandingPerWorker.set(worker, value: held - 1) otherwise panic("PoolDispatch.land: outstandingPerWorker.set OOB at worker {worker} below {self.workerCount}")
+		let size = try self.replySize.remove(ready) otherwise panic("PoolDispatch.land: replySize.remove({ready}) — the three columns are pushed and removed together")
+		self.inFlightSize = self.inFlightSize - size
 		return try self.replyJob.remove(ready) otherwise panic("PoolDispatch.land: replyJob.remove({ready}) — `awaitAny` answered a slot of the caller's reply array, which is in step with this one")
 	end 'land'
 end 'PoolDispatch'
+
+function uniformPipelineSize(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolJobSize
+	var total = 0 as PoolJobSize
+
+	for size in sizes 'eachJob'
+		total = total + size
+	end 'eachJob'
+
+	let mean = try (total / (sizes.count() as PoolJobSize)) otherwise panic("uniformPipelineSize: a pool of no jobs never reaches the dispatch")
+	return mean * (workerCount as PoolJobSize) * (JobsInFlightPerWorker as PoolJobSize)
+end 'uniformPipelineSize'
 
 // A job's size and position packed into one longest-first sort key.
 typealias LongestFirstKey = int(0 to u64.max)
@@ -434,12 +530,15 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
 	var refused = stdModule.funcCount() as FuncIndex
-	var dispatch = PoolDispatch.create(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount)
+	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount)
 	var replies = BackendReplyArray.create()
 
-	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
+	while dispatch.fillAdmitsAnother() 'fillThePipeline'
 		dispatchOneBackendJob(stdModule, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
 	end 'fillThePipeline'
+
+	let filled = replies.count()
+	logDebug(LogCategory.codegen, message: function() gives "regalloc pool: the fill put {filled} job(s) in flight over {workerCount} worker(s), bounded at {dispatch.inFlightSizeBudget()} op(s)")
 
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
 		let ready = __Builtins.awaitAny(replies)
@@ -459,7 +558,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 			end 'why'
 		end 'notFinished'
 
-		if dispatch.hasUndispatched() 'handTheFreedWorkerTheNextJob'
+		while dispatch.admitsAJobFor(freedWorker) 'handTheFreedWorkerTheNextJob'
 			dispatchOneBackendJob(stdModule, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
 		end 'handTheFreedWorkerTheNextJob'
 	end 'serveWhoeverFinishedFirst'
@@ -499,7 +598,7 @@ end 'dispatchOneBackendJob'
 // The key packs (size, job) into ONE integer, so ordering is a plain ascending sort of scalars with no
 // comparator closure to carry: `size * jobCount + job` is injective for `job < jobCount`, and it is bounded
 // by the total size times the job count. Read back DESCENDING, which is what makes it longest-first.
-function jobsLongestFirst(sizes PoolJobSizeArray, jobCount PoolSize) returns PoolJobArray
+function fillLongestFirstOrder(sizes PoolJobSizeArray, jobCount PoolSize, order PoolJobArray, sizeInDispatchOrder PoolJobSizeArray)
 	var keys = LongestFirstKeyArray.create()
 	let keyStride = jobCount as LongestFirstKey
 
@@ -509,15 +608,12 @@ function jobsLongestFirst(sizes PoolJobSizeArray, jobCount PoolSize) returns Poo
 
 	keys.sort()
 
-	var order = PoolJobArray.create()
-
 	for k in 0 upto keys.count() 'largestFirst'
-		let key = try keys.get(keys.count() - 1 - k) otherwise panic("jobsLongestFirst: keys.get OOB walking back from {keys.count()}")
-		order.push((try (key mod keyStride) otherwise panic("jobsLongestFirst: a pool of no jobs never reaches the ordering")) as PoolJob)
+		let key = try keys.get(keys.count() - 1 - k) otherwise panic("fillLongestFirstOrder: keys.get OOB walking back from {keys.count()}")
+		order.push((try (key mod keyStride) otherwise panic("fillLongestFirstOrder: a pool of no jobs never reaches the ordering")) as PoolJob)
+		sizeInDispatchOrder.push((try (key / keyStride) otherwise panic("fillLongestFirstOrder: a pool of no jobs never reaches the ordering")) as PoolJobSize)
 	end 'largestFirst'
-
-	return order
-end 'jobsLongestFirst'
+end 'fillLongestFirstOrder'
 
 // Every function's live op count, in index order — the size both backend pools dispatch a function by. It
 // takes the two arrays rather than a module because it serves two pools over the same Std module.
