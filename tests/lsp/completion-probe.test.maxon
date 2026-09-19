@@ -22,15 +22,15 @@ end 'CompletionLabelsOutcome'
 
 // Open `source`, ask what a `.` at this position offers, release. The outcome is a VALUE, so no assertion
 // can run before the handle is freed.
-function completionLabelsAfterDot(source String, line LspCoordinate, character LspCoordinate) returns CompletionLabelsOutcome
+function completionLabelsAfterDot(uri String, source String, line LspCoordinate, character LspCoordinate) returns CompletionLabelsOutcome
 	var client = LspClient.start()
 	var outcome = CompletionLabelsOutcome.broke(CompletionUnreportedSession)
 
 	try 'session'
 		_ = client.initialize()
 		client.initialized()
-		client.openDocument(CompletionUri, content: source)
-		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(CompletionUri, line: line, character: character, triggerCharacter: CompletionTriggerDot)))
+		client.openDocument(uri, content: source)
+		outcome = CompletionLabelsOutcome.offered(completionLabelsOf(client.completionWithTrigger(uri, line: line, character: character, triggerCharacter: CompletionTriggerDot)))
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
 			transportFailed(text) then outcome = CompletionLabelsOutcome.broke("the framed stream broke — {text}")
@@ -46,13 +46,17 @@ end 'completionLabelsAfterDot'
 // The labels a position offered. `after` is the cursor's own context, so a red says which request never
 // completed rather than only that one did not.
 export function completionLabelsFor(source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
-	match completionLabelsAfterDot(source, line: line, character: character) 'outcome'
+	return try completionLabelsForAtUri(CompletionUri, source: source, line: line, character: character, after: after)
+end 'completionLabelsFor'
+
+export function completionLabelsForAtUri(uri String, source String, line LspCoordinate, character LspCoordinate, after String) returns StringArray throws TestFailure
+	match completionLabelsAfterDot(uri, source: source, line: line, character: character) 'outcome'
 		offered(labels) then return labels
 		broke(detail) then try Expect.fail("completion after {after} did not complete: {detail}")
 	end 'outcome'
 
-	panic("completionLabelsFor: the `broke` arm always throws, so this line is unreachable")
-end 'completionLabelsFor'
+	panic("completionLabelsForAtUri: the `broke` arm always throws, so this line is unreachable")
+end 'completionLabelsForAtUri'
 
 export function assertCompletionOffersEach(labels StringArray, wanted StringArray, after String) throws TestFailure
 	for name in wanted 'eachWanted'

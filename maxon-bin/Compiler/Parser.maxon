@@ -66286,29 +66286,27 @@ export type Parser
 		return result
 	end 'dispatchMethodOnBase'
 
-	// ⭐⭐ **EVERYTHING AN AUTHOR MAY SPELL ON A `<T>.handle`, IN THE ORDER THE QUESTIONS CAN BE ASKED.** The
-	// request UNION is the roster: it holds one variant per message in declaration order, so "is this a
-	// message?" is `indexOfCase` and needs no second list to fall out of step with `messageMethodNames`.
+	// Everything an author may spell on a `<T>.handle`, in the order the questions can be asked, and
+	// `ServiceCompanions.serviceHandleSurface` is the same set enumerated for an editor.
 	//
-	// ⭐ **THE VARIANT TEST COMES FIRST, AND THAT IS WHAT GIVES A DECLARED `clone`/`shutdown` PRECEDENCE.** A
-	// service declaring `export function shutdown()` has a VARIANT of that name, so the author's method wins
-	// and the compiler's pill becomes unspellable for it — which leaves dropping the last handle as the other
-	// road to the same drain. It is `cloneIsSynthesized`'s rule, reached by asking the roster rather
-	// than by asking `declaresCallee` a second time.
+	// The request union is the roster: it holds one variant per message in declaration order, so "is this
+	// a message?" is `indexOfCase` and needs no second list to fall out of step with `messageMethodNames`.
 	//
-	// ⚠ **VARIANT 0 IS THE COMPILER'S `__shutdown` AND IS NOT A MESSAGE.** It is `__`-prefixed, so no source
-	// may declare it and no author may name it (E2051) — the arm below is the structural backstop for a
-	// spelling that reaches here anyway, and it answers the same way an absent member does.
+	// The variant test comes first, and that is what gives a declared `clone`/`shutdown` precedence. A
+	// service declaring `export function shutdown()` has a variant of that name, so the author's method
+	// wins and the compiler's pill becomes unspellable for it — which leaves dropping the last handle as
+	// the other road to the same drain. It is `cloneIsSynthesized`'s rule, reached by asking the roster
+	// rather than by asking `declaresCallee` a second time.
 	//
-	// ⚠ **`shutdown` IS THE HANDLE'S OWN METHOD TOO, AND THAT IS NOT WHY ITS ARM REFUSES A VALUE.** So is
-	// `clone`, whose whole point is the value it hands back. What separates them is that nothing DECLARES
+	// ⚠ `shutdown` is the handle's own method too, and that is not why its arm refuses a value. So is
+	// `clone`, whose whole point is the value it hands back. What separates them is that nothing declares
 	// what `shutdown` returns — see `emitServiceShutdown`, which carries the argument.
 	function dispatchOnServiceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws ParseError
 		let typeName = self.signatures.serviceOfHandle(base.layout.name)
 		let request = try serviceRequestLayoutOf(self.signatures, typeName: typeName) otherwise panic("dispatchOnServiceHandle: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
-		let caseIndex = request.indexOfCase(memberTok.value)
+		let caseIndex = serviceMessageCaseIndex(request, member: memberTok.value)
 
-		if caseIndex < request.caseCount() and caseIndex != ServiceShutdownCaseIndex 'aMessage'
+		if caseIndex < request.caseCount() 'aMessage'
 			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, resultUsed: resultUsed)
 		end 'aMessage'
 

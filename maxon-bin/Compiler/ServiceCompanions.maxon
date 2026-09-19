@@ -1216,6 +1216,44 @@ module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName By
 	end 'lookup'
 end 'serviceRequestLayoutOf'
 
+// ⚠ Variant 0 is the compiler's own `__shutdown` pill and is not a message. It is `__`-prefixed, so no
+// source may declare it and no author may name it (E2051); refusing it here is the structural backstop
+// for a spelling that arrives anyway, and it answers as an absent member does.
+module function serviceMessageCaseIndex(request EnumLayout, member ByteArray) returns CaseIndex
+	let caseIndex = request.indexOfCase(member)
+
+	if caseIndex >= request.caseCount() or caseIndex == ServiceShutdownCaseIndex 'namesNoMessage'
+		return request.caseCount()
+	end 'namesNoMessage'
+
+	return caseIndex
+end 'serviceMessageCaseIndex'
+
+// Everything an author may spell on a `<T>.handle`: the service's messages, plus the handle's own
+// `shutdown` and `clone`. `serviceHandleAdmits` below is the same roster asked about ONE name, and
+// `Parser.dispatchOnServiceHandle` has an arm per entry. The editor's offer set and the compiler's admit
+// set are one fact, so a fourth thing a handle accepts is owed to all three.
+module function serviceHandleSurface(request EnumLayout) returns ByteArrayArray
+	var surface = ByteArrayArray.create()
+
+	for index in 0 upto request.caseCount() 'eachVariant'
+		if index == ServiceShutdownCaseIndex 'theCompilersOwnPill'
+			continue
+		end 'theCompilersOwnPill'
+
+		surface.push(request.caseNameAt(index))
+	end 'eachVariant'
+
+	surface.push(ServiceShutdownMethodName)
+	surface.push(CloneMethodName)
+
+	return surface
+end 'serviceHandleSurface'
+
+module function serviceHandleAdmits(request EnumLayout, member ByteArray) returns bool
+	return serviceMessageCaseIndex(request, member: member) < request.caseCount() or member.equals(ServiceShutdownMethodName) or member.equals(CloneMethodName)
+end 'serviceHandleAdmits'
+
 // The request union's layout, or a panic, for a caller that holds a SPAWNED type: its companions were minted
 // before any body was parsed, so a missing union is a compiler bug rather than a program's.
 module function requireServiceRequestLayout(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout

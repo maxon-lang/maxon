@@ -1,0 +1,73 @@
+let DottedArgumentDirName = "temp/lsp/receiver-type-a-dotted-type-argument"
+let DottedArgumentMainFileName = "main.maxon"
+let DottedArgumentLine = 25 as LspCoordinate
+let DottedArgumentLocalCharacter = 27 as LspCoordinate
+let DottedArgumentMemberListCharacter = 33 as LspCoordinate
+
+test 'receiver type: a dotted type argument is never read as its head segment'
+	let directory = stagedCorpusDirectory(DottedArgumentDirName)
+	writeCorpusFile(directory, fileName: DottedArgumentMainFileName, content: dottedArgumentFixture())
+
+	let uri = fileUriOf(directory.join(DottedArgumentMainFileName))
+	let rendering = try hoverRenderingAtUri(uri, source: dottedArgumentFixture(), line: DottedArgumentLine, character: DottedArgumentLocalCharacter)
+
+	try Expect.isFalse(rendering.contains("of type `Counter`."), message: "hovering `counter` rendered its type as `Counter`, the HEAD SEGMENT of `Counter.handle`. `typealias CounterHandleArray = Array with Counter.handle` binds the element to a service HANDLE, which takes messages where the type itself takes calls — so `Counter` here writes code that does not compile. A walk that reads only the first token of a dotted type argument out of the buffer answers exactly this way. It rendered: {rendering}")
+
+	try Expect.contains(rendering, needle: "of type `Counter.handle`", message: "hovering `counter` did not name its type as `Counter.handle`. The element of `Array with Counter.handle` is the whole dotted type, and the project's own index is what spells it — the open buffer's `with` clause is a run of tokens this walk must not reassemble by hand. It rendered: {rendering}")
+end 'receiver type: a dotted type argument is never read as its head segment'
+
+test 'receiver type: a member of a dotted type argument resolves'
+	let directory = stagedCorpusDirectory(DottedArgumentDirName)
+	writeCorpusFile(directory, fileName: DottedArgumentMainFileName, content: dottedArgumentFixture())
+
+	let uri = fileUriOf(directory.join(DottedArgumentMainFileName))
+	let labels = try completionLabelsForAtUri(uri, source: dottedArgumentFixture(), line: DottedArgumentLine, character: DottedArgumentMemberListCharacter, after: "`counter.`, where `counter` is bound out of an `Array with Counter.handle`")
+
+	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `counter.` offered nothing at all. `counter` is an element of `Array with Counter.handle`, and a receiver typed as a name the project declares nothing for offers an empty list.")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "shutdown"), message: "completion after `counter.` did not offer `shutdown`, which `Parser.dispatchOnServiceHandle` accepts on every handle and which `type Counter` declares nowhere. It is what tells the two candidate answers apart: a list carrying it is the HANDLE's surface, and the head segment `Counter` has no such member.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "count"), message: "completion after `counter.` offered `count`, a field of `Counter` itself. The element of `Array with Counter.handle` is the handle, whose surface is its own, so a list carrying `Counter`'s fields is the head segment answering in the handle's place.")
+end 'receiver type: a member of a dotted type argument resolves'
+
+function dottedArgumentFixture() returns String
+	return String.from(b"typealias Tally = int(0 to u64.max)
+
+type Counter
+    var count as Tally
+
+    static function create() returns Self
+        return Self{count: 0}
+    end 'create'
+
+    export function bump(by Tally)
+        self.count = self.count + by
+    end 'bump'
+
+    export function total() returns Tally
+        return self.count
+    end 'total'
+end 'Counter'
+
+typealias CounterHandleArray = Array with Counter.handle
+
+type Desk
+    public var counters as CounterHandleArray
+
+    public function firstTotal() returns Tally
+        var counter = try self.counters.get(0) otherwise panic(\"the desk holds one counter\")
+        return try await counter.total() otherwise 0
+    end 'firstTotal'
+
+    public static function create() returns Desk
+        var counters = CounterHandleArray.create()
+        counters.push(spawn Counter.create())
+        return Desk{counters: counters}
+    end 'create'
+end 'Desk'
+
+function main() returns ExitCode
+    let desk = Desk.create()
+    return desk.firstTotal() as ExitCode
+end 'main'")
+end 'dottedArgumentFixture'

@@ -1,0 +1,47 @@
+let ChainedFieldLine = 23 as LspCoordinate
+let ChainedFieldMemberListCharacter = 24 as LspCoordinate
+let ChainedFieldMemberNameCharacter = 25 as LspCoordinate
+
+test 'receiver type: a chained field offers its members'
+	let labels = try completionLabelsFor(chainedFieldFixture(), line: ChainedFieldLine, character: ChainedFieldMemberListCharacter, after: "`o.inner.`, where `o` is bound by `Outer.create()` and `inner` is a field of `Outer` declared `as Inner`")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "ring"), message: "completion after `o.inner.` did not offer `ring`, the one method `type Inner` declares. The receiver of the second dot is `o.inner` — a FIELD of the type `o` names — and resolving the bare token `inner` against the document's declarations instead answers about whatever else happens to carry that name.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "push"), message: "completion after `o.inner.` offered `push`, which `Inner` does not declare and `StringArray` does. The buffer's nearest `inner` above the cursor is the local `let inner = StringArray.create()`, which is not what `o.inner` reaches — an editor offering it writes code that does not compile.")
+end 'receiver type: a chained field offers its members'
+
+test 'receiver type: a member through a chained field hovers'
+	let rendering = try hoverRendering(chainedFieldFixture(), line: ChainedFieldLine, character: ChainedFieldMemberNameCharacter)
+
+	try Expect.contains(rendering, needle: "ring", message: "hovering `ring` in `o.inner.ring()` did not name it. Hover and completion reach the second dot's receiver through ONE walk, so this case and the one above must agree about what `o.inner` is — a red in only one of them is the two doors coming apart.")
+
+	try Expect.contains(rendering, needle: "function ring", message: "the hover did not render the declaration `type Inner` holds for `ring`. It rendered: {rendering}")
+end 'receiver type: a member through a chained field hovers'
+
+function chainedFieldFixture() returns String
+	return String.from(b"type Inner
+    public var tag as StringArray
+
+    public function ring() returns bool
+        return self.tag.isEmpty()
+    end 'ring'
+
+    public static function create() returns Inner
+        return Inner{tag: StringArray.create()}
+    end 'create'
+end 'Inner'
+
+type Outer
+    public var inner as Inner
+
+    public static function create() returns Outer
+        return Outer{inner: Inner.create()}
+    end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+    let inner = StringArray.create()
+    let o = Outer.create()
+    return 0 if o.inner.ring() and inner.isEmpty() else 1
+end 'main'")
+end 'chainedFieldFixture'

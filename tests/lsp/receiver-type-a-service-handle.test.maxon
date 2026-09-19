@@ -1,0 +1,103 @@
+let ServiceHandleDirName = "temp/lsp/receiver-type-a-service-handle"
+let ServiceHandleHelperFileName = "helper.maxon"
+let ServiceHandleMainFileName = "main.maxon"
+let ServiceHandleParameterLine = 6 as LspCoordinate
+let ServiceHandleParameterListCharacter = 16 as LspCoordinate
+let ServiceHandleParameterNameCharacter = 17 as LspCoordinate
+let ServiceHandleInsideReceiverCharacter = 12 as LspCoordinate
+let ServiceHandleElementLine = 12 as LspCoordinate
+let ServiceHandleElementListCharacter = 27 as LspCoordinate
+let ServiceHandleElementNameCharacter = 28 as LspCoordinate
+
+test 'receiver type: a service handle offers its services messages'
+	let uri = stagedServiceHandleProject()
+
+	let declared = try completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterListCharacter, after: "`counter.`, a parameter declared `Counter.handle`, whose service is declared by the sibling file")
+	try assertHandleSurface(declared, shape: "a parameter declared `Counter.handle`")
+
+	let element = try completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementListCharacter, after: "`h.`, where `h` is bound by `try self.handles.get(0) otherwise …` and `handles` is declared `as CounterHandleArray`")
+	try assertHandleSurface(element, shape: "an element of `Array with Counter.handle`, taken out of a container")
+
+	try Expect.isTrue(declared.count() == element.count(), message: "the two receiver shapes offered DIFFERENT numbers of members — {declared.count()} for the parameter and {element.count()} for the container element — and they are the same type. Hover and completion reach a receiver through ONE walk precisely so two spellings of one type cannot answer differently.")
+
+	let insideTheWord = try completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleInsideReceiverCharacter, after: "a position INSIDE the receiver word `counter`, three characters before its dot")
+
+	try Expect.isTrue(insideTheWord.isEmpty(), message: "completion offered {insideTheWord.count()} member(s) at a position inside the bare word `counter`, before its `.`. This server completes a MEMBER of something and never an identifier prefix in open code, so the only position that offers a surface is the one after the dot — and a reading taken inside the receiver word is a reading of a different question.")
+end 'receiver type: a service handle offers its services messages'
+
+test 'receiver type: a message on a service handle hovers'
+	let uri = stagedServiceHandleProject()
+
+	let declared = try hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterNameCharacter)
+	try Expect.contains(declared, needle: "export function bump(by Tally)", message: "hovering `bump` on a parameter declared `Counter.handle` did not render the declaration `helper.maxon` holds for it. The compiler resolves a message to `Counter.bump`, so that is the declaration under the cursor. It rendered: {declared}")
+
+	let element = try hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementNameCharacter)
+	try Expect.contains(element, needle: "export function total() returns Tally", message: "hovering `total` on a handle taken OUT OF A CONTAINER did not render its declaration, though the same message hovers on a handle-typed parameter. A container element and a declared parameter are the same type reached two ways, and a road that answers for one and not the other is the two walks coming apart. It rendered: {element}")
+end 'receiver type: a message on a service handle hovers'
+
+function assertHandleSurface(labels StringArray, shape String) throws TestFailure
+	try assertCompletionOffersEach(labels, wanted: ["bump", "total", "shutdown", "clone"], after: "`.` on {shape} — `Parser.dispatchOnServiceHandle` accepts a request-union message, `shutdown` and `clone`, and those four are what it accepts here. `shutdown` and `clone` are the two that tell the answers apart: `type Counter` declares neither, so a list carrying them is the HANDLE's surface and not its service's.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "mailbox"), message: "completion on {shape} offered `mailbox`, the one field the SYNTHESIZED `Counter.handle` struct carries. No author writes it — the dispatch refuses it — and a list built from the companion's own declarations offers exactly the member the compiler refuses while withholding every one it accepts.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "count"), message: "completion on {shape} offered `count`, a file-private field of `Counter` itself. A handle is not its service: it takes messages, and only the `export`ed INSTANCE methods become messages.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "create"), message: "completion on {shape} offered `create`, a STATIC of `Counter`. `ServiceCompanions` excludes a static from the roster structurally — it has no `self` — so no handle takes it as a message.")
+end 'assertHandleSurface'
+
+function stagedServiceHandleProject() returns String
+	let directory = stagedCorpusDirectory(ServiceHandleDirName)
+	writeCorpusFile(directory, fileName: ServiceHandleHelperFileName, content: serviceHandleHelperSource())
+	writeCorpusFile(directory, fileName: ServiceHandleMainFileName, content: serviceHandleMainSource())
+
+	return fileUriOf(directory.join(ServiceHandleMainFileName))
+end 'stagedServiceHandleProject'
+
+function serviceHandleHelperSource() returns String
+	return String.from(b"export typealias Tally = int(0 to u64.max)
+
+export type Counter
+    var count as Tally
+
+    export static function create() returns Self
+        return Self{count: 0}
+    end 'create'
+
+    export function bump(by Tally)
+        self.count = self.count + by
+    end 'bump'
+
+    export function total() returns Tally
+        return self.count
+    end 'total'
+end 'Counter'")
+end 'serviceHandleHelperSource'
+
+function serviceHandleMainSource() returns String
+	return String.from(b"typealias CounterHandleArray = Array with Counter.handle
+
+type Desk
+    public var handles as CounterHandleArray
+
+    public function tally(counter Counter.handle) returns Tally
+        counter.bump(1)
+        return try await counter.total() otherwise 0
+    end 'tally'
+
+    public function first() returns Tally
+        var h = try self.handles.get(0) otherwise panic(\"one handle\")
+        return try await h.total() otherwise 0
+    end 'first'
+
+    public static function create() returns Desk
+        var handles = CounterHandleArray.create()
+        handles.push(spawn Counter.create())
+        return Desk{handles: handles}
+    end 'create'
+end 'Desk'
+
+function main() returns ExitCode
+    let desk = Desk.create()
+    return desk.first() as ExitCode
+end 'main'")
+end 'serviceHandleMainSource'

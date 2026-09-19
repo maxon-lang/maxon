@@ -20,22 +20,26 @@ module union LspSubject
 	nothingNamed
 end 'LspSubject'
 
-module function lspSubjectAt(text String, tokens TokenArray, keywords KeywordTable, offset ByteOffset) returns LspSubject
+module function lspCursorFollowsAMemberAccess(tokens TokenArray, offset ByteOffset) returns bool
+	return receiverIndexBefore(tokens, offset: offset) < tokens.count()
+end 'lspCursorFollowsAMemberAccess'
+
+module function lspSubjectAt(text String, tokens TokenArray, keywords KeywordTable, offset ByteOffset, corpus LspCorpus) returns LspSubject
 	let receiver = receiverIndexBefore(tokens, offset: offset)
 
 	if receiver >= tokens.count() 'noReceiver'
 		return LspSubject.nothingNamed
 	end 'noReceiver'
 
-	return lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: receiver)
+	return lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: receiver, corpus: corpus)
 end 'lspSubjectAt'
 
-module function lspSubjectOfReceiver(text String, tokens TokenArray, keywords KeywordTable, receiver TokenIndex) returns LspSubject
+module function lspSubjectOfReceiver(text String, tokens TokenArray, keywords KeywordTable, receiver TokenIndex, corpus LspCorpus) returns LspSubject
 	if receiver >= tokens.count() 'noSuchToken'
 		return LspSubject.nothingNamed
 	end 'noSuchToken'
 
-	return HoverDocument.ofTokens(text, tokens: tokens, keywords: keywords).receiverSubject(receiver)
+	return HoverDocument.ofTokens(text, tokens: tokens, keywords: keywords, corpus: corpus).receiverSubject(receiver)
 end 'lspSubjectOfReceiver'
 
 module function lspSubjectTypeName(subject LspSubject) returns String
@@ -99,15 +103,20 @@ module function lspBlockDirectlyHoldsLine(blocks LspDocumentBlockArray, block Ls
 	return true
 end 'lspBlockDirectlyHoldsLine'
 
-// ⚠ The receiver is found by TOKEN ORDER and not by byte range, because the `.` has no bytes: a
-// punctuator's `startByte` and `endByte` are both 0 (`Token`), so a dot cannot be located by offset at
-// all. What can be is the last token carrying source bytes that ends at or before the cursor — which,
-// after `arr.` and after `arr.pu`, is the receiver either way.
+// The receiver of the member access the cursor sits in, found by TOKEN ORDER rather than by byte range:
+// a punctuator and a newline carry no bytes — a `Token` of either kind has `startByte` and `endByte` 0 —
+// so a `.` cannot be located by offset at all. What can be is the last token carrying source bytes that
+// ends at or before the cursor, and the two branches read that token differently. A byte-less run after
+// it holding a `.` means the access was just opened, and the receiver is the token before that `.`,
+// which for `p.toString().` is the `)` rather than a name. Otherwise the cursor must sit at the END of
+// that name, the partial member of `arr.pu`; a cursor anywhere else has left the name behind, and
+// answering there offers a member list on a blank line or at an argument position.
 //
 // `tokens.count()` is the answer for "no receiver". It is not a sentinel inside the index domain: it is
 // one past the last index, which no token has.
 function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns TokenIndex
-	var candidate = tokens.count()
+	let total = tokens.count()
+	var candidate = total
 
 	for (position, token) in tokens.withIterator() 'eachToken'
 		if token.endByte <= token.startByte or token.endByte > offset 'notBeforeTheCursor'
@@ -117,23 +126,55 @@ function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns Token
 		candidate = position.index() as TokenIndex
 	end 'eachToken'
 
-	if candidate >= tokens.count() 'nothingBefore'
-		return tokens.count()
+	if candidate >= total 'nothingBefore'
+		return total
 	end 'nothingBefore'
 
-	let receiver = lspTokenAt(tokens, index: candidate)
+	let opened = openingDotAfter(tokens, candidate: candidate)
 
-	if not tokenCanBeAName(receiver) 'notANameToCompleteOn'
-		return tokens.count()
-	end 'notANameToCompleteOn'
+	if opened < total 'aMemberAccessJustOpened'
+		return opened - 1
+	end 'aMemberAccessJustOpened'
 
-	if candidate + 1 >= tokens.count() 'nothingFollows'
-		return tokens.count()
-	end 'nothingFollows'
+	if candidate < TokensBetweenAReceiverAndItsMember 'noReceiverCouldPrecedeIt'
+		return total
+	end 'noReceiverCouldPrecedeIt'
 
-	if lspTokenAt(tokens, index: candidate + 1).kind != TokenKind.dot 'notAMemberAccess'
-		return tokens.count()
+	let partial = lspTokenAt(tokens, index: candidate)
+
+	if partial.endByte != offset 'theCursorLeftThatNameBehind'
+		return total
+	end 'theCursorLeftThatNameBehind'
+
+	if not tokenCanBeAName(partial) 'notAPartialMemberName'
+		return total
+	end 'notAPartialMemberName'
+
+	if lspTokenAt(tokens, index: candidate - 1).kind != TokenKind.dot 'notAMemberAccess'
+		return total
 	end 'notAMemberAccess'
 
-	return candidate
+	return candidate - TokensBetweenAReceiverAndItsMember
 end 'receiverIndexBefore'
+
+function openingDotAfter(tokens TokenArray, candidate TokenIndex) returns TokenIndex
+	let total = tokens.count()
+	var found = total
+	var index = candidate + 1
+
+	while index < total 'eachToken'
+		let token = lspTokenAt(tokens, index: index)
+
+		if token.endByte > token.startByte or token.kind == TokenKind.newline 'theRunEnds'
+			break
+		end 'theRunEnds'
+
+		if token.kind == TokenKind.dot 'aMemberAccess'
+			found = index
+		end 'aMemberAccess'
+
+		index = index + 1
+	end 'eachToken'
+
+	return found
+end 'openingDotAfter'

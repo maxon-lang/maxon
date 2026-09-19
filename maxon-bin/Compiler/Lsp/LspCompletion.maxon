@@ -105,32 +105,58 @@ typealias CompletionOfferArray = Array with CompletionOffer
 // the author has to read twice.
 typealias OfferedLabelSet = Set with String
 
+// ⚠ The no-receiver rung comes first, and the order is a cost bound. A cursor following no `.` has
+// nothing to offer whatever the project declares, and an editor fires completion on ordinary typing, so
+// reaching a corpus build to answer an empty list puts a project sweep on every keystroke.
 function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks LspDocumentBlockArray, offset ByteOffset, uri String) returns CompletionOfferArray
-	var offers = CompletionOfferArray.create()
-	var offered = OfferedLabelSet.create()
+	if not lspCursorFollowsAMemberAccess(tokens, offset: offset) 'nothingToComplete'
+		return CompletionOfferArray.create()
+	end 'nothingToComplete'
 
-	let subject = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset)
+	let inTheBuffer = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: LspCorpus.unavailable)
+	let declaredHere = lspBlocksDeclaring(blocks, typeName: lspSubjectTypeName(inTheBuffer))
+
+	if not declaredHere.isEmpty() 'aTypeThisBufferDeclares'
+		return bufferOffers(inTheBuffer, tokens: tokens, blocks: blocks, declaring: declaredHere)
+	end 'aTypeThisBufferDeclares'
+
+	let corpus = lspWorkspaceCorpus(lspDocumentPath(uri))
+
+	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, blocks: blocks, corpus: corpus)
+end 'offersAt'
+
+// A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
+// type of the same name: the author is looking at the declaration in front of them.
+function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, corpus LspCorpus) returns CompletionOfferArray
 	let typeName = lspSubjectTypeName(subject)
 
 	if typeName.isEmpty() 'nothingToComplete'
-		return offers
+		return CompletionOfferArray.create()
 	end 'nothingToComplete'
 
-	// A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
-	// type of the same name: the author is looking at the declaration in front of them.
 	let declaring = lspBlocksDeclaring(blocks, typeName: typeName)
 
-	if declaring.isEmpty() 'notInThisBuffer'
-		addStdlibMembers(offers, offered: offered, typeName: typeName, uri: uri, subject: subject)
-		return offers
-	end 'notInThisBuffer'
+	if not declaring.isEmpty() 'aTypeThisBufferDeclares'
+		return bufferOffers(subject, tokens: tokens, blocks: blocks, declaring: declaring)
+	end 'aTypeThisBufferDeclares'
+
+	var offers = CompletionOfferArray.create()
+	var offered = OfferedLabelSet.create()
+	addCorpusMembers(offers, offered: offered, typeName: typeName, corpus: corpus, subject: subject)
+
+	return offers
+end 'offersFor'
+
+function bufferOffers(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, declaring LspDocumentBlockArray) returns CompletionOfferArray
+	var offers = CompletionOfferArray.create()
+	var offered = OfferedLabelSet.create()
 
 	for block in declaring 'eachDeclaringBody'
 		addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject)
 	end 'eachDeclaringBody'
 
 	return offers
-end 'offersAt'
+end 'bufferOffers'
 
 // --- Members of a type the BUFFER declares ----------------------------------------------------
 
@@ -212,16 +238,34 @@ end 'addMemberOnLine'
 // ⭐⭐ **THE VISIBILITY FILTER IS THE POINT OF THIS HALF.** Every name here is asked about through
 // `ProgramSignatures.calleeVisibilityFrom`, which is the compiler's own tier decision, so a member the
 // open document may not name is a member it is not offered.
-function addStdlibMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, uri String, subject LspSubject)
-	let readerPath = lspDocumentPath(uri)
-
-	match lspWorkspaceCorpus(readerPath) 'corpus'
+function addCorpusMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, corpus LspCorpus, subject LspSubject)
+	match corpus 'held'
 		loaded(_, signatures, corpusReaderPath) then addDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: corpusReaderPath, subject: subject)
 		unavailable then return
-	end 'corpus'
-end 'addStdlibMembers'
+	end 'held'
+end 'addCorpusMembers'
 
+// A handle forks rather than filters. Its surface has nothing to do with the synthesized companion's
+// declarations — none of the messages are declared on it, and its one field is refused — so it is a
+// different roster and not a narrowing of one.
 function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject)
+	match lspHandleSurfaceOf(signatures, typeName: typeName.toByteArray()) 'aHandle'
+		messages(_, request) then addHandleMessages(offers, offered: offered, request: request, subject: subject)
+		notAHandle then addOwnDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: readerPath, subject: subject)
+	end 'aHandle'
+end 'addDeclaredMembers'
+
+function addHandleMessages(offers CompletionOfferArray, offered OfferedLabelSet, request EnumLayout, subject LspSubject)
+	if lspSubjectIsStatic(subject) 'aHandleHasNoStaticSurface'
+		return
+	end 'aHandleHasNoStaticSurface'
+
+	for message in serviceHandleSurface(request) 'eachAccepted'
+		addOffer(offers, offered: offered, label: String.from(message), kind: MethodCompletionKind)
+	end 'eachAccepted'
+end 'addHandleMessages'
+
+function addOwnDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject)
 	let wantsStatics = lspSubjectIsStatic(subject)
 	let owner = typeName.toByteArray()
 	let prefix = "{typeName}{CompletionMemberSeparator}"
@@ -246,7 +290,7 @@ function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet
 	end 'casesAndStaticsOnly'
 
 	addDeclaredFields(offers, offered: offered, signatures: signatures, owner: owner, readerPath: readerPath)
-end 'addDeclaredMembers'
+end 'addOwnDeclaredMembers'
 
 // ⭐ **THE ONE VISIBILITY DECISION, ASKED OF THE COMPILER.** `calleeVisibilityFrom` reads the tier and
 // the declaring file the declaration sweep recorded and runs the same `isVisibleFrom` every other reader

@@ -1,0 +1,44 @@
+let BrandScopeDirName = "temp/lsp/receiver-type-a-field-brand"
+let BrandScopeHelperFileName = "helper.maxon"
+let BrandScopeMainFileName = "main.maxon"
+let BrandScopeLine = 4 as LspCoordinate
+let BrandScopeMemberListCharacter = 25 as LspCoordinate
+
+test 'receiver type: a field brand means its own files alias, not the readers'
+	let directory = stagedCorpusDirectory(BrandScopeDirName)
+	writeCorpusFile(directory, fileName: BrandScopeHelperFileName, content: brandScopeHelperSource())
+	writeCorpusFile(directory, fileName: BrandScopeMainFileName, content: brandScopeMainSource())
+
+	let uri = fileUriOf(directory.join(BrandScopeMainFileName))
+	let labels = try completionLabelsForAtUri(uri, source: brandScopeMainSource(), line: BrandScopeLine, character: BrandScopeMemberListCharacter, after: "`holder.items.`, where `items` is declared `as Bag` in `helper.maxon` and BOTH files declare a `typealias Bag` over different containers")
+
+	try assertCompletionOffersEach(labels, wanted: ["push", "count"], after: "`holder.items.` — `helper.maxon` declares `typealias Bag = Array with Tag` and that is the file whose field this is, so the element surface is `Array`'s")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "upsert"), message: "completion after `holder.items.` offered `upsert`, which `Map` declares and `Array` does not. The field's recorded brand is the bare word `Bag`, and a plain `typealias` is FILE-LOCAL — so resolving that brand against the OPEN BUFFER's `typealias Bag = Map with (String, Tag)` reads one file's name in another file's scope and offers a `Map`'s surface for an `Array`. A brand must be read in the scope that wrote it.")
+end 'receiver type: a field brand means its own files alias, not the readers'
+
+function brandScopeHelperSource() returns String
+	return String.from(b"export typealias Tag = int(0 to u64.max)
+
+typealias Bag = Array with Tag
+
+export type Holder
+    export var items as Bag
+
+    export static function create() returns Holder
+        return Holder{items: Bag.create()}
+    end 'create'
+end 'Holder'")
+end 'brandScopeHelperSource'
+
+function brandScopeMainSource() returns String
+	return String.from(b"typealias Bag = Map with (String, Tag)
+
+function main() returns ExitCode
+    let holder = Holder.create()
+    let n = holder.items.count()
+    var lookup = Bag.create()
+    lookup.upsert(\"a\", value: 1)
+    return 0 if n == 0 and lookup.count() == 1 else 1
+end 'main'")
+end 'brandScopeMainSource'

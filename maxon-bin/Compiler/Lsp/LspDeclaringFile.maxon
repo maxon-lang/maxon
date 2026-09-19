@@ -16,6 +16,39 @@ end 'LspDeclarationLookupError'
 
 module let TokensBetweenAReceiverAndItsMember = 2 as TokenIndex
 
+module union LspVisibleField
+	declared(layout StructLayout, index FieldIndex)
+	hidden
+	none
+end 'LspVisibleField'
+
+// Three answers and not two. "Nothing declares it" and "declared, but hidden from you" lead to different
+// fallbacks — only the first may reach a lookup by filename — so a reader that collapses them renders a
+// member the compiler refuses to let this file name.
+module union LspMemberDeclaration
+	declaredIn(path FilePath)
+	hiddenHere
+	nothingDeclaresIt
+end 'LspMemberDeclaration'
+
+module union LspHandleSurface
+	messages(serviceName ByteArray, request EnumLayout)
+	notAHandle
+end 'LspHandleSurface'
+
+// What a `<T>.handle` offers, as one guarded door: `isServiceHandle` is the compiler's own membership
+// test and `serviceOfHandle` panics for anything else, so the two are never asked apart.
+module function lspHandleSurfaceOf(signatures ProgramSignatures, typeName ByteArray) returns LspHandleSurface
+	if not signatures.isServiceHandle(typeName) 'notAHandle'
+		return LspHandleSurface.notAHandle
+	end 'notAHandle'
+
+	let serviceName = signatures.serviceOfHandle(typeName)
+	let request = try serviceRequestLayoutOf(signatures, typeName: serviceName) otherwise return LspHandleSurface.notAHandle
+
+	return LspHandleSurface.messages(serviceName, request: request)
+end 'lspHandleSurfaceOf'
+
 module function lspCursorNamesAMember(tokens TokenArray, cursor TokenIndex) returns bool
 	if cursor == 0 'nothingBefore'
 		return false
@@ -25,40 +58,117 @@ module function lspCursorNamesAMember(tokens TokenArray, cursor TokenIndex) retu
 	return before.kind == TokenKind.dot
 end 'lspCursorNamesAMember'
 
-module function lspDeclaringFileOfTheCursor(signatures ProgramSignatures, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+module function lspDeclaringFileOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex) returns FilePath throws LspDeclarationLookupError
+	match corpus 'held'
+		loaded(_, signatures, readerPath) then return try declaringFileOfACursorName(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, readerPath: readerPath)
+		unavailable then throw LspDeclarationLookupError.nothingThere
+	end 'held'
+end 'lspDeclaringFileOfTheCursor'
+
+function declaringFileOfACursorName(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	let name = lspTokenAt(tokens, index: cursor).value
 
 	if lspCursorNamesAMember(tokens, cursor: cursor) 'aMember'
-		return try declaringFileOfAMember(signatures, text: text, tokens: tokens, keywords: keywords, cursor: cursor, member: name, readerPath: readerPath)
+		return try declaringFileOfTheCursorsMember(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, member: name, readerPath: readerPath)
 	end 'aMember'
 
 	return try declaringFileOfABareName(signatures, name: name, readerPath: readerPath)
-end 'lspDeclaringFileOfTheCursor'
+end 'declaringFileOfACursorName'
 
-function declaringFileOfAMember(signatures ProgramSignatures, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+function declaringFileOfTheCursorsMember(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	if cursor < TokensBetweenAReceiverAndItsMember 'nothingBeforeTheDot'
 		throw LspDeclarationLookupError.nothingThere
 	end 'nothingBeforeTheDot'
 
-	let subject = lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: cursor - TokensBetweenAReceiverAndItsMember)
+	let subject = lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: cursor - TokensBetweenAReceiverAndItsMember, corpus: corpus)
 	let typeName = lspSubjectTypeName(subject)
 
 	if typeName.isEmpty() 'noReceiverType'
 		throw LspDeclarationLookupError.nothingThere
 	end 'noReceiverType'
 
-	let owner = typeName.toByteArray()
+	return try lspDeclaringFileOfAMember(signatures, owner: typeName.toByteArray(), member: member, readerPath: readerPath)
+end 'declaringFileOfTheCursorsMember'
 
-	if let declaredMethod = try visibleCalleeFile(signatures, qualified: qualifiedMethodName(owner, methodName: member), readerPath: readerPath) 'aMethod'
-		return declaredMethod
+function lspDeclaringFileOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+	match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath) 'declared'
+		declaredIn(path) then return path
+		hiddenHere or
+			nothingDeclaresIt then throw LspDeclarationLookupError.nothingThere
+	end 'declared'
+end 'lspDeclaringFileOfAMember'
+
+module function lspMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	match lspHandleSurfaceOf(signatures, typeName: owner) 'aHandle'
+		messages(serviceName, request) then return messageDeclarationOf(signatures, serviceName: serviceName, request: request, member: member, readerPath: readerPath)
+		notAHandle then return declaredMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
+	end 'aHandle'
+end 'lspMemberDeclarationOf'
+
+// A message resolves to the SERVICE's declaration, because that is the callee `emitServiceSend` binds.
+function messageDeclarationOf(signatures ProgramSignatures, serviceName ByteArray, request EnumLayout, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	if not serviceHandleAdmits(request, member: member) 'theCompilerRefusesIt'
+		return LspMemberDeclaration.nothingDeclaresIt
+	end 'theCompilerRefusesIt'
+
+	return calleeDeclarationOf(signatures, qualified: qualifiedMethodName(serviceName, methodName: member), readerPath: readerPath)
+end 'messageDeclarationOf'
+
+function declaredMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	let asMethod = calleeDeclarationOf(signatures, qualified: qualifiedMethodName(owner, methodName: member), readerPath: readerPath)
+
+	match asMethod 'aMethod'
+		declaredIn or
+			hiddenHere then return asMethod
+		nothingDeclaresIt then return fieldOrCaseDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
 	end 'aMethod'
+end 'declaredMemberDeclarationOf'
 
-	if let declaredField = try declaringFileOfAField(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
-		return declaredField
+function fieldOrCaseDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	let asField = fieldDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
+
+	match asField 'aField'
+		declaredIn or
+			hiddenHere then return asField
+		nothingDeclaresIt then return enumCaseDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath)
 	end 'aField'
+end 'fieldOrCaseDeclarationOf'
 
-	return try declaringFileOfAnEnumCase(signatures, owner: owner, member: member, readerPath: readerPath)
-end 'declaringFileOfAMember'
+function calleeDeclarationOf(signatures ProgramSignatures, qualified ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	if not signatures.declaresCallee(qualified) 'nothingDeclaresIt'
+		return LspMemberDeclaration.nothingDeclaresIt
+	end 'nothingDeclaresIt'
+
+	match signatures.calleeVisibilityFrom(qualified, readerFilePath: readerPath) 'tier'
+		visible then return LspMemberDeclaration.declaredIn(signatures.declaringFileOf(qualified))
+		hidden then return LspMemberDeclaration.hiddenHere
+	end 'tier'
+end 'calleeDeclarationOf'
+
+function fieldDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
+		declared(layout, _) then return LspMemberDeclaration.declaredIn(layout.declFilePath)
+		hidden then return LspMemberDeclaration.hiddenHere
+		none then return LspMemberDeclaration.nothingDeclaresIt
+	end 'aField'
+end 'fieldDeclarationOf'
+
+function enumCaseDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	match signatures.enumFor(owner, readerFilePath: readerPath) 'anEnum'
+		declared(layout) then return enumCaseDeclarationIn(signatures, layout: layout, member: member, readerPath: readerPath)
+		undeclared then return LspMemberDeclaration.nothingDeclaresIt
+	end 'anEnum'
+end 'enumCaseDeclarationOf'
+
+function enumCaseDeclarationIn(signatures ProgramSignatures, layout EnumLayout, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
+	for caseName in layout.caseNames 'eachCase'
+		if caseName.equals(member) 'thisCase'
+			return LspMemberDeclaration.declaredIn(layout.declFilePath) if signatures.isVisibleFrom(layout.visibility, declFilePath: layout.declFilePath, readerFilePath: readerPath) else LspMemberDeclaration.hiddenHere
+		end 'thisCase'
+	end 'eachCase'
+
+	return LspMemberDeclaration.nothingDeclaresIt
+end 'enumCaseDeclarationIn'
 
 function declaringFileOfABareName(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	if let declaredFunction = try declaringFileOfAFunction(signatures, name: name, readerPath: readerPath) 'aFunction'
@@ -156,41 +266,26 @@ function declaringFileOfABinding(signatures ProgramSignatures, name ByteArray, r
 	end 'aBinding'
 end 'declaringFileOfABinding'
 
-function declaringFileOfAField(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+module function lspVisibleFieldOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspVisibleField
 	match signatures.structFor(owner, readerFilePath: readerPath) 'aStruct'
-		declared(layout) then return try visibleFieldFile(signatures, layout: layout, member: member, readerPath: readerPath)
-		undeclared then throw LspDeclarationLookupError.nothingThere
+		declared(layout) then return visibleFieldIn(signatures, layout: layout, member: member, readerPath: readerPath)
+		undeclared then return LspVisibleField.none
 	end 'aStruct'
-end 'declaringFileOfAField'
+end 'lspVisibleFieldOf'
 
-function visibleFieldFile(signatures ProgramSignatures, layout StructLayout, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
-	for index in 0 upto layout.fieldCount() 'eachField'
-		if not layout.fieldNameAt(index).equals(member) 'anotherField'
-			continue
-		end 'anotherField'
+function visibleFieldIn(signatures ProgramSignatures, layout StructLayout, member ByteArray, readerPath FilePath) returns LspVisibleField
+	let index = layout.indexOfField(member)
 
-		return try visibleDeclarationFile(signatures, visibility: layout.fieldTier(index), declFilePath: layout.declFilePath, readerPath: readerPath)
-	end 'eachField'
+	if index >= layout.fieldCount() 'declaresNoSuchField'
+		return LspVisibleField.none
+	end 'declaresNoSuchField'
 
-	throw LspDeclarationLookupError.nothingThere
-end 'visibleFieldFile'
+	if not signatures.isVisibleFrom(layout.fieldTier(index), declFilePath: layout.declFilePath, readerFilePath: readerPath) 'hiddenHere'
+		return LspVisibleField.hidden
+	end 'hiddenHere'
 
-function declaringFileOfAnEnumCase(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
-	match signatures.enumFor(owner, readerFilePath: readerPath) 'anEnum'
-		declared(layout) then return try visibleEnumCaseFile(signatures, layout: layout, member: member, readerPath: readerPath)
-		undeclared then throw LspDeclarationLookupError.nothingThere
-	end 'anEnum'
-end 'declaringFileOfAnEnumCase'
-
-function visibleEnumCaseFile(signatures ProgramSignatures, layout EnumLayout, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
-	for caseName in layout.caseNames 'eachCase'
-		if caseName.equals(member) 'thisCase'
-			return try visibleDeclarationFile(signatures, visibility: layout.visibility, declFilePath: layout.declFilePath, readerPath: readerPath)
-		end 'thisCase'
-	end 'eachCase'
-
-	throw LspDeclarationLookupError.nothingThere
-end 'visibleEnumCaseFile'
+	return LspVisibleField.declared(layout, index: index)
+end 'visibleFieldIn'
 
 function visibleDeclarationFile(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	if not signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerPath) 'hiddenHere'

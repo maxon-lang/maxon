@@ -1,0 +1,39 @@
+let SiblingTypeDirName = "temp/lsp/completion-crosses-into-a-sibling-type"
+let SiblingTypeHelperFileName = "helper.maxon"
+let SiblingTypeMainFileName = "main.maxon"
+let SiblingTypeCallLine = 2 as LspCoordinate
+let SiblingTypeMemberListCharacter = 23 as LspCoordinate
+
+test 'completion crosses into a sibling types members'
+	let directory = stagedCorpusDirectory(SiblingTypeDirName)
+	writeCorpusFile(directory, fileName: SiblingTypeHelperFileName, content: siblingTypeHelperSource())
+	writeCorpusFile(directory, fileName: SiblingTypeMainFileName, content: siblingTypeMainSource())
+
+	let uri = fileUriOf(directory.join(SiblingTypeMainFileName))
+	let labels = try completionLabelsForAtUri(uri, source: siblingTypeMainSource(), line: SiblingTypeCallLine, character: SiblingTypeMemberListCharacter, after: "`roster.`, where `type Roster` is `export`ed by a sibling file of the same staged project")
+
+	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `roster.` offered nothing at all. `Roster` is declared by the file staged beside the open document, under a `build.maxon` that marks them one project, so the corpus holds its surface even though the open buffer never spells it.")
+
+	try assertCompletionOffersEach(labels, wanted: ["isVacant", "names"], after: "`roster.`, whose type is `export`ed by a sibling file of the same staged project")
+end 'completion crosses into a sibling types members'
+
+function siblingTypeHelperSource() returns String
+	return String.from(b"export type Roster
+    export var names as StringArray
+
+    export function isVacant() returns bool
+        return self.names.isEmpty()
+    end 'isVacant'
+
+    export static function create() returns Roster
+        return Roster{names: StringArray.create()}
+    end 'create'
+end 'Roster'")
+end 'siblingTypeHelperSource'
+
+function siblingTypeMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let roster = Roster.create()
+    return 0 if roster.isVacant() else 1
+end 'main'")
+end 'siblingTypeMainSource'

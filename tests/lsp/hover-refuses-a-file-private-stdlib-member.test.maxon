@@ -1,0 +1,29 @@
+let PrivateStdlibLine = 2 as LspCoordinate
+let PrivateStdlibControlLine = 3 as LspCoordinate
+let PrivateStdlibMemberListCharacter = 14 as LspCoordinate
+let PrivateStdlibMemberNameCharacter = 16 as LspCoordinate
+
+test 'hover and completion agree that a file-private stdlib member is not there'
+	let rendering = try hoverRendering(privateStdlibFixture(), line: PrivateStdlibLine, character: PrivateStdlibMemberNameCharacter) otherwise ""
+
+	try Expect.isFalse(rendering.contains("function sliceBytes"), message: "hovering `s.sliceBytes` rendered its declaration. `stdlib/String.maxon` declares `sliceBytes` with NO visibility modifier — file-private, and unreachable from any other file — so an editor showing its signature teaches an author to write a call the compiler refuses. A member refused on VISIBILITY must not fall through to the road that opens `stdlib/<Owner>.maxon` by name and reads it with no filter at all. It rendered: {rendering}")
+
+	let labels = try completionLabelsFor(privateStdlibFixture(), line: PrivateStdlibLine, character: PrivateStdlibMemberListCharacter, after: "`s.`, where `s` is a `String`")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "sliceBytes"), message: "completion after `s.` offered `sliceBytes`, which `stdlib/String.maxon` declares file-private.")
+
+	let control = try hoverRendering(privateStdlibFixture(), line: PrivateStdlibControlLine, character: PrivateStdlibMemberNameCharacter)
+
+	try Expect.contains(control, needle: "function count", message: "hovering `s.count` did not render its declaration, so the assertions above are passing on silence rather than on a filter. `count` is `public` in the same file as `sliceBytes`: the road must still answer for the member an author MAY name. It rendered: {control}")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "count"), message: "completion after `s.` did not offer `count`, so the negative above is passing on an empty list rather than on a filter.")
+end 'hover and completion agree that a file-private stdlib member is not there'
+
+function privateStdlibFixture() returns String
+	return String.from(b"function main() returns ExitCode
+    let s = \"hello\"
+    let n = s.sliceBytes(0, 1, false)
+    let m = s.count()
+    return 0 if n.count() == m else 1
+end 'main'")
+end 'privateStdlibFixture'

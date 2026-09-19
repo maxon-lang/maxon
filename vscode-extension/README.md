@@ -5,11 +5,15 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 ## Features
 - Syntax highlighting for `.maxon` files using a TextMate grammar
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) from the compiler's own `maxon lsp-server`
-- **Go to definition and hover across files**: F12 on a name declared in another file of your project, or
-  in the standard library, opens that file, and hovering one renders its declaration. The project is the
-  nearest directory above the file that holds a `build.maxon`, searched no higher than the workspace root;
-  failing that, the workspace root itself. Hover and completion also resolve a receiver typed by `self`,
-  by a call, by a `try … otherwise`, by a field of the enclosing type, or by a `for … in` loop variable.
+- **Go to definition and hover across files, and into their members**: F12 on a name declared in another
+  file of your project, or in the standard library, opens that file, and hovering one renders its
+  declaration — a field or method of such a type included, not only its top-level declarations. The
+  project is the nearest directory above the file that holds a `build.maxon`, searched no higher than the
+  workspace root; failing that, the workspace root itself. Hover and completion also resolve a receiver
+  typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a `for … in`
+  loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
+  an element taken out of a generic container, or by a service handle, which offers its service's messages
+  plus `shutdown` and `clone`.
 - **Diagnostics that know about your other files**: the server no longer reports a name as undeclared
   when a sibling file of the project declares it. Checking is still done per buffer, so an error only the
   whole program could raise is not reported; and while a file is unsaved, errors about its own text are

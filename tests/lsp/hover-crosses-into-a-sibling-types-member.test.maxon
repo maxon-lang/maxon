@@ -1,0 +1,39 @@
+let SiblingMemberDirName = "temp/lsp/hover-crosses-into-a-sibling-types-member"
+let SiblingMemberHelperFileName = "helper.maxon"
+let SiblingMemberMainFileName = "main.maxon"
+let SiblingMemberCallLine = 2 as LspCoordinate
+let SiblingMemberNameCharacter = 25 as LspCoordinate
+
+test 'hover crosses into a sibling types member'
+	let directory = stagedCorpusDirectory(SiblingMemberDirName)
+	writeCorpusFile(directory, fileName: SiblingMemberHelperFileName, content: siblingMemberHelperSource())
+	writeCorpusFile(directory, fileName: SiblingMemberMainFileName, content: siblingMemberMainSource())
+
+	let uri = fileUriOf(directory.join(SiblingMemberMainFileName))
+	let rendering = try hoverRenderingAtUri(uri, source: siblingMemberMainSource(), line: SiblingMemberCallLine, character: SiblingMemberNameCharacter)
+
+	try Expect.contains(rendering, needle: "isBlank", message: "a member call whose owning type is declared in a sibling file did not hover as that member. `Ledger` is `export`ed by the file staged beside the open document, under a `build.maxon` that marks them one project, and completion reads the same project's declarations from the corpus.")
+
+	try Expect.contains(rendering, needle: "function isBlank() returns bool", message: "the hover did not render the declaration `helper.maxon` holds for `isBlank`. It rendered: {rendering}. A hover that reaches a member by opening `stdlib/<Owner>.maxon` can only ever answer about the stdlib, so every member a PROJECT declares outside the open buffer answers nothing.")
+end 'hover crosses into a sibling types member'
+
+function siblingMemberHelperSource() returns String
+	return String.from(b"export type Ledger
+    export var entries as StringArray
+
+    export function isBlank() returns bool
+        return self.entries.isEmpty()
+    end 'isBlank'
+
+    export static function create() returns Ledger
+        return Ledger{entries: StringArray.create()}
+    end 'create'
+end 'Ledger'")
+end 'siblingMemberHelperSource'
+
+function siblingMemberMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let ledger = Ledger.create()
+    return 0 if ledger.isBlank() else 1
+end 'main'")
+end 'siblingMemberMainSource'

@@ -1,0 +1,27 @@
+let ChainedCallLine = 2 as LspCoordinate
+let ChainedCallMemberListCharacter = 25 as LspCoordinate
+let ChainedCallMemberNameCharacter = 27 as LspCoordinate
+
+test 'receiver type: a chained call offers its members'
+	let labels = try completionLabelsFor(chainedCallFixture(), line: ChainedCallLine, character: ChainedCallMemberListCharacter, after: "`p.toString().`, where `stdlib/FilePath.maxon` declares `toString` as `public function toString() returns String`")
+
+	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `p.toString().` offered nothing at all. The receiver of the second dot is a CALL, and the callee's declared return type is a fact sitting in the token stream rather than an inference, so nothing here needs guessing.")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "count"), message: "completion after `p.toString().` did not offer `count`, which `stdlib/String.maxon` declares `public` and which the very next characters of the fixture call. `toString` returns `String`; a walk that stops at the first dot offers `FilePath`'s members here, or none.")
+end 'receiver type: a chained call offers its members'
+
+test 'receiver type: a member through a chained call hovers'
+	let rendering = try hoverRendering(chainedCallFixture(), line: ChainedCallLine, character: ChainedCallMemberNameCharacter)
+
+	try Expect.contains(rendering, needle: "count", message: "hovering `count` in `p.toString().count()` did not name it. Hover and completion reach the second dot's receiver through ONE walk, so this case and the one above must agree about what `p.toString()` is.")
+
+	try Expect.contains(rendering, needle: "function count", message: "the hover did not render the declaration `stdlib/String.maxon` holds for `count`. It rendered: {rendering}")
+end 'receiver type: a member through a chained call hovers'
+
+function chainedCallFixture() returns String
+	return String.from(b"function main() returns ExitCode
+    let p = FilePath.empty()
+    let n = p.toString().count()
+    return 0 if n == 0 else 1
+end 'main'")
+end 'chainedCallFixture'

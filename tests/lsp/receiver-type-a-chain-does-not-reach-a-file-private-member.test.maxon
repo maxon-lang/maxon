@@ -1,0 +1,44 @@
+let PrivateMemberDirName = "temp/lsp/receiver-type-a-chain-does-not-reach-a-file-private-member"
+let PrivateMemberHelperFileName = "helper.maxon"
+let PrivateMemberMainFileName = "main.maxon"
+let PrivateMemberCallLine = 2 as LspCoordinate
+let PrivateMemberListCharacter = 22 as LspCoordinate
+let PrivateMemberNameCharacter = 23 as LspCoordinate
+
+test 'receiver type: a chain does not reach a file-private sibling member'
+	let directory = stagedCorpusDirectory(PrivateMemberDirName)
+	writeCorpusFile(directory, fileName: PrivateMemberHelperFileName, content: privateMemberHelperSource())
+	writeCorpusFile(directory, fileName: PrivateMemberMainFileName, content: privateMemberMainSource())
+
+	let uri = fileUriOf(directory.join(PrivateMemberMainFileName))
+	let labels = try completionLabelsForAtUri(uri, source: privateMemberMainSource(), line: PrivateMemberCallLine, character: PrivateMemberListCharacter, after: "`vault.`, where `type Vault` is `export`ed by a sibling file but the two members asserted here carry no visibility modifier")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "peek"), message: "completion after `vault.` offered `peek`, which `helper.maxon` declares with NO visibility modifier — file-private, and unreachable from the open document. A member list that reaches a project's declarations without asking Maxon's visibility rules offers an editor user code that will not compile.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "sealed"), message: "completion after `vault.` offered the field `sealed`, which `helper.maxon` declares with NO visibility modifier. Fields and methods are filtered by the same rule, so a list that leaks one leaks the other.")
+
+	let rendering = try hoverRenderingAtUri(uri, source: privateMemberMainSource(), line: PrivateMemberCallLine, character: PrivateMemberNameCharacter) otherwise ""
+
+	try Expect.isFalse(rendering.contains("function peek"), message: "hovering `peek` rendered the declaration `helper.maxon` holds for it, and nothing outside that file may see it. Hover reaching a project's members is the same road completion takes, so it owes the same visibility filter — this is the only case that would notice the filter being put on one road and not the other. It rendered: {rendering}")
+end 'receiver type: a chain does not reach a file-private sibling member'
+
+function privateMemberHelperSource() returns String
+	return String.from(b"export type Vault
+    var sealed as StringArray
+
+    function peek() returns bool
+        return self.sealed.isEmpty()
+    end 'peek'
+
+    export static function create() returns Vault
+        return Vault{sealed: StringArray.create()}
+    end 'create'
+end 'Vault'")
+end 'privateMemberHelperSource'
+
+function privateMemberMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let vault = Vault.create()
+    return 0 if vault.peek() else 1
+end 'main'")
+end 'privateMemberMainSource'
