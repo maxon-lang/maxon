@@ -1,0 +1,45 @@
+let UntitledCheckedUri = "untitled:Untitled-1"
+let UntitledCheckedBareIntErrorCode = "E3005"
+let UntitledCheckedUnreportedSession = "the session ended without saying how"
+
+union UntitledCheckedOutcome
+	published(items PublishedDiagnosticArray)
+	broke(detail String)
+end 'UntitledCheckedOutcome'
+
+test 'non-file document: an unsaved scratch buffer is still checked against the library tiers'
+	var client = LspClient.start()
+	var outcome = UntitledCheckedOutcome.broke(UntitledCheckedUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(UntitledCheckedUri, content: brokenDocument())
+		outcome = UntitledCheckedOutcome.published(client.awaitPublishedDiagnostics(UntitledCheckedUri).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(detail) then outcome = UntitledCheckedOutcome.broke("the framed stream broke — {detail}")
+			malformedResponse(detail) then outcome = UntitledCheckedOutcome.broke("a reply was not the shape LSP defines for `textDocument/publishDiagnostics` — {detail}")
+			serverRefused(code, message) then outcome = UntitledCheckedOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'outcome'
+		published(items) then try requireTheScratchBufferWasChecked(items)
+		broke(detail) then try Expect.fail("a document opened at `{UntitledCheckedUri}` — the unsaved scratch buffer an editor opens with one keystroke — was never published for: {detail}. ⛔ NO PUBLISH AT ALL IS THE REGRESSION THIS CASE EXISTS TO CATCH, and it is what `publishBufferDiagnostics` does for a document it refuses. A path-less document is compiled against `stdlib/` and `runtime/` alone, which is the right corpus for a buffer that belongs to no project, and it is the whole of why this server may not be narrowed to `file:` uris: a client that filters no schemes of its own — Neovim, Helix, Emacs — forwards whatever uri the buffer carries, and refusing them costs the author every squiggle in an unsaved file while every other feature keeps working.")
+	end 'outcome'
+end 'non-file document: an unsaved scratch buffer is still checked against the library tiers'
+
+function requireTheScratchBufferWasChecked(items PublishedDiagnosticArray) throws TestFailure
+	try Expect.equal(items.count(), expected: 1, message: "the scratch buffer holds `function main() returns int`, which does not compile, and the publish for it carried {items.count()} diagnostics. ⭐ AN EMPTY `items` IS NOT A PASS HERE: it is a publish saying NOTHING IS WRONG about a buffer with a real error in it, which is what a server that answered the open by giving up on the document — dropping its corpus, or checking it against nothing — would send while still looking alive on the wire.")
+
+	let reported = try items.get(0) otherwise panic("untitled buffer: the count was just held to one")
+
+	try Expect.equal(reported.code, expected: UntitledCheckedBareIntErrorCode, message: "the diagnostic published for the scratch buffer carries code `{reported.code}` rather than `{UntitledCheckedBareIntErrorCode}`. The code is what an author greps `docs/error-codes.txt` for, and a wrong one here means the publish came from somewhere other than a real check of that buffer — the same text in a `file:` document is checked into `{UntitledCheckedBareIntErrorCode}` by `a-non-file-document-uri-does-not-kill-the-session.test.maxon`, and the two must agree.")
+
+	try Expect.equal(reported.severity as AssertedInt, expected: PublishedErrorSeverity as AssertedInt, message: "the scratch buffer's diagnostic must be an Error. A hint where the build stops is an author told their unsaved file is fine.")
+
+	try Expect.equal(reported.source, expected: MaxonDiagnosticSource, message: "the scratch buffer's diagnostic must be sourced `{MaxonDiagnosticSource}`. An editor running several servers groups and filters by `source`, so a blank one hides the diagnostic in a list the author has narrowed to this language.")
+end 'requireTheScratchBufferWasChecked'

@@ -39,12 +39,13 @@ let DiagnosticSourceName = "maxon"
 let DiagnosticNameQuote = "'"
 let QuotedNameSegment = 1
 
-// ⚠ **A PROJECT THAT COULD NOT BE ASSEMBLED PUBLISHES NOTHING, AND AN EMPTY ARRAY WOULD BE A WRONG
-// ANSWER.** `[]` is a POSITIVE claim — "this document has no problems" — while a server that could not
-// locate `stdlib/` has checked nothing and knows nothing. Saying nothing leaves the editor showing what
-// it already had, which is what "not checked" looks like.
+// ⚠ A document that could not be checked publishes nothing, and an empty array would be a wrong
+// answer. `[]` is a positive claim — "this document has no problems" — while a server that could
+// not locate `stdlib/`, or was handed a uri spelling no path, has checked nothing and knows
+// nothing. Saying nothing leaves the editor showing what it already had, which is what "not
+// checked" looks like.
 module function publishBufferDiagnostics(uri String, text String)
-	let path = lspDocumentPath(uri)
+	let path = try lspDocumentPathOrThrow(uri) otherwise return
 
 	match lspDocumentProject(path, content: text) 'buffer'
 		loaded(project) then project.publishDocumentDiagnostics(uri, path: path, text: text)

@@ -1,0 +1,19 @@
+let NonFileProjectDirName = "maxon-tests-lsp-non-file-document-has-no-project"
+let NonFileProjectHelperFileName = "helper.maxon"
+let NonFileProjectHelperSource = "export function nonFileProjectGhost() returns ExitCode\n\treturn 0\nend 'nonFileProjectGhost'\n"
+
+let NonFileProjectDocumentUri = "git://host/repo/main.maxon"
+let NonFileProjectDocumentSource = "function main() returns ExitCode\n\treturn nonFileProjectGhost()\nend 'main'\n"
+
+let NonFileProjectCallLine = 1 as LspCoordinate
+let NonFileProjectCallCharacter = 12 as LspCoordinate
+
+test 'non-file document: a project-rooted definition answers nothing rather than guessing a path'
+	let root = stagedProjectDiagnosticsRoot(NonFileProjectDirName)
+
+	writeCorpusFile(root, fileName: NonFileProjectHelperFileName, content: NonFileProjectHelperSource)
+
+	let probe = probeCorpusDefinitionWithRoot(CorpusSessionRoot.clientRoot(root), uri: NonFileProjectDocumentUri, content: NonFileProjectDocumentSource, line: NonFileProjectCallLine, character: NonFileProjectCallCharacter)
+
+	try expectNoDefinitionInProject(probe, note: "a document opened at `{NonFileProjectDocumentUri}` names `nonFileProjectGhost`, which its own buffer does not declare and which `{NonFileProjectHelperFileName}` in the session's root DOES. ⭐ THE ANSWER IS NOTHING, AND NOTHING IS AN ANSWER. A document whose URI names no file has no path, so it has no place in any project — the same degradation the server already gives a session whose corpus is unavailable. ⛔ The failure this guards against is the tempting one: synthesizing a path out of the URI text, which files the buffer into a project it is not in and then answers cross-file questions about it CONFIDENTLY AND WRONGLY — jumping the author into a file that has nothing to do with what they are editing.")
+end 'non-file document: a project-rooted definition answers nothing rather than guessing a path'

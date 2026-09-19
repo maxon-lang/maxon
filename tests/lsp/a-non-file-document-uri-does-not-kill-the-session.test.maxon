@@ -1,0 +1,52 @@
+let NonFileSessionGitQueryUri = "git:/c:/repo/file.maxon?\{\"path\":\"c:\\\\repo\\\\file.maxon\",\"ref\":\"~\"\}"
+let NonFileSessionGitAuthorityUri = "git://host/repo/file.maxon"
+let NonFileSessionSurvivorUri = "file:///non-file-document-survivor.maxon"
+
+let NonFileSessionOpenedSource = "function nonFileSessionHelper() returns ExitCode\n\treturn 0\nend 'nonFileSessionHelper'\n"
+
+let NonFileSessionBareIntErrorCode = "E3005"
+let NonFileSessionUnreportedSession = "the session ended without saying how"
+
+union NonFileSessionOutcome
+	published(items PublishedDiagnosticArray)
+	broke(detail String)
+end 'NonFileSessionOutcome'
+
+test 'non-file document: a didOpen under a scheme that is not file leaves the session serving'
+	var client = LspClient.start()
+	var outcome = NonFileSessionOutcome.broke(NonFileSessionUnreportedSession)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(NonFileSessionGitQueryUri, content: NonFileSessionOpenedSource)
+		client.openDocument(NonFileSessionGitAuthorityUri, content: NonFileSessionOpenedSource)
+		client.openDocument(NonFileSessionSurvivorUri, content: brokenDocument())
+		outcome = NonFileSessionOutcome.published(client.awaitPublishedDiagnostics(NonFileSessionSurvivorUri).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(detail) then outcome = NonFileSessionOutcome.broke("the framed stream broke — {detail}")
+			malformedResponse(detail) then outcome = NonFileSessionOutcome.broke("a reply was not the shape LSP defines for `textDocument/publishDiagnostics` — {detail}")
+			serverRefused(code, message) then outcome = NonFileSessionOutcome.broke("the server refused with {code}: {message}")
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	match outcome 'outcome'
+		published(items) then try requireTheSurvivorWasChecked(items)
+		broke(detail) then try Expect.fail("two documents were opened under schemes that are not `file:` — `{NonFileSessionGitQueryUri}` and `{NonFileSessionGitAuthorityUri}` — and then an ordinary `file:` document was opened and never answered: {detail}. ⛔ THE STREAM ENDING IS THE SERVER PROCESS ENDING: a `didOpen` whose uri does not spell a filesystem path must not be able to take the editor's language support down for the rest of the session. This server documents itself as serving any editor with an LSP client and states no scheme restriction anywhere, so a client that filters nothing of its own — Neovim, Helix, Emacs — forwards whatever uri the buffer carries, and neither of these is a document the author did anything unusual to open.")
+	end 'outcome'
+end 'non-file document: a didOpen under a scheme that is not file leaves the session serving'
+
+function requireTheSurvivorWasChecked(items PublishedDiagnosticArray) throws TestFailure
+	try Expect.equal(items.count(), expected: 1, message: "the `file:` document opened AFTER the two path-less ones does not compile, so exactly one diagnostic must be published for it. The server published {items.count()}. ⭐ SURVIVING IS NOT ENOUGH — a server that answered the path-less opens by wedging its checker, dropping its corpus or publishing an empty array would still be standing here while giving the author a file with no squiggles on it, which is indistinguishable from a file with no errors.")
+
+	let reported = try items.get(0) otherwise panic("non-file document: the count was just held to one")
+
+	try Expect.equal(reported.code, expected: NonFileSessionBareIntErrorCode, message: "the diagnostic published for the surviving document carries code `{reported.code}`. The code is what an author greps `docs/error-codes.txt` for, and a wrong one here means the publish came from somewhere other than a real check of that buffer.")
+
+	try Expect.equal(reported.severity as AssertedInt, expected: PublishedErrorSeverity as AssertedInt, message: "the surviving document's diagnostic must still be an Error. A severity that degraded after the path-less opens would leave the editor showing a hint where it should be showing a build-stopping failure.")
+
+	try Expect.equal(reported.source, expected: MaxonDiagnosticSource, message: "the surviving document's diagnostic must still be sourced `{MaxonDiagnosticSource}`. An editor running several servers groups and filters by `source`, so a blank one hides the diagnostic in a list the author has narrowed to this language.")
+end 'requireTheSurvivorWasChecked'

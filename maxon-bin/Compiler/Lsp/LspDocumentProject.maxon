@@ -22,7 +22,6 @@
 // here from one of them would answer a diagnostic about a program no build ever sees — the editor
 // would then disagree with the build, which is the one thing this file exists to prevent.
 
-// `file:` — the one uri scheme a document this server checks can carry.
 let LspFileUriScheme = "file://"
 
 let LspUriRootSlash = "/"
@@ -54,14 +53,6 @@ let AsciiTilde = 126 as Byte
 
 typealias HexDigitValue = int(0 to 15)
 
-// ⚠ The panicking form is for a uri this server handed out or was handed as an open document. A uri
-// the CLIENT chose goes through `lspDocumentPathOrThrow`: a workspace root arrives as
-// `vscode-remote://…` from every Remote-SSH, WSL, dev container and Codespaces window, and a root
-// this server cannot read is no reason to end the session at its first message.
-module function lspDocumentPath(uri String) returns FilePath
-	return try lspDocumentPathOrThrow(uri) otherwise panic("lspDocumentPath: '{uri}' does not spell a path, and every request that reaches here named a document this server has open")
-end 'lspDocumentPath'
-
 // ⚠ **THE PATH IS AN IDENTITY, NOT A LOCATION — nothing ever opens it.** It answers `isVisibleFrom`'s
 // question (is the file asking the same file that declared the member, and is it in the same module
 // directory) and it is the compile ROOT, which is what a single-file `maxon build <file>` uses too;
@@ -73,6 +64,9 @@ end 'lspDocumentPath'
 // path is a file the corpus does not hold. `lspFileUri` is the inverse and the pair has to stay one —
 // an answer's uri that does not re-encode what this decoded names a document the client cannot match to
 // the one it asked about.
+//
+// A uri here is one the client chose and may carry any scheme, so a throw is ordinary: each caller
+// names its own degradation, because no uri a client sends may end the session.
 module function lspDocumentPathOrThrow(uri String) returns FilePath throws FilePathError
 	var text = uri
 

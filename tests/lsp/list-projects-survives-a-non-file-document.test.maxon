@@ -1,0 +1,18 @@
+let NonFileProjectsUri = "git://host/repo/list-projects.maxon"
+let NonFileProjectsUriScheme = "git:"
+let NonFileProjectsSource = "function nonFileProjectsMain() returns ExitCode\n\treturn 0\nend 'nonFileProjectsMain'\n"
+
+test 'non-file document: maxon/listProjects answers while a path-less document is open'
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(NonFileProjectsUri, content: NonFileProjectsSource))
+
+	match probe 'probe'
+		answered(result) then try requireNoProjectIsSpelledFromTheUri(result, scheme: NonFileProjectsUriScheme)
+		unanswered(reason) then try Expect.fail("`maxon/listProjects` did not answer with one document open at `{NonFileProjectsUri}`: {reason}. ⭐ THIS IS A SECOND DOOR ONTO THE SAME CRASH, NOT THE SAME ONE TWICE: a document is filed in the open-document map BEFORE its diagnostics are published, so a path-less document is already in the map by the time anything walks it — and the walk behind this poll reaches every entry with no guard in front of it. `maxon/listProjects` is a second, AUTOMATIC door: a client that polls it takes the session down without the author ever asking for hover, definition or completion.")
+	end 'probe'
+end 'non-file document: maxon/listProjects answers while a path-less document is open'
+
+export function requireNoProjectIsSpelledFromTheUri(result ListProjectsResult, scheme String) throws TestFailure
+	for project in result.projects 'eachProject'
+		try Expect.isFalse(project.rootPath.startsWith(scheme), message: "`maxon/listProjects` reported a project rooted at `{project.rootPath}`, which is the document's URI rather than a path. ⭐ A `rootPath` is what the status bar shows and what an author clicks; a document with no path has no project to report, and a root invented by stripping a scheme off a URI names a directory that does not exist on this machine.")
+	end 'eachProject'
+end 'requireNoProjectIsSpelledFromTheUri'

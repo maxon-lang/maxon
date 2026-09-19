@@ -1,0 +1,38 @@
+let UnlocatedProjectsUri = "untitled:Untitled-1"
+let UnlocatedProjectsUriScheme = "untitled:"
+let UnlocatedProjectsSource = "function unlocatedProjectsMain() returns ExitCode\n\treturn 0\nend 'unlocatedProjectsMain'\n"
+
+let UnlocatedProjectsLibraryFileCount = 1 as AssertedInt
+
+test 'non-file document: an untitled buffer is no project, and a stdlib document still is one'
+	let libraryUri = fileUriOf(corpusStdlibFilePath())
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: unlocatedProjectsDocuments(libraryUri))
+
+	match probe 'probe'
+		answered(result) then try requireOnlyTheLibraryDocumentIsAProject(result, libraryUri: libraryUri)
+		unanswered(reason) then try Expect.fail("`maxon/listProjects` did not answer with `{UnlocatedProjectsUri}` and `{libraryUri}` open: {reason}.")
+	end 'probe'
+end 'non-file document: an untitled buffer is no project, and a stdlib document still is one'
+
+function unlocatedProjectsDocuments(libraryUri String) returns WorkspaceFolderDocumentArray
+	var documents = projectRootsDocument(UnlocatedProjectsUri, content: UnlocatedProjectsSource)
+	documents.push(WorkspaceFolderDocument.create(libraryUri, content: unlocatedProjectsLibraryText()))
+
+	return documents
+end 'unlocatedProjectsDocuments'
+
+function unlocatedProjectsLibraryText() returns String
+	return try File.readText(corpusStdlibFilePath()) otherwise panic("list projects: could not read {corpusStdlibFilePath().toString()}, which an editor opening it would have sent as the buffer's text")
+end 'unlocatedProjectsLibraryText'
+
+function requireOnlyTheLibraryDocumentIsAProject(result ListProjectsResult, libraryUri String) throws TestFailure
+	try requireNoProjectIsSpelledFromTheUri(result, scheme: UnlocatedProjectsUriScheme)
+
+	let project = try soleProject(result, note: "two documents were open: `{UnlocatedProjectsUri}`, the unsaved scratch buffer every editor opens with a keystroke, and `{libraryUri}`, a real file with a real directory above it. ⛔ `{UnlocatedProjectsUri}` SPELLS A PATH `FilePath.from` ACCEPTS — it carries no `://`, so nothing refuses it — and the only thing wrong with that path is that it sits in no directory, which is why the skip is keyed on having no parent rather than on the scheme.")
+
+	try Expect.isTrue(foldedRootPath(project).endsWith(CorpusStdlibFilePathTail), message: "the one project reported is rooted at `{project.rootPath}` rather than at `{CorpusStdlibFilePathTail}`. ⭐ THIS IS THE HALF THAT MUST NOT CHANGE: a library-tier document lands on the same `libraryTierOnly` rung a path-less one does, so a fix that dropped every entry taking that rung would leave an author editing `stdlib/` with a status bar reporting nothing at all.")
+
+	try Expect.isTrue(project.isSingleFile, message: "the `stdlib/` document was reported as a project that is NOT a single file. A library-tier document is compiled against `stdlib/` and `runtime/` alone, and `isSingleFile` is the flag the extension reads to decide whether to offer cross-file answers for it.")
+
+	try Expect.equal(project.fileCount as AssertedInt, expected: UnlocatedProjectsLibraryFileCount, message: "the `stdlib/` document's project reported {project.fileCount} files. The buffer itself is the one file: the library tiers are not the author's sources and this request sweeps nothing.")
+end 'requireOnlyTheLibraryDocumentIsAProject'

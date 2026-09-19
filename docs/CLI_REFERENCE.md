@@ -1188,14 +1188,25 @@ it does when stdin closes or a message cannot be framed).
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
 in-memory text, for the host target.
 
-**Every feature reads the project, and diagnostics are still checked per buffer.** Hover, definition and
-completion resolve names through a separate index built by lexing every source under the document's
-project root and folding its declarations — never a full compile — so a name declared in another file
-resolves, and a type declared there offers its members. Diagnostics use that same index, but only to stop
-the server claiming a name is undeclared when a sibling file declares it. The *checking* is still done on
-the buffer together with the standard library alone, so a diagnostic that needs the whole program merged
-across files is out of reach: an error only the larger program could raise — two sibling files contesting
-one name, for example — is not reported, and the build remains the authority.
+**Every feature reads the project, where the document has one, and diagnostics are still checked per
+buffer.** Hover, definition and completion resolve names through a separate index built by lexing every
+source under the document's project root and folding its declarations — never a full compile — so a name
+declared in another file resolves, and a type declared there offers its members. Diagnostics use that
+same index, but only to stop the server claiming a name is undeclared when a sibling file declares it.
+The *checking* is still done on the buffer together with the standard library alone, so a diagnostic that
+needs the whole program merged across files is out of reach: an error only the larger program could
+raise — two sibling files contesting one name, for example — is not reported, and the build remains the
+authority.
+
+**A document's uri may carry any scheme, and what the server can do with a document turns on the path
+that uri spells rather than on the scheme.** No scheme is refused, so an editor that forwards whatever
+uri a buffer carries is served. Document symbols, folding ranges, formatting, linked editing, rename,
+code actions and semantic tokens read the buffer alone and answer for every open document. The project
+half needs a path with a directory above it: a uri without one names no place in any project, so the
+document contributes no `maxon/listProjects` entry. An unsaved scratch buffer (`untitled:Untitled-1`) is
+checked and resolved against `stdlib/` and `runtime/` alone — the treatment a file inside those tiers
+gets. A uri that spells no filesystem path at all (`git://host/repo/file.maxon`) leaves hover, definition
+and completion with nothing beyond the buffer, and no diagnostics are published for it.
 
 **While a buffer is unsaved, some diagnostics are withheld.** As long as the buffer matches the file on
 disk, the server reports what a build of that file reports. Once it has been edited, diagnostics about
@@ -1277,7 +1288,9 @@ two files of one project are one entry, and two sibling projects are two:
 
 `rootPath` is that root directory. `isSingleFile` is true only where the ladder gives a document no
 project — a file inside `stdlib/` or `runtime/`, or one sitting at a volume root — and then `rootPath` is
-the document's own file. `fileCount` is the number of `.maxon` sources under that root — `*.test.maxon`
+the document's own file. A document whose uri spells no filesystem path, or whose path has no directory
+above it, resolves to no root at all and contributes no entry, so the list can name fewer projects than
+there are open documents. `fileCount` is the number of `.maxon` sources under that root — `*.test.maxon`
 and the manifest aside — and is **0** for a root whose corpus the server has not built yet; the request
 never sweeps for one, so any hover,
 definition or completion in that project is what builds it and the next answer carries the real count.

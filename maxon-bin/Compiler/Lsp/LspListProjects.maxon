@@ -14,6 +14,10 @@ let FileCountKey = "fileCount"
 let SingleFileProjectFileCount = 1 as LspProjectFileCount
 let UnsweptProjectFileCount = 0 as LspProjectFileCount
 
+enum ListedProjectError implements Error
+	theDocumentSitsInNoDirectory
+end 'ListedProjectError'
+
 type ListedProject
 	module let rootPath as FilePath
 	module let isSingleFile as bool
@@ -31,7 +35,10 @@ module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExte
 	let search = lspRootSearch()
 
 	for (uri, _) in documents 'eachDocument'
-		addListedProject(listedProjectOf(lspDocumentPath(uri), search: search), into: listed)
+		let path = try lspDocumentPathOrThrow(uri) otherwise continue
+		let entry = try listedProjectOf(path, search: search) otherwise continue
+
+		addListedProject(entry, into: listed)
 	end 'eachDocument'
 
 	// The map's order is its hashing's; the answer's is the roots'.
@@ -53,12 +60,15 @@ module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExte
 	return LspExtensionOutcome.answered(LspAnswer.of(doc, result: result.finish()))
 end 'listProjectsAnswer'
 
-function listedProjectOf(readerPath FilePath, search LspRootSearch) returns ListedProject
-	return match lspProjectFactsOf(readerPath, search: search) 'facts'
-		swept(root, fileCount) gives ListedProject.create(root, isSingleFile: false, fileCount: fileCount)
-		unswept(root) gives ListedProject.create(root, isSingleFile: false, fileCount: UnsweptProjectFileCount)
-		singleFile(path) gives ListedProject.create(path, isSingleFile: true, fileCount: SingleFileProjectFileCount)
+function listedProjectOf(readerPath FilePath, search LspRootSearch) returns ListedProject throws ListedProjectError
+	match lspProjectFactsOf(readerPath, search: search) 'facts'
+		swept(root, fileCount) then return ListedProject.create(root, isSingleFile: false, fileCount: fileCount)
+		unswept(root) then return ListedProject.create(root, isSingleFile: false, fileCount: UnsweptProjectFileCount)
+		singleFile(path) then return ListedProject.create(path, isSingleFile: true, fileCount: SingleFileProjectFileCount)
+		unlocated then throw ListedProjectError.theDocumentSitsInNoDirectory
 	end 'facts'
+
+	panic("listedProjectOf: every case of the facts answers or throws")
 end 'listedProjectOf'
 
 function addListedProject(entry ListedProject, into ListedProjectArray)

@@ -33,6 +33,7 @@ module union LspProjectFacts
 	swept(root FilePath, fileCount LspProjectFileCount)
 	unswept(root FilePath)
 	singleFile(path FilePath)
+	unlocated
 end 'LspProjectFacts'
 
 union StatedRoot
@@ -45,17 +46,33 @@ module union LspRootSearch
 	unavailable
 end 'LspRootSearch'
 
+union DocumentDirectory
+	at(dir FilePath)
+	none
+end 'DocumentDirectory'
+
 type ReaderDocument
 	module let path as FilePath
 	module let normalized as FilePath
 	module let stated as StatedRoot
+	module let directory as DocumentDirectory
 
 	static function of(readerPath FilePath) returns ReaderDocument
 		let normalized = readerPath.normalize()
 
-		return Self{path: readerPath, normalized: normalized, stated: nearestNamedRootOver(normalized)}
+		return Self{path: readerPath, normalized: normalized, stated: nearestNamedRootOver(normalized), directory: directoryHolding(readerPath)}
 	end 'of'
 end 'ReaderDocument'
+
+// A uri that carries no `://` is kept verbatim, so `untitled:Untitled-1` arrives here as a path. A
+// path with no directory above it is not a place: the document gets no project rather than one
+// rooted at the uri's own text. The test is the parent and not the uri's scheme, because a library
+// file has a real directory and keeps its project while an unsaved buffer keeps the library tiers.
+function directoryHolding(path FilePath) returns DocumentDirectory
+	let dir = try path.parent() otherwise return DocumentDirectory.none
+
+	return DocumentDirectory.at(dir)
+end 'directoryHolding'
 
 union WorkspaceRoot
 	userDirectory(dir FilePath)
@@ -195,20 +212,32 @@ function heldProjectIsUnder(key String, dir FilePath) returns bool
 	return held.normalize().isInside(dir)
 end 'heldProjectIsUnder'
 
-// Hoisted out of the per-document walk `listProjectsAnswer` makes: both halves of this are a filesystem
-// probe, and neither varies with the document being asked about.
+// Both halves are a filesystem probe and neither varies with the document, so it is made once per
+// answer and handed down: `listProjectsAnswer`'s walk over the open documents would otherwise pay
+// for both once per document.
 module function lspRootSearch() returns LspRootSearch
 	let tiers = try LibraryTiers.locate() otherwise return LspRootSearch.unavailable
 
 	return LspRootSearch.ready(tiers, workingDirectory: Directory.currentPath())
 end 'lspRootSearch'
 
+// The directory test comes before the search, which answers `singleFile` with no ladder when the
+// filesystem could not be probed and would file a path-less document under its own uri text.
 module function lspProjectFactsOf(readerPath FilePath, search LspRootSearch) returns LspProjectFacts
-	return match search 'search'
-		ready(tiers, workingDirectory) gives factsUnderTheRootOf(ReaderDocument.of(readerPath), tiers: tiers, workingDirectory: workingDirectory)
-		unavailable gives LspProjectFacts.singleFile(readerPath)
-	end 'search'
+	let document = ReaderDocument.of(readerPath)
+
+	return match document.directory 'directory'
+		at gives locatedFacts(document, search: search)
+		none gives LspProjectFacts.unlocated
+	end 'directory'
 end 'lspProjectFactsOf'
+
+function locatedFacts(document ReaderDocument, search LspRootSearch) returns LspProjectFacts
+	return match search 'search'
+		ready(tiers, workingDirectory) gives factsUnderTheRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
+		unavailable gives LspProjectFacts.singleFile(document.path)
+	end 'search'
+end 'locatedFacts'
 
 function factsUnderTheRootOf(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns LspProjectFacts
 	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
@@ -229,12 +258,15 @@ function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspPr
 	return LspProjectFacts.swept(compileRoot, fileCount: held.sources.count() as LspProjectFileCount)
 end 'heldProjectFacts'
 
-module function lspWorkspaceCorpus(readerPath FilePath) returns LspCorpus
-	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
+module function lspDocumentCorpus(uri String) returns LspCorpus
+	let readerPath = try lspDocumentPathOrThrow(uri) otherwise return LspCorpus.unavailable
 	let document = ReaderDocument.of(readerPath)
 
-	return capturedCorpus(workspaceRootOf(document, tiers: tiers, workingDirectory: Directory.currentPath()), tiers: tiers, readerPath: readerPath)
-end 'lspWorkspaceCorpus'
+	return match lspRootSearch() 'search'
+		ready(tiers, workingDirectory) gives capturedCorpus(workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory), tiers: tiers, readerPath: readerPath)
+		unavailable gives LspCorpus.unavailable
+	end 'search'
+end 'lspDocumentCorpus'
 
 // The corpus a diagnostic may be corrected against, admitted only where the author has STATED the
 // project: a root the client named, holding this document. Without one the ladder roots a document at
@@ -251,14 +283,20 @@ module function lspProjectCorpus(readerPath FilePath) returns LspCorpus
 end 'lspProjectCorpus'
 
 function statedProjectCorpus(document ReaderDocument) returns LspCorpus
-	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
-	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: Directory.currentPath())
+	return match lspRootSearch() 'search'
+		ready(tiers, workingDirectory) gives statedRootCorpus(document, tiers: tiers, workingDirectory: workingDirectory)
+		unavailable gives LspCorpus.unavailable
+	end 'search'
+end 'statedProjectCorpus'
+
+function statedRootCorpus(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns LspCorpus
+	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
 
 	return match root 'root'
 		userDirectory gives capturedCorpus(root, tiers: tiers, readerPath: document.path)
 		libraryTierOnly gives LspCorpus.unavailable
 	end 'root'
-end 'statedProjectCorpus'
+end 'statedRootCorpus'
 
 module function clientNamedARootOver(readerPath FilePath) returns bool
 	return match nearestNamedRootOver(readerPath.normalize()) 'stated'
@@ -390,13 +428,18 @@ function workspaceRootOf(document ReaderDocument, tiers LibraryTiers, workingDir
 		return WorkspaceRoot.libraryTierOnly
 	end 'aLibraryFile'
 
-	let directory = try document.path.parent() otherwise return WorkspaceRoot.libraryTierOnly
+	return match document.directory 'directory'
+		at(dir) gives rootAround(document, directory: dir, workingDirectory: workingDirectory)
+		none gives WorkspaceRoot.libraryTierOnly
+	end 'directory'
+end 'workspaceRootOf'
 
+function rootAround(document ReaderDocument, directory FilePath, workingDirectory FilePath) returns WorkspaceRoot
 	return match nearestManifestDirectory(directory, noHigherThan: document.stated, workingDirectory: workingDirectory) 'manifest'
 		found(dir) gives sweepableRoot(dir)
 		none gives rootWithoutAManifest(document.stated, directory: directory)
 	end 'manifest'
-end 'workspaceRootOf'
+end 'rootAround'
 
 function rootWithoutAManifest(stated StatedRoot, directory FilePath) returns WorkspaceRoot
 	return match stated 'stated'
