@@ -5,14 +5,18 @@
 // still CHECKED there and never here: this corpus is lexed and its declarations folded, never compiled,
 // so it can say what a name means and never what is wrong with a program.
 //
-// ⚠ A document's project root is a ladder, and the ORDER of its rungs is the design.
-// `workspaceRootOf` holds it: a library tier's file gets the tiers alone; otherwise the nearest
-// ancestor holding a `build.maxon`, climbed no higher than the root the client named in
-// `initialize`; then that client root, for a document inside it; then the document's own directory.
-// The manifest climb is unbounded and this checkout carries a `build.maxon` at its own root, so a
-// client root consulted after an uncapped climb would never decide anything — while one consulted
-// before the climb would root a document under `<root>/sub/build.maxon` at `<root>`. A client that
-// names no root leaves the climb and the document's own directory.
+// A document's project root is a ladder, and the ORDER of its rungs is the design. `workspaceRootOf`
+// holds it: a library tier's file gets the tiers alone; otherwise the nearest ancestor holding a
+// `build.maxon`, climbed no higher than the nearest client-named root that holds this document; then
+// that named root, for a document inside it; then the document's own directory. The manifest climb is
+// unbounded and this checkout carries a `build.maxon` at its own root, so a named root consulted after
+// an uncapped climb would decide nothing, while one consulted before the climb would root a document
+// under `<root>/sub/build.maxon` at `<root>`. Capping the climb is what leaves both rungs right. A
+// client that names no root leaves the climb and the document's own directory.
+//
+// The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
+// a removed root takes every project held under it. The sweep under a root is never pruned at a nested
+// `build.maxon` — the build system has no nested projects, so two projects are siblings.
 //
 // ⚠ Answering `unavailable` costs a feature its cross-file half and leaves the in-buffer half standing,
 // which is what an editor should see: fewer answers, never a refused request.
@@ -21,10 +25,37 @@ module union LspCorpus
 	unavailable
 end 'LspCorpus'
 
-module union LspClientRoot
+module typealias LspClientRootArray = Array with FilePath
+
+module typealias LspProjectFileCount = int(0 to u64.max)
+
+module union LspProjectFacts
+	swept(root FilePath, fileCount LspProjectFileCount)
+	unswept(root FilePath)
+	singleFile(path FilePath)
+end 'LspProjectFacts'
+
+union StatedRoot
 	named(dir FilePath)
-	unset
-end 'LspClientRoot'
+	unnamed
+end 'StatedRoot'
+
+module union LspRootSearch
+	ready(tiers LibraryTiers, workingDirectory FilePath)
+	unavailable
+end 'LspRootSearch'
+
+type ReaderDocument
+	module let path as FilePath
+	module let normalized as FilePath
+	module let stated as StatedRoot
+
+	static function of(readerPath FilePath) returns ReaderDocument
+		let normalized = readerPath.normalize()
+
+		return Self{path: readerPath, normalized: normalized, stated: nearestNamedRootOver(normalized)}
+	end 'of'
+end 'ReaderDocument'
 
 union WorkspaceRoot
 	userDirectory(dir FilePath)
@@ -46,7 +77,7 @@ end 'ManifestDirectory'
 // `tests/lsp/definition-notices-a-file-created-on-disk.test.maxon` holds the re-walk in place.
 type HeldWorkspace
 	let project as Project
-	var sources as MaxonSourcePathArray
+	module var sources as MaxonSourcePathArray
 	var sweptAtMs as InstantMs
 
 	static function create(project Project, sources MaxonSourcePathArray, sweptAtMs InstantMs) returns HeldWorkspace
@@ -75,7 +106,10 @@ typealias HeldProjectKeyArray = Array with String
 // Projects are held across requests because building one costs a sweep, a lex of every file and a
 // signature fold. Eight rather than one: a jump from a user file into `stdlib/` and back crosses two
 // roots, and a library file is keyed by its OWN path, so a cache of one turns every round trip into two
-// cold rebuilds. Oldest out, so a session that wanders cannot grow the process without bound.
+// cold rebuilds. Least recently used out, so a session that wanders cannot grow the process without
+// bound and the root the author is working in is not evicted by a detour through the library.
+// Overflowing this costs a re-fold rather than a re-read: a rebuilt `Project` still hits `QueryEngine`'s
+// process-wide file memos.
 let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000 as DurationMs
@@ -83,43 +117,187 @@ let WorkspaceResweepIntervalMs = 1000 as DurationMs
 var heldProjects = HeldProjectMap.create()
 var heldProjectKeys = HeldProjectKeyArray.create()
 
-var namedClientRoot = LspClientRoot.unset
+var namedClientRoots = LspClientRootArray.create()
 
-module function lspRememberClientRoot(root LspClientRoot)
-	namedClientRoot = root
-end 'lspRememberClientRoot'
+module function lspRememberClientRoots(roots LspClientRootArray)
+	namedClientRoots = LspClientRootArray.create()
+
+	for root in roots 'eachRoot'
+		rememberOneClientRoot(root)
+	end 'eachRoot'
+end 'lspRememberClientRoots'
+
+module function lspChangeClientRoots(added LspClientRootArray, removed LspClientRootArray)
+	for root in removed 'eachRemoved'
+		forgetClientRoot(root)
+	end 'eachRemoved'
+
+	for root in added 'eachAdded'
+		rememberOneClientRoot(root)
+	end 'eachAdded'
+end 'lspChangeClientRoots'
+
+function rememberOneClientRoot(root FilePath)
+	let dir = root.normalize()
+
+	if namedRootsHold(dir) 'alreadyNamed'
+		return
+	end 'alreadyNamed'
+
+	namedClientRoots.push(dir)
+end 'rememberOneClientRoot'
+
+function namedRootsHold(dir FilePath) returns bool
+	for existing in namedClientRoots 'eachRoot'
+		if existing.equals(dir) 'theSameRoot'
+			return true
+		end 'theSameRoot'
+	end 'eachRoot'
+
+	return false
+end 'namedRootsHold'
+
+function forgetClientRoot(root FilePath)
+	let dir = root.normalize()
+	var kept = LspClientRootArray.create()
+
+	for existing in namedClientRoots 'eachRoot'
+		if not existing.equals(dir) 'staysNamed'
+			kept.push(existing)
+		end 'staysNamed'
+	end 'eachRoot'
+
+	namedClientRoots = kept
+
+	dropHeldProjectsUnder(dir)
+end 'forgetClientRoot'
+
+// A root is dropped in two places or not at all: the named-root list, and the projects already built
+// under it. Nothing but capacity expires a held project, so one left behind outlives the folder the
+// author closed.
+function dropHeldProjectsUnder(dir FilePath)
+	var kept = HeldProjectKeyArray.create()
+
+	for key in heldProjectKeys 'eachKey'
+		if heldProjectIsUnder(key, dir: dir) 'goesWithTheFolder'
+			_ = heldProjects.remove(key)
+		end 'goesWithTheFolder' else 'staysHeld'
+			kept.push(key)
+		end 'staysHeld'
+	end 'eachKey'
+
+	heldProjectKeys = kept
+end 'dropHeldProjectsUnder'
+
+function heldProjectIsUnder(key String, dir FilePath) returns bool
+	let held = try FilePath.from(key) otherwise return false
+
+	return held.normalize().isInside(dir)
+end 'heldProjectIsUnder'
+
+// Hoisted out of the per-document walk `listProjectsAnswer` makes: both halves of this are a filesystem
+// probe, and neither varies with the document being asked about.
+module function lspRootSearch() returns LspRootSearch
+	let tiers = try LibraryTiers.locate() otherwise return LspRootSearch.unavailable
+
+	return LspRootSearch.ready(tiers, workingDirectory: Directory.currentPath())
+end 'lspRootSearch'
+
+module function lspProjectFactsOf(readerPath FilePath, search LspRootSearch) returns LspProjectFacts
+	return match search 'search'
+		ready(tiers, workingDirectory) gives factsUnderTheRootOf(ReaderDocument.of(readerPath), tiers: tiers, workingDirectory: workingDirectory)
+		unavailable gives LspProjectFacts.singleFile(readerPath)
+	end 'search'
+end 'lspProjectFactsOf'
+
+function factsUnderTheRootOf(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns LspProjectFacts
+	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: workingDirectory)
+
+	return match root 'root'
+		userDirectory gives heldProjectFacts(root, readerPath: document.path)
+		libraryTierOnly gives LspProjectFacts.singleFile(document.path)
+	end 'root'
+end 'factsUnderTheRootOf'
+
+// The key is `compileRootOf`'s answer, which is the derivation `sweptWorkspace` files a project under. A
+// second spelling of it here reads a miss for every root and reports every project unswept, with nothing
+// failing to say so.
+function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspProjectFacts
+	let compileRoot = compileRootOf(root, readerPath: readerPath)
+	let held = try heldProjects.get(compileRoot.toString()) otherwise return LspProjectFacts.unswept(compileRoot)
+
+	return LspProjectFacts.swept(compileRoot, fileCount: held.sources.count() as LspProjectFileCount)
+end 'heldProjectFacts'
 
 module function lspWorkspaceCorpus(readerPath FilePath) returns LspCorpus
 	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
+	let document = ReaderDocument.of(readerPath)
 
-	return capturedCorpus(workspaceRootOf(readerPath, tiers: tiers), tiers: tiers, readerPath: readerPath)
+	return capturedCorpus(workspaceRootOf(document, tiers: tiers, workingDirectory: Directory.currentPath()), tiers: tiers, readerPath: readerPath)
 end 'lspWorkspaceCorpus'
 
 // The corpus a diagnostic may be corrected against, admitted only where the author has STATED the
-// project: a root the client named in `initialize`, holding this document. Without one the ladder roots a
-// document at its OWN DIRECTORY, so an unrelated neighbouring file would count as a sibling and could
-// silence a real error about a name no part of the author's project declares. A library-tier document
-// answers `unavailable` because its corpus is the two tiers the buffer compile already holds.
+// project: a root the client named, holding this document. Without one the ladder roots a document at
+// its OWN DIRECTORY, so an unrelated neighbouring file would count as a sibling and could silence a real
+// error about a name no part of the author's project declares. A library-tier document answers
+// `unavailable` because its corpus is the two tiers the buffer compile already holds.
 module function lspProjectCorpus(readerPath FilePath) returns LspCorpus
-	if not clientNamedARootOver(readerPath) 'noStatedWorkspace'
-		return LspCorpus.unavailable
-	end 'noStatedWorkspace'
+	let document = ReaderDocument.of(readerPath)
 
-	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
-	let root = workspaceRootOf(readerPath, tiers: tiers)
-
-	return match root 'root'
-		userDirectory gives capturedCorpus(root, tiers: tiers, readerPath: readerPath)
-		libraryTierOnly gives LspCorpus.unavailable
-	end 'root'
+	return match document.stated 'stated'
+		named gives statedProjectCorpus(document)
+		unnamed gives LspCorpus.unavailable
+	end 'stated'
 end 'lspProjectCorpus'
 
+function statedProjectCorpus(document ReaderDocument) returns LspCorpus
+	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
+	let root = workspaceRootOf(document, tiers: tiers, workingDirectory: Directory.currentPath())
+
+	return match root 'root'
+		userDirectory gives capturedCorpus(root, tiers: tiers, readerPath: document.path)
+		libraryTierOnly gives LspCorpus.unavailable
+	end 'root'
+end 'statedProjectCorpus'
+
 module function clientNamedARootOver(readerPath FilePath) returns bool
-	return match namedClientRoot 'client'
-		named(dir) gives readerPath.normalize().isInside(dir.normalize())
-		unset gives false
-	end 'client'
+	return match nearestNamedRootOver(readerPath.normalize()) 'stated'
+		named gives true
+		unnamed gives false
+	end 'stated'
 end 'clientNamedARootOver'
+
+function nearestNamedRootOver(document FilePath) returns StatedRoot
+	var nearest = StatedRoot.unnamed
+
+	for root in namedClientRoots 'eachRoot'
+		nearest = nearerNamedRoot(nearest, candidate: root, document: document)
+	end 'eachRoot'
+
+	return nearest
+end 'nearestNamedRootOver'
+
+// A root that does not hold this document is never selected, not even as the only candidate. Rooting a
+// document under a folder it sits outside builds a corpus over an unrelated tree and answers confidently
+// out of it, which is worse than the miss the document's own directory gives.
+function nearerNamedRoot(nearest StatedRoot, candidate FilePath, document FilePath) returns StatedRoot
+	if not document.isInside(candidate) 'holdsNothingOfThisDocument'
+		return nearest
+	end 'holdsNothingOfThisDocument'
+
+	if not candidateIsNearer(nearest, dir: candidate) 'noNearerThanTheOneHeld'
+		return nearest
+	end 'noNearerThanTheOneHeld'
+
+	return StatedRoot.named(candidate)
+end 'nearerNamedRoot'
+
+function candidateIsNearer(nearest StatedRoot, dir FilePath) returns bool
+	return match nearest 'nearest'
+		named(held) gives dir.isInside(held)
+		unnamed gives true
+	end 'nearest'
+end 'candidateIsNearer'
 
 function capturedCorpus(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
 	beginDiagnosticCapture()
@@ -134,7 +312,9 @@ function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FileP
 	let key = compileRoot.toString()
 
 	if heldProjects.contains(key) 'alreadySeenThisRoot'
-		var held = try heldProjects.get(key) otherwise panic("sweptWorkspace: '{key}' was found among the held projects one line above")
+		touchHeldProject(key)
+
+		var held = try heldProjects.get(key) otherwise panic("sweptWorkspace: '{key}' was found among the held projects two lines above")
 
 		return held.corpusFor(root, readerPath: readerPath)
 	end 'alreadySeenThisRoot'
@@ -160,9 +340,23 @@ function rememberProject(key String, held HeldWorkspace)
 		return
 	end 'roomRemains'
 
-	let oldest = try heldProjectKeys.remove(0) otherwise panic("rememberProject: the key list is over capacity, so it holds a first element")
-	_ = heldProjects.remove(oldest)
+	let coldest = try heldProjectKeys.remove(0) otherwise panic("rememberProject: the key list is over capacity, so it holds a first element")
+	_ = heldProjects.remove(coldest)
 end 'rememberProject'
+
+function touchHeldProject(key String)
+	var kept = HeldProjectKeyArray.create()
+
+	for existing in heldProjectKeys 'eachKey'
+		if existing != key 'staysInOrder'
+			kept.push(existing)
+		end 'staysInOrder'
+	end 'eachKey'
+
+	kept.push(key)
+
+	heldProjectKeys = kept
+end 'touchHeldProject'
 
 function compileRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
@@ -191,38 +385,25 @@ end 'maxonSourcesIn'
 // would root its project at the whole checkout and sweep every source in the tree to answer one jump.
 //
 // `build.maxon` is used purely as a MARKER of where a project begins — it is never read and never run.
-function workspaceRootOf(readerPath FilePath, tiers LibraryTiers) returns WorkspaceRoot
-	let document = readerPath.normalize()
-
-	if document.isInside(tiers.stdlibDir.normalize()) or document.isInside(tiers.runtimeDir.normalize()) 'aLibraryFile'
+function workspaceRootOf(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns WorkspaceRoot
+	if document.normalized.isInside(tiers.stdlibDir.normalize()) or document.normalized.isInside(tiers.runtimeDir.normalize()) 'aLibraryFile'
 		return WorkspaceRoot.libraryTierOnly
 	end 'aLibraryFile'
 
-	let directory = try readerPath.parent() otherwise return WorkspaceRoot.libraryTierOnly
+	let directory = try document.path.parent() otherwise return WorkspaceRoot.libraryTierOnly
 
-	return match nearestManifestDirectory(directory) 'manifest'
+	return match nearestManifestDirectory(directory, noHigherThan: document.stated, workingDirectory: workingDirectory) 'manifest'
 		found(dir) gives sweepableRoot(dir)
-		none gives rootWithoutAManifest(document, directory: directory)
+		none gives rootWithoutAManifest(document.stated, directory: directory)
 	end 'manifest'
 end 'workspaceRootOf'
 
-function rootWithoutAManifest(document FilePath, directory FilePath) returns WorkspaceRoot
-	return match namedClientRoot 'client'
-		named(dir) gives clientRootOver(document, dir: dir, directory: directory)
-		unset gives sweepableRoot(directory)
-	end 'client'
+function rootWithoutAManifest(stated StatedRoot, directory FilePath) returns WorkspaceRoot
+	return match stated 'stated'
+		named(dir) gives sweepableRoot(dir)
+		unnamed gives sweepableRoot(directory)
+	end 'stated'
 end 'rootWithoutAManifest'
-
-// A document outside the root the client named is no part of that project. Rooting it there would
-// build a corpus over an unrelated tree and answer confidently out of it, which is worse than the
-// miss the document's own directory gives.
-function clientRootOver(document FilePath, dir FilePath, directory FilePath) returns WorkspaceRoot
-	if not document.isInside(dir.normalize()) 'outsideTheClientRoot'
-		return sweepableRoot(directory)
-	end 'outsideTheClientRoot'
-
-	return sweepableRoot(dir)
-end 'clientRootOver'
 
 // A directory with no parent is a volume root — `/`, `C:\`, or a `\\server\share`. Rooting a
 // project there sweeps the whole volume to answer one request, so a document sitting at one gets
@@ -233,15 +414,15 @@ function sweepableRoot(dir FilePath) returns WorkspaceRoot
 	return WorkspaceRoot.userDirectory(dir)
 end 'sweepableRoot'
 
-function nearestManifestDirectory(directory FilePath) returns ManifestDirectory
-	var current = directory.resolve(Directory.currentPath()).clone()
+function nearestManifestDirectory(directory FilePath, noHigherThan StatedRoot, workingDirectory FilePath) returns ManifestDirectory
+	var current = directory.resolve(workingDirectory).clone()
 
 	while true 'upwards'
 		if File.exists(current.join("{BuildManifestFileName}")) 'holdsAManifest'
 			return ManifestDirectory.found(current)
 		end 'holdsAManifest'
 
-		if climbReachedTheClientRoot(current) 'noHigher'
+		if climbReachedTheStatedRoot(current, stated: noHigherThan) 'noHigher'
 			break
 		end 'noHigher'
 
@@ -255,12 +436,12 @@ function nearestManifestDirectory(directory FilePath) returns ManifestDirectory
 	return ManifestDirectory.none
 end 'nearestManifestDirectory'
 
-function climbReachedTheClientRoot(current FilePath) returns bool
-	return match namedClientRoot 'client'
-		named(dir) gives current.normalize().equals(dir.normalize())
-		unset gives false
-	end 'client'
-end 'climbReachedTheClientRoot'
+function climbReachedTheStatedRoot(current FilePath, stated StatedRoot) returns bool
+	return match stated 'stated'
+		named(dir) gives current.normalize().equals(dir)
+		unnamed gives false
+	end 'stated'
+end 'climbReachedTheStatedRoot'
 
 extension Project
 	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Two

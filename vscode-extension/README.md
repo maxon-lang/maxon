@@ -9,7 +9,9 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
   file of your project, or in the standard library, opens that file, and hovering one renders its
   declaration — a field or method of such a type included, not only its top-level declarations. The
   project is the nearest directory above the file that holds a `build.maxon`, searched no higher than the
-  workspace root; failing that, the workspace root itself. Hover and completion also resolve a receiver
+  workspace folder that contains the file; failing that, that folder itself. In a multi-root window every
+  folder is a root of its own, and a folder added to the window starts working without restarting the
+  editor. Hover and completion also resolve a receiver
   typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a `for … in`
   loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
   an element taken out of a generic container, or by a service handle, which offers its service's messages
@@ -17,8 +19,8 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - **Diagnostics that know about your other files**: the server no longer reports a name as undeclared
   when a sibling file of the project declares it. Checking is still done per buffer, so an error only the
   whole program could raise is not reported; and while a file is unsaved, errors about its own text are
-  published immediately while name-dependent ones wait until you save. It needs a workspace root — with
-  none open, diagnostics are per buffer as before.
+  published immediately while name-dependent ones wait until you save. It needs a workspace folder that
+  contains the file — with none open, diagnostics are per buffer as before.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to

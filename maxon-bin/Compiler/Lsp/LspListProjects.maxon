@@ -1,9 +1,9 @@
-// `maxon/listProjects` — the VS Code status bar's request: the projects this server holds.
+// `maxon/listProjects` — the VS Code status bar's request: the projects the open documents sit in, one
+// entry per distinct root `LspWorkspace.maxon`'s ladder resolves a document to.
 //
-// ⭐ **EVERY OPEN DOCUMENT IS A PROJECT OF ONE FILE**, because that is what this server compiles: each
-// buffer on its own with the library tiers, rooted at the document (`LspDocumentProject.maxon`). A project
-// discovered on disk would be one the server never checks, and the status bar would describe a program the
-// diagnostics are not about.
+// ⚠ A file count is read off a HELD corpus and this request sweeps for none: the status bar asks again
+// on every editor switch, so a sweep here would put a directory walk and a lex of every source behind a
+// keystroke. A root nothing has built yet is answered `0`, which the next hover or definition corrects.
 
 let ProjectsKey = "projects"
 let RootPathKey = "rootPath"
@@ -11,32 +11,62 @@ let IsSingleFileKey = "isSingleFile"
 let FileCountKey = "fileCount"
 
 // The buffer itself; the library tiers are not the author's files.
-let DocumentProjectFileCount = 1
+let SingleFileProjectFileCount = 1 as LspProjectFileCount
+let UnsweptProjectFileCount = 0 as LspProjectFileCount
+
+type ListedProject
+	module let rootPath as FilePath
+	module let isSingleFile as bool
+	module let fileCount as LspProjectFileCount
+
+	static function create(rootPath FilePath, isSingleFile bool, fileCount LspProjectFileCount) returns ListedProject
+		return Self{rootPath: rootPath, isSingleFile: isSingleFile, fileCount: fileCount}
+	end 'create'
+end 'ListedProject'
+
+typealias ListedProjectArray = Array with ListedProject
 
 module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExtensionOutcome
-	var roots = LspProjectRootArray.create()
+	var listed = ListedProjectArray.create()
+	let search = lspRootSearch()
 
 	for (uri, _) in documents 'eachDocument'
-		roots.push(lspDocumentPath(uri))
+		addListedProject(listedProjectOf(lspDocumentPath(uri), search: search), into: listed)
 	end 'eachDocument'
 
-	// The map's order is its hashing's; the answer's is the paths'.
-	roots.sort(function(a FilePath, b FilePath) gives comparePathSpelling(a, right: b))
+	// The map's order is its hashing's; the answer's is the roots'.
+	listed.sort(function(a ListedProject, b ListedProject) gives comparePathSpelling(a.rootPath, right: b.rootPath))
 
 	var doc = JsonDoc.create()
 	var projects = JsonNodeIdArray.create()
 
-	for root in roots 'eachRoot'
+	for entry in listed 'eachProject'
 		var project = LspJsonObject.create(doc)
-		project.put(RootPathKey, value: JsonNode.stringNode(root.toString()))
-		project.put(IsSingleFileKey, value: JsonNode.boolNode(true))
-		project.put(FileCountKey, value: JsonNode.numberNode(DocumentProjectFileCount as JsonFloat))
+		project.put(RootPathKey, value: JsonNode.stringNode(entry.rootPath.toString()))
+		project.put(IsSingleFileKey, value: JsonNode.boolNode(entry.isSingleFile))
+		project.put(FileCountKey, value: JsonNode.numberNode(entry.fileCount as JsonFloat))
 		projects.push(project.finish())
-	end 'eachRoot'
+	end 'eachProject'
 
 	var result = LspJsonObject.create(doc)
 	result.putNode(ProjectsKey, value: doc.add(JsonNode.arrayNode(projects)))
 	return LspExtensionOutcome.answered(LspAnswer.of(doc, result: result.finish()))
 end 'listProjectsAnswer'
 
-typealias LspProjectRootArray = Array with FilePath
+function listedProjectOf(readerPath FilePath, search LspRootSearch) returns ListedProject
+	return match lspProjectFactsOf(readerPath, search: search) 'facts'
+		swept(root, fileCount) gives ListedProject.create(root, isSingleFile: false, fileCount: fileCount)
+		unswept(root) gives ListedProject.create(root, isSingleFile: false, fileCount: UnsweptProjectFileCount)
+		singleFile(path) gives ListedProject.create(path, isSingleFile: true, fileCount: SingleFileProjectFileCount)
+	end 'facts'
+end 'listedProjectOf'
+
+function addListedProject(entry ListedProject, into ListedProjectArray)
+	for existing in into 'eachListed'
+		if existing.rootPath.equals(entry.rootPath) 'oneProjectAlready'
+			return
+		end 'oneProjectAlready'
+	end 'eachListed'
+
+	into.push(entry)
+end 'addListedProject'

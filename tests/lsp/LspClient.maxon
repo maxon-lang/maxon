@@ -104,6 +104,7 @@ public typealias SemanticTokenValueArray = Array with SemanticTokenValue
 public typealias PublishedDiagnosticArray = Array with PublishedDiagnostic
 public typealias GenerateIrErrorArray = Array with GenerateIrError
 public typealias ProjectEntryArray = Array with ProjectEntry
+public typealias WorkspaceFolderRootArray = Array with FilePath
 
 // A span of a document, flat rather than nested. LSP nests it as `{start: {…}, end: {…}}`, but `end` is
 // a Maxon keyword and cannot name a field — and the client contract already spells folding ranges and
@@ -169,13 +170,8 @@ public type CodeActionItem
 	end 'create'
 end 'CodeActionItem'
 
-// What the server advertised in its `initialize` response.
-//
-// ⛔⛔ A capability is a promise, and a server advertises a method capability only when the CLIENT
-// declared support for it — so this record is meaningless unless `initialize` sent a realistic
-// capability set. With `capabilities: {}` it
-// advertises three members, with a real set it advertises nine. `clientCapabilities` below is what makes
-// these fields answerable.
+// What the server advertised in its `initialize` response. A real multi-root client reads the two
+// `workspace.workspaceFolders` flags before it names a second folder or sends a folder change at all.
 public type InitializeResult
 	public var hasTextDocumentSync = false
 	public var hasHoverProvider = false
@@ -188,6 +184,8 @@ public type InitializeResult
 	public var hasRenameProvider = false
 	public var hasCodeActionProvider = false
 	public var hasSemanticTokensProvider = false
+	public var hasWorkspaceFoldersSupported = false
+	public var hasWorkspaceFolderChangeNotifications = false
 
 	static function create() returns InitializeResult
 		return Self{}
@@ -457,7 +455,7 @@ public type LspClient
 		var params = JsonObjectBuilder.create(doc)
 		params.putNull(ProcessIdKey)
 		params.putNull(RootUriKey)
-		params.putNode(CapabilitiesKey, value: clientCapabilities(doc))
+		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: false))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
@@ -470,41 +468,52 @@ public type LspClient
 	end 'initializeAtRoot'
 
 	public function initializeAtRootUri(uri String) returns InitializeResult throws LspClientError
-		return try self.initializeRooted(uri, sendsRootUri: true)
+		return try self.initializeRooted([uri], rootUri: InitializeRootUri.named(uri), declaresWorkspaceFolders: false)
 	end 'initializeAtRootUri'
 
 	public function initializeAtWorkspaceFolder(root FilePath) returns InitializeResult throws LspClientError
-		return try self.initializeRooted(fileUriOf(root), sendsRootUri: false)
+		return try self.initializeRooted([fileUriOf(root)], rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: false)
 	end 'initializeAtWorkspaceFolder'
 
-	function initializeRooted(rootUri String, sendsRootUri bool) returns InitializeResult throws LspClientError
+	public function initializeAtWorkspaceFolders(roots WorkspaceFolderRootArray) returns InitializeResult throws LspClientError
+		return try self.initializeRooted(folderUrisOf(roots), rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: true)
+	end 'initializeAtWorkspaceFolders'
+
+	function initializeRooted(folderUris StringArray, rootUri InitializeRootUri, declaresWorkspaceFolders bool) returns InitializeResult throws LspClientError
 		var doc = JsonDoc.create()
 		var message = beginMessage(doc, method: MethodInitialize)
-
-		var folder = JsonObjectBuilder.create(doc)
-		folder.putString(UriKey, value: rootUri)
-		folder.putString(NameKey, value: lastUriSegment(rootUri))
-
-		var folders = JsonNodeIdArray.create()
-		folders.push(folder.finish())
 
 		var params = JsonObjectBuilder.create(doc)
 		params.putNull(ProcessIdKey)
 
-		if sendsRootUri 'alsoRootUri'
-			params.putString(RootUriKey, value: rootUri)
-		end 'alsoRootUri' else 'foldersOnly'
-			params.putNull(RootUriKey)
-		end 'foldersOnly'
+		match rootUri 'alsoRootUri'
+			named(uri) then params.putString(RootUriKey, value: uri)
+			absent then params.putNull(RootUriKey)
+		end 'alsoRootUri'
 
-		params.putNode(WorkspaceFoldersKey, value: doc.add(JsonNode.arrayNode(folders)))
-		params.putNode(CapabilitiesKey, value: clientCapabilities(doc))
+		params.putNode(WorkspaceFoldersKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUris))))
+		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: declaresWorkspaceFolders))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
 
 		return try readAdvertised(replyDoc, result: result)
 	end 'initializeRooted'
+
+	public function changeWorkspaceFolders(added WorkspaceFolderRootArray, removed WorkspaceFolderRootArray) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodDidChangeWorkspaceFolders)
+
+		var event = JsonObjectBuilder.create(doc)
+		event.putNode(AddedKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUrisOf(added)))))
+		event.putNode(RemovedKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUrisOf(removed)))))
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNode(EventKey, value: event.finish())
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		try self.sendNotification(doc, message: message)
+	end 'changeWorkspaceFolders'
 
 	public function initialized() throws LspClientError
 		var doc = JsonDoc.create()
@@ -1089,6 +1098,34 @@ function textDocumentIdentifier(doc JsonDoc, uri String) returns JsonNodeId
 	return identifier.finish()
 end 'textDocumentIdentifier'
 
+union InitializeRootUri
+	named(uri String)
+	absent
+end 'InitializeRootUri'
+
+function workspaceFolderNodes(doc JsonDoc, uris StringArray) returns JsonNodeIdArray
+	var folders = JsonNodeIdArray.create()
+
+	for uri in uris 'eachFolder'
+		var folder = JsonObjectBuilder.create(doc)
+		folder.putString(UriKey, value: uri)
+		folder.putString(NameKey, value: lastUriSegment(uri))
+		folders.push(folder.finish())
+	end 'eachFolder'
+
+	return folders
+end 'workspaceFolderNodes'
+
+function folderUrisOf(roots WorkspaceFolderRootArray) returns StringArray
+	var uris = StringArray.create()
+
+	for root in roots 'eachRoot'
+		uris.push(fileUriOf(root))
+	end 'eachRoot'
+
+	return uris
+end 'folderUrisOf'
+
 function positionNode(doc JsonDoc, line LspCoordinate, character LspCoordinate) returns JsonNodeId
 	var position = JsonObjectBuilder.create(doc)
 	position.putInt(LineKey, value: line as JsonInteger)
@@ -1112,11 +1149,11 @@ function positionParams(doc JsonDoc, uri String, line LspCoordinate, character L
 	return params
 end 'positionParams'
 
-// ⛔⛔ **A REALISTIC CAPABILITY SET, NEVER `{}`.** A spec-compliant server advertises a text-document
-// capability only when the client declared support for it, so an empty set makes every capability
-// assertion fail for a reason that is not a bug. Each feature is declared the same way — the client
-// registers statically, not dynamically — which is why the set is one list rather than eleven objects.
-function clientCapabilities(doc JsonDoc) returns JsonNodeId
+// The set a real client sends, rather than `{}`, so that a session here is one an editor could have
+// opened. This server advertises out of `servedMethods()` and consults no client capability at all
+// (`LspServer.respondInitialize` owns that rule), so `declaresWorkspaceFolders` changes what the client
+// claims and never what the server answers.
+function clientCapabilities(doc JsonDoc, declaresWorkspaceFolders bool) returns JsonNodeId
 	var textDocument = JsonObjectBuilder.create(doc)
 
 	for feature in declaredTextDocumentFeatures() 'eachFeature'
@@ -1126,7 +1163,7 @@ function clientCapabilities(doc JsonDoc) returns JsonNodeId
 	end 'eachFeature'
 
 	var workspace = JsonObjectBuilder.create(doc)
-	workspace.putBool(WorkspaceFoldersKey, value: false)
+	workspace.putBool(WorkspaceFoldersKey, value: declaresWorkspaceFolders)
 
 	var capabilities = JsonObjectBuilder.create(doc)
 	capabilities.putNode(TextDocumentKey, value: textDocument.finish())
@@ -1216,9 +1253,18 @@ function readAdvertised(replyDoc JsonDoc, result JsonNodeId) returns InitializeR
 	advertised.hasRenameProvider = advertises(replyDoc, capabilities: capabilities, key: RenameProviderKey)
 	advertised.hasCodeActionProvider = advertises(replyDoc, capabilities: capabilities, key: CodeActionProviderKey)
 	advertised.hasSemanticTokensProvider = advertises(replyDoc, capabilities: capabilities, key: SemanticTokensProviderKey)
+	advertised.hasWorkspaceFoldersSupported = advertisesWorkspaceFolders(replyDoc, capabilities: capabilities, key: WorkspaceFoldersSupportedKey)
+	advertised.hasWorkspaceFolderChangeNotifications = advertisesWorkspaceFolders(replyDoc, capabilities: capabilities, key: WorkspaceFoldersChangeNotificationsKey)
 
 	return advertised
 end 'readAdvertised'
+
+function advertisesWorkspaceFolders(doc JsonDoc, capabilities JsonNodeId, key String) returns bool
+	let workspace = try doc.getChild(capabilities, key: WorkspaceKey) otherwise return false
+	let folders = try doc.getChild(workspace, key: WorkspaceFoldersKey) otherwise return false
+
+	return advertises(doc, capabilities: folders, key: key)
+end 'advertisesWorkspaceFolders'
 
 function isNull(doc JsonDoc, id JsonNodeId) returns bool
 	return doc.get(id).kind == JsonKind.jsonNull
@@ -1489,6 +1535,7 @@ let MethodLinkedEditingRange = "textDocument/linkedEditingRange"
 let MethodRename = "textDocument/rename"
 let MethodCodeAction = "textDocument/codeAction"
 let MethodSemanticTokensFull = "textDocument/semanticTokens/full"
+let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
 let MethodGenerateIr = "maxon/generateIR"
 let MethodListProjects = "maxon/listProjects"
 
@@ -1532,6 +1579,8 @@ let LinkedEditingRangeProviderKey = "linkedEditingRangeProvider"
 let RenameProviderKey = "renameProvider"
 let CodeActionProviderKey = "codeActionProvider"
 let SemanticTokensProviderKey = "semanticTokensProvider"
+let WorkspaceFoldersSupportedKey = "supported"
+let WorkspaceFoldersChangeNotificationsKey = "changeNotifications"
 
 let UriKey = "uri"
 let TextKey = "text"
@@ -1581,6 +1630,9 @@ let ProjectsKey = "projects"
 let RootPathKey = "rootPath"
 let IsSingleFileKey = "isSingleFile"
 let FileCountKey = "fileCount"
+let EventKey = "event"
+let AddedKey = "added"
+let RemovedKey = "removed"
 
 // The header field this client reads, lowercased: LSP header names are case-insensitive.
 let ContentLengthHeaderName = "content-length"

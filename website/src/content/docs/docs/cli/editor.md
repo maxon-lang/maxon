@@ -93,23 +93,31 @@ disk, the server reports what a build of that file reports. Once it has been edi
 the buffer's own text — syntax, tokens, literals — are still published immediately, while diagnostics
 that turn on what a declaration says are held back until the buffer matches disk again. That is what
 stops an editor inventing errors about names it cannot see, and it applies only when the buffer does use
-a name that only the project declares. This project view needs a workspace root: a client that sends
-none, and a file inside `stdlib/` or `runtime/`, get the per-buffer behaviour described below.
+a name that only the project declares. This project view needs a workspace folder that contains the file:
+a file the client named no root over, and a file inside `stdlib/` or `runtime/`, get the per-buffer
+behaviour described below.
 
-**The project root is a ladder, and the client's workspace root is one of its rungs.** A file inside the
-compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else. Any other document is rooted
-at the nearest ancestor directory holding a `build.maxon`, searched no higher than the root the client
-sent in `initialize` — `rootUri`, or the first entry of `workspaceFolders` when `rootUri` is absent or
-null. Failing that it is rooted at the client's root itself, when the document is inside it; failing that,
-at its own directory. A client that sends no root, or one whose root is not a `file:` uri — what
-Remote-SSH, WSL, dev containers and Codespaces send — leaves the manifest search and the document's own
-directory. The manifest is used only as a marker of where a project begins — it is never read and never
-run.
+**The project root is a ladder, and the client's workspace folders are one of its rungs.** A file inside
+the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else. Any other document is
+rooted at the nearest ancestor directory holding a `build.maxon`, searched no higher than the nearest
+root the client named that contains the document. Failing that it is rooted at that named root itself;
+failing that, at its own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is
+read only when the folders name none — so a multi-root window has as many roots as it has folders, each
+deciding for the documents inside it and for no others. A client that sends no root, or one whose root is
+not a `file:` uri — what Remote-SSH, WSL, dev containers and Codespaces send — leaves the manifest search
+and the document's own directory. The manifest is used only as a marker of where a project begins — it is
+never read and never run.
+
+**The roots are not fixed for the session.** The `initialize` response advertises
+`workspace.workspaceFolders` with `supported` and `changeNotifications` both true, and the server then
+handles `workspace/didChangeWorkspaceFolders`: a folder added to the window becomes a root at once, and
+one removed from it stops being one, with no restart of the editor. Nothing else in the workspace is
+renegotiated.
 
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
-when its size or modification time changes on disk. The list of files under a root is re-walked at most
-once a second, so a file created on disk after the project was built is resolved into shortly afterwards
-rather than at once.
+when its size or modification time changes on disk. Removing a workspace folder also drops every project
+held under it. The list of files under a root is re-walked at most once a second, so a file created on
+disk after the project was built is resolved into shortly afterwards rather than at once.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
@@ -150,13 +158,20 @@ Both params are required (otherwise `-32602`). The result:
 every diagnostic with a **1-based** `line` and `column`.
 
 **`maxon/listProjects`** is a Maxon-specific request, not advertised in the capabilities, that lists the
-projects the server holds. It is what the VS Code status bar shows. It takes no params. Each open document
-is a project of its own, because each is analysed on its own:
+projects the server holds. It is what the VS Code status bar shows. It takes no params. The open documents
+are grouped by the project root the ladder above resolves each of them to, one entry per distinct root —
+two files of one project are one entry, and two sibling projects are two:
 
 ```json
-{ "projects": [ { "rootPath": "/home/me/app/main.maxon", "isSingleFile": true, "fileCount": 1 } ] }
+{ "projects": [ { "rootPath": "/home/me/app", "isSingleFile": false, "fileCount": 12 } ] }
 ```
 
+`rootPath` is that root directory. `isSingleFile` is true only where the ladder gives a document no
+project — a file inside `stdlib/` or `runtime/`, or one sitting at a volume root — and then `rootPath` is
+the document's own file. `fileCount` is the number of `.maxon` sources under that root — `*.test.maxon`
+and the manifest aside — and is **0** for a root whose corpus the server has not built yet; the request
+never sweeps for one, so any hover,
+definition or completion in that project is what builds it and the next answer carries the real count.
 `rootPath` is a filesystem path, not a URI, and the projects are listed in path order.
 
 ## Other editors

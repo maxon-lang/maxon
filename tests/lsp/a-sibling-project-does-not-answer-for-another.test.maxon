@@ -1,0 +1,51 @@
+let GuardFirstDirName = "maxon-tests-lsp-sibling-guard-one"
+let GuardSecondDirName = "maxon-tests-lsp-sibling-guard-two"
+let GuardReaderFileName = "main.maxon"
+let GuardSiblingFileName = "sibling.maxon"
+let GuardFirstSiblingSource = "export function onlyInProjectOne() returns ExitCode\n\treturn 0\nend 'onlyInProjectOne'\n"
+let GuardSecondSiblingSource = "export function onlyInProjectTwo() returns ExitCode\n\treturn 0\nend 'onlyInProjectTwo'\n"
+let GuardFirstReaderSource = "function crossesToItsOwnSibling() returns ExitCode\n\treturn onlyInProjectOne()\nend 'crossesToItsOwnSibling'\n\nfunction main() returns ExitCode\n\treturn onlyInProjectTwo()\nend 'main'\n"
+let GuardSecondReaderSource = "function crossesToItsOwnSibling() returns ExitCode\n\treturn onlyInProjectTwo()\nend 'crossesToItsOwnSibling'\n\nfunction main() returns ExitCode\n\treturn onlyInProjectOne()\nend 'main'\n"
+let GuardOwnSiblingLine = 1 as LspCoordinate
+let GuardOtherProjectLine = 5 as LspCoordinate
+let GuardCallCharacter = 12 as LspCoordinate
+let GuardProbeCount = 4 as AssertedInt
+
+test 'project roots: a sibling project does not answer for another'
+	let first = stagedProjectDiagnosticsRoot(GuardFirstDirName)
+	let second = stagedProjectDiagnosticsRoot(GuardSecondDirName)
+
+	writeCorpusFile(first, fileName: GuardSiblingFileName, content: GuardFirstSiblingSource)
+	writeCorpusFile(first, fileName: GuardReaderFileName, content: GuardFirstReaderSource)
+	writeCorpusFile(second, fileName: GuardSiblingFileName, content: GuardSecondSiblingSource)
+	writeCorpusFile(second, fileName: GuardReaderFileName, content: GuardSecondReaderSource)
+
+	let firstUri = fileUriOf(first.join("{GuardReaderFileName}"))
+	let secondUri = fileUriOf(second.join("{GuardReaderFileName}"))
+
+	var documents = projectRootsDocument(firstUri, content: GuardFirstReaderSource)
+	documents.push(WorkspaceFolderDocument.create(secondUri, content: GuardSecondReaderSource))
+
+	var positions = WorkspaceFolderProbePositionArray.create()
+	positions.push(WorkspaceFolderProbePosition.create(firstUri, line: GuardOwnSiblingLine, character: GuardCallCharacter))
+	positions.push(WorkspaceFolderProbePosition.create(firstUri, line: GuardOtherProjectLine, character: GuardCallCharacter))
+	positions.push(WorkspaceFolderProbePosition.create(secondUri, line: GuardOwnSiblingLine, character: GuardCallCharacter))
+	positions.push(WorkspaceFolderProbePosition.create(secondUri, line: GuardOtherProjectLine, character: GuardCallCharacter))
+
+	let probes = try definitionsAcrossWorkspaceFolders(projectRootsFolderPair(first, second: second), addedFolders: WorkspaceFolderRootArray.create(), documents: documents, positions: positions)
+
+	try Expect.equal(probes.count() as AssertedInt, expected: GuardProbeCount, message: "the session was asked for {GuardProbeCount} definitions and handed back {probes.count()} probes, so at least one half of the separation was never measured.")
+
+	let firstOwnSibling = try probes.get(0) otherwise panic("sibling guard: the probe count was just held to {GuardProbeCount}")
+	let firstOtherProject = try probes.get(1) otherwise panic("sibling guard: the probe count was just held to {GuardProbeCount}")
+	let secondOwnSibling = try probes.get(2) otherwise panic("sibling guard: the probe count was just held to {GuardProbeCount}")
+	let secondOtherProject = try probes.get(3) otherwise panic("sibling guard: the probe count was just held to {GuardProbeCount}")
+
+	try expectDefinitionInFile(firstOwnSibling, fileTail: "{GuardFirstDirName}/{GuardSiblingFileName}", startLine: ProjectRootsDeclarationLine, note: "the open document in the FIRST staged project named `onlyInProjectOne`, which a file of that SAME project exports and no open buffer holds. This is the half that proves the first project's corpus was BUILT: without it, a server that loaded neither folder — or that answered nothing at all — passes the two negatives below for a reason that has nothing to do with keeping projects separate.")
+
+	try expectDefinitionInFile(secondOwnSibling, fileTail: "{GuardSecondDirName}/{GuardSiblingFileName}", startLine: ProjectRootsDeclarationLine, note: "the open document in the SECOND staged project named `onlyInProjectTwo`, which a file of that SAME project exports. Both corpora are proved live in the one session, because a separation asserted while only one of the two folders ever loaded is an assertion about a broken fixture.")
+
+	try expectNoDefinitionInProject(firstOtherProject, note: "a document in the FIRST staged project named `onlyInProjectTwo`, which only the SECOND project declares, and both roots were named to the client as workspace folders. That same document resolved its OWN project's sibling in this session, so the first corpus is loaded and this is the boundary alone. Two projects that are siblings share no declarations: an answer here is one project's corpus resolving another's name, which would let a rename or a jump cross a boundary the build system does not.")
+
+	try expectNoDefinitionInProject(secondOtherProject, note: "a document in the SECOND staged project named `onlyInProjectOne`, which only the FIRST project declares, and that document too resolved its own project's sibling in this session. The reverse direction is asserted as well because a leak in one direction only — one document finding its nearer root while the other falls back to a root holding both — looks correct from the first direction alone.")
+end 'project roots: a sibling project does not answer for another'

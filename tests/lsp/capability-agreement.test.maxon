@@ -59,6 +59,10 @@ test 'every advertised capability is answered, and every answered method is adve
 	try capabilityAgrees("renameProvider", advertised: advertised.hasRenameProvider, served: rename)
 	try capabilityAgrees("codeActionProvider", advertised: advertised.hasCodeActionProvider, served: action)
 	try capabilityAgrees("semanticTokensProvider", advertised: advertised.hasSemanticTokensProvider, served: tokens)
+
+	try Expect.isTrue(advertised.hasWorkspaceFoldersSupported, message: "`workspace.workspaceFolders.supported` was not advertised, and this server DOES answer out of every folder the client names — `workspace.workspaceFolders` in the `initialize` params is the only thing that carries more than one root, and a client that is not told the server supports them is entitled to send `rootUri` alone. Answered-but-unadvertised is the fail-open this file exists for.")
+
+	try Expect.isTrue(advertised.hasWorkspaceFolderChangeNotifications, message: "`workspace.workspaceFolders.changeNotifications` was not advertised, and this server DOES handle `workspace/didChangeWorkspaceFolders`. Real clients send that notification only when the server advertised this flag — VS Code among them — so without it the add-a-folder and remove-a-folder handling is dead in every editor while the tests, which send the notification unconditionally, stay green.")
 end 'every advertised capability is answered, and every answered method is advertised'
 
 // ⭐ BOTH DIRECTIONS, because the two failures are different bugs. Advertised-but-refused is a promise an

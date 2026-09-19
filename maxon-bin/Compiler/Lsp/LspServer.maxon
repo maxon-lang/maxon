@@ -35,6 +35,7 @@ let MethodExit = "exit"
 let MethodDidOpen = "textDocument/didOpen"
 let MethodDidChange = "textDocument/didChange"
 let MethodDidClose = "textDocument/didClose"
+let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
 
 let CapabilitiesKey = "capabilities"
 let TextDocumentSyncKey = "textDocumentSync"
@@ -42,9 +43,13 @@ let TextDocumentKey = "textDocument"
 let ContentChangesKey = "contentChanges"
 let TextKey = "text"
 let RootUriKey = "rootUri"
+let WorkspaceKey = "workspace"
 let WorkspaceFoldersKey = "workspaceFolders"
-
-let FirstWorkspaceFolder = 0 as ChildIndex
+let WorkspaceFoldersSupportedKey = "supported"
+let WorkspaceFoldersChangeNotificationsKey = "changeNotifications"
+let FolderEventKey = "event"
+let FoldersAddedKey = "added"
+let FoldersRemovedKey = "removed"
 
 // Run the server until the client ends the session, and report how it ended.
 export function runLspServer() returns ExitCode
@@ -205,7 +210,9 @@ type LspSession
 			try self.changeDocument(doc) otherwise ignore
 		end 'didChange' else if method == MethodDidClose 'didClose'
 			try self.closeDocument(doc) otherwise ignore
-		end 'didClose' else if method == MethodExit 'exit'
+		end 'didClose' else if method == MethodDidChangeWorkspaceFolders 'workspaceFolders'
+			try changeWorkspaceFolders(doc) otherwise ignore
+		end 'workspaceFolders' else if method == MethodExit 'exit'
 			self.stopped = true
 		end 'exit'
 	end 'handleNotification'
@@ -267,11 +274,12 @@ end 'LspSession'
 // serves and the client decides what to ask for. Gating advertisement on them made a client that declared
 // nothing get a hover it was never told about.
 function respondInitialize(id LspRequestId, doc JsonDoc)
-	lspRememberClientRoot(clientRootOf(doc))
+	lspRememberClientRoots(clientRootsOf(doc))
 
 	var reply = JsonDoc.create()
 	var capabilities = LspJsonObject.create(reply)
 	capabilities.put(TextDocumentSyncKey, value: JsonNode.numberNode(FullTextDocumentSync))
+	capabilities.putNode(WorkspaceKey, value: workspaceFoldersCapability(reply))
 
 	for method in servedMethods() 'eachMethod'
 		let spelling = lspMethodSpelling(method)
@@ -284,40 +292,75 @@ function respondInitialize(id LspRequestId, doc JsonDoc)
 end 'respondInitialize'
 
 // Both shapes, because clients in the field send either: `workspaceFolders` superseded `rootUri` in
-// LSP 3.6, and a client written since sends `rootUri: null` and names the root in the folders.
-function clientRootOf(doc JsonDoc) returns LspClientRoot
-	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return LspClientRoot.unset
+// LSP 3.6, and a client written since sends `rootUri: null` and names the root in the folders. The
+// folders settle it alone where there are any: `rootUri` carries one root and a multi-root window has
+// several, so consulting it first would leave the rest of the window out of the workspace entirely.
+function clientRootsOf(doc JsonDoc) returns LspClientRootArray
+	var roots = LspClientRootArray.create()
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return roots
+
+	pushWorkspaceFolderRoots(doc, container: params, key: WorkspaceFoldersKey, into: roots)
+
+	if roots.count() > 0 'theFoldersNamedThem'
+		return roots
+	end 'theFoldersNamedThem'
 
 	if let rootUri = try lspMemberText(doc, of: params, key: RootUriKey) 'namedARoot'
-		return clientRootAt(rootUri)
+		pushRootAt(rootUri, into: roots)
 	end 'namedARoot'
 
-	return firstWorkspaceFolderRoot(doc, params: params)
-end 'clientRootOf'
+	return roots
+end 'clientRootsOf'
 
-function firstWorkspaceFolderRoot(doc JsonDoc, params JsonNodeId) returns LspClientRoot
-	let folders = try lspMember(doc, of: params, key: WorkspaceFoldersKey) otherwise return LspClientRoot.unset
-	let folderCount = try doc.arrayLength(folders) otherwise return LspClientRoot.unset
+function changeWorkspaceFolders(doc JsonDoc) throws LspParamsError
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
+	let event = try lspMember(doc, of: params, key: FolderEventKey)
 
-	if folderCount == 0 'noFolders'
-		return LspClientRoot.unset
-	end 'noFolders'
+	var added = LspClientRootArray.create()
+	var removed = LspClientRootArray.create()
 
-	let first = try doc.arrayAt(folders, index: FirstWorkspaceFolder) otherwise return LspClientRoot.unset
-	let uri = try lspMemberText(doc, of: first, key: LspUriKey) otherwise return LspClientRoot.unset
+	pushWorkspaceFolderRoots(doc, container: event, key: FoldersAddedKey, into: added)
+	pushWorkspaceFolderRoots(doc, container: event, key: FoldersRemovedKey, into: removed)
 
-	return clientRootAt(uri)
-end 'firstWorkspaceFolderRoot'
+	lspChangeClientRoots(added, removed: removed)
+end 'changeWorkspaceFolders'
 
-function clientRootAt(uri String) returns LspClientRoot
+function pushWorkspaceFolderRoots(doc JsonDoc, container JsonNodeId, key String, into LspClientRootArray)
+	let folders = try lspMember(doc, of: container, key: key) otherwise return
+	let folderCount = try doc.arrayLength(folders) otherwise return
+
+	for index in 0 upto folderCount 'eachFolder'
+		let folder = try doc.arrayAt(folders, index: index) otherwise continue
+		let uri = try lspMemberText(doc, of: folder, key: LspUriKey) otherwise continue
+
+		pushRootAt(uri, into: into)
+	end 'eachFolder'
+end 'pushWorkspaceFolderRoots'
+
+function pushRootAt(uri String, into LspClientRootArray)
 	if uri.isEmpty() 'namedNothing'
-		return LspClientRoot.unset
+		return
 	end 'namedNothing'
 
-	let root = try lspDocumentPathOrThrow(uri) otherwise return LspClientRoot.unset
+	let root = try lspDocumentPathOrThrow(uri) otherwise return
 
-	return LspClientRoot.named(root)
-end 'clientRootAt'
+	into.push(root)
+end 'pushRootAt'
+
+// A real client names several folders, and sends `workspace/didChangeWorkspaceFolders`, only where the
+// server advertised these two — so the whole multi-root and mid-session half rides on them.
+// `tests/lsp/capability-agreement.test.maxon` is the gate, because a test client that sends either
+// unconditionally cannot notice their absence.
+function workspaceFoldersCapability(doc JsonDoc) returns JsonNodeId
+	var folders = LspJsonObject.create(doc)
+	folders.put(WorkspaceFoldersSupportedKey, value: JsonNode.boolNode(true))
+	folders.put(WorkspaceFoldersChangeNotificationsKey, value: JsonNode.boolNode(true))
+
+	var workspace = LspJsonObject.create(doc)
+	workspace.putNode(WorkspaceFoldersKey, value: folders.finish())
+
+	return workspace.finish()
+end 'workspaceFoldersCapability'
 
 // The VALUE of a served method's capability. The two that LSP defines as options objects are built by
 // the area that owns those options — a completion trigger set, a semantic-token legend — because

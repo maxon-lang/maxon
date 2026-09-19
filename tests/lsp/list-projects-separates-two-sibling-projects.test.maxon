@@ -1,0 +1,42 @@
+let SiblingProjectsFirstDirName = "maxon-tests-lsp-projects-sibling-one"
+let SiblingProjectsSecondDirName = "maxon-tests-lsp-projects-sibling-two"
+let SiblingProjectsFileName = "main.maxon"
+let SiblingProjectsFirstSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let SiblingProjectsSecondSource = "function main() returns ExitCode\n\treturn 1\nend 'main'\n"
+let SiblingProjectsExpectedCount = 2 as AssertedInt
+let SiblingProjectsOneEach = 1 as AssertedInt
+
+test 'project roots: two sibling projects are two projects'
+	let first = stagedProjectDiagnosticsRoot(SiblingProjectsFirstDirName)
+	let second = stagedProjectDiagnosticsRoot(SiblingProjectsSecondDirName)
+
+	writeCorpusFile(first, fileName: SiblingProjectsFileName, content: SiblingProjectsFirstSource)
+	writeCorpusFile(second, fileName: SiblingProjectsFileName, content: SiblingProjectsSecondSource)
+
+	var documents = projectRootsDocument(fileUriOf(first.join("{SiblingProjectsFileName}")), content: SiblingProjectsFirstSource)
+	documents.push(WorkspaceFolderDocument.create(fileUriOf(second.join("{SiblingProjectsFileName}")), content: SiblingProjectsSecondSource))
+
+	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolderPair(first, second: second)), documents: documents)
+
+	match probe 'probe'
+		answered(result) then try requireTwoSiblingProjects(result)
+		unanswered(reason) then try Expect.fail(reason)
+	end 'probe'
+end 'project roots: two sibling projects are two projects'
+
+function requireTwoSiblingProjects(result ListProjectsResult) throws TestFailure
+	try Expect.equal(result.projects.count() as AssertedInt, expected: SiblingProjectsExpectedCount, message: "two sibling `build.maxon` roots were named to the client as its two workspace folders, with one document open in each, and the server answered {result.projects.count()} projects. Two is the count whether the answer is read off the open documents or off the roots — a different number means neither.")
+
+	for project in result.projects 'eachProject'
+		try Expect.isFalse(foldedRootPath(project).endsWith(ProjectRootsMaxonExtension), message: "a project was rooted at the SOURCE FILE {project.rootPath} rather than at the directory holding it. The two roots the client named are directories, and a status bar naming a `.maxon` file tells the author that each buffer is its own program.")
+
+		try Expect.isFalse(project.isSingleFile, message: "the project at {project.rootPath} was answered as a single file, although it is one of the two `build.maxon` roots the client named.")
+	end 'eachProject'
+
+	let atFirst = projectsRootedAt(result, expectedTail: SiblingProjectsFirstDirName)
+	let atSecond = projectsRootedAt(result, expectedTail: SiblingProjectsSecondDirName)
+
+	try Expect.equal(atFirst, expected: SiblingProjectsOneEach, message: "{atFirst} of the answered projects are rooted at {SiblingProjectsFirstDirName}, and exactly one must be — so the first of the two sibling roots is either missing from the answer or claimed twice.")
+
+	try Expect.equal(atSecond, expected: SiblingProjectsOneEach, message: "{atSecond} of the answered projects are rooted at {SiblingProjectsSecondDirName}, and exactly one must be. The user ruling for this work is that projects are SIBLINGS, so two roots beside each other must stay two entries and never fold into one.")
+end 'requireTwoSiblingProjects'
