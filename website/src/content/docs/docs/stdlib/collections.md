@@ -382,7 +382,8 @@ implements `BidirectionalIterator with Element` and adds random access:
 | `retreatBy(n IterStep)` | — | `IterationError` | Back `n` (from `BidirectionalIterator`). |
 
 `advanceBy` and `retreatBy` step one at a time, so a move that fails part-way leaves the iterator where the
-throw happened.
+throw happened. `IterStep` is unsigned: the direction is the method you call, so a negative step is refused
+at the argument door rather than read as a move the other way.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -453,7 +454,7 @@ enum Ordering
 end 'Ordering'
 ```
 
-`HashValue` is `int(0 to u32.max)`; `IterStep` is `int(i64.min to i64.max)`.
+`HashValue` is `int(0 to u32.max)`; `IterStep` is `int(0 to u64.max)`.
 
 | Function | Returns | Description |
 |----------|---------|-------------|

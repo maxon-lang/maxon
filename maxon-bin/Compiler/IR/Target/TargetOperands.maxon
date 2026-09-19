@@ -556,7 +556,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// `divideReg`'s model exactly: ONE explicit use and no explicit def. The other
 		// multiplicand (RAX) and both halves of the product (RAX, RDX) are IMPLICIT, declared as masks on
 		// the op rather than as operands, so the colorer sees the same shape it already sees for a divide.
-		imulHighReg(src) then pushUse(buf, vreg: src)
+		mulHighReg(src, _) then pushUse(buf, vreg: src)
 
 		// `fneg` is a real 2-operand instruction — a PLAIN def beside `arm64Fabs`, for its reason.
 		arm64Fneg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
@@ -568,8 +568,8 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64StoreRelease(base, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
 
 		// The arm64 high multiply is a PLAIN 3-address op — two independent uses and a def that shares
-		// a register with neither, unlike `imulHighReg`'s implicit RAX/RDX pair.
-		arm64Smulh(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		// a register with neither, unlike `mulHighReg`'s implicit RAX/RDX pair.
+		arm64Mulh(dest, lhs, rhs, _) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
 
 		// ⭐ **NO OPERANDS AT ALL, AND THAT IS THE MODEL RATHER THAN AN OMISSION** — the counter's address is a
 		// link-time constant and its scratch registers are outside every allocatable pool, so it names nothing

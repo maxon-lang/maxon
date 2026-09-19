@@ -195,7 +195,7 @@ func @__slab_alloc {
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, state#5
-  critsplit#47:
+  critsplit#43:
     x64.movRegReg r8, rax
   state#6:
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
@@ -204,7 +204,7 @@ func @__slab_alloc {
     x64.leaRegRegImm32 r12, r8, 138720
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, shard#13
-  critsplit#48:
+  critsplit#44:
     x64.movRegReg rax, r12
     x64.jmp shard#7
   shard#13:
@@ -228,10 +228,10 @@ func @__slab_alloc {
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.cmpRegImm32 r13, 0
     x64.setccReg equal, rdi
-    x64.leaRegRegImm32 r14, rax, 536
+    x64.leaRegRegImm32 r14, rax, 552
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, shard#11
-  critsplit#51:
+  critsplit#47:
     x64.movRegReg r13, rdx
     x64.jmp shard#8
   shard#11:
@@ -248,9 +248,9 @@ func @__slab_alloc {
     x64.lock add [r14], rax
     x64.leaRegRegImm32 rcx, r8, 40
     x64.iatCall 21
-    x64.movRegReg rax, r13
-    x64.movRegReg rsi, r12
-    x64.movRegReg r8, r14
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.movRegReg rsi, r14
     x64.jmp routed
   shard#12:
     x64.imulRegRegImm32 rdx, rax, 48
@@ -264,72 +264,64 @@ func @__slab_alloc {
     x64.movRegImm32 r8, 0
     x64.aluBaseDispImm32.add [rsi + 24], 1
     x64.aluBaseDispReg.add [rsi + 40], rcx
-    x64.movRegReg rsi, rax
-    x64.movRegReg rax, rdx
+    x64.movRegReg rsi, r8
   routed:
-    x64.leaRegRegImm32 rcx, rsi, 648
-    x64.imulRegRegImm32 rdx, rbx, 8
-    x64.leaRegRegReg r9, rcx, rdx
-    x64.loadRegBaseDisp.word64 r10, [r9 + 0]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, pop#26
-  pop#28:
-    x64.loadRegBaseDisp.word64 rcx, [r10 + 16]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, pop#26
-  pop#29:
-    x64.loadRegBaseDisp.word64 rcx, [r10 + 48]
-    x64.cmpRegReg rcx, rax
-    x64.jcc equal, pop#18
-    x64.jmp pop#26
-  pop#30:
-    x64.loadRegBaseDisp.word64 rcx, [r10 + 16]
+    x64.leaRegRegImm32 rcx, rax, 648
+    x64.imulRegRegImm32 rdi, rbx, 8
+    x64.leaRegRegReg r8, rcx, rdi
+    x64.loadRegBaseDisp.word64 r9, [r8 + 0]
+    x64.cmpRegImm32 r9, 0
+    x64.jcc equal, pop#17
+  pop#26:
+    x64.loadRegBaseDisp.word64 rcx, [r9 + 16]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, pop#17
-  pop#31:
-    x64.loadRegBaseDisp.word64 rcx, [r10 + 48]
-    x64.cmpRegReg rcx, rax
+  pop#27:
+    x64.loadRegBaseDisp.word64 rcx, [r9 + 48]
+    x64.cmpRegReg rcx, rdx
     x64.jcc notEqual, pop#17
   pop#18:
     x64.leaRegRdata rax, [rip + __slab_class_geom]
-    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rdi
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg rdx, rcx
     x64.andRegReg rdx, rcx, rax
-    x64.loadRegBaseDisp.word64 rsi, [r10 + 8]
-    x64.cmpRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 r10, [r9 + 8]
+    x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, pop#19
   pop#20:
-    x64.loadRegBaseDisp.word64 rax, [r10 + 40]
+    x64.loadRegBaseDisp.word64 rax, [r9 + 40]
     x64.sarRegImm8 rcx, rcx, 32
     x64.imulRegReg rcx, rcx, rdx
-    x64.loadRegBaseDisp.word64 rsi, [r10 + 0]
-    x64.leaRegRegReg rcx, rsi, rcx
+    x64.loadRegBaseDisp.word64 rdi, [r9 + 0]
+    x64.leaRegRegReg rcx, rdi, rcx
     x64.cmpRegReg rax, rcx
     x64.jcc greaterEqual, pop#22
   pop#21:
     x64.leaRegRegReg rcx, rax, rdx
-    x64.storeBaseDispReg.word64 [r10 + 40], rcx
+    x64.storeBaseDispReg.word64 [r9 + 40], rcx
     x64.jmp pop#23
   pop#19:
-    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
-    x64.storeBaseDispReg.word64 [r10 + 8], rax
-    x64.movRegReg rdi, rsi
+    x64.loadRegBaseDisp.word64 rax, [r10 + 0]
+    x64.storeBaseDispReg.word64 [r9 + 8], rax
+    x64.movRegReg rdi, r10
     x64.movRegReg rcx, rdx
     x64.x64MemFill 0x00
-    x64.movRegReg rax, rsi
+    x64.movRegReg rax, r10
   pop#23:
-    x64.loadRegBaseDisp.word64 rcx, [r10 + 16]
+    x64.loadRegBaseDisp.word64 rcx, [r9 + 16]
     x64.leaRegRegImm32 rcx, rcx, -1
-    x64.storeBaseDispReg.word64 [r10 + 16], rcx
+    x64.storeBaseDispReg.word64 [r9 + 16], rcx
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, pop#25
   pop#24:
     x64.movRegImm32 rcx, 0
-    x64.storeBaseDispReg.word64 [r9 + 0], rcx
+    x64.storeBaseDispReg.word64 [r8 + 0], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r9 + 48], rcx
   pop#25:
-    x64.cmpRegImm32 r8, 0
+    x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, release
   handback:
     x64.movRegReg r8, rax
@@ -344,52 +336,52 @@ func @__slab_alloc {
     x64.leaRegGlobal rax, __slab_state
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#55
-  state#35:
+    x64.jcc notEqual, critsplit#50
+  state#31:
     x64.storeSlotReg slot0, rcx
     x64.callDirect __slab_state_base
     x64.loadRegSlot rcx, slot0
-    x64.jmp state#36
-  critsplit#55:
+    x64.jmp state#32
+  critsplit#50:
     x64.movRegReg r8, rax
-  state#36:
+  state#32:
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
     x64.leaRegRegImm32 rdx, r8, 152152
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, shard#37
-  shard#43:
+    x64.jcc equal, shard#33
+  shard#39:
     x64.mov rax, gs:[rax]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, shard#38
-  shard#39:
+    x64.jcc equal, shard#34
+  shard#35:
     x64.loadRegBaseDisp.word64 rsi, [rax + 8]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, shard#45
-  shard#44:
+    x64.jcc equal, shard#41
+  shard#40:
     x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
     x64.aluBaseDispImm32.add [rsi + 304], 1
     x64.aluBaseDispReg.add [rsi + 320], rcx
-  shard#45:
+  shard#41:
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, shard#38
-  shard#41:
+    x64.jcc equal, shard#34
+  shard#37:
     x64.loadRegBaseDisp.word64 rax, [rax + 32]
     x64.cmpRegImm32 rax, 255
-    x64.jcc less, shard#42
-  shard#38:
+    x64.jcc less, shard#38
+  shard#34:
     x64.movRegImm32 rax, 1
     x64.leaRegRegImm32 rsi, rdx, 24
     x64.lock add [rsi], rax
     x64.leaRegRegImm32 rax, rdx, 40
     x64.lock add [rax], rcx
     x64.jmp oscall
-  shard#42:
+  shard#38:
     x64.imulRegRegImm32 rax, rax, 48
     x64.leaRegRegImm32 rdx, r8, 139912
     x64.leaRegRegReg rax, rdx, rax
     x64.movRegReg rdx, rax
-  shard#37:
+  shard#33:
     x64.aluBaseDispImm32.add [rdx + 24], 1
     x64.aluBaseDispReg.add [rdx + 40], rcx
   oscall:
@@ -406,37 +398,16 @@ func @__slab_alloc {
     x64.callDirect __slab_state_base
     x64.loadRegSlot rcx, slot0
     x64.jmp state#6
-  pop#26:
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot4, r8
-    x64.storeSlotReg slot5, r9
-    x64.movRegReg rcx, rax
-    x64.callDirect __slab_drain_remote
-    x64.movRegReg rcx, r8
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot r8, slot4
-    x64.loadRegSlot r9, slot5
-  pop#27:
-    x64.loadRegBaseDisp.word64 r10, [r9 + 0]
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, pop#30
   pop#17:
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot4, r8
-    x64.storeSlotReg slot5, r9
+    x64.storeSlotReg slot1, rsi
+    x64.storeSlotReg slot2, rdi
+    x64.storeSlotReg slot3, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rax
-    x64.movRegReg rax, rsi
     x64.callDirect __slab_refill
-    x64.movRegReg rsi, r8
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r8, slot4
-    x64.loadRegSlot r9, slot5
-    x64.movRegReg r10, rsi
+    x64.movRegReg r9, r8
+    x64.loadRegSlot rsi, slot1
+    x64.loadRegSlot rdi, slot2
+    x64.loadRegSlot r8, slot3
     x64.jmp pop#18
   pop#22:
     x64.movRegImm32 rcx, 86
@@ -454,13 +425,13 @@ func @__slab_alloc {
     x64.leaRegGlobal rcx, __slab_state
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.leaRegRegImm32 rcx, rcx, 40
-    x64.storeSlotReg slot1, rax
-    x64.storeSlotReg slot4, r8
+    x64.storeSlotReg slot4, rax
+    x64.storeSlotReg slot1, rsi
     x64.iatCall 22
-    x64.loadRegSlot rax, slot1
-    x64.loadRegSlot r8, slot4
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rsi, slot1
     x64.movRegImm rcx, 18446744073709551615
-    x64.lock add [r8], rcx
+    x64.lock add [rsi], rcx
     x64.movRegReg r8, rax
     x64.epilogue 80
     x64.popReg r14
@@ -477,7 +448,7 @@ func @__slab_free {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 64
     x64.movRegReg rbx, rcx
     x64.leaRegGlobal rax, __slab_arena_map_l1
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -559,35 +530,38 @@ func @__slab_free {
     x64.jcc notEqual, rawlocked#18
     x64.jmp local
   notraw:
-    x64.cmpRegImm32 rax, -1
-    x64.jcc equal, parked
-  mine:
     x64.cmpRegReg rax, rdx
-    x64.jcc notEqual, remote
+    x64.jcc notEqual, mine
   local:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.storeBaseDispReg.word64 [rbx + 0], rax
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
-    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
-    x64.leaRegRegImm32 rax, rax, 1
-    x64.storeBaseDispReg.word64 [r12 + 16], rax
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 32]
-    x64.leaRegRdata rdx, [rip + __slab_class_geom]
-    x64.loadRegBaseIndexScale.word64 rcx, [rdx + rcx*8 + 0]
-    x64.sarRegImm8 rcx, rcx, 32
-    x64.cmpRegReg rax, rcx
-    x64.jcc equal, push#27
-  push#28:
-    x64.epilogue 48
+    x64.aluBaseDispImm32.add [r12 + 16], 1
+  push:
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  mine:
+    x64.cmpRegImm32 rax, -3
+    x64.jcc equal, uncached
+  notdead:
+    x64.cmpRegImm32 rax, -2
+    x64.jcc equal, parked
   remote:
-    x64.movRegImm32 rcx, 1
-    x64.leaRegRegImm32 rdx, rax, 152
-    x64.lock add [rdx], rcx
-    x64.leaRegRegImm32 rcx, rax, 120
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rcx, r12, 64
+    x64.lock add [rcx], rax
+    x64.cmpRegImm32 rdx, 0
+    x64.setccReg equal, rax
+    x64.leaRegRegImm32 rcx, r12, 56
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, rpush
+  rcredit:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rdx, rdx, 152
+    x64.lock add [rdx], rax
   rpush:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.storeBaseDispReg.word64 [rbx + 0], rax
@@ -596,7 +570,7 @@ func @__slab_free {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, rpush
   rpushed:
-    x64.epilogue 48
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -607,43 +581,43 @@ func @__slab_free {
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.leaRegRegImm32 rdx, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#32
-  shard#38:
+    x64.jcc equal, shard#41
+  shard#47:
     x64.mov rcx, gs:[rcx]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#33
-  shard#34:
+    x64.jcc equal, shard#42
+  shard#43:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, shard#40
-  shard#39:
+    x64.jcc equal, shard#49
+  shard#48:
     x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
     x64.aluBaseDispImm32.add [rsi + 312], 1
-  shard#40:
+  shard#49:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#33
-  shard#36:
+    x64.jcc equal, shard#42
+  shard#45:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.cmpRegImm32 rcx, 255
-    x64.jcc less, shard#37
-  shard#33:
+    x64.jcc less, shard#46
+  shard#42:
     x64.movRegImm32 rax, 1
     x64.leaRegRegImm32 rcx, rdx, 32
     x64.lock add [rcx], rax
     x64.jmp oscall
-  shard#37:
+  shard#46:
     x64.imulRegRegImm32 rcx, rcx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rcx
     x64.movRegReg rdx, rax
-  shard#32:
+  shard#41:
     x64.aluBaseDispImm32.add [rdx + 32], 1
   oscall:
     x64.movRegReg rcx, rbx
     x64.callDirect __slab_os_direct_free
     x64.movRegReg rax, r8
-    x64.epilogue 48
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -654,14 +628,14 @@ func @__slab_free {
     x64.leaRegRegImm32 rcx, rax, 32
     x64.loadRegBaseDisp.word64 rdx, [rax + 24]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, rawlocked#24
-  rawlocked#26:
+    x64.jcc equal, rawlocked#26
+  rawlocked#28:
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, rawlocked#24
-  rawlocked#25:
-    x64.leaRegRegImm32 rcx, rdx, 536
-  rawlocked#24:
+    x64.jcc equal, rawlocked#26
+  rawlocked#27:
+    x64.leaRegRegImm32 rcx, rdx, 552
+  rawlocked#26:
     x64.movRegImm32 rdx, 1
     x64.lock add [rcx], rdx
     x64.leaRegRegImm32 rdx, rax, 40
@@ -681,7 +655,65 @@ func @__slab_free {
     x64.loadRegSlot rcx, slot1
     x64.movRegImm rax, 18446744073709551615
     x64.lock add [rcx], rax
-    x64.epilogue 48
+    x64.epilogue 64
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  uncached:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, relistplain
+  relistlock:
+    x64.leaRegGlobal rax, __slab_state
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rcx, rax, 32
+    x64.loadRegBaseDisp.word64 rsi, [rax + 24]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, relist#32
+  relist#34:
+    x64.mov rsi, gs:[rsi]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, relist#32
+  relist#33:
+    x64.leaRegRegImm32 rcx, rsi, 552
+  relist#32:
+    x64.movRegImm32 rsi, 1
+    x64.lock add [rcx], rsi
+    x64.leaRegRegImm32 rsi, rax, 40
+    x64.storeSlotReg slot0, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.movRegReg rcx, rsi
+    x64.iatCall 21
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __slab_free_to_full
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.leaRegRegImm32 rax, rax, 40
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, r8
+    x64.movRegReg rcx, rax
+    x64.iatCall 22
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot r8, slot3
+    x64.movRegImm rax, 18446744073709551615
+    x64.lock add [rcx], rax
+    x64.jmp relistdone
+  relistplain:
+    x64.storeSlotReg slot2, rdx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __slab_free_to_full
+    x64.loadRegSlot rdx, slot2
+  relistdone:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, remote
+  relistret:
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -690,13 +722,9 @@ func @__slab_free {
     x64.movRegImm32 rcx, 89
     x64.movReg32Reg32 rcx, rcx
     x64.iatCall 0
-    x64.epilogue 48
+    x64.epilogue 64
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  push#27:
-    x64.movRegReg rcx, r12
-    x64.callDirect __slab_span_return
-    x64.jmp push#28
 }

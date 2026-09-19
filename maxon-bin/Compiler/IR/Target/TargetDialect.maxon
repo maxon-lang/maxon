@@ -1748,27 +1748,27 @@ export union TargetOp
 	// with no memory reader at all — still emits this one instruction.
 	arm64AddLsl(dest TargetVReg, base TargetVReg, index TargetVReg, scale MemoryIndexScale) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// ⭐⭐ **`imul r/m64` — the ONE-OPERAND group-3 signed multiply (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src,
-	// and this op is the half of it a division-by-constant needs, the HIGH one in RDX.**
+	// ⭐⭐ **`imul r/m64` / `mul r/m64` — the ONE-OPERAND group-3 multiplies (`REX.W F7 /5` and `F7 /4`):
+	// RDX:RAX ⟸ RAX × src, and this op is the half of it a division-by-constant needs, the HIGH one in
+	// RDX.**
 	//
 	// ⚠ **ITS REGISTER MODEL IS `divideReg`'s, EXACTLY, AND FOR THE SAME REASON.** RAX is an implicit
 	// USE (the other multiplicand) and RAX+RDX are implicit DEFS (the 128-bit product), so the masks
 	// are byte-identical to the divide's: `implicitUses: 0x1` (RAX) and `implicitDefs: 0x5` (RAX|RDX).
 	// `forbidOperandsFromImplicit` is what then keeps `src` out of both, which is what lets
-	// `StdToX64Conversion.lowerMulHighSigned` pre-move one multiplicand into RAX and read the answer
+	// `StdToX64Conversion.lowerMulHigh` pre-move one multiplicand into RAX and read the answer
 	// back out of RDX — the same three-op shape `lowerDivMod` already emits.
 	//
-	// ⚠ It carries NO `DivideSignedness`, unlike `divideReg`, and the asymmetry is deliberate rather
-	// than an oversight: `divideReg` carries one because BOTH group-3 divides are reachable from
-	// `StdOp.div`'s own signedness field, while `StdBinOpcode` has only `mulHighSigned` today. The
-	// unsigned form is `F7 /4` (`mul`), and the change that needs it (the unsigned magic sequence, which
-	// wants a 65-bit multiplier and an "add indicator" fixup) is the change that gives this op a
-	// signedness field — at which point the two arms are two extensions of one encoder, as the divide's
-	// already are.
+	// ⚠ **IT CARRIES A SIGNEDNESS FIELD WHERE `StdBinOpcode` SPELLS THE TWO AS SEPARATE OPCODES, AND THE
+	// TWO TIERS ARE OPPOSITE ON PURPOSE.** The two instructions are one encoder at a different `/ext`,
+	// exactly as `divideReg`'s pair is — but the argument that decides it is the RANGE ARMS: this union
+	// is matched by `… to …` ranges in the exhaustive scans, and a new VARIANT inserted inside a range
+	// is swallowed by them in silence, while a new FIELD on an existing variant is a compile error at
+	// every site that destructures it.
 	//
-	// IT SETS FLAGS (`imul` writes OF/CF), which is why nothing may be fused across it.
+	// IT SETS FLAGS (both forms write OF/CF), which is why nothing may be fused across it.
 	//
-	imulHighReg(src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
+	mulHighReg(src TargetVReg, signedness IntegerSignedness) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
 
 	// `FNEG Dd, Dn` (0x1E614000) — f64 negate, `StdUnaryOpcode.fneg`'s one instruction here, and the
 	// arm64 half of the asymmetry `negF64RegReg` records: arm64 HAS the instruction, so this is an
@@ -1811,17 +1811,17 @@ export union TargetOp
 	arm64LoadAcquire(dest TargetVReg, base TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64StoreRelease(base TargetVReg, src TargetVReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// ⭐ `SMULH Xd, Xn, Xm` — the high 64 bits of the 128-bit signed product, arm64's answer to the same
-	// question `imulHighReg` answers on x64 (the magic multiply).
+	// ⭐ `SMULH` / `UMULH Xd, Xn, Xm` — the high 64 bits of the 128-bit product, arm64's answer to the
+	// same question `mulHighReg` answers on x64 (the magic multiply).
 	//
-	// ⚠ **IT CARRIES NO IMPLICIT MASKS, AND THAT IS THE WHOLE DIFFERENCE FROM `imulHighReg`.** x64's
+	// ⚠ **IT CARRIES NO IMPLICIT MASKS, AND THAT IS THE WHOLE DIFFERENCE FROM `mulHighReg`.** x64's
 	// one-operand `imul` is a group-3 form wired to RAX/RDX, so its op declares those as implicit uses
 	// and defs and `forbidOperandsFromImplicit` keeps the explicit operand clear of them. AArch64's is an
 	// ordinary three-source data-processing instruction: both multiplicands and the destination are free
 	// registers, so it is a PLAIN 3-address op like `arm64Mul` and the allocator needs to know nothing
 	// special about it. It sets no flags either, so nothing is unfusable across it.
 	//
-	arm64Smulh(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64Mulh(dest TargetVReg, lhs TargetVReg, rhs TargetVReg, signedness IntegerSignedness) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// --- WP-3: the `--coverage` counter increment ---
 	//

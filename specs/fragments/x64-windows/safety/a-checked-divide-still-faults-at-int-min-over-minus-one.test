@@ -36,9 +36,15 @@ func @main {
     x64.pushReg r15
     x64.prologue 72
     x64.movRegImm rbx, 9223372036854775808
-  __il_cont:
+  __il_cont#7:
+    x64.movRegImm r12, 18446744073709551615
+  __il_cont#6:
     x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "before\x0a"
     x64.callDirect print
+    x64.xorRegImm32 r12, r12, -1
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, divovf
+  divok:
     x64.movRegImm32 rcx, 0
     x64.orRegImm32 rcx, rcx, -1
     x64.movRegReg rax, rbx
@@ -46,7 +52,7 @@ func @main {
     x64.idivReg rcx
     x64.movRegReg rbx, rax
   trycont:
-    x64.leaRegRdata rax, [rip + __str_rec_4]  ; "q="
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "q="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 21
@@ -57,7 +63,7 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_6]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot3, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -100,6 +106,18 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  divovf:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic: integer overflow\x0a"
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15

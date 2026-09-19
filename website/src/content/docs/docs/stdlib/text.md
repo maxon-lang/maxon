@@ -201,7 +201,7 @@ end 'StringError'
 | `codepoints()` | `CodepointView` | Every codepoint of the cluster. |
 | `bytes()` | `ByteView` | The UTF-8 bytes. |
 | `asciiValue()` | `AsciiValue` | The value 0–127 of a single-byte ASCII character. Throws `CharacterError.notAscii` otherwise. |
-| `advanceBy(n IterStep)` | `Character` | The character `n` codepoints later; used by character ranges. |
+| `advanceBy(n CodepointDelta)` | `Character` | The character `n` codepoints away, in either direction. |
 | `toString()` | `String` | The cluster as a string. |
 | `clone()` | `Character` | An independent copy. |
 | `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. |

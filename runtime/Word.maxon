@@ -6,10 +6,16 @@
 //
 // ⭐ **THAT IS WHY THESE ARE `bits(N)` AND NOT `int(...)`.** `bits(n)` is a PATTERN: it admits every
 // value n bits can hold, so its door is guarded by the WIDTH alone — vacuously at 64 — and every
-// ordering comparison on it reads UNSIGNED. An `int(...)` alias is a QUANTITY, and its door refuses a
-// value that arrived from a signed domain. A guarded door is exactly what a runtime body must NOT have
-// on a value the OS minted: the guard could only ever fire on something the substrate itself produced,
-// and it would panic where the runtime has no caller to report to.
+// ordering comparison on it reads UNSIGNED. An `int(...)` alias is a QUANTITY and its door is checked.
+// A guarded door is exactly what a runtime body must NOT have on a value the OS minted: the guard could
+// only ever fire on something the substrate itself produced, and it would panic where the runtime has
+// no caller to report to.
+//
+// ⚠ **WHAT THAT RULE FORBIDS IS A NARROWER DOMAIN THAN THE SUBSTRATE CAN PRODUCE, NOT THE `int` SPELLING
+// ITSELF.** `int(0 to u64.max)` over a value the compiler MINTED carries a proven interval that covers
+// it (`Parser.recordWholeMachineWordRange`), so its door elides and a runtime body may declare one — see
+// `Clock.maxon`'s `FileTimeTicks` and `Process.maxon`'s `ProcessId`. Any narrower bound is a real guard
+// again, and this paragraph is why it does not belong here.
 //
 // The three signed aliases below are the exception, each for a stated reason: their negative half
 // CARRIES MEANING, so reading them unsigned deletes a branch rather than widening one.

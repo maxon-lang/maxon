@@ -32788,6 +32788,24 @@ export type ProgramSignatures
 		return CalleeReturn.declared(self.adoptReturnType(declared, into: into))
 	end 'returnTypeOf'
 
+	export function declaredReturnAliasOf(callee ByteArray) returns DeclaredAlias
+		match try self.returnTypes.get(callee) otherwise return DeclaredAlias.undeclared 'declared'
+			void then return DeclaredAlias.undeclared
+			value(inner) then return self.namedReturnAliasOf(inner, callee: callee)
+		end 'declared'
+	end 'declaredReturnAliasOf'
+
+	// ⚠ The reader is the callee's OWN declaring file, never the caller's. `recordedReturnDeclFileOf`
+	// carries why: a return type resolves against the file that declared the function, and reading it
+	// from the call site gives one callee's return two meanings wherever the name coexists.
+	function namedReturnAliasOf(inner MaxonType, callee ByteArray) returns DeclaredAlias
+		if maxonTypeTag(inner) != ValueTypeTag.named 'namesNoAlias'
+			return DeclaredAlias.undeclared
+		end 'namesNoAlias'
+
+		return self.aliasOf(self.nameOfId(typeNameIdOf(inner)), readerFilePath: self.recordedReturnDeclFileOf(callee))
+	end 'namedReturnAliasOf'
+
 	// ⭐⭐ **DOES `callee` RETURN THE TYPE THAT DECLARES IT — i.e. is it a `Self`-returning CONSTRUCTOR? THE
 	// ONE HOME, because both sides of a hidden ABI block read it (W43b).** A static has no `self`, so its
 	// dictionary columns — the layout descriptor (P1.6-B1) and the constraint witnesses (P1.7a slice 2a) —

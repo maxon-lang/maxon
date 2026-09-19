@@ -463,12 +463,12 @@ durationMs:)`:
 | `pid` | `int(0 to u64.max)` | The child's process id |
 | `durationMs` | `DurationMs` | Wall time the run took |
 | `succeeded()` | `bool` | Exited with code 0 |
-| `exitCode()` | `int(i64.min to i64.max)` | The raw code |
+| `exitCode()` | `int(0 to u32.max)` | The raw code |
 
 ```maxon
 union TerminationStatus
-	exited(code int(i64.min to i64.max))
-	signalled(code int(i64.min to i64.max))
+	exited(code int(0 to u32.max))
+	signalled(code int(0 to u32.max))
 end 'TerminationStatus'
 ```
 
@@ -528,7 +528,7 @@ end 'LinePoll'
 
 union ExitPoll
 	running
-	exited(code int(i64.min to i64.max))
+	exited(code int(0 to u32.max))
 end 'ExitPoll'
 ```
 

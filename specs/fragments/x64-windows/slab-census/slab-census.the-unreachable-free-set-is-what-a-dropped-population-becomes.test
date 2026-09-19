@@ -4,6 +4,8 @@ typealias ByteArray = Array with Byte
 typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
+let Population = 16000
+
 function build(seed Seed) returns ByteArray
 	var b = ByteArray.create()
 	b.reserve(96)
@@ -15,9 +17,10 @@ end 'build'
 
 function main() returns ExitCode
 	var bufs = Bufs.create()
-	for k in 0 upto 16000 'alloc'
+	for k in 0 upto Population 'alloc'
 		bufs.push(build(k as Seed))
 	end 'alloc'
+
 	bufs = Bufs.create()
 
 	let free = __Builtins.slabFreeBytes()
@@ -97,10 +100,17 @@ func @main {
     x64.movRegImm32 r14, 0
     x64.jmp forhdr#13
   fill:
-    x64.leaRegRegReg rax, r12, r14
-    x64.movRegImm32 rcx, 251
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
+    x64.leaRegRegReg rcx, r12, r14
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -192,7 +202,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.the-unreachable-free-set-is-what-a-dropped-population-becomes.test:11: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.the-unreachable-free-set-is-what-a-dropped-population-becomes.test:13: Range check failed: value outside typealias 'Byte'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

@@ -362,7 +362,7 @@ func @Maker.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=make] @__jumptable_10
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=make] @__jumptable_12
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -400,17 +400,18 @@ func @Maker.__loop {
   __il_body:
     x64.callDirect Pair.create
     x64.movRegReg r15, r8
+  __il_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r13, 0
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r15
     x64.callDirect __sole_Pair
     x64.movRegReg rcx, r8
     x64.callDirect __mm_walk_settle
-  __il_cont:
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_decref
-    x64.movRegImm32 rax, 0
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r15
+    x64.movRegReg rax, r13
     x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
@@ -423,7 +424,7 @@ func @Maker.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=make] @__jumptable_11
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=make] @__jumptable_13
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

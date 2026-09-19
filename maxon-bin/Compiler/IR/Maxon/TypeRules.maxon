@@ -1717,7 +1717,7 @@ end 'rangeIsClosedUnderBitAnd'
 // The i64 pattern an unsigned `u64.max` upper bound rides as — named so the `-1`-means-
 // `u64.max` reinterpretation is not a bare literal (see RangedTypeAlias, and the sentinel case
 // in specs/ranged-typealias.md).
-let UnsignedFullUpperPattern = -1 as ParsedInt
+export let UnsignedFullUpperPattern = -1 as ParsedInt
 
 // The unsigned-decimal spelling of that same sentinel, for display. `ParsedInt` is a signed i64
 // with no unsigned-render helper, and `u64.max` is the only writable bound that stores negative
@@ -1846,9 +1846,11 @@ end 'rangeIsFull'
 // A non-negative low bound (`rangeIsUnsigned`) is what makes the range purely UNSIGNED: every
 // admissible value is non-negative in unsigned terms, and a bit-63-set value (negative signed)
 // is a huge unsigned that the range ADMITS. The full-unsigned `int(0 to u64.max)` (low == 0)
-// is included: `rangeIsFull` elides it before the runtime cascade ever asks, but the literal
-// check calls this directly with no such gate, and there the low == 0 reading — in range for
-// every value — is exactly right.
+// is included, and it REACHES the runtime cascade rather than being elided ahead of it:
+// `aliasAdmitsEveryValue` deliberately excludes it, because it is a QUANTITY whose door must
+// refuse a value arriving from a signed domain, so `boundChecks` gives it the one test its
+// bounds ask for — `value < 0`. The literal check calls this directly with no gate at all, and
+// there the low == 0 reading — in range for every value — is exactly right.
 export function rangeIsUnsignedMaxUpper(low ParsedInt, high ParsedInt) returns bool
 	return high == UnsignedFullUpperPattern and rangeIsUnsigned(low)
 end 'rangeIsUnsignedMaxUpper'

@@ -1,0 +1,23 @@
+// Test: error.cursor-retreat-by-a-written-negative-step-is-refused
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.retreatBy(-2) otherwise 'moved'
+		return 98
+	end 'moved'
+
+	return cursor.current()
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))

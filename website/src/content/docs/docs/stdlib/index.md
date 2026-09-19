@@ -54,9 +54,10 @@ end 'main'
 | `StringArray` | `Array with String` | Json |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
+| `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
 | `AsciiValue` | `int(0 to 127)` | Character |
 | `HashValue` | `int(0 to u32.max)` | Interfaces |
-| `IterStep` | `int(i64.min to i64.max)` | Interfaces |
+| `IterStep` | `int(0 to u64.max)` | Interfaces |
 | `RangeBound` | `int(i64.min to i64.max)` | Range |
 | `Real` | `float(f64.min to f64.max)` | Math |
 | `HashDigest` | `bits(64)` | Hasher |

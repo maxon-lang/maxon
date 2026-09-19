@@ -40,9 +40,9 @@ function main() returns ExitCode
 		return 2
 	end 'parkedSpansSurvived'
 
-	if __Builtins.slabLiveBytes() < liveBefore 'liveSlotsWereReclaimed'
+	if __Builtins.slabLiveBytes() != liveBefore 'theLiveSetMoved'
 		return 3
-	end 'liveSlotsWereReclaimed'
+	end 'theLiveSetMoved'
 
 	if kept.count() != 200 'populationLost'
 		return 4
@@ -107,10 +107,17 @@ func @build {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   fill:
-    x64.leaRegRegReg rax, rbx, r13
-    x64.movRegImm32 rcx, 251
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#9
   __rc_chk#10:
@@ -254,8 +261,8 @@ func @main {
   ifcont#12:
     x64.callDirect __slab_live_bytes
     x64.cmpRegReg r8, r15
-    x64.jcc greaterEqual, ifcont#14
-  liveSlotsWereReclaimed:
+    x64.jcc equal, ifcont#14
+  theLiveSetMoved:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref

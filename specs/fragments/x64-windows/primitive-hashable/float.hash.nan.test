@@ -6,7 +6,7 @@ function main() returns ExitCode
 	if nan.equals(nan) 'ieeeEquals'
 		return 1
 	end 'ieeeEquals'
-	if h != 0 'pinned'
+	if (h and 0x7FFFFFFF) != 2146959360 'pinned'
 		return 2
 	end 'pinned'
 	return 0
@@ -35,8 +35,13 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.jmp __il_body#13
   ifcont#9:
-    x64.movRegImm32 rcx, 4294967295
-    x64.andRegReg rax, rax, rcx
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 32
+    x64.xorRegReg rcx, rcx, rax
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg rcx, rcx, rax
+  __rc_ok:
+    x64.movRegReg rax, rcx
   __il_body#13:
     x64.ucomisdRegReg xmm0, xmm0
     x64.setccReg notEqual, rcx
@@ -52,7 +57,8 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont#2:
-    x64.cmpRegImm32 rax, 0
+    x64.andRegImm32 rax, rax, 2147483647
+    x64.cmpRegImm32 rax, 2146959360
     x64.jcc equal, ifcont#4
   pinned:
     x64.movRegImm32 r8, 2

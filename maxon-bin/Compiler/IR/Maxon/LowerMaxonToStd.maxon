@@ -387,7 +387,8 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		// no answer to name, so this arm panics instead of participating in the round trip — and
 		// `foldConstants`, this function's one caller, refuses the opcode before asking (it could not
 		// evaluate a 128-bit product into a 64-bit `ParsedInt` anyway).
-		mulHighSigned panic("maxonBinOpOfStdOpcode: `mulHighSigned` is a Std-TIER-ONLY opcode — it is minted by `StrengthReduceDivision` and has no source operator to carry back to. Its one would-be caller, `foldConstants.evaluateIntBinOp`, declines it before asking; reaching here means a new caller asked without that guard.")
+		mulHighSigned or
+			mulHighUnsigned panic("maxonBinOpOfStdOpcode: the high multiply is a Std-TIER-ONLY opcode — it is minted by `StrengthReduceDivision` and has no source operator to carry back to. Its one would-be caller, `foldConstants.evaluateIntBinOp`, declines it before asking; reaching here means a new caller asked without that guard.")
 	end 'map'
 
 	let roundTrip = maxonBinOpToStdOpcode(op)

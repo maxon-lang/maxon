@@ -206,7 +206,7 @@ function streamingWithEnvironment() returns bool
 	overrides.upsert("MAXON_SPEC_SCRATCH", value: "1")
 	let inheritCwd = try FilePath.from("") otherwise return false
 	var child = try StreamingSubprocess.spawnWithEnvironment(shell(), arguments: exitZero(), workingDirectory: inheritCwd, environment: Environment.inheritUpdating(overrides)) otherwise return false
-	let code = try child.wait() otherwise -1
+	let code = try child.wait() otherwise 1
 	child.release()
 	return code == 0
 end 'streamingWithEnvironment'

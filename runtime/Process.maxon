@@ -15,12 +15,8 @@
 // sweeps the body out of. That vacuity holds only while every tier body calls nothing but `__Raw`, which
 // names no callee. The allocator's own migration is what answers it; until then the path walk stays IR the
 // compiler builds (`Compiler/Runtime/ProcessRuntime.maxon`).
-//
-// ⚠ **BOTH ANSWER A MACHINE WORD, WHICH IS AN UNGUARDED DOOR, AND THAT IS THE POINT.** Neither value is a
-// quantity a program computed: one is an OS-assigned id, the other a priority in whatever unit the platform
-// keeps (a Windows priority CLASS against a POSIX NICE value, scales that even run in opposite directions).
-// A narrower `int(...)` alias would be a guarded door that could only ever fire on a word the substrate
-// itself wrote, in a body with no caller to report to — `runtime/Word.maxon` carries the rule.
+
+typealias ProcessId = int(0 to u64.max)
 
 // ⭐⭐ **`__proc_pid()` — THE OS-ASSIGNED ID OF THE RUNNING PROCESS.**
 //
@@ -29,8 +25,8 @@
 // call in a process. The op is nevertheless not pure — it is a call, and the backends need the call
 // barrier's clobber accounting — so two reads in one function are two calls, which
 // `specs/process-id.md:is-stable-across-calls` asserts agree rather than assuming.
-module function __proc_pid() returns MachineWord
-	return __Raw.osGetPid()
+module function __proc_pid() returns ProcessId
+	return __Raw.osGetPid() as ProcessId
 end '__proc_pid'
 
 // ⭐⭐ **`__proc_bg_priority()` — DROP THIS PROCESS TO BACKGROUND SCHEDULING PRIORITY AND ANSWER WHAT THE
@@ -43,6 +39,10 @@ end '__proc_pid'
 //
 // ⚠ **THE ANSWER IS A SECOND READING, NOT AN ECHO** — see `StdOp.osEnterBackgroundPriority`, which owns
 // that argument and the measurement behind it.
+// ⚠ **IT ANSWERS A `MachineWord` WHERE `__proc_pid` ANSWERS A `ProcessId`, AND THE ASYMMETRY IS THE
+// VALUE'S.** A priority is whatever unit the platform keeps — a Windows priority CLASS against a POSIX
+// NICE value, on scales that run in opposite directions and one of which is legitimately negative. There
+// is no non-negative domain to narrow it to; an id has one.
 module function __proc_bg_priority() returns MachineWord
 	return __Raw.osEnterBackgroundPriority()
 end '__proc_bg_priority'

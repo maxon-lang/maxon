@@ -6889,6 +6889,12 @@ let SubpSlotInUse = 0
 let SubpSlotClaimed = 1 as ParsedInt
 export let SubpSlotHProcess = 8
 export let SubpSlotStdinWrite = 16
+// ⛔⛔ **EVERY READ OF THE WORD THIS POINTS AT IS AN `emitLoadDword`, NEVER AN `emitLoadField`.** It is one
+// 8-byte scratch shared by `WriteFile`, `ReadFile`, `PeekNamedPipe` and `GetExitCodeProcess`, it is never
+// zeroed between users, and each of those Win32 out-params writes only its LOW DWORD — so the upper half
+// is whatever the previous user left. A full-word load answers a byte count or an exit status with
+// garbage above bit 31, which no caller can detect and a narrowed `ExitInt` turns into an uncatchable
+// range panic. The readers live in this file and in `SubprocessRuntime.maxon`; all of them obey this.
 export let SubpSlotBytesOut = 24
 export let SubpStdoutBase = 32
 export let SubpStderrBase = 72
@@ -7314,7 +7320,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 	// operation's source back on its way out, so a packet that DID come would land on the next operation's
 	// stamp. `emitSubpCreateReadPipe` is what makes that impossible rather than unlikely: the pipe does not
 	// exist unless the host granted `FILE_SKIP_COMPLETION_PORT_ON_SUCCESS` on this handle.
-	let syncBytes = emitLoadField(module, block: syncDone, record: bytesOutPtr, offset: 0, ids: ids)
+	let syncBytes = emitLoadDword(module, block: syncDone, record: bytesOutPtr, offset: 0, ids: ids)
 	module.setTerminator(syncDone, op: StdOp.branch(answer.id))
 	syncDone.branchEdges.push(BranchEdge.create(answer.id, argIds: argsOf(syncBytes)))
 
@@ -8353,7 +8359,7 @@ function emitSubpPeekBeforeRefill(module StdModule, func IrFunction, ids ValueMi
 	let peekFailed = emitCmp(module, block: gate, a: peekOk, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(gate, op: StdOp.condBranch(peekFailed, thenBlockId: nothing.id, elseBlockId: ready.id))
 
-	let avail = emitLoadField(module, block: ready, record: bytesOutPtr, offset: 0, ids: ids)
+	let avail = emitLoadDword(module, block: ready, record: bytesOutPtr, offset: 0, ids: ids)
 	let zeroA = emitConst(module, block: ready, value: 0, ids: ids)
 	let nothingReady = emitCmp(module, block: ready, a: avail, b: zeroA, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(ready, op: StdOp.condBranch(nothingReady, thenBlockId: nothing.id, elseBlockId: refill.id))
@@ -8757,7 +8763,7 @@ function buildSubpWait(module StdModule)
 	module.appendOp(live, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: infinite))
 	let codePtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
 	module.appendOp(live, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
-	let exitCode = emitLoadField(module, block: live, record: codePtr, offset: 0, ids: ids)
+	let exitCode = emitLoadDword(module, block: live, record: codePtr, offset: 0, ids: ids)
 	module.setTerminator(live, op: StdOp.ret(exitCode))
 
 	module.functions.push(func)

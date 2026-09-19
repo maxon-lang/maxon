@@ -427,21 +427,23 @@ export enum StdBinOpcode
 	min
 	max
 
-	// ⭐⭐ **THE HIGH 64 BITS OF THE 128-BIT SIGNED PRODUCT — the one operation a division by a
-	// compile-time constant cannot be replaced without (`StrengthReduceDivision`).** `n * M`
-	// at 128 bits, keeping bits 64..127. x64 spells it `imul r/m64` (the ONE-operand group-3 form,
-	// `TargetOp.imulHighReg`), AArch64 `SMULH`, and wasm has NO form of it at all — which is why the
-	// pass that produces it asks `targetLowersMulHigh` and reduces nothing on a target that cannot
-	// spell it.
+	// ⭐⭐ **THE HIGH 64 BITS OF THE 128-BIT PRODUCT — the one operation a division by a compile-time
+	// constant cannot be replaced without (`StrengthReduceDivision`).** `n * M` at 128 bits, keeping
+	// bits 64..127. x64 spells the pair `imul r/m64` and `mul r/m64` (the ONE-operand group-3 forms,
+	// `TargetOp.mulHighReg`), AArch64 `SMULH` and `UMULH`, and wasm has NO form of either — which is
+	// why the pass that produces them asks `targetLowersMulHigh` and reduces nothing on a target that
+	// cannot spell them.
 	//
-	// It is COMMUTATIVE and PURE — an ordinary `binOp` in every respect. It carries no signedness
-	// field because there is no unsigned twin: the unsigned magic sequence needs a 65-bit multiplier
-	// and an "add indicator" fixup nothing here takes, so an opcode for it would be a case no
-	// lowering could serve.
+	// ⚠ **TWO OPCODES AND NOT ONE CARRYING A SIGNEDNESS FIELD, WHICH IS THE OPPOSITE OF WHAT THE TARGET
+	// TIER DOES (`TargetOp.mulHighReg`).** This enum is payload-free, and that is its whole safety
+	// argument: an exhaustive `match` over it stops at the last case it knows and fails to compile until
+	// it names the new one. A field would carry the new case past every such match in silence.
 	//
-	// Declared LAST, and an exhaustive `match` over this enum cannot ignore it: every such arm stops
-	// at `max` and fails to compile until it names this one.
+	// Both are COMMUTATIVE and PURE — ordinary `binOp`s in every respect.
 	mulHighSigned
+
+	// Declared LAST, so it is this case an exhaustive `match` fails to compile without.
+	mulHighUnsigned
 end 'StdBinOpcode'
 
 // ⭐⭐ **THE STD BINARY OPCODES WITH NO INTEGER FORM** — THE one place that set is stated, for the
@@ -478,7 +480,8 @@ export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
 
 		// The high multiply is INTEGER-ONLY, which is the opposite exception and needs its own arm:
 		// there is no float 128-bit product, and `appendStdBinOp` would be right to refuse one.
-		mulHighSigned gives false
+		mulHighSigned or
+			mulHighUnsigned gives false
 	end 'k'
 end 'stdBinOpcodeIsFloatOnly'
 
@@ -3624,7 +3627,8 @@ export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		// that reader asks `integerBinOpIsTwoAddress` as well and x64's `imul r/m64` is a FIXED-REGISTER
 		// form rather than a two-address one — so no swap is ever taken on this opcode today. The answer
 		// is still the opcode's own, and stating it any other way would make this roster lie.
-		mulHighSigned gives true
+		mulHighSigned or
+			mulHighUnsigned gives true
 
 		// The three FLOAT-ONLY opcodes:
 		//   • `div` — `a / b` is not `b / a`.

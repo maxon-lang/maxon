@@ -34,10 +34,11 @@
 //   • `loopInvariantCodeMotion` can hoist a reduced quotient out of a loop. An `idiv` never left one.
 //
 // ⚠ **THE TARGET GATE.** The general sequence needs a 64×64 → 128 multiply, of which it reads the HIGH
-// half (`StdBinOpcode.mulHighSigned`). x64 has one (`imul r/m64`) and arm64 has one (`SMULH`);
+// half (`StdBinOpcode.mulHighSigned` / `mulHighUnsigned`, one per signedness — the high half is the one
+// place the two differ). x64 has both (`imul r/m64`, `mul r/m64`) and arm64 has both (`SMULH`, `UMULH`);
 // **wasm32 has NONE** — emulating it costs four 32×32 products and their carries, ~20 instructions
 // against the ONE `i64.div_s` the reduction would be replacing. So the pass asks
-// `targetLowersMulHighSigned` and rewrites NOTHING on a target that cannot spell the opcode.
+// `targetLowersMulHigh` and rewrites NOTHING on a target that cannot spell the opcode.
 // `PromoteStackRecords` is the precedent for a target-conditional Std pass, and the gate is what keeps
 // every wasm golden byte-identical for this row.
 //
@@ -56,10 +57,6 @@
 //     `specs/division.md` pins that fault as deliberate — a reduction would answer `i64.min`.
 //     Refusing the whole magnitude keeps one rule where two would need to agree.
 //   • **`K == i64.min`.** The derivation works in `|K|`, which is not representable.
-//   • **UNSIGNED by a non-power-of-two.** The unsigned magic sequence needs a 65-BIT multiplier and an
-//     "add indicator" fixup, which this pass does not implement. The unsigned POWER-of-two cases are taken
-//     and are the cheapest reductions here (one `shr`, one `and`); MEASURED on `fmt.maxon`, all five
-//     of its unsigned divides are by 2 or 32.
 //   • **UNSIGNED by a divisor at or above `2^63`** — i.e. one whose `ParsedInt` is NEGATIVE. This is
 //     the only refusal here that prevents a WRONG answer rather than an unsound trap deletion; see
 //     `classifyDivision`, which states it where the magnitude is taken.
@@ -69,7 +66,8 @@
 //
 // ⚠ **THE ANSWER MUST AGREE WITH `idiv` ON EVERY EDGE, NOT APPROXIMATELY.** Signed division TRUNCATES
 // TOWARD ZERO, which neither the magic multiply nor an arithmetic shift does on its own: `x / 2` for a
-// negative `x` is **not** `x >> 1`. Both sequences below therefore carry an explicit sign correction,
+// negative `x` is **not** `x >> 1`. Both SIGNED sequences below therefore carry an explicit sign
+// correction — an unsigned dividend has no negative half to correct and carries none —
 // and `specs/strength-reduction.md` is a DIFFERENTIAL test rather than a table of expected values
 // — it divides by a constant and by a runtime value of the same magnitude and asserts the two agree,
 // so the hardware `idiv` is the oracle for every case, over `i64.min`, `i64.max`, `±1`, `0`, both
@@ -87,6 +85,8 @@ let SignBitIndex = 63
 
 // The number of bits in the machine word the sequence computes at.
 let ReducedWordBits = 64
+
+let AddIndicatorHalvingShift = 1
 
 // The largest `q1` the magic refinement can hold and still DOUBLE without leaving i64 — see
 // `deriveSignedMagic`, whose one decline is this bound. It is `floor(i64.max / 2)`, spelled as a SHIFT
@@ -117,13 +117,13 @@ typealias PositiveModulus = int(1 to i64.max)
 //
 // wasm's isel PANICS on the opcode it cannot lower, so a wrong answer here is a loud compiler failure on
 // the first reduced division rather than a silent miscompile.
-module function targetLowersMulHighSigned(cpu CpuArch) returns bool
+module function targetLowersMulHigh(cpu CpuArch) returns bool
 	return match cpu 'c'
 		x64 or
 			arm64 gives true
 		wasm32 gives false
 	end 'c'
-end 'targetLowersMulHighSigned'
+end 'targetLowersMulHigh'
 
 // Which shape a division by a constant reduces to. An enum field of a record rather than a
 // payload-bearing union, for `StdArithOperands`' measured reason: a union heap-boxes every case,
@@ -136,7 +136,8 @@ enum DivisionReductionKind
 	// or a plain logical shift / mask (unsigned).
 	powerOfTwo
 
-	// The general signed case: multiply by `magic`, take the high half, shift, add the sign bit.
+	// The general case: multiply by `magic` and take the high half, then the tail its signedness owes —
+	// a shift and the sign bit (signed), or the round-up fixup and a logical shift (unsigned).
 	magicMultiply
 end 'DivisionReductionKind'
 
@@ -172,12 +173,18 @@ module type DivisionReduction
 	// `emitMagicQuotient`.
 	export var magicIsNegative as bool
 
-	// Whether the division reads its operands as UNSIGNED. Only the power-of-two shapes are reduced
-	// unsigned (see the header's fourth refusal), and they need no sign correction at all.
+	// Whether the division reads its operands as UNSIGNED. It selects the tail, not just the opcode: an
+	// unsigned dividend has no negative half, so no sequence emitted for one carries a sign correction.
 	export var isUnsigned as bool
 
+	// `magicMultiply`, unsigned only: whether `deriveUnsignedMagic` had to round the reciprocal up past
+	// 64 bits, so the stored multiplier is the true one MINUS `2^64` and the sequence owes the fixup that
+	// adds that missing bit back (`emitUnsignedMagicTail`). It is not the signed `magicIsNegative`, which
+	// is about how the machine READS a stored multiplier and is derived rather than recorded.
+	export var addIndicator as bool
+
 	module static function create() returns DivisionReduction
-		return Self{kind: DivisionReductionKind.notReducible, divisorMagnitude: 0, negateQuotient: false, shift: 0, magic: 0, magicIsNegative: false, isUnsigned: false}
+		return Self{kind: DivisionReductionKind.notReducible, divisorMagnitude: 0, negateQuotient: false, shift: 0, magic: 0, magicIsNegative: false, isUnsigned: false, addIndicator: false}
 	end 'create'
 
 	function recordNotReducible()
@@ -192,16 +199,18 @@ module type DivisionReduction
 		self.isUnsigned = unsigned
 		self.magic = 0
 		self.magicIsNegative = false
+		self.addIndicator = false
 	end 'recordPowerOfTwo'
 
-	function recordMagic(magnitude ParsedInt, multiplier ParsedInt, postShift ShiftCount, negate bool)
+	function recordMagic(magnitude ParsedInt, multiplier ParsedInt, postShift ShiftCount, negate bool, unsigned bool, carriesImplicitBit bool)
 		self.kind = DivisionReductionKind.magicMultiply
 		self.divisorMagnitude = magnitude
 		self.magic = multiplier
 		self.magicIsNegative = multiplier < 0
 		self.shift = postShift
 		self.negateQuotient = negate
-		self.isUnsigned = false
+		self.isUnsigned = unsigned
+		self.addIndicator = carriesImplicitBit
 	end 'recordMagic'
 
 	function isReducible() returns bool
@@ -209,17 +218,48 @@ module type DivisionReduction
 	end 'isReducible'
 end 'DivisionReduction'
 
-// The `(multiplier, postShift)` pair `deriveSignedMagic` answers with, plus whether it found one at
-// all. Caller-owned and refilled, for `DivisionReduction`'s reason.
-module type SignedMagic
+// The `(multiplier, postShift)` pair either derivation answers with, plus whether it found one at all.
+// Caller-owned and refilled, for `DivisionReduction`'s reason.
+//
+// ⚠ `found` is the SIGNED derivation's alone, and `classifyDivision` reads it only there. The signed
+// derivation SEARCHES for the scale and can run out of signed range on the way; the unsigned one takes
+// a fixed number of doublings and always answers, with the 65th bit carried by `addIndicator`.
+module type DivisionMagic
 	export var found as bool
 	export var multiplier as ParsedInt
 	export var postShift as ShiftCount
+	export var addIndicator as bool
 
-	module static function create() returns SignedMagic
-		return Self{found: false, multiplier: 0, postShift: 0}
+	module static function create() returns DivisionMagic
+		return Self{found: false, multiplier: 0, postShift: 0, addIndicator: false}
 	end 'create'
-end 'SignedMagic'
+end 'DivisionMagic'
+
+// `floor(2^p / m)` and `2^p mod m` for a `p` the caller raises one bit at a time — the shared state of
+// both derivations, seeded at `p = 63` by `divideTwoToThe63`.
+type FixedPointRatio
+	export var quotient as ParsedInt
+	export var remainder as ParsedInt
+
+	static function seeded(seedQuotient ParsedInt, seedRemainder ParsedInt) returns FixedPointRatio
+		return Self{quotient: seedQuotient, remainder: seedRemainder}
+	end 'seeded'
+
+	// ⚠ The carry is tested as `r >= m - r` and applied as `r - (m - r)` rather than as the `2r >= m` /
+	// `2r - m` the arithmetic reads as. `r` and `m` are both below `2^63` but `2r` need not be, and a
+	// `ParsedInt` that wraps past `i64.max` compares NEGATIVE — which would take the wrong branch and
+	// answer a plausible, wrong magic. Only `quotient` is allowed to wrap here.
+	function raiseByOneBit(modulus ParsedInt)
+		if self.remainder >= modulus - self.remainder 'carry'
+			self.quotient = self.quotient * 2 + 1
+			self.remainder = self.remainder - (modulus - self.remainder)
+			return
+		end 'carry'
+
+		self.quotient = self.quotient * 2
+		self.remainder = self.remainder + self.remainder
+	end 'raiseByOneBit'
+end 'FixedPointRatio'
 
 // ==================================================================================================
 // The derivation
@@ -267,7 +307,7 @@ end 'SignedMagic'
 // negating the QUOTIENT instead is exact (truncating division is odd) and removes the one case in
 // which `anc` reaches `2^63` and stops fitting — a negative `d` whose magnitude divides `2^63 + 1`,
 // of which `x / -3` is the smallest.
-function deriveSignedMagic(divisor ParsedInt, out SignedMagic)
+function deriveSignedMagic(divisor ParsedInt, out DivisionMagic)
 	if divisor < 2 'notADerivableDivisor'
 		panic("deriveSignedMagic: divisor {divisor} — the derivation is defined for a magnitude of 2 or more, and `classifyDivision` refuses 0, 1 and i64.min before asking")
 	end 'notADerivableDivisor'
@@ -275,56 +315,37 @@ function deriveSignedMagic(divisor ParsedInt, out SignedMagic)
 	out.found = false
 
 	// `anc` = 2^63 - 1 - (2^63 mod divisor): the largest n below 2^63 that is -1 modulo the divisor.
-	var seedQuotient = 0 as ParsedInt
-	var seedRemainder = 0 as ParsedInt
-	divideTwoToThe63(divisor as PositiveModulus, quotient: seedQuotient, remainder: seedRemainder)
-	let anc = i64.max - seedRemainder
+	var divisorRatio = divideTwoToThe63(divisor as PositiveModulus)
+	let anc = i64.max - divisorRatio.remainder
 
-	var q1 = 0 as ParsedInt
-	var r1 = 0 as ParsedInt
-	divideTwoToThe63(anc as PositiveModulus, quotient: q1, remainder: r1)
-
-	var q2 = seedQuotient
-	var r2 = seedRemainder
+	var ancRatio = divideTwoToThe63(anc as PositiveModulus)
 
 	var p = SignBitIndex
 
 	for _ in 0 upto MaxMagicRefinements 'refine'
 		p = p + 1
 
-		if q1 > MaxRefinableQuotient 'wouldLeaveTheSignedRange'
+		if ancRatio.quotient > MaxRefinableQuotient 'wouldLeaveTheSignedRange'
 			return
 		end 'wouldLeaveTheSignedRange'
 
 		// q1 = floor(2^p / anc), r1 = 2^p mod anc — one doubling with a remainder correction.
-		if r1 >= anc - r1 'carryOutOfR1'
-			q1 = q1 * 2 + 1
-			r1 = r1 - (anc - r1)
-		end 'carryOutOfR1' else 'noCarryOutOfR1'
-			q1 = q1 * 2
-			r1 = r1 + r1
-		end 'noCarryOutOfR1'
+		ancRatio.raiseByOneBit(anc)
 
 		// The same two for the divisor. ⚠ `q2` is the term that may WRAP — see the header.
-		if r2 >= divisor - r2 'carryOutOfR2'
-			q2 = q2 * 2 + 1
-			r2 = r2 - (divisor - r2)
-		end 'carryOutOfR2' else 'noCarryOutOfR2'
-			q2 = q2 * 2
-			r2 = r2 + r2
-		end 'noCarryOutOfR2'
+		divisorRatio.raiseByOneBit(divisor)
 
-		let delta = divisor - r2
+		let delta = divisor - divisorRatio.remainder
 
 		// ⚠ Hacker's Delight writes this as a do-WHILE, so the published expression is the CONTINUE
 		// condition and the loop stops when it stops holding. Transcribing it as an EXIT condition is
 		// the one transcription error this routine can make and the one a reader should check for:
 		// with the sense inverted, `x / 3` derives no magic at all and the refinement runs away.
-		let keepRefining = q1 < delta or (q1 == delta and r1 == 0)
+		let keepRefining = ancRatio.quotient < delta or (ancRatio.quotient == delta and ancRatio.remainder == 0)
 
 		if not keepRefining 'converged'
 			out.found = true
-			out.multiplier = q2 + 1
+			out.multiplier = divisorRatio.quotient + 1
 			out.postShift = (p - ReducedWordBits) as ShiftCount
 			return
 		end 'converged'
@@ -332,6 +353,46 @@ function deriveSignedMagic(divisor ParsedInt, out SignedMagic)
 
 	panic("deriveSignedMagic: the refinement for divisor {divisor} did not converge within {MaxMagicRefinements} steps — Granlund-Montgomery proves it converges by p = 2*64 - 1, so either the exit condition or one of the doublings has been transcribed wrongly")
 end 'deriveSignedMagic'
+
+// ⭐ **THE UNSIGNED RECIPROCAL, IN THE ROUND-UP FORM (libdivide's `u64_gen`) AND NOT HACKER'S DELIGHT
+// FIG 10-2 — because a `ParsedInt` CANNOT DERIVE FIG 10-2 AT ALL.** That figure's track runs through
+// `nc = 2^64 - 1 - (2^64 mod d)`, which exceeds `2^63` for every admissible `d`, and its `r1` ranges
+// over `[0, nc)`; every comparison on either is an UNSIGNED one, and this compiler's arithmetic is
+// signed 64-bit throughout. The round-up form needs only `floor(2^(64+s)/d)` and its remainder, where
+// `r < d < 2^63` holds at every step, so the same discipline the file header states for the signed `q2`
+// carries the whole derivation: the quotient is the one term allowed to wrap.
+//
+// `s` is `floor(log2 K)` and is fixed rather than searched, which is why there is no decline. When the
+// rounded-up reciprocal needs a 65th bit, the multiplier stored is that value minus `2^64` and
+// `addIndicator` says the sequence owes the fixup that restores it.
+function deriveUnsignedMagic(divisor ParsedInt, out DivisionMagic)
+	if divisor < 2 or isPowerOfTwo(divisor) 'notADerivableDivisor'
+		panic("deriveUnsignedMagic: divisor {divisor} — the derivation is defined for a magnitude of 2 or more that is NOT a power of two, and `classifyDivision` refuses 0, 1 and i64.min and takes every power of two before asking")
+	end 'notADerivableDivisor'
+
+	let scale = floorLog2(divisor)
+
+	var ratio = divideTwoToThe63(divisor as PositiveModulus)
+
+	for _ in 0 to scale 'raiseToTheMagicScale'
+		ratio.raiseByOneBit(divisor)
+	end 'raiseToTheMagicScale'
+
+	out.found = true
+	out.postShift = scale
+
+	let roundUpBound = (1 as ParsedInt) shl (scale as ParsedInt)
+
+	if divisor - ratio.remainder < roundUpBound 'roundUpFitsSixtyFourBits'
+		out.multiplier = ratio.quotient + 1
+		out.addIndicator = false
+		return
+	end 'roundUpFitsSixtyFourBits'
+
+	ratio.raiseByOneBit(divisor)
+	out.multiplier = ratio.quotient + 1
+	out.addIndicator = true
+end 'deriveUnsignedMagic'
 
 // `floor(2^63 / m)` and `2^63 mod m`, for `1 <= m <= i64.max`, in SIGNED 64-bit arithmetic alone.
 //
@@ -344,25 +405,22 @@ end 'deriveSignedMagic'
 // ⚠ `m` is a `PositiveModulus` rather than a `ParsedInt`, which is what makes the two divides below
 // TOTAL — see that typealias. Both call sites pass a magnitude the classifier has already proven to be
 // at least 2, or an `anc` derived from one.
-function divideTwoToThe63(m PositiveModulus, quotient ParsedInt, remainder ParsedInt)
+function divideTwoToThe63(m PositiveModulus) returns FixedPointRatio
 	let modulus = m as ParsedInt
 	let q0 = (i64.max / m) as ParsedInt
 	let r0 = i64.max - q0 * modulus
 
 	if r0 + 1 == modulus 'theIncrementCompletesOneMoreDivisor'
-		quotient = q0 + 1
-		remainder = 0
-		return
+		return FixedPointRatio.seeded(q0 + 1, seedRemainder: 0)
 	end 'theIncrementCompletesOneMoreDivisor'
 
-	quotient = q0
-	remainder = r0 + 1
+	return FixedPointRatio.seeded(q0, seedRemainder: r0 + 1)
 end 'divideTwoToThe63'
 
 // ⭐ **THE ONE ADMISSION RULE — what one `div`/`mod` site reduces to, written into `out`.** Every
 // refusal in this file's header is decided here and nowhere else, so the emitters below may assume
 // `2 <= divisorMagnitude <= i64.max` unconditionally.
-function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRemainder bool, magic SignedMagic, out DivisionReduction)
+function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRemainder bool, magic DivisionMagic, out DivisionReduction)
 	out.recordNotReducible()
 
 	// `0` keeps its fault; `i64.min`'s magnitude is not representable; `|K| == 1` is an identity rather
@@ -405,12 +463,11 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 		return
 	end 'shiftSequence'
 
-	// The unsigned magic sequence is the header's fourth refusal — a 65-bit multiplier this pass does
-	// not implement. ⚠ An unsigned divisor read as a SIGNED magnitude here would be a WRONG ANSWER rather
-	// than merely a missed one: `x /u 3` is not `x /s 3` for a dividend at or above `2^63`.
-	if unsigned 'noUnsignedMagic'
+	if unsigned 'unsignedMagic'
+		deriveUnsignedMagic(magnitude, out: magic)
+		out.recordMagic(magnitude, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate, unsigned: true, carriesImplicitBit: magic.addIndicator)
 		return
-	end 'noUnsignedMagic'
+	end 'unsignedMagic'
 
 	deriveSignedMagic(magnitude, out: magic)
 
@@ -418,7 +475,7 @@ function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRem
 		return
 	end 'outsideTheDerivableRange'
 
-	out.recordMagic(magnitude, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate)
+	out.recordMagic(magnitude, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate, unsigned: false, carriesImplicitBit: magic.addIndicator)
 end 'classifyDivision'
 
 // ==================================================================================================
@@ -426,10 +483,10 @@ end 'classifyDivision'
 // ==================================================================================================
 
 // The pass's headline: what it is about to do, or why it does nothing on this target. `reduces` is
-// `targetLowersMulHighSigned`'s answer for the compile's CPU.
+// `targetLowersMulHigh`'s answer for the compile's CPU.
 module function strengthReduceDivisionHeadline(reduces bool, firstFuncIndex FuncIndex, funcCount FuncCount) returns String
 	if not reduces 'targetCannotSpellTheMultiply'
-		return "strengthReduceDivision: skipped — this target has no `mulHighSigned` lowering"
+		return "strengthReduceDivision: skipped — this target lowers neither `mulHighSigned` nor `mulHighUnsigned`"
 	end 'targetCannotSpellTheMultiply'
 
 	return "strengthReduceDivision: function {firstFuncIndex} onward of {funcCount}"
@@ -443,7 +500,7 @@ end 'strengthReduceDivisionHeadline'
 // the divisions. What it buys is everything below it: most functions in a program contain no division
 // at all, and `liveOpIndices`, the const map, the value-id mint and the per-block `opRefs` rebuild are
 // all allocations they would otherwise pay for nothing.
-module function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
+module function reduceDivisionsInFunc(module StdModule, func IrFunction, reduction DivisionReduction, magic DivisionMagic, def StdFoldableDef)
 	if not funcHoldsADivision(module, func: func) 'noDivision'
 		return
 	end 'noDivision'
@@ -626,7 +683,7 @@ end 'opIsIntegerDivision'
 
 // Append the ops that belong at `opIdx` — the original op, or the sequence a reducible division
 // becomes.
-function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap, reduction DivisionReduction, magic SignedMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
 	let op = try module.ops.get(opIdx) otherwise panic("appendReducedOp: opIdx {opIdx} from block.opRefs not in module.ops")
 
 	match op 'site'
@@ -747,7 +804,7 @@ function appendReducedOp(module StdModule, opIdx OpIndex, constMap ConstValueMap
 end 'appendReducedOp'
 
 // One `div`/`mod`: classify it, and either keep it or emit its sequence.
-function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness IntegerSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic SignedMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
+function reduceOneDivision(module StdModule, opIdx OpIndex, resultId ValueId, dividend ValueId, divisorId ValueId, signedness IntegerSignedness, isRemainder bool, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
 	if not constMap.contains(divisorId) 'divisorIsNotAConstant'
 		rebuilt.push(opIdx)
 		return
@@ -861,10 +918,63 @@ end 'emitPowerOfTwoQuotient'
 
 // ⭐⭐ **DIVISION BY A GENERAL CONSTANT: MULTIPLY BY THE RECIPROCAL, IN FIXED POINT.** `M / 2^(64+s)`
 // approximates `1 / K` closely enough that the high half of `x * M`, shifted right by `s`, is exactly
-// `floor(x / K)` for every 64-bit `x` — which `deriveSignedMagic`'s exit condition is the proof of.
-// Two corrections turn that floor into the language's truncation:
+// `floor(x / K)` for every 64-bit `x` — which each derivation's exit condition is the proof of. The
+// high multiply is the half both signednesses share; the fixups that follow it are not, and are the two
+// tails below.
 //
-//     h = mulhi(M, x)
+// The magic goes on the LEFT of the multiply deliberately: `StdToX64Conversion.lowerMulHigh`
+// moves the left operand into RAX, and a `movRegImm` whose only reader is that move is biased into RAX
+// by `collectOpHints`, so the copy self-elides. (`foldConstOperands` cannot reorder the two operands:
+// it swaps a commutative op's operands only when it is folding one into an immediate, and
+// `constFitsBinOpImmediate` refuses every constant for this opcode.)
+function emitMagicQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	let multiplier = emitReducedConst(module, value: reduction.magic, mint: mint, rebuilt: rebuilt)
+	let highOpcode = StdBinOpcode.mulHighUnsigned if reduction.isUnsigned else StdBinOpcode.mulHighSigned
+
+	let highProduct = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(highProduct, lhs: multiplier, rhs: dividend, opcode: highOpcode, operandType: ReducedOperandType)))
+
+	if reduction.isUnsigned 'unsignedTail'
+		emitUnsignedMagicTail(module, resultId: resultId, dividend: dividend, highProduct: highProduct, reduction: reduction, mint: mint, rebuilt: rebuilt)
+		return
+	end 'unsignedTail'
+
+	emitSignedMagicTail(module, resultId: resultId, dividend: dividend, highProduct: highProduct, reduction: reduction, mint: mint, rebuilt: rebuilt)
+end 'emitMagicQuotient'
+
+//     h = mulhi_u(M, x)
+//     h = ((x - h) shrLogical 1) + h   ; ONLY when `addIndicator` — the 65th bit of the reciprocal
+//     q = h shrLogical s
+//
+// ⚠ **THE FIXUP IS WRITTEN AS `((x - h) >> 1) + h` AND NOT AS THE `(x + h) >> 1` IT IS EQUAL TO**, and
+// the difference is the whole of why it is correct: `x + h` is a 65-bit sum for a large dividend and
+// there is no 65th bit to hold it, while `x - h` never borrows (`h` is at most `x` here) and halving it
+// before the add keeps every intermediate inside the word. The shorter spelling drops the carry and
+// answers a wrong quotient for every dividend whose sum overflows.
+function emitUnsignedMagicTail(module StdModule, resultId ValueId, dividend ValueId, highProduct ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	if reduction.shift == 0 'noScaleToApply'
+		panic("emitUnsignedMagicTail: a post-shift of 0 — `deriveUnsignedMagic` answers `floor(log2 K)`, which is at least 1 for every divisor that reaches it, because a power of two takes `emitPowerOfTwoQuotient` instead")
+	end 'noScaleToApply'
+
+	var scaled = highProduct
+
+	if reduction.addIndicator 'restoreTheImplicitBit'
+		let difference = mint.mint()
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(difference, lhs: dividend, rhs: highProduct, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
+
+		let halvingCount = emitReducedConst(module, value: AddIndicatorHalvingShift, mint: mint, rebuilt: rebuilt)
+		let halved = mint.mint()
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(halved, lhs: difference, rhs: halvingCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+
+		let recombined = mint.mint()
+		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(recombined, lhs: halved, rhs: highProduct, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
+		scaled = recombined
+	end 'restoreTheImplicitBit'
+
+	let scaleCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: scaled, rhs: scaleCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+end 'emitUnsignedMagicTail'
+
 //     h = h + x                    ; ONLY when M's true value was at least 2^63 (see below)
 //     h = h shr s                  ; omitted when s is 0
 //     q = h + (h shrLogical 63)    ; +1 for a negative h — floor becomes truncate
@@ -874,17 +984,8 @@ end 'emitPowerOfTwoQuotient'
 // i.e. as `M - 2^64`, so the product is short by exactly `x * 2^64` — whose high half is `x`. Adding
 // the dividend back is what restores it. `magicIsNegative` is that condition, and it is derived from
 // the sign of the stored multiplier rather than carried as a separate flag, so the two cannot disagree.
-//
-// The magic goes on the LEFT of the multiply deliberately: `StdToX64Conversion.lowerMulHighSigned`
-// moves the left operand into RAX, and a `movRegImm` whose only reader is that move is biased into RAX
-// by `collectOpHints`, so the copy self-elides. (`foldConstOperands` cannot reorder the two operands:
-// it swaps a commutative op's operands only when it is folding one into an immediate, and
-// `constFitsBinOpImmediate` refuses every constant for this opcode.)
-function emitMagicQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
-	let multiplier = emitReducedConst(module, value: reduction.magic, mint: mint, rebuilt: rebuilt)
-
-	var high = mint.mint()
-	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(high, lhs: multiplier, rhs: dividend, opcode: StdBinOpcode.mulHighSigned, operandType: ReducedOperandType)))
+function emitSignedMagicTail(module StdModule, resultId ValueId, dividend ValueId, highProduct ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	var high = highProduct
 
 	if reduction.magicIsNegative 'restoreTheWrappedMultiplier'
 		let corrected = mint.mint()
@@ -904,7 +1005,7 @@ function emitMagicQuotient(module StdModule, resultId ValueId, dividend ValueId,
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBit, lhs: high, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: high, rhs: signBit, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
-end 'emitMagicQuotient'
+end 'emitSignedMagicTail'
 
 // A fresh `const` of `value`, appended to the rebuilt op list, answering the value it defines.
 //

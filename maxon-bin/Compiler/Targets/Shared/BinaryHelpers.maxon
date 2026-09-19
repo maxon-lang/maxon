@@ -198,6 +198,22 @@ export function log2OfPowerOfTwo(v ParsedInt) returns ShiftCount
 	return trailingZeroCount(v as MachineWord) as ShiftCount
 end 'log2OfPowerOfTwo'
 
+export function floorLog2(value ParsedInt) returns ShiftCount
+	if value < 1 'notAMagnitude'
+		panic("floorLog2: {value} — defined for a positive value only")
+	end 'notAMagnitude'
+
+	var bit = 0 as ShiftCount
+	var remaining = value
+
+	while remaining > 1 'halve'
+		remaining = remaining shr 1
+		bit = bit + 1
+	end 'halve'
+
+	return bit
+end 'floorLog2'
+
 // Assert a signed PC-relative displacement fits in `bits` two's-complement bits.
 // `byteOff` arrives as a u64 (MachineWord is unsigned), so a negative displacement
 // shows up as a value near u64.max; check both the small-positive and the

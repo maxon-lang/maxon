@@ -39,94 +39,97 @@ func @main {
     x64.storeSlotReg slot1, r12
   __il_body#11:
     x64.loadRegBaseDisp.word64 rax, [r12 + 0]
-  __il_body#37:
+  __il_body#35:
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-  __il_cont#36:
-    x64.cmpRegImm32 r13, 3
-    x64.jcc below, ifcont#25
-  checkDrive:
+  __il_cont#34:
+    x64.cmpRegImm32 r13, 1
+    x64.movRegImm32 rax, 0
+    x64.jcc below, scmerge#13
+  andrhs#12:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegImm32 rdx, 0
     x64.callDirect String.byteAtOrPanic
-    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r8, 92
+    x64.setccReg equal, rax
+  scmerge#13:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#23
+  leadingSeparator:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#10
+  __il_body#23:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_body#37:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#36:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc aboveEqual, ifcont#25
+  tooShort:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#22
+  ifcont#25:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect String.byteAtOrPanic
+    x64.cmpRegImm32 r8, 65
+    x64.movRegImm32 rax, 0
+    x64.jcc less, scmerge#27
+  andrhs#26:
+    x64.cmpRegImm32 r8, 90
+    x64.setccReg lessEqual, rax
+  scmerge#27:
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, scmerge#31
+  orrhs:
+    x64.cmpRegImm32 r8, 97
+    x64.movRegImm32 rax, 0
+    x64.jcc less, scmerge#30
+  andrhs#29:
+    x64.cmpRegImm32 r8, 122
+    x64.setccReg lessEqual, rax
+  scmerge#30:
+    x64.movRegReg rcx, rax
+  scmerge#31:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __il_cont#22
+  andrhs#32:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegImm32 rdx, 1
     x64.callDirect String.byteAtOrPanic
-    x64.movRegReg r15, r8
+    x64.cmpRegImm32 r8, 58
+    x64.setccReg equal, rax
+  __il_cont#22:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#39
+  andrhs#16:
+    x64.cmpRegImm32 r13, 3
+    x64.setccReg aboveEqual, rax
+    x64.jmp scmerge#17
+  critsplit#39:
+    x64.movRegReg rax, rcx
+  scmerge#17:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#38
+  andrhs#18:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegImm32 rdx, 2
     x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r15, 58
-    x64.movRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#14
-  andrhs#13:
     x64.cmpRegImm32 r8, 92
     x64.setccReg equal, rax
-  scmerge#14:
+    x64.jmp scmerge#19
+  critsplit#38:
+    x64.movRegReg rax, rcx
+  scmerge#19:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#25
-  hasDriveColon:
-    x64.cmpRegImm32 r14, 65
-    x64.movRegImm32 rax, 0
-    x64.jcc less, scmerge#17
-  andrhs#16:
-    x64.cmpRegImm32 r14, 90
-    x64.setccReg lessEqual, rax
-  scmerge#17:
-    x64.movRegImm32 rcx, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#21
-  orrhs:
-    x64.cmpRegImm32 r14, 97
-    x64.movRegImm32 rax, 0
-    x64.jcc less, scmerge#20
-  andrhs#19:
-    x64.cmpRegImm32 r14, 122
-    x64.setccReg lessEqual, rax
-  scmerge#20:
-    x64.movRegReg rcx, rax
-  scmerge#21:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, ifcont#25
-  isDrive:
+    x64.jcc equal, ifcont#21
+  driveRoot:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#10
-  ifcont#25:
-    x64.cmpRegImm32 r13, 2
-    x64.jcc below, ifcont#31
-  checkUNC:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegImm32 rdx, 0
-    x64.callDirect String.byteAtOrPanic
-    x64.movRegReg r14, r8
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegImm32 rdx, 1
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r14, 92
-    x64.movRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#28
-  andrhs#27:
-    x64.cmpRegImm32 r8, 92
-    x64.setccReg equal, rax
-  scmerge#28:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#31
-  isUNC:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#10
-  ifcont#31:
-    x64.cmpRegImm32 r13, 1
-    x64.jcc below, ifcont#35
-  checkRooted:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegImm32 rdx, 0
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r8, 92
-    x64.jcc notEqual, ifcont#35
-  isRooted:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#10
-  ifcont#35:
+  ifcont#21:
     x64.movRegImm32 rax, 0
   __il_cont#10:
     x64.cmpRegImm32 rax, 0

@@ -1921,7 +1921,8 @@ export type StdToX64Lowering
 			// nothing and no operand order can cost or save a copy. (It is genuinely commutative —
 			// `binOpcodeIsCommutative` says so — which is why the answer has to come from HERE rather
 			// than from that roster.)
-			mulHighSigned gives false
+			mulHighSigned or
+				mulHighUnsigned gives false
 		end 'o'
 	end 'integerBinOpIsTwoAddress'
 
@@ -1991,9 +1992,11 @@ export type StdToX64Lowering
 				min or
 				max then panic("lowerBinOp: `binOp({opcode.name})` with an INTEGER operand type — all three are FLOAT-ONLY (`stdBinOpcodeIsFloatOnly`). Float division rides the pure arith band because `divsd` cannot fault, while integer division traps and is `StdOp.div`; `min`/`max` have no integer form at all and their operands are promoted by the parser. See StdBinOpcode.")
 
-			// The high half of the 128-bit signed product. Three ops, not one, because x64's only
-			// form of it pins RAX and RDX; see `lowerMulHighSigned`.
-			mulHighSigned then self.lowerMulHighSigned(resultId, lhsReg: lhsReg, rhsReg: rhsReg, dstBlock: dstBlock)
+			// The high half of the 128-bit product. Three ops, not one, because x64's only form of
+			// either signedness pins RAX and RDX; see `lowerMulHigh`.
+			mulHighSigned then self.lowerMulHigh(resultId, lhsReg: lhsReg, rhsReg: rhsReg, signedness: IntegerSignedness.signed, dstBlock: dstBlock)
+
+			mulHighUnsigned then self.lowerMulHigh(resultId, lhsReg: lhsReg, rhsReg: rhsReg, signedness: IntegerSignedness.unsigned, dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOp'
 
@@ -2005,7 +2008,7 @@ export type StdToX64Lowering
 	//   mov result, rdx     ; the HIGH half out
 	//
 	// ⚠ **THE SHAPE IS `lowerDivMod`'s, OP FOR OP, AND SO IS THE ARGUMENT FOR IT.** `rhs` stays a
-	// VIRTUAL register and the allocator keeps it out of RAX/RDX (`imulHighReg`'s implicit masks forbid
+	// VIRTUAL register and the allocator keeps it out of RAX/RDX (`mulHighReg`'s implicit masks forbid
 	// it, exactly as `divideReg`'s do), so it survives the `mov rax, lhs` to be read by the multiply.
 	// The `mov rax, lhs` is a copy from a virtual to a PHYSICAL, which `collectOpHints` biases the other
 	// way for free: when `lhs` is a `movRegImm` of the magic number and nothing else reads it, the
@@ -2014,11 +2017,11 @@ export type StdToX64Lowering
 	// ⚠ It reads the HIGH half only, and there is no op that reads the low one. That is not a gap: the
 	// low half is `binOp(mul)`'s answer, which the two-operand `imul r64, r/m64` already gives without
 	// touching RAX/RDX at all — so a caller wanting both would emit two ops, and no caller does.
-	function lowerMulHighSigned(resultId ValueId, lhsReg TargetVReg, rhsReg TargetVReg, dstBlock IrBlock)
+	function lowerMulHigh(resultId ValueId, lhsReg TargetVReg, rhsReg TargetVReg, signedness IntegerSignedness, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: lhsReg))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.imulHighReg(rhsReg))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.mulHighReg(rhsReg, signedness: signedness))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rdx)))
-	end 'lowerMulHighSigned'
+	end 'lowerMulHigh'
 
 	// Lower a FLOAT binary op to its SSE instruction. All four are genuinely two-address (`addsd
 	// xmm1, xmm2` — SSE has no 3-operand form without AVX), so each declares `dest` a REUSE-of-
@@ -2071,7 +2074,8 @@ export type StdToX64Lowering
 			// 128-bit float product to take the top half of. It is minted only by
 			// `StrengthReduceDivision`, over integer operands, so reaching here means an f64 was handed
 			// to a codegen-internal opcode that has no float form at all.
-			mulHighSigned then panic("lowerFloatBinOp: `mulHighSigned` is INTEGER-ONLY — it is the high half of a 128-bit integer product, minted by `StrengthReduceDivision` over integer operands, and no float form of it exists")
+			mulHighSigned or
+				mulHighUnsigned then panic("lowerFloatBinOp: `{opcode.name}` is INTEGER-ONLY — it is the high half of a 128-bit integer product, minted by `StrengthReduceDivision` over integer operands, and no float form of it exists")
 		end 'op'
 	end 'lowerFloatBinOp'
 
@@ -2112,7 +2116,8 @@ export type StdToX64Lowering
 			div or
 				min or
 				max panic("shiftInstructionOf: `{opcode.name}` is a FLOAT-ONLY opcode, not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
-			mulHighSigned panic("shiftInstructionOf: `mulHighSigned` is a multiply, not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
+			mulHighSigned or
+				mulHighUnsigned panic("shiftInstructionOf: `{opcode.name}` is a multiply, not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
 		end 'o'
 	end 'shiftInstructionOf'
 
@@ -2266,7 +2271,8 @@ export type StdToX64Lowering
 			// x64's one-operand `imul` has NO immediate form, and the multiplier this opcode carries
 			// is a full 64-bit magic number an `Imm32` could not hold anyway.
 			// `constFitsBinOpImmediate` answers `false` for it, so this is unreachable by construction.
-			mulHighSigned then panic("lowerBinOpImm: `mulHighSigned` has no immediate form — x64's one-operand `imul` takes a register or memory operand only, and its multiplier is a 64-bit magic number. `constFitsBinOpImmediate` refuses every constant for it, so foldConstOperands must never produce this")
+			mulHighSigned or
+				mulHighUnsigned then panic("lowerBinOpImm: `{opcode.name}` has no immediate form — x64's one-operand `imul` takes a register or memory operand only, and its multiplier is a 64-bit magic number. `constFitsBinOpImmediate` refuses every constant for it, so foldConstOperands must never produce this")
 		end 'op'
 	end 'lowerBinOpImm'
 

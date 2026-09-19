@@ -302,11 +302,12 @@ below renders what the back end made of that source. Every OTHER case in this fi
 ANSWER, and each would pass just as happily against a body the compiler built itself; only a rendered
 body says which tier it came from.
 
-⚠ **THE DIVIDE IS THE HALF THAT NEEDS WATCHING.** A quotient whose two operand ranges are both declared
-non-negative is emitted UNSIGNED, so the source states both its types full-range signed and this golden
-is where a widened range would show up — as a plain `mul`-high reciprocal with the sign correction gone.
-The divisor is a literal constant, which is what keeps the divide BARE: a `__checked_div` call appearing
-here is a divisor that stopped being provably non-zero.
+⚠ **THE DIVIDE IS THE HALF THAT NEEDS WATCHING.** The source states both its types `int(0 to u64.max)`,
+so the quotient is emitted UNSIGNED and reduced to an unsigned magic multiply — and this golden is where
+a range guard would show up, as an `__rc_panic` on the loaded word or on the quotient. The loaded word
+carries a proven whole-word interval, so neither has anything to reject. The divisor is a literal
+constant, which is what keeps the divide BARE: a `__checked_div` call appearing here is a divisor that
+stopped being provably non-zero.
 
 ⚠ `main` reads the clock TWICE so that the rendered body is the one that runs: a called-once function is
 moved into its caller, which would leave this golden pinning an emitted leftover.

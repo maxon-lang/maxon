@@ -6,16 +6,15 @@ function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
-// The divisor's range excludes 0, so this is the unguarded `idiv` again — the `DivisionByZero` a
-// possibly-zero divisor would have raised is about the DIVISOR, and says nothing about a quotient
-// that does not fit. `i64.min / -1` is `i64.max + 1`, so `idiv` raises `#DE` with a divisor of -1.
+// The divisor's range excludes 0, so no `DivisionByZero` is possible — that error is about the
+// DIVISOR, and says nothing about a quotient that does not fit. `i64.min / -1` is `i64.max + 1`.
 function divide(d NegativeOne) returns Integer
 	return (dividend / d) as Integer
 end 'divide'
 
 function main() returns ExitCode
 	dividend = ident(i64.min)
-	// Opaque, so the divide cannot be strength-reduced to a negation — which would not trap.
+	// Opaque, so the divide is not folded or rewritten as a negation.
 	let d = ident(-1)
 	return divide(d as NegativeOne) as ExitCode
 end 'main'
@@ -36,13 +35,22 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm rax, 9223372036854775808
-  __il_cont#13:
+  __il_cont#15:
     x64.leaRegGlobal rcx, __data_dividend
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.movRegImm rcx, 18446744073709551615
-  __rc_ok#9:
+  __rc_ok#11:
     x64.leaRegGlobal rax, __data_dividend
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm rdx, 9223372036854775808
+    x64.movRegReg rsi, rax
+    x64.xorRegReg rsi, rax, rdx
+    x64.movRegReg rdx, rcx
+    x64.xorRegImm32 rdx, rcx, -1
+    x64.orRegReg rsi, rsi, rdx
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, divovf
+  divok:
     x64.cqo
     x64.idivReg rcx
   __il_cont#7:
@@ -57,8 +65,15 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
+  divovf:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic: integer overflow\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at integer-overflow-fault-from-int-min-over-minus-one.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at integer-overflow-fault-from-int-min-over-minus-one.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

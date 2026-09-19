@@ -1557,7 +1557,7 @@ function opIsCondBranch(op TargetOp) returns bool
 			arm64AddLsl gives false
 
 		// The high multiply is a body op, not a branch.
-		imulHighReg gives false
+		mulHighReg gives false
 
 		// arm64 `fneg` is a body op, not a branch.
 		arm64Fneg gives false
@@ -1567,7 +1567,7 @@ function opIsCondBranch(op TargetOp) returns bool
 			arm64StoreRelease gives false
 
 		// The arm64 high multiply is a body op, not a branch.
-		arm64Smulh gives false
+		arm64Mulh gives false
 
 		// A coverage counter is a body op, not a branch.
 		covInc gives false
@@ -1757,11 +1757,11 @@ export function unconditionalBranchTargetOf(module TargetModule, block IrBlock) 
 			arm64AddLsl gives UnconditionalBranchTarget.none
 
 		// The high multiply is a body op, not a branch.
-		imulHighReg gives UnconditionalBranchTarget.none
+		mulHighReg gives UnconditionalBranchTarget.none
 		arm64Fneg gives UnconditionalBranchTarget.none
 		arm64LoadAcquire or
 			arm64StoreRelease gives UnconditionalBranchTarget.none
-		arm64Smulh or
+		arm64Mulh or
 			covInc or
 			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives UnconditionalBranchTarget.none
@@ -1950,11 +1950,11 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 				loadRegBaseIndexScale or
 				storeBaseIndexScaleReg or
 				arm64AddLsl then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a scaled-index address or access body op as its terminator")
-			imulHighReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
+			mulHighReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 			arm64Fneg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a float negate body op as its terminator")
 			arm64LoadAcquire or
 				arm64StoreRelease then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an ordered load/store body op as its terminator")
-			arm64Smulh then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
+			arm64Mulh then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a high multiply body op as its terminator")
 			covInc then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a coverage counter body op as its terminator")
 			x64AluBaseDispReg or
 				x64AluBaseDispImm32 then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a read-modify-write of memory body op as its terminator")
@@ -3888,7 +3888,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				arm64AddLsl then break 'capture'
 
 			// Not a `movRegReg`, so never an entry param capture.
-			imulHighReg then break 'capture'
+			mulHighReg then break 'capture'
 
 			// arm64 `fneg` is not a `movRegReg`, so never an entry param capture.
 			arm64Fneg then break 'capture'
@@ -3898,7 +3898,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				arm64StoreRelease then break 'capture'
 
 			// `SMULH` is not a `movRegReg`, so never an entry param capture.
-			arm64Smulh then break 'capture'
+			arm64Mulh then break 'capture'
 
 			// A coverage counter is not a `movRegReg`, so never an entry param capture.
 			covInc then break 'capture'
@@ -5232,7 +5232,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			arm64AddLsl gives OpSlotRole.touchesNoSlot
 
 		// The high multiply touches no memory at all — its operands and its whole product are registers.
-		imulHighReg gives OpSlotRole.touchesNoSlot
+		mulHighReg gives OpSlotRole.touchesNoSlot
 
 		// arm64 `fneg` touches registers only.
 		arm64Fneg gives OpSlotRole.touchesNoSlot
@@ -5243,7 +5243,7 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 			arm64StoreRelease gives OpSlotRole.touchesNoSlot
 
 		// `SMULH` touches no memory at all — its operands and its result are registers.
-		arm64Smulh gives OpSlotRole.touchesNoSlot
+		arm64Mulh gives OpSlotRole.touchesNoSlot
 
 		// A coverage counter touches no SLOT — its address is a link-time constant, not a frame offset.
 		covInc gives OpSlotRole.touchesNoSlot

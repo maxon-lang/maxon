@@ -35,35 +35,65 @@ func @halves {
     x64.cmpRegImm32 rsi, 1
     x64.jcc less, __rc_panic
   __rc_ok:
+    x64.movRegImm rax, 9223372036854775808
+    x64.movRegReg rdx, rcx
+    x64.xorRegReg rdx, rcx, rax
+    x64.movRegReg rdi, rsi
+    x64.xorRegImm32 rdi, rsi, -1
+    x64.orRegReg rdx, rdx, rdi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, divovf#1
+  divok#2:
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
-    x64.movRegReg rdi, rax
-  tryok#1:
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
+    x64.movRegReg r8, rax
   tryok#3:
-    x64.leaRegRegReg rdi, rdi, rax
+    x64.movRegImm rax, 9223372036854775808
+    x64.movRegReg rdx, rcx
+    x64.xorRegReg rdx, rcx, rax
+    x64.orRegReg rdx, rdx, rdi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, divovf#5
+  divok#6:
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rsi
+  tryok#7:
+    x64.leaRegRegReg rdi, r8, rax
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -1
     x64.andRegReg rax, rax, rcx
     x64.cqo
     x64.idivReg rsi
-  tryok#5:
+  tryok#9:
     x64.leaRegRegReg rdi, rdi, rdx
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -1
     x64.andRegReg rax, rax, rcx
     x64.cqo
     x64.idivReg rsi
-  tryok#7:
+  tryok#11:
     x64.leaRegRegReg r8, rdi, rdx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-division-is-never-reused.test:7: Range check failed: value outside typealias 'NonZeroWord'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-division-is-never-reused.test:7: Range check failed: value outside typealias 'NonZeroWord'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  divovf#1:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic: integer overflow\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  divovf#5:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic: integer overflow\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

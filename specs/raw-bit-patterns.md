@@ -456,3 +456,42 @@ end 'main'
 ```stdout
 -4 -4
 ```
+
+<!-- test: a-compiler-minted-machine-word-reaches-an-unsigned-quantity-unguarded -->
+### A word the COMPILER minted crosses the same door as one the SOURCE named
+`bits(64) as int(0 to u64.max)` is free, and the case above pins it for a word a program declared. This
+case asks it of the other kind of word: one no source line gave a type to, minted by the compiler as the
+result of a `__Raw` machine-word operation. Pattern → quantity crosses no signed domain and no width
+whichever end minted the value, so the quantity's door has nothing to test in either case, and a sign-bit
+test plus an `__rc_panic` on this one would be a guard on an address- or bitmap-shaped word that can set
+bit 63 in the ordinary course of its work — in a tier body that has no caller to report a panic to.
+
+`__Raw` may only be spelled inside a runtime-tier file, so the probe is staged as one; `main` is an
+ordinary program and does not call it.
+
+⚠ **WHAT THIS CASE CAN AND CANNOT SAY.** Nothing reaches `probeLoadedCount`, so dead-function elimination
+drops it and no instruction of it survives into the binary. The case therefore measures that the program
+PARSES and LOWERS — that the cast is accepted at all — and it passes both before the guard is removed and
+after. It is not the evidence for the guard's absence. **The committed golden fragment is**: the emitted
+sequence for this probe is where a sign-bit test and an `__rc_panic` are either present or gone, and a
+diff of that fragment is what reports the change.
+```maxon
+// --- runtime-file: Probe.maxon
+typealias ProbeCount = int(0 to u64.max)
+
+let ProbeScratchBytes = 8
+
+function probeLoadedCount() returns ProbeCount
+	let addr = __Raw.scratch(ProbeScratchBytes)
+	__Raw.storeWord(addr, offset: 0, value: 7 as MachineWord)
+
+	return __Raw.loadWord(addr, offset: 0) as ProbeCount
+end 'probeLoadedCount'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

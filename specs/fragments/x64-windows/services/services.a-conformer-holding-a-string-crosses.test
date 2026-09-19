@@ -245,9 +245,12 @@ func @main {
     x64.callDirect labelOf
     x64.movRegReg rbx, r8
     x64.movRegReg r13, r10
+    x64.movRegImm32 rax, 0
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, rbx
     x64.callDirect __mm_sole_existential
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -386,7 +389,7 @@ func @Calc.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=measure, [2]=total] @__jumptable_13
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=measure, [2]=total] @__jumptable_15
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -472,7 +475,7 @@ func @Calc.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_14
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_16
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

@@ -1433,7 +1433,7 @@ function buildSubpWaitExit(module StdModule)
 	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
 	let codePtr = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotBytesOut, ids: ids)
 	module.appendOp(exited, op: StdOp.osProcessExitCode(hProcessE, codePtrId: codePtr))
-	let exitCode = emitLoadField(module, block: exited, record: codePtr, offset: 0, ids: ids)
+	let exitCode = emitLoadDword(module, block: exited, record: codePtr, offset: 0, ids: ids)
 	module.setTerminator(exited, op: StdOp.ret(exitCode))
 
 	module.functions.push(func)
@@ -1443,11 +1443,10 @@ end 'buildSubpWaitExit'
 // Answered with a ZERO-timeout wait, so it never blocks, and with no terminate on any path, so it never
 // changes what it is asking about.
 //
-// ⭐⭐ **-1 CANNOT COLLIDE WITH AN EXIT CODE, AND THE MASK IS WHAT MAKES THAT TRUE.** `GetExitCodeProcess`
-// writes a DWORD into a scratch word this runtime also lends to `WriteFile`'s bytes-written out-param, so the
-// upper half of the loaded machine word is whatever the last user left there. Masked, the answer is in
-// [0, 2^32) and every negative value is out of band — which is what lets one entry carry both "it exited with
-// this code" and "it has not". `StdOp.osHandleFileType` records the same hazard from the other end.
+// ⭐⭐ **-1 CANNOT COLLIDE WITH AN EXIT CODE, AND THE DWORD LOAD IS WHAT MAKES THAT TRUE.** Reading only the
+// low 32 bits of the shared scratch word (see `SubpSlotBytesOut`, which owns that rule) puts the answer in
+// [0, 2^32), so every negative value is out of band — which is what lets one entry carry both "it exited
+// with this code" and "it has not". `StdOp.osHandleFileType` records the same hazard from the other end.
 //
 // ⚠ A handle naming no live child also answers -1, which `stdlib/Subprocess.maxon` reads as `running`: after
 // `release()` there is no child left to report an exit for, and the throwing methods refuse a released handle
@@ -1668,7 +1667,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let hProcessF = emitLoadField(module, block: reap, record: slotF, offset: SubpSlotHProcess, ids: ids)
 	let codePtr = emitLoadField(module, block: reap, record: slotF, offset: SubpSlotBytesOut, ids: ids)
 	module.appendOp(reap, op: StdOp.osProcessExitCode(hProcessF, codePtrId: codePtr))
-	let exitCode = emitLoadField(module, block: reap, record: codePtr, offset: 0, ids: ids)
+	let exitCode = emitLoadDword(module, block: reap, record: codePtr, offset: 0, ids: ids)
 	let endMs = ids.mint()
 	module.appendOp(reap, op: StdOp.osTickCountMs(endMs))
 	let startF = emitLoadField(module, block: reap, record: state, offset: WcStartMs, ids: ids)
@@ -2028,7 +2027,7 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	let bytesOutPtr = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotBytesOut, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(capped, op: StdOp.osWriteFile(verdict, handleId: writeEnd, bufId: pendC, lenId: chunk, bytesOutPtrId: bytesOutPtr))
-	let written = emitLoadField(module, block: capped, record: bytesOutPtr, offset: 0, ids: ids)
+	let written = emitLoadDword(module, block: capped, record: bytesOutPtr, offset: 0, ids: ids)
 	let advanced = emitBin(module, block: capped, a: pendC, b: written, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: capped, record: slotC, offset: SubpSlotStdinPend, value: advanced)
 	emitSubpAddProgress(module, block: capped, ids: ids, state: state, amount: written)

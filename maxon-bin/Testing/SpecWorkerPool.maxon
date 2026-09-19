@@ -1574,14 +1574,6 @@ type PersistentWorkerHandle
 			return WorkerExit.unavailable(e.displayReason())
 		end 'notReaped'
 
-		// `waitWithTimeout` reports both of its own failures as THROWS, so every VALUE that reaches here
-		// is a status some host produced — and every supported host produces one inside the 32-bit band.
-		// A number outside it is the runtime answering something no OS could, which is worth saying
-		// rather than rendering as though it meant something.
-		if code < 0 or code > (u32.max as ExitInt) 'outsideTheBand'
-			return WorkerExit.unavailable("the wait answered {code}, which no host's exit status can be")
-		end 'outsideTheBand'
-
 		return WorkerExit.exited(code as WorkerExitCode)
 	end 'terminateAndReap'
 
@@ -1710,8 +1702,6 @@ union WorkerExit
 end 'WorkerExit'
 
 // A process exit status as every supported host reports one: a Win32 DWORD, or a POSIX `128 + signal`.
-// Narrower than `ExitInt` because `waitWithTimeout` answers its two failures as THROWS rather than as
-// negative values, so nothing outside this band is a status any host produced.
 typealias WorkerExitCode = int(0 to u32.max)
 
 // ⭐ **WHAT A CODE MEANS, WHERE THIS HARNESS RECOGNISES IT.** A union rather than a String that may be

@@ -49,9 +49,10 @@ end 'main'
 | `StringArray` | `Array with String` | Json |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
+| `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
 | `AsciiValue` | `int(0 to 127)` | Character |
 | `HashValue` | `int(0 to u32.max)` | Interfaces |
-| `IterStep` | `int(i64.min to i64.max)` | Interfaces |
+| `IterStep` | `int(0 to u64.max)` | Interfaces |
 | `RangeBound` | `int(i64.min to i64.max)` | Range |
 | `Real` | `float(f64.min to f64.max)` | Math |
 | `HashDigest` | `bits(64)` | Hasher |
@@ -387,7 +388,7 @@ end 'StringError'
 | `codepoints()` | `CodepointView` | Every codepoint of the cluster. |
 | `bytes()` | `ByteView` | The UTF-8 bytes. |
 | `asciiValue()` | `AsciiValue` | The value 0–127 of a single-byte ASCII character. Throws `CharacterError.notAscii` otherwise. |
-| `advanceBy(n IterStep)` | `Character` | The character `n` codepoints later; used by character ranges. |
+| `advanceBy(n CodepointDelta)` | `Character` | The character `n` codepoints away, in either direction. |
 | `toString()` | `String` | The cluster as a string. |
 | `clone()` | `Character` | An independent copy. |
 | `equals(other Character)`, `compare(other Character)`, `hash()` | | Interface conformances. |
@@ -868,7 +869,8 @@ implements `BidirectionalIterator with Element` and adds random access:
 | `retreatBy(n IterStep)` | — | `IterationError` | Back `n` (from `BidirectionalIterator`). |
 
 `advanceBy` and `retreatBy` step one at a time, so a move that fails part-way leaves the iterator where the
-throw happened.
+throw happened. `IterStep` is unsigned: the direction is the method you call, so a negative step is refused
+at the argument door rather than read as a move the other way.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -939,7 +941,7 @@ enum Ordering
 end 'Ordering'
 ```
 
-`HashValue` is `int(0 to u32.max)`; `IterStep` is `int(i64.min to i64.max)`.
+`HashValue` is `int(0 to u32.max)`; `IterStep` is `int(0 to u64.max)`.
 
 | Function | Returns | Description |
 |----------|---------|-------------|
@@ -1463,12 +1465,12 @@ durationMs:)`:
 | `pid` | `int(0 to u64.max)` | The child's process id |
 | `durationMs` | `DurationMs` | Wall time the run took |
 | `succeeded()` | `bool` | Exited with code 0 |
-| `exitCode()` | `int(i64.min to i64.max)` | The raw code |
+| `exitCode()` | `int(0 to u32.max)` | The raw code |
 
 ```maxon
 union TerminationStatus
-	exited(code int(i64.min to i64.max))
-	signalled(code int(i64.min to i64.max))
+	exited(code int(0 to u32.max))
+	signalled(code int(0 to u32.max))
 end 'TerminationStatus'
 ```
 
@@ -1528,7 +1530,7 @@ end 'LinePoll'
 
 union ExitPoll
 	running
-	exited(code int(i64.min to i64.max))
+	exited(code int(0 to u32.max))
 end 'ExitPoll'
 ```
 

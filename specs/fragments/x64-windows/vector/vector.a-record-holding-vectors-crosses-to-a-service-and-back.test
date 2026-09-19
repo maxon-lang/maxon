@@ -374,8 +374,11 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Cell
   __il_cont:
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __sole_Svc
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.leaRegFunc rcx, [rip + Svc.__loop]
     x64.leaRegFunc rax, [rip + Svc.__abandon]
     x64.movRegReg rdx, r12
@@ -408,8 +411,11 @@ func @main {
     x64.leaRegFunc rcx, [rip + __gt_reply_release_Svc.report]
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __sole_Cell
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -526,7 +532,7 @@ func @Svc.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=report] @__jumptable_22
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=report] @__jumptable_24
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -688,16 +694,20 @@ func @Svc.__loop {
     x64.movRegReg rdx, r8
     x64.callDirect Cell.create
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __sole_Cell
   __il_cont:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __destruct_Cell
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __sole_Cell
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.loadRegSlot rcx, slot0
     x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
     x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
@@ -710,7 +720,7 @@ func @Svc.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=report] @__jumptable_23
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=report] @__jumptable_25
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

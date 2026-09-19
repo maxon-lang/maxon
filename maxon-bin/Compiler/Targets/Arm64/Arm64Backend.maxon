@@ -112,6 +112,9 @@ export let Arm64OpMul = 0x9B007C00
 // (bit 22) instead of 0b000, so it differs from `Arm64OpMul` in exactly that bit. `Ra` stays XZR
 // (0x7C00): the field exists in the encoding and `SMULH` requires it be 0b11111.
 let Arm64OpSmulh = 0x9B407C00
+
+// The same word with `U` set (bit 23), which is the only field separating the two high multiplies.
+let Arm64OpUmulh = 0x9BC07C00
 let Arm64OpSdiv = 0x9AC00C00
 export let Arm64OpUdiv = 0x9AC00800
 export let Arm64OpAnd = 0x8A000000
@@ -1809,12 +1812,12 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64AddLsl(dest, base, index, scale) then emitArm64Rrr(code, opcode: ((Arm64OpAdd or (memoryIndexScaleShift(scale) shl Arm64ShiftedRegAmountShift)) as MachineWord), rd: arm64GprField(dest), rn: arm64GprField(base), rm: arm64GprField(index))
 
 		// x64's one-operand `imul`, wired to the RAX/RDX pair. arm64's high multiply is
-		// `arm64Smulh`, an op of its own, so `StdToArm64Conversion` never mints this one.
-		imulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — arm64 spells the high half of a signed product as `arm64Smulh`, a three-address form with no fixed-register pair")
+		// `arm64Mulh`, an op of its own, so `StdToArm64Conversion` never mints this one.
+		mulHighReg then panic("emitArm64TargetOp: an x64 one-operand `imul` reached the arm64 encoder — arm64 spells the high half of a signed product as `arm64Mulh`, a three-address form with no fixed-register pair")
 
-		// `SMULH Xd, Xn, Xm`. The same three-register emitter as `MUL`, because on AArch64 the two
-		// differ only in an opcode-word field.
-		arm64Smulh(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSmulh, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		// `SMULH`/`UMULH Xd, Xn, Xm`. The same three-register emitter as `MUL`, because on AArch64 all
+		// three differ only in opcode-word fields.
+		arm64Mulh(dest, lhs, rhs, signedness) then emitArm64Rrr(code, opcode: Arm64OpSmulh if signedness == IntegerSignedness.signed else Arm64OpUmulh, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		covInc(pointId) then arm64EmitCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
 
 		// AArch64 is load/store: no ALU instruction takes a memory destination, so its isel never selects one.

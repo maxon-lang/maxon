@@ -454,3 +454,116 @@ end 'main'
 ```stdout
 48 120 70 70 255
 ```
+
+### A step COUNT is unsigned, so a negative step is a MISTAKE and not a direction
+
+`IterStep` is `int(0 to u64.max)`. Direction is carried by WHICH METHOD is called — `advanceBy` goes
+forward, `retreatBy` goes back — so the argument is left with one job, *how far*, and a count of how
+far is never negative.
+
+⛔ The alternative was a signed step whose sign chose the direction, and it cannot be had at this
+price: `advanceBy` is published by `extension Iterator`, which has only `advance()`, so honouring a
+negative there needs a backward move every iterator has — and the only way to give it one is a default
+`retreat()` on that same extension. An extension method SATISFIES an interface requirement, so that
+default silently discharges `BidirectionalIterator.retreat()`: a type that declares the conformance and
+forgets the method stops earning **E3016** and compiles. ⇒ **the unsigned step is what lets `retreat()`
+stay a requirement nobody can forget.**
+
+A written negative is therefore refused where it is WRITTEN, by the ordinary range rule every
+`int(0 to …)` alias carries, rather than interpreted as a backwards step or — worse — counted by a
+`while i < n` loop that is false on its first test and returns having moved nothing.
+
+<!-- test: error.cursor-advance-by-a-written-negative-step-is-refused -->
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advanceBy(-2) otherwise 'moved'
+		return 98
+	end 'moved'
+
+	return cursor.current()
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/array-cursor/error.cursor-advance-by-a-written-negative-step-is-refused.test:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))
+```
+
+### And the mirror, so neither door is the one that was remembered
+
+`retreatBy` carries the same `IterStep` and owes the same refusal. Stating both is what makes this a
+property of the ALIAS rather than of one call site: a step count is unsigned wherever it is spelled.
+
+<!-- test: error.cursor-retreat-by-a-written-negative-step-is-refused -->
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.retreatBy(-2) otherwise 'moved'
+		return 98
+	end 'moved'
+
+	return cursor.current()
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/array-cursor/error.cursor-retreat-by-a-written-negative-step-is-refused.test:15:13: Value -2 is outside the range of 'IterStep' (int(0 to 18446744073709551615))
+```
+
+### The control: refusing the negative step did not break the positive one
+
+⚠ Two refusals pass just as well against methods that move nothing at all, so the set needs a case that
+reads a POSITION back. Four forward then three back from element 0 lands on element 1, and the answer is
+`20` only if `advanceBy` counted four forward moves and `retreatBy` counted three backward ones.
+
+<!-- test: cursor-advance-by-and-retreat-by-still-move-in-their-own-directions -->
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+	arr.push(50)
+
+	let cursor = try arr.cursor() otherwise 'fail'
+		return 99
+	end 'fail'
+
+	try cursor.advanceBy(4) otherwise 'forward'
+		return 98
+	end 'forward'
+
+	try cursor.retreatBy(3) otherwise 'backward'
+		return 97
+	end 'backward'
+
+	return cursor.current()
+end 'main'
+```
+```exitcode
+20
+```

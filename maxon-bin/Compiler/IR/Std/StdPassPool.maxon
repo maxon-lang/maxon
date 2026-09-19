@@ -83,7 +83,7 @@ union StepWorkspace
 	blockArgPrune
 	blockArgFold
 	constants(branch StdBranchOperands)
-	division(reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
+	division(reduction DivisionReduction, magic DivisionMagic, def StdFoldableDef)
 	constOperands
 	threading(scratch ThreadScratch)
 	ranges(scratch RangeScratch)
@@ -101,7 +101,7 @@ function workspaceFor(step StdFanOutStep, tally StdPassTally, log PassLog) retur
 		pruneDeadBlockArgs gives StepWorkspace.blockArgPrune
 		elimTrivialBlockArgs gives StepWorkspace.blockArgFold
 		foldConstants gives StepWorkspace.constants(StdBranchOperands.create())
-		strengthReduceDivision gives StepWorkspace.division(DivisionReduction.create(), magic: SignedMagic.create(), def: StdFoldableDef.create())
+		strengthReduceDivision gives StepWorkspace.division(DivisionReduction.create(), magic: DivisionMagic.create(), def: StdFoldableDef.create())
 		foldConstOperands gives StepWorkspace.constOperands
 		threadConstantBranches gives StepWorkspace.threading(ThreadScratch.create(tally, log: log))
 		refineValueRanges gives StepWorkspace.ranges(RangeScratch.create(tally, log: log))
@@ -150,7 +150,7 @@ module type StdPassWorker
 	var probe as PhaseProbe
 
 	static function create(cpu CpuArch, os Os, steps StdFanOutStepArray, irLevel LogLevel) returns Self
-		return Self{reducesDivision: targetLowersMulHighSigned(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), log: PassLog.create(irLevel), schedule: steps, steps: StepWorkspaceArray.create(), tallies: StdPassTallyArray.create(), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
+		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), log: PassLog.create(irLevel), schedule: steps, steps: StepWorkspaceArray.create(), tallies: StdPassTallyArray.create(), costs: PoolPhaseCosts.create(steps.count()), probe: PhaseProbe.beginCounters()}
 	end 'create'
 
 	function prepareWorkspaces()
@@ -239,9 +239,9 @@ function runFanOutStep(workspace StepWorkspace, module StdModule, funcIndex Func
 	return answer
 end 'runFanOutStep'
 
-// The division reduction is a no-op on a target with no `mulHighSigned` lowering — the same gate the
+// The division reduction is a no-op on a target with no high-multiply lowering — the same gate the
 // serial entry asks of the compile's target, asked once at `spawn`.
-function reduceDivisionsIfLowered(module StdModule, funcIndex FuncIndex, reduces bool, reduction DivisionReduction, magic SignedMagic, def StdFoldableDef)
+function reduceDivisionsIfLowered(module StdModule, funcIndex FuncIndex, reduces bool, reduction DivisionReduction, magic DivisionMagic, def StdFoldableDef)
 	if not reduces 'targetCannotSpellTheMultiply'
 		return
 	end 'targetCannotSpellTheMultiply'
@@ -291,7 +291,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	let funcCount = module.funcCount()
 	let processors = Runtime.processorCount() as FuncCount
 	let workerCount = processors if processors < funcCount else funcCount
-	let reducesDivision = targetLowersMulHighSigned(project.target.cpu)
+	let reducesDivision = targetLowersMulHigh(project.target.cpu)
 
 	// The only evidence that the passes ran in PARALLEL rather than merely correctly: the byte-identity
 	// gates pass on a pool of one. Under `codegen`, beside the allocator's line, so that `--log=ir:trace`
@@ -366,7 +366,7 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 		requireBandStepIsSound(step)
 	end 'eachScheduledStep'
 
-	let reducesDivision = targetLowersMulHighSigned(project.target.cpu)
+	let reducesDivision = targetLowersMulHigh(project.target.cpu)
 	let budget = hoistPressureBudgetFor(project.target)
 
 	// One log for the whole run, drained per function so the lines land in the order a reader expects — the

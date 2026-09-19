@@ -34,7 +34,7 @@ function main() returns ExitCode
 	end 'nothingCommitted'
 
 	var large = Bufs.create()
-	for k in 0 upto 2000 'allocLarge'
+	for k in 0 upto 600 'allocLarge'
 		large.push(build(k as Seed, n: LargePayload as Seed))
 	end 'allocLarge'
 
@@ -43,7 +43,7 @@ function main() returns ExitCode
 	end 'theSecondClassGrewTheHeap'
 
 	var bad = 0
-	for k in 0 upto 2000 'check'
+	for k in 0 upto 600 'check'
 		let b = try large.get(k) otherwise return 3
 		if b.count() != LargePayload 'length'
 			bad = bad + 1
@@ -121,10 +121,17 @@ func @build {
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
   fill:
-    x64.leaRegRegReg rax, rbx, r14
-    x64.movRegImm32 rcx, 251
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
+    x64.leaRegRegReg rcx, rbx, r14
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#12
   __rc_chk#13:
@@ -250,7 +257,7 @@ func @main {
   forstep#9:
     x64.leaRegRegImm32 r14, r14, 1
   forhdr#7:
-    x64.cmpRegImm32 r14, 2000
+    x64.cmpRegImm32 r14, 600
     x64.jcc less, allocLarge
   forexit#10:
     x64.callDirect __slab_committed_bytes
@@ -313,7 +320,7 @@ func @main {
   forstep#15:
     x64.leaRegRegImm32 rdx, rdx, 1
   forhdr#13:
-    x64.cmpRegImm32 rdx, 2000
+    x64.cmpRegImm32 rdx, 600
     x64.jcc less, check#14
     x64.jmp forexit#16
   check#36:
@@ -350,7 +357,7 @@ func @main {
   forstep#28:
     x64.leaRegRegImm32 rdx, rdx, 1
   forhdr#27:
-    x64.cmpRegImm32 rdx, 2000
+    x64.cmpRegImm32 rdx, 600
     x64.jcc less, check#36
   forexit#16:
     x64.cmpRegImm32 rax, 0

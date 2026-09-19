@@ -570,7 +570,7 @@ export function isCaptureMove(op TargetOp) returns bool
 			arm64AddLsl gives false
 
 		// The high multiply is not a `movRegReg`, so it is not a call-result capture move.
-		imulHighReg gives false
+		mulHighReg gives false
 
 		// arm64 `fneg` is not a `movRegReg`, so it is not a call-result capture move.
 		arm64Fneg gives false
@@ -580,7 +580,7 @@ export function isCaptureMove(op TargetOp) returns bool
 			arm64StoreRelease gives false
 
 		// `SMULH` is not a `movRegReg`, so it is not a call-result capture move.
-		arm64Smulh gives false
+		arm64Mulh gives false
 
 		// A coverage counter is not a `movRegReg`, so never a call-result capture move.
 		covInc gives false
@@ -813,7 +813,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			arm64AddLsl then return false
 
 		// Not a move at all, so never a physical self-move.
-		imulHighReg then return false
+		mulHighReg then return false
 
 		// arm64 `fneg` is not a move at all, so never a physical self-move.
 		arm64Fneg then return false
@@ -823,7 +823,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 			arm64StoreRelease then return false
 
 		// `SMULH` is not a move at all, so never a physical self-move.
-		arm64Smulh then return false
+		arm64Mulh then return false
 
 		// A coverage counter is not a move at all, so never a physical self-move.
 		covInc then return false
@@ -1269,11 +1269,11 @@ function retargetTerminatorOp(module TargetModule, opIdx OpIndex, oldTarget Bloc
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl then panic("retargetTerminatorOp: a scaled-index address or access is a body op, not a terminator — it names no block")
-		imulHighReg then panic("retargetTerminatorOp: a high multiply is a body op, not a terminator — it names no block")
+		mulHighReg then panic("retargetTerminatorOp: a high multiply is a body op, not a terminator — it names no block")
 		arm64Fneg then panic("retargetTerminatorOp: a float negate is a body op, not a terminator — it names no block")
 		arm64LoadAcquire or
 			arm64StoreRelease then panic("retargetTerminatorOp: an ordered load/store is a body op, not a terminator — it names no block")
-		arm64Smulh then panic("retargetTerminatorOp: a high multiply is a body op, not a terminator — it names no block")
+		arm64Mulh then panic("retargetTerminatorOp: a high multiply is a body op, not a terminator — it names no block")
 		covInc then panic("retargetTerminatorOp: a coverage counter is a body op, not a terminator — it names no block")
 		x64AluBaseDispReg or
 			x64AluBaseDispImm32 then panic("retargetTerminatorOp: a read-modify-write of memory is a body op, not a terminator — it names no block")

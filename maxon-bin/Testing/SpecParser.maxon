@@ -668,7 +668,7 @@ export typealias DisabledTestCount = int(0 to u64.max)
 // A process exit code — shared by the EXPECTED value parsed here and the OBSERVED
 // value the runner reads back, so they compare without a cast. Exported so the
 // runner names the `SpecExpectation.exitCode` payload in its own signatures.
-export typealias ExitCodeValue = int(i64.min to i64.max)
+export typealias ExitCodeValue = int(0 to u32.max)
 
 // What a spec pins about the RUN's stderr. A UNION, not an empty `String`: "this spec
 // says nothing about stderr" and "this spec says stderr is EMPTY" are different claims,
@@ -1359,6 +1359,16 @@ function testMarkerSpellingFor(active bool) returns String
 	return DisabledTestMarker
 end 'testMarkerSpellingFor'
 
+function exitCodeExpectationIn(text String, fenceIndex LineIndex, specPath FilePath) returns ExitCodeValue
+	let parsed = try int.fromString(text) otherwise panic("SpecParser: {specPath.toString()}:{fenceIndex + 1}: this test's `{ExitCodeFence}` block holds '{text}', which is not a number — so nothing would be pinned about the case's exit status and the case would run as though the block were not there")
+
+	if parsed < 0 or parsed > u32.max 'noProcessReportsOne'
+		panic("SpecParser: {specPath.toString()}:{fenceIndex + 1}: this test's `{ExitCodeFence}` block pins {parsed}. Every runtime this harness spawns reports an exit status as a full unsigned DWORD, so an expectation outside 0..{u32.max} can never be met and the case would be RED for ever")
+	end 'noProcessReportsOne'
+
+	return parsed as ExitCodeValue
+end 'exitCodeExpectationIn'
+
 // Scan one test starting at its marker line, returning the line index to resume the
 // outer scan from. When `active`, the parsed test is pushed onto `tests`; when not
 // (a `<!-- disabled-test: … -->` case) it is scanned identically and DISCARDED, so
@@ -1666,12 +1676,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 
 		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
 			let block = readFence(lines, openIndex: i)
-			let parsed = try int.fromString(block.text.trim()) otherwise 'badExitCode'
-				i = block.nextIndex
-				continue
-			end 'badExitCode'
-
-			exitCode = SpecExitCode.pinned(parsed as ExitCodeValue)
+			exitCode = SpecExitCode.pinned(exitCodeExpectationIn(block.text.trim(), fenceIndex: i, specPath: specPath))
 			i = block.nextIndex
 			continue
 		end 'exitCodeBlock'

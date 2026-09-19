@@ -61,14 +61,7 @@ func @shlBy {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc greaterEqual, shiftok
-  shiftneg:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:7: negative shift count\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
+    x64.jcc less, shiftneg
   shiftok:
     x64.movRegReg rcx, rdx
     x64.andRegImm32 rcx, rdx, -64
@@ -86,6 +79,13 @@ func @shlBy {
     x64.ret
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:6: Range check failed: value outside typealias 'Small'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  shiftneg:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-count-whose-alias-reaches-below-zero-keeps-the-guard.test:7: negative shift count\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

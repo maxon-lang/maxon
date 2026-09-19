@@ -4,6 +4,10 @@
 
 public typealias AsciiValue = int(0 to 127)
 public typealias Codepoint = int(0 to 1114111)
+// A move along the codepoint axis, in either direction — SIGNED, unlike the `IterStep` an iterator's
+// two directions are two methods for. `Character.advanceBy` is the one method and carries both, so a
+// negative here is a backwards step rather than the mistake it would be there.
+public typealias CodepointDelta = int(-1114111 to 1114111)
 
 // How many UTF-8 bytes a `Character` occupies. ⚠ NOT `int(0 to 4)`: a `Character` is a grapheme
 // CLUSTER, not a codepoint, and a cluster is any number of codepoints — four is the width of ONE
@@ -171,9 +175,8 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 		return ((i0 and 7) shl 18) or ((i1 and 63) shl 12) or ((i2 and 63) shl 6) or (i3 and 63)
 	end 'codepoint'
 
-	// Called by range-loop codegen for 'for c in start to end' over Characters.
-	public function advanceBy(n IterStep) returns Character
-		return Character.fromCodepoint(((codepoint() as IterStep) + n) as Codepoint)
+	public function advanceBy(n CodepointDelta) returns Character
+		return Character.fromCodepoint(((codepoint() as CodepointDelta) + n) as Codepoint)
 	end 'advanceBy'
 
 	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise

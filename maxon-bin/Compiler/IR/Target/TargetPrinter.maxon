@@ -969,15 +969,15 @@ function opIsArm64Band(op TargetOp) returns bool
 			storeBaseIndexScaleReg gives false
 		arm64AddLsl gives true
 
-		// The high multiply is one value with two instructions: x64's one-operand `imul` and arm64's
-		// three-address `SMULH`, each its own op.
-		imulHighReg gives false
+		// The high multiply is one value with two shapes: x64's one-operand group-3 form and arm64's
+		// three-address one, each its own op.
+		mulHighReg gives false
 
 		// `fneg` is arm64's own instruction (x64 spells the flip as `negF64RegReg`).
 		arm64Fneg gives true
 		arm64LoadAcquire or
 			arm64StoreRelease gives true
-		arm64Smulh gives true
+		arm64Mulh gives true
 
 		// ⛔ **`false`, AND IT IS THE ANSWER RATHER THAN A DEFAULT.** The counter is ONE op shared by both ISAs,
 		// so `true` here would make a pure-x64 module holding one report as arm64 and print every op in it
@@ -999,6 +999,23 @@ function x64DivideOpName(signedness IntegerSignedness) returns String
 		unsigned gives "divReg"
 	end 's'
 end 'x64DivideOpName'
+
+// ⚠ The SIGNED form prints as `imulHighReg`, which is not this op's name. That spelling is pinned
+// byte-for-byte by the existing goldens, none of which is about signedness, so the signed form keeps
+// the word they hold and only the unsigned one takes the op's own name.
+function x64MulHighOpName(signedness IntegerSignedness) returns String
+	return match signedness 's'
+		signed gives "imulHighReg"
+		unsigned gives "mulHighReg"
+	end 's'
+end 'x64MulHighOpName'
+
+function arm64MulHighOpName(signedness IntegerSignedness) returns String
+	return match signedness 's'
+		signed gives "smulh"
+		unsigned gives "umulh"
+	end 's'
+end 'arm64MulHighOpName'
 
 // Render one TargetOp as `<mnemonic> <operands>` (the ISA namespace is added by the caller).
 // EXHAUSTIVE over every TargetOp variant — see the file header: no bare `default`, so a new variant is
@@ -1253,11 +1270,11 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 
 		// Prints its ONE explicit operand, exactly as `divideReg` does — RAX and RDX are the op's implicit
 		// masks and a golden that spelled them would be showing the model rather than the instruction.
-		imulHighReg(src) gives "imulHighReg {vregName(src)}"
+		mulHighReg(src, signedness) gives "{x64MulHighOpName(signedness)} {vregName(src)}"
 		arm64Fneg(dest, src) gives "fneg {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64LoadAcquire(dest, base, width) gives "ldar.{accessWidthName(width)} {arm64VregName(dest)}, [{arm64VregName(base)}]"
 		arm64StoreRelease(base, src, width) gives "stlr.{accessWidthName(width)} [{arm64VregName(base)}], {arm64VregName(src)}"
-		arm64Smulh(dest, lhs, rhs) gives "smulh {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Mulh(dest, lhs, rhs, signedness) gives "{arm64MulHighOpName(signedness)} {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		covInc(pointId) gives "covInc {pointId}"
 
 		// Rendered as the word it rewrites, so the step and its address read at a glance in a golden.

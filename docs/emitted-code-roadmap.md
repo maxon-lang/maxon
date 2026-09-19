@@ -109,7 +109,7 @@ Pipeline: `maxon-bin/Compiler/IR/PassPipeline.maxon:395-413`.
 | **Loop unswitching** | ✅ `UnswitchInvariantGuards` (EC26) — the managed shape guards versioned, header loads hoisted under two runtime-stated facts; pressure-aware since EC28 |
 | **Redundant guard elimination by established facts** | ✅ `FoldEstablishedGuards` (EC31) — a forward dataflow per function over the managed shape predicates and a constant-index length floor; a guard already proved for its record folds |
 | **Cold-call spilling** | ✅ `IrBlock.heat` + `ColdBlockRuns` (EC28) — a call in a cold block does not confine the hot path; save/reload around the cold run |
-| **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 only; the `mul`→`shl` half is moot since EC16 |
+| **Strength reduction** (magic div, shift div) | ✅ `StrengthReduceDivision` (EC18) — x64 and arm64, signed and unsigned; the `mul`→`shl` half is moot since EC16 |
 | **Scaled-index addressing** (`[base+idx*8]`) | ✅ `loadRegBaseIndexScale` etc. (EC16) — x64 full, arm64 the `ADD` half |
 | **Static specialization of the inlined managed guards** | ✅ `Project.stdOpElementStrides` + `strideDispatchPlanForStamp` (EC15); `Project.stdOpTrivialElementSites` drops the `@40` guard (A4) |
 | Store-forwarding / dead-store elim | ❌ |
@@ -1071,13 +1071,13 @@ decision. `TargetDialect.absF64RegReg` and `StdToX64Conversion.materializeFloatE
 already recorded that wall from the other side; this row is the first to be stopped by it.
 
 **WHAT WAS ADDED, AND IT IS ONE OPCODE AND ONE INSTRUCTION.** `StdBinOpcode.mulHighSigned` (the high
-64 bits of the 128-bit signed product) and `TargetOp.imulHighReg` (x64's ONE-operand group-3
+64 bits of the 128-bit signed product) and `TargetOp.mulHighReg` (x64's ONE-operand group-3
 `imul r/m64`, `REX.W F7 /5`), whose register model is `divideReg`'s to the digit — implicit RAX in,
-implicit RAX+RDX out, one explicit operand — so `lowerMulHighSigned` is `lowerDivMod`'s three-op shape
+implicit RAX+RDX out, one explicit operand — so `lowerMulHigh` is `lowerDivMod`'s three-op shape
 and the twenty-odd exhaustive `TargetOp` matches each gained one arm.
 
 ⚠ **THE TARGET GATE IS THE ROW'S ONE PIECE OF SCOPE, AND IT IS THE HARDWARE'S ON ONE LANE AND THIS
-COMPILER'S ON THE OTHER.** `strengthReduceDivision` asks `targetLowersMulHighSigned` and rewrites
+COMPILER'S ON THE OTHER.** `strengthReduceDivision` asks `targetLowersMulHigh` and rewrites
 NOTHING where the answer is `false`: **wasm32 has no `i64.mul_high_s` at all** (four 32×32 products
 and their carries, ~20 instructions against the one `i64.div_s` it would replace), and **arm64 HAS the
 instruction — `SMULH Xd, Xn, Xm`, a plain three-address form strictly nicer than x64's — and has no
@@ -1188,7 +1188,7 @@ answer rather than a deleted trap.**
 
 ⭐⭐ **THE TIMED A/B — AND IT IS THE SECOND NON-ZERO RESULT THIS WORKSTREAM HAS HAD, ON THE PROGRAM
 THE ROW WAS DESIGNED AROUND.** Two compilers from ONE tree differing in the one line that turns the
-pass off (`targetLowersMulHighSigned`'s x64 arm), built in one session, each compiling the same three
+pass off (`targetLowersMulHigh`'s x64 arm), built in one session, each compiling the same three
 programs, runs interleaved on one box. **All three print byte-identical answers and all three binaries
 genuinely differ** (60,497 / 45,837 / 10,930 bytes apart — checked, because "same size" is not "same
 code" and the PE file size is 512-byte aligned):
@@ -1243,11 +1243,13 @@ test against the hardware `idiv` rather than a table of expected quotients:
 | `the-refused-divisors-keep-their-answers` | `i64.min mod -1`, `x / 1`, `x mod 1`, `x / i64.min` |
 | `a-reduced-division-still-meets-its-range-check` | that the rewrite keeps the division's RESULT VALUE ID, which the guard `insertRangeChecks` emitted names |
 
+**Since closed**: the **UNSIGNED magic sequence** — `deriveUnsignedMagic` takes libdivide's round-up
+(`u64_gen`) form rather than Hacker's Delight fig 10-2, because fig 10-2's `nc` track needs unsigned
+comparisons a signed `ParsedInt` cannot make, and the 65th bit rides the `addIndicator` fixup; and the
+**arm64 `SMULH`/`UMULH` ops**, so both lanes execute the row.
+
 **Left open**: the `mul` → `shl` half (`EC16` left six multiplies in the whole corpus and no site has
-been shown to pay); the **UNSIGNED magic sequence**, which needs a 65-bit multiplier and an
-"add-indicator" fixup — the unsigned power-of-two cases are taken and are the cheapest reductions
-here, but `x /u 10` still divides; the **arm64 `SMULH` op**, which is the whole of what that lane
-needs; a divisor at or above **2^62.5**, where the derivation leaves i64 range and declines;
+been shown to pay); a divisor at or above **2^62.5**, where the derivation leaves i64 range and declines;
 `|K| == 1`, an identity `foldConstOperands` cannot reach because `div`/`mod` have no `binOpImm` form;
 and — measured rather than assumed — **`const` UNIFICATION, which would buy this row a second time**.
 `(n / 8) + (n mod 8)` emits its four-op quotient chain ONCE because CSE merges the two; the same

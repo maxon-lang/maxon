@@ -1,7 +1,21 @@
 /// SHA-256 cryptographic hash function.
 /// @category Crypto
+// ⚠ **FULL-RANGE SIGNED THOUGH EVERY VALUE IT HOLDS IS A MASKED 32-BIT PATTERN, AND NARROWING IT COSTS
+// MORE GUARDS THAN IT REMOVES.** `RefineValueRanges` narrows neither an array-element load nor a
+// `shl`/`or` composition, which is what every word here is built out of — so a narrowed spelling proves
+// nothing about the values that reach a door and re-checks each of them at every parameter and return.
 typealias Word32 = int(i64.min to i64.max)
 typealias Sha256Words = Array with Word32
+
+// A rotate distance. 0 and 32 are excluded because the body spells the rotate as `shr n` / `shl (32-n)`,
+// and at either end one half of that pair shifts by the whole word.
+typealias RotateAmount = int(1 to 31)
+
+typealias BufferPos = int(0 to u64.max)
+
+// An index into the eight-word state. It is the one alias here that narrows to its real domain, which is
+// what makes the `otherwise` arms on `Sha256State.get`/`set` unreachable.
+typealias StateSlot = int(0 to 7)
 
 // The eight-word hash state (FIPS 180-4 section 5.3.3), held in a fixed-size Vector.
 //
@@ -36,7 +50,7 @@ let sha256KTable = [
 	0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]
 
-function sha256RotR(v Word32, n Word32) returns Word32
+function sha256RotR(v Word32, n RotateAmount) returns Word32
 	let right = v shr n
 	let left = (v shl (32 - n)) and 0xFFFFFFFF
 	return (right or left) and 0xFFFFFFFF
@@ -79,13 +93,13 @@ function sha256SmSigma1(v Word32) returns Word32
 	return (r17 xor r19 xor s10) and 0xFFFFFFFF
 end 'sha256SmSigma1'
 
-function sha256ReadBE32(buf ByteArray, off Word32) returns Word32
+function sha256ReadBE32(buf ByteArray, off BufferPos) returns Word32
 	// The caller (sha256Compress's schedule loop) guarantees off+3 < buf.count(); the otherwise
 	// branch is unreachable but must be syntactically present since Array.get throws.
-	let b0 = try buf.get(off) otherwise 0
-	let b1 = try buf.get(off + 1) otherwise 0
-	let b2 = try buf.get(off + 2) otherwise 0
-	let b3 = try buf.get(off + 3) otherwise 0
+	let b0 = try buf.get(off) otherwise panic("sha256: read past the block the caller sized")
+	let b1 = try buf.get(off + 1) otherwise panic("sha256: read past the block the caller sized")
+	let b2 = try buf.get(off + 2) otherwise panic("sha256: read past the block the caller sized")
+	let b3 = try buf.get(off + 3) otherwise panic("sha256: read past the block the caller sized")
 	return (b0 shl 24) or (b1 shl 16) or (b2 shl 8) or b3
 end 'sha256ReadBE32'
 
@@ -94,7 +108,7 @@ end 'sha256ReadBE32'
 // It is a function of its own rather than the body of sha256's block loop because the message
 // schedule, the padding buffer and the block offset are then not all live at once: the compression
 // needs the schedule and the state, and the caller needs the buffer and the offset.
-function sha256Compress(state Sha256State, padded ByteArray, blockOff Word32)
+function sha256Compress(state Sha256State, padded ByteArray, blockOff BufferPos)
 	// Message schedule: 64 extended words. An Array and not a Vector, because round r reads
 	// w[r-2], w[r-7], w[r-15], w[r-16] — indexes computed from a loop counter, which no fixed size
 	// makes constant. All four are in range by the loop header, so the otherwise branches below are
@@ -171,13 +185,11 @@ end 'sha256Compress'
 // state[slot] = (state[slot] + addend) mod 2^32 — the block's contribution, written once for the
 // eight slots that all owe it.
 //
-// ⚠ IT SAID "`slot` is a constant at every call site, so both accesses are decided at compile time
-// and neither is bounds-checked", AND THAT WAS FALSE WHERE IT WAS WRITTEN. The eight CALLERS pass
-// constants; `slot` inside this body is a parameter, and a parameter is what
-// `vector-static-index.an-index-that-is-a-parameter-keeps-the-check` exists to say no compiler folds.
-// Both accesses are checked, and the `otherwise` arms below are unreachable because the callers pass
-// 0..7 into an eight-slot type — which is a fact about the TYPE, not about the index.
-function sha256AddIntoState(state Sha256State, slot Word32, addend Word32)
+// ⚠ BOTH ACCESSES ARE BOUNDS-CHECKED THOUGH EVERY CALLER PASSES A CONSTANT. `slot` inside this body is a
+// PARAMETER, and a parameter is what `vector-static-index.an-index-that-is-a-parameter-keeps-the-check`
+// exists to say no compiler folds. The `otherwise` arms are unreachable all the same, and `StateSlot` is
+// why — the index cannot be outside 0..7 in the first place.
+function sha256AddIntoState(state Sha256State, slot StateSlot, addend Word32)
 	let current = try state.get(slot as ElementIndex) otherwise panic("sha256: state index unreachable")
 	try state.set(slot as ElementIndex, value: (current + addend) and 0xFFFFFFFF) otherwise panic("sha256: state index unreachable")
 end 'sha256AddIntoState'

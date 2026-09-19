@@ -36826,6 +36826,29 @@ export type Parser
 		proven.upsert(value, value: ProvenIntRange.create(low, high: high))
 	end 'recordProvenIntRange'
 
+	// ⭐⭐ **A COMPILER-MINTED MACHINE WORD IS PROVEN OVER `[0, 2^64-1]` AS A NAMELESS INTERVAL, NEVER BY
+	// RESOLVING `MachineWord` BY NAME — AND THE DIFFERENCE IS A FORGEABLE PROOF.** The by-name alias
+	// registry falls through to LAST-WINS across the whole program (`Project.maxon`'s tier note), and
+	// `fileMayUseReservedNames` admits a staged `*.test.maxon` into the reserved space, so a file
+	// declaring `typealias MachineWord = int(0 to 10)` would hand this door a range it never meant and
+	// delete a real guard from code that never saw that file. An interval names nothing and nothing can
+	// contest it.
+	//
+	// ⚠ It is also INVISIBLE to `integerValueDomain`, which is a feature and not a limitation: nothing
+	// downstream decides a divide's or a comparison's signedness off it, so a proof recorded here can
+	// only ever elide a guard that could not have fired — never change what the arithmetic computes.
+	function recordWholeMachineWordRange(value ValueId)
+		self.recordProvenIntRange(value, low: 0, high: UnsignedFullUpperPattern)
+	end 'recordWholeMachineWordRange'
+
+	function recordDeclaredAliasRange(value ValueId, alias RangedTypeAlias)
+		if aliasIsFloat(alias) 'aFloatAlias'
+			return
+		end 'aFloatAlias'
+
+		self.recordProvenIntRange(value, low: alias.low, high: alias.high)
+	end 'recordDeclaredAliasRange'
+
 	// ⭐ **DOES THE INTERVAL A COUNTED LOOP PROVED FOR `value` LIE INSIDE `target`?** The map probe and the
 	// one containment, spelled here so the joiner below reads as the two sentences it is. A function with no
 	// counted loop answers off the unwritten column and allocates nothing.
@@ -41979,8 +42002,21 @@ export type Parser
 	// column, so a positional call must still hand it a real per-argument one (`emptyArgLabels`'s own
 	// header). The two cases cannot be confused: a call with no arguments has nothing to slot either way.
 	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange, argLabels ByteArrayArray = NoRuntimeCallLabels) returns ValueId
-		return self.emitRuntimeCallInto(self.mintValue(resultTag, nameId: resultNameId), callee: callee, args: args, range: range, argLabels: argLabels)
+		let result = self.emitRuntimeCallInto(self.mintValue(resultTag, nameId: resultNameId), callee: callee, args: args, range: range, argLabels: argLabels)
+
+		if tagIsIntegral(resultTag) 'anIntegralAnswer'
+			self.recordDeclaredReturnRange(callee, value: result)
+		end 'anIntegralAnswer'
+
+		return result
 	end 'emitRuntimeCall'
+
+	function recordDeclaredReturnRange(callee ByteArray, value ValueId)
+		match self.signatures.declaredReturnAliasOf(callee) 'declaredReturn'
+			undeclared then return
+			declared(alias) then self.recordDeclaredAliasRange(value, alias: alias)
+		end 'declaredReturn'
+	end 'recordDeclaredReturnRange'
 
 	// ⭐⭐ **THE SAME EMISSION, ONTO A RESULT THE CALLER ALREADY MINTED — for the one construct whose
 	// ARGUMENTS have to name the record the call will hand back.** `<Union>.fromName("case", payload…)` moves
@@ -85569,11 +85605,11 @@ export type Parser
 			// rather than in the scalar band. See `BuiltinsSharedMemoryCreateName` for why they are their own
 			// family rather than members of the subprocess band.
 			if callee.equals(BuiltinsSharedMemoryCreateName) 'sharedMemoryCreate'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCreateName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.cstringFirst, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryCreateName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.cstringFirst, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'sharedMemoryCreate'
 
 			if callee.equals(BuiltinsSharedMemoryMapName) 'sharedMemoryMap'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryMapName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SharedMemoryMapName, arity: SharedMemoryTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'sharedMemoryMap'
 
 			if callee.equals(BuiltinsSharedMemoryReadWordName) 'sharedMemoryReadWord'
@@ -85610,7 +85646,7 @@ export type Parser
 			end 'profileThreadId'
 
 			if callee.equals(BuiltinsProfileThreadCyclesName) 'profileThreadCycles'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileThreadCyclesName, arity: ProfileOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileThreadCyclesName, arity: ProfileOneArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'profileThreadCycles'
 
 			if callee.equals(BuiltinsProfileSampleName) 'profileSample'
@@ -85650,7 +85686,7 @@ export type Parser
 			end 'profileScratchFree'
 
 			if callee.equals(BuiltinsProfileReadWordName) 'profileReadWord'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileReadWordName, arity: ProfileTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProfileReadWordName, arity: ProfileTwoArgArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
 			end 'profileReadWord'
 
 			if callee.equals(BuiltinsProfileWriteWordName) 'profileWriteWord'
@@ -85792,6 +85828,11 @@ export type Parser
 		try self.recordFrameDirective(func, intrinsic: intrinsic, calleeTok: calleeTok)
 
 		let result = self.mintValue(rawIntrinsicResultTag(intrinsic), nameId: UnnamedTypeId)
+
+		if rawResultKindOf(intrinsic) == RawResultKind.machineWord 'aMachineWord'
+			self.recordWholeMachineWordRange(result)
+		end 'aMachineWord'
+
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.rawIntrinsic(result, intrinsic: intrinsic, args: words, constant: constant), range: SourceRange.ofToken(calleeTok))
 		return result
 	end 'emitRawIntrinsic'
@@ -86742,14 +86783,25 @@ export type Parser
 	//
 	// A void result used in value position is rejected exactly as a void user-call is — the three void
 	// members are `subprocessReleaseHandle`, `subprocessResultRelease` and `subprocessCloseStdin`.
-	function emitScalarIntrinsicCall(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, shape IntrinsicArgShape, resultTag ValueTypeTag, resultUsed bool, calleeTok Token, resultNameId TypeNameId = UnnamedTypeId) returns ValueId throws ParseError
+	//
+	// ⚠ **`resultIsMachineWord` DEFAULTS TO FALSE AND IS OPTED INTO PER MEMBER, BECAUSE IT IS A PROOF AND
+	// NOT A DESCRIPTION.** Plenty of this band answers an integer that is a count, a verdict or a `-1`
+	// failure; claiming the whole unsigned word for one of those deletes a guard that CAN fire. The bit
+	// belongs only to a member whose answer is every 64-bit pattern and none of them an error value.
+	function emitScalarIntrinsicCall(args ValueIdArray, callee ByteArray, runtimeName ByteArray, arity ParamCount, shape IntrinsicArgShape, resultTag ValueTypeTag, resultUsed bool, calleeTok Token, resultNameId TypeNameId = UnnamedTypeId, resultIsMachineWord bool = false) returns ValueId throws ParseError
 		let callArgs = try self.requireIntrinsicArgs(args, callee: callee, arity: arity, shape: shape, calleeTok: calleeTok)
 
 		if resultTag == ValueTypeTag.void and resultUsed 'noValueToUse'
 			throw ParseError.voidCallResultUsed(String.from(callee), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
-		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: resultNameId, range: SourceRange.ofToken(calleeTok))
+		let result = self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: resultNameId, range: SourceRange.ofToken(calleeTok))
+
+		if resultIsMachineWord 'aMachineWord'
+			self.recordWholeMachineWordRange(result)
+		end 'aMachineWord'
+
+		return result
 	end 'emitScalarIntrinsicCall'
 
 	// ⭐ **A SUBPROCESS INTRINSIC WHOSE RESULT IS A FRESH OWNED `__ManagedMemory`** — the other six

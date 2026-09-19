@@ -542,9 +542,10 @@ function binOpImmIsIdentity(opcode StdBinOpcode, imm Imm32) returns bool
 		// The high multiply HAS no immediate form (`constFitsBinOpImmediate` refuses every constant
 		// for it), so no `binOpImm(mulHighSigned, …)` is ever produced and this arm is unreachable.
 		// `false` is nevertheless the right answer rather than a placeholder: `mulhi(x, 1)` is 0 for
-		// every non-negative x and -1 for every negative one — it is not `x`, so there is no immediate
-		// this operation is the identity at.
-		mulHighSigned gives false
+		// every x it does not read as negative and -1 for every x the signed form does — it is not `x`,
+		// so there is no immediate either operation is the identity at.
+		mulHighSigned or
+			mulHighUnsigned gives false
 	end 'o'
 end 'binOpImmIsIdentity'
 
@@ -740,8 +741,9 @@ function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 		// defensive. x64's one-operand `imul r/m64` has no immediate form at all, and the multiplier
 		// this opcode exists to carry is a full 64-BIT magic number that an `Imm32` field could not
 		// hold in the first place. Answering `true` for the magics that DO happen to fit 32 bits (every
-		// divisor above 2^32 has one) would mint a `binOpImm(mulHighSigned, …)` that no backend lowers.
-		mulHighSigned gives false
+		// divisor above 2^32 has one) would mint a `binOpImm` of a high multiply that no backend lowers.
+		mulHighSigned or
+			mulHighUnsigned gives false
 	end 'o'
 end 'constFitsBinOpImmediate'
 

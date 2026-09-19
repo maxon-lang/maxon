@@ -486,6 +486,7 @@ export let Grp2ExtShr = 5  // SHR r/m, count — LOGICAL right shift (zero-filli
 // Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
 let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
 let Grp3ExtNeg = 3  // NEG r/m
+let Grp3ExtMul = 4  // MUL r/m — UNSIGNED 128-bit multiply RAX × r/m (low→RAX, HIGH→RDX)
 let Grp3ExtImul = 5  // IMUL r/m — SIGNED 128-bit multiply RAX × r/m (low→RAX, HIGH→RDX)
 export let Grp3ExtDiv = 6  // DIV r/m — UNSIGNED divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
@@ -2375,14 +2376,14 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		storeBaseIndexScaleReg(base, index, scale, disp, src, width) then emitDataStore(code, base: resolveGpr(base), disp: disp, src: resolvePhysical(src), width: width, index: x64SibIndex(resolveGpr(index)), indexScale: scale)
 		arm64AddLsl then panic("emitX64TargetOp: an arm64 shifted-register `add` reached the x64 encoder — x64 spells a scaled-index address as `leaRegBaseIndexScale`")
 
-		// The ONE-operand `imul r/m64` (`REX.W F7 /5`): RDX:RAX ⟸ RAX × src. The same group-3
-		// encoder the two divides use, at a different extension, which is the whole difference between
-		// the four one-operand forms this family has.
-		imulHighReg(src) then encodeGrp3Reg(code, ext: Grp3ExtImul, reg: resolveGpr(src))
+		// The ONE-operand `imul`/`mul r/m64` (`REX.W F7 /5` and `/4`): RDX:RAX ⟸ RAX × src. The same
+		// group-3 encoder the two divides use, at a different extension, which is the whole difference
+		// between the four one-operand forms this family has.
+		mulHighReg(src, signedness) then encodeGrp3Reg(code, ext: Grp3ExtImul if signedness == IntegerSignedness.signed else Grp3ExtMul, reg: resolveGpr(src))
 		arm64Fneg then panic("emitTargetOp: an arm64 `fneg` reached the x64 encoder — the arm64 backend encodes the arm64 band; x64 spells the flip as `negF64RegReg`")
 		arm64LoadAcquire or
 			arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
-		arm64Smulh then panic("emitTargetOp: an arm64 `SMULH` reached the x64 encoder — x64 spells the high half of a signed product as the one-operand `imulHighReg`, which reads RAX and writes RDX:RAX")
+		arm64Mulh then panic("emitTargetOp: an arm64 `SMULH` reached the x64 encoder — x64 spells the high half of a signed product as the one-operand `mulHighReg`, which reads RAX and writes RDX:RAX")
 		covInc(pointId) then encodeCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
 
 		// The unlocked read-modify-writes. Both forms reach `emitBaseDispModRmBits`, which answers the rsp/r12
@@ -2640,11 +2641,11 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl or
-			imulHighReg or
+			mulHighReg or
 			arm64Fneg or
 			arm64LoadAcquire or
 			arm64StoreRelease or
-			arm64Smulh or
+			arm64Mulh or
 			covInc or
 			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives BranchWindowRole.other
@@ -2951,7 +2952,7 @@ end 'x64PrologueFrameBytes'
 // The bytes one op reserves: the `prologue`'s operand, and 0 for everything else. Split out because the
 // scan above needs an answer for every op and `prologue(0)` is never emitted, so 0 says "not it".
 //
-// EXHAUSTIVE by range rather than by `default`, so a variant appended past `arm64Smulh` fails to compile
+// EXHAUSTIVE by range rather than by `default`, so a variant appended past `arm64Mulh` fails to compile
 // here until it is consciously placed.
 function x64OpFrameBytes(op TargetOp) returns StackSize
 	return match op 'frame'
@@ -3091,11 +3092,11 @@ function x64OpFrameBytes(op TargetOp) returns StackSize
 			loadRegBaseIndexScale or
 			storeBaseIndexScaleReg or
 			arm64AddLsl or
-			imulHighReg or
+			mulHighReg or
 			arm64Fneg or
 			arm64LoadAcquire or
 			arm64StoreRelease or
-			arm64Smulh or
+			arm64Mulh or
 			covInc or
 			x64AluBaseDispReg or
 			x64AluBaseDispImm32 gives 0

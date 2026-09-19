@@ -200,6 +200,7 @@ func @main {
     x64.storeSlotReg slot1, r8
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.movRegImm32 rcx, 0
     x64.storeBaseDispReg.word64 [r8 + 8], rcx
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -207,6 +208,7 @@ func @main {
     x64.callDirect __managed_cursor_index
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r8
+    x64.movRegReg rax, r14
     x64.callDirect __managed_vacate
     x64.movRegReg rcx, r14
     x64.callDirect __gt_await
@@ -227,9 +229,10 @@ func @main {
     x64.loadRegBaseDisp.word64 r15, [r8 + 0]
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeSlotReg slot3, rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [r8 + 8], rax
-    x64.loadRegBaseDisp.word64 rcx, [r15 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rcx
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.storeSlotReg slot5, rax
     x64.callDirect __managed_cursor_index
@@ -244,6 +247,7 @@ func @main {
     x64.cmpRegReg r8, rax
     x64.jcc notEqual, ifcont
   matching:
+    x64.loadRegSlot rax, slot3
     x64.loadRegSlot rdx, slot4
     x64.loadRegSlot rcx, slot5
     x64.callDirect __managed_vacate
@@ -300,7 +304,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at Array.maxon:476: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at Array.maxon:497: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88

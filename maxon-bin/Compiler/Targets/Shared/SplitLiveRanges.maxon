@@ -5755,7 +5755,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 
 		// The high multiply DEFINES NOTHING EXPLICIT — its product lands in the implicit RAX/RDX
 		// pair — and it reads a register besides. `divideReg`'s answer, for both halves of the reason.
-		imulHighReg gives false
+		mulHighReg gives false
 
 		// arm64 `fneg` reads a register. Not rematerializable.
 		arm64Fneg gives false
@@ -5765,7 +5765,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 			arm64StoreRelease gives false
 
 		// `SMULH` reads two registers the pass cannot reconstruct. Not rematerializable.
-		arm64Smulh gives false
+		arm64Mulh gives false
 
 		// A coverage counter defines no value, so it is never a rematerialization candidate.
 		covInc gives false
@@ -6875,11 +6875,11 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 			arm64AddLsl panic("constDefInfo: def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false, so this never reaches here; named rather than swallowed.
-		imulHighReg panic("constDefInfo: def is not a constant materialization")
+		mulHighReg panic("constDefInfo: def is not a constant materialization")
 		arm64Fneg panic("constDefInfo: def is not a constant materialization")
 		arm64LoadAcquire or
 			arm64StoreRelease panic("constDefInfo: def is not a constant materialization")
-		arm64Smulh or
+		arm64Mulh or
 			covInc or
 			x64AluBaseDispReg or
 			x64AluBaseDispImm32 panic("constDefInfo: def is not a constant materialization")
@@ -7170,11 +7170,11 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64AddLsl(dest, base, index, scale) then return TargetOp.arm64AddLsl(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), index: substituteVReg(index, from: from, to: to), scale: scale)
 
 		// One register operand to substitute, exactly as `divideReg` has.
-		imulHighReg(src) then return TargetOp.imulHighReg(substituteVReg(src, from: from, to: to))
+		mulHighReg(src, signedness) then return TargetOp.mulHighReg(substituteVReg(src, from: from, to: to), signedness: signedness)
 		arm64Fneg(dest, src) then return TargetOp.arm64Fneg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64LoadAcquire(dest, base, width) then return TargetOp.arm64LoadAcquire(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), width: width)
 		arm64StoreRelease(base, src, width) then return TargetOp.arm64StoreRelease(substituteVReg(base, from: from, to: to), src: substituteVReg(src, from: from, to: to), width: width)
-		arm64Smulh(dest, lhs, rhs) then return TargetOp.arm64Smulh(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Mulh(dest, lhs, rhs, signedness) then return TargetOp.arm64Mulh(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to), signedness: signedness)
 		covInc(pointId) then return TargetOp.covInc(pointId)
 		x64AluBaseDispReg(base, disp, src, alu) then return TargetOp.x64AluBaseDispReg(substituteVReg(base, from: from, to: to), disp: disp, src: substituteVReg(src, from: from, to: to), alu: alu)
 		x64AluBaseDispImm32(base, disp, imm, alu) then return TargetOp.x64AluBaseDispImm32(substituteVReg(base, from: from, to: to), disp: disp, imm: imm, alu: alu)

@@ -25,8 +25,6 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "foo/bar"
   __il_body#4:
@@ -36,94 +34,97 @@ func @main {
     x64.jcc notEqual, tryerr
   __il_body#12:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#38:
+  __il_body#36:
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-  __il_cont#37:
-    x64.cmpRegImm32 r12, 3
-    x64.jcc below, ifcont#26
-  checkDrive:
+  __il_cont#35:
+    x64.cmpRegImm32 r12, 1
+    x64.movRegImm32 rax, 0
+    x64.jcc below, scmerge#14
+  andrhs#13:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 0
     x64.callDirect String.byteAtOrPanic
-    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r8, 92
+    x64.setccReg equal, rax
+  scmerge#14:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#24
+  leadingSeparator:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#11
+  __il_body#24:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+  __il_body#38:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  __il_cont#37:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc aboveEqual, ifcont#26
+  tooShort:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#23
+  ifcont#26:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect String.byteAtOrPanic
+    x64.cmpRegImm32 r8, 65
+    x64.movRegImm32 rax, 0
+    x64.jcc less, scmerge#28
+  andrhs#27:
+    x64.cmpRegImm32 r8, 90
+    x64.setccReg lessEqual, rax
+  scmerge#28:
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, scmerge#32
+  orrhs:
+    x64.cmpRegImm32 r8, 97
+    x64.movRegImm32 rax, 0
+    x64.jcc less, scmerge#31
+  andrhs#30:
+    x64.cmpRegImm32 r8, 122
+    x64.setccReg lessEqual, rax
+  scmerge#31:
+    x64.movRegReg rcx, rax
+  scmerge#32:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __il_cont#23
+  andrhs#33:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 1
     x64.callDirect String.byteAtOrPanic
-    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r8, 58
+    x64.setccReg equal, rax
+  __il_cont#23:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#40
+  andrhs#17:
+    x64.cmpRegImm32 r12, 3
+    x64.setccReg aboveEqual, rax
+    x64.jmp scmerge#18
+  critsplit#40:
+    x64.movRegReg rax, rcx
+  scmerge#18:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#39
+  andrhs#19:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 2
     x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r14, 58
-    x64.movRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#15
-  andrhs#14:
     x64.cmpRegImm32 r8, 92
     x64.setccReg equal, rax
-  scmerge#15:
+    x64.jmp scmerge#20
+  critsplit#39:
+    x64.movRegReg rax, rcx
+  scmerge#20:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#26
-  hasDriveColon:
-    x64.cmpRegImm32 r13, 65
-    x64.movRegImm32 rax, 0
-    x64.jcc less, scmerge#18
-  andrhs#17:
-    x64.cmpRegImm32 r13, 90
-    x64.setccReg lessEqual, rax
-  scmerge#18:
-    x64.movRegImm32 rcx, 1
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#22
-  orrhs:
-    x64.cmpRegImm32 r13, 97
-    x64.movRegImm32 rax, 0
-    x64.jcc less, scmerge#21
-  andrhs#20:
-    x64.cmpRegImm32 r13, 122
-    x64.setccReg lessEqual, rax
-  scmerge#21:
-    x64.movRegReg rcx, rax
-  scmerge#22:
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, ifcont#26
-  isDrive:
+    x64.jcc equal, ifcont#22
+  driveRoot:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#11
-  ifcont#26:
-    x64.cmpRegImm32 r12, 2
-    x64.jcc below, ifcont#32
-  checkUNC:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 0
-    x64.callDirect String.byteAtOrPanic
-    x64.movRegReg r13, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 1
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r13, 92
-    x64.movRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#29
-  andrhs#28:
-    x64.cmpRegImm32 r8, 92
-    x64.setccReg equal, rax
-  scmerge#29:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#32
-  isUNC:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#11
-  ifcont#32:
-    x64.cmpRegImm32 r12, 1
-    x64.jcc below, ifcont#36
-  checkRooted:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.movRegImm32 rdx, 0
-    x64.callDirect String.byteAtOrPanic
-    x64.cmpRegImm32 r8, 92
-    x64.jcc notEqual, ifcont#36
-  isRooted:
-    x64.movRegImm32 rax, 1
-    x64.jmp __il_cont#11
-  ifcont#36:
+  ifcont#22:
     x64.movRegImm32 rax, 0
   __il_cont#11:
     x64.xorRegImm32 rax, rax, 1
@@ -140,19 +141,15 @@ func @main {
     x64.callDirect __destruct_FilePath
     x64.movRegReg r8, r12
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at FilePath.maxon:31: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

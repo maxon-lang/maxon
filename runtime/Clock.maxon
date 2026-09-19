@@ -32,21 +32,15 @@ let FileTimeTicksFrom1601To1970 = 116444736000000000
 // once, and a shared word would hand each the other's reading — a wall clock that jumps.
 let WallClockScratchBytes = 8
 
-// The whole FILETIME the host wrote, and the calendar seconds it scales to.
+// The whole FILETIME the host wrote, and the calendar seconds it scales to. Neither can be negative, and
+// the unguarded-door rule `runtime/Word.maxon` carries is what says an `int` may spell that here.
 //
-// ⛔ **BOTH ARE FULL-RANGE SIGNED, AND THE HOST'S OWN WORD IS WHY.** A FILETIME cannot be negative and
-// `stdlib/Clock.maxon` publishes `UnixSeconds` as `int(0 to u64.max)`, so the unsigned spelling reads as
-// the honest one — and it is not. `0 to u64.max` is not vacuous off a `MachineWord`: it emits a
-// sign-bit test and `__rc_panic` on the loaded word, a second on the quotient, and an unsigned divide in
-// place of the signed magic multiply. MEASURED. Those guards can fire only on a FILETIME past year 30828,
-// which is to say only on a word the host itself wrote — and a runtime body has no caller to report a
-// panic to. A guarded door is exactly what this tier must not have.
-//
-// ⚠ **THE NAME IS `EpochSeconds` AND NOT `UnixSeconds` FOR THAT REASON.** The value crosses into
-// `stdlib`'s `UnixSeconds` at the intrinsic call, where it is non-negative in fact; sharing the name
-// across the boundary would assert the two ranges agree, and they deliberately do not.
-typealias FileTimeTicks = int(i64.min to i64.max)
-typealias EpochSeconds = int(i64.min to i64.max)
+// ⚠ **THE NAME IS `EpochSeconds` AND NOT `UnixSeconds`, WHICH IS WHAT `stdlib/Clock.maxon` PUBLISHES FOR
+// THE SAME RANGE.** A second declaration of that name would CONTEST the stdlib's in the by-name alias
+// registry, which resolves last-wins for a reader that declares neither — so the duplicate would decide
+// what `UnixSeconds` means in files that have nothing to do with this tier.
+typealias FileTimeTicks = int(0 to u64.max)
+typealias EpochSeconds = int(0 to u64.max)
 
 // ⭐ **`__clock_now_unix_s()` — WHOLE SECONDS SINCE 1970-01-01 UTC.** The host op reads its calendar into
 // the scratch word and nothing more; the epoch shift and the ticks→seconds scale are HERE, so a lane

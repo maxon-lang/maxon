@@ -2051,18 +2051,21 @@ end '__fixedPrecisionText'
 // The width, the fill, the base and the signedness are all compile-time constants the PARSER lifts out
 // of the specifier, so nothing here reads text.
 
-// Half the base — the only form of it the conversion needs, see `__unsignedDigitStep`. Its TYPE is
-// what keeps the division in the digit loop a non-throwing one: a divisor that cannot be zero.
+// Half the base — the form the parser lifts out of the specifier, doubled at the digit loop. Its lower
+// bound of 1 is what makes the `otherwise` arms on that loop's `/` and `mod` unreachable panics.
 typealias HalfRadix = int(1 to 8)
 
 // A digit of any base this renders, before it becomes a character.
 typealias RadixDigit = int(0 to 15)
 
-// Bit 63 cleared. Derived from `i64.min` for the same reason `__FloatSignBit` is — a `ParsedInt` is
-// SIGNED, so that is the only way Maxon can write a set top bit. Kept apart from `__FloatMagnitudeMask`
-// deliberately: the two carry equal bits and answer different questions (where a DOUBLE's sign lives
-// versus where an INTEGER's does), and merging them would couple them through a coincidence.
-let __IntMagnitudeMask = (not (i64.min as ParsedInt)) as ParsedInt
+// ⭐ **THE TWO-STEP CAST THROUGH THESE IS THE ONE BINDING DOOR THAT MAKES THE DIGIT LOOP'S DIVIDE
+// UNSIGNED, AND BOTH STEPS ARE LOAD-BEARING.** `ParsedInt` is signed, so `bits(64)` is the only spelling
+// that reinterprets a set bit 63 without a check, and `int(0 to u64.max)` is the only one that then makes
+// `/` and `mod` read the whole pattern as a magnitude. Typed back to `ParsedInt` anywhere in that loop,
+// every value past `i64.max` renders as its negative — and the divide stops reaching a magic multiply.
+typealias RenderedPattern = bits(64)
+
+typealias RenderedMagnitude = int(0 to u64.max)
 
 // The most digits a 64-bit pattern can produce in any base this renders — u64.max in base 2.
 let __MaxRadixDigits = 64
@@ -2093,12 +2096,13 @@ end '__int_toStringFormatted'
 // `bits` read as an UNSIGNED 64-bit pattern, written in the base `2 * halfRadix`.
 function __unsignedDigits(bits ParsedInt, halfRadix HalfRadix, uppercase bool) returns String
 	var text = ""
-	var rest = bits
+	var rest = bits as RenderedPattern as RenderedMagnitude
+	let radix = 2 * (halfRadix as RenderedMagnitude)
 
 	for _ in 0 upto __MaxRadixDigits 'place'
-		let step = __unsignedDigitStep(rest, halfRadix: halfRadix)
-		text = "{__radixDigitText(step.digit, uppercase: uppercase)}{text}"
-		rest = step.quotient
+		let digit = try (rest mod radix) otherwise panic("__unsignedDigits: the radix is twice a HalfRadix and cannot be zero")
+		text = "{__radixDigitText(digit as RadixDigit, uppercase: uppercase)}{text}"
+		rest = try (rest / radix) otherwise panic("__unsignedDigits: the radix is twice a HalfRadix and cannot be zero")
 
 		// Checked AFTER writing a digit, so zero renders as `0` rather than as nothing.
 		if rest == 0 'highestPlace'
@@ -2108,28 +2112,6 @@ function __unsignedDigits(bits ParsedInt, halfRadix HalfRadix, uppercase bool) r
 
 	panic("__unsignedDigits: a 64-bit pattern cannot hold more than {__MaxRadixDigits} digits in any base, but the quotient had not reached zero")
 end '__unsignedDigits'
-
-// One place of `bits` in the base `2 * halfRadix`, and what is left above it.
-type __UnsignedDigitStep
-	public var quotient as ParsedInt
-	public var digit as RadixDigit
-
-	static function create(quotient ParsedInt, digit RadixDigit) returns __UnsignedDigitStep
-		return Self{quotient: quotient, digit: digit}
-	end 'create'
-end '__UnsignedDigitStep'
-
-// ⭐ **ONE DIVISION SERVES EVERY BASE, BECAUSE EVERY BASE A SPECIFIER CAN ASK FOR IS EVEN**, and
-// halving the pattern first is what makes it an ORDINARY SIGNED division. `bits shr 1` copies the sign
-// bit down and the mask clears it, so `half` is non-negative whatever bit 63 held. With
-// `bits = 2*half + lowBit` and `half = halfRadix*quotient + rest`, the digit is `2*rest + lowBit` and
-// the quotient is the one an unsigned division by `2*halfRadix` would have given — so a value with bit
-// 63 set converts correctly without Maxon needing an unsigned divide at all.
-function __unsignedDigitStep(bits ParsedInt, halfRadix HalfRadix) returns __UnsignedDigitStep
-	let half = (bits shr 1) and __IntMagnitudeMask
-	let radix = halfRadix as ParsedInt
-	return __UnsignedDigitStep.create(try (half / radix) otherwise panic("halfRadix is never zero"), digit: (2 * (try (half mod radix) otherwise panic("halfRadix is never zero")) + (bits and 1)) as RadixDigit)
-end '__unsignedDigitStep'
 
 // The character of one digit. Numerals need no table: a value 0..9 interpolates AS its character,
 // which is the same reason `__digitText` needs neither ASCII arithmetic nor `String.from` (that would

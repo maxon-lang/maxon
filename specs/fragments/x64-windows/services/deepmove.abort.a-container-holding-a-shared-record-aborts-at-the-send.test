@@ -140,8 +140,11 @@ func @main {
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.storeBaseDispReg.word64 [r14 + 0], r13
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __sole_Array_Cell
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -204,7 +207,7 @@ func @Svc.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_11
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_13
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -316,7 +319,7 @@ func @Svc.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_12
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_14
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

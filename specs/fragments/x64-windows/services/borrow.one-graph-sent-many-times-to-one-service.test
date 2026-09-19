@@ -279,8 +279,11 @@ func @main {
     x64.movRegImm32 rbx, 1
     x64.jmp forhdr#1
   lend:
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r13
     x64.callDirect __share_Tree
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.movRegReg rcx, r13
     x64.callDirect __mm_retain
     x64.movRegReg r14, r8
@@ -473,7 +476,7 @@ func @Tally.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=take, [2]=report] @__jumptable_59
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=take, [2]=report] @__jumptable_61
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -618,9 +621,12 @@ func @Tally.__loop {
   __il_cont#17:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
-    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r13, 0
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __managed_sole_alone
     x64.loadRegSlot rcx, slot0
     x64.loadRegSlot rdx, slot3
+    x64.movRegReg rax, r13
     x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
@@ -633,7 +639,7 @@ func @Tally.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=report] @__jumptable_60
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=report] @__jumptable_62
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

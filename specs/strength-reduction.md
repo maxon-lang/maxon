@@ -500,3 +500,218 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: an-unsigned-magic-divisor-agrees-with-the-hardware-divide -->
+⭐⭐ **THE UNSIGNED GATE, AND ITS ORACLE IS THE HARDWARE `div` JUST AS THE SIGNED ONE'S IS `idiv`.** Every
+comparison here computes the answer twice: once by dividing by the LITERAL, and once through a reference
+function whose divisor is a RUNTIME value of the same magnitude. The reference's divisor carries a ranged
+type (`int(2 to …)`), which proves it non-zero, so `Parser.emitDivOrMod` emits a bare divide with no guard
+and no throw — the comparison is against the instruction and against nothing this pass wrote. The reference
+also carries a ranged-parameter guard, which keeps it outside `inlineLeaves`' budget: a spliced reference
+would have its divisor folded to the literal and be reduced too, and the case would then compare a
+reduction against itself.
+
+**The dividends are the unsigned edges, and three of them are past `i64.max`.** An integer literal is
+signed 64-bit and cannot name them, so they are built by wrapping arithmetic from `top` — the first value
+with bit 63 set. Those are the dividends that separate an unsigned derivation from the signed one: a
+64-bit reciprocal that is only right for a dividend the top bit of which is clear answers `0`, `1`, `31`
+and `i64.max` perfectly and is wrong for every value above.
+
+**The divisors exercise the two arms the derivation has, and neither of them pre-shifts the dividend.**
+Shape (i) is a `mulHighUnsigned` by the derived multiplier and ONE logical shift right by
+`floor(log2 d)`: `3`, `10`, `641`, `10000000` and `4294967295` take it. Shape (ii) is for a divisor whose
+reciprocal does not fit in 64 bits, and it recovers the 65th bit with the add-indicator fixup
+`((n - q0) shrLogical 1) + q0` before that same logical shift: `7`, `14` and `100` take it, and `7` is the
+FIRST divisor in the list that does — a list that stopped at `3` would test the fixup not at all.
+`10000000` and `4294967295` are large enough that the reciprocal's high word is what carries the answer,
+and `4294967295` is `2^32 - 1`, the divisor whose reciprocal most nearly needs a 65th bit without
+taking one. Both `/` and
+`mod` are asked of each, because a `mod` is derived from its own quotient and a fixup that is wrong only in
+the subtraction would otherwise go unseen. Each comparison returns its own exit code, so a failure names
+the divisor and the operator it failed on rather than merely reporting a mismatch.
+```maxon
+typealias Unsigned = bits(64)
+typealias UnsignedArray = Array with Unsigned
+typealias UPosDivisor = int(2 to 4294967295)
+
+function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUMod'
+
+function edgeDividends() returns UnsignedArray
+	var ns = UnsignedArray.create()
+	ns.push(0)
+	ns.push(1)
+	ns.push(31)
+	ns.push(9223372036854775807)
+	let top = (9223372036854775807 as Unsigned) + 1
+	ns.push(top)
+	ns.push(top + 9223372036854775807)
+	ns.push(top + 3122306832379791762)
+	return ns
+end 'edgeDividends'
+
+function main() returns ExitCode
+	for u in edgeDividends() 'each'
+		if u / 3 != refUDiv(u, d: 3) 'divThree'
+			return 1
+		end 'divThree'
+		if u mod 3 != refUMod(u, d: 3) 'modThree'
+			return 2
+		end 'modThree'
+		if u / 7 != refUDiv(u, d: 7) 'divSeven'
+			return 3
+		end 'divSeven'
+		if u mod 7 != refUMod(u, d: 7) 'modSeven'
+			return 4
+		end 'modSeven'
+		if u / 10 != refUDiv(u, d: 10) 'divTen'
+			return 5
+		end 'divTen'
+		if u mod 10 != refUMod(u, d: 10) 'modTen'
+			return 6
+		end 'modTen'
+		if u / 14 != refUDiv(u, d: 14) 'divFourteen'
+			return 7
+		end 'divFourteen'
+		if u mod 14 != refUMod(u, d: 14) 'modFourteen'
+			return 8
+		end 'modFourteen'
+		if u / 100 != refUDiv(u, d: 100) 'divHundred'
+			return 9
+		end 'divHundred'
+		if u mod 100 != refUMod(u, d: 100) 'modHundred'
+			return 10
+		end 'modHundred'
+		if u / 641 != refUDiv(u, d: 641) 'divSixFortyOne'
+			return 11
+		end 'divSixFortyOne'
+		if u mod 641 != refUMod(u, d: 641) 'modSixFortyOne'
+			return 12
+		end 'modSixFortyOne'
+		if u / 10000000 != refUDiv(u, d: 10000000) 'divTenMillion'
+			return 13
+		end 'divTenMillion'
+		if u mod 10000000 != refUMod(u, d: 10000000) 'modTenMillion'
+			return 14
+		end 'modTenMillion'
+		if u / 4294967295 != refUDiv(u, d: 4294967295) 'divFourGig'
+			return 15
+		end 'divFourGig'
+		if u mod 4294967295 != refUMod(u, d: 4294967295) 'modFourGig'
+			return 16
+		end 'modFourGig'
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: the-hardest-unsigned-dividend-for-a-divisor -->
+⛔⛔ **THE UNSIGNED ANALOGUE OF `anc`, AND IT EXISTS FOR THE SAME MEASURED REASON.** The gate above tests
+the EMITTED SEQUENCE and takes the CONSTANT that sequence carries on trust. A fixed-point reciprocal that
+is slightly too coarse is still right for almost every dividend in a 64-bit space — it is wrong only in a
+narrow band around the value the derivation's exit condition is stated in terms of, and a dividend list
+assembled from round numbers and range ends will miss that band every time. So this case computes that
+value per divisor and probes its immediate neighbourhood.
+
+**For the unsigned derivation that value is `nc`, the largest `n < 2^64` with `n mod d == d - 1`** — the
+dividend that comes closest to the next multiple of `d` without reaching it, and therefore the one where a
+reciprocal that rounds a shade low first fails to carry.
+
+⚠ **IT IS DERIVED HERE, NOT TABULATED.** `nc` is `u64.max - ((u64.max mod d + 1) mod d)`, and both `mod`s
+in `hardestDividend` read a RUNTIME divisor, so neither is reduced and neither can be folded: the value
+this case probes is the hardware's arithmetic, not a restatement of the pass's. Writing the five constants
+out instead would make this file a second transcription of the derivation it is supposed to check.
+
+⚠ **`nc + 1` is probed only when there is room for it.** When `u64.max mod d` is itself `d - 1`, `nc` IS
+`u64.max` and `nc + 1` wraps to `0` — which is a legal dividend but not a neighbour, and would quietly
+replace the probe with one the gate above already makes. The guard is an equality against `u64.max` rather
+than an ordering, so it says exactly that and nothing about how patterns compare.
+```maxon
+typealias Unsigned = bits(64)
+typealias UnsignedArray = Array with Unsigned
+typealias UPosDivisor = int(2 to 4294967295)
+
+function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUMod'
+
+// The largest `n` below 2^64 with `n mod d == d - 1`, from two runtime-divisor `mod`s the pass cannot
+// see through and the folder cannot evaluate.
+function hardestDividend(d UPosDivisor) returns Unsigned
+	let umax = u64.max as Unsigned
+	return umax - (try ((refUMod(umax, d: d) + 1) mod (d as Unsigned)) otherwise panic("d is never zero"))
+end 'hardestDividend'
+
+function neighbourhood(d UPosDivisor) returns UnsignedArray
+	let umax = u64.max as Unsigned
+	let nc = hardestDividend(d)
+	var ns = UnsignedArray.create()
+	ns.push(nc)
+	ns.push(nc - 1)
+
+	if nc != umax 'roomAbove'
+		ns.push(nc + 1)
+	end 'roomAbove'
+
+	return ns
+end 'neighbourhood'
+
+function main() returns ExitCode
+	for u in neighbourhood(3) 'three'
+		if u / 3 != refUDiv(u, d: 3) 'divThree'
+			return 1
+		end 'divThree'
+		if u mod 3 != refUMod(u, d: 3) 'modThree'
+			return 2
+		end 'modThree'
+	end 'three'
+	for u in neighbourhood(7) 'seven'
+		if u / 7 != refUDiv(u, d: 7) 'divSeven'
+			return 3
+		end 'divSeven'
+		if u mod 7 != refUMod(u, d: 7) 'modSeven'
+			return 4
+		end 'modSeven'
+	end 'seven'
+	for u in neighbourhood(10) 'ten'
+		if u / 10 != refUDiv(u, d: 10) 'divTen'
+			return 5
+		end 'divTen'
+		if u mod 10 != refUMod(u, d: 10) 'modTen'
+			return 6
+		end 'modTen'
+	end 'ten'
+	for u in neighbourhood(641) 'sixFortyOne'
+		if u / 641 != refUDiv(u, d: 641) 'divSixFortyOne'
+			return 7
+		end 'divSixFortyOne'
+		if u mod 641 != refUMod(u, d: 641) 'modSixFortyOne'
+			return 8
+		end 'modSixFortyOne'
+	end 'sixFortyOne'
+	for u in neighbourhood(10000000) 'tenMillion'
+		if u / 10000000 != refUDiv(u, d: 10000000) 'divTenMillion'
+			return 9
+		end 'divTenMillion'
+		if u mod 10000000 != refUMod(u, d: 10000000) 'modTenMillion'
+			return 10
+		end 'modTenMillion'
+	end 'tenMillion'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
