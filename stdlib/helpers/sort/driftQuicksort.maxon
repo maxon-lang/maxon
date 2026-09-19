@@ -53,8 +53,7 @@ public extension Array
 	// out. Written the other way round the two arms remain mutually exclusive
 	// and the program is still sound, but the borrow rule cannot see that and
 	// refuses it (E3070, blaming the arm that in that iteration never runs).
-	function stablePartition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator, trace SortTrace) returns SortIndex
-		trace("driftQuicksort.partition")
+	function stablePartition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns SortIndex
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
 		pivotHold.clear()
 		pivotHold.push(pivotAtHome)
@@ -175,13 +174,13 @@ public extension Array
 	// `pivotHold` is `stablePartition`'s one-slot pivot storage, threaded from
 	// `driftsortRange` alongside `scratch` for the same reason: allocated once
 	// per sort rather than once per partition.
-	public function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator, trace SortTrace)
+	public function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator)
 		var curLo = lo
 		var curHi = hi
 
 		while curHi - curLo > 32 'loop'
-			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp, trace: trace)
-			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, pivotHold: pivotHold, cmp: cmp, trace: trace)
+			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
+			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, pivotHold: pivotHold, cmp: cmp)
 
 			// [curLo, p) is the `< pivot` class; [p, curHi) is `>= pivot`.
 			// If the left class is empty, every element is `>= pivot`; sorting
@@ -217,14 +216,14 @@ public extension Array
 			end 'allGe'
 
 			if leftLen <= rightLen 'leftSmaller'
-				self.stableQuicksortRange(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp, trace: trace)
+				self.stableQuicksortRange(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 				curLo = p
 			end 'leftSmaller' else 'rightSmaller'
-				self.stableQuicksortRange(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp, trace: trace)
+				self.stableQuicksortRange(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 				curHi = p
 			end 'rightSmaller'
 		end 'loop'
 
-		self.smallSortRange(curLo, hi: curHi, cmp: cmp, trace: trace)
+		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'stableQuicksortRange'
 end 'Array'

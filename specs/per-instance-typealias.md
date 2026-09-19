@@ -434,10 +434,10 @@ statement about WHOSE member it is and not about which file it was written in. S
 in one file may spell a member `type Foo` — or another `extension Foo` — declared somewhere else,
 exactly as it may call a method declared somewhere else.
 
-`stdlib/helpers/sort/` is the case this exists for. Six files each write `export extension Array`;
-`insertionSort.maxon:17-19` declares `SortIndex`, `SortComparator` and `SortTrace`, `mergeSort.maxon:8`
+`stdlib/helpers/sort/` is the case this exists for. Six files each write `public extension Array`;
+`insertionSort.maxon:14-15` declares `SortIndex` and `SortComparator`, `mergeSort.maxon:8`
 declares `MergeScratchArray`, and every one of the six spells BARE from its own body whichever of the
-four it needs, without regard to which file wrote the declaration.
+three it needs, without regard to which file wrote the declaration.
 
 ⛔ **A FLAT, PROGRAM-WIDE NAME CANNOT DIAGNOSE TWO TYPES DECLARING ONE MEMBER NAME, AND the compiler
 DELIBERATELY DOES NOT USE ONE.** Here the widening is the ENCLOSING TYPE's

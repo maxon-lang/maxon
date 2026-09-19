@@ -177,8 +177,7 @@ public extension Array
 	// Algorithm: recursively split via binary search; rotate the middle
 	// block to bring the partition point of one side adjacent to the
 	// partition point of the other; recurse on the two sub-merges.
-	public function mergeRotation(lo SortIndex, mid SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace)
-		trace("rotationMerge.fire")
+	public function mergeRotation(lo SortIndex, mid SortIndex, hi SortIndex, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 
@@ -201,10 +200,10 @@ public extension Array
 			let newMid = q + (r - mid)
 
 			// Recurse on left of newMid (excludes the partition slot at newMid).
-			self.mergeRotation(lo, mid: q, hi: newMid, cmp: cmp, trace: trace)
+			self.mergeRotation(lo, mid: q, hi: newMid, cmp: cmp)
 
 			// Recurse on right of newMid + 1 — q's value already sits at newMid.
-			self.mergeRotation(newMid + 1, mid: r, hi: hi, cmp: cmp, trace: trace)
+			self.mergeRotation(newMid + 1, mid: r, hi: hi, cmp: cmp)
 		end 'leftLonger' else 'rightLonger'
 			let q = mid + rightLen / 2
 			let qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (right)")
@@ -214,8 +213,8 @@ public extension Array
 			// new partition point.
 			self.rotateRange(l, mid: mid, hi: q + 1)
 			let newPos = l + (q + 1 - mid) - 1
-			self.mergeRotation(lo, mid: l, hi: newPos, cmp: cmp, trace: trace)
-			self.mergeRotation(newPos + 1, mid: q + 1, hi: hi, cmp: cmp, trace: trace)
+			self.mergeRotation(lo, mid: l, hi: newPos, cmp: cmp)
+			self.mergeRotation(newPos + 1, mid: q + 1, hi: hi, cmp: cmp)
 		end 'rightLonger'
 	end 'mergeRotation'
 
@@ -246,18 +245,16 @@ public extension Array
 	// side fits the O(log n) buffer for the vast majority of merges). When
 	// even the smaller side exceeds scratchCap, fall back to the in-place
 	// rotation merge, which needs no auxiliary storage.
-	public function mergeAdaptive(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator, trace SortTrace)
+	public function mergeAdaptive(lo SortIndex, mid SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
 		let leftLen = mid - lo
 		let rightLen = hi - mid
 		let smaller = leftLen if leftLen < rightLen else rightLen
 
 		if smaller <= scratchCap 'fitsBuffer'
-			trace("mergeBuffer.fits")
 			self.mergeBuffered(lo, mid: mid, hi: hi, scratch: scratch, cmp: cmp)
 			return
 		end 'fitsBuffer'
 
-		trace("mergeBuffer.exhausted")
-		self.mergeRotation(lo, mid: mid, hi: hi, cmp: cmp, trace: trace)
+		self.mergeRotation(lo, mid: mid, hi: hi, cmp: cmp)
 	end 'mergeAdaptive'
 end 'Array'

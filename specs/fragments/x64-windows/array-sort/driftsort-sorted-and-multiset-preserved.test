@@ -271,11 +271,15 @@ func @main {
     x64.cmpRegReg rax, rcx
     x64.jcc less, tally
   forexit#4:
-    x64.leaRegFunc rdx, [rip + __fnref_ascending]
-    x64.movRegImm32 rax, 0
-    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.leaRegFunc r9, [rip + __fnref_ascending]
+    x64.movRegImm32 rsi, 0
+    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
+  __il_body:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.sort#Array.SortComparator
+    x64.callDirect Array.driftsortRange
+  __il_cont:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg rax, r12
     x64.setccReg equal, rax
@@ -312,32 +316,32 @@ func @main {
   forexit#8:
     x64.movRegImm32 rsi, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#34
+    x64.jcc equal, critsplit#36
   andrhs#17:
     x64.cmpRegReg rcx, r13
     x64.setccReg equal, rax
     x64.jmp scmerge#18
-  critsplit#34:
+  critsplit#36:
     x64.movRegReg rax, rsi
   scmerge#18:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, critsplit#37
+    x64.jcc equal, critsplit#39
   andrhs#19:
     x64.cmpRegReg rdx, r14
     x64.setccReg equal, rax
     x64.jmp scmerge#20
-  critsplit#37:
+  critsplit#39:
     x64.movRegReg rax, rcx
   scmerge#20:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifelse
   ok:
-    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "sorted\x0a"
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "sorted\x0a"
     x64.callDirect print
     x64.jmp ifcont
   ifelse:
-    x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "BROKEN\x0a"
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "BROKEN\x0a"
     x64.callDirect print
   ifcont:
     x64.movRegImm32 r12, 0

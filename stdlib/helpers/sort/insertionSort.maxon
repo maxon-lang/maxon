@@ -4,8 +4,8 @@
 // 9..32) and as the bottom of every recursive sort's recursion.
 //
 // Lives in a stand-alone extension so the algorithm body stays out of the
-// already-large Array.maxon. Also declares the `SortIndex`, `SortComparator`
-// and `SortTrace` aliases every sort helper file spells.
+// already-large Array.maxon. Also declares the `SortIndex` and `SortComparator`
+// aliases every sort helper file spells.
 
 public extension Array
 	// An array coordinate — a genuine INDEX, so a quantity and not a pattern. `nodePowerBetween`'s
@@ -13,7 +13,6 @@ public extension Array
 	// `NodePowerWord` rather than widening every index in the sort to pay for it.
 	typealias SortIndex = int(0 to u64.max)
 	typealias SortComparator = function(Element, Element) returns Ordering
-	typealias SortTrace = function(String)
 
 	// In-place insertion sort over the closed-open range [lo, hi).
 	// Stable: equal elements keep relative order because the bubble loop
@@ -26,9 +25,7 @@ public extension Array
 	// (`__managed_mem_set`'s overwrite semantics free the displaced element —
 	// the sort-of-managed-elements UAF). A swap moves ownership between slots
 	// with refcounts unchanged, so managed elements survive the relocation.
-	public function internalInsertionSortRange(lo SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace)
-		trace("insertionSort.run")
-
+	public function internalInsertionSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		if hi <= lo + 1 'trivial'
 			return
 		end 'trivial'

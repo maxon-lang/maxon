@@ -256,8 +256,9 @@ Run as `program --mode=fast`, it prints `2 fast a=b`.
 `Log` records trace keys so a test can check which internal path ran. It is not a general logger: there are
 no levels or outputs. While capture is off, `trace` does nothing.
 
-Standard-library algorithms never call `trace` themselves — they emit their keys into a sink the caller
-supplies, so a capture sees a sort only when that sort was handed one. The `Array` sorting members describe the sink they take.
+Nothing in the standard library calls `trace`, so a capture holds only the keys the program emitted itself.
+`Log` keeps its capture state in module-level `var`s, so a service message handler may not call any of
+these methods ([E3143](/docs/cli/error-codes/#e3143--semanticsharedglobalaccessfromgreenthread)).
 
 | Method | Returns | Description |
 |--------|---------|-------------|

@@ -226,7 +226,7 @@ func @main {
     x64.movRegReg rbx, r8
   trycont:
     x64.storeSlotReg slot1, rbx
-    x64.leaRegRdata rax, [rip + __str_rec_23]  ; "span="
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "span="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 21
@@ -237,7 +237,7 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_24]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot5, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -303,7 +303,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_123]  ; "panic at a-handler-may-sort-its-own-field.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_81]  ; "panic at a-handler-may-sort-its-own-field.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -325,7 +325,7 @@ func @Sorter.__loop {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 88
+    x64.prologue 104
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
   serve:
@@ -337,7 +337,7 @@ func @Sorter.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=add, [2]=arrange] @__jumptable_153
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=add, [2]=arrange] @__jumptable_111
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -357,7 +357,7 @@ func @Sorter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
     x64.movRegReg rax, r8
-    x64.epilogue 88
+    x64.epilogue 104
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -387,7 +387,9 @@ func @Sorter.__loop {
     x64.leaRegRdata rax, [rip + __layout_Array_Integer]
     x64.storeSlotReg slot3, rax
     x64.leaRegRdata r14, [rip + __witness_int.Comparable]
-  __il_body#28:
+  __il_body#30:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeSlotReg slot7, rax
     x64.leaRegFunc rax, [rip + Array.sortUnstable$closure_0]
     x64.storeSlotReg slot5, rax
     x64.movRegImm32 rcx, 8
@@ -395,19 +397,23 @@ func @Sorter.__loop {
     x64.callDirect __mm_alloc
     x64.movRegReg r15, r8
     x64.storeBaseDispReg.word64 [r15 + 0], r14
-    x64.loadRegSlot r9, slot3
-    x64.loadRegSlot rdx, slot5
     x64.movRegReg rcx, r13
-    x64.movRegReg rax, r15
-    x64.callDirect Array.sortUnstable#Array.SortComparator
+    x64.movRegImm32 rdx, 0
+    x64.loadRegSlot rdi, slot3
+    x64.loadRegSlot r9, slot5
+    x64.loadRegSlot rax, slot7
+    x64.movRegReg rsi, r15
+    x64.callDirect Array.pdqsortRange
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_cont#27:
+  __il_cont#29:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.leaRegRdata rax, [rip + __layout_Array_Integer]
     x64.storeSlotReg slot2, rax
     x64.leaRegRdata r14, [rip + __witness_int.Comparable]
-  __il_body#29:
+  __il_body#31:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeSlotReg slot6, rax
     x64.leaRegFunc rax, [rip + Array.sort$closure_0]
     x64.storeSlotReg slot4, rax
     x64.movRegImm32 rcx, 8
@@ -415,24 +421,34 @@ func @Sorter.__loop {
     x64.callDirect __mm_alloc
     x64.movRegReg r15, r8
     x64.storeBaseDispReg.word64 [r15 + 0], r14
-    x64.loadRegSlot r9, slot2
-    x64.loadRegSlot rdx, slot4
     x64.movRegReg rcx, r13
-    x64.movRegReg rax, r15
-    x64.callDirect Array.sort#Array.SortComparator
+    x64.movRegImm32 rdx, 0
+    x64.loadRegSlot rdi, slot2
+    x64.loadRegSlot r9, slot4
+    x64.loadRegSlot rax, slot6
+    x64.movRegReg rsi, r15
+    x64.callDirect Array.driftsortRange
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
+  __il_cont#28:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegFunc r9, [rip + Sorter.arrange$closure_0]
+    x64.movRegImm32 rsi, 0
+    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
+  __il_body#32:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.callDirect Array.pdqsortRange
+  __il_cont#27:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegFunc r9, [rip + Sorter.arrange$closure_1]
+    x64.movRegImm32 rsi, 0
+    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
+  __il_body#33:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.callDirect Array.driftsortRange
   __il_cont#26:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegFunc rdx, [rip + Sorter.arrange$closure_0]
-    x64.movRegImm32 rax, 0
-    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
-    x64.callDirect Array.sortUnstable#Array.SortComparator
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.leaRegFunc rdx, [rip + Sorter.arrange$closure_1]
-    x64.movRegImm32 rax, 0
-    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
-    x64.callDirect Array.sort#Array.SortComparator
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
@@ -481,9 +497,9 @@ func @Sorter.__loop {
     x64.jcc notEqual, tryerr#15
     x64.jmp tryok#14
   __im_slow#24:
-    x64.storeSlotReg slot6, rax
+    x64.storeSlotReg slot8, rax
     x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rax, slot8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#18
     x64.jmp tryok#17
@@ -497,7 +513,7 @@ func @Sorter.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=arrange] @__jumptable_154
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=arrange] @__jumptable_112
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

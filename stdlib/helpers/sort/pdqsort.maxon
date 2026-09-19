@@ -57,8 +57,7 @@ public extension Array
 	// from each third's first/middle/last, then median-of-3 of those three
 	// medians. Used for n > 128 where a simple median-of-3 is too likely
 	// to pick a degenerate pivot on partially-sorted input.
-	function medianOfMediansIndex(lo SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace) returns SortIndex
-		trace("pdq.medianOfMedians")
+	function medianOfMediansIndex(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
 		let n = hi - lo
 		let third = n / 3
 		let m1Lo = lo
@@ -79,14 +78,13 @@ public extension Array
 	// Pick a pivot index for [lo, hi). Uses median-of-3 for small slices,
 	// median-of-medians for large ones. Returns the index of the pivot
 	// element; partition swaps it into its sorted position.
-	public function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace) returns SortIndex
+	public function choosePivot(lo SortIndex, hi SortIndex, cmp SortComparator) returns SortIndex
 		let n = hi - lo
 
 		if n > 128 'large'
-			return self.medianOfMediansIndex(lo, hi: hi, cmp: cmp, trace: trace)
+			return self.medianOfMediansIndex(lo, hi: hi, cmp: cmp)
 		end 'large'
 
-		trace("pdq.medianOf3")
 		let mid = lo + n / 2
 		return self.medianOf3Index(lo, b: mid, c: hi - 1, cmp: cmp)
 	end 'choosePivot'
@@ -105,9 +103,7 @@ public extension Array
 	// two-pointer sweep. Branchless-ness is a future optimization — today
 	// the comparator-call-then-branch pattern matches insertion sort's
 	// shape, which keeps the inliner happy.
-	function partition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, cmp SortComparator, trace SortTrace) returns (SortIndex, bool)
-		trace("pdq.partition")
-
+	function partition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, cmp SortComparator) returns (SortIndex, bool)
 		// Move pivot to the front of the slice (unconditional swap).
 		// After this `lo` holds the pivot value for the rest of the pass.
 		self.swap(lo, j: pivotIndex)
@@ -209,8 +205,7 @@ public extension Array
 
 	// Heapsort fallback: O(n log n) worst case, called when pdqsort's bad
 	// allowance is exhausted (too many unbalanced partitions in a row).
-	function heapsort(lo SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace)
-		trace("pdq.heapsortFallback")
+	function heapsort(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
 
 		if n <= 1 'trivial'
@@ -246,7 +241,7 @@ public extension Array
 	// element just below the slice (prev pivot), all elements between are
 	// equal to that pivot and don't need re-partitioning. Saves a full pass
 	// on runs of duplicates.
-	function pdqsortRecurse(lo SortIndex, hi SortIndex, badAllowance SortIndex, prevPivotSame bool, cmp SortComparator, trace SortTrace)
+	function pdqsortRecurse(lo SortIndex, hi SortIndex, badAllowance SortIndex, prevPivotSame bool, cmp SortComparator)
 		var curLo = lo
 		var curHi = hi
 		var allowance = badAllowance
@@ -256,11 +251,11 @@ public extension Array
 			let n = curHi - curLo
 
 			if allowance == 0 'fallback'
-				self.heapsort(curLo, hi: curHi, cmp: cmp, trace: trace)
+				self.heapsort(curLo, hi: curHi, cmp: cmp)
 				return
 			end 'fallback'
 
-			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp, trace: trace)
+			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
 
 			// Common-prefix skip: if the new pivot equals the element just
 			// before the slice, the partition would put every element of
@@ -271,17 +266,15 @@ public extension Array
 				let pivotVal = try managed.get(pivotIndex) otherwise panic("pdqsortRecurse: get OOB at pivotIndex")
 
 				if cmp(prevAnchor, pivotVal) == Ordering.equalTo 'commonHit'
-					trace("pdq.commonPrefix")
-
 					// Partition into [<pivot] (empty per the anchor invariant)
 					// and [>=pivot]; only need to recurse on the right half.
-					let (p, _) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp, trace: trace)
+					let (p, _) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp)
 					curLo = p + 1
 					continue
 				end 'commonHit'
 			end 'tryCommonPrefix'
 
-			let (pivotPos, leftAllStrictlyLess) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp, trace: trace)
+			let (pivotPos, leftAllStrictlyLess) = self.partition(curLo, hi: curHi, pivotIndex: pivotIndex, cmp: cmp)
 			let leftSize = pivotPos - curLo
 			let rightSize = curHi - pivotPos - 1
 			let smaller = leftSize if leftSize < rightSize else rightSize
@@ -297,7 +290,6 @@ public extension Array
 			// elements that were NOT strictly less than the pivot, we have
 			// a run of equal elements on the left. Skip recursing on it.
 			if not leftAllStrictlyLess 'equalLeft'
-				trace("pdq.equalElements")
 				curLo = pivotPos + 1
 				prevSame = true
 				continue
@@ -308,11 +300,11 @@ public extension Array
 			// shrink the working range on the right just like `curLo`
 			// shrinks it on the left.
 			if leftSize < rightSize 'recurseLeft'
-				self.pdqsortRecurse(curLo, hi: pivotPos, badAllowance: allowance, prevPivotSame: prevSame, cmp: cmp, trace: trace)
+				self.pdqsortRecurse(curLo, hi: pivotPos, badAllowance: allowance, prevPivotSame: prevSame, cmp: cmp)
 				curLo = pivotPos + 1
 				prevSame = true
 			end 'recurseLeft' else 'recurseRight'
-				self.pdqsortRecurse(pivotPos + 1, hi: curHi, badAllowance: allowance, prevPivotSame: true, cmp: cmp, trace: trace)
+				self.pdqsortRecurse(pivotPos + 1, hi: curHi, badAllowance: allowance, prevPivotSame: true, cmp: cmp)
 				curHi = pivotPos
 
 				// prevSame for the next iteration's left half is unchanged.
@@ -320,18 +312,18 @@ public extension Array
 		end 'loop'
 
 		// Slice fell below the small-sort threshold; finish with the small-sort.
-		self.smallSortRange(curLo, hi: curHi, cmp: cmp, trace: trace)
+		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'pdqsortRecurse'
 
 	// Public entry into pdqsort. Computes an initial badAllowance budget
 	// of ⌊log2(n)⌋ × 2 and recurses. For n ≤ 32 short-circuits to
 	// smallSortRange — pdqsort's pivot/partition overhead beats insertion
 	// sort only on bigger inputs.
-	public function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace)
+	public function pdqsortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
 		let n = hi - lo
 
 		if n <= 32 'small'
-			self.smallSortRange(lo, hi: hi, cmp: cmp, trace: trace)
+			self.smallSortRange(lo, hi: hi, cmp: cmp)
 			return
 		end 'small'
 
@@ -346,6 +338,6 @@ public extension Array
 		end 'log2'
 
 		budget = budget * 2
-		self.pdqsortRecurse(lo, hi: hi, badAllowance: budget, prevPivotSame: false, cmp: cmp, trace: trace)
+		self.pdqsortRecurse(lo, hi: hi, badAllowance: budget, prevPivotSame: false, cmp: cmp)
 	end 'pdqsortRange'
 end 'Array'

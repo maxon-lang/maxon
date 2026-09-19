@@ -1,24 +1,28 @@
-/// Lightweight trace event capture for stdlib instrumentation.
+/// Lightweight trace event capture for a program's own instrumentation.
 ///
 /// This is not a full logger — there are no severity levels, no categories, no
-/// output streams. It exists so a test can record the stable dotted keys an
-/// instrumented algorithm emits at its decision points and then verify that the
-/// internal path it expected executed.
+/// output streams. It exists so a test can record the stable dotted keys a program emits at its own
+/// decision points and then verify that the internal path it expected executed.
 ///
-/// Nothing in the standard library calls `trace` itself. Instrumented stdlib code emits its keys into
-/// a sink the caller passes in, and this is the sink a test injects — an `arr.sort()` that was handed
-/// no sink writes nothing here, so one part of a program cannot contaminate another's capture.
+/// Nothing in the standard library calls `trace`, so a capture holds only the keys the program emitted
+/// itself. `capturing` and `captured` are module-level `var`s, so a service message handler — and
+/// anything it calls — may not reach any function here (E3143).
 ///
-/// Usage from tests:
-///   function captureTrace(key String)
-///     Log.trace(key)
-///   end 'captureTrace'
+/// Usage:
+///   function parseHeader(line String) returns bool
+///     if line.isEmpty() 'blank'
+///       Log.trace("parseHeader.blank")
+///       return false
+///     end 'blank'
+///
+///     return true
+///   end 'parseHeader'
 ///
 ///   Log.startCapture()
-///   arr.sort(ascending, trace: captureTrace)
+///   let ok = parseHeader(first)
 ///   let captured = Log.stopCapture()
-///   if not Log.fired(captured, key: "insertionSort.run") 'missing'
-///     panic("the insertion path did not engage on this input")
+///   if not Log.fired(captured, key: "parseHeader.blank") 'missing'
+///     panic("the blank-line branch did not engage on this input")
 ///   end 'missing'
 ///
 /// Capture is off by default. When off, trace() is a single bool load + branch
@@ -33,7 +37,7 @@ var captured = TraceKeyArray.create()
 
 public type Log
 	/// Emit a trace key. No-op when capture is off.
-	/// Pass a stable identifier like "insertionSort.run" — keys are matched
+	/// Pass a stable identifier like "parseHeader.blank" — keys are matched
 	/// literally by tests, so they should not embed run-specific data.
 	public static function trace(key String)
 		if capturing 'on'
