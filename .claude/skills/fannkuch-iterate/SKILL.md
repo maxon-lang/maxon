@@ -62,7 +62,7 @@ A candidate that names no shape is not a candidate.
 - ⛔ **During the round, never run the entire spec suite** (user ruling). Every spec run — yours, an
   implementer's, a reviewer's — is `spec-test --filter=<spec>` over the spec files the change
   touches, one filter per file, on x64 and again with `--target=wasm32-wasi`. The full suite runs
-  exactly once, in `/land`'s battery (§7 there), after the rebase; the self-compile is the E3092 gate
+  exactly once, in `/land`'s battery (§8 there), after the rebase; the self-compile is the E3092 gate
   and is not a spec run.
 - ⛔ **A filtered-green compiler is not a working compiler.** After EVERY rebuild the implementer runs
   the examples corpus, `maxon test tests/examples`, which builds every program in `examples/` and
