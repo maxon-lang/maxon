@@ -41,6 +41,10 @@ let TextDocumentSyncKey = "textDocumentSync"
 let TextDocumentKey = "textDocument"
 let ContentChangesKey = "contentChanges"
 let TextKey = "text"
+let RootUriKey = "rootUri"
+let WorkspaceFoldersKey = "workspaceFolders"
+
+let FirstWorkspaceFolder = 0 as ChildIndex
 
 // Run the server until the client ends the session, and report how it ended.
 export function runLspServer() returns ExitCode
@@ -114,7 +118,7 @@ type LspSession
 
 	function handleRequest(method String, id LspRequestId, doc JsonDoc)
 		if method == MethodInitialize 'initialize'
-			respondInitialize(id)
+			respondInitialize(id, doc: doc)
 			return
 		end 'initialize'
 
@@ -262,20 +266,58 @@ end 'LspSession'
 // capabilities say what a client can RENDER, not what a server may offer: the server advertises what it
 // serves and the client decides what to ask for. Gating advertisement on them made a client that declared
 // nothing get a hover it was never told about.
-function respondInitialize(id LspRequestId)
-	var doc = JsonDoc.create()
-	var capabilities = LspJsonObject.create(doc)
+function respondInitialize(id LspRequestId, doc JsonDoc)
+	lspRememberClientRoot(clientRootOf(doc))
+
+	var reply = JsonDoc.create()
+	var capabilities = LspJsonObject.create(reply)
 	capabilities.put(TextDocumentSyncKey, value: JsonNode.numberNode(FullTextDocumentSync))
 
 	for method in servedMethods() 'eachMethod'
 		let spelling = lspMethodSpelling(method)
-		capabilities.putNode(spelling.providerKey, value: providerValueNode(doc, shape: spelling.providerValue))
+		capabilities.putNode(spelling.providerKey, value: providerValueNode(reply, shape: spelling.providerValue))
 	end 'eachMethod'
 
-	var result = LspJsonObject.create(doc)
+	var result = LspJsonObject.create(reply)
 	result.putNode(CapabilitiesKey, value: capabilities.finish())
-	writeLspResult(doc, id: id, result: result.finish())
+	writeLspResult(reply, id: id, result: result.finish())
 end 'respondInitialize'
+
+// Both shapes, because clients in the field send either: `workspaceFolders` superseded `rootUri` in
+// LSP 3.6, and a client written since sends `rootUri: null` and names the root in the folders.
+function clientRootOf(doc JsonDoc) returns LspClientRoot
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return LspClientRoot.unset
+
+	if let rootUri = try lspMemberText(doc, of: params, key: RootUriKey) 'namedARoot'
+		return clientRootAt(rootUri)
+	end 'namedARoot'
+
+	return firstWorkspaceFolderRoot(doc, params: params)
+end 'clientRootOf'
+
+function firstWorkspaceFolderRoot(doc JsonDoc, params JsonNodeId) returns LspClientRoot
+	let folders = try lspMember(doc, of: params, key: WorkspaceFoldersKey) otherwise return LspClientRoot.unset
+	let folderCount = try doc.arrayLength(folders) otherwise return LspClientRoot.unset
+
+	if folderCount == 0 'noFolders'
+		return LspClientRoot.unset
+	end 'noFolders'
+
+	let first = try doc.arrayAt(folders, index: FirstWorkspaceFolder) otherwise return LspClientRoot.unset
+	let uri = try lspMemberText(doc, of: first, key: LspUriKey) otherwise return LspClientRoot.unset
+
+	return clientRootAt(uri)
+end 'firstWorkspaceFolderRoot'
+
+function clientRootAt(uri String) returns LspClientRoot
+	if uri.isEmpty() 'namedNothing'
+		return LspClientRoot.unset
+	end 'namedNothing'
+
+	let root = try lspDocumentPathOrThrow(uri) otherwise return LspClientRoot.unset
+
+	return LspClientRoot.named(root)
+end 'clientRootAt'
 
 // The VALUE of a served method's capability. The two that LSP defines as options objects are built by
 // the area that owns those options — a completion trigger set, a semantic-token legend — because

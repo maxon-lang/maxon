@@ -79,19 +79,27 @@ it does when stdin closes or a message cannot be framed).
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
 in-memory text, for the host target.
 
-**Diagnostics are per-buffer; definition and completion read the project.** A buffer is *checked* on its
-own together with the standard library, so a diagnostic never depends on what a sibling file declares.
-`textDocument/definition` and `textDocument/completion` do read the other files of the project: they use
-a separate index built by lexing every source under the document's project root and folding its
-declarations — never a full compile — so a name declared in another file resolves, and a type declared
-there offers its members.
+**Diagnostics are per-buffer; hover, definition and completion read the project.** A buffer is *checked*
+on its own together with the standard library, so a diagnostic never depends on what a sibling file
+declares. `textDocument/hover`, `textDocument/definition` and `textDocument/completion` do read the other
+files of the project: they use a separate index built by lexing every source under the document's project
+root and folding its declarations — never a full compile — so a name declared in another file resolves,
+and a type declared there offers its members.
 
-**The project root is derived from the document, not from the workspace.** `rootUri` and
-`workspaceFolders` are not read. A file inside the compiler's own `stdlib/` or `runtime/` gets those two
-tiers and nothing else; any other file gets the nearest ancestor directory holding a `build.maxon`, or
-its own directory when no ancestor has one. The manifest is used only as a marker of where a project
-begins — it is never read and never run. Projects are cached for the life of the server process, and a
-source is re-read when its size or modification time changes on disk.
+**The project root is a ladder, and the client's workspace root is one of its rungs.** A file inside the
+compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else. Any other document is rooted
+at the nearest ancestor directory holding a `build.maxon`, searched no higher than the root the client
+sent in `initialize` — `rootUri`, or the first entry of `workspaceFolders` when `rootUri` is absent or
+null. Failing that it is rooted at the client's root itself, when the document is inside it; failing that,
+at its own directory. A client that sends no root, or one whose root is not a `file:` uri — what
+Remote-SSH, WSL, dev containers and Codespaces send — leaves the manifest search and the document's own
+directory. The manifest is used only as a marker of where a project begins — it is never read and never
+run.
+
+Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
+when its size or modification time changes on disk. The list of files under a root is re-walked at most
+once a second, so a file created on disk after the project was built is resolved into shortly afterwards
+rather than at once.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
@@ -102,7 +110,7 @@ buffer is not a whole program.
 
 | Method | Result |
 |--------|--------|
-| `textDocument/hover` | Markdown: the declaration as written in a `maxon` code block, its `///` doc comment, and for a variable or parameter what it is and its type. Keywords and math intrinsics are described too. |
+| `textDocument/hover` | Markdown: the declaration as written in a `maxon` code block, its `///` doc comment, and for a variable or parameter what it is and its type. A name the buffer does not declare is looked up in the project, so a declaration in a sibling file or in the standard library renders too. Keywords and math intrinsics are described too. |
 | `textDocument/definition` | The declaration of the name under the cursor. A declaration in the same document is answered from it; otherwise the project's index says which file declares the name, and the answer points into that file. A name the compiler would refuse as ambiguous, or one no visible declaration carries, answers `null`. |
 | `textDocument/completion` | Members after `.` (the trigger character): fields, methods, static functions and enum cases, for a type name or a local whose type is evident. There is no completion of bare identifiers. |
 | `textDocument/formatting` | One edit replacing the whole document with `maxon fmt`'s layout, or `null` when it is already formatted. `insertSpaces: false` indents with tabs; `true` indents with `tabSize` spaces. |

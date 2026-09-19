@@ -14,22 +14,26 @@ let HoverDocumentUri = "file:///test.maxon"
 // ⭐ PRESENT and NON-EMPTY are separate assertions: a server that answers with an empty rendering has
 // failed differently from one that answered `null`, and one message covering both would hide which.
 export function hoverRendering(source String, line LspCoordinate, character LspCoordinate) returns String throws TestFailure
+	return try hoverRenderingAtUri(HoverDocumentUri, source: source, line: line, character: character)
+end 'hoverRendering'
+
+export function hoverRenderingAtUri(uri String, source String, line LspCoordinate, character LspCoordinate) returns String throws TestFailure
 	var rendering = ""
 
-	match probeHover(source, line: line, character: character) 'outcome'
+	match probeHover(uri, source: source, line: line, character: character) 'outcome'
 		answered(result) then rendering = try presentRendering(result)
 		refused(code, message) then try Expect.fail(refusalNote(code, message: message))
 		broke(detail) then try Expect.fail(breakageNote(detail))
 	end 'outcome'
 
 	return rendering
-end 'hoverRendering'
+end 'hoverRenderingAtUri'
 
 // Hovering something that is not a symbol — text inside a comment — answers ABSENCE: not an error, and
 // not an empty string. `isPresent` is the one shape both hover and definition use to say so; an
 // empty-string sentinel would fail silently the day a real rendering is empty.
 export function expectNoHover(source String, line LspCoordinate, character LspCoordinate, note String) throws TestFailure
-	match probeHover(source, line: line, character: character) 'outcome'
+	match probeHover(HoverDocumentUri, source: source, line: line, character: character) 'outcome'
 		answered(result) then try Expect.isFalse(result.isPresent, message: "{note} It answered: {result.contents}")
 		refused(code, message) then try Expect.fail(refusalNote(code, message: message))
 		broke(detail) then try Expect.fail(breakageNote(detail))
@@ -51,9 +55,9 @@ end 'HoverProbe'
 
 // Spawn, open the document, ask once, release. The release is unconditional: the outcome is a VALUE, so
 // no assertion can run before the handle is freed.
-function probeHover(source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
+function probeHover(uri String, source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
 	var client = LspClient.start()
-	let outcome = collectHover(client, source: source, line: line, character: character)
+	let outcome = collectHover(client, uri: uri, source: source, line: line, character: character)
 	client.release()
 	return outcome
 end 'probeHover'
@@ -61,14 +65,14 @@ end 'probeHover'
 // The lifecycle and the document are kept apart from the hover request itself: a refusal HERE would be a
 // server that cannot hold a session at all, and reporting that as a hover refusal would name the wrong
 // subject.
-function collectHover(client LspClient, source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
+function collectHover(client LspClient, uri String, source String, line LspCoordinate, character LspCoordinate) returns HoverProbe
 	var outcome = HoverProbe.broke("the session ended without saying how")
 
 	try 'session'
 		_ = client.initialize()
 		client.initialized()
-		client.openDocument(HoverDocumentUri, content: source)
-		outcome = askHover(client, line: line, character: character)
+		client.openDocument(uri, content: source)
+		outcome = askHover(client, uri: uri, line: line, character: character)
 	end 'session' otherwise (e) 'sessionBroke'
 		match e 'reason'
 			transportFailed(detail) then outcome = HoverProbe.broke("the framed stream broke before hover was asked — {detail}")
@@ -80,11 +84,11 @@ function collectHover(client LspClient, source String, line LspCoordinate, chara
 	return outcome
 end 'collectHover'
 
-function askHover(client LspClient, line LspCoordinate, character LspCoordinate) returns HoverProbe
+function askHover(client LspClient, uri String, line LspCoordinate, character LspCoordinate) returns HoverProbe
 	var outcome = HoverProbe.broke("the hover request ended without saying how")
 
 	try 'ask'
-		let answer = client.hover(HoverDocumentUri, line: line, character: character)
+		let answer = client.hover(uri, line: line, character: character)
 		outcome = HoverProbe.answered(answer)
 	end 'ask' otherwise (e) 'notAnswered'
 		match e 'reason'

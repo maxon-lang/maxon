@@ -1,0 +1,16 @@
+// hover-crosses-into-a-stdlib-type.test.maxon — a cursor on the stdlib TYPE NAME `FilePath` hovers
+// as the `public type FilePath` that `stdlib/FilePath.maxon` declares. A bare type name has no
+// receiver to name a file after, so the owner-keyed door that reaches `stdlib/` for a MEMBER access
+// cannot answer it and the project corpus is the only thing that can. The source is the one
+// `definition-crosses-into-the-stdlib.test.maxon` drives; the session is `hover-probe.test.maxon`'s.
+
+let HoverStdlibTypeLine = 1 as LspCoordinate
+let HoverStdlibTypeCharacter = 15 as LspCoordinate
+
+test 'hover crosses into a stdlib type'
+	let rendering = try hoverRendering(corpusFilePathSource(), line: HoverStdlibTypeLine, character: HoverStdlibTypeCharacter)
+
+	try Expect.contains(rendering, needle: "FilePath", message: "a cursor on the stdlib type `FilePath` did not hover as `FilePath`.")
+
+	try Expect.contains(rendering, needle: "type FilePath", message: "the hover did not render the type declaration `stdlib/FilePath.maxon` holds. A type name is what an editor user hovers to learn what a value IS, and the stdlib is where most of the types they meet are declared.")
+end 'hover crosses into a stdlib type'

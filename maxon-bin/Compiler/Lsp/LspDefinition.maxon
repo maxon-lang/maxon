@@ -16,14 +16,6 @@
 // where LSP's own spelling for "nothing here" is a `null` result. `definition on keyword returns nothing`
 // in `tests/lsp/definition-scope.test.maxon` is what says so from the client's side.
 
-// Nothing under the cursor, or nothing that declares what is. ⭐ A THROW rather than a token standing
-// for "none", for the reason `TypeNameRegistry.declarationOf` throws: a not-found token would carry a
-// real `0:0` position that a synthesized declaration also has. Every lookup below fails the same way, so
-// there is one arm and not four spellings of absence.
-enum DefinitionLookupError implements Error
-	nothingThere
-end 'DefinitionLookupError'
-
 module function definitionServedMethods() returns LspMethodArray
 	var served = LspMethodArray.create()
 	served.push(LspMethod.definition)
@@ -47,11 +39,11 @@ module function definitionAnswer(request LspRequest) returns LspAnswer throws Ls
 end 'definitionAnswer'
 
 // The token that DECLARES whatever the cursor is on.
-function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws DefinitionLookupError
+function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws LspDeclarationLookupError
 	// Which token the cursor is on is `lspTokenAtCursor`'s answer and not one taken here: `textDocument/hover`
 	// renders the same one, and an editor that jumped to a name that hover described as something else would
 	// be reading two different rules.
-	let cursor = try lspTokenAtCursor(tokens, offset: at) otherwise throw DefinitionLookupError.nothingThere
+	let cursor = try lspTokenAtCursor(tokens, offset: at) otherwise throw LspDeclarationLookupError.nothingThere
 	let cursorToken = lspTokenAt(tokens, index: cursor)
 
 	// ⚠ `tokenCanBeAName`, not `kind == identifier`. A keyword may be a declared name here — `from` is
@@ -60,14 +52,14 @@ function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws
 	// part of the standard library's own surface. A literal or a punctuator still declares nothing, and
 	// jumping from one takes an editor somewhere arbitrary.
 	if not tokenCanBeAName(cursorToken) 'notAName'
-		throw DefinitionLookupError.nothingThere
+		throw LspDeclarationLookupError.nothingThere
 	end 'notAName'
 
 	let name = cursorToken.value
 
 	// `p.x` names a MEMBER: the enclosing function's locals are the wrong place to look, and a local of
 	// the same name would be a confident wrong line rather than a miss.
-	if definitionNamesAMember(tokens, cursor: cursor) 'aMember'
+	if lspCursorNamesAMember(tokens, cursor: cursor) 'aMember'
 		return try definitionDeclarationOf(tokens, name: name)
 	end 'aMember'
 
@@ -75,15 +67,6 @@ function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws
 	// local walk answers first and the whole-document search is what it falls through to.
 	return try definitionLocalBinding(tokens, before: cursor, name: name) otherwise try definitionDeclarationOf(tokens, name: name)
 end 'definitionTarget'
-
-function definitionNamesAMember(tokens TokenArray, cursor TokenIndex) returns bool
-	if cursor == 0 'nothingBefore'
-		return false
-	end 'nothingBefore'
-
-	let before = try tokens.get(cursor - 1) otherwise return false
-	return before.kind == TokenKind.dot
-end 'definitionNamesAMember'
 
 // ⭐⭐ **THE SCOPE WALK. Backwards from the cursor, and what makes it a SCOPE walk rather than a
 // nearest-name search is that it steps OVER blocks that had already closed.** Without that, a use
@@ -93,13 +76,13 @@ end 'definitionNamesAMember'
 // A `function` or `type` opener is not counted and does not need to be: any EARLIER function body is
 // enclosed by an `end` the walk has already stepped over, while a genuinely enclosing one (a closure's,
 // whose body does capture the outer locals) has none.
-function definitionLocalBinding(tokens TokenArray, before TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+function definitionLocalBinding(tokens TokenArray, before TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	var closedLabels = TokenIndexArray.create()
 	var i = before
 
 	while i > 0 'walkBack'
 		i = i - 1
-		let token = try tokens.get(i) otherwise throw DefinitionLookupError.nothingThere
+		let token = try tokens.get(i) otherwise throw LspDeclarationLookupError.nothingThere
 
 		if token.kind == TokenKind.charLiteral 'blockLabel'
 			definitionTrackBlockNesting(closedLabels, tokens: tokens, at: i)
@@ -114,7 +97,7 @@ function definitionLocalBinding(tokens TokenArray, before TokenIndex, name ByteA
 		return bound
 	end 'walkBack'
 
-	throw DefinitionLookupError.nothingThere
+	throw LspDeclarationLookupError.nothingThere
 end 'definitionLocalBinding'
 
 // ⭐ A `'label'` is either a block's OPENER or the `end` that closes it, told apart by the token before
@@ -158,7 +141,7 @@ end 'definitionClosesABlock'
 // `otherwise (e)`. Those are introduced by punctuation rather than by a keyword, and reading a `(` as a
 // declaration would be answering from shape. They resolve to nothing, which is a miss rather than a
 // confident wrong line.
-function definitionBoundName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+function definitionBoundName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'oneBinding'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'oneBinding'
@@ -171,14 +154,14 @@ function definitionBoundName(tokens TokenArray, keyword Token, at TokenIndex, na
 		return try definitionParameterNamed(tokens, from: at, name: name)
 	end 'parameters'
 
-	throw DefinitionLookupError.nothingThere
+	throw LspDeclarationLookupError.nothingThere
 end 'definitionBoundName'
 
-function definitionIdentifierNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
-	let token = try tokens.get(at) otherwise throw DefinitionLookupError.nothingThere
+function definitionIdentifierNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+	let token = try tokens.get(at) otherwise throw LspDeclarationLookupError.nothingThere
 
 	if not tokenCanBeAName(token) or not token.value.equals(name) 'notThatName'
-		throw DefinitionLookupError.nothingThere
+		throw LspDeclarationLookupError.nothingThere
 	end 'notThatName'
 
 	return token
@@ -187,15 +170,15 @@ end 'definitionIdentifierNamed'
 // A loop's variables are every name between `for` and its `in` — one for `for item in items`, two for
 // `for (key, value) in map`. A line break ends the search as well: an `in` that never arrives means the
 // buffer is mid-edit, not that the rest of the file is the binding list.
-function definitionLoopVariableNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+function definitionLoopVariableNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	var i = from
 
 	while i < tokens.count() 'scan'
-		let token = try tokens.get(i) otherwise throw DefinitionLookupError.nothingThere
+		let token = try tokens.get(i) otherwise throw LspDeclarationLookupError.nothingThere
 		i = i + 1
 
 		if token.kind == TokenKind.in or token.kind == TokenKind.newline 'theBindingsEnd'
-			throw DefinitionLookupError.nothingThere
+			throw LspDeclarationLookupError.nothingThere
 		end 'theBindingsEnd'
 
 		if token.kind == TokenKind.identifier and token.value.equals(name) 'thisOne'
@@ -203,19 +186,19 @@ function definitionLoopVariableNamed(tokens TokenArray, from TokenIndex, name By
 		end 'thisOne'
 	end 'scan'
 
-	throw DefinitionLookupError.nothingThere
+	throw LspDeclarationLookupError.nothingThere
 end 'definitionLoopVariableNamed'
 
 // A parameter name is the first token inside the parentheses and the one after each top-level comma;
 // everything else between them is a type, a default value, or a nested list.
-function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	var i = from
 	var depth = 0
 	var sawTheList = false
 	var expectingAName = false
 
 	while i < tokens.count() 'scanList'
-		let token = try tokens.get(i) otherwise throw DefinitionLookupError.nothingThere
+		let token = try tokens.get(i) otherwise throw LspDeclarationLookupError.nothingThere
 		i = i + 1
 
 		if token.kind == TokenKind.leftParen 'opensAList'
@@ -229,7 +212,7 @@ function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteA
 			depth = depth - 1
 
 			if depth == 0 'theListEnds'
-				throw DefinitionLookupError.nothingThere
+				throw LspDeclarationLookupError.nothingThere
 			end 'theListEnds'
 
 			continue
@@ -238,7 +221,7 @@ function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteA
 		// A declaration's parameters open on the keyword's own line, so a line break before any `(` is a
 		// truncated buffer rather than a list to walk.
 		if not sawTheList and token.kind == TokenKind.newline 'noListAtAll'
-			throw DefinitionLookupError.nothingThere
+			throw LspDeclarationLookupError.nothingThere
 		end 'noListAtAll'
 
 		if depth == 1 and token.kind == TokenKind.comma 'nextParameter'
@@ -257,20 +240,20 @@ function definitionParameterNamed(tokens TokenArray, from TokenIndex, name ByteA
 		end 'thisParameter'
 	end 'scanList'
 
-	throw DefinitionLookupError.nothingThere
+	throw LspDeclarationLookupError.nothingThere
 end 'definitionParameterNamed'
 
 // Where the document declares `name`, in the order the file states it.
-function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws DefinitionLookupError
+function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws LspDeclarationLookupError
 	for (iter, keyword) in tokens.withIterator() 'eachToken'
 		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index() as TokenIndex, name: name) otherwise continue
 		return declared
 	end 'eachToken'
 
-	throw DefinitionLookupError.nothingThere
+	throw LspDeclarationLookupError.nothingThere
 end 'definitionDeclarationOf'
 
-function definitionDeclaredName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+function definitionDeclaredName(tokens TokenArray, keyword Token, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if definitionDeclaresAType(keyword.kind) 'aType'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'aType'
@@ -283,7 +266,7 @@ function definitionDeclaredName(tokens TokenArray, keyword Token, at TokenIndex,
 		return try definitionFieldNamed(tokens, at: at + 1, name: name)
 	end 'aBinding'
 
-	throw DefinitionLookupError.nothingThere
+	throw LspDeclarationLookupError.nothingThere
 end 'definitionDeclaredName'
 
 // ⚠ `extension` is NOT here: it names a type declared elsewhere rather than declaring one.
@@ -293,8 +276,8 @@ end 'definitionDeclaresAType'
 
 // `function Printable.print()` declares `print`; the name before the dot is the interface's, and it is
 // declared where the interface is.
-function definitionFunctionNameIndex(tokens TokenArray, at TokenIndex) returns TokenIndex throws DefinitionLookupError
-	let afterTheFirstName = try tokens.get(at + 2) otherwise throw DefinitionLookupError.nothingThere
+function definitionFunctionNameIndex(tokens TokenArray, at TokenIndex) returns TokenIndex throws LspDeclarationLookupError
+	let afterTheFirstName = try tokens.get(at + 2) otherwise throw LspDeclarationLookupError.nothingThere
 	return at + 3 if afterTheFirstName.kind == TokenKind.dot else at + 1
 end 'definitionFunctionNameIndex'
 
@@ -304,12 +287,12 @@ end 'definitionFunctionNameIndex'
 // a confident wrong line where nothing is the honest answer. A field carrying a declaration DEFAULT
 // (`var value = 0`) falls on the far side of it and resolves to nothing; the reference server draws the
 // same boundary, from indentation rather than from the annotation.
-function definitionFieldNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws DefinitionLookupError
+function definitionFieldNamed(tokens TokenArray, at TokenIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	let named = try definitionIdentifierNamed(tokens, at: at, name: name)
-	let afterTheName = try tokens.get(at + 1) otherwise throw DefinitionLookupError.nothingThere
+	let afterTheName = try tokens.get(at + 1) otherwise throw LspDeclarationLookupError.nothingThere
 
 	if afterTheName.kind == TokenKind.equals 'aLocalBinding'
-		throw DefinitionLookupError.nothingThere
+		throw LspDeclarationLookupError.nothingThere
 	end 'aLocalBinding'
 
 	return named
@@ -326,8 +309,6 @@ function definitionLocationAnswer(uri String, source String, lines LspLineIndex,
 
 	return LspAnswer.of(doc, result: location.finish())
 end 'definitionLocationAnswer'
-
-let TokensBetweenAReceiverAndItsMember = 2 as TokenIndex
 
 function definitionAcrossFiles(request LspRequest, tokens TokenArray, offset ByteOffset) returns LspAnswer
 	let cursor = try lspTokenAtCursor(tokens, offset: offset) otherwise return LspAnswer.nothing()
@@ -355,7 +336,7 @@ extension Project
 	// byte span to LSP's UTF-16 coordinates, while the index holds 1-based compiler coordinates; a second
 	// converter here is the defect `tests/lsp/position-characters.test.maxon` exists to catch.
 	module function definitionInTheCorpus(signatures ProgramSignatures, tokens TokenArray, cursor TokenIndex, readerPath FilePath) returns LspAnswer
-		let declFile = try declaringFileOfTheCursor(signatures, tokens: tokens, cursor: cursor, readerPath: readerPath) otherwise return LspAnswer.nothing()
+		let declFile = try lspDeclaringFileOfTheCursor(signatures, tokens: tokens, cursor: cursor, readerPath: readerPath) otherwise return LspAnswer.nothing()
 		return self.definitionInAnotherFile(declFile, name: lspTokenAt(tokens, index: cursor).value)
 	end 'definitionInTheCorpus'
 
@@ -368,178 +349,3 @@ extension Project
 		return definitionLocationAnswer(lspFileUri(declFile), source: text, lines: LspLineIndex.build(text), name: declared)
 	end 'definitionInAnotherFile'
 end 'Project'
-
-function declaringFileOfTheCursor(signatures ProgramSignatures, tokens TokenArray, cursor TokenIndex, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	let name = lspTokenAt(tokens, index: cursor).value
-
-	if definitionNamesAMember(tokens, cursor: cursor) 'aMember'
-		return try declaringFileOfAMember(signatures, tokens: tokens, cursor: cursor, member: name, readerPath: readerPath)
-	end 'aMember'
-
-	return try declaringFileOfABareName(signatures, name: name, readerPath: readerPath)
-end 'declaringFileOfTheCursor'
-
-function declaringFileOfAMember(signatures ProgramSignatures, tokens TokenArray, cursor TokenIndex, member ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	if cursor < TokensBetweenAReceiverAndItsMember 'nothingBeforeTheDot'
-		throw DefinitionLookupError.nothingThere
-	end 'nothingBeforeTheDot'
-
-	let subject = lspSubjectOfReceiver(tokens, blocks: lspDocumentBlocks(tokens), receiver: cursor - TokensBetweenAReceiverAndItsMember)
-	let typeName = lspSubjectTypeName(subject)
-
-	if typeName.isEmpty() 'noReceiverType'
-		throw DefinitionLookupError.nothingThere
-	end 'noReceiverType'
-
-	let owner = typeName.toByteArray()
-
-	if let declaredMethod = try visibleCalleeFile(signatures, qualified: qualifiedMethodName(owner, methodName: member), readerPath: readerPath) 'aMethod'
-		return declaredMethod
-	end 'aMethod'
-
-	if let declaredField = try declaringFileOfAField(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
-		return declaredField
-	end 'aField'
-
-	return try declaringFileOfAnEnumCase(signatures, owner: owner, member: member, readerPath: readerPath)
-end 'declaringFileOfAMember'
-
-function declaringFileOfABareName(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	if let declaredFunction = try declaringFileOfAFunction(signatures, name: name, readerPath: readerPath) 'aFunction'
-		return declaredFunction
-	end 'aFunction'
-
-	if let declaredStruct = try declaringFileOfAStruct(signatures, name: name, readerPath: readerPath) 'aStructType'
-		return declaredStruct
-	end 'aStructType'
-
-	if let declaredEnum = try declaringFileOfAnEnum(signatures, name: name, readerPath: readerPath) 'anEnumType'
-		return declaredEnum
-	end 'anEnumType'
-
-	if let declaredAlias = try declaringFileOfAnAlias(signatures, name: name, readerPath: readerPath) 'aRangedAlias'
-		return declaredAlias
-	end 'aRangedAlias'
-
-	if let declaredInterface = try declaringFileOfAnInterface(signatures, name: name) 'anInterface'
-		return declaredInterface
-	end 'anInterface'
-
-	return try declaringFileOfABinding(signatures, name: name, readerPath: readerPath)
-end 'declaringFileOfABareName'
-
-// ⚠ `ambiguous` answers NOTHING, exactly as `undeclared` does. `resolveFunctionName` is the compiler's
-// own resolver, and `ambiguous` is the verdict behind E3095 — an editor that picked one of the
-// candidates would send an author to a declaration the compiler refuses to bind the call to.
-function declaringFileOfAFunction(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.resolveFunctionName(name, readerFilePath: readerPath) 'resolution'
-		declaration(resolved) then return try visibleCalleeFile(signatures, qualified: resolved, readerPath: readerPath)
-		ambiguous or
-			undeclared then throw DefinitionLookupError.nothingThere
-	end 'resolution'
-end 'declaringFileOfAFunction'
-
-function visibleCalleeFile(signatures ProgramSignatures, qualified ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	if not signatures.declaresCallee(qualified) 'nothingDeclaresIt'
-		throw DefinitionLookupError.nothingThere
-	end 'nothingDeclaresIt'
-
-	match signatures.calleeVisibilityFrom(qualified, readerFilePath: readerPath) 'tier'
-		visible then return signatures.declaringFileOf(qualified)
-		hidden then throw DefinitionLookupError.nothingThere
-	end 'tier'
-end 'visibleCalleeFile'
-
-function declaringFileOfAStruct(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.structFor(name, readerFilePath: readerPath) 'aStruct'
-		declared(layout) then return try visibleDeclarationFile(signatures, visibility: layout.visibility, declFilePath: layout.declFilePath, readerPath: readerPath)
-		undeclared then throw DefinitionLookupError.nothingThere
-	end 'aStruct'
-end 'declaringFileOfAStruct'
-
-function declaringFileOfAnEnum(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.enumFor(name, readerFilePath: readerPath) 'anEnum'
-		declared(layout) then return try visibleDeclarationFile(signatures, visibility: layout.visibility, declFilePath: layout.declFilePath, readerPath: readerPath)
-		undeclared then throw DefinitionLookupError.nothingThere
-	end 'anEnum'
-end 'declaringFileOfAnEnum'
-
-function declaringFileOfAnAlias(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.aliasOf(name, readerFilePath: readerPath) 'anAlias'
-		declared(alias) then return try visibleAliasFile(signatures, alias: alias, readerPath: readerPath)
-		undeclared then throw DefinitionLookupError.nothingThere
-	end 'anAlias'
-end 'declaringFileOfAnAlias'
-
-function visibleAliasFile(signatures ProgramSignatures, alias RangedTypeAlias, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	if not signatures.aliasVisibleFrom(alias, readerFilePath: readerPath) 'hiddenHere'
-		throw DefinitionLookupError.nothingThere
-	end 'hiddenHere'
-
-	return alias.declFilePath
-end 'visibleAliasFile'
-
-function declaringFileOfAnInterface(signatures ProgramSignatures, name ByteArray) returns FilePath throws DefinitionLookupError
-	if not signatures.nameDeclaresAnInterface(name) 'nothingDeclaresIt'
-		throw DefinitionLookupError.nothingThere
-	end 'nothingDeclaresIt'
-
-	for site in signatures.interfaceDeclSites 'eachSite'
-		if site.name.equals(name) 'thisInterface'
-			return site.path
-		end 'thisInterface'
-	end 'eachSite'
-
-	throw DefinitionLookupError.nothingThere
-end 'declaringFileOfAnInterface'
-
-function declaringFileOfABinding(signatures ProgramSignatures, name ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.bindingFor(name, readerFilePath: readerPath) 'aBinding'
-		declared(declFilePath) then return declFilePath
-		undeclared then throw DefinitionLookupError.nothingThere
-	end 'aBinding'
-end 'declaringFileOfABinding'
-
-function declaringFileOfAField(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.structFor(owner, readerFilePath: readerPath) 'aStruct'
-		declared(layout) then return try visibleFieldFile(signatures, layout: layout, member: member, readerPath: readerPath)
-		undeclared then throw DefinitionLookupError.nothingThere
-	end 'aStruct'
-end 'declaringFileOfAField'
-
-function visibleFieldFile(signatures ProgramSignatures, layout StructLayout, member ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	for index in 0 upto layout.fieldCount() 'eachField'
-		if not layout.fieldNameAt(index).equals(member) 'anotherField'
-			continue
-		end 'anotherField'
-
-		return try visibleDeclarationFile(signatures, visibility: layout.fieldTier(index), declFilePath: layout.declFilePath, readerPath: readerPath)
-	end 'eachField'
-
-	throw DefinitionLookupError.nothingThere
-end 'visibleFieldFile'
-
-function declaringFileOfAnEnumCase(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	match signatures.enumFor(owner, readerFilePath: readerPath) 'anEnum'
-		declared(layout) then return try visibleEnumCaseFile(signatures, layout: layout, member: member, readerPath: readerPath)
-		undeclared then throw DefinitionLookupError.nothingThere
-	end 'anEnum'
-end 'declaringFileOfAnEnumCase'
-
-function visibleEnumCaseFile(signatures ProgramSignatures, layout EnumLayout, member ByteArray, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	for caseName in layout.caseNames 'eachCase'
-		if caseName.equals(member) 'thisCase'
-			return try visibleDeclarationFile(signatures, visibility: layout.visibility, declFilePath: layout.declFilePath, readerPath: readerPath)
-		end 'thisCase'
-	end 'eachCase'
-
-	throw DefinitionLookupError.nothingThere
-end 'visibleEnumCaseFile'
-
-function visibleDeclarationFile(signatures ProgramSignatures, visibility Visibility, declFilePath FilePath, readerPath FilePath) returns FilePath throws DefinitionLookupError
-	if not signatures.isVisibleFrom(visibility, declFilePath: declFilePath, readerFilePath: readerPath) 'hiddenHere'
-		throw DefinitionLookupError.nothingThere
-	end 'hiddenHere'
-
-	return declFilePath
-end 'visibleDeclarationFile'

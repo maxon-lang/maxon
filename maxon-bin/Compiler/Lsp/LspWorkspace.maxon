@@ -4,10 +4,14 @@
 // ALONE — that is what `textDocument/publishDiagnostics` still uses, so a diagnostic remains a statement
 // about one file and never about a sibling the author did not open.
 //
-// ⚠ The root is derived from the DOCUMENT, never from `rootUri` or `workspaceFolders`: a request names a
-// file and the server holds no workspace. `workspaceRootOf` is the ladder — a library tier's file gets
-// the tiers only, and anything else gets the nearest ancestor holding a `build.maxon`, or the document's
-// own directory when there is none.
+// ⚠ A document's project root is a ladder, and the ORDER of its rungs is the design.
+// `workspaceRootOf` holds it: a library tier's file gets the tiers alone; otherwise the nearest
+// ancestor holding a `build.maxon`, climbed no higher than the root the client named in
+// `initialize`; then that client root, for a document inside it; then the document's own directory.
+// The manifest climb is unbounded and this checkout carries a `build.maxon` at its own root, so a
+// client root consulted after an uncapped climb would never decide anything — while one consulted
+// before the climb would root a document under `<root>/sub/build.maxon` at `<root>`. A client that
+// names no root leaves the climb and the document's own directory.
 //
 // ⚠ Answering `unavailable` costs a feature its cross-file half and leaves the in-buffer half standing,
 // which is what an editor should see: fewer answers, never a refused request.
@@ -15,6 +19,11 @@ module union LspCorpus
 	loaded(project Project, signatures ProgramSignatures, readerPath FilePath)
 	unavailable
 end 'LspCorpus'
+
+module union LspClientRoot
+	named(dir FilePath)
+	unset
+end 'LspClientRoot'
 
 union WorkspaceRoot
 	userDirectory(dir FilePath)
@@ -26,16 +35,40 @@ union ManifestDirectory
 	none
 end 'ManifestDirectory'
 
-type WorkspaceSweep
-	export let compileRoot as FilePath
-	export let sources as MaxonSourcePathArray
+// A held project and the source list it was built over. ⚠ The directory walk that takes that list
+// runs only on a miss, or once `WorkspaceResweepIntervalMs` has passed: hover, definition and
+// completion each ask for a corpus as fast as an editor can send, and a walk hoisted ahead of the
+// held-project probe costs one per request with nothing failing to say so.
+//
+// The LIST is what goes stale — a file created on disk is invisible until the next walk, which is
+// what the interval bounds, while a file's CONTENT is re-read every request.
+// `tests/lsp/definition-notices-a-file-created-on-disk.test.maxon` holds the re-walk in place.
+type HeldWorkspace
+	let project as Project
+	var sources as MaxonSourcePathArray
+	var sweptAtMs as InstantMs
 
-	export static function create(compileRoot FilePath, sources MaxonSourcePathArray) returns WorkspaceSweep
-		return Self{compileRoot: compileRoot, sources: sources}
+	static function create(project Project, sources MaxonSourcePathArray, sweptAtMs InstantMs) returns HeldWorkspace
+		return Self{project: project, sources: sources, sweptAtMs: sweptAtMs}
 	end 'create'
-end 'WorkspaceSweep'
 
-typealias HeldProjectMap = Map with (String, Project)
+	function corpusFor(root WorkspaceRoot, readerPath FilePath) returns LspCorpus
+		resweep(root)
+
+		return self.project.sweptOver(self.sources, readerPath: readerPath)
+	end 'corpusFor'
+
+	function resweep(root WorkspaceRoot)
+		if Clock.elapsedMs(self.sweptAtMs) < WorkspaceResweepIntervalMs 'sweptRecently'
+			return
+		end 'sweptRecently'
+
+		self.sources = sourcesUnder(root)
+		self.sweptAtMs = Clock.nowMs()
+	end 'resweep'
+end 'HeldWorkspace'
+
+typealias HeldProjectMap = Map with (String, HeldWorkspace)
 typealias HeldProjectKeyArray = Array with String
 
 // Projects are held across requests because building one costs a sweep, a lex of every file and a
@@ -44,41 +77,53 @@ typealias HeldProjectKeyArray = Array with String
 // cold rebuilds. Oldest out, so a session that wanders cannot grow the process without bound.
 let HeldProjectCapacity = 8
 
+let WorkspaceResweepIntervalMs = 1000 as DurationMs
+
 var heldProjects = HeldProjectMap.create()
 var heldProjectKeys = HeldProjectKeyArray.create()
 
+var namedClientRoot = LspClientRoot.unset
+
+module function lspRememberClientRoot(root LspClientRoot)
+	namedClientRoot = root
+end 'lspRememberClientRoot'
+
 module function lspWorkspaceCorpus(readerPath FilePath) returns LspCorpus
 	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
-	let sweep = workspaceSweepOf(readerPath, tiers: tiers)
+	let root = workspaceRootOf(readerPath, tiers: tiers)
 
 	beginDiagnosticCapture()
-	let corpus = sweptWorkspace(sweep, tiers: tiers, readerPath: readerPath)
+	let corpus = sweptWorkspace(root, tiers: tiers, readerPath: readerPath)
 	discardDiagnosticCapture()
 
 	return corpus
 end 'lspWorkspaceCorpus'
 
-function sweptWorkspace(sweep WorkspaceSweep, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-	let key = sweep.compileRoot.toString()
+function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
+	let compileRoot = compileRootOf(root, readerPath: readerPath)
+	let key = compileRoot.toString()
 
-	if let held = try heldProjects.get(key) 'alreadySeenThisRoot'
-		return held.sweptOver(sweep.sources, readerPath: readerPath)
+	if heldProjects.contains(key) 'alreadySeenThisRoot'
+		var held = try heldProjects.get(key) otherwise panic("sweptWorkspace: '{key}' was found among the held projects one line above")
+
+		return held.corpusFor(root, readerPath: readerPath)
 	end 'alreadySeenThisRoot'
 
-	var project = try libraryTierProject(sweep.compileRoot, tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
+	let project = try libraryTierProject(compileRoot, tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
+	var fresh = HeldWorkspace.create(project, sources: sourcesUnder(root), sweptAtMs: Clock.nowMs())
 
-	let corpus = project.sweptOver(sweep.sources, readerPath: readerPath)
+	let corpus = fresh.corpusFor(root, readerPath: readerPath)
 
 	match corpus 'outcome'
-		loaded then rememberProject(key, project: project)
+		loaded then rememberProject(key, held: fresh)
 		unavailable then return LspCorpus.unavailable
 	end 'outcome'
 
 	return corpus
 end 'sweptWorkspace'
 
-function rememberProject(key String, project Project)
-	heldProjects.upsert(key, value: project)
+function rememberProject(key String, held HeldWorkspace)
+	heldProjects.upsert(key, value: held)
 	heldProjectKeys.push(key)
 
 	if heldProjectKeys.count() <= HeldProjectCapacity 'roomRemains'
@@ -89,24 +134,27 @@ function rememberProject(key String, project Project)
 	_ = heldProjects.remove(oldest)
 end 'rememberProject'
 
-function workspaceSweepOf(readerPath FilePath, tiers LibraryTiers) returns WorkspaceSweep
-	return match workspaceRootOf(readerPath, tiers: tiers) 'root'
-		userDirectory(dir) gives userDirectorySweep(dir, readerPath: readerPath)
-		libraryTierOnly gives libraryTierSweep(readerPath)
+function compileRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
+	return match root 'root'
+		userDirectory(dir) gives dir
+		libraryTierOnly gives readerPath
 	end 'root'
-end 'workspaceSweepOf'
+end 'compileRootOf'
 
-function userDirectorySweep(dir FilePath, readerPath FilePath) returns WorkspaceSweep
+function sourcesUnder(root WorkspaceRoot) returns MaxonSourcePathArray
+	return match root 'root'
+		userDirectory(dir) gives maxonSourcesIn(dir)
+		libraryTierOnly gives MaxonSourcePathArray.create()
+	end 'root'
+end 'sourcesUnder'
+
+function maxonSourcesIn(dir FilePath) returns MaxonSourcePathArray
 	var sources = MaxonSourcePathArray.create()
 
-	_ = try collectMaxonSources(dir, into: sources, selection: SourceSelection.productionOnly) otherwise return libraryTierSweep(readerPath)
+	_ = try collectMaxonSources(dir, into: sources, selection: SourceSelection.productionOnly) otherwise return MaxonSourcePathArray.create()
 
-	return WorkspaceSweep.create(dir, sources: sources)
-end 'userDirectorySweep'
-
-function libraryTierSweep(readerPath FilePath) returns WorkspaceSweep
-	return WorkspaceSweep.create(readerPath, sources: MaxonSourcePathArray.create())
-end 'libraryTierSweep'
+	return sources
+end 'maxonSourcesIn'
 
 // ⚠ The tier test comes FIRST, and a library file must never reach the manifest climb. The checkout
 // this compiler is built from holds a `build.maxon` at its root, so a `stdlib/` file climbing for one
@@ -123,10 +171,37 @@ function workspaceRootOf(readerPath FilePath, tiers LibraryTiers) returns Worksp
 	let directory = try readerPath.parent() otherwise return WorkspaceRoot.libraryTierOnly
 
 	return match nearestManifestDirectory(directory) 'manifest'
-		found(dir) gives WorkspaceRoot.userDirectory(dir)
-		none gives WorkspaceRoot.userDirectory(directory)
+		found(dir) gives sweepableRoot(dir)
+		none gives rootWithoutAManifest(document, directory: directory)
 	end 'manifest'
 end 'workspaceRootOf'
+
+function rootWithoutAManifest(document FilePath, directory FilePath) returns WorkspaceRoot
+	return match namedClientRoot 'client'
+		named(dir) gives clientRootOver(document, dir: dir, directory: directory)
+		unset gives sweepableRoot(directory)
+	end 'client'
+end 'rootWithoutAManifest'
+
+// A document outside the root the client named is no part of that project. Rooting it there would
+// build a corpus over an unrelated tree and answer confidently out of it, which is worse than the
+// miss the document's own directory gives.
+function clientRootOver(document FilePath, dir FilePath, directory FilePath) returns WorkspaceRoot
+	if not document.isInside(dir.normalize()) 'outsideTheClientRoot'
+		return sweepableRoot(directory)
+	end 'outsideTheClientRoot'
+
+	return sweepableRoot(dir)
+end 'clientRootOver'
+
+// A directory with no parent is a volume root — `/`, `C:\`, or a `\\server\share`. Rooting a
+// project there sweeps the whole volume to answer one request, so a document sitting at one gets
+// the library tiers instead.
+function sweepableRoot(dir FilePath) returns WorkspaceRoot
+	_ = try dir.parent() otherwise return WorkspaceRoot.libraryTierOnly
+
+	return WorkspaceRoot.userDirectory(dir)
+end 'sweepableRoot'
 
 function nearestManifestDirectory(directory FilePath) returns ManifestDirectory
 	var current = directory.resolve(Directory.currentPath()).clone()
@@ -135,6 +210,10 @@ function nearestManifestDirectory(directory FilePath) returns ManifestDirectory
 		if File.exists(current.join("{BuildManifestFileName}")) 'holdsAManifest'
 			return ManifestDirectory.found(current)
 		end 'holdsAManifest'
+
+		if climbReachedTheClientRoot(current) 'noHigher'
+			break
+		end 'noHigher'
 
 		let above = try current.parent() otherwise 'atTheRoot'
 			break
@@ -145,6 +224,13 @@ function nearestManifestDirectory(directory FilePath) returns ManifestDirectory
 
 	return ManifestDirectory.none
 end 'nearestManifestDirectory'
+
+function climbReachedTheClientRoot(current FilePath) returns bool
+	return match namedClientRoot 'client'
+		named(dir) gives current.normalize().equals(dir.normalize())
+		unset gives false
+	end 'client'
+end 'climbReachedTheClientRoot'
 
 extension Project
 	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Two

@@ -4,11 +4,17 @@
 // never reaches the filesystem, and the uri is what a cross-file answer is judged by. Release discipline —
 // why every session is driven into a VALUE before anything is asserted — is `LspClient.maxon`'s hazard 1.
 
+#if os(Windows)
+	let CorpusTempVariable = "TEMP"
+#else
+	let CorpusTempVariable = "TMPDIR"
+	let CorpusPosixLastResortTempDir = "/tmp"
+#endif
+
 let CorpusBuildFileName = "build.maxon"
 let CorpusBuildFileContent = ""
 let CorpusBackslash = "\\"
 let CorpusSlash = "/"
-let CorpusFileUriPrefix = "file://"
 let CorpusNewline = "\n"
 let CorpusStdlibDirName = "stdlib"
 let CorpusStdlibFileName = "FilePath.maxon"
@@ -21,6 +27,13 @@ union CorpusDefinitionProbe
 	refused(code JsonRpcErrorCode, message String)
 	broke(detail String)
 end 'CorpusDefinitionProbe'
+
+export union CorpusSessionRoot
+	unrooted
+	clientRoot(directory FilePath)
+	clientRootUri(uri String)
+	workspaceFolderOnly(directory FilePath)
+end 'CorpusSessionRoot'
 
 // ⭐ **THE DECLARATION'S LINE IS READ OUT OF THE FILE, NOT WRITTEN DOWN HERE.** A pinned line number into a
 // live `stdlib/` file is a standing false alarm: any edit ABOVE the declaration reddens a case that is
@@ -51,17 +64,40 @@ export function corpusFilePathSource() returns String
 end 'corpusFilePathSource'
 
 export function stagedCorpusDirectory(dirName String) returns FilePath
+	let resolved = createdStagingDirectory(dirName, under: Directory.currentPath())
+	writeCorpusFile(resolved, fileName: CorpusBuildFileName, content: CorpusBuildFileContent)
+
+	return resolved
+end 'stagedCorpusDirectory'
+
+// Staging OUTSIDE the checkout, which a case about a project's ROOT needs. This checkout holds a
+// `build.maxon` at its own root, so a tree staged under it has a manifest somewhere above it
+// whatever the case writes — and the manifest rung would decide the root before the client's ever
+// came up.
+export function stagedDirectoryOutsideTheCheckout(dirName String) returns FilePath
+	return createdStagingDirectory(dirName, under: corpusHostTempArea())
+end 'stagedDirectoryOutsideTheCheckout'
+
+function createdStagingDirectory(dirName String, under FilePath) returns FilePath
 	let directory = try FilePath.from(dirName) otherwise panic("definition corpus: '{dirName}' is not a spellable path")
-	let resolved = directory.resolve(Directory.currentPath())
+	let resolved = directory.resolve(under)
 
 	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'couldNotCreate'
 		panic("definition corpus: the test could not run — could not create {resolved.toString()}")
 	end 'couldNotCreate'
 
-	writeCorpusFile(resolved, fileName: CorpusBuildFileName, content: CorpusBuildFileContent)
-
 	return resolved
-end 'stagedCorpusDirectory'
+end 'createdStagingDirectory'
+
+function corpusHostTempArea() returns FilePath
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(CorpusTempVariable) otherwise panic("definition corpus: the test could not run — {CorpusTempVariable} is not set, and it names the only area outside this checkout a case can stage in.")
+	#else
+		let spelled = try Process.environmentVariable(CorpusTempVariable) otherwise CorpusPosixLastResortTempDir
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("definition corpus: the host temp area '{spelled}' is not a spellable path")
+end 'corpusHostTempArea'
 
 export function writeCorpusFile(directory FilePath, fileName String, content String)
 	let file = directory.join(fileName)
@@ -71,12 +107,16 @@ end 'writeCorpusFile'
 export function probeCorpusDefinition(directory FilePath, fileName String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
 	writeCorpusFile(directory, fileName: fileName, content: content)
 
+	return probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: fileUriOf(directory.join(fileName)), content: content, line: line, character: character)
+end 'probeCorpusDefinition'
+
+export function probeCorpusDefinitionWithRoot(root CorpusSessionRoot, uri String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
 	var client = LspClient.start()
-	let probe = collectCorpusDefinition(client, uri: corpusUriOf(directory.join(fileName)), content: content, line: line, character: character)
+	let probe = collectCorpusDefinition(client, root: root, uri: uri, content: content, line: line, character: character)
 	client.release()
 
 	return probe
-end 'probeCorpusDefinition'
+end 'probeCorpusDefinitionWithRoot'
 
 export function expectDefinitionInFile(probe CorpusDefinitionProbe, fileTail String, startLine LspCoordinate, note String) throws TestFailure
 	match probe 'probe'
@@ -104,11 +144,11 @@ function requireCorpusLocation(uri String, range LspRange, fileTail String, star
 	try Expect.equal(range.startLine as AssertedInt, expected: startLine as AssertedInt, message: "{note} The jump landed on line {range.startLine} of {uri}.")
 end 'requireCorpusLocation'
 
-function collectCorpusDefinition(client LspClient, uri String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
+function collectCorpusDefinition(client LspClient, root CorpusSessionRoot, uri String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
 	var probe = CorpusDefinitionProbe.broke("the request ended without saying how")
 
 	try 'session'
-		_ = client.initialize()
+		openCorpusSession(client, root: root)
 		client.initialized()
 		client.openDocument(uri, content: content)
 		probe = corpusProbeOf(client.definition(uri, line: line, character: character))
@@ -123,6 +163,15 @@ function collectCorpusDefinition(client LspClient, uri String, content String, l
 	return probe
 end 'collectCorpusDefinition'
 
+function openCorpusSession(client LspClient, root CorpusSessionRoot) throws LspClientError
+	match root 'shape'
+		unrooted then _ = try client.initialize()
+		clientRoot(directory) then _ = try client.initializeAtRoot(directory)
+		clientRootUri(uri) then _ = try client.initializeAtRootUri(uri)
+		workspaceFolderOnly(directory) then _ = try client.initializeAtWorkspaceFolder(directory)
+	end 'shape'
+end 'openCorpusSession'
+
 export function corpusProbeOf(found DefinitionResult) returns CorpusDefinitionProbe
 	if not found.isPresent 'nothing'
 		return CorpusDefinitionProbe.absent
@@ -130,11 +179,6 @@ export function corpusProbeOf(found DefinitionResult) returns CorpusDefinitionPr
 
 	return CorpusDefinitionProbe.located(found.uri, range: found.range)
 end 'corpusProbeOf'
-
-export function corpusUriOf(file FilePath) returns String
-	let slashed = file.toString().replace(CorpusBackslash, with: CorpusSlash)
-	return "{CorpusFileUriPrefix}{slashed}" if slashed.startsWith(CorpusSlash) else "{CorpusFileUriPrefix}{CorpusSlash}{slashed}"
-end 'corpusUriOf'
 
 function corpusRefusalSentence(code JsonRpcErrorCode, message String) returns String
 	return "`textDocument/definition` was refused with JSON-RPC {code}: {message}. The definition handler IS served, so a refusal here is a REGRESSION rather than an answer."

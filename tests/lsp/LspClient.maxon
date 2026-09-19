@@ -461,23 +461,50 @@ public type LspClient
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		let capabilities = try memberNode(replyDoc, of: result, key: CapabilitiesKey)
 
-		var advertised = InitializeResult.create()
-		advertised.hasTextDocumentSync = advertises(replyDoc, capabilities: capabilities, key: TextDocumentSyncKey)
-		advertised.hasHoverProvider = advertises(replyDoc, capabilities: capabilities, key: HoverProviderKey)
-		advertised.hasCompletionProvider = advertises(replyDoc, capabilities: capabilities, key: CompletionProviderKey)
-		advertised.hasDefinitionProvider = advertises(replyDoc, capabilities: capabilities, key: DefinitionProviderKey)
-		advertised.hasFormattingProvider = advertises(replyDoc, capabilities: capabilities, key: FormattingProviderKey)
-		advertised.hasDocumentSymbolProvider = advertises(replyDoc, capabilities: capabilities, key: DocumentSymbolProviderKey)
-		advertised.hasFoldingRangeProvider = advertises(replyDoc, capabilities: capabilities, key: FoldingRangeProviderKey)
-		advertised.hasLinkedEditingRangeProvider = advertises(replyDoc, capabilities: capabilities, key: LinkedEditingRangeProviderKey)
-		advertised.hasRenameProvider = advertises(replyDoc, capabilities: capabilities, key: RenameProviderKey)
-		advertised.hasCodeActionProvider = advertises(replyDoc, capabilities: capabilities, key: CodeActionProviderKey)
-		advertised.hasSemanticTokensProvider = advertises(replyDoc, capabilities: capabilities, key: SemanticTokensProviderKey)
-
-		return advertised
+		return try readAdvertised(replyDoc, result: result)
 	end 'initialize'
+
+	public function initializeAtRoot(root FilePath) returns InitializeResult throws LspClientError
+		return try self.initializeAtRootUri(fileUriOf(root))
+	end 'initializeAtRoot'
+
+	public function initializeAtRootUri(uri String) returns InitializeResult throws LspClientError
+		return try self.initializeRooted(uri, sendsRootUri: true)
+	end 'initializeAtRootUri'
+
+	public function initializeAtWorkspaceFolder(root FilePath) returns InitializeResult throws LspClientError
+		return try self.initializeRooted(fileUriOf(root), sendsRootUri: false)
+	end 'initializeAtWorkspaceFolder'
+
+	function initializeRooted(rootUri String, sendsRootUri bool) returns InitializeResult throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodInitialize)
+
+		var folder = JsonObjectBuilder.create(doc)
+		folder.putString(UriKey, value: rootUri)
+		folder.putString(NameKey, value: lastUriSegment(rootUri))
+
+		var folders = JsonNodeIdArray.create()
+		folders.push(folder.finish())
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putNull(ProcessIdKey)
+
+		if sendsRootUri 'alsoRootUri'
+			params.putString(RootUriKey, value: rootUri)
+		end 'alsoRootUri' else 'foldersOnly'
+			params.putNull(RootUriKey)
+		end 'foldersOnly'
+
+		params.putNode(WorkspaceFoldersKey, value: doc.add(JsonNode.arrayNode(folders)))
+		params.putNode(CapabilitiesKey, value: clientCapabilities(doc))
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		let (replyDoc, result) = try self.sendRequest(doc, message: message)
+
+		return try readAdvertised(replyDoc, result: result)
+	end 'initializeRooted'
 
 	public function initialized() throws LspClientError
 		var doc = JsonDoc.create()
@@ -985,6 +1012,23 @@ function testedServerPath() returns FilePath
 	return try FilePath.from(spelled) otherwise panic("LspClient: the test could not run — '{TestedCompilerStem}' is not a spellable path")
 end 'testedServerPath'
 
+export function fileUriOf(file FilePath) returns String
+	let slashed = file.toString().replace(WindowsPathSeparator, with: UriPathSeparator)
+	return "{FileUriScheme}{slashed}" if slashed.startsWith(UriPathSeparator) else "{FileUriScheme}{UriPathSeparator}{slashed}"
+end 'fileUriOf'
+
+function lastUriSegment(uri String) returns String
+	var name = uri
+
+	for segment in uri.split(UriPathSeparator) 'eachSegment'
+		if not segment.isEmpty() 'named'
+			name = segment
+		end 'named'
+	end 'eachSegment'
+
+	return name
+end 'lastUriSegment'
+
 // ============================================================================================
 // BUILDING A MESSAGE
 // ============================================================================================
@@ -1156,6 +1200,25 @@ function advertises(doc JsonDoc, capabilities JsonNodeId, key String) returns bo
 			jsonObject gives true
 	end 'shape'
 end 'advertises'
+
+function readAdvertised(replyDoc JsonDoc, result JsonNodeId) returns InitializeResult throws LspClientError
+	let capabilities = try memberNode(replyDoc, of: result, key: CapabilitiesKey)
+
+	var advertised = InitializeResult.create()
+	advertised.hasTextDocumentSync = advertises(replyDoc, capabilities: capabilities, key: TextDocumentSyncKey)
+	advertised.hasHoverProvider = advertises(replyDoc, capabilities: capabilities, key: HoverProviderKey)
+	advertised.hasCompletionProvider = advertises(replyDoc, capabilities: capabilities, key: CompletionProviderKey)
+	advertised.hasDefinitionProvider = advertises(replyDoc, capabilities: capabilities, key: DefinitionProviderKey)
+	advertised.hasFormattingProvider = advertises(replyDoc, capabilities: capabilities, key: FormattingProviderKey)
+	advertised.hasDocumentSymbolProvider = advertises(replyDoc, capabilities: capabilities, key: DocumentSymbolProviderKey)
+	advertised.hasFoldingRangeProvider = advertises(replyDoc, capabilities: capabilities, key: FoldingRangeProviderKey)
+	advertised.hasLinkedEditingRangeProvider = advertises(replyDoc, capabilities: capabilities, key: LinkedEditingRangeProviderKey)
+	advertised.hasRenameProvider = advertises(replyDoc, capabilities: capabilities, key: RenameProviderKey)
+	advertised.hasCodeActionProvider = advertises(replyDoc, capabilities: capabilities, key: CodeActionProviderKey)
+	advertised.hasSemanticTokensProvider = advertises(replyDoc, capabilities: capabilities, key: SemanticTokensProviderKey)
+
+	return advertised
+end 'readAdvertised'
 
 function isNull(doc JsonDoc, id JsonNodeId) returns bool
 	return doc.get(id).kind == JsonKind.jsonNull
@@ -1453,6 +1516,10 @@ let WorkspaceFoldersKey = "workspaceFolders"
 let DynamicRegistrationKey = "dynamicRegistration"
 let ProcessIdKey = "processId"
 let RootUriKey = "rootUri"
+
+let FileUriScheme = "file://"
+let UriPathSeparator = "/"
+let WindowsPathSeparator = "\\"
 
 let TextDocumentSyncKey = "textDocumentSync"
 let HoverProviderKey = "hoverProvider"

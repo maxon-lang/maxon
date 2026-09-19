@@ -55,12 +55,69 @@ module function hoverAnswer(request LspRequest) returns LspAnswer throws LspPara
 	// "nothing here" and not a refusal: the client asked a well-formed question about a place with
 	// nothing to say.
 	let document = try HoverDocument.of(request.text, keywords: request.keywords) otherwise return LspAnswer.nothing()
+	let cursor = try document.cursorTokenIndex(position) otherwise return LspAnswer.nothing()
 
-	match document.renderingAt(position) 'answer'
+	match hoverRenderingOf(request, document: document, cursor: cursor) 'answer'
 		present(markdown) then return markdownAnswer(markdown)
 		absent then return LspAnswer.nothing()
 	end 'answer'
 end 'hoverAnswer'
+
+function hoverRenderingOf(request LspRequest, document HoverDocument, cursor TokenIndex) returns HoverRendering
+	let inTheBuffer = document.renderingForToken(cursor)
+
+	match inTheBuffer 'buffer'
+		present then return inTheBuffer
+		absent then return hoverBeyondTheBuffer(request, document: document, cursor: cursor)
+	end 'buffer'
+end 'hoverRenderingOf'
+
+// ⚠ The reserved-word rung comes BEFORE the project one, and the order is a cost bound.
+// `tokenCanBeAName` is true of every keyword, so `return`, `end` and `if` would otherwise reach a
+// corpus build — a directory sweep, a lex of every file and a signature fold — to be told nothing,
+// on a request an editor fires on every pointer movement. It loses no answer:
+// `specs/keyword-as-a-declared-name.md` admits a keyword as a name in a function's declared name
+// and a parameter's name and nowhere else, so a keyword spelled across a file boundary names a
+// FUNCTION, written as a call or as a member — both of which `reservedWordOutOfNamePosition` lets
+// past — while a parameter is local and the buffer rung has already answered it.
+function hoverBeyondTheBuffer(request LspRequest, document HoverDocument, cursor TokenIndex) returns HoverRendering
+	if document.reservedWordOutOfNamePosition(cursor) 'theLanguagesOwnWord'
+		return reservedWordRendering(document.tokenAt(cursor))
+	end 'theLanguagesOwnWord'
+
+	let inTheProject = hoverAcrossFiles(request, document: document, cursor: cursor)
+
+	match inTheProject 'project'
+		present then return inTheProject
+		absent then return reservedWordRendering(document.tokenAt(cursor))
+	end 'project'
+end 'hoverBeyondTheBuffer'
+
+function hoverAcrossFiles(request LspRequest, document HoverDocument, cursor TokenIndex) returns HoverRendering
+	if not tokenCanBeAName(document.tokenAt(cursor)) 'notAName'
+		return HoverRendering.absent
+	end 'notAName'
+
+	return hoverFromTheCorpus(lspWorkspaceCorpus(lspDocumentPath(request.uri)), document: document, cursor: cursor)
+end 'hoverAcrossFiles'
+
+function hoverFromTheCorpus(corpus LspCorpus, document HoverDocument, cursor TokenIndex) returns HoverRendering
+	match corpus 'corpus'
+		loaded(project, signatures, readerPath) then return document.declarationInTheCorpus(project, signatures: signatures, cursor: cursor, readerPath: readerPath)
+		unavailable then return HoverRendering.absent
+	end 'corpus'
+end 'hoverFromTheCorpus'
+
+function reservedWordRendering(tok Token) returns HoverRendering
+	if not tokenIsAReservedWord(tok) 'anAuthoredToken'
+		return HoverRendering.absent
+	end 'anAuthoredToken'
+
+	var prose = StringArray.create()
+	prose.push(KeywordNote)
+
+	return HoverRendering.present(hoverMarkdown(String.from(tok.value), prose: prose))
+end 'reservedWordRendering'
 
 function markdownAnswer(markdown String) returns LspAnswer
 	var doc = JsonDoc.create()
@@ -100,6 +157,14 @@ union HoverDeclaration
 	typeName(index TokenIndex)
 	none
 end 'HoverDeclaration'
+
+// ⚠ `visibleToAnotherFile` narrows the WALK and never its answer: `declarationOf` stops at the
+// first declaration of the name, so discarding that answer afterwards would report absence for a
+// file whose next match is the visible declaration being looked for.
+enum HoverDeclarationScope
+	everyDeclaration
+	visibleToAnotherFile
+end 'HoverDeclarationScope'
 
 // What a declaration sits inside, decided by the nearest declaration keyword above it.
 union HoverEnclosure
@@ -161,6 +226,8 @@ enum HoverLookupError implements Error
 
 	// This document declares no such member — `stdlib/` is where the lookup goes next.
 	notDeclaredHere
+
+	noTokenAtTheCursor
 end 'HoverLookupError'
 
 // One buffer, prepared for the questions a hover asks of it: its bytes (to slice source text out of),
@@ -177,8 +244,14 @@ type HoverDocument
 	let keywords as KeywordTable
 
 	static function of(text String, keywords KeywordTable) returns HoverDocument throws LexerError
-		return Self{text: text, bytes: text.toByteArray(), tokens: try tokenize(text, keywords: keywords), lines: LspLineIndex.build(text), keywords: keywords}
+		return Self.ofTokens(text, tokens: try tokenize(text, keywords: keywords), keywords: keywords)
 	end 'of'
+
+	// Tokens the caller already holds, so a declaring file is rendered out of `queryActiveTokens`'
+	// memo rather than lexed again on every hover.
+	static function ofTokens(text String, tokens TokenArray, keywords KeywordTable) returns HoverDocument
+		return Self{text: text, bytes: text.toByteArray(), tokens: tokens, lines: LspLineIndex.build(text), keywords: keywords}
+	end 'ofTokens'
 
 	// --- The stream, and the cursor in it -----------------------------------------------------
 
@@ -192,13 +265,23 @@ type HoverDocument
 	// Which token the cursor names is `lspTokenAtCursor`'s answer and not one taken here:
 	// `textDocument/definition` resolves the same position, and an editor that jumped to a name this
 	// hover described as something else would be reading two different rules.
-	function renderingAt(position LspPosition) returns HoverRendering
+	function cursorTokenIndex(position LspPosition) returns TokenIndex throws HoverLookupError
 		let offset = lines.offsetOf(text, position: position)
 
-		let index = try lspTokenAtCursor(tokens, offset: offset) otherwise return HoverRendering.absent
+		return try lspTokenAtCursor(tokens, offset: offset) otherwise throw HoverLookupError.noTokenAtTheCursor
+	end 'cursorTokenIndex'
 
-		return renderingForToken(index)
-	end 'renderingAt'
+	function reservedWordOutOfNamePosition(cursor TokenIndex) returns bool
+		if not tokenIsAReservedWord(tokenAt(cursor)) 'anAuthoredToken'
+			return false
+		end 'anAuthoredToken'
+
+		if lspCursorNamesAMember(tokens, cursor: cursor) 'aMember'
+			return false
+		end 'aMember'
+
+		return tokenAt(cursor + 1).kind != TokenKind.leftParen
+	end 'reservedWordOutOfNamePosition'
 
 	function renderingForToken(index TokenIndex) returns HoverRendering
 		let tok = tokenAt(index)
@@ -209,13 +292,7 @@ type HoverDocument
 			return HoverRendering.absent
 		end 'prose'
 
-		if tokenIsAReservedWord(tok) 'keyword'
-			var prose = StringArray.create()
-			prose.push(KeywordNote)
-			return HoverRendering.present(hoverMarkdown(String.from(tok.value), prose: prose))
-		end 'keyword'
-
-		if tok.kind != TokenKind.identifier 'neitherANameNorAWord'
+		if not tokenCanBeAName(tok) 'neitherANameNorAWord'
 			return HoverRendering.absent
 		end 'neitherANameNorAWord'
 
@@ -248,26 +325,43 @@ type HoverDocument
 	// --- Resolving a name ---------------------------------------------------------------------
 
 	function nameRendering(index TokenIndex) returns HoverRendering
-		match declarationOf(tokenAt(index).value, near: index) 'resolved'
+		return renderingOfDeclaration(declarationOf(tokenAt(index).value, near: index, scope: HoverDeclarationScope.everyDeclaration))
+	end 'nameRendering'
+
+	function declarationInTheCorpus(project Project, signatures ProgramSignatures, cursor TokenIndex, readerPath FilePath) returns HoverRendering
+		let declFile = try lspDeclaringFileOfTheCursor(signatures, tokens: tokens, cursor: cursor, readerPath: readerPath) otherwise return HoverRendering.absent
+		let declTokens = try queryActiveTokens(project, path: declFile) otherwise return HoverRendering.absent
+		let entry = try sourceEntryOf(project, path: declFile) otherwise return HoverRendering.absent
+		let declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: keywords)
+
+		return declaring.crossFileRendering(tokenAt(cursor).value)
+	end 'declarationInTheCorpus'
+
+	function crossFileRendering(name ByteArray) returns HoverRendering
+		return renderingOfDeclaration(declarationOf(name, near: FirstToken, scope: HoverDeclarationScope.visibleToAnotherFile))
+	end 'crossFileRendering'
+
+	function renderingOfDeclaration(declaration HoverDeclaration) returns HoverRendering
+		match declaration 'resolved'
 			binding(head) then return bindingRendering(head)
 			parameter(functionIndex, nameIndex) then return parameterRendering(functionIndex, nameIndex: nameIndex)
 			routine(head) then return declarationHeadRendering(head)
 			typeName(head) then return declarationHeadRendering(head)
 			none then return HoverRendering.absent
 		end 'resolved'
-	end 'nameRendering'
+	end 'renderingOfDeclaration'
 
 	// The declaration a name at `near` stands for.
 	//
 	// ⚠ **NEAREST-ABOVE-FIRST IS LEXICAL ORDER STANDING IN FOR LEXICAL SCOPE**, for the reason the file
 	// header gives: there is no parse to take a scope from. Below the cursor is searched second because
 	// a call legitimately precedes the function it names.
-	function declarationOf(name ByteArray, near TokenIndex) returns HoverDeclaration
+	function declarationOf(name ByteArray, near TokenIndex, scope HoverDeclarationScope) returns HoverDeclaration
 		let total = tokens.count()
 		var step = 0
 
 		while step < total 'eachCandidate'
-			let found = declarationHeadAt(candidateIndex(step, near: near), name: name)
+			let found = declarationHeadAt(candidateIndex(step, near: near), name: name, scope: scope)
 
 			match found 'hit'
 				none then step = step + 1
@@ -282,11 +376,11 @@ type HoverDocument
 	end 'declarationOf'
 
 	// Whether the token at `index` declares `name`, and as what.
-	function declarationHeadAt(index TokenIndex, name ByteArray) returns HoverDeclaration
+	function declarationHeadAt(index TokenIndex, name ByteArray, scope HoverDeclarationScope) returns HoverDeclaration
 		let kind = tokenAt(index).kind
 
 		if kind == TokenKind.function 'routineOrItsParameters'
-			return functionDeclaring(index, name: name)
+			return functionDeclaring(index, name: name, scope: scope)
 		end 'routineOrItsParameters'
 
 		if not namesFollowing(index, name: name) 'declaresSomethingElse'
@@ -294,7 +388,7 @@ type HoverDocument
 		end 'declaresSomethingElse'
 
 		if kind == TokenKind.let or kind == TokenKind.var 'bindingHead'
-			return HoverDeclaration.binding(index)
+			return bindingDeclaredAt(index, scope: scope)
 		end 'bindingHead'
 
 		if kindDeclaresATypeName(kind) 'typeHead'
@@ -304,23 +398,44 @@ type HoverDocument
 		return HoverDeclaration.none
 	end 'declarationHeadAt'
 
-	// Whether the token after `index` is the identifier `name`.
+	function bindingDeclaredAt(index TokenIndex, scope HoverDeclarationScope) returns HoverDeclaration
+		match scope 'reach'
+			everyDeclaration then return HoverDeclaration.binding(index)
+			visibleToAnotherFile then return moduleLevelBindingAt(index)
+		end 'reach'
+	end 'bindingDeclaredAt'
+
+	function moduleLevelBindingAt(index TokenIndex) returns HoverDeclaration
+		if tokenAt(declarationStart(index)).column != TopLevelColumn 'aLocalOrAField'
+			return HoverDeclaration.none
+		end 'aLocalOrAField'
+
+		return HoverDeclaration.binding(index)
+	end 'moduleLevelBindingAt'
+
 	function namesFollowing(index TokenIndex, name ByteArray) returns bool
 		let next = tokenAt(index + 1)
-		return next.kind == TokenKind.identifier and next.value.equals(name)
+		return tokenCanBeAName(next) and next.value.equals(name)
 	end 'namesFollowing'
 
 	// Whether the `function` at `functionIndex` declares `name` — as the function itself, or as one of
 	// its parameters.
-	function functionDeclaring(functionIndex TokenIndex, name ByteArray) returns HoverDeclaration
+	function functionDeclaring(functionIndex TokenIndex, name ByteArray, scope HoverDeclarationScope) returns HoverDeclaration
 		if signatureDeclares(functionIndex, name: name) 'thisFunction'
 			return HoverDeclaration.routine(functionIndex)
 		end 'thisFunction'
 
+		match scope 'reach'
+			everyDeclaration then return parameterDeclaring(functionIndex, name: name)
+			visibleToAnotherFile then return HoverDeclaration.none
+		end 'reach'
+	end 'functionDeclaring'
+
+	function parameterDeclaring(functionIndex TokenIndex, name ByteArray) returns HoverDeclaration
 		let openIndex = try signatureListIndex(functionIndex) otherwise return HoverDeclaration.none
 
 		return parameterNamed(functionIndex, openIndex: openIndex, name: name)
-	end 'functionDeclaring'
+	end 'parameterDeclaring'
 
 	// Whether a signature's declared name is `name`. A closure literal (`function(x) gives …`) declares
 	// none, so it is never the answer to a name.
@@ -338,7 +453,7 @@ type HoverDocument
 		while index > functionIndex + 1 'backToTheName'
 			index = index - 1
 
-			if tokenAt(index).kind == TokenKind.identifier 'theName'
+			if tokenCanBeAName(tokenAt(index)) 'theName'
 				return index
 			end 'theName'
 		end 'backToTheName'
@@ -362,12 +477,12 @@ type HoverDocument
 		let total = tokens.count()
 		var index = functionIndex + 1
 
-		while index < total 'head'
-			let kind = tokenAt(index).kind
+		while index < total and tokenCanBeAName(tokenAt(index)) 'head'
+			index = index + 1
 
-			if kind != TokenKind.identifier and kind != TokenKind.dot 'headEnds'
+			if tokenAt(index).kind != TokenKind.dot 'thePathEnds'
 				break
-			end 'headEnds'
+			end 'thePathEnds'
 
 			index = index + 1
 		end 'head'
@@ -398,7 +513,7 @@ type HoverDocument
 				end 'listEnds'
 			end 'closes' else if tok.kind == TokenKind.comma and depth == 1 'nextParameter'
 				atParameterStart = true
-			end 'nextParameter' else if atParameterStart and tok.kind == TokenKind.identifier 'parameterName'
+			end 'nextParameter' else if atParameterStart and tokenCanBeAName(tok) 'parameterName'
 				atParameterStart = false
 
 				if tok.value.equals(name) 'thisOne'
@@ -678,13 +793,13 @@ type HoverDocument
 
 	// `f(…)`, `String.from(…)`, `path.cstr(…)` — a call, and the type its callee is DECLARED to answer.
 	function callValueAt(index TokenIndex, reach HoverReceiverReach) returns HoverValue
-		if tokenAt(index).kind != TokenKind.identifier 'notACalleeName'
+		if not tokenCanBeAName(tokenAt(index)) 'notACalleeName'
 			return HoverValue.none
 		end 'notACalleeName'
 
 		var lastSegment = index
 
-		while tokenAt(lastSegment + 1).kind == TokenKind.dot and tokenAt(lastSegment + 2).kind == TokenKind.identifier 'pathSegment'
+		while tokenAt(lastSegment + 1).kind == TokenKind.dot and tokenCanBeAName(tokenAt(lastSegment + 2)) 'pathSegment'
 			lastSegment = lastSegment + 2
 		end 'pathSegment'
 
@@ -731,7 +846,7 @@ type HoverDocument
 	end 'bareCalleeReturnType'
 
 	function routineReturnTypeNamed(name ByteArray, near TokenIndex) returns HoverType
-		match declarationOf(name, near: near) 'resolved'
+		match declarationOf(name, near: near, scope: HoverDeclarationScope.everyDeclaration) 'resolved'
 			routine(head) then return returnTypeOf(head)
 			binding or
 				parameter or
@@ -745,7 +860,7 @@ type HoverDocument
 	// eight return types would be the same fact written twice.
 	function mathBuiltinReturnType(builtin MathBuiltin) returns HoverType
 		let signature = try HoverDocument.of(mathBuiltinSignature(builtin), keywords: keywords) otherwise return HoverType.unknown
-		return signature.returnTypeOf(SignatureFunctionToken)
+		return signature.returnTypeOf(FirstToken)
 	end 'mathBuiltinReturnType'
 
 	// ⚠ **`Array with int` IS MAXON'S OWN SPELLING OF THIS TYPE**, and it is what a reader would have to
@@ -768,7 +883,7 @@ type HoverDocument
 
 		let receiver = tokenAt(index - 2)
 
-		if receiver.kind != TokenKind.identifier 'chainedOrComputedReceiver'
+		if not tokenCanBeAName(receiver) 'chainedOrComputedReceiver'
 			return HoverRendering.absent
 		end 'chainedOrComputedReceiver'
 
@@ -784,7 +899,7 @@ type HoverDocument
 	//
 	// `reach` is `HoverReceiverReach`'s subject: what a receiver may itself be resolved through.
 	function receiverType(name ByteArray, near TokenIndex, reach HoverReceiverReach) returns HoverType
-		match declarationOf(name, near: near) 'resolved'
+		match declarationOf(name, near: near, scope: HoverDeclarationScope.everyDeclaration) 'resolved'
 			binding(head) then return bindingType(head, reach: reach)
 			parameter(_, nameIndex) then return parameterType(nameIndex)
 			typeName(head) then return declaredTypeNameAt(head)
@@ -796,7 +911,7 @@ type HoverDocument
 	function declaredTypeNameAt(keyword TokenIndex) returns HoverType
 		let named = tokenAt(keyword + 1)
 
-		if named.kind != TokenKind.identifier 'unnamed'
+		if not tokenCanBeAName(named) 'unnamed'
 			return HoverType.unknown
 		end 'unnamed'
 
@@ -1052,7 +1167,7 @@ type HoverDocument
 	function declaredNamePhrase(keyword TokenIndex) returns String
 		let named = tokenAt(keyword + 1)
 
-		if named.kind != TokenKind.identifier 'unnamed'
+		if not tokenCanBeAName(named) 'unnamed'
 			return AnonymousTypePhrase
 		end 'unnamed'
 
@@ -1148,9 +1263,7 @@ function namedPrimitive(name ByteArray) returns HoverType
 	return HoverType.named(name, rendered: String.from(name))
 end 'namedPrimitive'
 
-// `mathBuiltinSignature` yields a document holding one declaration, so its `function` keyword is the
-// first token in the stream.
-let SignatureFunctionToken = 0
+let FirstToken = 0
 
 let UninferredTypePhrase = ", of a type this hover could not infer"
 let SentenceEnd = "."
