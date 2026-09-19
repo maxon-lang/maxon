@@ -25,7 +25,8 @@ A directory walk skips three things:
 - **`*.test.maxon`** — test files; [`maxon test`](/docs/language/testing/) compiles them.
 - **any directory containing a `.maxonignore` file**, with everything beneath it.
 
-Naming a file explicitly on the command line compiles it regardless. See
+A `.maxonignore` excludes a directory the walk *discovers*. Naming a path explicitly on the command
+line — a file or a directory — compiles it regardless of a marker above it or on it. See
 [Project Structure](/docs/cli/project-structure/) for the full layout rules.
 
 ## A Manifest Is a Program

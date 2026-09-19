@@ -2768,6 +2768,11 @@ export union DeclaredEnum
 	undeclared
 end 'DeclaredEnum'
 
+module union DeclaredBinding
+	declared(declFilePath FilePath)
+	undeclared
+end 'DeclaredBinding'
+
 // ⭐ **THE KINDS OF RECORD THAT MAY LIE WITHIN A RECORD** (`ProgramSignatures.recordKindsWithinAggregate`). A kind
 // is a declared struct's or union's name, a generic instance's compiled name (`mangleGenericInstance`, which no
 // declaration shares), `HeldTupleKind` for every tuple, or `HeldByteRecordKind` for a `String` or a `Character`;
@@ -13259,6 +13264,19 @@ export type ProgramSignatures
 		return site.takesReceiver
 	end 'declaredMethodTakesReceiver'
 
+	module function declaredMemberKeysOf(typeName ByteArray) returns ByteArrayArray
+		let prefix = qualifiedMethodName(typeName, methodName: EmptySourceText)
+		var keys = ByteArrayArray.create()
+
+		for (qualified, _) in self.funcDeclSites 'eachDeclaration'
+			if bytesStartWith(qualified, prefix: prefix) 'declaredOnThisType'
+				keys.push(qualified)
+			end 'declaredOnThisType'
+		end 'eachDeclaration'
+
+		return keys
+	end 'declaredMemberKeysOf'
+
 	// Note that the `extension` declared in `declFilePath` published `qualified` onto a conformer — the write
 	// side of the test above, AND the write that discovers a cross-file contest (X-contains).
 	//
@@ -19137,6 +19155,17 @@ export type ProgramSignatures
 
 		return SymbolVisibility.visible
 	end 'declVisibilityFrom'
+
+	module function bindingFor(name ByteArray, readerFilePath FilePath) returns DeclaredBinding
+		let index = try self.declIndex.get(name) otherwise return DeclaredBinding.undeclared
+		let decl = self.declAt(index)
+
+		if not self.isVisibleFrom(decl.visibility, declFilePath: decl.declFilePath, readerFilePath: readerFilePath) 'hiddenHere'
+			return DeclaredBinding.undeclared
+		end 'hiddenHere'
+
+		return DeclaredBinding.declared(decl.declFilePath)
+	end 'bindingFor'
 
 	// The verdict for the declaration at `index`. Its own name so the two probes above read one arena entry
 	// each and hand `symbolVisibility` the tier and the file off the same record.
@@ -26323,7 +26352,7 @@ export type ProgramSignatures
 	// Does an `interface` declaration hold `name`? Asked of the declaration SITES as well as the registry,
 	// because a service's request union is synthesized before `foldInterfaceDeclarations` fills `interfaces`
 	// (`settleCrossKindContests` reads the sites for the same reason).
-	function nameDeclaresAnInterface(name ByteArray) returns bool
+	module function nameDeclaresAnInterface(name ByteArray) returns bool
 		return isInterfaceName(self.interfaces, name: name) or self.interfaceDeclSiteNames.contains(name)
 	end 'nameDeclaresAnInterface'
 

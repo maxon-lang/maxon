@@ -1,0 +1,18 @@
+// definition-crosses-into-the-stdlib.test.maxon — the user's report: a cursor on `FilePath` resolves to
+// `stdlib/FilePath.maxon`, where `public type FilePath` is declared, rather than to nothing. The session,
+// the staging and the assertions are `definition-corpus-probe.test.maxon`'s.
+
+let StdlibTypeDirName = "temp/lsp/definition-crosses-into-the-stdlib"
+let StdlibTypeFileName = "main.maxon"
+let StdlibTypeUseLine = 1 as LspCoordinate
+let StdlibTypeUseCharacter = 15 as LspCoordinate
+let StdlibTypeDeclarationLineNeedle = "public type FilePath"
+
+test 'definition crosses into the stdlib'
+	let directory = stagedCorpusDirectory(StdlibTypeDirName)
+	let source = corpusFilePathSource()
+
+	let probe = probeCorpusDefinition(directory, fileName: StdlibTypeFileName, content: source, line: StdlibTypeUseLine, character: StdlibTypeUseCharacter)
+
+	try expectDefinitionInFile(probe, fileTail: CorpusStdlibFilePathTail, startLine: corpusLineDeclaring(corpusStdlibFilePath(), needle: StdlibTypeDeclarationLineNeedle), note: "a cursor on the stdlib type `FilePath` did not resolve to the `public type FilePath` that declares it.")
+end 'definition crosses into the stdlib'

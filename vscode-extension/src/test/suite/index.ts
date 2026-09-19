@@ -14,8 +14,10 @@ export function run(): Promise<void> {
 
     return new Promise(async (resolve, reject) => {
         try {
-            const files = await glob('**/**.test.js', { cwd: testsRoot });
-            
+            // ⚠ SORTED, because the glob's own order is the filesystem's. A run whose order varies
+            // between machines is a run whose failures cannot be reproduced from the report.
+            const files = (await glob('**/**.test.js', { cwd: testsRoot })).sort();
+
             // Add files to the test suite
             files.forEach(f => mocha.addFile(path.resolve(testsRoot, f)));
 

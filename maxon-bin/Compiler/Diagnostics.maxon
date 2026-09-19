@@ -308,16 +308,26 @@ export function beginDiagnosticCapture()
 	capturedDiagnosticText = CapturedDiagnosticTextArray.create()
 end 'beginDiagnosticCapture'
 
+module function discardDiagnosticCapture()
+	requireDiagnosticCaptureOpen("discardDiagnosticCapture")
+	closeDiagnosticCapture()
+end 'discardDiagnosticCapture'
+
+// ⚠ Closing a capture that was never opened is a hard failure and not an empty answer. `""` is a
+// legitimate result — a compile that reported nothing produces it — so an unpaired close hands back
+// the value a clean compile gives, and a caller that forgot to open reads every refused compile as
+// having said nothing at all. That is the silent-wrong-answer shape, so it panics.
+function requireDiagnosticCaptureOpen(closer String)
+	if diagnosticCaptureOpen 'open'
+		return
+	end 'open'
+
+	panic("{closer}: no diagnostic capture is open — every close pairs with a `beginDiagnosticCapture`, and an unpaired one cannot be told from a compile that legitimately reported nothing")
+end 'requireDiagnosticCaptureOpen'
+
 // Stop capturing and hand back everything captured, byte for byte as stderr would have received it.
-//
-// ⚠ **CLOSING A CAPTURE THAT WAS NEVER OPENED IS A HARD FAILURE, NOT AN EMPTY ANSWER.** `""` is a
-// LEGITIMATE result — a compile that reported nothing produces it — so an unpaired close would hand
-// back the value a clean compile gives, and a caller that forgot to open would read every refused
-// compile as having said nothing at all. That is the silent-wrong-answer shape, so it panics.
 export function endDiagnosticCapture() returns String
-	if not diagnosticCaptureOpen 'notOpen'
-		panic("endDiagnosticCapture: no diagnostic capture is open — every close pairs with a `beginDiagnosticCapture`, and an unpaired one returns the empty text a compile with NO diagnostics legitimately produces")
-	end 'notOpen'
+	requireDiagnosticCaptureOpen("endDiagnosticCapture")
 
 	var joined = StringBuilder.create()
 

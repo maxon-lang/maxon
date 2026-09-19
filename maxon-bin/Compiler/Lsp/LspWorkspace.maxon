@@ -1,0 +1,215 @@
+// The declarations of a whole PROJECT, for the editor features that have to look outside the buffer in
+// front of the author: which file declares a name (`LspDefinition`) and which members a type publishes
+// (`LspCompletion`). `LspDocumentProject` is the other half of the pair and answers about the buffer
+// ALONE — that is what `textDocument/publishDiagnostics` still uses, so a diagnostic remains a statement
+// about one file and never about a sibling the author did not open.
+//
+// ⚠ The root is derived from the DOCUMENT, never from `rootUri` or `workspaceFolders`: a request names a
+// file and the server holds no workspace. `workspaceRootOf` is the ladder — a library tier's file gets
+// the tiers only, and anything else gets the nearest ancestor holding a `build.maxon`, or the document's
+// own directory when there is none.
+//
+// ⚠ Answering `unavailable` costs a feature its cross-file half and leaves the in-buffer half standing,
+// which is what an editor should see: fewer answers, never a refused request.
+module union LspCorpus
+	loaded(project Project, signatures ProgramSignatures, readerPath FilePath)
+	unavailable
+end 'LspCorpus'
+
+union WorkspaceRoot
+	userDirectory(dir FilePath)
+	libraryTierOnly
+end 'WorkspaceRoot'
+
+union ManifestDirectory
+	found(dir FilePath)
+	none
+end 'ManifestDirectory'
+
+type WorkspaceSweep
+	export let compileRoot as FilePath
+	export let sources as MaxonSourcePathArray
+
+	export static function create(compileRoot FilePath, sources MaxonSourcePathArray) returns WorkspaceSweep
+		return Self{compileRoot: compileRoot, sources: sources}
+	end 'create'
+end 'WorkspaceSweep'
+
+typealias HeldProjectMap = Map with (String, Project)
+typealias HeldProjectKeyArray = Array with String
+
+// Projects are held across requests because building one costs a sweep, a lex of every file and a
+// signature fold. Eight rather than one: a jump from a user file into `stdlib/` and back crosses two
+// roots, and a library file is keyed by its OWN path, so a cache of one turns every round trip into two
+// cold rebuilds. Oldest out, so a session that wanders cannot grow the process without bound.
+let HeldProjectCapacity = 8
+
+var heldProjects = HeldProjectMap.create()
+var heldProjectKeys = HeldProjectKeyArray.create()
+
+module function lspWorkspaceCorpus(readerPath FilePath) returns LspCorpus
+	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
+	let sweep = workspaceSweepOf(readerPath, tiers: tiers)
+
+	beginDiagnosticCapture()
+	let corpus = sweptWorkspace(sweep, tiers: tiers, readerPath: readerPath)
+	discardDiagnosticCapture()
+
+	return corpus
+end 'lspWorkspaceCorpus'
+
+function sweptWorkspace(sweep WorkspaceSweep, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
+	let key = sweep.compileRoot.toString()
+
+	if let held = try heldProjects.get(key) 'alreadySeenThisRoot'
+		return held.sweptOver(sweep.sources, readerPath: readerPath)
+	end 'alreadySeenThisRoot'
+
+	var project = try libraryTierProject(sweep.compileRoot, tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
+
+	let corpus = project.sweptOver(sweep.sources, readerPath: readerPath)
+
+	match corpus 'outcome'
+		loaded then rememberProject(key, project: project)
+		unavailable then return LspCorpus.unavailable
+	end 'outcome'
+
+	return corpus
+end 'sweptWorkspace'
+
+function rememberProject(key String, project Project)
+	heldProjects.upsert(key, value: project)
+	heldProjectKeys.push(key)
+
+	if heldProjectKeys.count() <= HeldProjectCapacity 'roomRemains'
+		return
+	end 'roomRemains'
+
+	let oldest = try heldProjectKeys.remove(0) otherwise panic("rememberProject: the key list is over capacity, so it holds a first element")
+	_ = heldProjects.remove(oldest)
+end 'rememberProject'
+
+function workspaceSweepOf(readerPath FilePath, tiers LibraryTiers) returns WorkspaceSweep
+	return match workspaceRootOf(readerPath, tiers: tiers) 'root'
+		userDirectory(dir) gives userDirectorySweep(dir, readerPath: readerPath)
+		libraryTierOnly gives libraryTierSweep(readerPath)
+	end 'root'
+end 'workspaceSweepOf'
+
+function userDirectorySweep(dir FilePath, readerPath FilePath) returns WorkspaceSweep
+	var sources = MaxonSourcePathArray.create()
+
+	_ = try collectMaxonSources(dir, into: sources, selection: SourceSelection.productionOnly) otherwise return libraryTierSweep(readerPath)
+
+	return WorkspaceSweep.create(dir, sources: sources)
+end 'userDirectorySweep'
+
+function libraryTierSweep(readerPath FilePath) returns WorkspaceSweep
+	return WorkspaceSweep.create(readerPath, sources: MaxonSourcePathArray.create())
+end 'libraryTierSweep'
+
+// ⚠ The tier test comes FIRST, and a library file must never reach the manifest climb. The checkout
+// this compiler is built from holds a `build.maxon` at its root, so a `stdlib/` file climbing for one
+// would root its project at the whole checkout and sweep every source in the tree to answer one jump.
+//
+// `build.maxon` is used purely as a MARKER of where a project begins — it is never read and never run.
+function workspaceRootOf(readerPath FilePath, tiers LibraryTiers) returns WorkspaceRoot
+	let document = readerPath.normalize()
+
+	if document.isInside(tiers.stdlibDir.normalize()) or document.isInside(tiers.runtimeDir.normalize()) 'aLibraryFile'
+		return WorkspaceRoot.libraryTierOnly
+	end 'aLibraryFile'
+
+	let directory = try readerPath.parent() otherwise return WorkspaceRoot.libraryTierOnly
+
+	return match nearestManifestDirectory(directory) 'manifest'
+		found(dir) gives WorkspaceRoot.userDirectory(dir)
+		none gives WorkspaceRoot.userDirectory(directory)
+	end 'manifest'
+end 'workspaceRootOf'
+
+function nearestManifestDirectory(directory FilePath) returns ManifestDirectory
+	var current = directory.resolve(Directory.currentPath()).clone()
+
+	while true 'upwards'
+		if File.exists(current.join("{BuildManifestFileName}")) 'holdsAManifest'
+			return ManifestDirectory.found(current)
+		end 'holdsAManifest'
+
+		let above = try current.parent() otherwise 'atTheRoot'
+			break
+		end 'atTheRoot'
+
+		current = above
+	end 'upwards'
+
+	return ManifestDirectory.none
+end 'nearestManifestDirectory'
+
+extension Project
+	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Two
+	// reasons, and either alone would be enough.
+	//
+	// It is WRONG to call: `QueryEngine`'s merged-module memo hands back a module the last compile's
+	// passes rewrote in place, and re-serving one invented diagnostics against a program that had none
+	// and then crashed. That memo's own header owns the rule; a long-lived `Project` answering many
+	// requests is exactly the shape that trips it.
+	//
+	// It is also the expensive half. Lexing and folding signatures is what a name-to-file question
+	// actually needs; parse and merge cost more than the two of them together and answer nothing asked
+	// here.
+	module function sweptOver(sources MaxonSourcePathArray, readerPath FilePath) returns LspCorpus
+		for path in sources 'eachSource'
+			try loadOneSourceFileIfChanged(self, path: path) otherwise return LspCorpus.unavailable
+		end 'eachSource'
+
+		let reader = corpusSpellingOf(self, reader: readerPath.resolve(Directory.currentPath()).normalize())
+		registerTheReader(self, readerPath: reader)
+
+		var pool = FrontEndPool.create()
+
+		try pool.lexEveryFile(self) otherwise 'lexingFailed'
+			pool.close(self)
+			return LspCorpus.unavailable
+		end 'lexingFailed'
+
+		pool.close(self)
+
+		let signatures = try queryProgramSignatures(self) otherwise return LspCorpus.unavailable
+		return LspCorpus.loaded(self, signatures: signatures, readerPath: reader)
+	end 'sweptOver'
+end 'Project'
+
+// The spelling this corpus already registered the reader's file under, which is not always the spelling
+// the request arrived with. ⚠ `FilePath` compares case-insensitively on Windows, so `db.sourceFiles`
+// holds ONE entry for two spellings — while `ProgramSignatures.moduleDirectoryOfPathText` is keyed by
+// exact path TEXT and PANICS on a miss. A visibility question asked on behalf of the other spelling
+// would take the server down.
+function corpusSpellingOf(project Project, reader FilePath) returns FilePath
+	for registered in project.db.sourcePaths 'eachRegistered'
+		if registered.equals(reader) 'theSameFile'
+			return registered
+		end 'theSameFile'
+	end 'eachRegistered'
+
+	return reader
+end 'corpusSpellingOf'
+
+// Every visibility question is asked ON BEHALF OF a file, and a file the sweep never saw has no module
+// directory, so the reader has to be in the corpus before the fold runs.
+//
+// ⛔ The CORPUS is asked first and the disk second. `fileChanged(…, "")` overwrites whatever is
+// registered, and a tier sweep contributes no sources of its own — so keying this off sweep membership
+// blanks a `stdlib/` reader's own file out of the corpus it is reading from, and a library file missing
+// from the corpus surfaces as a panic in another file entirely (see `loadLibrarySources`). The empty
+// registration is for the one case that has no other answer: a path in no corpus entry that also cannot
+// be read, which is an unsaved buffer or a uri a client invented.
+function registerTheReader(project Project, readerPath FilePath)
+	if project.db.sourceFiles.contains(readerPath) 'theCorpusAlreadyHoldsIt'
+		return
+	end 'theCorpusAlreadyHoldsIt'
+
+	try loadOneSourceFileIfChanged(project, path: readerPath) otherwise 'noSuchFile'
+		fileChanged(project, path: readerPath, content: "")
+	end 'noSuchFile'
+end 'registerTheReader'

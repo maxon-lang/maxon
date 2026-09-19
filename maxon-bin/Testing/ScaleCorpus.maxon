@@ -1523,6 +1523,13 @@ export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRung
 		throw ScaleError.reason("could not create the corpus root {root.toString()}")
 	end 'noRoot'
 
+	// The corpus is generated inside the checkout, so without this marker a `maxon fmt` or a `maxon
+	// build` of the tree walks into it and compiles a ladder of generated programs. It costs the
+	// measurement nothing, because `compileRung` NAMES the rung directory and a named root escapes
+	// every marker.
+	let marker = root.join("{IgnoreMarkerName}")
+	try File.writeText(marker, content: "") otherwise throw ScaleError.reason("could not write {marker.toString()}")
+
 	var ladder = ScaleRungArray.create()
 
 	for rung in 0 upto rungs 'eachRung'

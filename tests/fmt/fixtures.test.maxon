@@ -967,17 +967,17 @@ test 'a .git at the traversal root does not prune the walk'
 	try checkFixture("git-at-root-not-pruned")
 end 'a .git at the traversal root does not prune the walk'
 
-// maxonignore-above-root.test.maxon — a `.maxonignore` does not stop applying because the walk was
-// started BELOW it. The named root here is `vendor/deep` and the marker sits in `vendor/`: the
-// subtree is still excluded, and `0 changed, 0 unchanged` says the walk found nothing rather than
-// finding the file and declining it.
+// maxonignore-above-root.test.maxon — a `.maxonignore` excludes a directory the walk DISCOVERS, and
+// does not override a root the caller NAMED. The named root here is `vendor/deep` and the marker sits
+// in `vendor/` above it: naming the root is the explicit act, so `vendor/deep/D.maxon` is formatted.
+// `vendor/V.maxon` sits above the named root and is never walked at all.
 //
-// ⚠ Read against `named-path-escapes-ignore`, which names a FILE under the same marker and DOES
-// format it. Naming a file is an instruction; naming a directory is still a walk.
+// ⚠ Read against `named-path-escapes-ignore`, which names a FILE under the same marker and formats it
+// for the same reason. Naming a path is an instruction, whether it names a file or a directory.
 //
-test 'a .maxonignore above the named directory still excludes it'
+test 'a .maxonignore above the named directory does not exclude it'
 	try checkFixture("maxonignore-above-root")
-end 'a .maxonignore above the named directory still excludes it'
+end 'a .maxonignore above the named directory does not exclude it'
 
 // maxonignore-pruned.test.maxon — a `.maxonignore` prunes its whole subtree from a directory walk,
 // however deep. `1 changed, 0 unchanged` is the assertion: the one source outside the marked

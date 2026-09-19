@@ -1,0 +1,191 @@
+// What a `<receiver>.<member>` access names, read off the token stream — the one answer to "what is the
+// receiver's type" that `textDocument/completion` and `textDocument/definition` share.
+//
+// Two doors, because the two features hold different things when they ask. Completion has a cursor
+// sitting AFTER the `.` and must find the receiver from it (`lspSubjectAt`); definition already has the
+// member token and steps back two (`lspSubjectOfReceiver`). One rule, two ways in — a second walk would
+// be free to answer the two features differently about the same line.
+//
+// ⚠ It is LEXICAL, like everything else the LSP reads from a buffer: a document being edited is
+// mid-edit and in general does not compile, so a receiver whose type only `resolveTypes` could supply is
+// a receiver nothing here answers for. `LspCompletion`'s header argues that split in full.
+
+// `Color.` names a TYPE, so its STATIC surface is what may be written next; `arr.` names a VALUE, so its
+// INSTANCE surface is. Swapping the two offers a list of the wrong half with nothing reporting it.
+module union LspSubject
+	staticSurfaceOf(typeName String)
+	instanceSurfaceOf(typeName String)
+	nothingNamed
+end 'LspSubject'
+
+module union LspDeclaringBlock
+	found(block LspDocumentBlock)
+	notInThisBuffer
+end 'LspDeclaringBlock'
+
+let ArrayRecordName = "Array"
+let StringRecordName = "String"
+
+module function lspSubjectAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset) returns LspSubject
+	let receiver = receiverIndexBefore(tokens, offset: offset)
+
+	if receiver >= tokens.count() 'noReceiver'
+		return LspSubject.nothingNamed
+	end 'noReceiver'
+
+	return lspSubjectOfReceiver(tokens, blocks: blocks, receiver: receiver)
+end 'lspSubjectAt'
+
+module function lspSubjectOfReceiver(tokens TokenArray, blocks LspDocumentBlockArray, receiver TokenIndex) returns LspSubject
+	if receiver >= tokens.count() 'noSuchToken'
+		return LspSubject.nothingNamed
+	end 'noSuchToken'
+
+	let token = lspTokenAt(tokens, index: receiver)
+
+	if token.kind != TokenKind.identifier 'notANameToResolveOn'
+		return LspSubject.nothingNamed
+	end 'notANameToResolveOn'
+
+	let name = String.from(token.value)
+
+	return match lspBlockDeclaring(blocks, typeName: name) 'namesAType'
+		found gives LspSubject.staticSurfaceOf(name)
+		notInThisBuffer gives valueSubject(tokens, before: receiver, name: name)
+	end 'namesAType'
+end 'lspSubjectOfReceiver'
+
+module function lspSubjectTypeName(subject LspSubject) returns String
+	return match subject 'subject'
+		staticSurfaceOf(typeName) gives typeName
+		instanceSurfaceOf(typeName) gives typeName
+		nothingNamed gives ""
+	end 'subject'
+end 'lspSubjectTypeName'
+
+module function lspSubjectIsStatic(subject LspSubject) returns bool
+	return match subject 'subject'
+		staticSurfaceOf gives true
+		instanceSurfaceOf gives false
+		nothingNamed gives false
+	end 'subject'
+end 'lspSubjectIsStatic'
+
+module function lspBlockDeclaring(blocks LspDocumentBlockArray, typeName String) returns LspDeclaringBlock
+	for block in blocks 'eachBlock'
+		if block.kind == LspBlockKind.functionBody or block.kind == LspBlockKind.labelled 'declaresNoType'
+			continue
+		end 'declaresNoType'
+
+		if String.from(block.name) == typeName 'thisOne'
+			return LspDeclaringBlock.found(block)
+		end 'thisOne'
+	end 'eachBlock'
+
+	return LspDeclaringBlock.notInThisBuffer
+end 'lspBlockDeclaring'
+
+function valueSubject(tokens TokenArray, before TokenIndex, name String) returns LspSubject
+	let bound = boundTypeName(tokens, before: before, name: name)
+
+	if bound.isEmpty() 'nothingBindsIt'
+		return LspSubject.staticSurfaceOf(name)
+	end 'nothingBindsIt'
+
+	return LspSubject.instanceSurfaceOf(bound)
+end 'valueSubject'
+
+// ⚠ The receiver is found by TOKEN ORDER and not by byte range, because the `.` has no bytes: a
+// punctuator's `startByte` and `endByte` are both 0 (`Token`), so a dot cannot be located by offset at
+// all. What can be is the last token carrying source bytes that ends at or before the cursor — which,
+// after `arr.` and after `arr.pu`, is the receiver either way.
+//
+// `tokens.count()` is the answer for "no receiver". It is not a sentinel inside the index domain: it is
+// one past the last index, which no token has.
+function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns TokenIndex
+	var candidate = tokens.count()
+
+	for (position, token) in tokens.withIterator() 'eachToken'
+		if token.endByte <= token.startByte or token.endByte > offset 'notBeforeTheCursor'
+			continue
+		end 'notBeforeTheCursor'
+
+		candidate = position.index() as TokenIndex
+	end 'eachToken'
+
+	if candidate >= tokens.count() 'nothingBefore'
+		return tokens.count()
+	end 'nothingBefore'
+
+	let receiver = lspTokenAt(tokens, index: candidate)
+
+	if receiver.kind != TokenKind.identifier 'notANameToCompleteOn'
+		return tokens.count()
+	end 'notANameToCompleteOn'
+
+	if candidate + 1 >= tokens.count() 'nothingFollows'
+		return tokens.count()
+	end 'nothingFollows'
+
+	if lspTokenAt(tokens, index: candidate + 1).kind != TokenKind.dot 'notAMemberAccess'
+		return tokens.count()
+	end 'notAMemberAccess'
+
+	return candidate
+end 'receiverIndexBefore'
+
+// The type of a local binding, read from the shape of its initializer. The LAST binding before the
+// cursor wins: a later one shadows an earlier one at every scope this walk can see.
+function boundTypeName(tokens TokenArray, before TokenIndex, name String) returns String
+	var found = ""
+
+	for tokenLine in lspTokenLines(tokens) 'eachLine'
+		if tokenLine.firstIndex >= before 'pastTheCursor'
+			break
+		end 'pastTheCursor'
+
+		let keyword = lspTokenAt(tokens, index: tokenLine.firstIndex)
+
+		if keyword.kind != TokenKind.let and keyword.kind != TokenKind.var 'notABinding'
+			continue
+		end 'notABinding'
+
+		if tokenLine.lastIndex < tokenLine.firstIndex + 3 'noInitializer'
+			continue
+		end 'noInitializer'
+
+		if String.from(lspTokenAt(tokens, index: tokenLine.firstIndex + 1).value) != name 'bindsSomethingElse'
+			continue
+		end 'bindsSomethingElse'
+
+		if lspTokenAt(tokens, index: tokenLine.firstIndex + 2).kind != TokenKind.equals 'noAssignment'
+			continue
+		end 'noAssignment'
+
+		found = initializerTypeName(tokens, at: tokenLine.firstIndex + 3, tokenLine: tokenLine)
+	end 'eachLine'
+
+	return found
+end 'boundTypeName'
+
+// Three initializer forms, and each is one whose type the language fixes without any inference: an array
+// literal is an `Array`, a string literal is a `String`, and `Point{…}` is a `Point`. Anything else
+// answers EMPTY and offers nothing, because a list built on a guess is worse than no list.
+function initializerTypeName(tokens TokenArray, at TokenIndex, tokenLine LspTokenLine) returns String
+	let first = lspTokenAt(tokens, index: at)
+
+	if first.kind == TokenKind.leftBracket 'arrayLiteral'
+		return ArrayRecordName
+	end 'arrayLiteral'
+
+	if first.kind == TokenKind.stringLiteral or first.kind == TokenKind.stringInterpStart 'stringLiteral'
+		return StringRecordName
+	end 'stringLiteral'
+
+	// The brace is what tells a record literal from a bare reference to a constant of the same spelling.
+	if first.kind == TokenKind.identifier and at < tokenLine.lastIndex and lspTokenAt(tokens, index: at + 1).kind == TokenKind.leftBrace 'recordLiteral'
+		return String.from(first.value)
+	end 'recordLiteral'
+
+	return ""
+end 'initializerTypeName'

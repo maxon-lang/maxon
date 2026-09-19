@@ -1,20 +1,20 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import * as path from 'path';
 import * as myExtension from '../../extension';
+import { activateMaxonExtension, maxonExtension, openFixture, stageProject } from './fixtures';
 
 suite('Extension Test Suite', () => {
 	vscode.window.showInformationMessage('Start all tests.');
 
 	test('Extension should be present', () => {
-		assert.ok(vscode.extensions.getExtension('maxon.maxon-lsp-client'));
+		assert.ok(maxonExtension());
 	});
 
-	test('Extension should activate', async () => {
-		const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-		assert.ok(ext);
-		await ext?.activate();
-		assert.strictEqual(ext?.isActive, true);
+	test('Extension should activate', async function () {
+		this.timeout(90000);
+
+		const ext = await activateMaxonExtension();
+		assert.strictEqual(ext.isActive, true);
 	});
 
 	test('Maxon language should be registered', () => {
@@ -32,33 +32,32 @@ suite('Extension Test Suite', () => {
 
 suite('Language Client Test Suite', () => {
 	test('Should handle .maxon file extensions', async () => {
-		// Create a temporary .maxon file to test language association
-		const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-		if (workspaceFolder) {
-			const testFilePath = path.join(workspaceFolder.uri.fsPath, 'temp', 'test.maxon');
-			const testFileUri = vscode.Uri.file(testFilePath);
+		const dir = stageProject('extension-language-id', {
+			'main.maxon': "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+		});
 
-			// Try to open a document with .maxon extension
-			try {
-				const doc = await vscode.workspace.openTextDocument(testFileUri);
-				assert.strictEqual(doc.languageId, 'maxon', 'Document should be identified as Maxon language');
-			} catch (err) {
-				// File might not exist, which is okay for this test
-			}
-		}
+		const doc = await openFixture(dir, 'main.maxon');
+		assert.strictEqual(doc.languageId, 'maxon', 'Document should be identified as Maxon language');
 	});
 
-	test('Language client should support file scheme', () => {
-		// The language client should be configured to watch file:// scheme documents
-		// This is a basic check that the client options are correctly set
-		assert.ok(true, 'Language client configuration test');
+	test('Language client should support file scheme', async () => {
+		const dir = stageProject('extension-file-scheme', {
+			'main.maxon': "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+		});
+
+		// The selector the extension hands the language client, asked of a real file on disk.
+		const doc = await openFixture(dir, 'main.maxon');
+		const matched = vscode.languages.match({ scheme: 'file', language: 'maxon', pattern: '**/*.maxon' }, doc);
+
+		assert.ok(matched > 0, 'a .maxon file on disk should match the language client selector');
 	});
 });
 
 suite('Deactivation Test Suite', () => {
+	// ⚠ This is NOT the module VS Code activated. The manifest's `main` is the esbuild bundle in
+	// `dist/`, and a test imports `out/` — two instances, so this one holds no client and stopping it
+	// leaves the running server alone. That is what makes the no-client path testable at all.
 	test('Deactivate should handle no client gracefully', () => {
-		const result = myExtension.deactivate();
-		// If client is not initialized, deactivate should return undefined
-		assert.ok(result === undefined || result instanceof Promise);
+		assert.strictEqual(myExtension.deactivate(), undefined);
 	});
 });

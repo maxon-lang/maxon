@@ -140,12 +140,13 @@ place.
 ## Ignoring directories
 
 Place a `.maxonignore` file in a directory to exclude it, and everything beneath it, from builds,
-`maxon test` discovery and `maxon fmt`. The file is a flag; its contents are never read. A marker in any
-directory above a path excludes that path too.
+`maxon test` discovery and `maxon fmt`. The file is a flag; its contents are never read.
 
-The marker means "do not sweep me into somebody else's program", not "this file may not be compiled":
-**naming a file outright overrides it**. `maxon build fixtures/sample.maxon` compiles that file, and
-`maxon fmt fixtures/sample.maxon` formats it. Naming a marked *directory* compiles nothing.
+The marker means "do not sweep me into somebody else's program", not "this may not be compiled":
+**it excludes a directory the walk discovers, and never a path you named**. `maxon build
+fixtures/sample.maxon` compiles that file and `maxon fmt fixtures/sample.maxon` formats it; so do
+`maxon build fixtures` and `maxon fmt fixtures`, and so does naming a directory with a marker in an
+ancestor above it. Only a marker *below* the path you named can exclude anything.
 
 ## The `.maxon/` directory
 

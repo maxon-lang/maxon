@@ -5,6 +5,9 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 ## Features
 - Syntax highlighting for `.maxon` files using a TextMate grammar
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) from the compiler's own `maxon lsp-server`
+- **Go to definition across files**: F12 on a name declared in another file of your project, or in the
+  standard library, opens that file. The project is the nearest directory above the file that holds a
+  `build.maxon`; diagnostics are still reported per buffer.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to

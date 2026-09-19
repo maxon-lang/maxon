@@ -31,12 +31,39 @@ let LspDriveLetterSeparator = ":"
 // `/C` — the slash and the one letter in front of a `file:` uri's drive-letter colon.
 let RootedDriveLetterLength = 2
 
+let WindowsDirectorySeparator = "\\"
+
+let PercentSignByte = 37 as Byte
+let PercentEscapeLength = 3 as ByteOffset
+
+let HexRadix = 16
+let LastSingleHexDigit = 9
+
+let AsciiDigitZero = 48 as Byte
+let AsciiDigitNine = 57 as Byte
+let AsciiUpperA = 65 as Byte
+let AsciiUpperZ = 90 as Byte
+let AsciiLowerA = 97 as Byte
+let AsciiLowerZ = 122 as Byte
+let AsciiHyphen = 45 as Byte
+let AsciiPeriod = 46 as Byte
+let AsciiSlash = 47 as Byte
+let AsciiUnderscore = 95 as Byte
+let AsciiTilde = 126 as Byte
+
+typealias HexDigitValue = int(0 to 15)
+
 // ⚠ **THE PATH IS AN IDENTITY, NOT A LOCATION — nothing ever opens it.** It answers `isVisibleFrom`'s
 // question (is the file asking the same file that declared the member, and is it in the same module
 // directory) and it is the compile ROOT, which is what a single-file `maxon build <file>` uses too;
 // neither reads a byte from it. So the scheme is stripped and a Windows drive letter is un-rooted
-// (`file:///C:/x` names `C:/x`, not `/C:/x`), and percent-escapes are left exactly as the client wrote
-// them: two uris that differ by an escape name two different documents to this server either way.
+// (`file:///C:/x` names `C:/x`, not `/C:/x`).
+//
+// ⚠ Percent-escapes ARE decoded, because the path has to match what a directory walk registered: a
+// client that sends `%20` for a space names a file the corpus holds under a real space, and an undecoded
+// path is a file the corpus does not hold. `lspFileUri` is the inverse and the pair has to stay one —
+// an answer's uri that does not re-encode what this decoded names a document the client cannot match to
+// the one it asked about.
 module function lspDocumentPath(uri String) returns FilePath
 	var text = uri
 
@@ -44,12 +71,21 @@ module function lspDocumentPath(uri String) returns FilePath
 		text = text.replaceFirst(LspFileUriScheme, with: "")
 	end 'fileScheme'
 
+	text = percentDecoded(text)
+
 	if driveRooted(text) 'windowsDriveLetter'
 		text = text.replaceFirst(LspUriRootSlash, with: "")
 	end 'windowsDriveLetter'
 
 	return try FilePath.from(text) otherwise panic("lspDocumentPath: '{uri}' does not spell a path, and every request that reaches here named a document this server has open")
 end 'lspDocumentPath'
+
+module function lspFileUri(path FilePath) returns String
+	let slashed = path.toString().replace(WindowsDirectorySeparator, with: LspUriRootSlash)
+	let encoded = percentEncodedUriPath(slashed)
+
+	return "{LspFileUriScheme}{encoded}" if encoded.startsWith(LspUriRootSlash) else "{LspFileUriScheme}{LspUriRootSlash}{encoded}"
+end 'lspFileUri'
 
 // `/C:/…` — a `file:` uri roots an absolute Windows path with a slash the path itself does not have.
 function driveRooted(text String) returns bool
@@ -63,6 +99,121 @@ function driveRooted(text String) returns bool
 	return head.startsWith(LspUriRootSlash) and head.count() == RootedDriveLetterLength
 end 'driveRooted'
 
+union DecodedEscape
+	byteValue(decoded Byte)
+	notAnEscape
+end 'DecodedEscape'
+
+union HexDigit
+	value(amount HexDigitValue)
+	notAHexDigit
+end 'HexDigit'
+
+// ⚠ A `%` that does not begin a well-formed escape is kept as a literal `%` rather than dropped or
+// refused: a path may hold one, and the decode of a uri this server never produced must still name a
+// file. `literalInAUriPath` is the encoder's other half of that agreement — it leaves `/` alone, so a
+// re-encoded path stays a path instead of collapsing into one segment.
+function percentDecoded(text String) returns String
+	let bytes = text.toByteArray()
+	var decoded = ByteArray.create()
+	var position = 0 as ByteOffset
+
+	while position < bytes.count() 'scan'
+		let escape = decodedEscapeAt(bytes, at: position)
+
+		match escape 'escape'
+			byteValue(value) then decoded.push(value)
+			notAnEscape then decoded.push(uriByteAt(bytes, at: position))
+		end 'escape'
+
+		position = position + escapeWidth(escape)
+	end 'scan'
+
+	return String.from(decoded)
+end 'percentDecoded'
+
+function decodedEscapeAt(bytes ByteArray, at ByteOffset) returns DecodedEscape
+	if uriByteAt(bytes, at: at) != PercentSignByte 'notAnEscapeAtAll'
+		return DecodedEscape.notAnEscape
+	end 'notAnEscapeAtAll'
+
+	if at + PercentEscapeLength > bytes.count() 'truncated'
+		return DecodedEscape.notAnEscape
+	end 'truncated'
+
+	return match hexDigitValueOf(uriByteAt(bytes, at: at + 1)) 'highNibble'
+		value(high) gives escapeOf(high, low: hexDigitValueOf(uriByteAt(bytes, at: at + 2)))
+		notAHexDigit gives DecodedEscape.notAnEscape
+	end 'highNibble'
+end 'decodedEscapeAt'
+
+function escapeOf(high HexDigitValue, low HexDigit) returns DecodedEscape
+	return match low 'lowNibble'
+		value(amount) gives DecodedEscape.byteValue(((high * HexRadix) + amount) as Byte)
+		notAHexDigit gives DecodedEscape.notAnEscape
+	end 'lowNibble'
+end 'escapeOf'
+
+function escapeWidth(escape DecodedEscape) returns ByteOffset
+	return match escape 'escape'
+		byteValue gives PercentEscapeLength
+		notAnEscape gives 1
+	end 'escape'
+end 'escapeWidth'
+
+function hexDigitValueOf(digit Byte) returns HexDigit
+	if not isHexDigit(digit) 'notAHexDigitAtAll'
+		return HexDigit.notAHexDigit
+	end 'notAHexDigitAtAll'
+
+	return HexDigit.value(hexDigitValue(digit) as HexDigitValue)
+end 'hexDigitValueOf'
+
+function percentEncodedUriPath(text String) returns String
+	var encoded = ByteArray.create()
+
+	for pathByte in text.bytes() 'eachByte'
+		if literalInAUriPath(pathByte) 'needsNoEscape'
+			encoded.push(pathByte)
+			continue
+		end 'needsNoEscape'
+
+		encoded.push(PercentSignByte)
+		encoded.push(hexDigitByteOf((pathByte / HexRadix) as HexDigitValue))
+		encoded.push(hexDigitByteOf((pathByte mod HexRadix) as HexDigitValue))
+	end 'eachByte'
+
+	return String.from(encoded)
+end 'percentEncodedUriPath'
+
+function literalInAUriPath(pathByte Byte) returns bool
+	if pathByte >= AsciiDigitZero and pathByte <= AsciiDigitNine 'digit'
+		return true
+	end 'digit'
+
+	if pathByte >= AsciiUpperA and pathByte <= AsciiUpperZ 'upperCaseLetter'
+		return true
+	end 'upperCaseLetter'
+
+	if pathByte >= AsciiLowerA and pathByte <= AsciiLowerZ 'lowerCaseLetter'
+		return true
+	end 'lowerCaseLetter'
+
+	return pathByte == AsciiHyphen or pathByte == AsciiPeriod or pathByte == AsciiUnderscore or pathByte == AsciiTilde or pathByte == AsciiSlash
+end 'literalInAUriPath'
+
+function hexDigitByteOf(amount HexDigitValue) returns Byte
+	if amount <= LastSingleHexDigit 'decimalDigit'
+		return (amount + AsciiDigitZero) as Byte
+	end 'decimalDigit'
+
+	return (amount - LastSingleHexDigit - 1 + AsciiUpperA) as Byte
+end 'hexDigitByteOf'
+
+function uriByteAt(bytes ByteArray, at ByteOffset) returns Byte
+	return try bytes.get(at) otherwise panic("uriByteAt: {at} is past the {bytes.count()} bytes of a uri this walk is indexing within")
+end 'uriByteAt'
+
 // The project an open buffer makes, or nothing when this compiler cannot assemble one. A failure is a
 // broken installation — a library tier missing beside the binary, or one that will not load — and each
 // caller says what it does with the absence; there is no half-built project to hand back.
@@ -71,6 +222,39 @@ module union LspDocumentProject
 	unavailable
 end 'LspDocumentProject'
 
+module type LibraryTiers
+	module let stdlibDir as FilePath
+	module let runtimeDir as FilePath
+
+	module static function locate() returns LibraryTiers throws CompileError
+		let stdlibDir = try locateStdlibDir()
+		let runtimeDir = try runtimeDirBeside(stdlibDir)
+
+		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir}
+	end 'locate'
+end 'LibraryTiers'
+
+module union OpenBuffer
+	held(path FilePath, content String)
+	none
+end 'OpenBuffer'
+
+module function libraryTierProject(root FilePath, tiers LibraryTiers, buffer OpenBuffer) returns Project throws CompileError
+	var project = createProject(root, target: detectHostTarget(), stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, debugStream: false)
+
+	registerTheOpenBuffer(project, buffer: buffer)
+
+	try loadLibrarySources(project)
+	return project
+end 'libraryTierProject'
+
+function registerTheOpenBuffer(project Project, buffer OpenBuffer)
+	match buffer 'buffer'
+		held(path, content) then fileChanged(project, path: path, content: content)
+		none then return
+	end 'buffer'
+end 'registerTheOpenBuffer'
+
 // A `Project` holding exactly this buffer plus both library roots.
 //
 // ⚠ **THE ROOT IS THE DOCUMENT ITSELF, WHICH IS WHAT A SINGLE-FILE BUILD USES.**
@@ -78,12 +262,8 @@ end 'LspDocumentProject'
 // file — and every namespace this compile derives is measured from that root. A different root here
 // would give the same buffer a different namespace under the editor than under a build.
 module function lspDocumentProject(path FilePath, content String) returns LspDocumentProject
-	let stdlibDir = try locateStdlibDir() otherwise return LspDocumentProject.unavailable
-	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return LspDocumentProject.unavailable
-	var project = createProject(path, target: detectHostTarget(), stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: false)
+	let tiers = try LibraryTiers.locate() otherwise return LspDocumentProject.unavailable
+	let project = try libraryTierProject(path, tiers: tiers, buffer: OpenBuffer.held(path, content: content)) otherwise return LspDocumentProject.unavailable
 
-	fileChanged(project, path: path, content: content)
-
-	try loadLibrarySources(project) otherwise return LspDocumentProject.unavailable
 	return LspDocumentProject.loaded(project)
 end 'lspDocumentProject'

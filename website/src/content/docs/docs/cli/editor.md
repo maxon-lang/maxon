@@ -76,9 +76,22 @@ answers `null`, and `exit` ends the process with code **0** after a `shutdown` a
 it does when stdin closes or a message cannot be framed).
 
 **Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole
-document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed **on its own**
-together with the standard library, from its in-memory text, for the host target; other files of the
-project are not read, so a call into another file of the project is not resolved in the editor.
+document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
+in-memory text, for the host target.
+
+**Diagnostics are per-buffer; definition and completion read the project.** A buffer is *checked* on its
+own together with the standard library, so a diagnostic never depends on what a sibling file declares.
+`textDocument/definition` and `textDocument/completion` do read the other files of the project: they use
+a separate index built by lexing every source under the document's project root and folding its
+declarations — never a full compile — so a name declared in another file resolves, and a type declared
+there offers its members.
+
+**The project root is derived from the document, not from the workspace.** `rootUri` and
+`workspaceFolders` are not read. A file inside the compiler's own `stdlib/` or `runtime/` gets those two
+tiers and nothing else; any other file gets the nearest ancestor directory holding a `build.maxon`, or
+its own directory when no ancestor has one. The manifest is used only as a marker of where a project
+begins — it is never read and never run. Projects are cached for the life of the server process, and a
+source is re-read when its size or modification time changes on disk.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
@@ -90,7 +103,7 @@ buffer is not a whole program.
 | Method | Result |
 |--------|--------|
 | `textDocument/hover` | Markdown: the declaration as written in a `maxon` code block, its `///` doc comment, and for a variable or parameter what it is and its type. Keywords and math intrinsics are described too. |
-| `textDocument/definition` | The declaration of the name under the cursor, **in the same document** |
+| `textDocument/definition` | The declaration of the name under the cursor. A declaration in the same document is answered from it; otherwise the project's index says which file declares the name, and the answer points into that file. A name the compiler would refuse as ambiguous, or one no visible declaration carries, answers `null`. |
 | `textDocument/completion` | Members after `.` (the trigger character): fields, methods, static functions and enum cases, for a type name or a local whose type is evident. There is no completion of bare identifiers. |
 | `textDocument/formatting` | One edit replacing the whole document with `maxon fmt`'s layout, or `null` when it is already formatted. `insertSpaces: false` indents with tabs; `true` indents with `tabSize` spaces. |
 | `textDocument/documentSymbol` | The top-level declarations: functions, types, enums, unions, interfaces and extensions |

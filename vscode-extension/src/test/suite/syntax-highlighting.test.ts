@@ -35,9 +35,11 @@ suite('Syntax Highlighting Test Suite', () => {
 	});
 
 	test('Type keywords are present and can be highlighted', async () => {
+		// The built-in types are `int`, `float`, `bool` and `byte`; a text type is the stdlib's
+		// `String`, spelled with its capital.
 		const testContent = [
-			"function test(a int, b float, c bool, d character) int",
-			"    var str = \"hello\"",
+			"function test(a int, b float, c bool, d byte) returns int",
+			"    var str String = \"hello\"",
 			"    return a",
 			"end 'test'"
 		].join('\n');
@@ -50,7 +52,7 @@ suite('Syntax Highlighting Test Suite', () => {
 		assert.strictEqual(doc.languageId, 'maxon');
 
 		const content = doc.getText();
-		const types = ['int', 'float', 'bool', 'character', 'string'];
+		const types = ['int', 'float', 'bool', 'byte', 'String'];
 		for (const type of types) {
 			assert.ok(content.includes(type), `Should contain type: ${type}`);
 		}

@@ -1,94 +1,149 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import * as path from 'path';
+import type { LanguageClient } from 'vscode-languageclient/node';
+import {
+    activateMaxonExtension,
+    closeAllEditors,
+    diagnosticsFor,
+    openFixture,
+    stageProject
+} from './fixtures';
 
-suite('LSP Client Integration Tests', () => {
-    test('Language client should be configured with correct document selector', () => {
-        // The extension should configure the language client to watch 'maxon' language files
-        // This test verifies the configuration is set up correctly
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
+/**
+ * The language server, driven.
+ *
+ * ⛔ EVERY TEST HERE SENDS A REQUEST AND READS THE ANSWER. Asserting that the extension exists, or
+ * that it has a `packageJSON`, proves that VS Code loaded a manifest and nothing about the server —
+ * a suite of those stays green through a language feature disappearing entirely.
+ */
+suite('Language Server Integration', () => {
+
+    /** MEASURED on x64-windows: 253-928 ms per request. `definition.test.ts` states why the deadline is wide. */
+    const serverDeadlineMs = 90000;
+
+    let client: LanguageClient;
+
+    suiteSetup(async function () {
+        this.timeout(serverDeadlineMs);
+
+        const ext = await activateMaxonExtension();
+        const exported = ext.exports as { getClient(): LanguageClient | undefined; } | undefined;
+        const running = exported?.getClient();
+
+        assert.ok(running, 'the extension activated without a language client — no compiler was found');
+        client = running;
     });
 
-    test('File system watcher should be configured', () => {
-        // The extension should create a file system watcher for .maxon files
-        // This ensures the LSP server is notified of file changes
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
+    teardown(async () => {
+        await closeAllEditors();
+    });
 
-        // Verify extension is active
-        if (ext.isActive) {
-            assert.ok(true, 'Extension is active and file watcher is configured');
+    test('the server handshake advertises the features the editor drives', () => {
+        const capabilities = client.initializeResult?.capabilities;
+        assert.ok(capabilities, 'the client holds no initialize result, so no handshake completed');
+
+        for (const advertised of [
+            'definitionProvider',
+            'hoverProvider',
+            'completionProvider',
+            'documentFormattingProvider',
+            'documentSymbolProvider',
+            'renameProvider',
+            'semanticTokensProvider'
+        ]) {
+            assert.ok(
+                (capabilities as Record<string, unknown>)[advertised],
+                `the server does not advertise ${advertised}`
+            );
         }
     });
 
-    test('Server executable path should be correctly resolved', () => {
-        // The extension should resolve the path to the LSP server executable
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
+    test('a call to a name that exists nowhere is reported as a diagnostic', async function () {
+        this.timeout(serverDeadlineMs);
 
-        // The path should point to ../bin/maxon.exe relative to extension (with 'lsp-server' arg)
-        const expectedPath = path.join(ext.extensionPath, '..', 'bin', 'maxon.exe');
-        assert.ok(expectedPath.includes('bin'), 'Server path should include bin directory');
-    });
-});
-
-suite('Error Handling Tests', () => {
-    test('Extension should handle missing LSP server gracefully', async () => {
-        // The extension should not crash if the LSP server binary is not found
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
-
-        // Extension should still be present even if server is missing
-        assert.strictEqual(ext.id, 'maxon.maxon-lsp-client');
-    });
-
-    test('Deactivation should be safe to call multiple times', () => {
-        // Test that deactivate can be called multiple times without errors
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
-
-        // This should not throw an error
-        assert.doesNotThrow(() => {
-            // The actual deactivate is called by VS Code lifecycle
-            assert.ok(true);
+        const dir = stageProject('lsp-diagnostics', {
+            'main.maxon': "function main() returns ExitCode\n\treturn thereIsNoSuchCallee()\nend 'main'\n"
         });
-    });
-});
+        const doc = await openFixture(dir, 'main.maxon');
 
-suite('Language Features Tests', () => {
-    test('Should support Maxon language ID', async () => {
-        const languages = await vscode.languages.getLanguages();
-        assert.ok(languages.includes('maxon'), 'Maxon language should be registered');
-    });
+        const published = await diagnosticsFor(doc.uri, serverDeadlineMs / 2);
 
-    test('Should have document selector for file scheme', () => {
-        // Language client should be configured to handle file:// URIs
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
-
-        const packageJSON = ext.packageJSON;
-        assert.ok(packageJSON, 'Package.json should be available');
-    });
-});
-
-suite('Transport Configuration Tests', () => {
-    test('LSP client should use stdio transport', () => {
-        // The extension configures the LSP client to use stdio for communication
-        // This is the standard way for LSP clients to communicate with servers
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
-
-        // Verify extension is properly loaded
-        assert.ok(ext.packageJSON);
+        assert.ok(published.length > 0, 'the server published no diagnostic for an undefined callee');
+        assert.ok(
+            published.some(one => one.message.includes('thereIsNoSuchCallee')),
+            `no diagnostic names the undefined callee: ${published.map(one => one.message).join(' | ')}`
+        );
+        assert.ok(
+            published.some(one => one.severity === vscode.DiagnosticSeverity.Error),
+            'an undefined callee is an error, not a hint'
+        );
     });
 
-    test('Server options should include executable command', () => {
-        // Server options should specify the command to run the LSP server
-        const ext = vscode.extensions.getExtension('maxon.maxon-lsp-client');
-        assert.ok(ext);
+    test('hovering a declaration answers with its signature', async function () {
+        this.timeout(serverDeadlineMs);
 
-        // The extension should be configured with proper server options
-        assert.ok(ext.isActive !== undefined);
+        const dir = stageProject('lsp-hover', {
+            'main.maxon': "function main() returns ExitCode\n\tprint(\"42\\n\")\n\treturn 0\nend 'main'\n"
+        });
+        const doc = await openFixture(dir, 'main.maxon');
+
+        const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+            'vscode.executeHoverProvider',
+            doc.uri,
+            new vscode.Position(0, 10)
+        );
+
+        assert.ok(hovers && hovers.length > 0, 'the server answered no hover over a function declaration');
+
+        const text = hovers
+            .flatMap(one => one.contents)
+            .map(part => typeof part === 'string' ? part : part.value)
+            .join('\n');
+        assert.match(
+            text,
+            /function main\(\) returns ExitCode/,
+            `the hover does not render the declaration it is over: ${text}`
+        );
+    });
+
+    test('formatting answers with the edits that re-indent a file', async function () {
+        this.timeout(serverDeadlineMs);
+
+        const dir = stageProject('lsp-formatting', {
+            'main.maxon': "function main() returns ExitCode\n        return 0\nend 'main'\n"
+        });
+        const doc = await openFixture(dir, 'main.maxon');
+
+        const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+            'vscode.executeFormatDocumentProvider',
+            doc.uri,
+            { insertSpaces: false, tabSize: 2 }
+        );
+
+        assert.ok(edits && edits.length > 0, 'the server answered no edits for an over-indented file');
+        assert.ok(
+            edits.some(one => one.newText.includes('\t')),
+            `no edit indents with a tab: ${JSON.stringify(edits.map(one => one.newText))}`
+        );
+    });
+
+    test('document symbols list what a file declares', async function () {
+        this.timeout(serverDeadlineMs);
+
+        const dir = stageProject('lsp-symbols', {
+            'main.maxon': "type Point\n\tvar x int\nend 'Point'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+        });
+        const doc = await openFixture(dir, 'main.maxon');
+
+        const symbols = await vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[]>(
+            'vscode.executeDocumentSymbolProvider',
+            doc.uri
+        );
+
+        assert.ok(symbols && symbols.length > 0, 'the server listed no symbols for a file declaring two things');
+
+        const names = symbols.map(one => one.name);
+        assert.ok(names.includes('main'), `the declared function is missing from ${JSON.stringify(names)}`);
+        assert.ok(names.includes('Point'), `the declared type is missing from ${JSON.stringify(names)}`);
     });
 });

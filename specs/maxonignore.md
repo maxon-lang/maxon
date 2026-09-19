@@ -26,13 +26,16 @@ own `main`, so without a way to say *"not mine"* the enclosing project would not
 
 ### What it does NOT do
 
-**It does not stop a file being compiled when you NAME it.** `maxon build marked/prog.maxon`
-compiles that file. The marker excludes a directory from a **walk**; naming a path is the explicit
-act it cannot override, and it is how a program parked inside somebody else's tree gets built at all.
+**It does not stop a path being compiled when you NAME it.** `maxon build marked/prog.maxon`
+compiles that file, and `maxon build marked` compiles that directory. The marker excludes a directory
+from a **walk**; naming a path is the explicit act it cannot override, and it is how a program parked
+inside somebody else's tree gets built at all.
 
-**It is not scoped to what is below the directory you build.** A marker sitting on the build root
-itself — or above it — excludes everything, and the build reports that it found no sources rather
-than quietly compiling a subset.
+**It does not reach up past the root you named.** A marker sitting on the build root itself — or in
+any directory above it — excludes nothing, because the root was named rather than discovered. Both
+`maxon build marked` and `maxon build marked/deeper` compile what is under them. The rule is the same
+one as above, stated for the directory that starts the walk: only what the walk finds for itself can
+be excluded.
 
 ## Tests
 

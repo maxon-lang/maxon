@@ -8,19 +8,21 @@
 //     (`returns int` is E3005, `var x int` is E2010) — so a receiver's type, and the members of a type the
 //     buffer itself declares, are read off the token stream. A completion list that appears only for files
 //     that already compile is a completion list that never appears.
-//   * **`stdlib/` IS READ FROM THE REAL COMPILE**, because the question it answers is not answerable by
-//     reading: *may this file NAME this member?* `stdlib/Array.maxon` declares `fillPublished`
+//   * **EVERY OTHER TYPE IS READ FROM THE PROJECT'S OWN DECLARATIONS**, because the question that half
+//     answers is not answerable by reading: *may this file NAME this member?* `stdlib/Array.maxon` declares `fillPublished`
 //     without `public`, and offering it teaches an author to write a call that will not compile. The tier
 //     and the declaring file are `ProgramSignatures`' own facts, asked through the one function that turns
 //     a `Visibility` into an answer (`calleeVisibilityFrom`). ⛔ Re-deriving visibility by looking for the
 //     word `public` in front of a declaration would be a second, shallower copy of the language's own
 //     rule — the exact shape this project keeps paying for.
 //
-// ⚠ **THE BUFFER IS REGISTERED WITH THAT COMPILE WITH EMPTY CONTENT, AND THAT IS DELIBERATE.** Its own
-// declarations are read lexically, so the compile needs nothing from it but its PATH: a visibility
-// question is asked ON BEHALF OF A FILE, and `ProgramSignatures.moduleDirectoryOf` PANICS for a path the
-// sweep never saw. Registering the real text instead would put a document that does not parse into the
-// merge and cost the stdlib roster as well.
+// ⚠ **THAT HALF IS A LEX AND A SIGNATURE FOLD, NEVER A MERGE.** `LspWorkspace` builds and holds it, and
+// owns the rule that nothing on this path may reach `queryAllModule`. What the corpus holds for the open
+// document is the file as it is ON DISK — it is a source like any other there — so an unsaved
+// declaration is offered by the buffer half above and by nothing else.
+//
+// ⚠ The corpus is asked for the buffer's PATH as well as its members: a visibility question is asked on
+// behalf of a file, and `ProgramSignatures.moduleDirectoryOf` panics for a path the sweep never saw.
 
 let LabelKey = "label"
 let TriggerCharactersKey = "triggerCharacters"
@@ -36,11 +38,6 @@ let MethodCompletionKind = 2 as LspCompletionKind
 let StaticFunctionCompletionKind = 3 as LspCompletionKind
 let FieldCompletionKind = 5 as LspCompletionKind
 let EnumMemberCompletionKind = 20 as LspCompletionKind
-
-// The type an array literal and a string literal denote. They are the two literal forms whose type is
-// fixed by the language rather than by a name the author wrote, so they are the two this file spells.
-let ArrayRecordName = "Array"
-let StringRecordName = "String"
 
 // D7 registers a later overload of one member name under a mangled key (`Array.contains#type parameter`).
 // An editor offers the SOURCE spelling, which is the part in front of the marker.
@@ -108,22 +105,12 @@ typealias CompletionOfferArray = Array with CompletionOffer
 // the author has to read twice.
 typealias OfferedLabelSet = Set with String
 
-// What the cursor is asking about.
-union CompletionSubject
-	// `Color.` — the receiver names a TYPE, so its STATIC surface is what an author may write next.
-	staticSurfaceOf(typeName String)
-
-	// `arr.` — the receiver names a VALUE of some type, so its INSTANCE surface is offered.
-	instanceSurfaceOf(typeName String)
-	nothingToOffer
-end 'CompletionSubject'
-
 function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset, uri String) returns CompletionOfferArray
 	var offers = CompletionOfferArray.create()
 	var offered = OfferedLabelSet.create()
 
-	let subject = subjectAt(tokens, blocks: blocks, offset: offset)
-	let typeName = subjectTypeName(subject)
+	let subject = lspSubjectAt(tokens, blocks: blocks, offset: offset)
+	let typeName = lspSubjectTypeName(subject)
 
 	if typeName.isEmpty() 'nothingToComplete'
 		return offers
@@ -131,7 +118,7 @@ function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOf
 
 	// A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
 	// type of the same name: the author is looking at the declaration in front of them.
-	match blockDeclaring(blocks, typeName: typeName) 'declaredHere'
+	match lspBlockDeclaring(blocks, typeName: typeName) 'declaredHere'
 		found(block) then addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject)
 		notInThisBuffer then addStdlibMembers(offers, offered: offered, typeName: typeName, uri: uri, subject: subject)
 	end 'declaredHere'
@@ -139,169 +126,13 @@ function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOf
 	return offers
 end 'offersAt'
 
-function subjectTypeName(subject CompletionSubject) returns String
-	return match subject 'subject'
-		staticSurfaceOf(typeName) gives typeName
-		instanceSurfaceOf(typeName) gives typeName
-		nothingToOffer gives ""
-	end 'subject'
-end 'subjectTypeName'
-
-// --- What the cursor is on --------------------------------------------------------------------
-
-// ⭐ **THE RECEIVER IS FOUND BY TOKEN ORDER AND NOT BY BYTE RANGE, BECAUSE THE `.` HAS NO BYTES.** A
-// punctuator's `startByte`/`endByte` are both 0 (`Token`), so a dot cannot be located by offset at all.
-// What CAN be: the last token carrying source bytes that ends at or before the cursor — which, after
-// `arr.` and after `arr.pu`, is the receiver either way.
-function subjectAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset) returns CompletionSubject
-	let receiver = receiverIndexBefore(tokens, offset: offset)
-
-	if receiver >= tokens.count() 'noReceiver'
-		return CompletionSubject.nothingToOffer
-	end 'noReceiver'
-
-	let name = String.from(lspTokenAt(tokens, index: receiver).value)
-
-	// A name the buffer declares as a type is a STATIC access; anything else is a value whose type has to
-	// be read off the binding that introduced it.
-	return match blockDeclaring(blocks, typeName: name) 'namesAType'
-		found gives CompletionSubject.staticSurfaceOf(name)
-		notInThisBuffer gives valueSubject(tokens, before: receiver, name: name)
-	end 'namesAType'
-end 'subjectAt'
-
-// The receiver is not a type this buffer declares, so it is a VALUE whose binding says what it is — or,
-// when nothing binds it, a name the corpus may declare as a type. A name nothing declares at all simply
-// offers nothing, which is what both routes answer for it.
-function valueSubject(tokens TokenArray, before TokenIndex, name String) returns CompletionSubject
-	let bound = completionBoundTypeName(tokens, before: before, name: name)
-
-	if bound.isEmpty() 'nothingBindsIt'
-		return CompletionSubject.staticSurfaceOf(name)
-	end 'nothingBindsIt'
-
-	return CompletionSubject.instanceSurfaceOf(bound)
-end 'valueSubject'
-
-// The index of the receiver token, or `tokens.count()` when the cursor is not after a member access. The
-// count is not a sentinel inside the index domain: it is one past the last index, which no token has.
-function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns TokenIndex
-	var candidate = tokens.count()
-
-	for (position, token) in tokens.withIterator() 'eachToken'
-		if token.endByte <= token.startByte or token.endByte > offset 'notBeforeTheCursor'
-			continue
-		end 'notBeforeTheCursor'
-
-		candidate = position.index() as TokenIndex
-	end 'eachToken'
-
-	if candidate >= tokens.count() 'nothingBefore'
-		return tokens.count()
-	end 'nothingBefore'
-
-	let receiver = lspTokenAt(tokens, index: candidate)
-
-	if receiver.kind != TokenKind.identifier 'notANameToCompleteOn'
-		return tokens.count()
-	end 'notANameToCompleteOn'
-
-	// A member access and nothing else: the very next token must be the `.` the author just typed.
-	if candidate + 1 >= tokens.count() 'nothingFollows'
-		return tokens.count()
-	end 'nothingFollows'
-
-	if lspTokenAt(tokens, index: candidate + 1).kind != TokenKind.dot 'notAMemberAccess'
-		return tokens.count()
-	end 'notAMemberAccess'
-
-	return candidate
-end 'receiverIndexBefore'
-
-// ⭐ **THE TYPE OF A LOCAL BINDING, READ FROM THE SHAPE OF ITS INITIALIZER.** Three forms, and each is a
-// form whose type the language fixes without any inference: an array literal is an `Array`, a string
-// literal is a `String`, and `Point{…}` is a `Point`. Anything else answers EMPTY and offers nothing —
-// a completion list built on a guess is worse than none.
-function completionBoundTypeName(tokens TokenArray, before TokenIndex, name String) returns String
-	var found = ""
-
-	for tokenLine in lspTokenLines(tokens) 'eachLine'
-		if tokenLine.firstIndex >= before 'pastTheCursor'
-			break
-		end 'pastTheCursor'
-
-		let keyword = lspTokenAt(tokens, index: tokenLine.firstIndex)
-
-		if keyword.kind != TokenKind.let and keyword.kind != TokenKind.var 'notABinding'
-			continue
-		end 'notABinding'
-
-		if tokenLine.lastIndex < tokenLine.firstIndex + 3 'noInitializer'
-			continue
-		end 'noInitializer'
-
-		if String.from(lspTokenAt(tokens, index: tokenLine.firstIndex + 1).value) != name 'bindsSomethingElse'
-			continue
-		end 'bindsSomethingElse'
-
-		if lspTokenAt(tokens, index: tokenLine.firstIndex + 2).kind != TokenKind.equals 'noAssignment'
-			continue
-		end 'noAssignment'
-
-		// The LAST binding before the cursor wins: a later one shadows an earlier one at every scope this
-		// walk can see.
-		found = initializerTypeName(tokens, at: tokenLine.firstIndex + 3, tokenLine: tokenLine)
-	end 'eachLine'
-
-	return found
-end 'completionBoundTypeName'
-
-function initializerTypeName(tokens TokenArray, at TokenIndex, tokenLine LspTokenLine) returns String
-	let first = lspTokenAt(tokens, index: at)
-
-	if first.kind == TokenKind.leftBracket 'arrayLiteral'
-		return ArrayRecordName
-	end 'arrayLiteral'
-
-	if first.kind == TokenKind.stringLiteral or first.kind == TokenKind.stringInterpStart 'stringLiteral'
-		return StringRecordName
-	end 'stringLiteral'
-
-	// `Point{x: 0, y: 0}` — a record literal names its own type, and the brace is what tells it from a
-	// bare reference to a constant of the same spelling.
-	if first.kind == TokenKind.identifier and at < tokenLine.lastIndex and lspTokenAt(tokens, index: at + 1).kind == TokenKind.leftBrace 'recordLiteral'
-		return String.from(first.value)
-	end 'recordLiteral'
-
-	return ""
-end 'initializerTypeName'
-
 // --- Members of a type the BUFFER declares ----------------------------------------------------
-
-union DeclaringBlock
-	found(block LspDocumentBlock)
-	notInThisBuffer
-end 'DeclaringBlock'
-
-function blockDeclaring(blocks LspDocumentBlockArray, typeName String) returns DeclaringBlock
-	for block in blocks 'eachBlock'
-		if block.kind == LspBlockKind.functionBody or block.kind == LspBlockKind.labelled 'declaresNoType'
-			continue
-		end 'declaresNoType'
-
-		if String.from(block.name) == typeName 'thisOne'
-			return DeclaringBlock.found(block)
-		end 'thisOne'
-	end 'eachBlock'
-
-	return DeclaringBlock.notInThisBuffer
-end 'blockDeclaring'
 
 // ⚠ **ONLY THE BLOCK'S OWN LINES, NOT EVERY LINE BETWEEN ITS ENDS.** A `var` written inside a method body
 // is a local and not a field, and `directlyInside` is what tells the two apart — without it a type's
 // completion list would carry every temporary its methods declare.
-function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, blocks LspDocumentBlockArray, block LspDocumentBlock, subject CompletionSubject)
-	let wantsStatics = subjectIsStatic(subject)
+function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, blocks LspDocumentBlockArray, block LspDocumentBlock, subject LspSubject)
+	let wantsStatics = lspSubjectIsStatic(subject)
 	let caseList = block.kind == LspBlockKind.enumBody or block.kind == LspBlockKind.unionBody
 
 	for tokenLine in lspTokenLines(tokens) 'eachLine'
@@ -398,29 +229,24 @@ end 'directlyInside'
 // ⭐⭐ **THE VISIBILITY FILTER IS THE POINT OF THIS HALF.** Every name here is asked about through
 // `ProgramSignatures.calleeVisibilityFrom`, which is the compiler's own tier decision, so a member the
 // open document may not name is a member it is not offered.
-function addStdlibMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, uri String, subject CompletionSubject)
+function addStdlibMembers(offers CompletionOfferArray, offered OfferedLabelSet, typeName String, uri String, subject LspSubject)
 	let readerPath = lspDocumentPath(uri)
 
-	match corpusDeclarations(readerPath) 'corpus'
-		loaded(project, signatures) then addDeclaredMembers(offers, offered: offered, project: project, signatures: signatures, typeName: typeName, readerPath: readerPath, subject: subject)
+	match lspWorkspaceCorpus(readerPath) 'corpus'
+		loaded(_, signatures, corpusReaderPath) then addDeclaredMembers(offers, offered: offered, signatures: signatures, typeName: typeName, readerPath: corpusReaderPath, subject: subject)
 		unavailable then return
 	end 'corpus'
 end 'addStdlibMembers'
 
-function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, project Project, signatures ProgramSignatures, typeName String, readerPath FilePath, subject CompletionSubject)
-	let wantsStatics = subjectIsStatic(subject)
+function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, typeName String, readerPath FilePath, subject LspSubject)
+	let wantsStatics = lspSubjectIsStatic(subject)
+	let owner = typeName.toByteArray()
 	let prefix = "{typeName}{CompletionMemberSeparator}"
 
-	for (registered, signature) in project.funcSignatures 'eachFunction'
-		let qualified = String.from(registered)
-
-		if not qualified.startsWith(prefix) 'anotherType'
-			continue
-		end 'anotherType'
-
+	for registered in signatures.declaredMemberKeysOf(owner) 'eachMember'
 		// A receiverless declaration is reached through the type and a receiver-taking one through a
 		// value. `takesReceiver` is the compiler's own bit for that, so the two lists cannot drift.
-		if signature.takesReceiver() == wantsStatics 'wrongAccessForm'
+		if signatures.declaredMethodTakesReceiver(registered) == wantsStatics 'wrongAccessForm'
 			continue
 		end 'wrongAccessForm'
 
@@ -428,15 +254,15 @@ function addDeclaredMembers(offers CompletionOfferArray, offered OfferedLabelSet
 			continue
 		end 'hiddenFromThisFile'
 
-		addOffer(offers, offered: offered, label: memberNameIn(qualified, prefix: prefix), kind: StaticFunctionCompletionKind if wantsStatics else MethodCompletionKind)
-	end 'eachFunction'
+		addOffer(offers, offered: offered, label: memberNameIn(String.from(registered), prefix: prefix), kind: StaticFunctionCompletionKind if wantsStatics else MethodCompletionKind)
+	end 'eachMember'
 
 	if wantsStatics 'casesAndStaticsOnly'
-		addDeclaredCases(offers, offered: offered, project: project, typeName: typeName)
+		addDeclaredCases(offers, offered: offered, signatures: signatures, owner: owner, readerPath: readerPath)
 		return
 	end 'casesAndStaticsOnly'
 
-	addDeclaredFields(offers, offered: offered, project: project, signatures: signatures, typeName: typeName, readerPath: readerPath)
+	addDeclaredFields(offers, offered: offered, signatures: signatures, owner: owner, readerPath: readerPath)
 end 'addDeclaredMembers'
 
 // ⭐ **THE ONE VISIBILITY DECISION, ASKED OF THE COMPILER.** `calleeVisibilityFrom` reads the tier and
@@ -450,9 +276,14 @@ function nameableFrom(signatures ProgramSignatures, registered ByteArray, reader
 	end 'tier'
 end 'nameableFrom'
 
-function addDeclaredFields(offers CompletionOfferArray, offered OfferedLabelSet, project Project, signatures ProgramSignatures, typeName String, readerPath FilePath)
-	let layout = try project.structTypes.get(typeName.toByteArray()) otherwise return
+function addDeclaredFields(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, owner ByteArray, readerPath FilePath)
+	match signatures.structFor(owner, readerFilePath: readerPath) 'aStruct'
+		declared(layout) then addVisibleFields(offers, offered: offered, signatures: signatures, layout: layout, readerPath: readerPath)
+		undeclared then return
+	end 'aStruct'
+end 'addDeclaredFields'
 
+function addVisibleFields(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, layout StructLayout, readerPath FilePath)
 	for index in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.isVisibleFrom(layout.fieldTier(index), declFilePath: layout.declFilePath, readerFilePath: readerPath) 'hiddenHere'
 			continue
@@ -460,44 +291,20 @@ function addDeclaredFields(offers CompletionOfferArray, offered OfferedLabelSet,
 
 		addOffer(offers, offered: offered, label: String.from(layout.fieldNameAt(index)), kind: FieldCompletionKind)
 	end 'eachField'
-end 'addDeclaredFields'
+end 'addVisibleFields'
 
-function addDeclaredCases(offers CompletionOfferArray, offered OfferedLabelSet, project Project, typeName String)
-	let layout = try project.enumTypes.get(typeName.toByteArray()) otherwise return
+function addDeclaredCases(offers CompletionOfferArray, offered OfferedLabelSet, signatures ProgramSignatures, owner ByteArray, readerPath FilePath)
+	match signatures.enumFor(owner, readerFilePath: readerPath) 'anEnum'
+		declared(layout) then addCaseNames(offers, offered: offered, layout: layout)
+		undeclared then return
+	end 'anEnum'
+end 'addDeclaredCases'
 
+function addCaseNames(offers CompletionOfferArray, offered OfferedLabelSet, layout EnumLayout)
 	for caseName in layout.caseNames 'eachCase'
 		addOffer(offers, offered: offered, label: String.from(caseName), kind: EnumMemberCompletionKind)
 	end 'eachCase'
-end 'addDeclaredCases'
-
-// The declarations of the corpus this compiler ships with, or nothing when they cannot be loaded. A
-// failure here costs the corpus half of the list and leaves the buffer half standing, which is what an
-// editor should see: fewer offers, never a refused request.
-union CorpusDeclarations
-	loaded(project Project, signatures ProgramSignatures)
-	unavailable
-end 'CorpusDeclarations'
-
-function corpusDeclarations(readerPath FilePath) returns CorpusDeclarations
-	// See this file's header: the buffer's PATH is registered and its text is not.
-	match lspDocumentProject(readerPath, content: "") 'buffer'
-		loaded(project) then return project.resolvedCorpus()
-		unavailable then return CorpusDeclarations.unavailable
-	end 'buffer'
-end 'corpusDeclarations'
-
-// ⚖ **THE STEP IS THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH IT.** Both queries below
-// write the project, and a method writing its own receiver is legal on a binding nothing may write from
-// outside; the same work spelled `resolvedCorpus(project)` hands that payload to a parameter the callee
-// writes, which is E3019.
-extension Project
-	function resolvedCorpus() returns CorpusDeclarations
-		_ = try queryAllModule(self) otherwise return CorpusDeclarations.unavailable
-		let signatures = try queryProgramSignatures(self) otherwise return CorpusDeclarations.unavailable
-
-		return CorpusDeclarations.loaded(self, signatures: signatures)
-	end 'resolvedCorpus'
-end 'Project'
+end 'addCaseNames'
 
 // The member half of a `<Type>.<member>` registration name.
 function memberNameIn(qualified String, prefix String) returns String
@@ -523,11 +330,3 @@ function addOffer(offers CompletionOfferArray, offered OfferedLabelSet, label St
 	offered.insert(label)
 	offers.push(CompletionOffer.create(label, kind: kind))
 end 'addOffer'
-
-function subjectIsStatic(subject CompletionSubject) returns bool
-	return match subject 'subject'
-		staticSurfaceOf gives true
-		instanceSurfaceOf gives false
-		nothingToOffer gives false
-	end 'subject'
-end 'subjectIsStatic'

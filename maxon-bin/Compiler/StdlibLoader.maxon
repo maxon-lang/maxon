@@ -302,13 +302,11 @@ end 'loadLibrarySources'
 // root is not entitled to its own answer to it. A second walk here would be free to drift on the
 // extension, on the build manifest, and on every ignore rule either walk grows.
 //
-// ⛔ **A ROOT THAT CONTRIBUTES NOTHING IS A REFUSAL, NEVER A QUIET ZERO — and this floor exists
-// because DELETING THE WHITELIST TOOK THE OLD ONE AWAY.** `listWhitelistedModule` resolved each listed
-// name and threw `fileNotFound` when it was gone, so a `stdlib/` missing its contents was caught HERE,
-// by name. Enumeration has no such floor: a walk that finds nothing returns an empty array and every
-// caller downstream sees a program that simply contains no library. That is reachable without anyone
-// deleting a file — `collectMaxonSources` asks `isIgnoredDirectory` about its ROOT, so a `.maxonignore`
-// in any ancestor of the checkout makes the walk return 0 rather than throw.
+// ⛔ A root that contributes nothing is a REFUSAL, never a quiet zero, and enumeration is why this
+// floor has to be written down: a walk that finds nothing returns an empty array, and every caller
+// downstream then sees a program that simply contains no library. Nobody has to delete a file for
+// that — a `.maxonignore` anywhere inside the tier prunes what it covers, and a tier directory that
+// exists but holds no source lists cleanly and answers 0.
 //
 // The symptom without it is a PANIC far downstream and in another file
 // (`Project.requireCorpusDeclaredEnum`: *"this compile declares no enum of that name"*), naming a

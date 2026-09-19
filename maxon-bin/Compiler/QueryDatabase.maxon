@@ -233,6 +233,29 @@ end 'FileProvenance'
 
 export typealias FileProvenanceMemo = Map with (FilePath, FileProvenance)
 
+module type SourceFileStamp
+	module let size as FileSize
+	module let modifiedTime as Timestamp
+	module let observedAt as Timestamp
+
+	module static function create(size FileSize, modifiedTime Timestamp, observedAt Timestamp) returns SourceFileStamp
+		return Self{size: size, modifiedTime: modifiedTime, observedAt: observedAt}
+	end 'create'
+
+	// ⚠ `>=`, not `>`: `Timestamp` is whole seconds, so a write inside the second the read began in is
+	// indistinguishable from one that preceded it and has to count as unseen. A stamp that fails this
+	// describes nothing and forces a re-read.
+	module function describes(info FileInfo) returns bool
+		if self.modifiedTime >= self.observedAt 'writableWithinTheStampedSecond'
+			return false
+		end 'writableWithinTheStampedSecond'
+
+		return self.size == info.size and self.modifiedTime == info.modifiedTime
+	end 'describes'
+end 'SourceFileStamp'
+
+module typealias SourceFileStampMap = Map with (FilePath, SourceFileStamp)
+
 export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
 export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
 export typealias ParseCacheMap = Map with (FilePath, ParseMemo)
@@ -321,6 +344,8 @@ export type QueryDatabase
 	// Source inputs (path -> content + hash) and insertion-ordered path list.
 	export var sourceFiles as SourceFileMap
 	export var sourcePaths as FilePathArray
+
+	module var sourceStamps as SourceFileStampMap
 
 	// The composite whole-program source hash, MEMOIZED — every whole-program memo keys on it, and
 	// since the signature index landed it is asked once per FILE, which made re-folding it O(files²).
@@ -413,6 +438,7 @@ export type QueryDatabase
 		return Self{
 			sourceFiles: SourceFileMap.create(),
 			sourcePaths: FilePathArray.create(),
+			sourceStamps: SourceFileStampMap.create(),
 			compositeHash: 0, compositeHashValid: false,
 			fileProvenance: FileProvenanceMemo.create(),
 			shareableTokenHashes: HashDigestSet.create(),

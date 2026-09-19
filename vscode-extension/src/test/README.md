@@ -1,12 +1,17 @@
 # VSCode Extension Tests
 
-This directory contains tests for the Maxon Language Support VSCode extension.
+This directory contains tests for the Maxon VS Code extension.
 
 ## Test Structure
 
-- `runTest.ts` - Entry point for running tests using @vscode/test-electron
+- `runTest.ts` - Entry point for running tests using @vscode/test-electron. It opens the checkout
+  root as the workspace, and pins the language server to this checkout's own compiler at
+  `maxon-bin/.maxon/` — the suite refuses to run without one.
 - `suite/index.ts` - Mocha test suite configuration and test file discovery
-- `suite/extension.test.ts` - Main extension tests
+- `suite/fixtures.ts` - the extension id (derived from `package.json`), and staging for the fixture
+  projects the end-to-end tests drive the server against
+- `suite/definition.test.ts` - go to definition, end to end, judged on the answer's URI
+- `suite/lsp-integration.test.ts` - the rest of the language features, each one a real request
 - `unit/` - Tests of modules that do not import `vscode`, run under plain mocha by `npm run test:unit`
 
 ## Running Tests
@@ -18,28 +23,30 @@ npm test
 ```
 
 This will:
-1. Compile the TypeScript code
-2. Download a VS Code instance for testing (if not already downloaded)
-3. Launch VS Code and run the tests
-4. Display test results in the console
+1. Discard `out/` and recompile, so a suite deleted from `src/` cannot go on running from a stale build
+2. Run the TextMate grammar snapshot tests
+3. Download a VS Code instance for testing (if not already downloaded)
+4. Launch VS Code and run the end-to-end suite
+5. Display test results in the console
+
+The end-to-end tests need a built compiler, because the compiler *is* the language server:
+`scripts/build-from-seed.sh`, or `maxon build maxon-bin`.
+
+## Fixtures
+
+Each end-to-end case stages its own project under `<checkout>/temp/vscode-e2e/<case>/`, written to
+disk rather than edited into an unsaved buffer — a cross-file answer is read from disk. `temp/` is
+gitignored and carries a `.maxonignore`, so a fixture is in neither the repository nor any project
+walk rooted above it; the server roots the project at the fixture's own `build.maxon`, which is also
+what keeps it from climbing to the checkout root and indexing the whole tree.
 
 ## Test Coverage
 
-The test suite covers:
-
-1. **Extension Activation**
-   - Extension presence check
-   - Extension activation
-   - Language registration
-
-2. **Language Client**
-   - File extension handling (.maxon)
-   - Language scheme support
-   - Document management
-
-3. **Extension Deactivation**
-   - Graceful shutdown
-   - Client cleanup
+1. **Extension Activation** - presence, activation, language registration, manifest contributions
+2. **Go to definition** - into the stdlib, into a sibling file, and within the buffer being edited
+3. **Language server** - the handshake's advertised capabilities, diagnostics, hover, formatting and
+   document symbols, each driven through the editor's own provider commands
+4. **Grammar** - the TextMate grammar's structure, and its snapshots (`npm run test:grammar`)
 
 ## Prerequisites
 
@@ -55,8 +62,9 @@ To add new tests:
 
 1. Create a new `.test.ts` file in the `suite/` directory
 2. Use the Mocha TDD interface (`suite` and `test` functions)
-3. Import necessary modules from `vscode` and the extension
-4. Follow the existing test patterns
+3. Stage what the test needs with `stageProject` from `./fixtures`, and ask for the extension with
+   `maxonExtension()` rather than spelling its id
+4. A test that drives the server raises its own timeout; the suite default is 10 s
 
 Example:
 
@@ -76,5 +84,5 @@ suite('My Test Suite', () => {
 If tests fail to run:
 1. Ensure all dependencies are installed (`npm install`)
 2. Check that TypeScript compilation succeeds (`npm run compile`)
-3. Verify the LSP server binary exists at the expected path
+3. Verify the compiler exists at `maxon-bin/.maxon/` — `runTest.ts` says so and stops
 4. Check console output for specific error messages

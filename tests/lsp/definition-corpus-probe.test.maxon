@@ -1,0 +1,141 @@
+// definition-corpus-probe.test.maxon — one `textDocument/definition` session driven against a project
+// STAGED ON DISK, for every file asking where a name declared in ANOTHER file lives. It declares no tests.
+// `definition-probe.test.maxon` cannot answer these: its probe discards the answer's uri and its document
+// never reaches the filesystem, and the uri is what a cross-file answer is judged by. Release discipline —
+// why every session is driven into a VALUE before anything is asserted — is `LspClient.maxon`'s hazard 1.
+
+let CorpusBuildFileName = "build.maxon"
+let CorpusBuildFileContent = ""
+let CorpusBackslash = "\\"
+let CorpusSlash = "/"
+let CorpusFileUriPrefix = "file://"
+let CorpusNewline = "\n"
+let CorpusStdlibDirName = "stdlib"
+let CorpusStdlibFileName = "FilePath.maxon"
+
+export let CorpusStdlibFilePathTail = "stdlib/FilePath.maxon"
+
+union CorpusDefinitionProbe
+	located(uri String, range LspRange)
+	absent
+	refused(code JsonRpcErrorCode, message String)
+	broke(detail String)
+end 'CorpusDefinitionProbe'
+
+// ⭐ **THE DECLARATION'S LINE IS READ OUT OF THE FILE, NOT WRITTEN DOWN HERE.** A pinned line number into a
+// live `stdlib/` file is a standing false alarm: any edit ABOVE the declaration reddens a case that is
+// testing something else entirely. The needle is the declaration's own text, which moves with it.
+export function corpusLineDeclaring(file FilePath, needle String) returns LspCoordinate
+	let text = try File.readText(file) otherwise panic("definition corpus: could not read {file.toString()} to find the line declaring '{needle}'")
+	var line = 0 as LspCoordinate
+
+	for candidate in text.split(CorpusNewline) 'eachLine'
+		if candidate.startsWith(needle) 'thisOne'
+			return line
+		end 'thisOne'
+
+		line = line + 1
+	end 'eachLine'
+
+	panic("definition corpus: no line of {file.toString()} begins with '{needle}'")
+end 'corpusLineDeclaring'
+
+// The stdlib file both stdlib cases resolve into, as a path this host can read.
+export function corpusStdlibFilePath() returns FilePath
+	let directory = try FilePath.from(CorpusStdlibDirName) otherwise panic("definition corpus: '{CorpusStdlibDirName}' is not a spellable path")
+	return directory.resolve(Directory.currentPath()).join(CorpusStdlibFileName)
+end 'corpusStdlibFilePath'
+
+export function corpusFilePathSource() returns String
+	return "function main() returns ExitCode\n\tlet p = try FilePath.from(\"x\") otherwise return 1\n\tprint(p.toString())\n\treturn 0\nend 'main'\n"
+end 'corpusFilePathSource'
+
+export function stagedCorpusDirectory(dirName String) returns FilePath
+	let directory = try FilePath.from(dirName) otherwise panic("definition corpus: '{dirName}' is not a spellable path")
+	let resolved = directory.resolve(Directory.currentPath())
+
+	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'couldNotCreate'
+		panic("definition corpus: the test could not run — could not create {resolved.toString()}")
+	end 'couldNotCreate'
+
+	writeCorpusFile(resolved, fileName: CorpusBuildFileName, content: CorpusBuildFileContent)
+
+	return resolved
+end 'stagedCorpusDirectory'
+
+export function writeCorpusFile(directory FilePath, fileName String, content String)
+	let file = directory.join(fileName)
+	try File.writeText(file, content: content) otherwise panic("definition corpus: the test could not run — could not write {file.toString()}")
+end 'writeCorpusFile'
+
+export function probeCorpusDefinition(directory FilePath, fileName String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
+	writeCorpusFile(directory, fileName: fileName, content: content)
+
+	var client = LspClient.start()
+	let probe = collectCorpusDefinition(client, uri: corpusUriOf(directory.join(fileName)), content: content, line: line, character: character)
+	client.release()
+
+	return probe
+end 'probeCorpusDefinition'
+
+export function expectDefinitionInFile(probe CorpusDefinitionProbe, fileTail String, startLine LspCoordinate, note String) throws TestFailure
+	match probe 'probe'
+		located(uri, range) then try requireCorpusLocation(uri, range: range, fileTail: fileTail, startLine: startLine, note: note)
+		absent then try Expect.fail("{note} The server found no definition at that position at all, which is what it answers for every name it cannot see in the open buffer.")
+		refused(code, message) then try Expect.fail(corpusRefusalSentence(code, message: message))
+		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
+	end 'probe'
+end 'expectDefinitionInFile'
+
+export function expectNoDefinitionInProject(probe CorpusDefinitionProbe, note String) throws TestFailure
+	match probe 'probe'
+		absent then return
+		located(uri, range) then try Expect.fail("{note} The server pointed at line {range.startLine} of {uri}.")
+		refused(code, message) then try Expect.fail(corpusRefusalSentence(code, message: message))
+		broke(detail) then try Expect.fail("the session broke before an answer arrived: {detail}")
+	end 'probe'
+end 'expectNoDefinitionInProject'
+
+function requireCorpusLocation(uri String, range LspRange, fileTail String, startLine LspCoordinate, note String) throws TestFailure
+	let folded = uri.replace(CorpusBackslash, with: CorpusSlash)
+
+	try Expect.isTrue(folded.endsWith(fileTail), message: "{note} The answer names {uri}, which does not end with {fileTail}.")
+
+	try Expect.equal(range.startLine as AssertedInt, expected: startLine as AssertedInt, message: "{note} The jump landed on line {range.startLine} of {uri}.")
+end 'requireCorpusLocation'
+
+function collectCorpusDefinition(client LspClient, uri String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
+	var probe = CorpusDefinitionProbe.broke("the request ended without saying how")
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(uri, content: content)
+		probe = corpusProbeOf(client.definition(uri, line: line, character: character))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed(detail) then probe = CorpusDefinitionProbe.broke("the framed stream broke — {detail}")
+			malformedResponse(detail) then probe = CorpusDefinitionProbe.broke("a reply was not the shape LSP defines for `textDocument/definition` — {detail}")
+			serverRefused(code, message) then probe = CorpusDefinitionProbe.refused(code, message: message)
+		end 'reason'
+	end 'failed'
+
+	return probe
+end 'collectCorpusDefinition'
+
+export function corpusProbeOf(found DefinitionResult) returns CorpusDefinitionProbe
+	if not found.isPresent 'nothing'
+		return CorpusDefinitionProbe.absent
+	end 'nothing'
+
+	return CorpusDefinitionProbe.located(found.uri, range: found.range)
+end 'corpusProbeOf'
+
+export function corpusUriOf(file FilePath) returns String
+	let slashed = file.toString().replace(CorpusBackslash, with: CorpusSlash)
+	return "{CorpusFileUriPrefix}{slashed}" if slashed.startsWith(CorpusSlash) else "{CorpusFileUriPrefix}{CorpusSlash}{slashed}"
+end 'corpusUriOf'
+
+function corpusRefusalSentence(code JsonRpcErrorCode, message String) returns String
+	return "`textDocument/definition` was refused with JSON-RPC {code}: {message}. The definition handler IS served, so a refusal here is a REGRESSION rather than an answer."
+end 'corpusRefusalSentence'

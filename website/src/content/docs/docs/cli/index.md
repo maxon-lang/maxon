@@ -171,8 +171,9 @@ maxon build [<target name>] [options]
 
 **Arguments.** One or more paths. **Several paths are compiled as one program, in the order given.** A
 directory contributes every `.maxon` file beneath it, except `build.maxon` (in any letter case),
-`*.test.maxon` files and subtrees marked with a `.maxonignore`. A file you name explicitly is compiled whatever a
-`.maxonignore` above it says.
+`*.test.maxon` files and subtrees marked with a `.maxonignore`. A `.maxonignore` excludes a directory the
+walk **discovers**; it does not override a path you **named**. So a file or a directory you name
+explicitly is compiled whatever a `.maxonignore` above it — or on it — says.
 
 **No path** runs the `build.maxon` manifest in the current directory, and a bare word that names one of
 its targets builds that target. See [Project Structure](/docs/cli/project-structure/). A directory
@@ -316,9 +317,10 @@ maxon fmt [<file|directory>]
 
 With **no path it formats the whole working directory**. A named **file** is formatted whatever it is
 called. A **directory** is walked for `.maxon` files, skipping a project's `build.maxon` (in any letter case;
-the compiler's own `stdlib/` and `runtime/` hold no manifest, so their `Build.maxon` is formatted), anything under a
-`.maxonignore`, and any subdirectory that holds a `.git` (a nested clone or worktree), so a run never
-rewrites another repository's files.
+the compiler's own `stdlib/` and `runtime/` hold no manifest, so their `Build.maxon` is formatted), any
+subdirectory the walk finds under a `.maxonignore`, and any subdirectory that holds a `.git` (a nested
+clone or worktree), so a run never rewrites another repository's files. As with `build`, a `.maxonignore`
+on or above the directory you **named** does not exclude it — naming it is the explicit act.
 
 **It takes no options.** Any `-`-leading argument is refused with exit 1 and nothing written, and so
 is a second path.

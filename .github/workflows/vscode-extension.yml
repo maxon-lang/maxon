@@ -1,4 +1,8 @@
-# Publish the VS Code extension when a release is published.
+# Test the VS Code extension on every change to it, and publish it when a release is published.
+#
+# ⭐⭐ THE SUITE IS HERE BECAUSE `ci.yml` EXCLUDES `vscode-extension/**` — deliberately, since nothing
+# there runs the extension. So this is the only workflow that can run it, and a language feature the
+# extension is the client for can be lost with every other lane green.
 #
 # ⭐ TWO REGISTRIES, ONE ARTIFACT. The same `.vsix` goes to the VS Code Marketplace and to Open VSX,
 # which is what VSCodium, Cursor and Windsurf install from. Building it twice would risk publishing two
@@ -16,6 +20,19 @@
 name: vscode-extension
 
 on:
+  # ⭐ THE SUITE RUNS ON EVERY CHANGE TO THE EXTENSION OR TO THE SERVER IT DRIVES, WHICH THE PUBLISH
+  # DOES NOT. The extension has no code of its own for a language feature — it forwards to the
+  # compiler's LSP — so a change under `maxon-bin/Compiler/Lsp/` is a change to what these tests
+  # assert. `stdlib/Print.maxon` is named because the cross-file definition case pins that path.
+  push:
+    branches: [main]
+    paths: &extension-inputs
+      - 'vscode-extension/**'
+      - 'maxon-bin/Compiler/Lsp/**'
+      - 'stdlib/Print.maxon'
+      - '.github/workflows/vscode-extension.yml'
+  pull_request:
+    paths: *extension-inputs
   release:
     types: [published]
   workflow_dispatch:
@@ -31,8 +48,68 @@ permissions:
   contents: read
   id-token: write
 
+# A pull request supersedes its own older runs; `main` and a release never cancel — `ci.yml` states why.
+concurrency:
+  group: vscode-extension-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
+  # ⭐⭐ THE SERVER UNDER TEST IS THIS TREE'S COMPILER, WHICH IS WHY THIS JOB BUILDS ONE. The extension
+  # is a client: every assertion about a language feature is an assertion about `maxon lsp-server`, so a
+  # suite run against a released compiler would report on code this commit did not change. `runTest.ts`
+  # pins the search to `maxon-bin/.maxon/` and refuses to run without it.
+  #
+  # ⚠ `xvfb-run`, because the suite launches a real VS Code and a Linux runner has no display.
+  suite:
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: vscode-extension
+    steps:
+      - uses: actions/checkout@v5
+
+      # `ci.yml`'s seed step, for its reason: Maxon compiles Maxon, so a runner takes the last
+      # published release to build this tree with — and until one exists there is nothing to build.
+      - name: Seed from the last release
+        id: seed
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/fetch-seed.sh --allow-none
+          . scripts/lib/host-binaries.sh
+          if [ -x "$(maxon_downloaded_path)" ]; then
+            echo "seeded=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::no published release to seed from yet — the extension suite is inert until v0.1.0"
+            echo "seeded=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the compiler that serves the tests
+        if: steps.seed.outputs.seeded == 'yes'
+        working-directory: .
+        run: ./scripts/build-from-seed.sh
+
+      - uses: actions/setup-node@v5
+        if: steps.seed.outputs.seeded == 'yes'
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - if: steps.seed.outputs.seeded == 'yes'
+        run: npm ci
+
+      # The grammar snapshots and the end-to-end suite, which is what `npm test` is.
+      - name: Suite
+        if: steps.seed.outputs.seeded == 'yes'
+        run: xvfb-run -a npm test
+
   publish:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:

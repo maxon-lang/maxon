@@ -1,0 +1,22 @@
+// definition-refuses-a-file-private-sibling.test.maxon — a sibling declaration with NO visibility modifier
+// is file-private, so a call naming it from another file resolves to NOTHING.
+// ⚠ GREEN TODAY, for the wrong reason: the server answers nothing for every cross-file name. It is the
+// control for the finished resolver — it stays green only if that resolver consults Maxon's visibility
+// rules, and goes red the moment it matches a name across files instead.
+
+let PrivateSiblingDirName = "temp/lsp/definition-refuses-a-file-private-sibling"
+let PrivateSiblingHiddenFileName = "private.maxon"
+let PrivateSiblingMainFileName = "main.maxon"
+let PrivateSiblingHiddenSource = "function hiddenHelper() returns ExitCode\n\treturn 0\nend 'hiddenHelper'\n"
+let PrivateSiblingMainSource = "function main() returns ExitCode\n\treturn hiddenHelper()\nend 'main'\n"
+let PrivateSiblingCallLine = 1 as LspCoordinate
+let PrivateSiblingCallCharacter = 12 as LspCoordinate
+
+test 'definition refuses a file-private sibling'
+	let directory = stagedCorpusDirectory(PrivateSiblingDirName)
+	writeCorpusFile(directory, fileName: PrivateSiblingHiddenFileName, content: PrivateSiblingHiddenSource)
+
+	let probe = probeCorpusDefinition(directory, fileName: PrivateSiblingMainFileName, content: PrivateSiblingMainSource, line: PrivateSiblingCallLine, character: PrivateSiblingCallCharacter)
+
+	try expectNoDefinitionInProject(probe, note: "a call named a sibling's file-private declaration, which nothing outside that file may see, and the server jumped to it anyway.")
+end 'definition refuses a file-private sibling'

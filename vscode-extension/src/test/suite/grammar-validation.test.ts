@@ -27,7 +27,7 @@ suite('TextMate Grammar Validation', () => {
 
 	test('Grammar includes all pattern types', () => {
 		const patterns = grammar.patterns.map((p: any) => p.include);
-		const expectedPatterns = ['#comments', '#keywords', '#block-labels', '#strings', '#characters', '#numbers', '#operators', '#functions', '#types'];
+		const expectedPatterns = ['#comments', '#keywords', '#block-labels', '#strings', '#characters', '#numbers', '#operators', '#function-definitions', '#function-calls', '#types'];
 
 		for (const expected of expectedPatterns) {
 			assert.ok(patterns.includes(expected), `Grammar should include ${expected}`);
@@ -52,7 +52,7 @@ suite('TextMate Grammar Validation', () => {
 		const declarationPattern = keywordsRepo.patterns.find((p: any) => p.name === 'keyword.other.maxon');
 		assert.ok(declarationPattern, 'Declaration keyword pattern should exist');
 
-		const declarationKeywords = ['var', 'function', 'let', 'export', 'type', 'extern'];
+		const declarationKeywords = ['var', 'function', 'let', 'export', 'public', 'type', 'union', 'enum', 'interface', 'typealias', 'extension', 'static'];
 		for (const kw of declarationKeywords) {
 			assert.ok(declarationPattern.match.includes(kw), `Declaration pattern should include ${kw}`);
 		}
@@ -60,35 +60,45 @@ suite('TextMate Grammar Validation', () => {
 
 	test('Keywords pattern includes boolean literals', () => {
 		const keywordsRepo = grammar.repository.keywords;
-		const boolPattern = keywordsRepo.patterns.find((p: any) => p.name === 'constant.language.boolean.maxon');
+		const boolPattern = keywordsRepo.patterns.find((p: any) => p.name === 'constant.language.maxon');
 		assert.ok(boolPattern, 'Boolean literal pattern should exist');
 		assert.ok(boolPattern.match.includes('true'), 'Boolean pattern should include true');
 		assert.ok(boolPattern.match.includes('false'), 'Boolean pattern should include false');
 	});
 
-	test('Keywords pattern includes math intrinsics', () => {
+	// The word-spelled operators. Maxon has no `&&` or `||`, so these ARE the operators a reader sees
+	// most, and nothing else in the grammar would colour them as anything but ordinary identifiers.
+	test('Keywords pattern includes the word operators', () => {
 		const keywordsRepo = grammar.repository.keywords;
-		const mathPattern = keywordsRepo.patterns.find((p: any) => p.name === 'support.function.math.maxon');
-		assert.ok(mathPattern, 'Math intrinsic pattern should exist');
+		const operatorPattern = keywordsRepo.patterns.find((p: any) => p.name === 'keyword.operator.logical.maxon');
+		assert.ok(operatorPattern, 'Word operator pattern should exist');
 
-		const mathFunctions = ['floor', 'trunc', 'sqrt', 'abs', 'ceil', 'round', 'sin', 'cos'];
-		for (const func of mathFunctions) {
-			assert.ok(mathPattern.match.includes(func), `Math pattern should include ${func}`);
+		const wordOperators = ['mod', 'and', 'or', 'not', 'as', 'is', 'shl', 'shr', 'xor'];
+		for (const operator of wordOperators) {
+			assert.ok(operatorPattern.match.includes(operator), `Word operator pattern should include ${operator}`);
 		}
 	});
 
+	// ⚠ THE BUILT-IN TYPES ARE KEYWORDS AND THE STDLIB'S TYPES ARE NOT, which is why they sit in two
+	// repositories under two scopes. 'string', 'character' and 'map' are stdlib types, so they are
+	// `support.type.maxon` under their real spellings and never `storage.type.maxon`.
 	test('Type keywords pattern exists', () => {
+		const keywordsRepo = grammar.repository.keywords;
+		const typePattern = keywordsRepo.patterns.find((p: any) => p.name === 'storage.type.maxon' && p.match.includes('int'));
+		assert.ok(typePattern, 'Built-in type keyword pattern should exist');
+
+		for (const type of ['int', 'bool', 'float', 'byte']) {
+			assert.ok(typePattern.match.includes(type), `Type pattern should include ${type}`);
+		}
+
 		const typesRepo = grammar.repository.types;
 		assert.ok(typesRepo, 'Types repository should exist');
 
-		const typePattern = typesRepo.patterns.find((p: any) => p.name === 'storage.type.maxon');
-		assert.ok(typePattern, 'Type keyword pattern should exist');
+		const stdlibPattern = typesRepo.patterns.find((p: any) => p.name === 'support.type.maxon');
+		assert.ok(stdlibPattern, 'Stdlib type pattern should exist');
 
-		// Note: 'string', 'character', and 'map' are stdlib types, not built-in keywords, so they're not in this list
-		// 'character' is now a grapheme cluster struct defined in stdlib/string/character.maxon
-		const types = ['int', 'bool', 'float', 'byte'];
-		for (const type of types) {
-			assert.ok(typePattern.match.includes(type), `Type pattern should include ${type}`);
+		for (const type of ['String', 'Character', 'Array', 'Map']) {
+			assert.ok(stdlibPattern.match.includes(type), `Stdlib type pattern should include ${type}`);
 		}
 	});
 
@@ -144,13 +154,25 @@ suite('TextMate Grammar Validation', () => {
 		assert.ok(comparisonPattern, 'Comparison operator pattern should exist');
 	});
 
-	test('Function call pattern exists', () => {
-		const functionsRepo = grammar.repository.functions;
-		assert.ok(functionsRepo, 'Functions repository should exist');
+	// A definition and a call are scoped apart, so a name being declared reads differently from the same
+	// name being used. Both carry their scope on a CAPTURE rather than on the pattern: the match covers
+	// the `function` keyword or the trailing paren too, which must not take the name's colour.
+	test('Function definition and call patterns exist', () => {
+		const definitionsRepo = grammar.repository['function-definitions'];
+		assert.ok(definitionsRepo, 'Function definition repository should exist');
 
-		const functionPattern = functionsRepo.patterns.find((p: any) => p.name === 'entity.name.function.maxon');
-		assert.ok(functionPattern, 'Function pattern should exist');
-		assert.ok(functionPattern.match, 'Function pattern should have match');
+		const definitionPattern = definitionsRepo.patterns.find((p: any) => p.captures?.['2']?.name === 'entity.name.function.maxon');
+		assert.ok(definitionPattern, 'Function definition pattern should name the declared function');
+		assert.ok(definitionPattern.match, 'Function definition pattern should have match');
+
+		const callsRepo = grammar.repository['function-calls'];
+		assert.ok(callsRepo, 'Function call repository should exist');
+
+		const callPattern = callsRepo.patterns.find((p: any) => p.captures?.['1']?.name === 'entity.name.function.call.maxon');
+		assert.ok(callPattern, 'Function call pattern should name the called function');
+
+		const methodPattern = callsRepo.patterns.find((p: any) => p.captures?.['1']?.name === 'entity.name.function.method.maxon');
+		assert.ok(methodPattern, 'Method call pattern should name the called method');
 	});
 
 	test('Regex patterns use proper word boundaries', () => {
