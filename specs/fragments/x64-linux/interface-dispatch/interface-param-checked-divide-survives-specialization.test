@@ -65,7 +65,14 @@ func @main {
     x64.leaRegRdata rax, [rip + __witness_Alpha.Scorer]
   __il_body#9:
     x64.movRegReg rcx, r12
-    x64.callMem [rax + 24]
+    x64.callMem [rax + 40]
+    x64.movRegImm rax, 9223372036854775808
+    x64.movRegReg rcx, r8
+    x64.xorRegReg rcx, r8, rax
+    x64.orRegImm32 rcx, rcx, -4
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, divovf
+  divok:
     x64.movRegImm rax, 6148914691236517206
     x64.imulHighReg r8
     x64.movRegReg rax, rdx
@@ -86,8 +93,17 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  divovf:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic: integer overflow\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at interface-param-checked-divide-survives-specialization.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at interface-param-checked-divide-survives-specialization.test:29: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

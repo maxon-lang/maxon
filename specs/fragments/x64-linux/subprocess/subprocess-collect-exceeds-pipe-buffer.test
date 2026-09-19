@@ -1,23 +1,24 @@
 // Test: subprocess-collect-exceeds-pipe-buffer
 function main() returns ExitCode
 	// A child writing FAR more than one OS pipe buffer (65,536 bytes on macOS,
-	// ~4 KiB on Windows), on BOTH streams at once. 20,000 numbered lines is
-	// ~108 KB per stream. The child blocks in write() the moment the buffer
+	// ~4 KiB on Windows), on BOTH streams at once: 1,100 lines of 100 characters
+	// is over 110 KB per stream. The child blocks in write() the moment the buffer
 	// fills, so the parent has to be reading both streams WHILE it waits for the
 	// child to exit: a runtime that waits first and drains afterwards deadlocks
 	// here, and one that drains stdout to EOF before touching stderr deadlocks on
-	// whichever stream it left alone. Both were real (arm64-macOS reported the
-	// deadlock as the caller's timeout).
+	// whichever stream it left alone. The volume comes from long lines rather than
+	// many iterations because the suite runs below normal priority, where a shell
+	// loop of tens of thousands of iterations can starve past the run deadline.
 	#if os(Windows)
 	let exe = Executable.name("cmd")
 	var argv = StringArray.create()
 	argv.push("/c")
-	argv.push("(for /L %i in (1,1,20000) do @echo %i) & (for /L %j in (1,1,20000) do @echo %j 1>&2)")
+	argv.push("(for /L %i in (1,1,1100) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789) & echo stdout-tail & (for /L %j in (1,1,1100) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 1>&2) & echo stderr-tail 1>&2")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
 	var argv = StringArray.create()
 	argv.push("-c")
-	argv.push("i=1; while [ $i -le 20000 ]; do echo $i; echo $i 1>&2; i=$((i+1)); done")
+	argv.push("i=1; while [ $i -le 1100 ]; do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789; echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 1>&2; i=$((i+1)); done; echo stdout-tail; echo stderr-tail 1>&2")
 	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
 	if not result.succeeded() 'check-success'
@@ -33,10 +34,10 @@ function main() returns ExitCode
 	end 'check-stderr-size'
 	// The LAST line, which only arrives if the capture ran to the child's exit
 	// rather than stopping at the first buffer.
-	if not result.stdout.contains("20000") 'check-stdout-tail'
+	if not result.stdout.contains("stdout-tail") 'check-stdout-tail'
 		return 6
 	end 'check-stdout-tail'
-	if not result.stderr.contains("20000") 'check-stderr-tail'
+	if not result.stderr.contains("stderr-tail") 'check-stderr-tail'
 		return 7
 	end 'check-stderr-tail'
 	return 0
@@ -119,7 +120,7 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "/bin/sh"
+    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "/bin/sh"
     x64.callDirect FilePath.from
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -145,12 +146,12 @@ func @main {
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_32]  ; "-c"
+    x64.leaRegRdata rcx, [rip + __str_rec_33]  ; "-c"
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_33]  ; "i=1; while [ $i -le 20000 ]; do echo $i; echo $i 1>&2; i=$((i+1)); done"
+    x64.leaRegRdata rcx, [rip + __str_rec_34]  ; "i=1; while [ $i -le 1100 ]; do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789; echo 01234567890123456"...
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
@@ -261,7 +262,7 @@ func @main {
     x64.ret
   ifcont#10:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
-    x64.leaRegRdata rdx, [rip + __str_rec_34]  ; "20000"
+    x64.leaRegRdata rdx, [rip + __str_rec_35]  ; "stdout-tail"
     x64.callDirect String.contains
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
@@ -284,7 +285,7 @@ func @main {
     x64.ret
   ifcont#12:
     x64.loadRegBaseDisp.word64 rcx, [r13 + 16]
-    x64.leaRegRdata rdx, [rip + __str_rec_34]  ; "20000"
+    x64.leaRegRdata rdx, [rip + __str_rec_36]  ; "stderr-tail"
     x64.callDirect String.contains
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0

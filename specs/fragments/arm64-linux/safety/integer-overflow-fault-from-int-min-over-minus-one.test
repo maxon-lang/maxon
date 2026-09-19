@@ -43,13 +43,7 @@ func @main {
     arm64.eor x3, x0, x16
     arm64.orr x2, x2, x3
     arm64.cmp x2, 0
-    arm64.b.ne divok
-  divovf:
-    arm64.leaRdata x0, __str_blob_0  ; "panic: integer overflow\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
+    arm64.b.eq divovf
   divok:
     arm64.sdiv x0, x1, x0
   __il_cont#7:
@@ -59,6 +53,12 @@ func @main {
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
   __rc_ok#4:
+    arm64.epilogue 16
+    arm64.ret
+  divovf:
+    arm64.leaRdata x0, __str_blob_0  ; "panic: integer overflow\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
   __rc_panic:

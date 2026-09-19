@@ -1,0 +1,19 @@
+// Test: pass-by-reference.borrowed-managed-global-to-reassigning-param-error
+
+typealias StringArray = Array with String
+
+var pool = ["hello world this is a long string for heap allocation"]
+
+function wipe(items StringArray)
+	items = StringArray.create()
+end 'wipe'
+
+function main() returns ExitCode
+	let held = try pool.get(0) otherwise ""
+	wipe(pool)
+	print("[{held}]")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:13:2: cannot mutate 'pool' via 'wipe' while it is borrowed by 'held' (borrowed at line 12)

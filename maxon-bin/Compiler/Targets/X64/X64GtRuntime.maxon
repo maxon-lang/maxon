@@ -593,7 +593,6 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// The two attached-subprocess imports. `PeekNamedPipe` takes SIX arguments — four in registers and
 		// two on the stack — so it is the only one of this pair with a non-zero count.
 		PeekNamedPipe gives PeekPipeStackArgWords  // 6: hNamedPipe, lpBuffer, nBufferSize, lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage
-		TerminateProcess gives 0  // 2: hProcess, uExitCode
 
 		// ⭐ **THE BLOCKING `ws2_32` SOCKET IMPORTS — EVERY ONE TAKES FOUR ARGUMENTS OR FEWER**, so every one
 		// passes entirely in registers and needs no stack words. That is not a coincidence worth relying on
@@ -688,6 +687,12 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		// The child-exit source. The register takes six, so two on the stack; the unregister two.
 		RegisterWaitForSingleObject gives RegisterWaitStackArgWords  // 6: phNewWaitObject, hObject, Callback, Context, dwMilliseconds, dwFlags
 		UnregisterWaitEx gives 0  // 2: WaitHandle, CompletionEvent
+
+		// The process-tree kill's four, none of them past the four argument registers.
+		CreateJobObjectW gives 0  // 2: lpJobAttributes, lpName
+		AssignProcessToJobObject gives 0  // 2: hJob, hProcess
+		TerminateJobObject gives 0  // 2: hJob, uExitCode
+		SetLastError gives 0  // 1: dwErrCode
 	end 'k'
 end 'gtShimStackArgWordsOf'
 
@@ -839,7 +844,6 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		GetTickCount64 gives SyscallClass.schedulerBound
 		QueryThreadCycleTime gives SyscallClass.schedulerBound
 		GetExitCodeProcess gives SyscallClass.schedulerBound
-		TerminateProcess gives SyscallClass.schedulerBound
 		CloseHandle gives SyscallClass.schedulerBound
 		SetHandleInformation gives SyscallClass.schedulerBound
 		CreateIoCompletionPort gives SyscallClass.schedulerBound
@@ -922,6 +926,13 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		// pool rather than a far end — and the register itself only arms a wait.
 		RegisterWaitForSingleObject gives SyscallClass.schedulerBound
 		UnregisterWaitEx gives SyscallClass.schedulerBound
+
+		// The process-tree kill's four. The terminate asks the kernel to end a job's processes and waits on
+		// none of them, so it holds no machine of ours.
+		CreateJobObjectW gives SyscallClass.schedulerBound
+		AssignProcessToJobObject gives SyscallClass.schedulerBound
+		TerminateJobObject gives SyscallClass.schedulerBound
+		SetLastError gives SyscallClass.schedulerBound
 	end 'k'
 end 'gtShimSyscallClassOf'
 

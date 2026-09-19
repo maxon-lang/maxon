@@ -98,7 +98,7 @@ func @sweep {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, __il_cont#50
   tryerr#54:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:415: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -113,10 +113,17 @@ func @sweep {
     x64.movRegImm32 r15, 0
     x64.jmp forhdr#40
   fill:
-    x64.leaRegRegReg rax, r15, r13
-    x64.movRegImm32 rcx, 251
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
+    x64.leaRegRegReg rcx, r15, r13
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
   __rc_chk:

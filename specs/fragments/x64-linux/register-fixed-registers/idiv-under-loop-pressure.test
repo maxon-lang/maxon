@@ -35,12 +35,20 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
   __il_body:
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rsi, 1
     x64.jmp whilehdr
   loop:
     x64.movRegImm32 rax, 135
+    x64.movRegImm rdx, 9223372036854775943
+    x64.movRegReg rdi, rsi
+    x64.xorRegImm32 rdi, rsi, -1
+    x64.orRegReg rdx, rdx, rdi
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, divovf
+  divok:
     x64.cqo
     x64.idivReg rsi
   tryok:
@@ -54,10 +62,19 @@ func @main {
     x64.jcc notEqual, ifcont
   ok:
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  divovf:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic: integer overflow\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

@@ -787,8 +787,9 @@ kind=0 code=7
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A non-zero `timeoutMs` is a KILL-AFTER deadline, which is what `stdlib/Subprocess.maxon`'s
 `Configuration.timeoutMs` documents. The child would run for many seconds; the deadline fires,
-`TerminateProcess` ends it, and the result's status kind is `timedOut` (`2`). A wait that ignored
-the deadline would take twenty seconds and answer `0`.
+`TerminateJobObject` ends the job the spawn put it in, and the result's status kind is `timedOut` (`2`). A
+wait that ignored the deadline would take twenty seconds and answer `0`. What the kill reaches BEYOND the
+direct child is `timeout-kills-the-whole-tree`'s subject, not this case's.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -831,9 +832,10 @@ kind=2
 `timeout-kills-the-child` on this lane. `/bin/sleep 5` would run for five seconds; the 300 ms deadline
 fires, the child is killed, and the result's status kind is `timedOut` (`2`). The DURATION is asserted
 beside the kind because the kind alone cannot tell a deadline that fired from one that was ignored and then
-mislabelled: a wait that ran the child to completion would report five seconds. ⚠ It is a POSIX `kill`
-rather than `TerminateProcess`, and a runtime that signalled but never reaped would report `timedOut` while
-leaving a zombie — which the leak gate does not see, but a subsequent `waitpid` in the same process would.
+mislabelled: a wait that ran the child to completion would report five seconds. ⚠ The signal is a POSIX
+`kill(-pgid, SIGKILL)` reaching the child's whole process group, whose Windows twin is `TerminateJobObject`,
+and a runtime that signalled but never reaped would report `timedOut` while leaving a zombie — which the
+leak gate does not see, but a subsequent `waitpid` in the same process would.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -869,6 +871,121 @@ end 'main'
 ```
 ```stdout
 kind=2 killedEarly=true
+
+```
+
+<!-- test: subprocess-builtins.timeout-kills-the-whole-tree -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+**A DEADLINE KILLS THE CHILD'S DESCENDANTS, NOT ONLY THE CHILD.** `timeout-kills-the-child` proves the
+direct child is ended and can say nothing about what the child had already started.
+
+⚠ **THE MARKER IS WRITTEN BY THE GRANDCHILD AND NOT BY THE CHILD, WHICH IS WHY THE SHELL IS NESTED.** A
+single `cmd /c "ping … & echo x > marker"` runs the `echo` in the DIRECT child, so ending that child alone
+already stops the write and the case would pass against a compiler that orphans every descendant. The inner
+`cmd` is a process of its own: the sleep and the write are both its work, and it survives a kill aimed only
+at its parent. It writes the marker only AFTER a sleep that outlasts the deadline many times over, so a
+marker on disk is proof a descendant outlived the kill — and this program waits longer than that sleep
+before it looks, so an absent marker cannot be one that was merely early.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	let markerName = "subp-tree-kill-windows.marker"
+	let marker = try FilePath.from(markerName) otherwise panic("the marker name is a valid relative path")
+
+	if File.exists(marker) 'stale'
+		try File.delete(marker) otherwise panic("a marker left by an earlier run must not decide this case")
+	end 'stale'
+
+	var argv = ByteArray.create()
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "cmd")
+	appendToken(argv, token: "/c")
+	appendToken(argv, token: "ping -n 4 127.0.0.1 > nul & echo x > {markerName}")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 5, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 300)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+
+	let pastTheDescendantsSleepMs = 6000
+	sleep(pastTheDescendantsSleepMs)
+	print("kind={kind} descendantSurvived={File.exists(marker)}")
+	return kind as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+kind=2 descendantSurvived=false
+
+```
+
+<!-- test: subprocess-builtins.posix-timeout-kills-the-whole-tree -->
+<!-- unsupported-targets: x64-windows -->
+`timeout-kills-the-whole-tree` on this lane, and the shell is nested here for that case's reason: the inner
+`/bin/sh` is a GRANDCHILD of this program and both the sleep and the write are its work, so a kill that
+signalled only the direct child would leave it running and it would go on to write the marker. The runtime
+puts every child it spawns in a process group of its own and signals the GROUP, so the whole tree goes down
+together.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	let markerName = "subp-tree-kill-posix.marker"
+	let marker = try FilePath.from(markerName) otherwise panic("the marker name is a valid relative path")
+
+	if File.exists(marker) 'stale'
+		try File.delete(marker) otherwise panic("a marker left by an earlier run must not decide this case")
+	end 'stale'
+
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "/bin/sh -c 'sleep 3; echo x > {markerName}'")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 300)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+
+	let pastTheDescendantsSleepMs = 6000
+	sleep(pastTheDescendantsSleepMs)
+	print("kind={kind} descendantSurvived={File.exists(marker)}")
+	return kind as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+kind=2 descendantSurvived=false
 
 ```
 
@@ -1190,6 +1307,80 @@ end 'main'
 ```
 ```stdout
 spawned=65 firstFailure=-1
+
+```
+
+<!-- test: subprocess-builtins.posix-a-detached-child-gets-a-new-session -->
+<!-- unsupported-targets: x64-windows -->
+⛔⛔ **THE TWO POSIX DETACH CASES ABOVE ASSERT THE PID AND THE SLOT, AND NEITHER ASSERTS WHAT DETACHING IS
+FOR.** A detached child must be in a SESSION OF ITS OWN, so the terminal hangup that ends the parent never
+reaches it — that is the whole of what `DETACHED_PROCESS` buys and what `setsid()`/`POSIX_SPAWN_SETSID`
+deliver.
+A child that merely led a process group of its own would answer a real pid and release its slot exactly as
+those two cases demand, and would still die with the parent's terminal.
+
+⚠ **THE SESSION IS READ FROM INSIDE THE CHILD, BECAUSE NO BUILTIN EXPOSES IT.** The detached shell asks
+`getsid` for its own session id and for its PARENT's — which is this program, since the spawn is one
+`clone` or `posix_spawn` deep and nothing double-forks — and writes the verdict to a file named for this case
+alone, the suite's `temp/` cwd being shared by twelve workers. A second, ORDINARY child reads that file
+back: an ordinary child inherits the parent's session, so the same route that would be the wrong
+answer here is what makes the file readable at all.
+
+⛔ **THE SESSION IS ASKED OF `getsid` AND NOT OF `ps`, AND THE DIFFERENCE IS THE WHOLE CASE.** macOS
+reports `sess` as a session POINTER that reads `0` for every process and knows no `sid` keyword at all,
+so a `ps` spelling compares `0` against `0` on that lane and calls a child that changed nothing a new
+session. It would fail an arm64-macos child that IS correct and pass a Linux one that is not.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function main() returns ExitCode
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+
+	var cleanup = ByteArray.create()
+	appendToken(cleanup, token: "/bin/sh")
+	appendToken(cleanup, token: "-c")
+	appendToken(cleanup, token: "rm -f posix-detach-session-probe.txt")
+	let cleanupHandle = __Builtins.subprocessSpawn(cleanup, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let cleanupResult = __Builtins.subprocessWaitCollect(cleanupHandle, 0)
+	__Builtins.subprocessResultRelease(cleanupResult)
+	__Builtins.subprocessReleaseHandle(cleanupHandle)
+
+	var probe = ByteArray.create()
+	appendToken(probe, token: "/bin/sh")
+	appendToken(probe, token: "-c")
+	appendToken(probe, token: "mine=$(python3 -c 'import os;print(os.getsid(0))'); theirs=$(python3 -c 'import os,sys;print(os.getsid(int(sys.argv[1])))' $PPID); if [ x$mine != x ] && [ x$mine != x$theirs ]; then echo differs; else echo same; fi > posix-detach-session-probe.txt")
+	let pid = __Builtins.subprocessDetach(probe, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
+
+	var reader = ByteArray.create()
+	appendToken(reader, token: "/bin/sh")
+	appendToken(reader, token: "-c")
+	appendToken(reader, token: "i=0; while [ $i -lt 100 ]; do if [ -s posix-detach-session-probe.txt ]; then cat posix-detach-session-probe.txt; rm -f posix-detach-session-probe.txt; exit 0; fi; sleep 0.1; i=$((i+1)); done; echo timeout")
+	let readerHandle = __Builtins.subprocessSpawn(reader, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
+	let readerResult = __Builtins.subprocessWaitCollect(readerHandle, 0)
+	let verdict = String.init(__Builtins.subprocessResultStdout(readerResult))
+	let newSession = verdict.startsWith("differs")
+	print("detached={pid > 0} newSession={newSession}\n")
+	__Builtins.subprocessResultRelease(readerResult)
+	__Builtins.subprocessReleaseHandle(readerHandle)
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+detached=true newSession=true
 
 ```
 

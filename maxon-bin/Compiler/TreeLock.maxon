@@ -56,9 +56,9 @@
 // ============================================================================================
 //
 // A stale lock that outlives its holder blocks every later command forever, and the orphan case is
-// GUARANTEED rather than hypothetical: **the MCP `build` tool times out at 300 s and a timed-out call
-// does not kill the process** — that is precisely how one pid came to hold this tree for 12 minutes
-// after its caller was gone.
+// GUARANTEED rather than hypothetical: the MCP `build` tool times out at `McpTools.LongRunTimeoutMs`
+// and a timed-out call does not kill the process — that is how a pid comes to hold this tree long
+// after its caller is gone.
 //
 // So the record is REWRITTEN while its holder works (`touchTreeLock`, throttled to one write every
 // `TouchIntervalMs`), and its FILE MTIME is the liveness signal: a lock nothing has touched for
@@ -418,9 +418,26 @@ function reportBusy(lockPath FilePath, record String, untouchedSeconds LockSecon
 	printError("  lock:  {lockPath.toString()}\n")
 	printError("  held by:\n{indentedRecord(record)}\n")
 	printError("  last progress: {untouchedSeconds} s ago (a live holder rewrites the record every {TouchIntervalMs} ms)\n")
+	printError("  is it still alive? {livenessProbeLine(fieldValue(record, key: PidField))}\n")
 	printError("  Wait for it to finish, or end that process. A holder that stops making progress for {AbandonedAfterSeconds} s is treated as abandoned and its lock is broken automatically, with a line saying so.\n")
 	return NothingRanExitCode
 end 'reportBusy'
+
+// The probe is PRINTED for the reader to run, never performed here: this lock's liveness is the record's
+// mtime heartbeat, and the section at the top of this file argues why testing a pid is the wrong rule. What
+// the reader needs is the one command their own host answers, spelled exactly.
+function livenessProbeLine(pid String) returns String
+	if pid.isEmpty() 'recordCarriesNoPid'
+		return "the record above carries no {PidField} field, so there is no process to probe — wait for the abandonment window instead"
+	end 'recordCarriesNoPid'
+
+	match detectHostTarget().os 'host'
+		windows then return "run `tasklist /FI \"PID eq {pid}\"` — it lists the process, or prints that no task matches"
+		linux or
+			macos then return "run `ps -p {pid}` — it lists the process, or exits 1 with no row"
+		wasi then panic("livenessProbeLine: no wasi process hosts this compiler, so none of them can hold a tree lock")
+	end 'host'
+end 'livenessProbeLine'
 
 // The record, indented under the line that introduces it. Its own trailing newline is dropped so the
 // caller's `\n` is the only one — a record ends with one, and two would put a blank line inside the

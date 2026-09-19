@@ -54,8 +54,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 56
+    x64.prologue 48
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -72,79 +71,19 @@ func @main {
     x64.movRegImm32 r12, 1
     x64.movRegImm32 r13, 99
     x64.leaRegRdata rax, [rip + __layout_Array_Int]
-  __rc_ok#43:
+  __rc_ok#41:
     x64.loadRegBaseDisp.word64 r14, [rbx + 8]
     x64.cmpRegImm32 r14, 1
     x64.jcc greaterEqual, ifcont#34
   clampHigh:
     x64.movRegReg r12, r14
   ifcont#34:
-    x64.leaRegRegImm32 r15, r14, 1
-  __il_body#61:
-    x64.cmpRegImm32 r15, 0
+    x64.leaRegRegImm32 rdx, r14, 1
+    x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic
-  __rc_ok#66:
+  __rc_ok#43:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_capacity
-    x64.cmpRegReg r15, r8
-    x64.jcc lessEqual, __il_cont#60
-  __il_body#76:
-    x64.leaRegRegReg rax, r8, r8
-    x64.cmpRegReg r15, rax
-    x64.jcc lessEqual, ifcont#70
-  __rc_ok#85:
-    x64.cmpRegImm32 r15, 4
-    x64.jcc aboveEqual, ifcont#84
-  raise#83:
-    x64.movRegImm32 rax, 4
-    x64.jmp __il_cont#81
-  ifcont#84:
-    x64.movRegReg rax, r15
-  __il_cont#81:
-    x64.movRegReg rdx, rax
-    x64.jmp __il_cont#68
-  ifcont#70:
-    x64.cmpRegImm32 r8, 256
-    x64.jcc greaterEqual, whilehdr
-  __rc_ok#91:
-    x64.cmpRegImm32 rax, 4
-    x64.jcc aboveEqual, __il_cont#87
-  raise#89:
-    x64.movRegImm32 rax, 4
-  __il_cont#87:
-    x64.movRegReg rdx, rax
-    x64.jmp __il_cont#68
-  ease:
-    x64.leaRegRegImm32 rax, r8, 768
-    x64.movRegReg rcx, rax
-    x64.sarRegImm8 rcx, rax, 63
-    x64.shrRegImm8 rcx, rcx, 62
-    x64.leaRegRegReg rax, rax, rcx
-    x64.sarRegImm8 rax, rax, 2
-    x64.leaRegRegReg r8, r8, rax
-  whilehdr:
-    x64.cmpRegReg r8, r15
-    x64.jcc less, ease
-  __rc_ok#79:
-    x64.movRegReg rdx, r8
-  __il_cont#68:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_mem_grow
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_cont#60
-  tryerr#64:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:304: Array.ensureCapacity: grow failed \xe2\x80\x94 grownCapacity never returns below the current capacity\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __il_cont#60:
+    x64.callDirect __managed_resize
     x64.cmpRegReg r12, r14
     x64.jcc greaterEqual, ifcont#38
   shift:
@@ -156,11 +95,10 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, ifcont#38
   tryerr#37:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Array.maxon:382: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within ensured capacity\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:275: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within the resized length\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -194,7 +132,7 @@ func @main {
     x64.jcc notEqual, __im_slow#46
   __im_store#54:
     x64.storeBaseIndexScaleReg.word64 [rax + r12*8 + 0], r13
-    x64.jmp tryok#39
+    x64.jmp __il_cont
   __im_stride:
     x64.cmpRegImm32 rax, 1
     x64.jcc notEqual, __im_slow#46
@@ -222,45 +160,26 @@ func @main {
   __im_store#59:
     x64.leaRegRegReg rax, rax, r12
     x64.storeBaseDispReg.byte [rax + 0], r13
-    x64.jmp tryok#39
+    x64.jmp __il_cont
   __im_slow#46:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r13
     x64.callDirect __managed_mem_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#39
+    x64.jcc equal, __il_cont
   tryerr#40:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Array.maxon:387: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and capacity ensured\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Array.maxon:280: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and resized to len + 1\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#39:
-    x64.leaRegRegImm32 rdx, r14, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_set_length
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_cont#31
-  tryerr#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at Array.maxon:391: Array.insert: setLength OOB \xe2\x80\x94 capacity ensured for len+1\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __il_cont#31:
+  __il_cont:
     x64.movRegImm32 rdx, 1
     x64.leaRegRdata rax, [rip + __layout_Array_Int]
     x64.movRegReg rcx, rbx
@@ -272,8 +191,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -288,8 +206,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -305,8 +222,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -368,8 +284,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -384,8 +299,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -400,8 +314,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -413,8 +326,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -422,11 +334,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at Array.maxon:299: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:271: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 56
-    x64.popReg r15
+    x64.epilogue 48
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12

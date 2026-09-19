@@ -161,7 +161,7 @@ func @build {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, __il_cont
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:415: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -174,10 +174,17 @@ func @build {
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   fill:
-    x64.leaRegRegReg rax, rbx, r13
-    x64.movRegImm32 rcx, 251
-    x64.movRegImm32 rdx, 0
-    x64.divReg rcx
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#9
   __rc_chk#10:
@@ -420,7 +427,7 @@ func @main {
   __il_body#38:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callMem [rax + 24]
+    x64.callMem [rax + 40]
     x64.movRegReg r14, r8
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
@@ -510,11 +517,17 @@ func @main {
     x64.movRegReg rcx, r8
   tryok:
     x64.loadRegSlot rax, slot2
-    x64.leaRegRegReg rax, rax, r12
-    x64.movRegImm32 rsi, 251
-    x64.movRegImm32 rdx, 0
-    x64.divReg rsi
-    x64.cmpRegReg rcx, rdx
+    x64.leaRegRegReg rsi, rax, r12
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rsi
+    x64.movRegReg rax, rsi
+    x64.subRegReg rax, rsi, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.subRegReg rsi, rsi, rax
+    x64.cmpRegReg rcx, rsi
     x64.jcc equal, critsplit#45
   value:
     x64.loadRegSlot rax, slot1
@@ -577,7 +590,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at Array.maxon:594: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at Array.maxon:497: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88

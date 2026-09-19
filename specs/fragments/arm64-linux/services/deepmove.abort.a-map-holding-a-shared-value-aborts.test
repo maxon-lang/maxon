@@ -133,16 +133,18 @@ func @main {
   __il_cont#10:
     arm64.movImm x23, 0
     arm64.movImm x24, 0
-    arm64.movImm x0, 48
+    arm64.movImm x25, 0
+    arm64.movImm x0, 56
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x25, x0
-    arm64.storeBaseDispReg.word64 [x25 + 0], x20
-    arm64.storeBaseDispReg.word64 [x25 + 8], x19
-    arm64.storeBaseDispReg.word64 [x25 + 16], x21
-    arm64.storeBaseDispReg.word64 [x25 + 24], x22
-    arm64.storeBaseDispReg.word64 [x25 + 32], x23
-    arm64.storeBaseDispReg.word64 [x25 + 40], x24
+    arm64.movRegReg x26, x0
+    arm64.storeBaseDispReg.word64 [x26 + 0], x20
+    arm64.storeBaseDispReg.word64 [x26 + 8], x19
+    arm64.storeBaseDispReg.word64 [x26 + 16], x21
+    arm64.storeBaseDispReg.word64 [x26 + 24], x22
+    arm64.storeBaseDispReg.word64 [x26 + 32], x23
+    arm64.storeBaseDispReg.word64 [x26 + 40], x24
+    arm64.storeBaseDispReg.word64 [x26 + 48], x25
   __il_body#6:
     arm64.movImm x19, 1
     arm64.movImm x0, 8
@@ -167,8 +169,8 @@ func @main {
     arm64.add x0, x24, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x26, x0
-    arm64.add x27, x26, 56
+    arm64.movRegReg x25, x0
+    arm64.add x27, x25, 56
     arm64.movRegReg x0, x27
     arm64.movRegReg x1, x19
     arm64.movRegReg x2, x21
@@ -179,12 +181,12 @@ func @main {
     arm64.movRegReg x2, x22
     arm64.bl __str_copy
     arm64.add x0, x19, x22
-    arm64.storeBaseDispReg.word64 [x26 + 0], x27
-    arm64.storeBaseDispReg.word64 [x26 + 8], x24
+    arm64.storeBaseDispReg.word64 [x25 + 0], x27
+    arm64.storeBaseDispReg.word64 [x25 + 8], x24
     arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
     arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
     arm64.movRegReg x0, x20
@@ -193,8 +195,8 @@ func @main {
     arm64.leaRdata x3, __layout_Map_String_Cell
     arm64.leaRdata x4, __witness_String.Hashable
     arm64.leaRdata x5, __witness_String.Equatable
-    arm64.movRegReg x0, x25
-    arm64.movRegReg x1, x26
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x25
     arm64.bl Map.upsert
   __il_body#7:
     arm64.movImm x19, 0
@@ -213,15 +215,17 @@ func @main {
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.storeBaseDispReg.word64 [x21 + 0], x19
-    arm64.movRegReg x0, x25
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x26
     arm64.bl __sole_Map_String_Cell
+    arm64.bl __mm_walk_settle
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x25
+    arm64.storeBaseDispReg.word64 [x1 + 8], x26
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.bl __mbox_send
     arm64.loadRegBaseDisp.word64 x19, [x20 + 0]
@@ -287,7 +291,7 @@ func @Svc.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_73
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_71
   __shutdown:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
@@ -397,7 +401,7 @@ func @Svc.__loop {
     arm64.bl __mm_decref
     arm64.b serve
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_35  ; "panic at Map.maxon:190: Range check failed: value outside typealias 'EntryCount'\x0a"
+    arm64.leaRdata x0, __str_blob_35  ; "panic at Map.maxon:223: Range check failed: value outside typealias 'EntryCount'\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot3
     arm64.loadRegSlot x20, slot4
@@ -419,7 +423,7 @@ func @Svc.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_74
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop] @__jumptable_72
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0

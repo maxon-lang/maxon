@@ -113,7 +113,7 @@ normally. It must report the exit code IT chose, **42**.
 terminates when a `waitWithTimeout` deadline fires, so a `pollExit` implemented on top of that path — the
 obvious wrong implementation, and the reason this member is not a wrapper — turns this case red with
 `code=1` rather than merely failing to answer. MEASURED against THIS child: `waitWithTimeout(50)` throws
-`timed out after 50ms` and a following `wait()` answers **1**, so the two outcomes really are
+`SubprocessError.timeout`, whose rendering opens `timed out after 50ms`, and a following `wait()` answers **1**, so the two outcomes really are
 distinguishable by the number and not only in principle. `exitedSeen` staying `-1` is the second half of
 the same claim: not one of the five polls claimed an exit that had not happened.
 ```maxon

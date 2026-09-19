@@ -14,6 +14,7 @@ let TypeErrorSource = "typealias Byte = int(0 to u8.max)\n\nfunction main() retu
 let TypeErrorCode = "E3005"
 let WarmRebuildGateName = "verify-warm-rebuild"
 let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let StdlibDirName = "stdlib"
 
 test 'check answers a type error with its code, and writes nothing'
 	let broken = stagedProgram(TypeErrorDirName, fileName: ProgramFileName, source: TypeErrorSource)
@@ -32,4 +33,12 @@ test 'check answers a type error with its code, and writes nothing'
 	try Expect.isFalse(toolCallIsError(wellFormedAnswer), message: "`check` over a well-formed program was answered as an error: {wellFormedText}")
 	try Expect.isFalse(wellFormedText.contains(WarmRebuildGateName) or brokenText.contains(WarmRebuildGateName), message: "`check` answered with the warm-rebuild gate's run rather than a type check: {wellFormedText}")
 	try Expect.isEmpty(filesWrittenBeside(wellFormed, dir: try wellFormed.parent() otherwise panic("a staged program sits in a directory")), message: "`check` over a well-formed program wrote files.")
+
+	// `check` compiles IN the server process, so it answers about the SERVER's own stdlib and can honour no
+	// `repoRoot`. Both answers therefore have to say which compiler and which library tier answered, or a
+	// verdict read in a worktree cannot be attributed to a tree at all.
+	try Expect.equal(payloadString(wellFormedAnswer, key: "executable"), expected: testedCompilerPath().toString())
+	try Expect.equal(payloadString(brokenAnswer, key: "executable"), expected: testedCompilerPath().toString())
+	try Expect.isTrue(payloadString(wellFormedAnswer, key: "stdlibRoot").endsWith(StdlibDirName), message: "`check` did not name the stdlib root it compiled against: {wellFormedText}")
+	try Expect.isTrue(payloadString(brokenAnswer, key: "stdlibRoot").endsWith(StdlibDirName), message: "a REFUSED `check` did not name the stdlib root it compiled against: {brokenText}")
 end 'check answers a type error with its code, and writes nothing'

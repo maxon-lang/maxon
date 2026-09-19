@@ -97,6 +97,42 @@ data {
   __slab_state@16 = i64 0
 }
 
+func @refDiv {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 2
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x16, 1000000
+    arm64.cmp x1, x16
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movImm x2, 9223372036854775808
+    arm64.eor x2, x0, x2
+    arm64.movImm x16, 18446744073709551615
+    arm64.eor x3, x1, x16
+    arm64.orr x2, x2, x3
+    arm64.cmp x2, 0
+    arm64.b.eq divovf
+  divok:
+    arm64.sdiv x0, x0, x1
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT.test:6: Range check failed: value outside typealias 'PosDivisor'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  divovf:
+    arm64.leaRdata x0, __str_blob_0  ; "panic: integer overflow\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
 func @refMod {
   entry:
     arm64.prologue 16
@@ -116,7 +152,7 @@ func @refMod {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT.test:10: Range check failed: value outside typealias 'PosDivisor'\x0a"
+    arm64.leaRdata x0, __str_blob_6  ; "panic at the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT.test:10: Range check failed: value outside typealias 'PosDivisor'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -179,7 +215,7 @@ func @neighbourhood {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_7  ; "panic at the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT.test:20: Range check failed: value outside typealias 'PosDivisor'\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT.test:20: Range check failed: value outside typealias 'PosDivisor'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -191,6 +227,7 @@ func @neighbourhood {
 func @main {
   entry:
     arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -201,19 +238,16 @@ func @main {
     arm64.b forhdr#1
   three:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#57:
-    arm64.movImm x1, 6148914691236517206
-    arm64.smulh x1, x1, x0
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#68:
-    arm64.movImm x2, 6148914691236517206
-    arm64.smulh x2, x2, x0
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#64:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 6148914691236517206
+    arm64.smulh x0, x0, x21
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#6
   divThree:
     arm64.movImm x20, 1
@@ -223,18 +257,20 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#6:
-    arm64.movImm x1, 6148914691236517206
-    arm64.smulh x1, x1, x0
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-    arm64.arm64AddLsl x1, x1, x1, lsl #1
-    arm64.sub x21, x0, x1
+    arm64.movImm x0, 6148914691236517206
+    arm64.smulh x0, x0, x21
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
+    arm64.arm64AddLsl x0, x0, x0, lsl #1
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 3
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#3
   modThree:
     arm64.movImm x20, 2
@@ -244,6 +280,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#3:
@@ -262,21 +299,17 @@ func @main {
     arm64.b forhdr#9
   seven:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#58:
-    arm64.movImm x1, 5270498306774157605
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 1
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#75:
-    arm64.movImm x2, 5270498306774157605
-    arm64.smulh x2, x2, x0
-    arm64.asr x2, x2, 1
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#71:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 5270498306774157605
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 1
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#14
   divSeven:
     arm64.movImm x20, 3
@@ -286,20 +319,22 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#14:
-    arm64.movImm x1, 5270498306774157605
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 1
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
+    arm64.movImm x0, 5270498306774157605
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 1
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.movImm x16, 7
-    arm64.mul x1, x1, x16
-    arm64.sub x21, x0, x1
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 7
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#11
   modSeven:
     arm64.movImm x20, 4
@@ -309,6 +344,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#11:
@@ -327,21 +363,17 @@ func @main {
     arm64.b forhdr#17
   ten:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#59:
-    arm64.movImm x1, 7378697629483820647
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 2
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#82:
-    arm64.movImm x2, 7378697629483820647
-    arm64.smulh x2, x2, x0
-    arm64.asr x2, x2, 2
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#78:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 7378697629483820647
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 2
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#22
   divTen:
     arm64.movImm x20, 5
@@ -351,20 +383,22 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#22:
-    arm64.movImm x1, 7378697629483820647
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 2
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
+    arm64.movImm x0, 7378697629483820647
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 2
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.movImm x16, 10
-    arm64.mul x1, x1, x16
-    arm64.sub x21, x0, x1
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 10
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#19
   modTen:
     arm64.movImm x20, 6
@@ -374,6 +408,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#19:
@@ -392,23 +427,18 @@ func @main {
     arm64.b forhdr#25
   fifteen:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#60:
-    arm64.movImm x1, 9838263505978427529
-    arm64.smulh x1, x1, x0
-    arm64.add x1, x1, x0
-    arm64.asr x1, x1, 3
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#89:
-    arm64.movImm x2, 9838263505978427529
-    arm64.smulh x2, x2, x0
-    arm64.add x2, x2, x0
-    arm64.asr x2, x2, 3
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#85:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 9838263505978427529
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 15
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#30
   divFifteen:
     arm64.movImm x20, 7
@@ -418,21 +448,23 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#30:
-    arm64.movImm x1, 9838263505978427529
-    arm64.smulh x1, x1, x0
-    arm64.add x1, x1, x0
-    arm64.asr x1, x1, 3
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
+    arm64.movImm x0, 9838263505978427529
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.movImm x16, 15
-    arm64.mul x1, x1, x16
-    arm64.sub x21, x0, x1
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 15
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#27
   modFifteen:
     arm64.movImm x20, 8
@@ -442,6 +474,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#27:
@@ -460,21 +493,17 @@ func @main {
     arm64.b forhdr#33
   twentyEight:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#61:
-    arm64.movImm x1, 5270498306774157605
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 3
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#96:
-    arm64.movImm x2, 5270498306774157605
-    arm64.smulh x2, x2, x0
-    arm64.asr x2, x2, 3
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#92:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 5270498306774157605
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 28
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#38
   divTwentyEight:
     arm64.movImm x20, 9
@@ -484,20 +513,22 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#38:
-    arm64.movImm x1, 5270498306774157605
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 3
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
+    arm64.movImm x0, 5270498306774157605
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 3
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.movImm x16, 28
-    arm64.mul x1, x1, x16
-    arm64.sub x21, x0, x1
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 28
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#35
   modTwentyEight:
     arm64.movImm x20, 10
@@ -507,6 +538,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#35:
@@ -525,23 +557,18 @@ func @main {
     arm64.b forhdr#41
   hundred:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#62:
-    arm64.movImm x1, 11805916207174113035
-    arm64.smulh x1, x1, x0
-    arm64.add x1, x1, x0
-    arm64.asr x1, x1, 6
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#103:
-    arm64.movImm x2, 11805916207174113035
-    arm64.smulh x2, x2, x0
-    arm64.add x2, x2, x0
-    arm64.asr x2, x2, 6
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#99:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 11805916207174113035
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 6
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 100
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#46
   divHundred:
     arm64.movImm x20, 11
@@ -551,21 +578,23 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#46:
-    arm64.movImm x1, 11805916207174113035
-    arm64.smulh x1, x1, x0
-    arm64.add x1, x1, x0
-    arm64.asr x1, x1, 6
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
+    arm64.movImm x0, 11805916207174113035
+    arm64.smulh x0, x0, x21
+    arm64.add x0, x0, x21
+    arm64.asr x0, x0, 6
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.movImm x16, 100
-    arm64.mul x1, x1, x16
-    arm64.sub x21, x0, x1
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 100
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#43
   modHundred:
     arm64.movImm x20, 12
@@ -575,6 +604,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#43:
@@ -593,21 +623,17 @@ func @main {
     arm64.b forhdr#49
   thousand:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x20*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x21, [x0 + x20*8 + 0]
   __im_cont#63:
-    arm64.movImm x1, 2361183241434822607
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 7
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
-  __rc_ok#110:
-    arm64.movImm x2, 2361183241434822607
-    arm64.smulh x2, x2, x0
-    arm64.asr x2, x2, 7
-    arm64.lsr x3, x2, 63
-    arm64.add x2, x2, x3
-  __il_cont#106:
-    arm64.cmp x1, x2
+    arm64.movImm x0, 2361183241434822607
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 7
+    arm64.lsr x1, x0, 63
+    arm64.add x22, x0, x1
+    arm64.movImm x1, 1000
+    arm64.movRegReg x0, x21
+    arm64.bl refDiv
+    arm64.cmp x22, x0
     arm64.b.eq ifcont#54
   divThousand:
     arm64.movImm x20, 13
@@ -617,20 +643,22 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   ifcont#54:
-    arm64.movImm x1, 2361183241434822607
-    arm64.smulh x1, x1, x0
-    arm64.asr x1, x1, 7
-    arm64.lsr x2, x1, 63
-    arm64.add x1, x1, x2
+    arm64.movImm x0, 2361183241434822607
+    arm64.smulh x0, x0, x21
+    arm64.asr x0, x0, 7
+    arm64.lsr x1, x0, 63
+    arm64.add x0, x0, x1
     arm64.movImm x16, 1000
-    arm64.mul x1, x1, x16
-    arm64.sub x21, x0, x1
+    arm64.mul x0, x0, x16
+    arm64.sub x22, x21, x0
     arm64.movImm x1, 1000
+    arm64.movRegReg x0, x21
     arm64.bl refMod
-    arm64.cmp x21, x0
+    arm64.cmp x22, x0
     arm64.b.eq forstep#51
   modThousand:
     arm64.movImm x20, 14
@@ -640,6 +668,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
   forstep#51:
@@ -655,6 +684,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
 }

@@ -381,7 +381,7 @@ The 'is'/'is not' reference-identity operator is applied to a primitive, which h
 
 ### E3070 — `semanticBorrowConflict`
 
-borrow conflict -- a collection was mutated (e.g. `arr.push(x)`) while a reference into its backing buffer is still live (e.g. `let s = try arr.get(0) ...`). A growth could reallocate the buffer and dangle the outstanding reference. Emitted by the Maxon-tier `runMaxonBorrowCheck` pass.
+borrow conflict -- a collection was mutated (e.g. `arr.push(x)`) while a reference into its backing buffer is still live (e.g. `let s = try arr.get(0) ...`). A growth could reallocate the buffer and dangle the outstanding reference. Passing that collection to a function that reassigns its parameter counts as such a mutation: the reassignment drops the record the caller's storage held, from another frame, which frees exactly what the outstanding reference points into. Emitted by the Maxon-tier `runMaxonBorrowCheck` pass.
 
 ### E3071 — `semanticUnreachableCode`
 

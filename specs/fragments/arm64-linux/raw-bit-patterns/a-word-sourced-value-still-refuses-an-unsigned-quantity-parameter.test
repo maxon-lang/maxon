@@ -1,0 +1,35 @@
+// Test: a-word-sourced-value-still-refuses-an-unsigned-quantity-parameter
+typealias Word = bits(64)
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	let laundered = opaque(0) - 3
+	print("{show(laundered as Word as Count)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_state@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at a-word-sourced-value-still-refuses-an-unsigned-quantity-parameter.test:10: Range check failed: value outside typealias 'Count'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

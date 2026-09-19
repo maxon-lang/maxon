@@ -97,8 +97,11 @@ func @main {
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
   __il_cont:
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __sole_Box_int
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.leaRegFunc rcx, [rip + Box_int.__loop]
     x64.leaRegFunc rax, [rip + Box.__abandon]
     x64.movRegReg rdx, r12
@@ -176,7 +179,7 @@ func @Box_int.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=peek] @__jumptable_7
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=peek] @__jumptable_9
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -234,7 +237,7 @@ func @Box.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=peek] @__jumptable_8
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=peek] @__jumptable_10
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

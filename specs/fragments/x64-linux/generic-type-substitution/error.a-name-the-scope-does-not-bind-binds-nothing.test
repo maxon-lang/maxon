@@ -26,13 +26,16 @@ end 'Outer'
 typealias O = Outer with Integer
 typealias IntArray = Array with Integer
 
+function takes(_ Inner) returns ExitCode
+	return 7
+end 'takes'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(7)
 	let o = O.create(a)
-	let w = o.wrap()
-	return (try w.first() otherwise panic("Inner binds nothing")) as ExitCode
+	return takes(o.wrap())
 end 'main'
 ---
 CompilerError:
-error E3005: <fragment>:22:16: argument type mismatch for 'v': expected 'Inner.UArr', got 'Outer.OArr'
+error E3162: <fragment>:22:16: 'Inner' is named without type arguments inside 'type Outer uses T', where its parameter 'U' binds to nothing, so 'Inner.make' may not be handed a value typed at a parameter of 'Outer': no instance of 'Inner' describes what it would hold. Name the instance with a typealias, e.g. 'typealias InnerInstance = Inner with T'

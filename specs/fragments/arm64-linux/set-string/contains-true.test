@@ -52,15 +52,17 @@ func @main {
   __il_cont#66:
     arm64.movImm x22, 0
     arm64.movImm x23, 0
-    arm64.movImm x0, 40
+    arm64.movImm x24, 0
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x24, x0
-    arm64.storeBaseDispReg.word64 [x24 + 0], x19
-    arm64.storeBaseDispReg.word64 [x24 + 8], x20
-    arm64.storeBaseDispReg.word64 [x24 + 16], x21
-    arm64.storeBaseDispReg.word64 [x24 + 24], x22
-    arm64.storeBaseDispReg.word64 [x24 + 32], x23
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x19
+    arm64.storeBaseDispReg.word64 [x25 + 8], x20
+    arm64.storeBaseDispReg.word64 [x25 + 16], x21
+    arm64.storeBaseDispReg.word64 [x25 + 24], x22
+    arm64.storeBaseDispReg.word64 [x25 + 32], x23
+    arm64.storeBaseDispReg.word64 [x25 + 40], x24
   __il_cont#64:
     arm64.leaRdata x0, __str_rec_2  ; "alice"
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
@@ -84,7 +86,7 @@ func @main {
     arm64.leaRdata x2, __layout_Set_String
     arm64.leaRdata x3, __witness_String.Hashable
     arm64.leaRdata x4, __witness_String.Equatable
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.movRegReg x1, x21
     arm64.bl Set.insert
     arm64.leaRdata x0, __str_rec_3  ; "bob"
@@ -109,7 +111,7 @@ func @main {
     arm64.leaRdata x2, __layout_Set_String
     arm64.leaRdata x3, __witness_String.Hashable
     arm64.leaRdata x4, __witness_String.Equatable
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.movRegReg x1, x21
     arm64.bl Set.insert
     arm64.leaRdata x19, __str_rec_3  ; "bob"
@@ -117,7 +119,7 @@ func @main {
     arm64.leaRdata x1, __witness_String.Hashable
     arm64.leaRdata x20, __witness_String.Equatable
   __il_body#4:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 32]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
     arm64.cmp x0, 0
     arm64.b.ne ifcont#6
   empty_check:
@@ -125,18 +127,18 @@ func @main {
     arm64.b __il_cont#3
   ifcont#6:
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
     arm64.blr x16
     arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 32]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
     arm64.sub x22, x0, 1
     arm64.movRegReg x0, x21
     arm64.bl spreadHash
     arm64.and x23, x0, x22
-    arm64.movImm x25, 0
+    arm64.movImm x24, 0
     arm64.b whilehdr
   probe:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 8]
     arm64.cmp x23, 0
     arm64.b.lt __rc_panic
   __rc_ok#41:
@@ -212,7 +214,7 @@ func @main {
   matchcont#28:
     arm64.cbz x0, ifcont#40
   check_found:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 16]
   __rc_ok#43:
     arm64.movRegReg x1, x23
     arm64.bl __managed_get
@@ -224,7 +226,7 @@ func @main {
     arm64.cmp x0, x21
     arm64.b.ne ifcont#40
   hash_match:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
   __rc_ok#45:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
@@ -271,7 +273,7 @@ func @main {
     arm64.b.ne ifcont#40
   get_existing:
     arm64.movRegReg x1, x19
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
     arm64.blr x16
     arm64.cbz x0, ifcont#40
   found:
@@ -280,11 +282,11 @@ func @main {
   ifcont#40:
     arm64.add x0, x23, 1
     arm64.and x0, x0, x22
-    arm64.add x25, x25, 1
+    arm64.add x24, x24, 1
     arm64.movRegReg x23, x0
   whilehdr:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 32]
-    arm64.cmp x25, x0
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
+    arm64.cmp x24, x0
     arm64.b.lt probe
     arm64.b whileexit
   matchdead#25:
@@ -295,7 +297,7 @@ func @main {
     arm64.cbz x0, ifcont#2
   yes:
     arm64.movImm x19, 1
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl __destruct_Set_String
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
@@ -309,7 +311,7 @@ func @main {
     arm64.ret
   ifcont#2:
     arm64.movImm x19, 0
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl __destruct_Set_String
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
@@ -322,7 +324,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_30  ; "panic at Set.maxon:212: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_30  ; "panic at Set.maxon:224: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

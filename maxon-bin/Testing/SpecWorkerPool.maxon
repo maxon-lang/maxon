@@ -319,7 +319,8 @@ let TestProgressDeadlineMs = SpecSpawnTimeoutMs + SlowCompileGraceMs
 //
 // ⚠ **`waitWithTimeout` IS THE ONLY WAY THIS HARNESS CAN TERMINATE A CHILD, AND ITS EXPIRY IS EXACTLY
 // THE WANTED BEHAVIOUR**: *"throws `SubprocessError.timeout` if the timeout fires (the runtime forcibly
-// terminates the child in that case)"*. `__Builtins.subprocessKill` is deliberately NOT among the
+// terminates the child's whole process tree in that case)"* — so a worker that spawned test binaries of its
+// own takes them with it. `__Builtins.subprocessKill` is deliberately NOT among the
 // intrinsics the compiler emits (`Parser.maxon`: an intrinsic no program can reach is an entry point no spec
 // can exercise), and adding one to reach a kill this call already performs would be a second door onto
 // one act.
@@ -1541,8 +1542,9 @@ type PersistentWorkerHandle
 	// hangs the suite HERE, past the watchdog's reach, with the run's every verdict already computed
 	// and no symptom but a gate that never returns. That is precisely the failure this slice exists
 	// to abolish, and it does not stop being one because it happens two lines after the loop.
-	// `waitWithTimeout` forcibly terminates the child when the deadline fires, so the timeout leaves
-	// no orphan; `shutdownPool` turns the throw into a named per-worker error and a non-zero suite.
+	// `waitWithTimeout` forcibly terminates the child's whole process tree when the deadline fires, so the
+	// timeout leaves no orphan — not the worker, and not the test binaries it had running;
+	// `shutdownPool` turns the throw into a named per-worker error and a non-zero suite.
 	function requestExitAndWait() returns ExitInt throws SubprocessError
 		try child.writeStdinLine(ExitCommand)
 		child.closeStdin()
@@ -1553,9 +1555,10 @@ type PersistentWorkerHandle
 	// WITH THE STATUS IT LEFT.**
 	//
 	// `waitWithTimeout` IS the kill: *"throws `SubprocessError.timeout` if the timeout fires (the
-	// runtime forcibly terminates the child in that case)"*. An already-exited child answers with its
-	// exit code before the grace elapses and nothing is terminated; a live one is. (`__Builtins.subprocessKill`
-	// is deliberately not among the compiler's intrinsics; see `JobKillGraceMs`.)
+	// runtime forcibly terminates the child's whole process tree in that case)"*. An already-exited child
+	// answers with its exit code before the grace elapses and nothing is terminated; a live one is, and so is
+	// anything it started. (`__Builtins.subprocessKill` is deliberately not among the compiler's intrinsics;
+	// see `JobKillGraceMs`.)
 	//
 	// ⚠ **THE ANSWER IS THE WORKER'S OWN ONLY WHERE THE WAIT DID NOT HAVE TO KILL IT.** A grace that
 	// expires terminates the child, and the code such a child then reports is the one the KILL named —

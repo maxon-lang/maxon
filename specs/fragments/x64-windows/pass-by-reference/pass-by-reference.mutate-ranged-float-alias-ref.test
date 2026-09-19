@@ -1,0 +1,161 @@
+// Test: pass-by-reference.mutate-ranged-float-alias-ref
+
+typealias Weight = float(0.0 to 1000.0)
+
+var scale = 1.0 as Weight
+
+function setTo99(w Weight)
+	w = 99.0
+end 'setTo99'
+
+type Box
+	export var w as Weight
+
+	static function create() returns Self
+		return Self{w: 1.0}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.create()
+	setTo99(b.w)
+	setTo99(scale)
+	print("{b.w} {scale}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_scale@0 = f64 1
+  __slab_arena_list@8 = i64 0
+  __slab_arena_map_l1@16 = i64 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+}
+
+func @setTo99 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 xmm0, [rcx + 0]
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_1000]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, __rc_panic
+  __rc_ok:
+    x64.movsdRegRip xmm0, [rip + __fconst_99]
+    x64.storeBaseDispReg.word64 [rcx + 0], xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_205]  ; "panic at pass-by-reference.mutate-ranged-float-alias-ref.test:7: Range check failed: value outside typealias 'Weight'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.storeSlotReg slot7, xmm6
+  __il_body#3:
+    x64.movsdRegRip xmm6, [rip + __fconst_1]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.storeBaseDispReg.word64 [rbx + 0], xmm6
+  __il_cont#2:
+    x64.movRegReg rcx, rbx
+    x64.callDirect setTo99
+    x64.leaRegGlobal rcx, __data_scale
+    x64.callDirect setTo99
+    x64.loadRegBaseDisp.word64 xmm0, [rbx + 0]
+    x64.callDirect __float_toString
+    x64.storeSlotReg slot1, r8
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_93]  ; " "
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegGlobal rax, __data_scale
+    x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
+    x64.callDirect __float_toString
+    x64.storeSlotReg slot2, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot6, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot5, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot4, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+  __il_body#4:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.loadRegSlot xmm6, slot7
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

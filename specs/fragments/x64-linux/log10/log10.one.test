@@ -13,22 +13,57 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
   one:
-    x64.movsdRegRip xmm0, [rip + __fconst_0]
-  __il_cont#5:
-    x64.movsdRegRip xmm1, [rip + __fconst_2.302585092994046]
-    x64.divsdRegReg xmm0, xmm0, xmm1
-  __il_cont#3:
     x64.movsdRegRip xmm1, [rip + __fconst_0]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont
-  fordered:
-    x64.jcc notEqual, ifcont
+  __il_cont#15:
+    x64.movsdRegRip xmm2, [rip + __fconst_2.302585092994046]
+    x64.divsdRegReg xmm1, xmm1, xmm2
+    x64.movsdRegRip xmm2, [rip + __fconst_-0.5]
+    x64.ucomisdRegReg xmm1, xmm2
+    x64.movRegImm32 rax, 0
+    x64.jcc belowEqual, scmerge
+  andrhs:
+    x64.movsdRegRip xmm2, [rip + __fconst_22.5]
+    x64.ucomisdRegReg xmm2, xmm1
+    x64.setccReg above, rax
+  scmerge:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_cont#3
+  ifcont#8:
+    x64.roundsdRegReg.nearestTiesToEven xmm2, xmm1
+    x64.cvttsd2siRegReg rax, xmm2
+    x64.movsdRegRip xmm2, [rip + __fconst_1]
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr
+  raise:
+    x64.movsdRegRip xmm3, [rip + __fconst_10]
+    x64.mulsdRegReg xmm2, xmm2, xmm3
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr:
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, raise
+  forexit:
+    x64.ucomisdRegReg xmm0, xmm2
+    x64.jcc parity, __il_cont#3
+  fordered#53:
+    x64.jcc notEqual, __il_cont#3
+  exactPower:
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.movRegReg xmm1, xmm0
+  __il_cont#3:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc parity, ifcont#2
+  fordered#52:
+    x64.jcc notEqual, ifcont#2
   check:
     x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret

@@ -107,6 +107,293 @@ end 'main'
 99
 ```
 
+<!-- test: pass-by-reference.mutate-module-global-ref -->
+### A module-level `var` at a by-reference position is written
+Every parameter is passed by reference, and a module-level `var` is storage with an address like any
+other. It is not cell-resident the way a local `var` is, so the write has to reach the global itself.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0
+
+function setTo99(x Integer)
+	x = 99
+end 'setTo99'
+
+function main() returns ExitCode
+	setTo99(counter)
+	print("{counter}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99
+```
+
+<!-- test: pass-by-reference.mutate-self-field-ref -->
+### A self field at a by-reference position is written
+A field is storage the receiver owns, reached as an offset from its base. Handing one to a
+by-reference parameter must write the field, not a copy of it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setTo99(x Integer)
+	x = 99
+end 'setTo99'
+
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump()
+		setTo99(self.n)
+	end 'bump'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	c.bump()
+	print("{c.value()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99
+```
+
+<!-- test: pass-by-reference.mutate-struct-binding-field-ref -->
+### A field of an ordinary struct binding at a by-reference position is written
+`self.n` is not the only field that reaches a by-reference parameter. A field of any mutable struct
+binding is storage with an address, and the write has to reach the field itself.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setTo99(x Integer)
+	x = 99
+end 'setTo99'
+
+type Point
+	export var x as Integer
+
+	static function create() returns Self
+		return Self{x: 0}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create()
+	p.x = 1
+	setTo99(p.x)
+	print("{p.x}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99
+```
+
+<!-- test: pass-by-reference.mutate-nested-field-ref -->
+### A field reached through a CHAIN is written, from either kind of base
+One hop is not a special case. A chain names storage exactly as a single field does, and the address
+handed over is the one the matching assignment would store through — so the rule is the store door's:
+the last field decides, and an intermediate `let` fixes only which record is reached, never whether
+its own fields may be written.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setTo99(x Integer)
+	x = 99
+end 'setTo99'
+
+type Inner
+	export var b as Integer
+
+	static function create() returns Self
+		return Self{b: 0}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var a as Inner
+
+	static function create() returns Self
+		return Self{a: Inner.create()}
+	end 'create'
+
+	export function bumpOwn()
+		setTo99(self.a.b)
+	end 'bumpOwn'
+
+	export function inner() returns Integer
+		return self.a.b
+	end 'inner'
+end 'Outer'
+
+function main() returns ExitCode
+	var p = Outer.create()
+	p.a.b = 1
+	setTo99(p.a.b)
+
+	var q = Outer.create()
+	q.a.b = 2
+	q.bumpOwn()
+
+	print("{p.a.b} {q.inner()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99 99
+```
+
+<!-- test: pass-by-reference.mutate-managed-module-global-ref -->
+### A MANAGED module-level `var` at a by-reference position is written
+The slot handed over holds a record, so the callee's reassignment releases what the global was holding
+and stores what it built. The caller reads the new container out of the same slot.
+```maxon
+
+typealias StringArray = Array with String
+
+var pool = ["alpha"]
+
+function refill(items StringArray)
+	items = StringArray.create()
+	items.push("beta")
+	items.push("gamma")
+end 'refill'
+
+function main() returns ExitCode
+	refill(pool)
+	let first = try pool.get(0) otherwise "?"
+	print("{pool.count()} {first}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 beta
+```
+
+<!-- test: pass-by-reference.borrowed-managed-global-to-reassigning-param-error -->
+### Handing a BORROWED managed global to a reassigning parameter is E3070
+The reassignment inside the callee drops the record the caller's slot was holding, freeing every element
+borrowed out of it — the same write `pool = StringArray.create()` performs at the caller, and refused on
+the same terms. The hand-over of real storage is what makes the two spellings one write: a callee that
+rebinds a by-reference parameter of a container type writes that argument's storage, which is the column
+E3070 settles every call site against.
+```maxon
+
+typealias StringArray = Array with String
+
+var pool = ["hello world this is a long string for heap allocation"]
+
+function wipe(items StringArray)
+	items = StringArray.create()
+end 'wipe'
+
+function main() returns ExitCode
+	let held = try pool.get(0) otherwise ""
+	wipe(pool)
+	print("[{held}]")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/pass-by-reference/pass-by-reference.borrowed-managed-global-to-reassigning-param-error.test:13:2: cannot mutate 'pool' via 'wipe' while it is borrowed by 'held' (borrowed at line 12)
+```
+
+<!-- test: pass-by-reference.mutate-ranged-float-alias-ref -->
+### A RANGED FLOAT ALIAS field and global are written, and the address is not converted
+A ranged float alias is spelled `named`, not `float`, so a door that retypes the handed-over address
+without resolving the alias hands the callee a value whose machine class disagrees with the parameter's
+— and an argument that crosses the float domain has a conversion inserted on it. The address is an
+address in either case, so the alias is resolved where the slot is retyped.
+```maxon
+
+typealias Weight = float(0.0 to 1000.0)
+
+var scale = 1.0 as Weight
+
+function setTo99(w Weight)
+	w = 99.0
+end 'setTo99'
+
+type Box
+	export var w as Weight
+
+	static function create() returns Self
+		return Self{w: 1.0}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.create()
+	setTo99(b.w)
+	setTo99(scale)
+	print("{b.w} {scale}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99.0 99.0
+```
+
+<!-- test: pass-by-reference.mutate-tuple-member-ref -->
+### A POSITIONAL tuple member at a by-reference position is written
+`t.0` and `t._0` name one field, so they cannot have opposite semantics at a by-reference position. The
+token walk that predicts the hand-over asks the same member-name predicate the real chain walk does,
+which is what admits the positional spelling.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function setTo99(x Integer)
+	x = 99
+end 'setTo99'
+
+function main() returns ExitCode
+	var pair = (1, 2)
+	setTo99(pair.0)
+	setTo99(pair._1)
+	print("{pair.0} {pair.1}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99 99
+```
+
 <!-- test: pass-by-reference.immutable-primitive-ref -->
 ```maxon
 

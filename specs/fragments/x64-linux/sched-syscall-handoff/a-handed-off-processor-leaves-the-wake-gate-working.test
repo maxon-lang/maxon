@@ -295,8 +295,11 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r13
     x64.callDirect __mm_share_box
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.movRegReg rcx, r13
     x64.callDirect __mbox_handle_retain_box
     x64.movRegReg r12, r8
@@ -596,7 +599,7 @@ func @Spinner.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=spin#5] @__jumptable_88
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=spin#5] @__jumptable_90
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -665,7 +668,7 @@ func @Spinner.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=spin] @__jumptable_89
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=spin] @__jumptable_91
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -707,7 +710,7 @@ func @Sentinel.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=ping] @__jumptable_90
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=ping] @__jumptable_92
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -764,7 +767,7 @@ func @Sentinel.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=ping] @__jumptable_91
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=ping] @__jumptable_93
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -806,7 +809,7 @@ func @Reader.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=read] @__jumptable_92
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=read] @__jumptable_94
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegSlot rcx, slot34
@@ -1627,7 +1630,7 @@ func @Reader.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=read] @__jumptable_93
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=read] @__jumptable_95
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

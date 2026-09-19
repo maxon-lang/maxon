@@ -976,11 +976,21 @@ end 'buildArm64PosixProcExitCodeChunk'
 // mrt_host_proc_terminate(x0 = handle, x1 = exitCode)
 // ==========================================================================
 
-// `TerminateProcess(h, exitCode)` — `kill(pid, SIGKILL)`, plus the one thing POSIX cannot carry across a
+// `TerminateProcess(h, exitCode)` — `kill(-pgid, SIGKILL)`, plus the one thing POSIX cannot carry across a
 // signal: the CODE the caller named. It is recorded in the object first, so the reap that follows reports it
 // instead of decoding `128 + SIGKILL` from the status. See `PosixSignalExitCodeBase`.
+//
+// ⭐⭐ **THE PID IS NEGATED, AND THAT IS THE WHOLE PROCESS-TREE KILL ON BOTH ARM64 POSIX LANES.** A NEGATIVE
+// pid names a process GROUP, and every child this runtime spawns leads one — a detached child through
+// `setsid`, every other through `setpgid(0, 0)` in the Linux lane's cloned child or `POSIX_SPAWN_SETPGROUP`
+// in the Darwin lane's spawnattr — so its pid IS its group and the signal reaches every descendant it
+// started.
+//
+// ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
+// record whose pid was never filled would kill this process and every sibling it shares a group with.
 export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let noChild = asm.newLabel()
 
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffChildStatus)
@@ -988,9 +998,13 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall) returns Fu
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffChildKilled)
 
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: noChild)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixSigKill)
 	arm64PosixEmitHostCall(asm, call: kill)
 
+	asm.placeLabel(noChild)
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildArm64PosixProcTerminateChunk'
 

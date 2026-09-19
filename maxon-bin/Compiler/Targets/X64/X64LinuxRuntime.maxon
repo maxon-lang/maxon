@@ -196,6 +196,14 @@ let X64LinuxSyscallPpoll = 271
 let X64LinuxSyscallSetsid = 112
 let X64LinuxSyscallFchdir = 81
 
+// Every child leads a process group of its own, and the tree kill rests on it: a deadline signals the GROUP
+// (`buildX64LinuxProcTerminateChunk`, which negates the pid), so a child that shared the parent's group could
+// not be signalled without signalling the parent too, and `kill(pid)` alone would still orphan the processes
+// a shell child started. ⚠ Only a NON-detached child calls this. `setsid` makes a detached child lead a new
+// session AND a new group, and it fails with `EPERM` for a caller that already leads a group — a child
+// making both calls would silently stay in the parent's session. It is 154 on AArch64.
+let X64LinuxSyscallSetpgid = 109
+
 // The scheduler's poller — `epoll` and the `eventfd` it breaks a wait through.
 let X64LinuxSyscallEpollCreate1 = 291
 let X64LinuxSyscallEventfd2 = 290
@@ -3263,11 +3271,21 @@ end 'buildX64LinuxProcExitCodeChunk'
 // mrt_host_proc_terminate(rcx = handle, rdx = exitCode)
 // ==========================================================================
 
-// `TerminateProcess(h, exitCode)` — `kill(pid, SIGKILL)`, plus the one thing POSIX cannot carry across a
+// `TerminateProcess(h, exitCode)` — `kill(-pgid, SIGKILL)`, plus the one thing POSIX cannot carry across a
 // signal: the CODE the caller named. It is recorded in the object first, so the reap that follows reports it
 // instead of decoding `128 + SIGKILL` from the status. See `PosixSignalExitCodeBase`.
+//
+// ⭐⭐ **THE PID IS NEGATED, AND THAT IS THE WHOLE PROCESS-TREE KILL ON THIS LANE.** A NEGATIVE pid names a
+// process GROUP, and every child this runtime spawns leads one — `X64LinuxSyscallSetpgid`, or
+// `X64LinuxSyscallSetsid` for a detached child — so its pid IS its group: the signal reaches the child and
+// every descendant it started, where `kill(pid)` would end a shell and orphan everything under it.
+//
+// ⛔⛔ **AND A ZERO PID IS SKIPPED RATHER THAN NEGATED.** `kill(0, …)` signals the CALLER's OWN group, so a
+// record whose pid was never filled would kill this process and every sibling it shares a group with. The
+// guard is unreachable through a live handle and costs two instructions; what it prevents is not a failure.
 function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
+	let noChild = asm.newLabel()
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildStatus as Imm32, srcReg: X64Register.rdx)
@@ -3275,9 +3293,13 @@ function buildX64LinuxProcTerminateChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: PosixWaitOffChildKilled as Imm32, srcReg: X64Register.rax)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noChild)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtNeg, reg: X64Register.rdi)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixSigKill)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
 
+	asm.placeLabel(noChild)
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildX64LinuxProcTerminateChunk'
 
@@ -3342,7 +3364,8 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	let cwdEnterFailed = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
-	let noSession = asm.newLabel()
+	let ownGroup = asm.newLabel()
+	let groupReady = asm.newLabel()
 	let inheritCwd = asm.newLabel()
 	let envChosen = asm.newLabel()
 
@@ -3482,18 +3505,23 @@ function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdOutputOffset as Imm32, childDescriptor: PosixChildStdoutFd)
 	emitX64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdErrorOffset as Imm32, childDescriptor: PosixChildStderrFd)
 
-	// `DETACHED_PROCESS` ⇒ `setsid()`, which is what `POSIX_SPAWN_SETSID` asks the Darwin lane's spawnattr
-	// for: a detached child gets its own SESSION and outlives the parent's terminal.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rax, imm: DetachedProcess as Imm32)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noSession)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ownGroup)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallSetsid)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: groupReady)
+
+	asm.placeLabel(ownGroup)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallSetpgid)
+
+	asm.placeLabel(groupReady)
 
 	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of an `fchdir`. One that fails —
 	// a directory the parent could open but may not enter — is reported down the status pipe as the working
 	// directory's step, like a failed `execve` otherwise.
-	asm.placeLabel(noSession)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotCwd), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: inheritCwd)

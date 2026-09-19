@@ -388,6 +388,57 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-timeout-carries-the-partial-output -->
+<!-- unsupported-targets: wasm32-wasi -->
+⭐⭐ **A DEADLINE DOES NOT DESTROY WHAT THE CHILD ALREADY SAID.** The runtime hands back the bytes it
+collected before the kill exactly as it does on a clean exit, so `SubprocessError.timeout` carries them:
+`timeout(elapsedMs, stdout, stderr)`. Without that payload the collected buffers were decoded and then
+dropped on the floor when the throw fired, and every caller rendered a timeout as a bare
+"timed out after Nms" — which is the same text whether the child was wedged before it started or died
+one line short of finishing, and tells a reader nothing about which.
+
+The child here prints `alpha`, flushes, and then sleeps far past the deadline; only the `timeout` arm
+can hand `alpha` back, so a green here is a statement about the payload and about the arm at once.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	var argv = StringArray.create()
+	argv.push("/c")
+	argv.push("echo")
+	argv.push("alpha")
+	argv.push("&")
+	argv.push("ping")
+	argv.push("127.0.0.1")
+	argv.push("-n")
+	argv.push("30")
+	#else
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 1)
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("echo alpha; sleep 30")
+	#endif
+	let cwd = Directory.currentPath()
+	var partial = ""
+	try Subprocess.run(exe, arguments: argv, workingDirectory: cwd, timeoutMs: 2000) otherwise (e) 'handler'
+		partial = match e 'kind'
+			timeout(_, out, _) gives out
+			executableNotFound or
+				spawnFailed or
+				ioFailed or
+				inputTooLarge gives ""
+		end 'kind'
+	end 'handler'
+	if partial.contains("alpha") 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: subprocess-run-bare-name-found-on-path -->
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐⭐ **A BARE NAME IS FOUND THROUGH `PATH` ON EVERY LANE.** Every other case here spawns a POSIX tool by

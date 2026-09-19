@@ -1811,6 +1811,14 @@ let DarwinPipeNoFlags = 0
 // terminal exactly as Win32's flag intends.
 let DarwinSpawnSetSid = 0x400
 
+// Every child leads a process group of its own, and the tree kill rests on it: a deadline signals the GROUP
+// (`Arm64PosixRuntime.buildArm64PosixProcTerminateChunk`, which negates the pid), so a child left in the
+// parent's group could not be signalled without signalling the parent too. This flag is that road for a
+// NON-detached child only — `POSIX_SPAWN_SETSID` already makes a detached child lead a group, and
+// `posix_spawn` refuses a spawnattr asking for both. It needs no `posix_spawnattr_setpgroup` call:
+// `posix_spawnattr_init` zeroes the attributes and a pgroup of 0 is exactly "become your own group leader".
+let DarwinSpawnSetPgroup = 0x0002
+
 // `O_DIRECTORY|O_CLOEXEC` as Darwin numbers them — the flags a spawn's working directory is opened with, so the
 // open refuses a path that is not a directory and no launched program inherits the descriptor.
 let DarwinOpenDirectory = 0x100000
@@ -1867,7 +1875,7 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 
 	let cwdReady = asm.newLabel()
 	let inheritCwd = asm.newLabel()
-	let noSession = asm.newLabel()
+	let groupReady = asm.newLabel()
 	let spawned = asm.newLabel()
 	let published = asm.newLabel()
 	let noCwdToClose = asm.newLabel()
@@ -1925,11 +1933,12 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotFlags)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: DetachedProcess as MachineWord)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x4, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: noSession)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: DarwinSpawnSetPgroup)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: groupReady)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: DarwinSpawnSetSid)
-	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x5)
 
-	asm.placeLabel(noSession)
+	asm.placeLabel(groupReady)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x5)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotAttributes)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.posixSpawnattrSetflags)
 

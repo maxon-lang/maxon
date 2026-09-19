@@ -61,6 +61,13 @@ test 'standard mcp-server build schema hides the contributor arguments'
 
 	try Expect.isFalse(containsString(props, target: "repoRoot"), message: "repoRoot is contributor-only")
 	try Expect.isFalse(containsString(props, target: "from"), message: "from is contributor-only")
+
+	// `run`, `test` and `fmt` take `repoRoot` too, and it is contributor-only on them for the same reason it
+	// is on `build`: it names a CHECKOUT and runs that tree's own compiler, which is not a thing a user of
+	// the language has.
+	for tool in ["run", "test", "fmt"] 'eachUserFacingTool'
+		try Expect.isFalse(containsString(toolPropertyKeys(listTools(), toolName: tool), target: "repoRoot"), message: "{tool} must not advertise repoRoot in user mode")
+	end 'eachUserFacingTool'
 end 'standard mcp-server build schema hides the contributor arguments'
 
 test 'standard mcp-server lookup_error_code answers name and stage from the compiled registry'
@@ -119,10 +126,12 @@ test 'standard mcp-server refuses an argument no tool declares'
 end 'standard mcp-server refuses an argument no tool declares'
 
 test 'standard mcp-server refuses a contributor argument in user mode'
-	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"/somewhere\"\}")
+	for tool in ["build", "run", "test", "fmt"] 'eachToolTakingARepoRoot'
+		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"/somewhere\"\}")
 
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
-	try Expect.contains(rpcErrorMessage(doc), needle: "started without --dev")
+		try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602, message: "{tool} answered a user-mode repoRoot instead of refusing it")
+		try Expect.contains(rpcErrorMessage(doc), needle: "started without --dev")
+	end 'eachToolTakingARepoRoot'
 end 'standard mcp-server refuses a contributor argument in user mode'
 
 test 'standard mcp-server refuses an argument of the wrong JSON type'

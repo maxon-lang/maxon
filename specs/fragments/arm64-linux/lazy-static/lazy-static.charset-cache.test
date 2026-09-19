@@ -1,6 +1,6 @@
 // Test: lazy-static.charset-cache
 type WSCache
-	static var ws = CharacterSet.whitespacesAndNewlines()
+	static let ws = CharacterSet.whitespacesAndNewlines()
 
 	export static function isWhitespace(c Character) returns bool
 		return WSCache.ws.contains(c)
@@ -32,8 +32,7 @@ data {
 
 func @WSCache.isWhitespace {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot8, x27
+    arm64.prologue 80
     arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
@@ -45,17 +44,13 @@ func @WSCache.isWhitespace {
     arm64.movRegReg x19, x0
     arm64.leaGlobal x0, __data_WSCache.ws
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.leaFuncAddr x1, __clone_CharacterSet
-    arm64.movRegReg x0, x20
-    arm64.bl __mm_own_deep
-    arm64.movRegReg x21, x0
   __il_body#2:
-    arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.leaRdata x0, __layout_Set_Character
     arm64.leaRdata x1, __witness_Character.Hashable
-    arm64.leaRdata x23, __witness_Character.Equatable
+    arm64.leaRdata x22, __witness_Character.Equatable
   __il_body#10:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 32]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
     arm64.cmp x0, 0
     arm64.b.ne ifcont#12
   empty_check:
@@ -63,19 +58,19 @@ func @WSCache.isWhitespace {
     arm64.b __il_cont#9
   ifcont#12:
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
     arm64.blr x16
-    arm64.movRegReg x24, x0
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 32]
-    arm64.sub x25, x0, 1
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x23, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
+    arm64.sub x24, x0, 1
+    arm64.movRegReg x0, x23
     arm64.bl spreadHash
-    arm64.and x26, x0, x25
-    arm64.movImm x27, 0
+    arm64.and x25, x0, x24
+    arm64.movImm x26, 0
     arm64.b whilehdr#13
   probe:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-    arm64.cmp x26, 0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
+    arm64.cmp x25, 0
     arm64.b.lt __rc_panic#48
   __rc_ok#47:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
@@ -83,26 +78,26 @@ func @WSCache.isWhitespace {
     arm64.b.ne __im_stride#57
   __im_word#55:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x26, x1
+    arm64.cmp x25, x1
     arm64.b.hs __im_slow#54
   __im_load#59:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x26*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x25*8 + 0]
     arm64.b trycont#18
   __im_stride#57:
     arm64.cmp x1, 1
     arm64.b.ne __im_slow#54
   __im_byte#56:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x26, x1
+    arm64.cmp x25, x1
     arm64.b.hs __im_slow#54
   __im_load#60:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
-    arm64.add x0, x0, x26
+    arm64.add x0, x0, x25
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
     arm64.b trycont#18
   __im_slow#54:
-    arm64.movRegReg x1, x26
+    arm64.movRegReg x1, x25
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq trycont#18
@@ -150,41 +145,41 @@ func @WSCache.isWhitespace {
   matchcont#34:
     arm64.cbz x0, ifcont#46
   check_found:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 16]
   __rc_ok#49:
-    arm64.movRegReg x1, x26
+    arm64.movRegReg x1, x25
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq trycont#38
   tryerr#37:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x23
   trycont#38:
-    arm64.cmp x0, x24
+    arm64.cmp x0, x23
     arm64.b.ne ifcont#46
   hash_match:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
   __rc_ok#51:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
     arm64.b.ne __im_stride#65
   __im_word#63:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x26, x1
+    arm64.cmp x25, x1
     arm64.b.hs __im_slow#62
   __im_load#67:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x26*8 + 0]
+    arm64.loadRegBaseIndexScale.word64 x1, [x1 + x25*8 + 0]
     arm64.b __im_loaded
   __im_stride#65:
     arm64.cmp x1, 1
     arm64.b.ne __im_slow#62
   __im_byte#64:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
-    arm64.cmp x26, x1
+    arm64.cmp x25, x1
     arm64.b.hs __im_slow#62
   __im_load#68:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.add x1, x1, x26
+    arm64.add x1, x1, x25
     arm64.loadRegBaseDisp.byte x1, [x1 + 0]
   __im_loaded:
     arm64.movImm x2, 0
@@ -201,7 +196,7 @@ func @WSCache.isWhitespace {
     arm64.movRegReg x0, x1
     arm64.b __im_cont
   __im_slow#62:
-    arm64.movRegReg x1, x26
+    arm64.movRegReg x1, x25
     arm64.bl __managed_get
     arm64.movRegReg x2, x9
   __im_cont:
@@ -209,20 +204,20 @@ func @WSCache.isWhitespace {
     arm64.b.ne ifcont#46
   get_existing:
     arm64.movRegReg x1, x19
-    arm64.loadRegBaseDisp.word64 x16, [x23 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 40]
     arm64.blr x16
     arm64.cbz x0, ifcont#46
   found:
     arm64.movImm x0, 1
     arm64.b __il_cont#9
   ifcont#46:
-    arm64.add x0, x26, 1
-    arm64.and x0, x0, x25
-    arm64.add x27, x27, 1
-    arm64.movRegReg x26, x0
+    arm64.add x0, x25, 1
+    arm64.and x0, x0, x24
+    arm64.add x26, x26, 1
+    arm64.movRegReg x25, x0
   whilehdr#13:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 32]
-    arm64.cmp x27, x0
+    arm64.loadRegBaseDisp.word64 x0, [x21 + 32]
+    arm64.cmp x26, x0
     arm64.b.lt probe
     arm64.b whileexit#15
   matchdead#31:
@@ -232,7 +227,7 @@ func @WSCache.isWhitespace {
   __il_cont#9:
     arm64.cbz x0, ifcont#4
   exact:
-    arm64.movImm x19, 1
+    arm64.movImm x0, 1
     arm64.b __il_cont#1
   ifcont#4:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
@@ -242,11 +237,11 @@ func @WSCache.isWhitespace {
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.bl __managed_byte_at
-    arm64.movRegReg x22, x0
+    arm64.movRegReg x21, x0
     arm64.cmp x9, 0
     arm64.b.eq tryok#73
   tryerr#74:
-    arm64.leaRdata x0, __str_blob_31  ; "panic at Character.maxon:144: Character.codepoint: empty character \xe2\x80\x94 invariant violation\x0a"
+    arm64.leaRdata x0, __str_blob_31  ; "panic at Character.maxon:148: Character.codepoint: empty character \xe2\x80\x94 invariant violation\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -257,25 +252,24 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   tryok#73:
-    arm64.cmp x22, 128
+    arm64.cmp x21, 128
     arm64.b.ge ifcont#76
   ascii:
-    arm64.cmp x22, 0
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic#88
     arm64.b __il_body#99
   ifcont#76:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_byte_at
-    arm64.movRegReg x23, x0
+    arm64.movRegReg x22, x0
     arm64.cmp x9, 0
     arm64.b.eq tryok#77
   tryerr#78:
-    arm64.leaRdata x0, __str_blob_32  ; "panic at Character.maxon:152: Character.codepoint: 2+ byte char missing continuation byte\x0a"
+    arm64.leaRdata x0, __str_blob_32  ; "panic at Character.maxon:156: Character.codepoint: 2+ byte char missing continuation byte\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -286,16 +280,15 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   tryok#77:
-    arm64.cmp x22, 224
+    arm64.cmp x21, 224
     arm64.b.ge ifcont#80
   two_byte:
-    arm64.and x0, x22, 31
+    arm64.and x0, x21, 31
     arm64.lsl x0, x0, 6
-    arm64.and x1, x23, 63
+    arm64.and x1, x22, 63
     arm64.orr x19, x0, x1
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic#91
@@ -304,17 +297,17 @@ func @WSCache.isWhitespace {
     arm64.cmp x19, x16
     arm64.b.gt __rc_panic#91
   __rc_ok#90:
-    arm64.movRegReg x22, x19
+    arm64.movRegReg x21, x19
     arm64.b __il_body#99
   ifcont#80:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x19
     arm64.bl __managed_byte_at
-    arm64.movRegReg x24, x0
+    arm64.movRegReg x23, x0
     arm64.cmp x9, 0
     arm64.b.eq tryok#81
   tryerr#82:
-    arm64.leaRdata x0, __str_blob_33  ; "panic at Character.maxon:160: Character.codepoint: 3+ byte char missing byte 2\x0a"
+    arm64.leaRdata x0, __str_blob_33  ; "panic at Character.maxon:164: Character.codepoint: 3+ byte char missing byte 2\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -325,19 +318,18 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   tryok#81:
-    arm64.cmp x22, 240
+    arm64.cmp x21, 240
     arm64.b.ge ifcont#84
   three_byte:
-    arm64.and x0, x22, 15
+    arm64.and x0, x21, 15
     arm64.lsl x0, x0, 12
-    arm64.and x1, x23, 63
+    arm64.and x1, x22, 63
     arm64.lsl x1, x1, 6
     arm64.orr x0, x0, x1
-    arm64.and x1, x24, 63
+    arm64.and x1, x23, 63
     arm64.orr x19, x0, x1
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic#94
@@ -346,7 +338,7 @@ func @WSCache.isWhitespace {
     arm64.cmp x19, x16
     arm64.b.gt __rc_panic#94
   __rc_ok#93:
-    arm64.movRegReg x22, x19
+    arm64.movRegReg x21, x19
     arm64.b __il_body#99
   ifcont#84:
     arm64.movImm x1, 3
@@ -355,7 +347,7 @@ func @WSCache.isWhitespace {
     arm64.cmp x9, 0
     arm64.b.eq tryok#85
   tryerr#86:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at Character.maxon:168: Character.codepoint: 4-byte char missing byte 3\x0a"
+    arm64.leaRdata x0, __str_blob_34  ; "panic at Character.maxon:172: Character.codepoint: 4-byte char missing byte 3\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -366,16 +358,15 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   tryok#85:
-    arm64.and x1, x22, 7
+    arm64.and x1, x21, 7
     arm64.lsl x1, x1, 18
-    arm64.and x2, x23, 63
+    arm64.and x2, x22, 63
     arm64.lsl x2, x2, 12
     arm64.orr x1, x1, x2
-    arm64.and x2, x24, 63
+    arm64.and x2, x23, 63
     arm64.lsl x2, x2, 6
     arm64.orr x1, x1, x2
     arm64.and x0, x0, 63
@@ -387,19 +378,19 @@ func @WSCache.isWhitespace {
     arm64.cmp x19, x16
     arm64.b.gt __rc_panic#97
   __rc_ok#96:
-    arm64.movRegReg x22, x19
+    arm64.movRegReg x21, x19
   __il_body#99:
-    arm64.cmp x22, 0
+    arm64.cmp x21, 0
     arm64.b.lt __rc_panic#112
   __rc_chk#113:
     arm64.movImm x16, 1114111
-    arm64.cmp x22, x16
+    arm64.cmp x21, x16
     arm64.b.gt __rc_panic#112
   __rc_ok#111:
-    arm64.cmp x22, 65536
+    arm64.cmp x21, 65536
     arm64.b.ge ifcont#101
   bmp:
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x21
     arm64.bl __ucd_bmp_at
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic#115
@@ -409,35 +400,35 @@ func @WSCache.isWhitespace {
     arm64.b __il_cont#70
   ifcont#101:
     arm64.movImm x19, 0
-    arm64.movImm x23, 805
+    arm64.movImm x22, 805
     arm64.b whilehdr#102
   bsearch:
-    arm64.add x0, x19, x23
-    arm64.asr x24, x0, 1
-    arm64.movRegReg x0, x24
+    arm64.add x0, x19, x22
+    arm64.asr x23, x0, 1
+    arm64.movRegReg x0, x23
     arm64.bl __ucd_supp_at
     arm64.and x1, x0, 2097151
     arm64.asr x2, x0, 21
     arm64.and x2, x2, 2097151
-    arm64.cmp x22, x1
+    arm64.cmp x21, x1
     arm64.b.ge ifelse#106
   left:
-    arm64.sub x0, x24, 1
+    arm64.sub x0, x23, 1
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.b ifcont#110
   ifelse#106:
-    arm64.cmp x22, x2
+    arm64.cmp x21, x2
     arm64.b.le ifelse#108
   right:
-    arm64.add x0, x24, 1
+    arm64.add x0, x23, 1
   ifcont#109:
-    arm64.movRegReg x1, x23
+    arm64.movRegReg x1, x22
   ifcont#110:
     arm64.movRegReg x19, x0
-    arm64.movRegReg x23, x1
+    arm64.movRegReg x22, x1
   whilehdr#102:
-    arm64.cmp x19, x23
+    arm64.cmp x19, x22
     arm64.b.le bsearch
     arm64.b whileexit#104
   ifelse#108:
@@ -456,14 +447,11 @@ func @WSCache.isWhitespace {
     arm64.cmp x0, 1
     arm64.b.ne ifcont#8
   match:
-    arm64.movImm x19, 1
+    arm64.movImm x0, 1
     arm64.b __il_cont#1
   ifcont#8:
-    arm64.movImm x19, 0
+    arm64.movImm x0, 0
   __il_cont#1:
-    arm64.movRegReg x0, x21
-    arm64.bl __destruct_CharacterSet
-    arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -472,11 +460,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#48:
-    arm64.leaRdata x0, __str_blob_54  ; "panic at Set.maxon:212: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_54  ; "panic at Set.maxon:224: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -487,11 +474,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#88:
-    arm64.leaRdata x0, __str_blob_76  ; "panic at Character.maxon:148: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_74  ; "panic at Character.maxon:152: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -502,11 +488,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#91:
-    arm64.leaRdata x0, __str_blob_77  ; "panic at Character.maxon:156: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_75  ; "panic at Character.maxon:160: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -517,11 +502,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#94:
-    arm64.leaRdata x0, __str_blob_78  ; "panic at Character.maxon:164: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_76  ; "panic at Character.maxon:168: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -532,11 +516,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#97:
-    arm64.leaRdata x0, __str_blob_79  ; "panic at Character.maxon:171: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_77  ; "panic at Character.maxon:175: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -547,11 +530,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#112:
-    arm64.leaRdata x0, __str_blob_85  ; "panic at unicodeCategory.maxon:53: Range check failed: value outside typealias 'Codepoint'\x0a"
+    arm64.leaRdata x0, __str_blob_83  ; "panic at unicodeCategory.maxon:53: Range check failed: value outside typealias 'Codepoint'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -562,11 +544,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#115:
-    arm64.leaRdata x0, __str_blob_86  ; "panic at unicodeCategory.maxon:55: Range check failed: value outside typealias 'GeneralCategory'\x0a"
+    arm64.leaRdata x0, __str_blob_84  ; "panic at unicodeCategory.maxon:55: Range check failed: value outside typealias 'GeneralCategory'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -577,11 +558,10 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
   __rc_panic#118:
-    arm64.leaRdata x0, __str_blob_87  ; "panic at unicodeCategory.maxon:73: Range check failed: value outside typealias 'GeneralCategory'\x0a"
+    arm64.leaRdata x0, __str_blob_85  ; "panic at unicodeCategory.maxon:73: Range check failed: value outside typealias 'GeneralCategory'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -592,8 +572,7 @@ func @WSCache.isWhitespace {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.loadRegSlot x27, slot8
-    arm64.epilogue 96
+    arm64.epilogue 80
     arm64.ret
 }
 

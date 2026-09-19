@@ -206,6 +206,13 @@ let NullPointer = 0x0
 // is what makes the parent read end usable with FILE_FLAG_OVERLAPPED + IOCP (an anonymous `CreatePipe` handle
 // cannot be overlapped).
 let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child inherits the pipe write end)
+
+// ⛔⛔ **`CREATE_SUSPENDED`, AND THE WHOLE PROCESS-TREE KILL RESTS ON IT.** A child assigned to a job object
+// after it has already started is in the job, but the descendants it managed to start first are NOT — so a
+// shell that forks immediately would leave exactly the processes the kill is aimed at outside the job. The
+// child is therefore created with no thread running, assigned, and only then resumed, which makes "every
+// descendant of this child" a fact rather than a race.
+let CreateSuspended = 0x00000004
 let PipeReadOpenMode = 0x40080001  // PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE
 let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
 let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
@@ -2879,7 +2886,11 @@ export type StdToX64Lowering
 		// with every register still free, exactly as the two out-struct pointers above do. ⚠ A NULL
 		// `lpCurrentDirectory` means "inherit the parent's cwd" and a 0 `dwCreationFlags` means "no special
 		// creation", so a builder with nothing to say passes 0 and gets the bytes a zeroed slot would.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCreationFlagsSlot), src: TargetVReg.virtual(creationFlagsId), width: X64AccessWidth.word64))
+		let suspendBit = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(suspendBit, value: CreateSuspended))
+		let suspendedFlags = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(suspendedFlags, lhs: TargetVReg.virtual(creationFlagsId), rhs: suspendBit))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCreationFlagsSlot), src: suspendedFlags, width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCurrentDirSlot), src: TargetVReg.virtual(cwdPtrId), width: X64AccessWidth.word64))
 
 		// lpEnvironment (arg 7) is a VALUE operand for their reason exactly: a NULL means "inherit the
@@ -2914,7 +2925,44 @@ export type StdToX64Lowering
 		end 'inherit'
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateProcessA)))
+		self.emitWin64AdoptChildIntoJob(procInfoPtrId, dstBlock: dstBlock)
 	end 'lowerOsProcessSpawnWin64'
+
+	// ⭐⭐ **THE CHILD'S OWN JOB OBJECT — WHAT MAKES A DEADLINE'S KILL REACH THE WHOLE TREE.** Every process a
+	// job's member starts is born inside that job, so one `TerminateJobObject` ends the child and everything
+	// it started; `TerminateProcess` ends one process and leaves the rest running, holding the machine and
+	// answering to nobody. The job handle goes back to the caller in the PROCESS_INFORMATION record's
+	// `ProcInfoTreeObjectOffset` word, which the runtime stores in the handle's slot and closes at release.
+	//
+	// ⛔ **THE ORDER IS THE CONTRACT: CREATE SUSPENDED → ASSIGN → RESUME.** See `CreateSuspended`.
+	//
+	// ⛔⛔ **AND THE SPAWN'S OWN `GetLastError` IS SAVED ACROSS ALL OF IT.** A failed `CreateProcessA` leaves
+	// the record zeroed, so the assign below is handed a NULL process handle and fails — publishing
+	// `ERROR_INVALID_HANDLE` over the code the runtime's launch-failure path is about to read, which is how
+	// `executableNotFound` would become an invalid handle. Nothing here is allowed to be the reason a spawn
+	// failure reports.
+	function emitWin64AdoptChildIntoJob(procInfoPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetLastError)))
+		let spawnError = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(spawnError, srcReg: x64PhysReg(X64Register.rax)))
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateJobObjectW)))
+		let job = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(job, srcReg: x64PhysReg(X64Register.rax)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(procInfoPtrId), disp: ProcInfoTreeObjectOffset as Imm32, src: job, width: X64AccessWidth.word64))
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: job))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rdx), base: TargetVReg.virtual(procInfoPtrId), disp: ProcInfoHProcessOffset as Imm32, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.AssignProcessToJobObject)))
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(procInfoPtrId), disp: ProcInfoHThreadOffset as Imm32, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ResumeThread)))
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: spawnError))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetLastError)))
+	end 'emitWin64AdoptChildIntoJob'
 
 	// ⭐ **THE FOUR ATTACHED-SUBPROCESS HOST PRIMITIVES.** Each routes on `x64OsCallKind` through the shared
 	// `requireWin64Substrate` rejection, exactly as every other member of the band does — the whole
@@ -3051,13 +3099,19 @@ export type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsHandleFileType'
 
-	// `TerminateProcess(handle, exitCode)` — two register arguments; the BOOL is discarded (a child that has
-	// already exited answers FALSE, which is the same outcome as success for the deadline this serves).
+	// ⭐⭐ **THE OPERAND IS THE CHILD'S TREE, NOT THE CHILD** (`GtRuntime.SubpSlotProcessTree`): the job object
+	// the spawn put the child in on this lane, the child's wait object — whose pid is also its process-group
+	// id — on a POSIX one. Ending the TREE is the contract, because a child that is a shell has already
+	// started the processes the deadline is really aimed at.
+	//
+	// `TerminateJobObject(job, exitCode)` — two register arguments; the BOOL is discarded (a job whose
+	// processes have already exited answers FALSE, which is the same outcome as success for the deadline this
+	// serves).
 	function lowerOsProcessTerminate(handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsWin64Call2(IatSlot.TerminateProcess, arg0: handleId, arg1: exitCodeId, dstBlock: dstBlock)
+			importCall then self.lowerOsWin64Call2(IatSlot.TerminateJobObject, arg0: handleId, arg1: exitCodeId, dstBlock: dstBlock)
 
-			// `kill(pid, SIGKILL)` plus the one thing POSIX cannot carry across a signal: the CODE the caller
+			// `kill(-pgid, SIGKILL)` plus the one thing POSIX cannot carry across a signal: the CODE the caller
 			// named, which the chunk records so the reap reports it instead of `128 + SIGKILL`.
 			syscall then self.emitLinuxHostChunkCall(dstBlock, chunk: HostProcTerminateName, args: twoArgs(handleId, second: exitCodeId))
 		end 'route'

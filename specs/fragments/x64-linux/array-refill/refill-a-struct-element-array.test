@@ -88,7 +88,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr#16:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:541: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -171,7 +171,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, forstep#20
   tryerr#23:
-    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "panic at Array.maxon:547: "
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "panic at Array.maxon:450: "
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.leaRegRdata rax, [rip + __str_rec_6]  ; "Array.fillPublished: set OOB at "
@@ -265,6 +265,8 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __drop_type_param
   __il_cont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
     x64.movRegImm32 r12, 0
     x64.movRegImm32 rax, 0
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
@@ -281,8 +283,6 @@ func @main {
     x64.cmpRegReg rax, rcx
     x64.jcc less, sum
   forexit:
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0

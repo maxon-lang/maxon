@@ -2156,14 +2156,18 @@ export union StdOp
 	// so the two are the same Win32 entry point serving two different questions, which is one import and two ops.
 	osEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// `osProcessTerminate(handle, exitCode)` = `TerminateProcess(handle, exitCode)`. Two VALUE operands, no
-	// result — the BOOL is ignored for `osCloseHandle`'s reason (a child that has already exited answers FALSE,
-	// which is the same outcome as success for every caller here).
+	// `osProcessTerminate(tree, exitCode)`. Two VALUE operands, no result — the BOOL is ignored for
+	// `osCloseHandle`'s reason (a tree whose processes have already exited answers FALSE, which is the same
+	// outcome as success for every caller here).
 	//
-	// ⭐ **IT IS THE TIMEOUT CONTRACT, not a convenience.** `stdlib/Subprocess.maxon`'s `waitWithTimeout` documents
-	// that the runtime *"forcibly terminates the child"* when the deadline fires, and `Configuration.timeoutMs`
-	// says the non-zero value IS the kill-after deadline. Without it a timed-out spawn leaves a live child and a
-	// pipe nobody drains.
+	// ⚠ The first operand is the child's PROCESS TREE and not a process handle: the job object the spawn put
+	// the child in on Windows (`TerminateJobObject`), the wait object whose pid is also its process-group id
+	// on POSIX (`kill(-pgid)`). Lowering it as a process kill ends one process and orphans every descendant a
+	// shell child started, which is what the deadline is aimed at.
+	//
+	// It is the timeout contract, not a convenience: `stdlib/Subprocess.maxon`'s `waitWithTimeout` and
+	// `Configuration.timeoutMs` both state that the deadline kills. Without it a timed-out spawn leaves a
+	// live child and a pipe nobody drains.
 	osProcessTerminate(handleId ValueId, exitCodeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The socket slice: the eight `ws2_32` primitives behind `__ManagedSocket` ---

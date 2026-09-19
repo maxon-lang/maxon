@@ -2485,10 +2485,17 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- Passing a `var` lets the callee's writes propagate.
+- Passing a `var` lets the callee's writes propagate. Any storage you could assign to at that point may be
+  passed and is written in place: a local `var`, a module-level `var`, a field of a binding (`p.x`), a field
+  of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
+  assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
+  the call site would be accepted.
 - Passing a `let` to a parameter the callee writes is **E3019** (`cannot pass 'y' to function that mutates
   parameter 'n'`). A method writing a field of its **own** receiver is not a parameter write, so
-  `let acc = Accumulator.create()` followed by `acc.add(10)` is legal.
+  `let acc = Accumulator.create()` followed by `acc.add(10)` is legal. An immutable field, or a field of an
+  immutable instance, is refused for the same reason the equivalent assignment is.
+- Passing a collection to a parameter the callee **reassigns** while a reference into that collection is
+  still live is **E3070**: the reassignment frees what the reference points into.
 - Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
 
 ### Function Types and Function Values

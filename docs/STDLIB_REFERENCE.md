@@ -1353,7 +1353,7 @@ With `git` on `PATH`, it prints `true 0 true`.
 |--------|---------|-------------|
 | `Subprocess.run(executable Executable, arguments StringArray)` | `CollectedOutput` | Inherit the working directory and environment, no stdin, collect stdout and stderr up to 16 MiB each, no timeout. |
 | `Subprocess.run(executable, arguments:, workingDirectory FilePath)` | `CollectedOutput` | With a working directory. |
-| `Subprocess.run(executable, arguments:, workingDirectory:, timeoutMs DurationMs)` | `CollectedOutput` | With a deadline after which the child is killed; `0` waits forever. |
+| `Subprocess.run(executable, arguments:, workingDirectory:, timeoutMs DurationMs)` | `CollectedOutput` | With a deadline after which the child's whole process tree is killed; `0` waits forever. |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 
@@ -1392,7 +1392,7 @@ Create one with `Configuration.create(executable)`, assign the fields you need, 
 | `standardInput` | `InputSource` | `none` |
 | `standardOutput` | `OutputDestination` | `collect` up to 16 MiB |
 | `standardError` | `OutputDestination` | `collect` up to 16 MiB |
-| `timeoutMs` | `DurationMs` | `0`, no deadline |
+| `timeoutMs` | `DurationMs` | `0`, no deadline. Non-zero kills the child's whole process tree. |
 | `platformOptions` | `PlatformOptions` | `PlatformOptions.defaults()` |
 
 | Method | Returns | Description |
@@ -1485,7 +1485,7 @@ union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
 	ioFailed(reason String)
-	timeout(elapsedMs DurationMs)
+	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	inputTooLarge
 end 'SubprocessError'
 ```
@@ -1495,7 +1495,12 @@ finds, or an `Executable.path` naming a missing file. `spawnFailed` is any other
 a `file` stream that cannot be opened and a `workingDirectory` that does not exist included, though either
 fails with a not-found code; its reason carries the OS error number (`os error 5`).
 
-`displayReason()` renders any case as one line, such as `timed out after 5000ms`.
+`timeout` carries the output the child had already produced when the deadline killed it, since that partial
+text is usually the only evidence of why it hung. Both fields are empty when the layer that threw was not
+collecting output, which is `StreamingSubprocess.waitWithTimeout`.
+
+`displayReason()` renders any case as one line, such as
+`timed out after 5000ms, and the kill was sent to the child's whole process tree`.
 
 ### StreamingSubprocess
 
@@ -1518,7 +1523,7 @@ request after request. A read parks the calling green thread until data arrives.
 | `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. |
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Block until the child exits. |
-| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Throws `timeout` and kills the child when the deadline passes; `0` waits forever. |
+| `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Throws `timeout` and kills the child's whole process tree when the deadline passes; `0` waits forever. The thrown `timeout` carries empty output fields — a streaming child's bytes belong to the caller draining the streams. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 

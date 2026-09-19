@@ -333,11 +333,16 @@ end 'TerminationStatus'
 
 /// Errors raised by `Subprocess.run` / `Configuration.run`. Each carries the
 /// actionable detail rather than just a kind tag.
+///
+/// `timeout` carries the output the child had already produced when the
+/// deadline killed it, because that partial text is usually the only evidence
+/// of why it hung. Both fields are empty where the layer that threw was not
+/// collecting output — see `StreamingSubprocess.waitWithTimeout`.
 public union SubprocessError implements Error
 	executableNotFound(name String)
 	spawnFailed(reason String)
 	ioFailed(reason String)
-	timeout(elapsedMs DurationMs)
+	timeout(elapsedMs DurationMs, stdout String, stderr String)
 	inputTooLarge
 
 	/// Human-readable rendering for diagnostics. Centralises the wording so
@@ -348,7 +353,7 @@ public union SubprocessError implements Error
 			executableNotFound(name) gives "executable not found: {name}"
 			spawnFailed(reason) gives "spawn failed: {reason}"
 			ioFailed(reason) gives "I/O failed: {reason}"
-			timeout(elapsedMs) gives "timed out after {elapsedMs}ms"
+			timeout(elapsedMs, _, _) gives "timed out after {elapsedMs}ms, and the kill was sent to the child's whole process tree"
 			inputTooLarge gives "stdin payload too large"
 		end 'e'
 	end 'displayReason'
@@ -417,7 +422,9 @@ public type Configuration
 	public var standardOutput as OutputDestination
 	public var standardError as OutputDestination
 
-	/// 0 means "wait forever". Non-zero is the kill-after deadline.
+	/// 0 means "wait forever". Non-zero is the kill-after deadline, and what it
+	/// kills is the child's whole process TREE: a child that is a shell takes
+	/// every process it started with it.
 	public var timeoutMs as DurationMs
 	public var platformOptions as PlatformOptions
 
@@ -523,7 +530,7 @@ public type Subprocess
 		__Builtins.subprocessReleaseHandle(handle)
 
 		let statusKind = try ResultStatusKind.fromRawValue(statusKindRaw) otherwise panic("Subprocess.runConfiguration: runtime returned unexpected statusKind raw={statusKindRaw}")
-		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode, durationMs: durationMs)
+		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode, durationMs: durationMs, stdout: stdout, stderr: stderr)
 		return CollectedOutput.create(status, stdout: stdout, stderr: stderr, pid: pid, durationMs: durationMs)
 	end 'runConfiguration'
 
@@ -765,14 +772,17 @@ end 'appendBytesOf'
 
 /// Convert a runtime-reported `ResultStatusKind` + payload into the
 /// user-facing TerminationStatus, or throw `SubprocessError.timeout` for
-/// the `timedOut` arm. Pulled out of `runConfiguration` so the
+/// the `timedOut` arm. The collected output is threaded in so that arm can
+/// carry it: a killed child's `CollectedOutput` is never returned, so the
+/// throw is the only thing that can hand back what it had written.
+/// Pulled out of `runConfiguration` so the
 /// match-statement form is available — match-expressions in stdlib don't
 /// yet accept `panic(...)` arm bodies.
-function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitInt, durationMs DurationMs) returns TerminationStatus throws SubprocessError
+function terminationStatusFromKind(statusKind ResultStatusKind, statusCode ExitInt, durationMs DurationMs, stdout String, stderr String) returns TerminationStatus throws SubprocessError
 	match statusKind 's'
 		exited then return TerminationStatus.exited(statusCode)
 		signalled then return TerminationStatus.signalled(statusCode)
-		timedOut then throw SubprocessError.timeout(durationMs)
+		timedOut then throw SubprocessError.timeout(durationMs, stdout: stdout, stderr: stderr)
 	end 's'
 end 'terminationStatusFromKind'
 
@@ -1038,14 +1048,17 @@ public type StreamingSubprocess
 
 	/// Block until the child exits or `timeoutMs` elapses (0 = wait forever).
 	/// Returns the exit code on success; throws `SubprocessError.timeout` if
-	/// the timeout fires (the runtime forcibly terminates the child in that
-	/// case) or `SubprocessError.ioFailed` on a wait error.
+	/// the timeout fires (the runtime forcibly terminates the child's whole
+	/// process tree in that case) or `SubprocessError.ioFailed` on a wait
+	/// error. The thrown `timeout` carries empty output fields: a streaming
+	/// child's bytes belong to the caller draining the streams, and this layer
+	/// never sees them.
 	public function waitWithTimeout(timeoutMs DurationMs) returns ExitInt throws SubprocessError
 		try requireLive()
 		let rc = __Builtins.subprocessWaitExit(handle, timeoutMs)
 
 		if rc == -2 'timedOut'
-			throw SubprocessError.timeout(timeoutMs)
+			throw SubprocessError.timeout(timeoutMs, stdout: "", stderr: "")
 		end 'timedOut'
 
 		if rc == -1 'failed'
@@ -1111,7 +1124,9 @@ public type StreamingSubprocess
 		end 'gone'
 	end 'requireLive'
 
-	/// Release the OS handle. Idempotent; safe to call at the end of a
+	/// Release the OS handles this child owns — its process handle, its pipe
+	/// ends, and the job object naming its process tree where the platform
+	/// made one. Idempotent; safe to call at the end of a
 	/// using-block or from a guard path. Nothing reaches the runtime with a
 	/// released handle afterwards: the throwing methods refuse it through
 	/// `requireLive`, and `closeStdin` and `release` are idempotent no-ops

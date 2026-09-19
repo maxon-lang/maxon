@@ -867,8 +867,9 @@ let StartupInfoSize = 0x68
 let StartupInfoCbOffset = 0
 
 // PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8, dwProcessId@16, dwThreadId@20. The record a spawn is
-// handed is one word longer, for `SpawnFailedPreparationOffset`, which `CreateProcessA` never writes.
-let ProcInfoSize = 0x20
+// handed is two words longer, for `SpawnFailedPreparationOffset` and `ProcInfoTreeObjectOffset`, neither of
+// which `CreateProcessA` writes.
+let ProcInfoSize = 0x28
 export let ProcInfoHProcessOffset = 0
 export let ProcInfoHThreadOffset = 8
 
@@ -890,6 +891,11 @@ end 'SpawnPreparation'
 // Where a spawn chunk that failed before launching stores its `SpawnPreparation`: the word after
 // PROCESS_INFORMATION. A record the spawn fills is slab-zeroed, so a launch failure leaves `none` here.
 export let SpawnFailedPreparationOffset = 0x18
+
+// Where the spawn lowering parks the object that names the child's whole PROCESS TREE — the job object the
+// Windows lane creates and assigns the child to. Zero on every lane that has none, which is what
+// `emitSubpCloseTreeObject` and the `SubpSlotProcessTree` fill-in below both test.
+export let ProcInfoTreeObjectOffset = 0x20
 
 // ⭐ **A LINUX CHILD THAT CANNOT LAUNCH REPORTS IN THE PARENT's OWN RECORD SHAPE.** The launch happens in a
 // cloned process, so what failed crosses back down the spawn's status pipe: the child writes these bytes of its
@@ -6457,9 +6463,12 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// park alike. Freeing once, before the branch, is what keeps both arms from needing their own copy of it,
 	// and `hThread` is read here for the same reason (on the failure path it is the slot's zero, which that arm
 	// never looks at).
+	let runTreeObject = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(runTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
 	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command)
 	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
+	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: runTreeObject)
 	let spawnZeroConst = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.const(spawnZeroConst, value: 0, valueType: StdType.i64))
 	let spawnFailedCmp = ids.mint()
@@ -6769,9 +6778,12 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// every region is dead on BOTH arms below — released once, before the branch, exactly as
 	// `__gt_process_run` does it. On the failure path `hThread` is the fresh slot's zero, which that arm never
 	// reads.
+	let probeTreeObject = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(probeTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
 	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: probeCommand)
 	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
+	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: probeTreeObject)
 	let spawnFailed = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailed, lhs: hProcess, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
@@ -6869,7 +6881,7 @@ let SubpMaxHandles = 64
 // `ERROR_TOO_MANY_OPEN_FILES` — the last error a spawn publishes when every one of the `SubpMaxHandles` slots is
 // live, a refusal no OS call made.
 let ErrorTooManyOpenFiles = 4 as ParsedInt
-let SubpSlotBytes = 192
+let SubpSlotBytes = 208
 
 // A live handle is `generation * SubpHandleSlotSpan + slotIndex`: the index in the low bits, the slot's
 // `SubpSlotGeneration` above it. The generation is bumped before the handle is minted, so every live handle
@@ -6889,6 +6901,7 @@ let SubpSlotInUse = 0
 let SubpSlotClaimed = 1 as ParsedInt
 export let SubpSlotHProcess = 8
 export let SubpSlotStdinWrite = 16
+
 // ⛔⛔ **EVERY READ OF THE WORD THIS POINTS AT IS AN `emitLoadDword`, NEVER AN `emitLoadField`.** It is one
 // 8-byte scratch shared by `WriteFile`, `ReadFile`, `PeekNamedPipe` and `GetExitCodeProcess`, it is never
 // zeroed between users, and each of those Win32 out-params writes only its LOW DWORD — so the upper half
@@ -6945,6 +6958,15 @@ export let SubpSlotWaitStartMs = 168 as ByteOffset
 export let SubpSlotStdinFeedAt = 176 as ByteOffset
 let SubpStdinFeedUnarmed = -1 as ParsedInt
 
+// What a deadline's kill is aimed at, and it always names something terminate-able: the child's job object
+// where the lane has one, the child's own process handle where it has not (a POSIX wait object, whose pid is
+// also its process-group id). `osProcessTerminate` takes this word and nothing else.
+export let SubpSlotProcessTree = 184 as ByteOffset
+
+// The tree object this slot OWNS and must close at release, which is zero exactly when the word above is the
+// process handle the release already closes. Two words rather than one, so the release cannot double-close.
+let SubpSlotOwnedTreeObject = 192 as ByteOffset
+
 // ⛔⛔ **THE COLLECT INTERLOCK — the one word a collect and a release contend for, and the last word of the
 // slot.** Nothing else serialises `__gt_subp_wait_collect` against `__gt_subp_release`: the release closes the
 // pipes, zeroes the handles and clears `inUse` under no lock, so a collect on another processor can pass any
@@ -6954,7 +6976,7 @@ let SubpStdinFeedUnarmed = -1 as ParsedInt
 // takes `free -> released` for good, and either party finding the word taken stops at
 // `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
 // again.
-let SubpSlotCollector = 184 as ByteOffset
+let SubpSlotCollector = 200 as ByteOffset
 let SubpCollectorFree = 0 as ParsedInt
 export let SubpCollectorHeld = 1 as ParsedInt
 let SubpCollectorReleased = 2 as ParsedInt
@@ -7780,8 +7802,10 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// shares.
 	let launchStep = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: SpawnFailedPreparationOffset, ids: ids)
 	emitSubpRecordSpawnError(module, block: launchFail, preparation: launchStep, ids: ids)
-	emitSubpFreeLaunchRecords(module, block: launchFail, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
-	module.setTerminator(launchFail, op: StdOp.branch(spawnFail.id))
+	let launchTree = emitLoadField(module, block: launchFail, record: procInfoPtr, offset: ProcInfoTreeObjectOffset, ids: ids)
+	var afterLaunchTree = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: launchFail, treeObject: launchTree)
+	emitSubpFreeLaunchRecords(module, block: afterLaunchTree, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
+	module.setTerminator(afterLaunchTree, op: StdOp.branch(spawnFail.id))
 
 	// spawnFail: close every handle this attempt opened (reloaded from the slot + the owned-child scratch) — the
 	// slot stays free — give back the setup's scratch, and answer -1. Both roads here have already published the
@@ -7805,11 +7829,18 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	// The mask discards `dwThreadId`, which sits in the high half of the word the load reads.
 	let pid = emitLoadDword(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoDwProcessIdOffset, ids: ids)
+	let treeObject = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoTreeObjectOffset, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: spawnOk, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	emitSubpFreeSetupScratch(module, block: spawnOk, saPtr: saPtr, childScratch: childScratch, nulName: nulName, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotHProcess, value: hProcess)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotPid, value: pid)
+	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotOwnedTreeObject, value: treeObject)
+	let zeroTree = emitConst(module, block: spawnOk, value: 0, ids: ids)
+	let noTreeObject = emitCmp(module, block: spawnOk, a: treeObject, b: zeroTree, pred: StdCmpPred.eq, ids: ids)
+	let childItself = emitBin(module, block: spawnOk, a: noTreeObject, b: hProcess, opcode: StdBinOpcode.mul, ids: ids)
+	let processTree = emitBin(module, block: spawnOk, a: treeObject, b: childItself, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotProcessTree, value: processTree)
 	let zeroB = emitConst(module, block: spawnOk, value: 0, ids: ids)
 
 	// Both streams start `open`. Written from the declaration rather than left to the slab's zero, because a
@@ -7839,10 +7870,11 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	emitStoreField(module, block: afterBytesOut, record: slotC, offset: SubpSlotGeneration, value: genNext)
 	let handle = emitSubpPackHandle(module, block: afterBytesOut, ids: ids, slotIdx: slotIdx, generation: genNext)
 
-	// ⭐ A DETACHED spawn answers the child's PID and hands the slot straight back. The slot is claimed first and
-	// released here rather than skipped, because releasing is what CLOSES the process handle and the three pipe
-	// ends — a detached child the parent still holds a handle to is a leaked kernel object per spawn, and the
-	// release path already knows every handle a slot owns. The release is a guarded entry, so it is given the
+	// A DETACHED spawn answers the child's PID and hands the slot straight back. The slot is claimed first and
+	// released here rather than skipped, because releasing is what CLOSES the process handle, the three pipe
+	// ends and the child's job object — a detached child the parent still holds handles to is leaked kernel
+	// objects per spawn, and the release path already knows every handle a slot owns. It is a guarded entry, so
+	// it is given the
 	// PACKED handle: a bare index decodes to generation 0, which the guard refuses, and the slot would stay live.
 	let detachAsked = emitLoadField(module, block: afterBytesOut, record: req, offset: SubpReqDetach, ids: ids)
 	let zeroD = emitConst(module, block: afterBytesOut, value: 0, ids: ids)
@@ -8200,6 +8232,19 @@ end 'emitSubpCloseOwnedChildEnds'
 // handle to close: this runs only where `CreateProcessA` left the slab-zeroed PROCESS_INFORMATION untouched.
 // Each handle is reloaded from memory so no handle occupies a register here, and a slot field left 0 by a
 // non-pipe stream reaches `CloseHandle(0)`, which is the no-op that keeps this path free of kind tests.
+function emitSubpCloseTreeObject(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, treeObject ValueId) returns IrBlock
+	var doClose = module.addBlock(func, label: b"subptreec", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"subptreed", heat: BlockHeat.normal)
+
+	let zeroT = emitConst(module, block: cur, value: 0, ids: ids)
+	let noObject = emitCmp(module, block: cur, a: treeObject, b: zeroT, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noObject, thenBlockId: cont.id, elseBlockId: doClose.id))
+
+	module.appendOp(doClose, op: StdOp.osCloseHandle(treeObject))
+	module.setTerminator(doClose, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpCloseTreeObject'
+
 function emitSubpCloseSlotHandles(module StdModule, block IrBlock, ids ValueMinter, slot ValueId, childScratch ValueId)
 	let stdinWrite = emitLoadField(module, block: block, record: slot, offset: SubpSlotStdinWrite, ids: ids)
 	module.appendOp(block, op: StdOp.osCloseHandle(stdinWrite))
@@ -8824,8 +8869,13 @@ function buildSubpRelease(module StdModule)
 	let hProcess = emitLoadField(module, block: afterStdin, record: slot, offset: SubpSlotHProcess, ids: ids)
 	module.appendOp(afterStdin, op: StdOp.osCloseHandle(hProcess))
 	emitStoreField(module, block: afterStdin, record: slot, offset: SubpSlotHProcess, value: zeroA)
-	emitStoreField(module, block: afterStdin, record: slot, offset: SubpSlotInUse, value: zeroA)
-	module.setTerminator(afterStdin, op: StdOp.branch(done.id))
+	let ownedTree = emitLoadField(module, block: afterStdin, record: slot, offset: SubpSlotOwnedTreeObject, ids: ids)
+	var afterTree = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterStdin, treeObject: ownedTree)
+	let zeroT = emitConst(module, block: afterTree, value: 0, ids: ids)
+	emitStoreField(module, block: afterTree, record: slot, offset: SubpSlotOwnedTreeObject, value: zeroT)
+	emitStoreField(module, block: afterTree, record: slot, offset: SubpSlotProcessTree, value: zeroT)
+	emitStoreField(module, block: afterTree, record: slot, offset: SubpSlotInUse, value: zeroT)
+	module.setTerminator(afterTree, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
 

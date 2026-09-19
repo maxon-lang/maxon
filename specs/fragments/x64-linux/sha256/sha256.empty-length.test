@@ -201,6 +201,9 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.jmp whilehdr#25
   __il_body#71:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#115
+  __rc_ok#114:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -212,164 +215,153 @@ func @main {
     x64.jmp whilehdr#72
   readWords:
     x64.leaRegBaseIndexScale r12, [rbx + rax*4]
-  __il_body#150:
+  __il_body#152:
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#164
-  __rc_ok#163:
+    x64.jcc less, __rc_panic#162
+  __rc_ok#161:
     x64.loadRegBaseDisp.word64 rax, [r14 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#175
-  __im_word#173:
+    x64.jcc notEqual, __im_stride#173
+  __im_word#171:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#172
-  __im_load#177:
+    x64.jcc aboveEqual, __im_slow#170
+  __im_load#175:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r12*8 + 0]
-    x64.jmp tryok#151
-  __im_stride#175:
+    x64.jmp __im_loaded#174
+  __im_stride#173:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#172
-  __im_byte#174:
+    x64.jcc notEqual, __im_slow#170
+  __im_byte#172:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg r12, rax
-    x64.jcc aboveEqual, __im_slow#172
-  __im_load#178:
+    x64.jcc aboveEqual, __im_slow#170
+  __im_load#176:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.leaRegRegReg rax, rax, r12
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp tryok#151
-  __im_slow#172:
+  __im_loaded#174:
+    x64.movRegReg r13, rax
+    x64.jmp tryok#153
+  __im_slow#170:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#242
-  tryerr#152:
-    x64.movRegImm32 r13, 0
-    x64.jmp trycont#153
-  critsplit#242:
-    x64.movRegReg rax, r8
-  tryok#151:
-    x64.movRegReg r13, rax
-  trycont#153:
+    x64.jcc notEqual, tryerr#154
+  critsplit#240:
+    x64.movRegReg r13, r8
+  tryok#153:
     x64.leaRegRegImm32 rdx, r12, 1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#164
+  __rc_ok#163:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride#181
+  __im_word#179:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#178
+  __im_load#183:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.jmp __im_loaded#182
+  __im_stride#181:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow#178
+  __im_byte#180:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.cmpRegReg rdx, rax
+    x64.jcc aboveEqual, __im_slow#178
+  __im_load#184:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+  __im_loaded#182:
+    x64.movRegReg r15, rax
+    x64.jmp tryok#155
+  __im_slow#178:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#156
+  critsplit#241:
+    x64.movRegReg r15, r8
+  tryok#155:
+    x64.leaRegRegImm32 rdx, r12, 2
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#166
   __rc_ok#165:
     x64.loadRegBaseDisp.word64 rax, [r14 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#183
-  __im_word#181:
+    x64.jcc notEqual, __im_stride#189
+  __im_word#187:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#180
-  __im_load#185:
+    x64.jcc aboveEqual, __im_slow#186
+  __im_load#191:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp tryok#154
-  __im_stride#183:
+    x64.jmp __im_cont#185
+  __im_stride#189:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#180
-  __im_byte#182:
+    x64.jcc notEqual, __im_slow#186
+  __im_byte#188:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#180
-  __im_load#186:
+    x64.jcc aboveEqual, __im_slow#186
+  __im_load#192:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp tryok#154
-  __im_slow#180:
+    x64.jmp __im_cont#185
+  __im_slow#186:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#243
-  tryerr#155:
-    x64.movRegImm32 r15, 0
-    x64.jmp trycont#156
-  critsplit#243:
+    x64.jcc notEqual, tryerr#158
+  critsplit#242:
     x64.movRegReg rax, r8
-  tryok#154:
-    x64.movRegReg r15, rax
-  trycont#156:
-    x64.leaRegRegImm32 rdx, r12, 2
+  __im_cont#185:
+    x64.storeSlotReg slot20, rax
+  tryok#157:
+    x64.leaRegRegImm32 rdx, r12, 3
     x64.cmpRegImm32 rdx, 0
     x64.jcc less, __rc_panic#168
   __rc_ok#167:
     x64.loadRegBaseDisp.word64 rax, [r14 + 24]
     x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#191
-  __im_word#189:
+    x64.jcc notEqual, __im_stride#197
+  __im_word#195:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#188
-  __im_load#193:
+    x64.jcc aboveEqual, __im_slow#194
+  __im_load#199:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp trycont#159
-  __im_stride#191:
+    x64.jmp tryok#159
+  __im_stride#197:
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#188
-  __im_byte#190:
+    x64.jcc notEqual, __im_slow#194
+  __im_byte#196:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#188
-  __im_load#194:
+    x64.jcc aboveEqual, __im_slow#194
+  __im_load#200:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp trycont#159
-  __im_slow#188:
+    x64.jmp tryok#159
+  __im_slow#194:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#244
-  tryerr#158:
-    x64.movRegImm32 rax, 0
-    x64.jmp trycont#159
-  critsplit#244:
+    x64.jcc notEqual, tryerr#160
+  critsplit#243:
     x64.movRegReg rax, r8
-  trycont#159:
-    x64.storeSlotReg slot20, rax
-    x64.leaRegRegImm32 rdx, r12, 3
-    x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#170
-  __rc_ok#169:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride#199
-  __im_word#197:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#196
-  __im_load#201:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.jmp trycont#162
-  __im_stride#199:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow#196
-  __im_byte#198:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#196
-  __im_load#202:
-    x64.loadRegBaseDisp.word64 rax, [r14 + 0]
-    x64.leaRegRegReg rax, rax, rdx
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-    x64.jmp trycont#162
-  __im_slow#196:
-    x64.movRegReg rcx, r14
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#245
-  tryerr#161:
-    x64.movRegImm32 rax, 0
-    x64.jmp trycont#162
-  critsplit#245:
-    x64.movRegReg rax, r8
-  trycont#162:
+  tryok#159:
     x64.shlRegImm8 r13, r13, 24
     x64.shlRegImm8 r15, r15, 16
     x64.orRegReg r13, r13, r15
@@ -378,7 +370,7 @@ func @main {
     x64.orRegReg r13, r13, rcx
     x64.movRegReg rdx, r13
     x64.orRegReg rdx, r13, rax
-  __il_cont#149:
+  __il_cont#151:
     x64.loadRegSlot rcx, slot19
     x64.callDirect __managed_push
     x64.loadRegSlot rax, slot14
@@ -392,52 +384,52 @@ func @main {
     x64.jmp whilehdr#75
   extend:
     x64.leaRegRegImm32 rdx, rax, -2
-  __rc_ok#114:
+  __rc_ok#116:
     x64.loadRegSlot rcx, slot19
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#129
-  __im_load#130:
+    x64.jcc aboveEqual, __im_slow#131
+  __im_load#132:
     x64.loadRegSlot rcx, slot19
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rbx, [rcx + rdx*8 + 0]
   tryok#78:
     x64.leaRegRegImm32 rdx, rax, -7
-  __rc_ok#116:
-    x64.loadRegSlot rcx, slot19
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#132
-  __im_load#133:
-    x64.loadRegSlot rcx, slot19
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
-    x64.movRegReg r8, rcx
-  __im_cont#131:
-    x64.storeSlotReg slot17, r8
-  tryok#80:
-    x64.leaRegRegImm32 rdx, rax, -15
   __rc_ok#118:
     x64.loadRegSlot rcx, slot19
     x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#135
-  __im_load#136:
+    x64.jcc aboveEqual, __im_slow#134
+  __im_load#135:
+    x64.loadRegSlot rcx, slot19
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rdx*8 + 0]
+    x64.movRegReg r8, rcx
+  __im_cont#133:
+    x64.storeSlotReg slot17, r8
+  tryok#80:
+    x64.leaRegRegImm32 rdx, rax, -15
+  __rc_ok#120:
+    x64.loadRegSlot rcx, slot19
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegReg rdx, rcx
+    x64.jcc aboveEqual, __im_slow#137
+  __im_load#138:
     x64.loadRegSlot rcx, slot19
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 r12, [rcx + rdx*8 + 0]
   tryok#82:
     x64.leaRegRegImm32 rdx, rax, -16
-  __rc_ok#120:
+  __rc_ok#122:
     x64.loadRegSlot rax, slot19
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#138
-  __im_load#139:
+    x64.jcc aboveEqual, __im_slow#140
+  __im_load#141:
     x64.loadRegSlot rax, slot19
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseIndexScale.word64 r13, [rax + rdx*8 + 0]
-  __il_body#205:
+  __il_body#203:
     x64.movRegImm32 rdx, 7
     x64.movRegReg rcx, r12
     x64.callDirect sha256RotR
@@ -452,7 +444,7 @@ func @main {
     x64.xorRegReg r15, r15, r12
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg r15, r15, rax
-  __il_body#206:
+  __il_body#204:
     x64.movRegImm32 rdx, 17
     x64.movRegReg rcx, rbx
     x64.callDirect sha256RotR
@@ -467,7 +459,7 @@ func @main {
     x64.xorRegReg r12, r12, rbx
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg r12, r12, rax
-  __il_cont#203:
+  __il_cont#201:
     x64.leaRegRegReg rax, r13, r15
     x64.loadRegSlot rcx, slot17
     x64.leaRegRegReg rax, rax, rcx
@@ -484,37 +476,37 @@ func @main {
     x64.jcc less, extend
   whileexit#77:
     x64.movRegImm32 rdx, 0
-    x64.leaRegRdata rax, [rip + __barr_rec_4]
+    x64.leaRegRdata rax, [rip + __barr_rec_7]
     x64.movRegImm32 rcx, 0
-  __us_test#232:
+  __us_test#230:
     x64.loadRegSlot rsi, slot19
     x64.loadRegBaseDisp.word64 rdi, [rsi + 8]
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc less, forhdr#86
-  __us_test#233:
+  __us_test#231:
     x64.loadRegSlot rsi, slot19
     x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
     x64.cmpRegImm32 rsi, 0
     x64.jcc equal, forhdr#86
-  __us_test#234:
+  __us_test#232:
     x64.leaRegRegImm32 r8, rsi, -24
     x64.loadRegBaseDisp.word64 r8, [r8 + 16]
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, forhdr#86
-    x64.jmp forhdr#215
+    x64.jmp forhdr#213
   foldRoundConstants#87:
     x64.loadRegBaseDisp.word64 rsi, [rax + 0]
     x64.loadRegBaseIndexScale.word64 rsi, [rsi + rcx*8 + 0]
-  __im_cont#126:
+  __im_cont#128:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#123
-  __rc_ok#122:
+    x64.jcc less, __rc_panic#125
+  __rc_ok#124:
     x64.loadRegSlot rdi, slot19
     x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegReg rdx, rdi
-    x64.jcc aboveEqual, __im_slow#141
-  __im_load#142:
+    x64.jcc aboveEqual, __im_slow#143
+  __im_load#144:
     x64.loadRegSlot rdi, slot19
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.loadRegBaseIndexScale.word64 rdi, [rdi + rdx*8 + 0]
@@ -523,27 +515,27 @@ func @main {
     x64.leaRegRegReg rsi, r8, rsi
     x64.movRegImm32 rdi, 4294967295
     x64.andRegReg rsi, rsi, rdi
-  __rc_ok#124:
+  __rc_ok#126:
     x64.loadRegSlot rdi, slot19
     x64.loadRegBaseDisp.word64 rdi, [rdi + 16]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc less, __im_slow#144
+    x64.jcc less, __im_slow#146
   __im_bounds:
     x64.loadRegSlot rdi, slot19
     x64.loadRegBaseDisp.word64 rdi, [rdi + 8]
     x64.cmpRegReg rdx, rdi
-    x64.jcc aboveEqual, __im_slow#144
+    x64.jcc aboveEqual, __im_slow#146
   __im_buffer:
     x64.loadRegSlot rdi, slot19
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, __im_slow#144
+    x64.jcc equal, __im_slow#146
   __im_viewed:
     x64.leaRegRegImm32 r8, rdi, -24
     x64.loadRegBaseDisp.word64 r8, [r8 + 16]
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, __im_slow#144
-  __im_store#148:
+    x64.jcc notEqual, __im_slow#146
+  __im_store#150:
     x64.storeBaseIndexScaleReg.word64 [rdi + rdx*8 + 0], rsi
   tryok#92:
     x64.leaRegRegImm32 rdx, rdx, 1
@@ -554,31 +546,31 @@ func @main {
     x64.cmpRegReg rcx, rsi
     x64.jcc less, foldRoundConstants#87
     x64.jmp forexit#89
-  foldRoundConstants#231:
+  foldRoundConstants#229:
     x64.loadRegBaseDisp.word64 r8, [rax + 0]
     x64.loadRegBaseIndexScale.word64 r8, [r8 + rcx*8 + 0]
-  __im_cont#230:
+  __im_cont#228:
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#123
-  __rc_ok#229:
+    x64.jcc less, __rc_panic#125
+  __rc_ok#227:
     x64.cmpRegReg rdx, rdi
-    x64.jcc aboveEqual, __im_slow#227
-  __im_load#228:
+    x64.jcc aboveEqual, __im_slow#225
+  __im_load#226:
     x64.loadRegBaseIndexScale.word64 r9, [rsi + rdx*8 + 0]
-  tryok#225:
+  tryok#223:
     x64.leaRegRegReg r8, r9, r8
     x64.movRegImm32 r9, 4294967295
     x64.andRegReg r8, r8, r9
-  __im_store#220:
+  __im_store#218:
     x64.storeBaseIndexScaleReg.word64 [rsi + rdx*8 + 0], r8
-  tryok#217:
+  tryok#215:
     x64.leaRegRegImm32 rdx, rdx, 1
-  forstep#216:
+  forstep#214:
     x64.leaRegRegImm32 rcx, rcx, 1
-  forhdr#215:
+  forhdr#213:
     x64.loadRegBaseDisp.word64 r8, [rax + 8]
     x64.cmpRegReg rcx, r8
-    x64.jcc less, foldRoundConstants#231
+    x64.jcc less, foldRoundConstants#229
   forexit#89:
     x64.movRegImm32 rdx, 0
     x64.leaRegRdata rax, [rip + __layout_Vector_N8_Word32]
@@ -656,7 +648,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rcx + rax*8 + 0]
     x64.storeSlotReg slot7, rax
-  __il_body#211:
+  __il_body#209:
     x64.movRegImm32 rdx, 6
     x64.movRegReg rcx, r12
     x64.callDirect sha256RotR
@@ -672,10 +664,10 @@ func @main {
     x64.xorRegReg rbx, rbx, r8
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg rbx, rbx, rax
-  __il_cont#210:
+  __il_cont#208:
     x64.loadRegSlot rax, slot18
     x64.leaRegRegReg rax, rax, rbx
-  __il_body#212:
+  __il_body#210:
     x64.movRegImm32 rcx, 4294967295
     x64.loadRegSlot rdx, slot15
     x64.xorRegReg rcx, rcx, rdx
@@ -687,13 +679,13 @@ func @main {
     x64.xorRegReg rdx, rdx, rcx
     x64.movRegImm32 rcx, 4294967295
     x64.andRegReg rdx, rdx, rcx
-  __il_cont#209:
+  __il_cont#207:
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegSlot rcx, slot7
     x64.leaRegRegReg rbx, rax, rcx
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg rbx, rbx, rax
-  __il_body#213:
+  __il_body#211:
     x64.movRegImm32 rdx, 2
     x64.loadRegSlot rcx, slot6
     x64.callDirect sha256RotR
@@ -709,7 +701,7 @@ func @main {
     x64.xorRegReg r12, r12, r8
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg r12, r12, rax
-  __il_body#214:
+  __il_body#212:
     x64.loadRegSlot rax, slot5
     x64.loadRegSlot rcx, slot6
     x64.movRegReg rdx, rcx
@@ -721,7 +713,7 @@ func @main {
     x64.xorRegReg rdx, rdx, rax
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg rdx, rdx, rax
-  __il_cont#207:
+  __il_cont#205:
     x64.leaRegRegReg rax, r12, rdx
     x64.movRegImm32 rcx, 4294967295
     x64.andRegReg rax, rax, rcx
@@ -919,7 +911,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at Sha256.maxon:189: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at Sha256.maxon:201: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -931,7 +923,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#9:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at Sha256.maxon:190: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Sha256.maxon:202: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -943,7 +935,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#11:
-    x64.leaRegRdata rcx, [rip + __str_blob_23]  ; "panic at Sha256.maxon:191: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at Sha256.maxon:203: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -955,7 +947,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#13:
-    x64.leaRegRdata rcx, [rip + __str_blob_24]  ; "panic at Sha256.maxon:192: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at Sha256.maxon:204: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -967,7 +959,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at Sha256.maxon:193: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at Sha256.maxon:205: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -979,7 +971,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_26]  ; "panic at Sha256.maxon:194: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at Sha256.maxon:206: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -991,7 +983,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at Sha256.maxon:195: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at Sha256.maxon:207: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1003,7 +995,43 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_28]  ; "panic at Sha256.maxon:196: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at Sha256.maxon:208: sha256: state index unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#115:
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Sha256.maxon:111: Range check failed: value outside typealias 'BufferPos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#162:
+    x64.leaRegRdata rcx, [rip + __str_blob_45]  ; "panic at Sha256.maxon:96: Range check failed: value outside typealias 'BufferPos'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#154:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at Sha256.maxon:99: sha256: read past the block the caller sized\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1015,7 +1043,19 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#164:
-    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at Sha256.maxon:85: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_46]  ; "panic at Sha256.maxon:100: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#156:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at Sha256.maxon:100: sha256: read past the block the caller sized\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1027,7 +1067,19 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#166:
-    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at Sha256.maxon:86: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_47]  ; "panic at Sha256.maxon:101: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#158:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at Sha256.maxon:101: sha256: read past the block the caller sized\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1039,7 +1091,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#168:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at Sha256.maxon:87: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_48]  ; "panic at Sha256.maxon:102: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1050,8 +1102,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#170:
-    x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at Sha256.maxon:88: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  tryerr#160:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at Sha256.maxon:102: sha256: read past the block the caller sized\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1062,15 +1114,56 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#129:
+  __im_slow#131:
+    x64.loadRegSlot rcx, slot19
+    x64.storeSlotReg slot21, rax
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot21
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#234
+  tryerr#79:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at Sha256.maxon:128: sha256: extend w[wi-2] unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  critsplit#234:
+    x64.movRegReg rbx, r8
+    x64.jmp tryok#78
+  __im_slow#134:
+    x64.loadRegSlot rcx, slot19
+    x64.storeSlotReg slot21, rax
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot21
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __im_cont#133
+  tryerr#81:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at Sha256.maxon:129: sha256: extend w[wi-7] unreachable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 248
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#137:
     x64.loadRegSlot rcx, slot19
     x64.storeSlotReg slot21, rax
     x64.callDirect __managed_get
     x64.loadRegSlot rax, slot21
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, critsplit#236
-  tryerr#79:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at Sha256.maxon:114: sha256: extend w[wi-2] unreachable\x0a"
+  tryerr#83:
+    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at Sha256.maxon:130: sha256: extend w[wi-15] unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1082,56 +1175,15 @@ func @main {
     x64.popReg rbp
     x64.ret
   critsplit#236:
-    x64.movRegReg rbx, r8
-    x64.jmp tryok#78
-  __im_slow#132:
-    x64.loadRegSlot rcx, slot19
-    x64.storeSlotReg slot21, rax
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot21
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_cont#131
-  tryerr#81:
-    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at Sha256.maxon:115: sha256: extend w[wi-7] unreachable\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 248
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_slow#135:
-    x64.loadRegSlot rcx, slot19
-    x64.storeSlotReg slot21, rax
-    x64.callDirect __managed_get
-    x64.loadRegSlot rax, slot21
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#238
-  tryerr#83:
-    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at Sha256.maxon:116: sha256: extend w[wi-15] unreachable\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 248
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  critsplit#238:
     x64.movRegReg r12, r8
     x64.jmp tryok#82
-  __im_slow#138:
+  __im_slow#140:
     x64.loadRegSlot rcx, slot19
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit#239
+    x64.jcc equal, critsplit#237
   tryerr#85:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at Sha256.maxon:117: sha256: extend w[wi-16] unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Sha256.maxon:131: sha256: extend w[wi-16] unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1142,10 +1194,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  critsplit#239:
+  critsplit#237:
     x64.movRegReg r13, r8
-    x64.jmp __il_body#205
-  __im_slow#141:
+    x64.jmp __il_body#203
+  __im_slow#143:
     x64.loadRegSlot rdi, slot19
     x64.storeSlotReg slot21, rax
     x64.storeSlotReg slot22, rcx
@@ -1160,7 +1212,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#91
     x64.jmp tryok#90
-  __im_slow#144:
+  __im_slow#146:
     x64.loadRegSlot rdi, slot19
     x64.storeSlotReg slot21, rax
     x64.storeSlotReg slot22, rcx
@@ -1174,7 +1226,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#92
   tryerr#93:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at Sha256.maxon:132: sha256: schedule index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at Sha256.maxon:146: sha256: schedule index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1185,8 +1237,8 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#123:
-    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Sha256.maxon:131: Range check failed: value outside typealias 'ElementIndex'\x0a"
+  __rc_panic#125:
+    x64.leaRegRdata rcx, [rip + __str_blob_54]  ; "panic at Sha256.maxon:145: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1197,7 +1249,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#227:
+  __im_slow#225:
     x64.loadRegSlot r9, slot19
     x64.storeSlotReg slot21, rax
     x64.storeSlotReg slot22, rcx
@@ -1215,9 +1267,9 @@ func @main {
     x64.loadRegSlot rdi, slot25
     x64.loadRegSlot r8, slot26
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#225
+    x64.jcc equal, tryok#223
   tryerr#91:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]  ; "panic at Sha256.maxon:131: sha256: schedule index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Sha256.maxon:145: sha256: schedule index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1229,7 +1281,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#95:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at Sha256.maxon:136: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at Sha256.maxon:150: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1241,7 +1293,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#97:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Sha256.maxon:137: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at Sha256.maxon:151: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1253,7 +1305,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#99:
-    x64.leaRegRdata rcx, [rip + __str_blob_13]  ; "panic at Sha256.maxon:138: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at Sha256.maxon:152: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1265,7 +1317,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#101:
-    x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at Sha256.maxon:139: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at Sha256.maxon:153: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1277,7 +1329,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#103:
-    x64.leaRegRdata rcx, [rip + __str_blob_15]  ; "panic at Sha256.maxon:140: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at Sha256.maxon:154: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1289,7 +1341,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#105:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]  ; "panic at Sha256.maxon:141: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at Sha256.maxon:155: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1301,7 +1353,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#107:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]  ; "panic at Sha256.maxon:142: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at Sha256.maxon:156: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1313,7 +1365,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#109:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at Sha256.maxon:143: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at Sha256.maxon:157: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1325,7 +1377,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#29:
-    x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at Sha256.maxon:228: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at Sha256.maxon:240: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1337,7 +1389,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#31:
-    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at Sha256.maxon:229: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Sha256.maxon:241: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1349,7 +1401,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#33:
-    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at Sha256.maxon:230: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at Sha256.maxon:242: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1361,7 +1413,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#35:
-    x64.leaRegRdata rcx, [rip + __str_blob_32]  ; "panic at Sha256.maxon:231: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "panic at Sha256.maxon:243: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1373,7 +1425,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#37:
-    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Sha256.maxon:232: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at Sha256.maxon:244: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1385,7 +1437,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#39:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at Sha256.maxon:233: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at Sha256.maxon:245: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1397,7 +1449,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#41:
-    x64.leaRegRdata rcx, [rip + __str_blob_35]  ; "panic at Sha256.maxon:234: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at Sha256.maxon:246: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1409,7 +1461,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#43:
-    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at Sha256.maxon:235: sha256: state index unreachable\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_39]  ; "panic at Sha256.maxon:247: sha256: state index unreachable\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248
@@ -1421,7 +1473,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_39]  ; "panic at sha256.empty-length.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at sha256.empty-length.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 248

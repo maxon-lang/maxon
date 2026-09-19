@@ -357,21 +357,17 @@ export enum IatSlot
 	MapViewOfFile = IatSlotMeta{dll: ImportDll.kernel32}
 	GetTickCount64 = IatSlotMeta{dll: ImportDll.kernel32}
 
-	// ⭐ **THE TWO ATTACHED-SUBPROCESS IMPORTS.** APPENDED AFTER `GetTickCount64` for the reason every entry
-	// above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
-	// kernel32 again, so they add no import DIRECTORY entry (see `ImportDll`).
+	// ⭐ **THE ATTACHED-SUBPROCESS IMPORT.** `PeekNamedPipe` is what makes collecting a child's stdout AND
+	// stderr deadlock-free — see `osPipePeek`, which carries the argument in full. kernel32, so it adds no
+	// import DIRECTORY entry (see `ImportDll`).
 	//
-	// `PeekNamedPipe` is what makes collecting a child's stdout AND stderr deadlock-free — see `osPipePeek`,
-	// which carries the argument in full. `TerminateProcess` is the kill a `timeoutMs` deadline owes.
-	//
-	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// ⚠ It joins the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
 	// four do and for the identical reason: an import nothing references still costs its IAT thunk, its
 	// import-lookup entry and its Hint/Name record, and a program that spawns no child should not pay for
-	// two. See `isOptionalTrailingImport`.
+	// it. See `isOptionalTrailingImport`.
 	PeekNamedPipe = IatSlotMeta{dll: ImportDll.kernel32}
-	TerminateProcess = IatSlotMeta{dll: ImportDll.kernel32}
 
-	// ⭐ **THE MACHINE-QUERY IMPORT.** APPENDED AFTER `TerminateProcess` for the reason every entry above
+	// ⭐ **THE MACHINE-QUERY IMPORT.** APPENDED AFTER `PeekNamedPipe` for the reason every entry above
 	// states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
 	// kernel32 again, so it adds no import DIRECTORY entry (see `ImportDll`).
 	//
@@ -584,6 +580,17 @@ export enum IatSlot
 	RegisterWaitForSingleObject = IatSlotMeta{dll: ImportDll.kernel32}
 	UnregisterWaitEx = IatSlotMeta{dll: ImportDll.kernel32}
 
+	// ⭐⭐ **THE PROCESS-TREE KILL'S FOUR.** A spawned child is put in a job object of its own and every
+	// descendant it starts is born inside that job, so `TerminateJobObject` ends the whole tree where
+	// `TerminateProcess` ends one process and orphans the rest. `SetLastError` restores the code
+	// `CreateProcessA` published, which the job calls that follow it would otherwise overwrite before the
+	// runtime can read it. kernel32 again, so they add no import DIRECTORY entry, and they join the
+	// OPTIONAL TRAILING BAND beside the subprocess imports above on the same terms.
+	CreateJobObjectW = IatSlotMeta{dll: ImportDll.kernel32}
+	AssignProcessToJobObject = IatSlotMeta{dll: ImportDll.kernel32}
+	TerminateJobObject = IatSlotMeta{dll: ImportDll.kernel32}
+	SetLastError = IatSlotMeta{dll: ImportDll.kernel32}
+
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
 	// `WSAStartup` (Winsock demands it once per process before any other call), `getaddrinfo`/`freeaddrinfo`
@@ -725,7 +732,7 @@ end 'iatSlotIndex'
 // import table — the trade is not close.
 //
 // ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm, which spans
-// `GetEnvironmentVariableA` through `UnregisterWaitEx`; a producer added later must extend that arm (or fail
+// `GetEnvironmentVariableA` through `SetLastError`; a producer added later must extend that arm (or fail
 // this total match) and this comment with it.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
@@ -734,7 +741,6 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			MapViewOfFile or
 			GetTickCount64 or
 			PeekNamedPipe or
-			TerminateProcess or
 			GetActiveProcessorCount or
 			QueryThreadCycleTime or
 			TlsAlloc or
@@ -765,7 +771,11 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			PostQueuedCompletionStatus or
 			SwitchToThread or
 			RegisterWaitForSingleObject or
-			UnregisterWaitEx gives true
+			UnregisterWaitEx or
+			CreateJobObjectW or
+			AssignProcessToJobObject or
+			TerminateJobObject or
+			SetLastError gives true
 		ExitProcess or
 			GetStdHandle or
 			WriteFile or

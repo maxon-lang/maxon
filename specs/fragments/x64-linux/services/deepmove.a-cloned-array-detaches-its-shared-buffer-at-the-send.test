@@ -131,7 +131,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#12
   tryerr#13:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_8]  ; "panic at Array.maxon:80: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 152
@@ -170,8 +170,11 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r13
     x64.callDirect __managed_share
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.movRegReg rcx, r13
     x64.callDirect __managed_retain
     x64.movRegReg r13, r8
@@ -358,7 +361,7 @@ func @Svc.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_15
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=take] @__jumptable_17
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [rbx + 56], rax
@@ -488,7 +491,7 @@ func @Svc.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=take] @__jumptable_16
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=take] @__jumptable_18
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

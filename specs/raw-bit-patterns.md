@@ -495,3 +495,81 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-word-sourced-value-is-free-at-a-return-door-and-at-a-binding -->
+### The `bits(64)`-SOURCED route, one door at a time — the two that are FREE
+`bits(64) as int(0 to u64.max)` is free, so a value that arrived through a `Word` reaches a `Count`
+RETURN and a `Count` BINDING with nothing to test, bit 63 set and all. Both doors read the pattern the
+`Word` already held and print it as the unsigned quantity it now denotes. The case below is the same
+value at the remaining door, and it panics.
+```maxon
+typealias Word = bits(64)
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function throughReturn(n Integer) returns Count
+	return n as Word as Count
+end 'throughReturn'
+
+function throughBinding(n Integer) returns Count
+	let c = n as Word as Count
+	return c
+end 'throughBinding'
+
+function main() returns ExitCode
+	let laundered = opaque(0) - 3
+	print("{throughReturn(laundered)}\n")
+	print("{throughBinding(laundered)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551613
+18446744073709551613
+```
+
+<!-- test: a-word-sourced-value-still-refuses-an-unsigned-quantity-parameter -->
+### ⚠⚠ …AND THE ARGUMENT DOOR REFUSES IT ANYWAY
+The sharp edge above, asked of the route a `bits(64)` value takes. `Word` is where a bit-63 pattern is
+legitimately at home, and `Word as Count` is free — but neither fact travels with the value. A PARAMETER
+door has only the 64 bits to look at, exactly as it does for a value that never met a `Word`, so it
+cannot separate this laundered `-3` from the quantity 18446744073709551613 it just printed. It refuses
+both, and this program dies on the argument the one above returned and bound.
+⇒ **THE SOURCE OF A VALUE NEVER RELAXES A DOOR.** A type that needs the whole word through a CALL is a
+`bits(64)` parameter; converting to `int(0 to u64.max)` at the call site converts nothing away.
+```maxon
+typealias Word = bits(64)
+typealias Count = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	let laundered = opaque(0) - 3
+	print("{show(laundered as Word as Count)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-word-sourced-value-still-refuses-an-unsigned-quantity-parameter.test:10: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in show
+  in main
+  in mrt_start
+```

@@ -8,6 +8,8 @@ let LongRunTimeoutMs = 600000
 // does not have to know the number.
 let MemoryLeakExitCode = 101
 
+let StdlibRootUnresolved = "unresolved — this compiler does not sit inside a tree holding stdlib/, so it can compile nothing"
+
 let ScaleResultRelativePath = ".scale-tmp/scale-result.json"
 let SnippetStem = "mcp-snippet"
 
@@ -15,8 +17,9 @@ let SnippetStem = "mcp-snippet"
 // Spawning
 // =============================================================================
 
-// Where a tool runs, and with which compiler. `repoRootLabel` is empty for the user-facing tools,
-// which act in the host's working directory and have no tree to name.
+// Where a tool runs, and with which compiler. `repoRootLabel` is empty exactly when no `repoRoot` arrived:
+// the tool then acts in the host's working directory and has no tree to name, and every answer leaves the
+// key out rather than reporting an empty one (`addRepoRootIfKnown`).
 type ToolContext
 	export var compiler as FilePath
 	export var workingDir as FilePath
@@ -220,15 +223,21 @@ export function executeBuildTool(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 end 'executeBuildTool'
 
 export function executeRunTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let tree = hostOrTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
+
+	if not tree.ready 'answered'
+		return
+	end 'answered'
+
 	let target = resolveSourceTarget(reqDoc, args: args)
 
 	if not target.ok() 'bad'
-		sendToolError(reqDoc, idNode: idNode, message: "run: {target.error}", repoRoot: "")
+		sendToolError(reqDoc, idNode: idNode, message: "run: {target.error}", repoRoot: tree.ctx.repoRootLabel)
 		return
 	end 'bad'
 
 	if not target.named 'nothingToRun'
-		sendToolError(reqDoc, idNode: idNode, message: "run: give either `path` or `source`.", repoRoot: "")
+		sendToolError(reqDoc, idNode: idNode, message: "run: give either `path` or `source`.", repoRoot: tree.ctx.repoRootLabel)
 		return
 	end 'nothingToRun'
 
@@ -240,10 +249,16 @@ export function executeRunTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalN
 		argv.push(a)
 	end 'each'
 
-	runAndReport(reqDoc, idNode: idNode, ctx: ToolContext.hostRelative(exePath), argv: argv, what: "the program", timeoutMs: LongRunTimeoutMs)
+	runAndReport(reqDoc, idNode: idNode, ctx: tree.ctx, argv: argv, what: "the program", timeoutMs: LongRunTimeoutMs)
 end 'executeRunTool'
 
 export function executeTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+	let tree = hostOrTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
+
+	if not tree.ready 'answered'
+		return
+	end 'answered'
+
 	var argv = StringArray.create()
 	argv.push("test")
 
@@ -259,16 +274,22 @@ export function executeTestTool(reqDoc JsonDoc, idNode JsonNodeId, args Optional
 		argv.push("--filter={filterArg}")
 	end 'hasFilter'
 
-	runAndReport(reqDoc, idNode: idNode, ctx: ToolContext.hostRelative(exePath), argv: argv, what: "tests", timeoutMs: LongRunTimeoutMs)
+	runAndReport(reqDoc, idNode: idNode, ctx: tree.ctx, argv: argv, what: "tests", timeoutMs: LongRunTimeoutMs)
 end 'executeTestTool'
 
 export function executeFmtTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
-	let ctx = ToolContext.hostRelative(exePath)
+	let tree = hostOrTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
+
+	if not tree.ready 'answered'
+		return
+	end 'answered'
+
+	let ctx = tree.ctx
 
 	let target = resolveSourceTarget(reqDoc, args: args)
 
 	if not target.ok() 'badSource'
-		sendToolError(reqDoc, idNode: idNode, message: "fmt: {target.error}", repoRoot: "")
+		sendToolError(reqDoc, idNode: idNode, message: "fmt: {target.error}", repoRoot: ctx.repoRootLabel)
 		return
 	end 'badSource'
 
@@ -293,6 +314,7 @@ export function executeFmtTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalN
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
 	payload.addString(doc, key: "command", value: formatArgv(ctx.compiler, argv: argv))
+	addRepoRootIfKnown(doc, payload: payload, repoRoot: ctx.repoRootLabel)
 	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
 
 	if res.succeeded() 'readBack'
@@ -351,20 +373,35 @@ function addCompileOutcome(doc JsonDoc, payload JsonObjectBuilder, compile InPro
 	return succeeded
 end 'addCompileOutcome'
 
-export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
+function stdlibRootLabel() returns String
+	let located = try locateStdlibDir() otherwise return StdlibRootUnresolved
+	return located.toString()
+end 'stdlibRootLabel'
+
+// `check` and `dump_ir` compile IN this process, so they can honour no `repoRoot` and nothing else in their
+// answer says whose verdict it is. One server serves every worktree, so without these two fields a diagnostic
+// read in one tree cannot be attributed to the compiler and the library tier that produced it.
+function addInProcessAttribution(doc JsonDoc, payload JsonObjectBuilder, exePath FilePath)
+	payload.addString(doc, key: "executable", value: exePath.toString())
+	payload.addString(doc, key: "stdlibRoot", value: stdlibRootLabel())
+end 'addInProcessAttribution'
+
+export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false))
+	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 
 	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeCheckTool'
 
 // `ir` is empty when the compile was refused, as `maxon/generateIR`'s is.
-export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode)
+export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true)
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compile)
+	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 
 	let irText = match compile 'ir'
 		compiled(project, codeResult, _) gives renderTargetIr(project, codeResult: codeResult)
@@ -426,6 +463,17 @@ function resolveTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode
 
 	return TreeContext.usable(ToolContext.inTree(binary, repoRoot: root.path))
 end 'resolveTreeContext'
+
+// ⚠ An ABSENT `repoRoot` means the HOST's working directory, not this server's own checkout. `run f.maxon`,
+// `test .` and a bare `fmt` all resolve their paths against the caller's cwd, so falling back to the tree
+// this binary sits in would run the command somewhere the argument was never written for.
+function hostOrTreeContext(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath) returns TreeContext
+	if getOptionalStringArg(reqDoc, args: args, key: "repoRoot", defaultVal: "").isEmpty() 'noTreeNamed'
+		return TreeContext.usable(ToolContext.hostRelative(exePath))
+	end 'noTreeNamed'
+
+	return resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
+end 'hostOrTreeContext'
 
 export function executeSpecTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
 	let tree = resolveTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)

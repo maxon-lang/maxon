@@ -1,0 +1,159 @@
+// Test: a-base-extension-discharges-a-derived-interfaces-requirement
+typealias Integer = int(i64.min to i64.max)
+
+interface Forward
+	function step() returns Integer
+end 'Forward'
+
+interface Both extends Forward
+	function back() returns Integer
+end 'Both'
+
+extension Forward
+	export function back() returns Integer
+		return 0 - self.step()
+	end 'back'
+end 'Forward'
+
+type Walker implements Both
+	export var stride as Integer
+
+	export static function of(stride Integer) returns Self
+		return Walker{stride: stride}
+	end 'of'
+
+	export function step() returns Integer
+		return self.stride
+	end 'step'
+end 'Walker'
+
+function main() returns ExitCode
+	let w = Walker.of(7)
+	print("{w.step()} {w.back()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegImm32 rbx, 7
+  __il_body#4:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_body#8:
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
+  __il_cont#7:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_2]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+  __il_body#5:
+    x64.movRegImm32 r15, 0
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+  __il_cont#9:
+    x64.subRegReg r15, r15, rax
+  __il_cont#2:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot5, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegReg rcx, rbx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot6
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot4
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot2
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+  __il_body#6:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -44,6 +44,15 @@ export let NothingRanExitCode = 2 as AssertedInt
 // A stable fragment of the tree lock's busy refusal (`TreeLock.reportBusy`).
 export let TreeLockBusyWording = "holds its tree lock"
 
+// The refusal must name the host's own way of asking whether the holder is still alive, spelled exactly: a
+// reader left to their half-remembered process tool reads the wrong column and believes a live holder is
+// gone. The probe is spelled around `HeldLockRecord`'s pid, so the two must agree.
+#if os(Windows)
+	export let TreeLockLivenessProbeWording = "tasklist /FI \"PID eq 0\""
+#else
+	export let TreeLockLivenessProbeWording = "ps -p 0"
+#endif
+
 // `TreeLock.LockFileName`, and the directory whose presence makes a directory a checkout
 // (`stdlibDirAbove`). A second copy of each.
 let TreeLockFileName = ".maxon-tree.lock"
@@ -219,12 +228,19 @@ end 'plantHeldTreeLock'
 
 // ⛔ **THE ABSENCE OF AN EXECUTABLE IS ASSERTED BESIDE THE REFUSAL.** A refused build that still wrote one
 // did the work the refusal exists to prevent.
-export function requireRefused(staged FilePath, options StringArray, exitCode AssertedInt, wording String, what String) throws TestFailure
+//
+// Every wording in `wordings` must appear: a refusal that carries several facts is pinned on all of them, so
+// dropping one from the message is a failure rather than a message that still matches.
+export function requireRefused(staged FilePath, options StringArray, exitCode AssertedInt, wordings StringArray, what String) throws TestFailure
 	let build = spawnManifestBuild(staged, options: options)
 	let stderr = withoutCarriageReturns(build.stderr)
 
 	try Expect.equal(build.exitCode() as AssertedInt, expected: exitCode, message: "`{what}` over the staged manifest exited {build.exitCode()} and must be refused with exit {exitCode}. It wrote to stdout: {build.stdout} and to stderr: {stderr}")
-	try Expect.contains(stderr, needle: wording, message: "`{what}` over the staged manifest was not refused for the reason under test. It wrote to stderr: {stderr}")
+
+	for wording in wordings 'eachWording'
+		try Expect.contains(stderr, needle: wording, message: "`{what}` over the staged manifest was not refused for the reason under test. It wrote to stderr: {stderr}")
+	end 'eachWording'
+
 	try Expect.isEmpty(builtProductsIn(staged), message: "`{what}` over the staged manifest was refused and still wrote a product.")
 end 'requireRefused'
 

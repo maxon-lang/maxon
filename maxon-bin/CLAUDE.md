@@ -481,16 +481,21 @@ restart the MCP server when you need the new one to answer.
 > `success: true` about a tree containing none of your work.**
 >
 > ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree root — to EVERY tool call
-> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test` and `spec_test_outcome`. The
-> user-facing tools (`run`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`) take none —
-> they act in the host's working directory and name no tree.
+> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test`, `spec_test_outcome`, and `run`,
+> `test` and `fmt` when you mean YOUR tree's compiler to answer. Those last three default to the
+> host's working directory and name no tree, which is right for a path you wrote yourself and wrong
+> for a worktree whose compiler you want exercised. `check`, `dump_ir`, `lookup_error_code` and `info`
+> take no `repoRoot` at all: the first two compile INSIDE the server, so they always answer about the
+> server's own compiler — read the `executable` and `stdlibRoot` fields they carry before believing a
+> verdict about your tree.
 >
 > ```
 > build(repoRoot: "C:/Users/Eric/dev/maxon/.claude/worktrees/agent-xyz")
 > ```
 >
 > - **Every result echoes the `repoRoot` it actually used**, in the payload's `repoRoot` field —
->   answers and refusals alike. **READ IT BACK.**
+>   answers and refusals alike. **READ IT BACK.** A tool that named no tree leaves the field out
+>   rather than reporting an empty one, so an absent `repoRoot` means "the host's directory".
 > - ⭐ **THE TREE'S OWN COMPILER RUNS, NOT THE SERVER'S.** A tool acting on `repoRoot` spawns
 >   `<repoRoot>/maxon-bin/.maxon/maxon`, because `stdlib/` and `runtime/` are resolved by walking UP
 >   from the EXECUTABLE — the server's binary would compile your worktree against the MAIN repo's

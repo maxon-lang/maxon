@@ -142,8 +142,10 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.storeBaseDispReg.word64 [x19 + 0], x20
   __il_cont#12:
+    arm64.movImm x1, 0
     arm64.movRegReg x0, x19
     arm64.bl __sole_Middle
+    arm64.bl __mm_walk_settle
     arm64.leaFuncAddr x0, Middle.__loop
     arm64.leaFuncAddr x2, Middle.__abandon
     arm64.movRegReg x1, x19
@@ -362,7 +364,7 @@ func @Slow.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=get] @__jumptable_16
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=get] @__jumptable_18
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -416,7 +418,7 @@ func @Slow.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=get] @__jumptable_17
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=get] @__jumptable_19
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
@@ -456,7 +458,7 @@ func @Middle.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_18
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=go] @__jumptable_20
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -530,7 +532,7 @@ func @Middle.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_19
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=go] @__jumptable_21
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0

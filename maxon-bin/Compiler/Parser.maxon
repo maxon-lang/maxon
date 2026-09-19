@@ -3918,8 +3918,9 @@ end 'tagCarriesStructLayout'
 // The resolved END of a field-access chain `base.f1.…fN` (P1.4a wave 2): the `box` its LAST field lives in
 // (the base's box for a single field, an intermediate struct field's loaded box for a chain), the `layout`
 // that box has, the `lastFieldTok` naming the field still to read or write, and the `baseTok`/`baseBinding`
-// the chain started from (the write path needs the base binding for its mutability check). `resolveFieldChain`
-// is the one producer; a chained read and a chained write are its two consumers.
+// the chain started from. Both paths need the base binding for its mutability: the write to refuse a store
+// through an immutable instance, the read to refuse handing that instance's field address to a callee.
+// `resolveFieldChain` is the one producer; a chained read and a chained write are its two consumers.
 type FieldChainStep
 	export let box as ValueId
 	export let layout as StructLayout
@@ -4989,14 +4990,16 @@ let WithIteratorElementPosition = 1 as FieldIndex
 // The library cursor whose `current()` pairs an iterator with its element (`stdlib/helpers/itertools/withIterator.maxon`).
 let WithIterIteratorTypeName = b"WithIterIterator"
 
-// ⭐ **A CELL HOLDS EXACTLY ONE VALUE, AT OFFSET 0 (PBR-2).** Named rather than spelled as a bare `0` at the
-// FIVE sites that address one, for the reason a global's read names its own: the offset field is not dead
-// weight — it is what says the address is already the exact one, so a reader can tell "the whole of this box"
-// from "a slot inside it".
+// A cell holds exactly one value, at offset 0 (PBR-2). Named rather than spelled as a bare `0` at every site
+// that addresses one, for the reason a global's read names its own: the offset field is not dead weight — it
+// is what says the address is already the exact one, so a reader can tell "the whole of this box" from "a
+// slot inside it". One of those sites is in ANOTHER FILE: `InsertRangeChecks.emitCellLoad` dereferences a
+// by-reference parameter for its entry range guard. Derive the roster by grepping the name, never from a
+// remembered count.
 //
-// ⚠ The fifth is in ANOTHER FILE and arrived a rung later: `InsertRangeChecks.emitCellLoad` dereferences a
-// by-reference parameter for its entry range guard. The count is DERIVED by grepping `CellContentOffset`,
-// not remembered — a stale census is this project's own recurring defect.
+// ⚠ A site can DEPEND on the offset being 0 without naming it, and no grep will find it.
+// `takeCellRequestForField` hands a callee a field's own address as the cell, which is the right address
+// only while a cell's payload starts at its first byte.
 module let CellContentOffset = 0 as ByteOffset
 
 // The local NAMES of one function body that must live in a cell (PBR-2) — see
@@ -15494,14 +15497,16 @@ export type Parser
 	// closure in the file no binding can be captured, so the per-body walk is not worth taking.
 	var fileHasClosureLiteral as bool
 
-	// ⭐⭐ **A CALL ARGUMENT AT A BY-REFERENCE POSITION HAS ASKED FOR THE CELL ITSELF (PBR-2).** Set by
-	// `parseCallArgs` to the argument's first token when that argument is exactly a name, and CONSUMED by
-	// `parseVariableReference`'s cell arm, which then hands back the cell's ADDRESS instead of loading it.
+	// A call argument at a by-reference position has asked for the STORAGE itself rather than its contents
+	// (PBR-2). Set by `parseCallArgs` to the argument's chain ANCHOR — a bare name's own token, or the LAST
+	// field token of `p.a.b` — through `cellArgumentAnchorAt`, and consumed by whichever read door lands on
+	// that token (a cell local, a module slot, a self field, a field chain), which then hands back the
+	// storage's ADDRESS and emits no load.
 	//
 	// ⚠ **IT IS KEYED ON THE TOKEN INDEX, AND A BARE BOOLEAN WOULD BE A WRONG ANSWER.** `f(x + 1)` at a
 	// by-reference position parses `x` through the same read door, and a flag would hand the cell's address to
-	// the `+`. The index says WHICH read may take it — the one standing on the argument's own first token —
-	// and every nested read sees a request that is not for it.
+	// the `+`. The index says WHICH read may take it — the one standing on the anchor — and every other read
+	// the argument contains sees a request that is not for it.
 	var cellArgumentTokenIndex as TokenIndex
 
 	// ⭐⭐ **A RECEIVING SLOT HAS STATED THE `Array` INSTANCE THE LITERAL AT THIS TOKEN MUST BE BUILT AT.**
@@ -31043,12 +31048,17 @@ export type Parser
 				func.reassignedParamMask = maskWithParam(func.reassignedParamMask, param: i)
 			end 'arrivesAsACellAddress'
 
-			// ⭐⭐ **E3019's SEED FOR A PLAIN REASSIGNMENT (PBR-2).** `writtenParamMask` answers *"does passing
-			// an immutable binding HERE make it an error?"*, and a body that REBINDS the name is the plainest
+			// E3019's seed for a plain reassignment (PBR-2). `writtenParamMask` answers "does passing an
+			// immutable binding HERE make it an error?", and a body that REBINDS the name is the plainest
 			// possible yes: `let n = 5` handed to a `setTo99(x)` whose body is `x = 99` must be refused, which
 			// is `pass-by-reference.let-to-mutating-param-error`. From there the existing machinery does the
 			// rest — `buildParamMutationSummary` closes it over the call graph and
-			// `checkImmutableArgToMutatingParam` reports it — so this rung adds a SEED and no new check.
+			// `checkImmutableArgToMutatingParam` reports it.
+			//
+			// E3070's storage column is seeded from the same rebind, and it is the callee-side half of the
+			// refusal `storeToGlobal` carries: the reassignment DROPS the record the caller's storage held, so
+			// a borrow taken out of that storage and held across the call dangles. Without the seed a
+			// by-reference argument reaches a free the equivalent store is refused for.
 			//
 			// ⚠ **THE *DIRECT* COLUMN, NEVER `paramIsByRef`.** A forwarder takes its parameter by reference
 			// without writing anything of its own, and the fixpoint is what carries the callee's write back to
@@ -31062,6 +31072,10 @@ export type Parser
 			// second union-returning lookup.
 			if paramIsByRef and self.signatures.paramIsDirectlyReassigned(funcName, index: i) 'rebindsThisParameter'
 				func.writtenParamMask = maskWithParam(func.writtenParamMask, param: i)
+
+				if self.typeOwnsBorrowableStorage(paramType) 'freesBorrowableStorage'
+					func.storageWrittenParamMask = maskWithParam(func.storageWrittenParamMask, param: i)
+				end 'freesBorrowableStorage'
 			end 'rebindsThisParameter'
 
 			// ⚠ **THE VALUE COLUMN KEEPS THE DECLARED TYPE, DELIBERATELY.** ValueId `i` physically holds a
@@ -33059,7 +33073,7 @@ export type Parser
 			// here like any other bare-call statement — is dropped by the statement's `drainPendingTemps`
 			// tail when it owns heap. Treating `cb` as a direct call instead is what misreported it E3004.
 			if self.calleeIsFunctionTypedLocal() 'functionLocalCallStmt'
-				_ = try self.parsePostfix(func, value: try self.parseVariableReference(), resultUsed: false)
+				_ = try self.parsePostfix(func, value: try self.parseVariableReference(func), resultUsed: false)
 			end 'functionLocalCallStmt' else 'directCallStmt'
 				// A trailing `(` on the call's RESULT is a call-result callee (`getFn()()`) — the result is itself a
 				// `function` value, applied by `parsePostfix` as an indirect call, the statement-position twin of the
@@ -35414,10 +35428,10 @@ export type Parser
 			throw assignToImmutableError(nameTok)
 		end 'immutableGlobal'
 
-		// ⭐ **E3070's REBIND DOOR FOR MODULE STORAGE — the same write as `arr = other`, one anchoring out.**
-		// The store below DECREFS the record the slot was holding (`emitCheckedGlobalStore`), so every element
-		// borrowed out of it is freed: MEASURED **0xC0000005** on `let s = try g.get(0) otherwise ""` +
-		// `g = StringArray.create()` + `print("{s}")`.
+		// E3070's rebind door for module storage — the same write as `arr = other`, one anchoring out. The
+		// store below DECREFS the record the slot was holding (`emitCheckedGlobalStore`), so every element
+		// borrowed out of it is freed. A callee reached this same free through a by-reference argument, which
+		// is why `bindParameters` seeds the callee-side column off the same claim; the two must stay one rule.
 		//
 		// ⚠ **THE SUBJECT IS THE TARGET'S STORAGE NAME, TAKEN OFF THE RESOLVED NAME RATHER THAN OFF A TOKEN
 		// INDEX (W65).** A static member's target is `Counter.count`, which no single token spells — a
@@ -35483,7 +35497,7 @@ export type Parser
 		// everything but a MANAGED top-level binding (that predicate exists for the borrow rule, where only a
 		// managed slot can free an element). `staticMemberNameToken` has already fused `Counter.count` into one
 		// token, so this spelling is the author's for both shapes.
-		self.artifact.recordModuleVarAccessSite(ModuleVarAccessSite.create(nameTok.value, access: ModuleVarAccess.write, line: nameTok.line, column: nameTok.column, declFilePath: self.filePath))
+		self.recordModuleVarAccess(nameTok, access: ModuleVarAccess.write)
 
 		// ⭐ **THE EFFECT SUMMARY'S "modifies global state" SEED (E3064).** Recorded here for the reason the
 		// write half above is: past this door the write is a `globalAddr` + `storeIndirect` pair a READ emits
@@ -35578,18 +35592,30 @@ export type Parser
 		self.markMutabilityExercised(binding)
 	end 'requireMutableBinding'
 
-	// **THE SECOND DOOR: MAY THE RECORD THIS NAME DENOTES BE WRITTEN THROUGH?** — the INSTANCE rank of
-	// `p.x = 5` (see `parseFieldAssignment` for the rank order the whole permission band obeys). It differs
-	// from the rebind above in exactly the parameter, and it asks that through
-	// `bindingStorageIsWritableHere` rather than restating it — the same predicate the mutating-METHOD
-	// receiver asks, because `p.push(9)` and `p.x = 5` are one write of one record under two spellings.
+	// May the record this name denotes be written through? — the INSTANCE rank of `p.x = 5` (see
+	// `parseFieldAssignment` for the rank order the whole permission band obeys). It differs from the rebind
+	// above in exactly the parameter, and it asks that through `bindingStorageIsWritableHere` rather than
+	// restating it — the same predicate the mutating-METHOD receiver asks, because `p.push(9)` and `p.x = 5`
+	// are one write of one record under two spellings.
 	//
-	// ⚠ It marks E3077's evidence on the same terms the rebind door does, and for a PARAMETER that mark is
-	// inert rather than special-cased: only a `var` DECLARATION is ever an E3077 candidate, and the
-	// receiver door already marks a parameter receiver unconditionally (`dispatchMethodOnBinding`), so a
-	// second rule here would be this one fact answered twice.
+	// ⚠ The by-reference hand-over in `parseFieldAccess` asks it too, and must: a callee handed the field's
+	// ADDRESS writes through this instance, so admitting a chain the equivalent store would refuse is a
+	// write past a permission rank, with no diagnostic anywhere.
+	function instanceAcceptsAWriteThrough(binding VarInfo) returns bool
+		return not self.bindingAliasesAnImmutableGlobal(binding) and self.bindingStorageIsWritableHere(binding)
+	end 'instanceAcceptsAWriteThrough'
+
+	// The refusing door, and it marks E3077's evidence on the same terms the rebind door does. For a
+	// PARAMETER that mark is inert rather than special-cased: only a `var` DECLARATION is ever an E3077
+	// candidate, and the receiver door already marks a parameter receiver unconditionally
+	// (`dispatchMethodOnBinding`), so a second rule here would be this one fact answered twice.
 	function requireWritableInstance(binding VarInfo, nameTok Token) throws ParseError
-		// ⭐⭐ **THE TAINT DOOR (W117), AND IT NEEDS ITS OWN SENTENCE RATHER THAN E2013's.** `p.x = 5` through a
+		if self.instanceAcceptsAWriteThrough(binding) 'writable'
+			self.markMutabilityExercised(binding)
+			return
+		end 'writable'
+
+		// The taint door (W117), and it needs its own sentence rather than E2013's. `p.x = 5` through a
 		// value that aliases a `let`-declared global is refused on the same terms the mutating-METHOD receiver
 		// one over is (`immutableReceiverNameOf`), off the same one predicate — but E2013 renders "cannot
 		// assign to immutable variable: 'a'", which is FALSE of the `var` this most often is and would send the
@@ -35599,11 +35625,7 @@ export type Parser
 			throw ParseError.unsupported(immutableGlobalWriteRefusal(String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
 		end 'aliasesAnImmutableGlobal'
 
-		if not self.bindingStorageIsWritableHere(binding) 'immutableInstance'
-			throw assignToImmutableError(nameTok)
-		end 'immutableInstance'
-
-		self.markMutabilityExercised(binding)
+		throw assignToImmutableError(nameTok)
 	end 'requireWritableInstance'
 
 	// **WHAT A USER MAY NOT DECLARE, IN ONE PLACE.** Two reservations, both raised as E2051 at the declared
@@ -58563,7 +58585,7 @@ export type Parser
 				// (`parsePostfix`) apply the `(args)`. The same diversion — reading the SAME predicate —
 				// runs at statement position (`parseStatement`'s `callStmt`); see `calleeIsFunctionTypedLocal`.
 				if self.calleeIsFunctionTypedLocal() 'functionLocalCall'
-					return try self.parseVariableReference()
+					return try self.parseVariableReference(func)
 				end 'functionLocalCall'
 
 				// A call in an EXPRESSION — its result IS the expression, so a void callee has nothing
@@ -58579,7 +58601,7 @@ export type Parser
 				return try self.parseDottedPrimary(func, resultUsed: true)
 			end 'dotted'
 
-			return try self.parseVariableReference()
+			return try self.parseVariableReference(func)
 		end 'namedPrimary'
 
 		let tok = self.current()
@@ -62302,7 +62324,8 @@ export type Parser
 	// method could mutate and no ownership for a blame name to protect. Its member (if any) is then served by
 	// `parsePostfix`'s value receiver exactly as an integer literal's is.
 	function parseStaticMemberAccess(func IrFunction, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		let memberTok = self.tokenAt(self.pos + TokensPerQualifierSegment)
+		let memberIndex = (self.pos + TokensPerQualifierSegment) as TokenIndex
+		let memberTok = self.tokenAt(memberIndex)
 		let nameTok = self.staticMemberNameToken(baseTok, memberTok: memberTok)
 
 		// ON the member token, not past it: `dispatchMethodOnBinding` advances once off the receiver's LAST
@@ -62318,7 +62341,7 @@ export type Parser
 		end 'aMethodOnTheMember'
 
 		self.advance()
-		return try self.topLevelBindingReference(nameTok)
+		return try self.topLevelBindingReference(func, tok: nameTok, nameIndex: memberIndex)
 	end 'parseStaticMemberAccess'
 
 	// ⭐ **DOES `<baseTok>.<member at memberIndex>` NAME A DECLARED STATIC MEMBER (W65)?** — the ONE
@@ -65942,7 +65965,7 @@ export type Parser
 	// and one refused, is the asymmetry this being a shared function ends.
 	function baseBoxOf(binding VarInfo, baseTok Token) returns ValueId throws ParseError
 		if binding.isSelfField 'materializeTheField'
-			return try self.parseSelfFieldRead(baseTok, binding: binding)
+			return try self.parseSelfFieldRead(baseTok, nameIndex: NoCellArgumentRequest, binding: binding)
 		end 'materializeTheField'
 
 		return self.bindingValue(binding, range: SourceRange.ofToken(baseTok))
@@ -65994,19 +66017,19 @@ export type Parser
 	// INVERTED restatement is the shape that lets a `var` field become one a method may push onto but no callee
 	// may be handed, with nothing in either site to say the other exists.
 	//
-	// ⭐⭐ **AND AN ITERATED FIELD IS NOT WRITABLE, WHATEVER THE FIELD DECLARES.** This is one of the five
-	// readers of the iteration lock, and it needs its own arm rather than sharing
-	// `immutableReceiverNameOf`'s, because `baseBindingOf` MINTS A FRESH `VarInfo` for the alias:
-	// the lock is keyed on object identity (so a shadowing declaration is correctly not locked), and that
-	// fresh object is not the one the lock holds. Asking HERE — where the alias's own binding is still in
-	// hand — covers both of this function's askers at once, which is the reason it is a function.
+	// The alias's binding is what this door holds; the rule itself is keyed on the field INDEX
+	// (`selfFieldIndexIsWritable`), which is all a by-reference hand-over has.
 	function selfFieldIsWritable(binding VarInfo, nameTok Token) returns bool throws ParseError
-		if self.bindingIsIterationLocked(binding) 'iterated'
-			return false
-		end 'iterated'
-
-		return (try self.enclosingLayout(nameTok)).fieldIsMutable(binding.fieldIndex)
+		return self.selfFieldIndexIsWritable(try self.enclosingLayout(nameTok), index: binding.fieldIndex)
 	end 'selfFieldIsWritable'
+
+	// An iterated field is not writable, whatever the field declares. The lock must be read by INDEX and not
+	// by binding: `baseBindingOf` mints a fresh `VarInfo` for a self-field alias, and the lock is keyed on
+	// object identity (so a shadowing declaration is correctly not locked), so the fresh object is never the
+	// one the lock holds.
+	function selfFieldIndexIsWritable(layout StructLayout, index FieldIndex) returns bool
+		return layout.fieldIsMutable(index) and not self.selfFieldIsIterationLocked(index)
+	end 'selfFieldIndexIsWritable'
 
 	// ⭐ **COULD THE `<base> . <member> (` AT `index` BE A METHOD CALL ON A TOP-LEVEL MANAGED BINDING?** — a
 	// `let` (P1.7a) or a `var` (P1.7 slice 2a). The ONE gate in front of both askers — `methodCallsAt` (is
@@ -66177,7 +66200,8 @@ export type Parser
 			// A member that is a FIELD is READ, in two cases: a FUNCTION-typed one however it is spelled (the
 			// `(args)` after it is an INDIRECT call the postfix loop applies, not a method dispatch), and ANY
 			// field with no `(` after it at all — `Inner.make(9).x`, `t.branch().tally`, a plain member access
-			// on a value the chain walk could not reach because its base was not a name.
+			// on a value no chain walk resolved, whether because the base was not a name or because an
+			// earlier door already materialized it.
 			//
 			// A NON-function field WITH a `(` falls through to the method path deliberately: `p.count(…)` on
 			// an int field `count` is not a call through the field, and it must report the unknown method
@@ -72371,13 +72395,15 @@ export type Parser
 	// declared `let`?" but "would this write destroy the loop's borrow?", and it overrules a `var` and a
 	// PARAMETER alike (see `bindingIsIterationLocked`).
 	//
-	// ⭐ **EVERY DOOR THAT WRITES A BINDING ASKS IT, AND THEY MUST ALL GET ONE ANSWER**: the mutating-METHOD
+	// Every door that writes a binding asks it, and they must all get one answer: the mutating-METHOD
 	// receiver (E3019, `immutableReceiverNameOf`), the field STORE's instance rank (E2013,
-	// `requireWritableInstance`, which is `p.x = 5`), and the REBIND (`requireMutableBinding`), which asks
-	// this and then adds the one conjunct a rebind needs on top of it. They are spellings of one write — the
-	// record `p` denotes is modified — so a further kind of writable binding, or a further LOCK, taught to
-	// one of them and not the others is exactly the drift `bindingStorageIsWritable`'s header is about, one
-	// qualifier further out. The lock therefore lives HERE, in the one conjunct they share, and nowhere else.
+	// `requireWritableInstance`, which is `p.x = 5`), the REBIND (`requireMutableBinding`), which asks this
+	// and then adds the one conjunct a rebind needs on top of it, and the by-reference hand-over
+	// (`instanceAcceptsAWriteThrough`) — a READ door asking the write question, because the address it gives
+	// away is written through by the callee. They are spellings of one write — the record `p` denotes is
+	// modified — so a further kind of writable binding, or a further LOCK, taught to one of them and not the
+	// others is exactly the drift `bindingStorageIsWritable`'s header is about, one qualifier further out.
+	// The lock therefore lives HERE, in the one conjunct they share, and nowhere else.
 	//
 	// ⚠ E3078's source test (`requireMutableBindingSource`) deliberately reads the UNQUALIFIED predicate:
 	// it asks whether the SOURCE was declared writable, which is a fact about the declaration and not
@@ -73286,7 +73312,8 @@ export type Parser
 	// USE-AFTER-FREE rather than a compile error: `fieldChainMethodCallAt` decides that a WRITE goes
 	// through a chain, and `sourceNamesABase` decides that a `for … in` LOCKS that chain's base against
 	// exactly that write (`bindingIsIterationLocked`). Teach one a new chain shape and not the other and
-	// the lock silently stops covering the door it was built to cover.
+	// the lock silently stops covering the door it was built to cover. `cellArgumentAnchorAt` predicts the
+	// same shape at a cursor this walk's askers do not hold, and is bound to `namesMemberAt` for this reason.
 	function fieldChainEndAfter(index TokenIndex, minHops FieldHopCount) returns TokenIndex
 		// The base is anything `tokenCanBeAName` admits — which subsumes the identifier and the `self` keyword,
 		// and adds a KEYWORD-named binding. One predicate for the base
@@ -75019,35 +75046,32 @@ export type Parser
 		return self.signatures.isArrayInstanceAt(maxonTypeTag(t), nameId: typeNameIdOf(t))
 	end 'typeIsArrayInstance'
 
-	// ⭐⭐⭐ **CAN DROPPING A RECORD OF THIS TYPE FREE STORAGE AN E3070 BORROW POINTS INTO? — THE ONE HOME OF
-	// THE GATE ON BOTH FIELD-STORE DOORS (W-BORROW).** `emitCheckedSelfFieldStore` (`items = <fresh>`) and
-	// `parseFieldAssignment` (`b.items = <fresh>`) both DROP the record the field held, so what they can
-	// invalidate is every borrow into anything that record transitively owns — which is a question about the
-	// FIELD'S TYPE and has exactly two wrong answers, both of which the compiler has now shipped:
+	// Can dropping a record of this type free storage an E3070 borrow points into? The one home of that gate
+	// for its three askers: the two field-store doors — `emitCheckedSelfFieldStore` (`items = <fresh>`) and
+	// `parseFieldAssignment` (`b.items = <fresh>`) — and `bindParameters`, where a by-reference parameter's
+	// reassignment drops the caller's record. Each invalidates every borrow into anything that record
+	// transitively owns, which is a question about the TYPE and has exactly two wrong answers:
 	//
-	//   • **`typeIsArrayInstance`, which is TOO NARROW and was a measured 0xC0000005 twice.** A `List` field
-	//     dropped under a live `first()` borrow, and a nested STRUCT field whose drop cascades to the `Array`
-	//     inside it. "An array element is the only borrow E3070 tracks" was true only while the `Array` was
-	//     the only surface handing one out, and a store does not free an ELEMENT in any case.
-	//   • **bare `typeIsManaged`, which is TOO WIDE and is a measured false rejection.** A `String` field
-	//     store — `name = "another tag"` inside a method — was refused *"cannot mutate 'b' via 'retag'"*
-	//     while `b.items` was borrowed, on a program the runnable oracle compiles and runs (`44 another tag
-	//     entirely`). It also contradicts a committed case one door over:
-	//     `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` states this very fact for
-	//     the METHOD door, and one fact may not have two answers.
+	//   • `typeIsArrayInstance` is TOO NARROW, and it is a use-after-free: it misses a `List` field dropped
+	//     under a live `first()` borrow, and a nested STRUCT field whose drop cascades to the `Array` inside
+	//     it. An array element is not the only borrow E3070 tracks, and a store frees no ELEMENT in any case.
+	//   • Bare `typeIsManaged` is TOO WIDE, and it refuses a legal program: a `String` field store inside a
+	//     method while a sibling container is borrowed. It also contradicts
+	//     `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict`, which states that fact
+	//     for the METHOD door, and one fact may not have two answers.
 	//
-	// ⇒ **EVERY BORROW E3070 TRACKS IS A REFERENCE INTO A CONTAINER** — an element (`Array`, `List`,
-	// `Vector`, through `emitContainerElementAccessor`), a chain NODE handle (`emitManagedListNodeHandle`) or
-	// a CURSOR (`createCursor`). So the question is *"is this type, or does it own, a container"*, and the
-	// two managed types that are neither are `String` and `Character`: each owns a BYTE BUFFER and nothing
-	// else, and no door in the language mints a tracked borrow into one (`s.byteAt(i)` copies a word, and
+	// Every borrow E3070 tracks is a reference into a CONTAINER — an element (`Array`, `List`, `Vector`,
+	// through `emitContainerElementAccessor`), a chain NODE handle (`emitManagedListNodeHandle`) or a CURSOR
+	// (`createCursor`). So the question is whether this type is, or owns, a container, and the two managed
+	// types that are neither are `String` and `Character`: each owns a BYTE BUFFER and nothing else, and no
+	// door in the language mints a tracked borrow into one (`s.byteAt(i)` copies a word, and
 	// `arrayManagedFieldAt` will not route `.managed` off a non-instance binding, so no cursor can be taken
 	// on either). Every other managed type is an aggregate or a container and is admitted.
 	//
-	// ⚠ **THE CARVE-OUT IS THE DANGEROUS DIRECTION AND IS DELIBERATELY THE SHORTEST POSSIBLE ONE.** A type
+	// ⚠ The carve-out is the dangerous direction and is deliberately the shortest possible one. A type
 	// wrongly EXCLUDED here is a use-after-free; a type wrongly included is only a refusal. These two are
-	// excluded on the same claim `IrFunction`'s mask table already makes about a `String` RECEIVER — a
-	// String write frees no container element — and nothing else is.
+	// excluded on the same claim `IrFunction`'s mask table makes about a `String` RECEIVER — a String write
+	// frees no container element — and nothing else is.
 	function typeOwnsBorrowableStorage(t MaxonType) returns bool
 		if not self.signatures.typeIsManagedFor(t, from: self.artifact.typeNames, readerFilePath: self.filePath) 'ownsNoHeapAtAll'
 			return false
@@ -77045,10 +77069,18 @@ export type Parser
 		end 'deferredCallError'
 
 		let step = try self.resolveFieldChain()
+		let fieldIndex = self.lastConsumedTokenIndex()
 		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
 		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
 
-		return self.emitFieldLoad(step.box, layout: step.layout, index: index, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+		let range = SourceRange.between(step.baseTok, last: step.lastFieldTok)
+
+		if self.cellWasRequestedAt(fieldIndex) and self.mayHandOverFieldAt(fieldIndex, box: step.box, layout: step.layout, index: index, writableHere: self.instanceAcceptsAWriteThrough(step.baseBinding)) 'handOverTheSlot'
+			self.markMutabilityExercised(step.baseBinding)
+			return self.takeCellRequestForField(step.box, layout: step.layout, index: index, range: range)
+		end 'handOverTheSlot'
+
+		return self.emitFieldLoad(step.box, layout: step.layout, index: index, range: range)
 	end 'parseFieldAccess'
 
 	// ⭐ **RESOLVE A FIELD-ACCESS CHAIN `base.f1.f2.…fN` to its FINAL box + layout + last field token** —
@@ -77100,11 +77132,12 @@ export type Parser
 
 	// **The token kinds that may NAME a member after a `.`** — anything `tokenCanBeAName` admits (an identifier,
 	// or a KEYWORD, which after a `.` is a name — D8), or the int literal of a tuple's positional access.
-	// Spelled once, so the two shapes built on it — the chain HOP (`fieldChainEndAfter`, which every field-store
-	// and chained-call dispatcher now walks through) and the call TAIL (`memberCallFollows`, which every
-	// `<base> . <member> (` dispatcher now asks) — and the consumer above cannot come to disagree about where a
-	// chain's hop ends. They already MUST agree: `fieldChainEndAfter`'s header states that a divergence
-	// between its two askers is a use-after-free rather than a compile error.
+	// Spelled once, so the shapes built on it — the chain HOP (`fieldChainEndAfter`, which every field-store
+	// and chained-call dispatcher walks through), the by-reference argument's anchor walk
+	// (`cellArgumentAnchorAt`) and the call TAIL (`memberCallFollows`, which every `<base> . <member> (`
+	// dispatcher asks) — and the consumer above cannot come to disagree about where a chain's hop ends. They
+	// already MUST agree: `fieldChainEndAfter`'s header states that a divergence between its askers is a
+	// use-after-free rather than a compile error.
 	function namesMemberAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.intLiteral or tokenCanBeAName(self.tokenAt(index))
 	end 'namesMemberAt'
@@ -77315,7 +77348,8 @@ export type Parser
 		let base = try self.capturedStructBase(baseTok, enclosing: enclosing)
 
 		// The enclosing binding is threaded as `baseBinding` so a WRITE through a captured base (`level.x = …`)
-		// is correctly refused — a captured `let` is immutable (E2013). A read never reads it.
+		// is correctly refused — a captured `let` is immutable (E2013) — and so a READ that hands the field's
+		// address to a by-reference callee asks that same permission before it does.
 		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: enclosing.getInfo(self.baseBindingName(baseTok)))
 	end 'resolveCapturedFieldChain'
 
@@ -77438,10 +77472,11 @@ export type Parser
 		return try self.structLayoutOfType(BaseAccessKind.field, tag: tag, nameId: typeNameIdOf(resolved), baseTok: fieldTok)
 	end 'structLayoutOfField'
 
-	// ⭐⭐ **A SELF-FIELD READ — `count` AND `self.count`, ONE PATH.**
+	// A self-field read — `count` and `self.count`, one path.
 	//
 	// Both spellings mean the same thing, so both resolve to the same `(layout, index)` and hand it
-	// to `emitFieldLoad` — **the very routine `p.x` uses**, emitting the same `loadIndirect` at the
+	// to `selfFieldReference`, which decides between handing the slot's address to a by-reference argument
+	// and `emitFieldLoad` — the very routine `p.x` uses, emitting the same `loadIndirect` at the
 	// same offset with the same storage type. The two spellings differ in exactly one step, and it
 	// is the step they *have* to differ in: `self.count` names its field with a TOKEN, so it asks
 	// `requireFieldIndex` (and can report E3018); a bare `count` came off an alias that
@@ -77454,9 +77489,64 @@ export type Parser
 	// only `fieldLoad`/`fieldStore`, and wrong inside a closure, where there is no receiver slot for
 	// slot 0 to name. `Project.maxon`'s `VarInfo.isSelfField` states the rule; this is where it is
 	// obeyed.
-	function parseSelfFieldRead(nameTok Token, binding VarInfo) returns ValueId throws ParseError
-		return self.emitFieldLoad(try self.requireReceiverValue(nameTok), layout: try self.enclosingLayout(nameTok), index: binding.fieldIndex, range: SourceRange.ofToken(nameTok))
+	function parseSelfFieldRead(nameTok Token, nameIndex TokenIndex, binding VarInfo) returns ValueId throws ParseError
+		return self.selfFieldReference(try self.requireReceiverValue(nameTok), nameIndex: nameIndex, layout: try self.enclosingLayout(nameTok), index: binding.fieldIndex, range: SourceRange.ofToken(nameTok))
 	end 'parseSelfFieldRead'
+
+	function cellWasRequestedAt(nameIndex TokenIndex) returns bool
+		return self.cellArgumentTokenIndex != NoCellArgumentRequest and self.cellArgumentTokenIndex == nameIndex
+	end 'cellWasRequestedAt'
+
+	function lastConsumedTokenIndex() returns TokenIndex
+		return (self.pos - 1) as TokenIndex
+	end 'lastConsumedTokenIndex'
+
+	function selfFieldReference(box ValueId, nameIndex TokenIndex, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
+		if self.cellWasRequestedAt(nameIndex) and self.mayHandOverFieldAt(nameIndex, box: box, layout: layout, index: index, writableHere: not self.selfFieldIsIterationLocked(index)) 'handOverTheSlot'
+			return self.takeCellRequestForField(box, layout: layout, index: index, range: range)
+		end 'handOverTheSlot'
+
+		return self.emitFieldLoad(box, layout: layout, index: index, range: range)
+	end 'selfFieldReference'
+
+	// ⚠ The storage is handed over exactly where `<the same chain> = v` would be accepted as a real store —
+	// same box, same layout, same field index, same permission band, same guards. A callee reassigning a
+	// by-reference parameter performs that store from another frame, so a shape admitted here and refused
+	// there is a write past a permission rank with no diagnostic anywhere, and a shape refused here and
+	// accepted there loses the write silently. `writableHere` is each door's answer to that question.
+	//
+	// ⛔ An `interfaceRef` is refused whatever its permission: a cell holds exactly ONE value, and an
+	// existential spans `fieldSlotCount`'s two slots — so the callee's single-word store through the
+	// address it is handed would rewrite the pointer and leave the witness behind it untouched.
+	function mayHandOverStorageAt(nameIndex TokenIndex, writableHere bool, slotType MaxonType) returns bool
+		return self.cellWasRequestedAt(nameIndex) and writableHere and maxonTypeTag(slotType) != ValueTypeTag.interfaceRef
+	end 'mayHandOverStorageAt'
+
+	function mayHandOverFieldAt(nameIndex TokenIndex, box ValueId, layout StructLayout, index FieldIndex, writableHere bool) returns bool
+		if not self.cellWasRequestedAt(nameIndex) 'noRequestPending'
+			return false
+		end 'noRequestPending'
+
+		if layout.fieldIsTheInlineManagedRecord(index) or fieldReadIsThePromiseHandle(self.signatures, receiverType: self.valueMaxonType(box), layout: layout, index: index) 'theFieldIsTheReceiver'
+			return false
+		end 'theFieldIsTheReceiver'
+
+		return self.mayHandOverStorageAt(nameIndex, writableHere: writableHere and layout.fieldIsMutable(index), slotType: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
+	end 'mayHandOverFieldAt'
+
+	// The field's own address IS the cell the callee is handed, which is sound only because a cell's payload
+	// sits at `CellContentOffset`, and that is 0: the callee dereferences at that offset and lands on the
+	// field. Give a cell a header and this hands every by-reference callee an address one header too low.
+	function takeCellRequestForField(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
+		self.cellArgumentTokenIndex = NoCellArgumentRequest
+
+		let declared = self.slotTypeThroughReceiver(box, declared: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
+		let offset = self.emitLiteral(layout.offsetOfField(index) as ParsedInt, valueType: MaxonType.integer, range: range)
+		let addr = self.emitMachineWordAdd(box, rhs: offset, range: range)
+
+		self.retypeValue(addr, valueType: self.resolveFloatAliasType(declared, scopeFilePath: self.filePath))
+		return addr
+	end 'takeCellRequestForField'
 
 	// `count = <expr>` — write a field of the enclosing type through the receiver, named bare. The
 	// mirror of `parseSelfFieldRead`, landing on `emitFieldStore` exactly as `p.x = 5` does.
@@ -77572,8 +77662,11 @@ export type Parser
 	// cannot ride the identifier paths; what it can do is resolve to the same two destinations they
 	// do, which is what this routine is for.
 	//
-	// The `(` at +3 splits them, exactly as `parseDottedPrimary` splits `p.x` from `p.m(…)` — one
-	// lookahead, written the same way, because it is the same question about the same three tokens.
+	// The `(` at +3 splits the method call from the field read, exactly as `parseDottedPrimary` splits `p.x`
+	// from `p.m(…)`. A `self.a.b` whose last field is a by-reference argument's anchor takes the chain door
+	// instead, and that one is decided by the pending request's own token index rather than by a lookahead:
+	// only the chain walk can reach a field the explicit single-hop read would leave to `parsePostfix`, and
+	// the request has to be taken by the read that stands on it.
 	//
 	// ⭐ **A BARE `self` — not followed by a dot — IS THE RECEIVER AS A VALUE, AND IT IS ONE (S5).** It used
 	// to be a positioned `unsupported` claiming the receiver's type needed "the ownership ruling struct-typed
@@ -77618,19 +77711,25 @@ export type Parser
 			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
 
+		if self.selfFieldChainHandsOverACell() 'chainedFieldCell'
+			return try self.parseFieldAccess()
+		end 'chainedFieldCell'
+
 		return try self.parseExplicitSelfFieldRead()
 	end 'parseSelfPrimary'
 
-	// `self.x` in value position. It asks `requireFieldIndex` where the bare spelling reads the
-	// alias's index — see `parseSelfFieldRead` for why that is the one legitimate difference — and
-	// converges on the same `emitFieldLoad`.
+	// `self.x` in value position, and the first hop of a longer self chain that hands over no storage — the
+	// hops after it are `parsePostfix`'s. It asks
+	// `requireFieldIndex` where the bare spelling reads the alias's index — see `parseSelfFieldRead` for why
+	// that is the one legitimate difference — and converges on the same `selfFieldReference`.
 	function parseExplicitSelfFieldRead() returns ValueId throws ParseError
 		let selfTok = try self.consume(TokenKind.self)
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
+		let fieldIndex = self.lastConsumedTokenIndex()
 
 		let layout = try self.enclosingLayout(selfTok)
-		return self.emitFieldLoad(try self.requireReceiverValue(selfTok), layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), range: SourceRange.between(selfTok, last: fieldTok))
+		return self.selfFieldReference(try self.requireReceiverValue(selfTok), nameIndex: fieldIndex, layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), range: SourceRange.between(selfTok, last: fieldTok))
 	end 'parseExplicitSelfFieldRead'
 
 	// `self.x = <expr>`. The explicit spelling, resolving its field token to an index and then
@@ -79724,7 +79823,7 @@ export type Parser
 	// `lastBareBindingImmutableName`, the E3019 blame name of a bare-identifier call ARGUMENT (see
 	// `bareArgImmutableName`). Each arm that can answer sets it, through the same `immutableReceiverNameOf`
 	// a receiver asks, so an argument and a receiver naming the same binding get the same verdict.
-	function parseVariableReference() returns ValueId throws ParseError
+	function parseVariableReference(func IrFunction) returns ValueId throws ParseError
 		// Captured before the cursor leaves it: a by-reference call argument identifies the ONE read that may
 		// take a cell's address by the token it stands on (`cellArgumentTokenIndex`).
 		let nameIndex = self.pos
@@ -79740,7 +79839,7 @@ export type Parser
 			let binding = self.scope.getInfo(tok.value)
 			let writable = try self.selfFieldIsWritable(binding, nameTok: tok)
 			self.publishBareBindingName(tok, immutable: not writable)
-			return try self.parseSelfFieldRead(tok, binding: binding)
+			return try self.parseSelfFieldRead(tok, nameIndex: nameIndex, binding: binding)
 		end 'selfField'
 
 		// A LOCAL binding: reject a read of one that has been MOVED FROM through the shared liveness guard
@@ -79762,7 +79861,7 @@ export type Parser
 				// and emits no load at all.** Keyed on the token index rather than on a flag — see
 				// `cellArgumentTokenIndex` for the `f(x + 1)` wrong answer a flag would give — and CLEARED
 				// here, which is also how the call site learns its request was taken.
-				if self.cellArgumentTokenIndex == nameIndex 'handOverTheCell'
+				if self.cellWasRequestedAt(nameIndex) 'handOverTheCell'
 					self.cellArgumentTokenIndex = NoCellArgumentRequest
 					return binding.boundValue
 				end 'handOverTheCell'
@@ -79795,7 +79894,7 @@ export type Parser
 			notCaptured then break 'capture'
 		end 'capture'
 
-		return try self.topLevelBindingReference(tok)
+		return try self.topLevelBindingReference(func, tok: tok, nameIndex: nameIndex)
 	end 'parseVariableReference'
 
 	// Publish the blame name of the bare identifier just resolved, or clear it when the binding may be
@@ -79930,7 +80029,7 @@ export type Parser
 		// ⚠ It cannot recurse: the receiver's OWN binding is a parameter, so the capture this delegation
 		// triggers reaches this same routine with `isSelfField` false.
 		if binding.isSelfField 'capturedSelfField'
-			return try self.parseSelfFieldRead(anchor, binding: binding)
+			return try self.parseSelfFieldRead(anchor, nameIndex: NoCellArgumentRequest, binding: binding)
 		end 'capturedSelfField'
 
 		// ⭐ **DECLARED vs STORAGE, at an env slot.** `captureType` is what the SOURCE said, and it is
@@ -80024,7 +80123,7 @@ export type Parser
 	// is not a formality: `let G = "hi"` materializes the ONE immortal `.rdata` record every read of those
 	// bytes shares, so a callee that appended through it would write read-only memory (measured: exit 139,
 	// where the oracle raises E3019). It publishes its name for the same reason a `let` local does.
-	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
+	function topLevelBindingReference(func IrFunction, tok Token, nameIndex TokenIndex) returns ValueId throws ParseError
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
@@ -80033,7 +80132,7 @@ export type Parser
 			notFound then break 'constant'
 		end 'constant'
 
-		return try self.topLevelGlobalRead(tok)
+		return try self.topLevelGlobalRead(func, tok: tok, nameIndex: nameIndex)
 	end 'topLevelBindingReference'
 
 	// Publish a top-level constant read's blame name and hand the value straight back —
@@ -80198,9 +80297,10 @@ export type Parser
 	// `topLevelGlobalRead` directly below. It is what P1.0d.5b added: the read that does NOT
 	// disappear.
 
-	// ⭐ **A USE OF A TOP-LEVEL `var` LOADS FROM ITS `.data` SLOT.** The exact inverse of a
-	// constant's read: nothing is folded, a slot IS reserved, a relocation IS emitted, and the
-	// backend very much knows this feature exists.
+	// A use of a top-level `var` loads from its `.data` slot — the exact inverse of a constant's read:
+	// nothing is folded, a slot IS reserved, a relocation IS emitted, and the backend very much knows this
+	// feature exists. A by-reference argument is the one use that loads nothing, taking the slot's own
+	// address instead (`moduleSlotReference`).
 	//
 	// It emits the GENERAL PAIR — `globalAddr` then `loadIndirect` — rather than a fused
 	// `globalLoad`, per the Std memory band's contract: the same two ops a struct field (P1.1) and a
@@ -80212,15 +80312,39 @@ export type Parser
 	// ⚠ The load is NOT hoisted out of a loop that writes the same global, and that is not this
 	// function's doing — it is `loadIndirect`'s `isPure: false` (see StdDialect). Get that wrong and
 	// this emits perfectly correct IR that a later pass silently breaks.
-	function topLevelGlobalRead(tok Token) returns ValueId throws ParseError
+	function topLevelGlobalRead(func IrFunction, tok Token, nameIndex TokenIndex) returns ValueId throws ParseError
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
-			// A read itself does not care whether the slot may be WRITTEN — it borrows the occupant either
-			// way. What the MUTABILITY decides is whether the borrowed value may later become a mutable
-			// ALIAS, which is `recordGlobalReadValue`'s business (P1.7 slice 2b).
-			found(label, valueType, brand, mutable) then return self.recordGlobalReadValue(tok, value: self.brandedGlobalLoad(label, valueType: valueType, brand: brand, tok: tok, mutable: mutable), mutable: mutable)
+			found(label, valueType, brand, mutable) then return self.moduleSlotReference(func, tok: tok, nameIndex: nameIndex, label: label, valueType: valueType, brand: brand, mutable: mutable)
 			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
 	end 'topLevelGlobalRead'
+
+	// What `mutable` decides depends on which arm is taken: on the load it is whether the borrowed occupant
+	// may become a mutable ALIAS (`recordGlobalReadValue`), and on the hand-over it is the write permission
+	// itself — the callee stores through the address, which a `let` slot must refuse exactly as `G = v` does.
+	function moduleSlotReference(func IrFunction, tok Token, nameIndex TokenIndex, label ByteArray, valueType MaxonType, brand ByteArray, mutable bool) returns ValueId
+		if self.mayHandOverStorageAt(nameIndex, writableHere: mutable, slotType: valueType) 'handOverTheSlot'
+			self.cellArgumentTokenIndex = NoCellArgumentRequest
+			self.publishBareBindingName(tok, immutable: false)
+			return self.moduleSlotCellAddress(func, tok: tok, label: label, valueType: valueType, brand: brand)
+		end 'handOverTheSlot'
+
+		return self.recordGlobalReadValue(tok, value: self.brandedGlobalLoad(label, valueType: valueType, brand: brand, tok: tok, mutable: mutable), mutable: mutable)
+	end 'moduleSlotReference'
+
+	// Recorded as a WRITE of the slot, because that is what the callee does through this address — the same
+	// two marks `storeToGlobal` leaves, so the module-var census and E3064's effect summary see the write
+	// whichever spelling performs it. Nothing marks a borrowed occupant here: none was loaded, so there is no
+	// value for `recordGlobalReadValue`'s rebindable-slot rule to guard.
+	function moduleSlotCellAddress(func IrFunction, tok Token, label ByteArray, valueType MaxonType, brand ByteArray) returns ValueId
+		self.recordModuleVarAccess(tok, access: ModuleVarAccess.write)
+		func.writesModuleStorage = true
+
+		let addr = self.emitGlobalAddr(label, range: SourceRange.ofToken(tok))
+		self.retypeValue(addr, valueType: self.resolveFloatAliasType(valueType, scopeFilePath: self.filePath))
+		self.brandValue(addr, brand: brand)
+		return addr
+	end 'moduleSlotCellAddress'
 
 	// A global read wears the brand its initializer spelled (`var shared = Xs.create()` reads as an `Xs`).
 	function brandedGlobalLoad(label ByteArray, valueType MaxonType, brand ByteArray, tok Token, mutable bool) returns ValueId
@@ -81855,10 +81979,14 @@ export type Parser
 		return ModuleSlotReader.source(nameTok) if mutable else ModuleSlotReader.notASharedAccess
 	end 'moduleSlotReaderOf'
 
+	function recordModuleVarAccess(nameTok Token, access ModuleVarAccess)
+		self.artifact.recordModuleVarAccessSite(ModuleVarAccessSite.create(nameTok.value, access: access, line: nameTok.line, column: nameTok.column, declFilePath: self.filePath))
+	end 'recordModuleVarAccess'
+
 	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange, reader ModuleSlotReader) returns ValueId
 		match reader 'reader'
 			notASharedAccess then break 'reader'
-			source(nameTok) then self.artifact.recordModuleVarAccessSite(ModuleVarAccessSite.create(nameTok.value, access: ModuleVarAccess.read, line: nameTok.line, column: nameTok.column, declFilePath: self.filePath))
+			source(nameTok) then self.recordModuleVarAccess(nameTok, access: ModuleVarAccess.read)
 		end 'reader'
 
 		let addr = self.emitGlobalAddr(label, range: range)
@@ -87052,15 +87180,10 @@ export type Parser
 				// column are both in hand here, which is what makes the position answerable this early.
 				let byRefPosition = calleeTakesArgumentByRef(calleeByRef, argIndex: args.count(), label: label, forwardingIsLive: calleeForwardingIsLive)
 
-				// Only an argument that is EXACTLY a name can hand over a cell; anything else is an r-value and
-				// gets a scratch cell below. Requesting it here (rather than testing afterwards) is what lets the
-				// read door skip its load entirely.
-				var requestedTheCell = false
-
-				if byRefPosition and self.argumentIsExactlyANameAt(valueStart) 'mayHandOverACell'
-					self.cellArgumentTokenIndex = valueStart
-					requestedTheCell = true
-				end 'mayHandOverACell'
+				// Requested before the value is parsed rather than tested afterwards: that is what lets the read
+				// door hand back an address instead of emitting a load it could not un-emit.
+				self.cellArgumentTokenIndex = self.cellArgumentAnchorAt(valueStart) if byRefPosition else NoCellArgumentRequest
+				let requestedTheCell = self.cellArgumentTokenIndex != NoCellArgumentRequest
 
 				// ⭐ **AND DOES THIS POSITION STATE AN `Array` INSTANCE?** — the by-reference question's twin one
 				// slot over, asked here for the same reason: the answer changes what the parse must PRODUCE, and
@@ -87088,22 +87211,10 @@ export type Parser
 					self.closureParamOffer = noClosureParamOffer
 				end 'anOfferMustNotOutliveItsArgument'
 
-				// ⭐⭐ **AN R-VALUE AT A BY-REFERENCE POSITION GETS A SCRATCH CELL** — a literal, an expression, a
-				// fresh call result, or a binding that is not cell-resident (a `let`, which `checkImmutableArgToMutatingParam`
-				// refuses with E3019 a phase later — the spill keeps the IR well-formed until that diagnostic is
-				// reported, exactly as every other recovery here does).
-				//
-				// ⚠⚠ **`let` IS NOT THE ONLY NON-CELL BINDING THAT LANDS HERE, AND THE OTHERS ARE NOT REFUSED —
-				// THEY LOSE THE WRITE SILENTLY.** A MODULE-LEVEL `var` and a SELF-FIELD alias are both mutable, so
-				// no diagnostic fires, and neither is cell-resident: `collectCellLocalNames` decides LOCAL names
-				// and `declareCellLocal` installs a cell only at a local `var`'s declaration. Each therefore
-				// spills its VALUE into a scratch cell the callee then writes and the caller never reads back.
-				// MEASURED on this tree: `var g = 0` at module level plus `setTo99(g)` prints `g=0`, and a
-				// `setTo99(count)` on a self field leaves the field 0.
-				//
-				// ⚠ The gap here is the language's rather than this compiler's — the two programs answer `g=0`
-				// and `field=0`. It is recorded HERE because this is the line that decides it, and because what
-				// the two storage kinds need is a WRITE-BACK or a cell of their own.
+				// An r-value at a by-reference position gets a scratch cell — a literal, an expression, a fresh
+				// call result, or a binding the read door declined to hand storage for (a `let`, which
+				// `checkImmutableArgToMutatingParam` refuses with E3019 a phase later; the spill keeps the IR
+				// well-formed until that diagnostic is reported, exactly as every other recovery here does).
 				let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
 
 				// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
@@ -90909,19 +91020,52 @@ export type Parser
 		self.cellLocalNames = CellLocalNameRoster.entries(handedOverByReference)
 	end 'collectCellLocalNames'
 
-	// Is the argument beginning at `index` EXACTLY one name and nothing else? The by-reference call site's
-	// pre-parse question — asked before the value is parsed, because handing over a cell means the read must
-	// not materialize its contents in the first place. `bareCallArgumentAt` above answers the same shape from
-	// inside a walk that already knows where it is; this one is asked at a cursor that is standing on the
-	// argument's first token, so the bracket state is the caller's own and needs no stack.
+	// Is the argument beginning at `index` EXACTLY one name and nothing else? `bareCallArgumentAt` above
+	// answers the same shape from inside a walk that already knows where it is; this one is asked at a cursor
+	// standing on the argument's first token, so the bracket state is the caller's own and needs no stack.
 	function argumentIsExactlyANameAt(index TokenIndex) returns bool
-		if not tokenCanBeAName(self.tokenAt(index)) 'notAName'
-			return false
-		end 'notAName'
-
-		let after = self.kindAt(index + 1)
-		return after == TokenKind.comma or after == TokenKind.rightParen
+		return tokenCanBeAName(self.tokenAt(index)) and self.argumentEndsAt(index + 1)
 	end 'argumentIsExactlyANameAt'
+
+	// Which token of a by-reference argument may hand over storage — the name itself, or the LAST field of
+	// `base.f1.…fN`. Answered from TOKENS before the value is parsed, because a read that has already
+	// materialized the contents cannot be un-emitted.
+	//
+	// ⚠ The hop is `namesMemberAt`, the same predicate `fieldChainEndAfter` walks with. This walk predicts
+	// where the parse will stop, and a shape one of them admits and the other does not leaves the anchor on a
+	// token no read door stands on: the request is then silently never taken and the write is lost.
+	function cellArgumentAnchorAt(index TokenIndex) returns TokenIndex
+		if self.argumentIsExactlyANameAt(index) 'aBareName'
+			return index
+		end 'aBareName'
+
+		if not tokenCanBeAName(self.tokenAt(index)) 'notAChainBase'
+			return NoCellArgumentRequest
+		end 'notAChainBase'
+
+		var segments = 0 as TokenIndex
+
+		while self.kindAt(index + segments * TokensPerQualifierSegment + 1) == TokenKind.dot and self.namesMemberAt((index + segments * TokensPerQualifierSegment + 2) as TokenIndex) 'walk'
+			segments = segments + 1
+		end 'walk'
+
+		let fieldIndex = (index + segments * TokensPerQualifierSegment) as TokenIndex
+
+		if segments > 0 and self.argumentEndsAt(fieldIndex + 1) 'aFieldOfAChainedBase'
+			return fieldIndex
+		end 'aFieldOfAChainedBase'
+
+		return NoCellArgumentRequest
+	end 'cellArgumentAnchorAt'
+
+	function selfFieldChainHandsOverACell() returns bool
+		return self.cellArgumentTokenIndex != NoCellArgumentRequest and self.cellArgumentTokenIndex > (self.pos + TokensPerQualifierSegment) as TokenIndex
+	end 'selfFieldChainHandsOverACell'
+
+	function argumentEndsAt(index TokenIndex) returns bool
+		let after = self.kindAt(index)
+		return after == TokenKind.comma or after == TokenKind.rightParen
+	end 'argumentEndsAt'
 
 	// ⭐ **IS THE TOKEN AT `index` A BARE NAME STANDING ALONE AS A CALL ARGUMENT?** — PBR-2's forwarding probe
 	// (`scanBodyFacts`), and the token-level twin of what `argWasBareName` asks of the real parse: an

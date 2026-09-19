@@ -839,7 +839,8 @@ end 'CompileAnswer'
 // The value is deliberately ~1000x the headroom it needs rather than tuned to observed timings: all
 // 780 tests COMPILE AND RUN in ~90 s serially (~0.12 s per test per phase), so no legitimate spec
 // can approach it. It exists to convert an unbounded silent hang into a named failure
-// (`SubprocessError.timeout` renders as "timed out after 120000ms"), NOT to police slow tests — a
+// (`SubprocessError.timeout`, rendered by `runFailureReason` with whatever the child had written), NOT to
+// police slow tests — a
 // tight deadline would inject flakes into a suite that currently has none, which is the one way
 // this guard could leave things worse than it found them.
 //
@@ -4240,11 +4241,32 @@ function spawnOneRun(pending PendingRun, specName String, runWorkingDir FilePath
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
 	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(pending.compiled.test.procs, preempt: pending.compiled.test.preempt), standardInput: runStdinFor(pending.compiled.test.stdin)) otherwise (e) 'runSpawnFailed'
-		return RunObservation.failed("program spawn failed: {e.displayReason()}")
+		return RunObservation.failed(runFailureReason(e))
 	end 'runSpawnFailed'
 
 	return RunObservation.completed(spawned)
 end 'spawnOneRun'
+
+// A deadline that fired is not a spawn that failed, and calling it one sends the reader to look for a missing
+// executable. The partial output rides along because a killed run leaves no other evidence: its
+// `CollectedOutput` is never returned, so what the child had printed before the kill exists only on the error.
+function runFailureReason(e SubprocessError) returns String
+	return match e 'why'
+		timeout(_, out, err) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
+		executableNotFound or
+			spawnFailed or
+			ioFailed or
+			inputTooLarge gives "program spawn failed: {e.displayReason()}"
+	end 'why'
+end 'runFailureReason'
+
+function partialOutputBeforeTheKill(stdout String, stderr String) returns String
+	if stdout.isEmpty() and stderr.isEmpty() 'nothingArrived'
+		return ". It wrote nothing on either stream before the deadline."
+	end 'nothingArrived'
+
+	return ". What it had written before the kill:\n--- partial stdout ---\n{stdout}\n--- partial stderr ---\n{stderr}\n--- end of partial output ---"
+end 'partialOutputBeforeTheKill'
 
 // ⭐⭐ **WHAT A CASE'S `<!-- procs: N -->` AND `<!-- preempt: off -->` MARKERS MEAN AT THE SPAWN: one variable
 // each, in one child's environment, and nothing else changed.**

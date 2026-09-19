@@ -245,7 +245,7 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's `var` variable. Passing a `let` variable to a mutating parameter is a compile error (E3019). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a `let` variable to a mutating parameter is a compile error (E3019). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 

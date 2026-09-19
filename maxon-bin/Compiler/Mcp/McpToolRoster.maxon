@@ -75,10 +75,16 @@ function list(name String, description String) returns McpProperty
 	return McpProperty.create(name, jsonType: "array", description: description)
 end 'list'
 
-// `repoRoot` reads the same on every tool that takes it, and a caller who learns it once should not
-// have to read four spellings of it.
-function repoRootProperty() returns McpProperty
-	return str("repoRoot", description: "Absolute path of the Maxon checkout to act in. Defaults to the checkout this compiler sits in. Every answer echoes back the root it used.", devOnly: true)
+// `repoRoot` reads the same on every tool that takes it, and a caller who learns it once should not have to
+// read seven spellings of it. Only the sentence about what an ABSENT one means differs, because the two
+// bands of tools genuinely differ there: a tool that acts on the TREE falls back to this compiler's own
+// checkout, and one that acts on the CALLER's paths falls back to the host's working directory and names no
+// tree at all.
+let RepoRootDefaultsToOwnCheckout = "Defaults to the checkout this compiler sits in."
+let RepoRootDefaultsToHostDirectory = "Defaults to the host's working directory, driven by this server's own compiler and naming no tree."
+
+function repoRootProperty(whenAbsent String) returns McpProperty
+	return str("repoRoot", description: "Absolute path of the Maxon checkout to act in; that tree's own compiler is the one that runs. {whenAbsent} Every answer echoes back the root it used.", devOnly: true)
 end 'repoRootProperty'
 
 export function mcpToolRoster() returns McpToolSpecArray
@@ -91,23 +97,26 @@ export function mcpToolRoster() returns McpToolSpecArray
 	buildProps.push(str("target", description: "Cross-compile target (--target=<cpu>-<os>), or the name of a target declared in build.maxon"))
 	buildProps.push(flag("emitIr", description: "Emit intermediate representation (--emit-ir)"))
 	buildProps.push(str("from", description: "Compiler binary to build WITH, instead of the target tree's own.", devOnly: true))
-	buildProps.push(repoRootProperty())
+	buildProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create("build", description: "Build a Maxon project, source file, or inline snippet using `maxon build`.", properties: buildProps))
 
 	var runProps = McpPropertyArray.create()
 	runProps.push(str("path", description: "Path to the .maxon file to run. Mutually exclusive with `source`."))
 	runProps.push(str("source", description: "Inline Maxon source to compile and run instead of a path."))
 	runProps.push(list("arguments", description: "Command-line arguments passed to the program"))
+	runProps.push(repoRootProperty(RepoRootDefaultsToHostDirectory))
 	tools.push(McpToolSpec.create("run", description: "Compile and run a Maxon program, or an inline snippet, using `maxon run`.", properties: runProps))
 
 	var testProps = McpPropertyArray.create()
 	testProps.push(str("path", description: "Project directory containing tests. Defaults to '.'"))
 	testProps.push(str("filter", description: "Substring pattern selecting tests by name or file (case-insensitive; comma-separated patterns are a union)"))
+	testProps.push(repoRootProperty(RepoRootDefaultsToHostDirectory))
 	tools.push(McpToolSpec.create("test", description: "Run unit tests in a Maxon project using `maxon test`.", properties: testProps))
 
 	var fmtProps = McpPropertyArray.create()
 	fmtProps.push(str("path", description: "File or directory to format in place. Defaults to '.'"))
 	fmtProps.push(str("source", description: "Inline Maxon source to format, returned rather than written. Mutually exclusive with `path`."))
+	fmtProps.push(repoRootProperty(RepoRootDefaultsToHostDirectory))
 	tools.push(McpToolSpec.create("fmt", description: "Format Maxon source in place, or format an inline snippet and return it.", properties: fmtProps))
 
 	var checkProps = McpPropertyArray.create()
@@ -132,7 +141,7 @@ export function mcpToolRoster() returns McpToolSpecArray
 	specProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
 	specProps.push(str("target", description: "Cross-compile target passed to --target=<value> (e.g. 'wasm32-wasi').", devOnly: true))
 	specProps.push(whole("workers", description: "Number of worker subprocesses (--workers=<n>). A debugging tool; the suite's own count is the default.", devOnly: true))
-	specProps.push(repoRootProperty())
+	specProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create("run_spec_test", description: "Run the Maxon spec-test suite, optionally filtered, returning structured pass/fail counts.", properties: specProps, devOnly: true))
 
 	var scaleProps = McpPropertyArray.create()
@@ -141,14 +150,14 @@ export function mcpToolRoster() returns McpToolSpecArray
 	scaleProps.push(str("note", description: "Record this run in docs/optimization-log.md with this text as the reason.", devOnly: true))
 	scaleProps.push(str("emitCorpus", description: "Write the generated corpus to this directory and compile nothing.", devOnly: true))
 	scaleProps.push(str("log", description: "Passed to --log=<value>.", devOnly: true))
-	scaleProps.push(repoRootProperty())
+	scaleProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create("run_scale_test", description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. It has no verdict — the RATIO between rungs is the reading.", properties: scaleProps, devOnly: true))
 
 	var outcomeProps = McpPropertyArray.create()
 	outcomeProps.push(str("filter", description: "Passed to --filter=<pattern>. ONE CASE-SENSITIVE substring, typically a label like 'arithmetic/addition'.", required: true, devOnly: true))
 	outcomeProps.push(str("target", description: "Cross-compile target passed to --target=<value>.", devOnly: true))
 	outcomeProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
-	outcomeProps.push(repoRootProperty())
+	outcomeProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create("spec_test_outcome", description: "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a failure summary.", properties: outcomeProps, devOnly: true))
 
 	return tools

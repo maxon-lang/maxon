@@ -757,3 +757,61 @@ end 'main'
 ```maxoncstderr
 error E2008: <fragment>:12:1: Mismatched end label: expected 'Countable', got 'Countables'
 ```
+
+### An extension on a BASE interface discharges a DERIVED interface's requirement
+
+<!-- test: a-base-extension-discharges-a-derived-interfaces-requirement -->
+⭐ **THE CONFORMANCE CONSEQUENCE OF "Transitive Extensions", PINNED AS BEHAVIOUR RATHER THAN AS PROSE.**
+`Both extends Forward` REQUIRES `back()`, and `Walker implements Both` declares only `step()` — which
+reads like a missing method. It is not: `extension Forward` supplies one `back()` that works for every
+`Forward` conformer, and a `Both` conformer is a `Forward` conformer, so the requirement is already
+discharged when conformance is checked. The program compiles clean.
+
+⚠ **THE CONTROL IS THE SAME PROGRAM WITHOUT THE `extension Forward` BLOCK**: it earns
+`error E3016: Partial interface implementation: type 'Walker' is missing 1 method(s): - back() returns
+Integer`. So the extension is what is doing the work, and this case is not measuring an absent check.
+
+The extension's body is asked for on purpose. A case that merely COMPILES cannot tell a discharged
+requirement from an unchecked one, so `back()` returns the NEGATION of `step()` — a value no declared
+method of `Walker` produces — and the case prints both.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Forward
+	function step() returns Integer
+end 'Forward'
+
+interface Both extends Forward
+	function back() returns Integer
+end 'Both'
+
+extension Forward
+	export function back() returns Integer
+		return 0 - self.step()
+	end 'back'
+end 'Forward'
+
+type Walker implements Both
+	export var stride as Integer
+
+	export static function of(stride Integer) returns Self
+		return Walker{stride: stride}
+	end 'of'
+
+	export function step() returns Integer
+		return self.stride
+	end 'step'
+end 'Walker'
+
+function main() returns ExitCode
+	let w = Walker.of(7)
+	print("{w.step()} {w.back()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 -7
+```

@@ -1361,9 +1361,9 @@ end 'buildSubpReadBytes'
 // `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever, which is
 // `stdlib/Subprocess.maxon`'s documented convention for the whole family.
 //
-// ⚠ **A TIMEOUT TERMINATES THE CHILD**, which is what `waitWithTimeout`'s doc-comment promises: *"the runtime
-// forcibly terminates the child in that case"*. Without it a timed-out wait leaves a live child holding the
-// write ends of pipes nobody is draining.
+// ⚠ **A TIMEOUT TERMINATES THE CHILD'S WHOLE TREE**, which is what `waitWithTimeout`'s doc-comment promises:
+// *"the runtime forcibly terminates the child's whole process tree in that case"*. Without it a timed-out
+// wait leaves live processes holding the write ends of pipes nobody is draining.
 function buildSubpWaitExit(module StdModule)
 	var func = IrFunction.createFromStd(SubpWaitExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -1423,9 +1423,9 @@ function buildSubpWaitExit(module StdModule)
 	module.setTerminator(waitFailed, op: StdOp.ret(failure2))
 
 	let slotK = emitSubpSlotOf(module, block: timedOut, ids: ids, handle: handle)
-	let hProcessK = emitLoadField(module, block: timedOut, record: slotK, offset: SubpSlotHProcess, ids: ids)
+	let treeK = emitLoadField(module, block: timedOut, record: slotK, offset: SubpSlotProcessTree, ids: ids)
 	let killCode = emitConst(module, block: timedOut, value: SubpKilledExitCode, ids: ids)
-	module.appendOp(timedOut, op: StdOp.osProcessTerminate(hProcessK, exitCodeId: killCode))
+	module.appendOp(timedOut, op: StdOp.osProcessTerminate(treeK, exitCodeId: killCode))
 	let timedOutRc = emitConst(module, block: timedOut, value: SubpTimedOutRc, ids: ids)
 	module.setTerminator(timedOut, op: StdOp.ret(timedOutRc))
 
@@ -1637,9 +1637,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 
 	let handleK = emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids)
 	let slotK = emitSubpSlotOf(module, block: killIt, ids: ids, handle: handleK)
-	let hProcessK = emitLoadField(module, block: killIt, record: slotK, offset: SubpSlotHProcess, ids: ids)
+	let treeK = emitLoadField(module, block: killIt, record: slotK, offset: SubpSlotProcessTree, ids: ids)
 	let killCode = emitConst(module, block: killIt, value: SubpKilledExitCode, ids: ids)
-	module.appendOp(killIt, op: StdOp.osProcessTerminate(hProcessK, exitCodeId: killCode))
+	module.appendOp(killIt, op: StdOp.osProcessTerminate(treeK, exitCodeId: killCode))
 	let timedOutStatus = emitConst(module, block: killIt, value: SubpStatusTimedOut, ids: ids)
 	emitStoreField(module, block: killIt, record: state, offset: WcStatus, value: timedOutStatus)
 	module.setTerminator(killIt, op: StdOp.branch(finish.id))

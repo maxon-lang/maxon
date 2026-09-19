@@ -280,15 +280,20 @@ end 'sendToolResult'
 // What tree a tool acted in is the single most consequential fact about a dev-mode call, and the
 // caller cannot see it any other way: one server process serves every worktree. Every answer carries
 // it back so a caller can read it against the tree they meant.
+export function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot String)
+	if repoRoot.isEmpty() 'namesNoTree'
+		return
+	end 'namesNoTree'
+
+	payload.addString(doc, key: "repoRoot", value: repoRoot)
+end 'addRepoRootIfKnown'
+
 export function sendToolError(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot String)
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: message)
-
-	if not repoRoot.isEmpty() 'knowsTree'
-		payload.addString(doc, key: "repoRoot", value: repoRoot)
-	end 'knowsTree'
+	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
 
 	sendToolResult(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
 end 'sendToolError'
@@ -298,11 +303,7 @@ export function formatSubprocessResult(res CollectedOutput, command String, repo
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
 	payload.addString(doc, key: "command", value: command)
-
-	if not repoRoot.isEmpty() 'knowsTree'
-		payload.addString(doc, key: "repoRoot", value: repoRoot)
-	end 'knowsTree'
-
+	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
 	payload.addNumber(doc, key: "exitCode", value: res.exitCode() as JsonFloat)
 	payload.addString(doc, key: "stdout", value: res.stdout)
 	payload.addString(doc, key: "stderr", value: res.stderr)

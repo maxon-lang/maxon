@@ -30,7 +30,8 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 80
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
     arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
@@ -66,15 +67,17 @@ func @main {
   __il_cont#15:
     arm64.movImm x24, 0
     arm64.movImm x25, 0
-    arm64.movImm x0, 40
+    arm64.movImm x26, 0
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x26, x0
-    arm64.storeBaseDispReg.word64 [x26 + 0], x21
-    arm64.storeBaseDispReg.word64 [x26 + 8], x22
-    arm64.storeBaseDispReg.word64 [x26 + 16], x23
-    arm64.storeBaseDispReg.word64 [x26 + 24], x24
-    arm64.storeBaseDispReg.word64 [x26 + 32], x25
+    arm64.movRegReg x27, x0
+    arm64.storeBaseDispReg.word64 [x27 + 0], x21
+    arm64.storeBaseDispReg.word64 [x27 + 8], x22
+    arm64.storeBaseDispReg.word64 [x27 + 16], x23
+    arm64.storeBaseDispReg.word64 [x27 + 24], x24
+    arm64.storeBaseDispReg.word64 [x27 + 32], x25
+    arm64.storeBaseDispReg.word64 [x27 + 40], x26
   __il_cont#13:
     arm64.leaRdata x0, __str_rec_1  ; "dup"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
@@ -98,7 +101,7 @@ func @main {
     arm64.leaRdata x2, __layout_Set_String
     arm64.leaRdata x3, __witness_String.Hashable
     arm64.leaRdata x4, __witness_String.Equatable
-    arm64.movRegReg x0, x26
+    arm64.movRegReg x0, x27
     arm64.movRegReg x1, x23
     arm64.bl Set.insert
     arm64.leaRdata x0, __str_rec_1  ; "dup"
@@ -123,13 +126,13 @@ func @main {
     arm64.leaRdata x2, __layout_Set_String
     arm64.leaRdata x3, __witness_String.Hashable
     arm64.leaRdata x4, __witness_String.Equatable
-    arm64.movRegReg x0, x26
+    arm64.movRegReg x0, x27
     arm64.movRegReg x1, x23
     arm64.bl Set.insert
     arm64.leaRdata x0, __witness_String.Hashable
     arm64.leaRdata x0, __witness_String.Equatable
   __il_body#9:
-    arm64.loadRegBaseDisp.word64 x0, [x26 + 24]
+    arm64.loadRegBaseDisp.word64 x0, [x27 + 24]
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -143,7 +146,7 @@ func @main {
     arm64.add x20, x20, 1
   ifcont#5:
     arm64.add x19, x19, 1
-    arm64.movRegReg x0, x26
+    arm64.movRegReg x0, x27
     arm64.bl __destruct_Set_String
   whilehdr:
     arm64.cmp x19, 100
@@ -161,7 +164,8 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
   ifcont#7:
     arm64.movImm x0, 1
@@ -173,10 +177,11 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_28  ; "panic at Set.maxon:312: Range check failed: value outside typealias 'MemberCount'\x0a"
+    arm64.leaRdata x0, __str_blob_28  ; "panic at Set.maxon:325: Range check failed: value outside typealias 'MemberCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -187,6 +192,7 @@ func @main {
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
     arm64.ret
 }

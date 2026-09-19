@@ -1,6 +1,20 @@
 // Test: netpoll-socket.drop-a-parked-reader
+let settleTurns = 1000
+
+var parkedFrom = 0
+
+function parkedInRecv() returns bool
+	if parkedFrom == 0 'notYet'
+		return false
+	end 'notYet'
+
+	return __Builtins.schedNetpollBlockCount() >= parkedFrom
+end 'parkedInRecv'
+
 function stall(listener TcpListener) returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+
+	parkedFrom = __Builtins.schedNetpollBlockCount() + 1
 	_ = try client.recv(1024)
 
 	return 0
@@ -9,79 +23,108 @@ end 'stall'
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 
-	let before = __Builtins.schedNetpollBlockCount()
 	let reader = async stall(listener)
-	sleep(200)
-	let parked = __Builtins.schedNetpollBlockCount() - before
+
+	var parked = parkedInRecv()
+	var turns = 0
+
+	while turns < settleTurns and not parked 'untilParkedInRecv'
+		sleep(1)
+		turns = turns + 1
+		parked = parkedInRecv()
+	end 'untilParkedInRecv'
+
 	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
 
-	print("dropped={parked > 0 and stillWaiting}\n")
+	print("dropped={parked and stillWaiting}\n")
 	return 0 as ExitCode
 end 'main'
 ---
 ExitCode: 0
 ---
 data {
-  __gt_run_queue_head@0 = i64 0
-  __gt_run_queue_tail@8 = i64 0
-  __gt_timer_count@16 = i64 0
-  __gt_timer_heap_base@24 = i64 0
-  __gt_timer_capacity@32 = i64 0
-  __gt_timer_seq@40 = i64 0
-  __gt_timer_when@48 = i64 9223372036854775807
-  __gt_trace_counter@56 = i64 0
-  __gt_live_count@64 = i64 0
-  __gt_seed_bytes@72 = i64 2048
-  __gt_stack_bytes_sum@80 = i64 0
-  __gt_stack_bytes_count@88 = i64 0
-  __gt_seed_sum_seen@96 = i64 0
-  __gt_seed_count_seen@104 = i64 0
-  __gt_keeps_cpu_clock@112 = i64 0
-  __sched_active_workers@120 = i64 1
-  __sched_max_active_workers@128 = i64 1
-  __sched_tls_index@136 = i64 0
-  __sched_tls_teb_offset@144 = i64 0
-  __sched_procs@152 = i64 0
-  __sched_allm@160 = i64 0
-  __sched_midle@168 = i64 0
-  __sched_pidle@176 = i64 0
-  __gt_gfree_head@184 = i64 0
-  __sched_arena_cursor@192 = i64 0
-  __sched_arena_limit@200 = i64 0
-  __gt_records_carved@208 = i64 0
-  __sched_npidle@216 = i64 0
-  __sched_runq_size@224 = i64 0
-  __sched_global_pushes@232 = i64 0
-  __sched_timer_scan_steps@240 = i64 0
-  __sched_mcount@248 = i64 0
-  __sched_nmidle@256 = i64 0
-  __sched_main_m@264 = i64 0
-  __sched_phase@272 = i64 0
-  __sched_lastpoll@280 = i64 0
-  __sched_poll_until@288 = i64 0
-  __sched_regain_head@296 = i64 0
-  __np_poller@304 = i64 0
-  __np_break@312 = i64 0
-  __np_wake_sig@320 = i64 0
-  __np_pd_table@328 = i64 0
-  __np_pd_cap@336 = i64 0
-  __np_waiters@344 = i64 0
-  __sched_num_procs@352 = i64 0
-  __sched_shutdown_flag@360 = i64 0
-  __sched_lock@368 = i64 0
-  __sched_lock_depth_sink@376 = i64 0
-  __sched_nmspinning@384 = i64 0
-  __sched_needspinning@392 = i64 0
-  __sched_sysmon_event@400 = i64 0
-  __sched_sysmon_wait@408 = i64 0
-  __sched_timer_starts@416 = i64 0
-  __mrt_errno@424 = i64 0
-  __mrt_envp@432 = i64 0
-  __mrt_tls_next_key@440 = i64 0
-  __slab_arena_list@448 = i64 0
-  __slab_arena_map_l1@456 = i64 0
-  __slab_state@464 = i64 0
-  __ms_wsa_started@472 = i64 0
+  __data_parkedFrom@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __gt_keeps_cpu_clock@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __sched_num_procs@360 = i64 0
+  __sched_shutdown_flag@368 = i64 0
+  __sched_lock@376 = i64 0
+  __sched_lock_depth_sink@384 = i64 0
+  __sched_nmspinning@392 = i64 0
+  __sched_needspinning@400 = i64 0
+  __sched_sysmon_event@408 = i64 0
+  __sched_sysmon_wait@416 = i64 0
+  __sched_timer_starts@424 = i64 0
+  __mrt_errno@432 = i64 0
+  __mrt_envp@440 = i64 0
+  __mrt_tls_next_key@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+  __ms_wsa_started@480 = i64 0
+}
+
+func @parkedInRecv {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_parkedFrom
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.b.ne ifcont
+  notYet:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.bl __sched_netpoll_block_count
+    arm64.leaGlobal x1, __data_parkedFrom
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.cmp x0, x1
+    arm64.cset x0, ge
+    arm64.epilogue 16
+    arm64.ret
 }
 
 func @stall {
@@ -125,6 +168,10 @@ func @stall {
     arm64.epilogue 32
     arm64.ret
   tryok#1:
+    arm64.bl __sched_netpoll_block_count
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_parkedFrom
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.movImm x1, 1024
     arm64.movRegReg x0, x19
     arm64.bl TcpClient.recv
@@ -178,8 +225,7 @@ func @main {
     arm64.leaRdata x0, __str_rec_3  ; "127.0.0.1"
     arm64.movImm x1, 0
     arm64.bl TcpListener.bind
-    arm64.movRegReg x19, x0
-    arm64.storeSlotReg slot0, x19
+    arm64.storeSlotReg slot0, x0
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
@@ -197,50 +243,62 @@ func @main {
     arm64.epilogue 112
     arm64.ret
   tryok:
-    arm64.bl __sched_netpoll_block_count
-    arm64.movRegReg x20, x0
-    arm64.movRegReg x0, x19
     arm64.bl __mm_own
     arm64.movRegReg x19, x0
     arm64.leaFuncAddr x0, stall
     arm64.bl __gt_spawn
-    arm64.movRegReg x21, x0
-    arm64.storeBaseDispReg.word64 [x21 + 200], x19
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 200], x19
     arm64.leaFuncAddr x0, __gt_release_stall
-    arm64.storeBaseDispReg.word64 [x21 + 176], x0
-    arm64.movRegReg x0, x21
+    arm64.storeBaseDispReg.word64 [x20 + 176], x0
+    arm64.movRegReg x0, x20
     arm64.bl __gt_ready
-    arm64.movImm x0, 200
+    arm64.bl parkedInRecv
+    arm64.movImm x19, 0
+    arm64.movRegReg x21, x19
+    arm64.movRegReg x19, x0
+  whilehdr:
+    arm64.cmp x21, 1000
+    arm64.movImm x0, 0
+    arm64.b.ge scmerge#5
+  andrhs:
+    arm64.eor x0, x19, 1
+  scmerge#5:
+    arm64.cbz x0, whileexit
+  untilParkedInRecv:
+    arm64.movImm x0, 1
   __rc_ok:
     arm64.bl __gt_sleep
-  __il_cont#5:
-    arm64.bl __sched_netpoll_block_count
-    arm64.sub x19, x0, x20
-    arm64.movRegReg x0, x21
+  __il_cont#10:
+    arm64.add x21, x21, 1
+    arm64.bl parkedInRecv
+    arm64.movRegReg x19, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x20
     arm64.bl __gt_is_complete
     arm64.cmp x0, 0
-    arm64.cset x20, eq
+    arm64.cset x21, eq
     arm64.leaRdata x0, __str_rec_4  ; "dropped="
     arm64.loadRegBaseDisp.word64 x22, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
-    arm64.cmp x19, 0
-    arm64.movImm x19, 0
-    arm64.b.gt scmerge
+    arm64.movImm x24, 0
+    arm64.cbnz x19, scmerge#9
   critsplit:
-    arm64.movRegReg x20, x19
-  scmerge:
+    arm64.movRegReg x21, x24
+  scmerge#9:
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x19, x0
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
     arm64.bl __bool_to_string
-    arm64.movRegReg x20, x0
+    arm64.movRegReg x21, x0
     arm64.leaRdata x0, __str_rec_5  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-    arm64.add x0, x23, x20
+    arm64.add x0, x23, x21
     arm64.add x26, x0, x25
     arm64.add x0, x26, 57
     arm64.movImm x1, 0
@@ -254,14 +312,14 @@ func @main {
     arm64.add x22, x28, x23
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x20, x22, x20
-    arm64.movRegReg x0, x20
+    arm64.add x21, x22, x21
+    arm64.movRegReg x0, x21
     arm64.movRegReg x1, x24
     arm64.movRegReg x2, x25
     arm64.bl __str_copy
-    arm64.add x0, x20, x25
+    arm64.add x0, x21, x25
     arm64.storeBaseDispReg.word64 [x27 + 0], x28
     arm64.storeBaseDispReg.word64 [x27 + 8], x26
     arm64.movImm x0, 18446744073709551613
@@ -273,11 +331,11 @@ func @main {
   __il_body:
     arm64.movRegReg x0, x27
     arm64.bl __write_stdout
-  __il_cont#9:
+  __il_cont#14:
     arm64.movRegReg x0, x27
     arm64.bl __str_decref
     arm64.movImm x19, 0
-    arm64.movRegReg x0, x21
+    arm64.movRegReg x0, x20
     arm64.bl __gt_promise_drop
     arm64.loadRegSlot x0, slot0
     arm64.bl __destruct_TcpListener

@@ -167,11 +167,11 @@ func @__mm_free {
 
 func @__slab_alloc {
   entry:
-    arm64.prologue 96
-    arm64.storeSlotReg slot9, x22
-    arm64.storeSlotReg slot8, x21
-    arm64.storeSlotReg slot7, x20
-    arm64.storeSlotReg slot6, x19
+    arm64.prologue 80
+    arm64.storeSlotReg slot7, x22
+    arm64.storeSlotReg slot6, x21
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
     arm64.cmp x0, 32768
     arm64.b.gt osdirect
   small:
@@ -202,7 +202,7 @@ func @__slab_alloc {
     arm64.add x20, x1, 138720
     arm64.cmp x2, 0
     arm64.b.ne shard#13
-  critsplit#48:
+  critsplit#44:
     arm64.movRegReg x1, x20
     arm64.b shard#7
   shard#13:
@@ -235,9 +235,9 @@ func @__slab_alloc {
     arm64.loadRegBaseDisp.word64 x21, [x2 + 0]
     arm64.cmp x21, 0
     arm64.cset x5, eq
-    arm64.add x22, x2, 536
+    arm64.add x22, x2, 552
     arm64.cbz x5, shard#11
-  critsplit#51:
+  critsplit#47:
     arm64.movRegReg x21, x3
     arm64.b shard#8
   shard#11:
@@ -285,21 +285,12 @@ func @__slab_alloc {
     arm64.add x5, x0, x3
     arm64.loadRegBaseDisp.word64 x6, [x5 + 0]
     arm64.cmp x6, 0
-    arm64.b.eq pop#26
-  pop#28:
-    arm64.loadRegBaseDisp.word64 x0, [x6 + 16]
-    arm64.cmp x0, 0
-    arm64.b.eq pop#26
-  pop#29:
-    arm64.loadRegBaseDisp.word64 x0, [x6 + 48]
-    arm64.cmp x0, x1
-    arm64.b.eq pop#18
-    arm64.b pop#26
-  pop#30:
+    arm64.b.eq pop#17
+  pop#26:
     arm64.loadRegBaseDisp.word64 x0, [x6 + 16]
     arm64.cmp x0, 0
     arm64.b.eq pop#17
-  pop#31:
+  pop#27:
     arm64.loadRegBaseDisp.word64 x0, [x6 + 48]
     arm64.cmp x0, x1
     arm64.b.ne pop#17
@@ -340,32 +331,35 @@ func @__slab_alloc {
   pop#24:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x5 + 0], x1
+    arm64.movImm x1, 18446744073709551613
+    arm64.add x16, x6, 48
+    arm64.stlr.word64 [x16], x1
   pop#25:
     arm64.cmp x4, 0
     arm64.b.ne release
   handback:
-    arm64.loadRegSlot x19, slot6
-    arm64.loadRegSlot x20, slot7
-    arm64.loadRegSlot x21, slot8
-    arm64.loadRegSlot x22, slot9
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
     arm64.ret
   osdirect:
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
-    arm64.b.ne state#36
-  state#35:
+    arm64.b.ne state#32
+  state#31:
     arm64.storeSlotReg slot0, x0
     arm64.bl __slab_state_base
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
-  state#36:
+  state#32:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.add x3, x1, 152152
     arm64.cmp x2, 0
-    arm64.b.eq shard#37
-  shard#43:
+    arm64.b.eq shard#33
+  shard#39:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -373,12 +367,12 @@ func @__slab_alloc {
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
-    arm64.b.eq shard#38
-  shard#39:
+    arm64.b.eq shard#34
+  shard#35:
     arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
     arm64.cmp x4, 0
-    arm64.b.eq shard#45
-  shard#44:
+    arm64.b.eq shard#41
+  shard#40:
     arm64.loadRegBaseDisp.word64 x4, [x4 + 256]
     arm64.loadRegBaseDisp.word64 x5, [x4 + 304]
     arm64.add x5, x5, 1
@@ -386,28 +380,28 @@ func @__slab_alloc {
     arm64.loadRegBaseDisp.word64 x5, [x4 + 320]
     arm64.add x5, x5, x0
     arm64.storeBaseDispReg.word64 [x4 + 320], x5
-  shard#45:
+  shard#41:
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
     arm64.cmp x2, 0
-    arm64.b.eq shard#38
-  shard#41:
+    arm64.b.eq shard#34
+  shard#37:
     arm64.loadRegBaseDisp.word64 x2, [x2 + 32]
     arm64.cmp x2, 255
-    arm64.b.lt shard#42
-  shard#38:
+    arm64.b.lt shard#38
+  shard#34:
     arm64.movImm x1, 1
     arm64.add x2, x3, 24
     arm64.arm64AtomicRmw.add x1, [x2], x1
     arm64.add x1, x3, 40
     arm64.arm64AtomicRmw.add x1, [x1], x0
     arm64.b oscall
-  shard#42:
+  shard#38:
     arm64.movImm x16, 48
     arm64.mul x2, x2, x16
     arm64.add x1, x1, 139912
     arm64.add x1, x1, x2
     arm64.movRegReg x3, x1
-  shard#37:
+  shard#33:
     arm64.loadRegBaseDisp.word64 x1, [x3 + 24]
     arm64.add x1, x1, 1
     arm64.storeBaseDispReg.word64 [x3 + 24], x1
@@ -416,11 +410,11 @@ func @__slab_alloc {
     arm64.storeBaseDispReg.word64 [x3 + 40], x1
   oscall:
     arm64.bl __slab_os_direct_alloc
-    arm64.loadRegSlot x19, slot6
-    arm64.loadRegSlot x20, slot7
-    arm64.loadRegSlot x21, slot8
-    arm64.loadRegSlot x22, slot9
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
     arm64.ret
   state#5:
     arm64.storeSlotReg slot0, x0
@@ -428,69 +422,52 @@ func @__slab_alloc {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.b state#6
-  pop#26:
-    arm64.storeSlotReg slot1, x1
-    arm64.storeSlotReg slot2, x2
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
-    arm64.movRegReg x0, x1
-    arm64.bl __slab_drain_remote
-    arm64.loadRegSlot x1, slot1
-    arm64.loadRegSlot x2, slot2
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
-  pop#27:
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 0]
-    arm64.cmp x6, 0
-    arm64.b.ne pop#30
   pop#17:
-    arm64.storeSlotReg slot3, x3
-    arm64.storeSlotReg slot4, x4
-    arm64.storeSlotReg slot5, x5
+    arm64.storeSlotReg slot1, x3
+    arm64.storeSlotReg slot2, x4
+    arm64.storeSlotReg slot3, x5
     arm64.movRegReg x0, x19
     arm64.bl __slab_refill
-    arm64.loadRegSlot x3, slot3
-    arm64.loadRegSlot x4, slot4
-    arm64.loadRegSlot x5, slot5
+    arm64.loadRegSlot x3, slot1
+    arm64.loadRegSlot x4, slot2
+    arm64.loadRegSlot x5, slot3
     arm64.movRegReg x6, x0
     arm64.b pop#18
   pop#22:
     arm64.movImm x0, 86
     arm64.syscall 94
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot6
-    arm64.loadRegSlot x20, slot7
-    arm64.loadRegSlot x21, slot8
-    arm64.loadRegSlot x22, slot9
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
     arm64.ret
   release:
     arm64.leaGlobal x1, __slab_state
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.add x1, x1, 40
     arm64.storeSlotReg slot0, x0
-    arm64.storeSlotReg slot4, x4
+    arm64.storeSlotReg slot2, x4
     arm64.movRegReg x0, x1
     arm64.bl mrt_linux_lock_leave
     arm64.loadRegSlot x0, slot0
-    arm64.loadRegSlot x4, slot4
+    arm64.loadRegSlot x4, slot2
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x1, [x4], x1
-    arm64.loadRegSlot x19, slot6
-    arm64.loadRegSlot x20, slot7
-    arm64.loadRegSlot x21, slot8
-    arm64.loadRegSlot x22, slot9
-    arm64.epilogue 96
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.epilogue 80
     arm64.ret
 }
 
 func @__slab_free {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x20
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x20
+    arm64.storeSlotReg slot4, x19
     arm64.movRegReg x19, x0
     arm64.leaGlobal x0, __slab_arena_map_l1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
@@ -571,7 +548,8 @@ func @__slab_free {
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x3 + 32], x0
   routed:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 48]
+    arm64.add x16, x20, 48
+    arm64.ldar.word64 x0, [x16]
     arm64.cmp x0, 0
     arm64.b.ne notraw
   rawowned:
@@ -579,11 +557,8 @@ func @__slab_free {
     arm64.b.ne rawlocked#18
     arm64.b local
   notraw:
-    arm64.cmp x0, -1
-    arm64.b.eq parked
-  mine:
     arm64.cmp x0, x2
-    arm64.b.ne remote
+    arm64.b.ne mine
   local:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
@@ -591,32 +566,39 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x20 + 16], x0
-    arm64.loadRegBaseDisp.word64 x1, [x20 + 32]
-    arm64.leaRdata x2, __slab_class_geom
-    arm64.loadRegBaseIndexScale.word64 x1, [x2 + x1*8 + 0]
-    arm64.asr x1, x1, 32
-    arm64.cmp x0, x1
-    arm64.b.eq push#27
-  push#28:
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.epilogue 48
+  push:
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
     arm64.ret
+  mine:
+    arm64.cmp x0, -3
+    arm64.b.eq uncached
+  notdead:
+    arm64.cmp x0, -2
+    arm64.b.eq parked
   remote:
-    arm64.movImm x1, 1
-    arm64.add x2, x0, 152
-    arm64.arm64AtomicRmw.add x1, [x2], x1
-    arm64.add x0, x0, 120
+    arm64.movImm x0, 1
+    arm64.add x1, x20, 64
+    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.cmp x2, 0
+    arm64.cset x0, eq
+    arm64.add x1, x20, 56
+    arm64.cbnz x0, rpush
+  rcredit:
+    arm64.movImm x0, 1
+    arm64.add x2, x2, 152
+    arm64.arm64AtomicRmw.add x0, [x2], x0
   rpush:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.arm64AtomicCas x1, [x0], x1, x19
-    arm64.cmp x1, 0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.arm64AtomicCas x0, [x1], x0, x19
+    arm64.cmp x0, 0
     arm64.b.eq rpush
   rpushed:
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
     arm64.ret
   osdirect:
     arm64.leaGlobal x0, __slab_state
@@ -624,8 +606,8 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.add x2, x0, 152152
     arm64.cmp x1, 0
-    arm64.b.eq shard#32
-  shard#38:
+    arm64.b.eq shard#41
+  shard#47:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x1
     arm64.cmp x1, 0
@@ -633,36 +615,36 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x1, x16, x17
     arm64.cmp x1, 0
-    arm64.b.eq shard#33
-  shard#34:
+    arm64.b.eq shard#42
+  shard#43:
     arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
     arm64.cmp x3, 0
-    arm64.b.eq shard#40
-  shard#39:
+    arm64.b.eq shard#49
+  shard#48:
     arm64.loadRegBaseDisp.word64 x3, [x3 + 256]
     arm64.loadRegBaseDisp.word64 x4, [x3 + 312]
     arm64.add x4, x4, 1
     arm64.storeBaseDispReg.word64 [x3 + 312], x4
-  shard#40:
+  shard#49:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq shard#33
-  shard#36:
+    arm64.b.eq shard#42
+  shard#45:
     arm64.loadRegBaseDisp.word64 x1, [x1 + 32]
     arm64.cmp x1, 255
-    arm64.b.lt shard#37
-  shard#33:
+    arm64.b.lt shard#46
+  shard#42:
     arm64.movImm x0, 1
     arm64.add x1, x2, 32
     arm64.arm64AtomicRmw.add x0, [x1], x0
     arm64.b oscall
-  shard#37:
+  shard#46:
     arm64.movImm x16, 48
     arm64.mul x1, x1, x16
     arm64.add x0, x0, 139912
     arm64.add x0, x0, x1
     arm64.movRegReg x2, x0
-  shard#32:
+  shard#41:
     arm64.loadRegBaseDisp.word64 x0, [x2 + 32]
     arm64.add x0, x0, 1
     arm64.storeBaseDispReg.word64 [x2 + 32], x0
@@ -670,9 +652,9 @@ func @__slab_free {
     arm64.movRegReg x0, x19
     arm64.bl __slab_os_direct_free
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
     arm64.ret
   rawlocked#18:
     arm64.leaGlobal x0, __slab_state
@@ -680,8 +662,8 @@ func @__slab_free {
     arm64.add x1, x0, 32
     arm64.loadRegBaseDisp.word64 x2, [x0 + 24]
     arm64.cmp x2, 0
-    arm64.b.eq rawlocked#24
-  rawlocked#26:
+    arm64.b.eq rawlocked#26
+  rawlocked#28:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
     arm64.cmp x2, 0
@@ -689,10 +671,10 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x2, x16, x17
     arm64.cmp x2, 0
-    arm64.b.eq rawlocked#24
-  rawlocked#25:
-    arm64.add x1, x2, 536
-  rawlocked#24:
+    arm64.b.eq rawlocked#26
+  rawlocked#27:
+    arm64.add x1, x2, 552
+  rawlocked#26:
     arm64.movImm x2, 1
     arm64.arm64AtomicRmw.add x2, [x1], x2
     arm64.add x2, x0, 40
@@ -712,19 +694,78 @@ func @__slab_free {
     arm64.loadRegSlot x1, slot1
     arm64.movImm x2, 18446744073709551615
     arm64.arm64AtomicRmw.add x1, [x1], x2
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
+    arm64.ret
+  uncached:
+    arm64.cmp x1, 0
+    arm64.b.eq relistplain
+  relistlock:
+    arm64.leaGlobal x0, __slab_state
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x1, x0, 32
+    arm64.loadRegBaseDisp.word64 x3, [x0 + 24]
+    arm64.cmp x3, 0
+    arm64.b.eq relist#32
+  relist#34:
+    arm64.arm64ThreadPointer x16, linuxWritable
+    arm64.add x16, x16, x3
+    arm64.cmp x3, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x3, x16, x17
+    arm64.cmp x3, 0
+    arm64.b.eq relist#32
+  relist#33:
+    arm64.add x1, x3, 552
+  relist#32:
+    arm64.movImm x3, 1
+    arm64.arm64AtomicRmw.add x3, [x1], x3
+    arm64.add x3, x0, 40
+    arm64.storeSlotReg slot0, x0
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x3
+    arm64.bl mrt_linux_lock_enter
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __slab_free_to_full
+    arm64.movRegReg x3, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.add x0, x0, 40
+    arm64.storeSlotReg slot1, x1
+    arm64.storeSlotReg slot2, x2
+    arm64.storeSlotReg slot3, x3
+    arm64.bl mrt_linux_lock_leave
+    arm64.loadRegSlot x1, slot1
+    arm64.loadRegSlot x2, slot2
+    arm64.loadRegSlot x3, slot3
+    arm64.movImm x0, 18446744073709551615
+    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.b relistdone
+  relistplain:
+    arm64.storeSlotReg slot2, x2
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __slab_free_to_full
+    arm64.loadRegSlot x2, slot2
+    arm64.movRegReg x3, x0
+  relistdone:
+    arm64.cmp x3, 0
+    arm64.b.eq remote
+  relistret:
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
     arm64.ret
   parked:
     arm64.movImm x0, 89
     arm64.syscall 94
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.epilogue 64
     arm64.ret
-  push#27:
-    arm64.movRegReg x0, x20
-    arm64.bl __slab_span_return
-    arm64.b push#28
 }

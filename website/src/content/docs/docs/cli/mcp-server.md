@@ -47,7 +47,7 @@ maxon mcp-server --dev   # also exposes the compiler-development tools
 
 | Option | Description |
 |--------|-------------|
-| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, and the `repoRoot` and `from` arguments of `build` |
+| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, the `repoRoot` argument of `build`, `run`, `test` and `fmt`, and the `from` argument of `build` |
 
 The server reads newline-delimited JSON-RPC 2.0 messages on stdin and writes responses to stdout. It
 implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `tools/list` and
@@ -89,6 +89,7 @@ Compiles, or reuses a cached build of, a program and runs it, as `maxon run` doe
 | `path` | string | The `.maxon` file or directory to run |
 | `source` | string | Inline Maxon source to compile and run. Give `path` or `source`. |
 | `arguments` | array of strings | Command-line arguments for the program |
+| `repoRoot` | string | Developer mode only. The checkout whose compiler runs the program; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 
 The answer carries the program's exit code, stdout and stderr.
 
@@ -100,6 +101,7 @@ Runs a project's `test` declarations, as `maxon test` does.
 |----------|------|-------------|
 | `path` | string | Project directory (default: the working directory) |
 | `filter` | string | Selects tests by name or file: case-insensitive, comma-separated patterns are a union |
+| `repoRoot` | string | Developer mode only. The checkout whose compiler runs the tests; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 
 ### `fmt`
 
@@ -109,6 +111,7 @@ Formats Maxon source, as `maxon fmt` does.
 |----------|------|-------------|
 | `path` | string | File or directory, rewritten **in place**. Omitted, the whole working directory is formatted. |
 | `source` | string | Inline source to format. Nothing is written; the result's `formatted` field holds the text. Give `path` or `source`, not both. |
+| `repoRoot` | string | Developer mode only. The checkout whose compiler formats; see [Which tree, and which compiler](#which-tree-and-which-compiler). |
 
 ### `check`
 
@@ -121,6 +124,10 @@ in a child `maxon`, so a compiler panic ends the server.
 |----------|------|-------------|
 | `path` | string, required | The `.maxon` file or directory to check |
 
+Because the compile runs in the server process, `check` honours no `repoRoot`: it always answers about the
+server's own compiler and standard library. The answer says which those were, in `executable` (the running
+compiler's path) and `stdlibRoot` (the `stdlib/` directory it compiled against).
+
 ### `dump_ir`
 
 Compiles a program for the host, as `maxon build` would, and answers its Target IR in `ir`: the text
@@ -131,6 +138,8 @@ panic ends the server.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `path` | string, required | The `.maxon` file or directory to compile |
+
+It carries `executable` and `stdlibRoot` for the same reason `check` does.
 
 ### `lookup_error_code`
 
@@ -156,19 +165,26 @@ These tools are for working on the Maxon compiler itself, in a checkout of its r
 
 ### Which tree, and which compiler
 
-One server can serve several checkouts or worktrees, so every developer tool, and `build` in developer
-mode, takes a `repoRoot` argument:
+One server can serve several checkouts or worktrees, so every developer tool, and `build`, `run`, `test` and
+`fmt` in developer mode, takes a `repoRoot` argument:
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `repoRoot` | string | Absolute path of the Maxon checkout to act in. Defaults to the checkout the server's own compiler sits in. |
+| `repoRoot` | string | Absolute path of the Maxon checkout to act in; that tree's own compiler is the one that runs. |
 
 - `repoRoot` must be **absolute**. A relative path, or a directory that is not a Maxon checkout, is
   refused, never replaced by another tree.
 - A tool acting on a tree runs **that tree's own compiler**, `<repoRoot>/maxon-bin/.maxon/maxon`, because
   the compiler finds its standard library by walking up from its own executable. A tree whose compiler
   has not been built is refused, naming the `build` tool.
-- **Every answer echoes the `repoRoot` it used**, on success and on refusal.
+- **Omitted, the default differs by tool.** `build`, `run_spec_test`, `run_scale_test` and
+  `spec_test_outcome` act on the checkout the server's own compiler sits in. `run`, `test` and `fmt` act in
+  the host's working directory, driven by the server's own compiler and naming no tree — their `path`
+  arguments are the caller's, and are resolved against the caller's directory.
+- **An answer echoes the `repoRoot` it used** whenever it acted on a named tree, on success and on refusal.
+  A tool that named no tree leaves the field out rather than reporting an empty one.
+- `check` and `dump_ir` take no `repoRoot`: they compile in the server process and answer with the
+  `executable` and `stdlibRoot` that did so.
 
 In developer mode `build` also accepts:
 

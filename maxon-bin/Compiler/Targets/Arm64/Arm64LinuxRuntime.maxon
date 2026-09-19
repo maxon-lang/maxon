@@ -221,6 +221,14 @@ let Arm64LinuxSyscallPpoll = 73
 let Arm64LinuxSyscallExit = 93
 let Arm64LinuxSyscallKill = 129
 let Arm64LinuxSyscallSetsid = 157
+
+// Every child leads a process group of its own, and the tree kill rests on it: a deadline signals the GROUP
+// (`Arm64PosixRuntime.buildArm64PosixProcTerminateChunk`, which negates the pid), so a child left in the
+// parent's group could not be signalled without signalling the parent too. ⚠ Only a NON-detached child calls
+// this. `setsid` makes a detached child lead a new session AND a new group, and it fails with `EPERM` for a
+// caller that already leads a group — a child making both calls would silently stay in the parent's session.
+// It is 109 on x86-64.
+let Arm64LinuxSyscallSetpgid = 154
 let Arm64LinuxSyscallClone = 220
 let Arm64LinuxSyscallExecve = 221
 let Arm64LinuxSyscallWait4 = 260
@@ -2594,21 +2602,27 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdOutputOffset as MachineWord, childDescriptor: PosixChildStdoutFd)
 	emitArm64LinuxChildDup3(asm, startupSlot: SlotStartup, handleOffset: StartupInfoHStdErrorOffset as MachineWord, childDescriptor: PosixChildStderrFd)
 
-	// `DETACHED_PROCESS` ⇒ `setsid()`, which is what `POSIX_SPAWN_SETSID` asks the other lane's spawnattr for:
-	// a detached child gets its own SESSION and outlives the parent's terminal.
-	let noSession = asm.newLabel()
+	let ownGroup = asm.newLabel()
+	let groupReady = asm.newLabel()
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotFlags)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: DetachedProcess as MachineWord)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x4, lhs: Arm64Register.x2, rhs: Arm64Register.x3)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: noSession)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: ownGroup)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallSetsid)
+	arm64EmitBranchTo(asm, label: groupReady)
+
+	asm.placeLabel(ownGroup)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallSetpgid)
+
+	asm.placeLabel(groupReady)
 
 	// A NULL `lpCurrentDirectory` inherits the parent's, which is the absence of an `fchdir`. One that fails —
 	// a directory the parent could open but may not enter — is reported down the status pipe as the working
 	// directory's step, like a failed `execve` otherwise.
 	let inheritCwd = asm.newLabel()
 	let cwdEnterFailed = asm.newLabel()
-	asm.placeLabel(noSession)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwd)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: inheritCwd)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotCwdFd)

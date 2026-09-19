@@ -12,20 +12,52 @@ ExitCode: 0
 func @main {
   entry:
     arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
   one:
-    arm64.fpLoadRdata d0, [rdata + __fconst_0]
-  __il_cont#5:
-    arm64.fpLoadRdata d1, [rdata + __fconst_2.302585092994046]
-    arm64.fdiv d0, d0, d1
-  __il_cont#3:
     arm64.fpLoadRdata d1, [rdata + __fconst_0]
-    arm64.fcmp d0, d1
-    arm64.b.ne ifcont
+  __il_cont#15:
+    arm64.fpLoadRdata d2, [rdata + __fconst_2.302585092994046]
+    arm64.fdiv d1, d1, d2
+    arm64.fpLoadRdata d2, [rdata + __fconst_-0.5]
+    arm64.fcmp d1, d2
+    arm64.movImm x0, 0
+    arm64.b.le scmerge
+  andrhs:
+    arm64.fpLoadRdata d2, [rdata + __fconst_22.5]
+    arm64.fcmp d1, d2
+    arm64.cset x0, mi
+  scmerge:
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, __il_cont#3
+  ifcont#8:
+    arm64.frintn d2, d1
+    arm64.fcvtzs x0, d2
+    arm64.fpLoadRdata d2, [rdata + __fconst_1]
+    arm64.movImm x1, 0
+    arm64.b forhdr
+  raise:
+    arm64.fpLoadRdata d3, [rdata + __fconst_10]
+    arm64.fmul d2, d2, d3
+  forstep:
+    arm64.add x1, x1, 1
+  forhdr:
+    arm64.cmp x1, x0
+    arm64.b.lt raise
+  forexit:
+    arm64.fcmp d0, d2
+    arm64.b.ne __il_cont#3
+  exactPower:
+    arm64.scvtf d0, x0
+    arm64.movRegReg d1, d0
+  __il_cont#3:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fcmp d1, d0
+    arm64.b.ne ifcont#2
   check:
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  ifcont:
+  ifcont#2:
     arm64.movImm x0, 1
     arm64.epilogue 16
     arm64.ret

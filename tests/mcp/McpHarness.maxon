@@ -363,6 +363,13 @@ function toolPayload(doc JsonDoc) returns JsonDoc
 	return try Json.parse(text) otherwise panic("tool payload is not JSON: {text}")
 end 'toolPayload'
 
+// Whether the payload carries a key at all — the question an OMITTED field is the answer to. A tool that
+// names no tree leaves `repoRoot` out rather than reporting an empty one.
+export function payloadHasKey(doc JsonDoc, key String) returns bool
+	let payload = toolPayload(doc)
+	return hasChildKey(payload, parent: payload.root, key: key)
+end 'payloadHasKey'
+
 export function payloadString(doc JsonDoc, key String) returns String
 	let payload = toolPayload(doc)
 	return try payload.getString(payload.root, key: key) otherwise panic("tool payload has no `{key}`: {toolCallText(doc)}")

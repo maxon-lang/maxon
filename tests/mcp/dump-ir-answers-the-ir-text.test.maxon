@@ -7,6 +7,7 @@ let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'
 
 // How the Target IR printer opens a function (`TargetPrinter.FuncHeaderPrefix`), followed by the name.
 let MainFunctionHeader = "func @main"
+let StdlibDirName = "stdlib"
 
 test 'dump_ir answers the IR of main, and writes nothing'
 	let program = stagedProgram(DumpIrDirName, fileName: ProgramFileName, source: WellFormedSource)
@@ -16,4 +17,9 @@ test 'dump_ir answers the IR of main, and writes nothing'
 	try Expect.isFalse(toolCallIsError(answer), message: "`dump_ir` over a well-formed program was answered as an error: {text}")
 	try Expect.contains(text, needle: MainFunctionHeader, message: "`dump_ir` did not answer the IR of `main`: {text}")
 	try Expect.isEmpty(filesWrittenBeside(program, dir: try program.parent() otherwise panic("a staged program sits in a directory")), message: "`dump_ir` wrote files.")
+
+	// The IR is the SERVER's own compiler's answer about the SERVER's own stdlib, and the payload has to say
+	// so: nothing else in it names a compiler or a tree.
+	try Expect.equal(payloadString(answer, key: "executable"), expected: testedCompilerPath().toString())
+	try Expect.isTrue(payloadString(answer, key: "stdlibRoot").endsWith(StdlibDirName), message: "`dump_ir` did not name the stdlib root it compiled against: {text}")
 end 'dump_ir answers the IR of main, and writes nothing'

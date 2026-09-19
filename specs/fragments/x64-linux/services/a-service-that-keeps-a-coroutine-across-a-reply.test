@@ -131,8 +131,11 @@ func @main {
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
   __il_cont:
+    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __sole_Svc
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
     x64.leaRegFunc rcx, [rip + Svc.__loop]
     x64.leaRegFunc rax, [rip + Svc.__abandon]
     x64.movRegReg rdx, r12
@@ -235,7 +238,7 @@ func @Svc.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_8
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_10
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -313,7 +316,7 @@ func @Svc.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_9
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=start, [2]=finish] @__jumptable_11
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0

@@ -26,20 +26,29 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 10
-  __il_cont#16:
+  __il_cont#21:
+    x64.movRegImm32 rax, 0
+  __il_cont#20:
+    x64.movRegImm rdx, 9223372036854775818
+    x64.xorRegImm32 rax, rax, -1
+    x64.orRegReg rdx, rdx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, divovf
+  divok#2:
     x64.movRegImm32 rsi, 1
     x64.movRegReg rax, rcx
     x64.cqo
     x64.idivReg rsi
-  ifcont#5:
+  ifcont#7:
     x64.movRegImm32 rsi, 1
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 rax, rax, -1
     x64.andRegImm32 rax, rax, 10
     x64.cqo
     x64.idivReg rsi
-  __il_cont#20:
+  divok#14:
     x64.movRegImm rax, 6148914691236517206
     x64.imulHighReg rcx
     x64.movRegReg rax, rdx
@@ -47,13 +56,22 @@ func @main {
     x64.leaRegRegReg rax, rdx, rax
   trycont:
     x64.cmpRegImm32 rax, 3
-    x64.jcc equal, ifcont#15
+    x64.jcc equal, ifcont#19
   anOrdinaryDivisionStillDivides:
     x64.movRegImm32 r8, 3
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  ifcont#15:
+  ifcont#19:
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  divovf:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic: integer overflow\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
