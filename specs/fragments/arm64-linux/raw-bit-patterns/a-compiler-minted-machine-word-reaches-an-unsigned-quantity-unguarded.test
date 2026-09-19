@@ -1,0 +1,26 @@
+// Test: a-compiler-minted-machine-word-reaches-an-unsigned-quantity-unguarded
+// --- runtime-file: Probe.maxon
+typealias ProbeCount = int(0 to u64.max)
+
+let ProbeScratchBytes = 8
+
+function probeLoadedCount() returns ProbeCount
+	let addr = __Raw.scratch(ProbeScratchBytes)
+	__Raw.storeWord(addr, offset: 0, value: 7 as MachineWord)
+
+	return __Raw.loadWord(addr, offset: 0) as ProbeCount
+end 'probeLoadedCount'
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

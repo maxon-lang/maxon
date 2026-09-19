@@ -118,8 +118,10 @@ func @main {
     arm64.bl __str_retain
     arm64.storeBaseDispReg.word64 [x21 + 8], x0
   __il_cont#4:
+    arm64.movImm x1, 0
     arm64.movRegReg x0, x21
     arm64.bl __sole_Store
+    arm64.bl __mm_walk_settle
     arm64.leaFuncAddr x0, Store.__loop
     arm64.leaFuncAddr x2, Store.__abandon
     arm64.movRegReg x1, x21
@@ -151,6 +153,8 @@ func @main {
     arm64.storeBaseDispReg.word64 [x23 + 16], x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_sole_alone
     arm64.movImm x0, 16
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -310,7 +314,7 @@ func @Store.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=keep, [2]=report] @__jumptable_21
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=keep, [2]=report] @__jumptable_23
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -443,9 +447,12 @@ func @Store.__loop {
   __il_cont#12:
     arm64.loadRegSlot x0, slot1
     arm64.bl __mm_decref
-    arm64.movImm x2, 0
+    arm64.movImm x21, 0
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __managed_sole_alone
     arm64.loadRegSlot x0, slot0
     arm64.loadRegSlot x1, slot3
+    arm64.movRegReg x2, x21
     arm64.bl __gt_cell_complete
     arm64.b serve
 }
@@ -456,7 +463,7 @@ func @Store.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=report] @__jumptable_22
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=report] @__jumptable_24
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0

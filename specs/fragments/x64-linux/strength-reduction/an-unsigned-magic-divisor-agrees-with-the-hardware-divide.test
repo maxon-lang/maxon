@@ -1,0 +1,598 @@
+// Test: an-unsigned-magic-divisor-agrees-with-the-hardware-divide
+typealias Unsigned = bits(64)
+typealias UnsignedArray = Array with Unsigned
+typealias UPosDivisor = int(2 to 4294967295)
+
+function refUDiv(n Unsigned, d UPosDivisor) returns Unsigned
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUMod'
+
+function edgeDividends() returns UnsignedArray
+	var ns = UnsignedArray.create()
+	ns.push(0)
+	ns.push(1)
+	ns.push(31)
+	ns.push(9223372036854775807)
+	let top = (9223372036854775807 as Unsigned) + 1
+	ns.push(top)
+	ns.push(top + 9223372036854775807)
+	ns.push(top + 3122306832379791762)
+	return ns
+end 'edgeDividends'
+
+function main() returns ExitCode
+	for u in edgeDividends() 'each'
+		if u / 3 != refUDiv(u, d: 3) 'divThree'
+			return 1
+		end 'divThree'
+		if u mod 3 != refUMod(u, d: 3) 'modThree'
+			return 2
+		end 'modThree'
+		if u / 7 != refUDiv(u, d: 7) 'divSeven'
+			return 3
+		end 'divSeven'
+		if u mod 7 != refUMod(u, d: 7) 'modSeven'
+			return 4
+		end 'modSeven'
+		if u / 10 != refUDiv(u, d: 10) 'divTen'
+			return 5
+		end 'divTen'
+		if u mod 10 != refUMod(u, d: 10) 'modTen'
+			return 6
+		end 'modTen'
+		if u / 14 != refUDiv(u, d: 14) 'divFourteen'
+			return 7
+		end 'divFourteen'
+		if u mod 14 != refUMod(u, d: 14) 'modFourteen'
+			return 8
+		end 'modFourteen'
+		if u / 100 != refUDiv(u, d: 100) 'divHundred'
+			return 9
+		end 'divHundred'
+		if u mod 100 != refUMod(u, d: 100) 'modHundred'
+			return 10
+		end 'modHundred'
+		if u / 641 != refUDiv(u, d: 641) 'divSixFortyOne'
+			return 11
+		end 'divSixFortyOne'
+		if u mod 641 != refUMod(u, d: 641) 'modSixFortyOne'
+			return 12
+		end 'modSixFortyOne'
+		if u / 10000000 != refUDiv(u, d: 10000000) 'divTenMillion'
+			return 13
+		end 'divTenMillion'
+		if u mod 10000000 != refUMod(u, d: 10000000) 'modTenMillion'
+			return 14
+		end 'modTenMillion'
+		if u / 4294967295 != refUDiv(u, d: 4294967295) 'divFourGig'
+			return 15
+		end 'divFourGig'
+		if u mod 4294967295 != refUMod(u, d: 4294967295) 'modFourGig'
+			return 16
+		end 'modFourGig'
+	end 'each'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @refUMod {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegReg rsi, rdx
+    x64.cmpRegImm32 rsi, 2
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rsi, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.andRegReg rcx, rcx, rax
+    x64.movRegReg rax, rcx
+    x64.movRegImm32 rdx, 0
+    x64.divReg rsi
+  tryok:
+    x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-unsigned-magic-divisor-agrees-with-the-hardware-divide.test:10: Range check failed: value outside typealias 'UPosDivisor'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 31
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm rdx, 9223372036854775807
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm rdx, 9223372036854775808
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm rdx, 18446744073709551615
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm rdx, 12345678869234567570
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  __il_cont#38:
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  each:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 r13, [rax + r12*8 + 0]
+  __im_cont:
+    x64.movRegImm rax, 12297829382473034411
+    x64.mulHighReg r13
+    x64.movRegReg rcx, rdx
+    x64.shrRegImm8 rcx, rdx, 1
+  __rc_ok#93:
+    x64.movRegImm rax, 12297829382473034411
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 1
+  __il_cont#89:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, ifcont#6
+  divThree:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm rax, 12297829382473034411
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 1
+    x64.imulRegRegImm32 rax, rdx, 3
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#8
+  modThree:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm rax, 2635249153387078803
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rcx, rax, rdx
+    x64.shrRegImm8 rcx, rcx, 2
+  __rc_ok#44:
+    x64.movRegImm rax, 2635249153387078803
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 2
+  __il_cont#40:
+    x64.cmpRegReg rcx, rax
+    x64.jcc equal, ifcont#10
+  divSeven:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm rax, 2635249153387078803
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 2
+    x64.imulRegRegImm32 rax, rax, 7
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#12
+  modSeven:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.movRegImm rax, 14757395258967641293
+    x64.mulHighReg r13
+    x64.movRegReg rcx, rdx
+    x64.shrRegImm8 rcx, rdx, 3
+  __rc_ok#51:
+    x64.movRegImm rax, 14757395258967641293
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 3
+  __il_cont#47:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, ifcont#14
+  divTen:
+    x64.movRegImm32 r12, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegImm rax, 14757395258967641293
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 3
+    x64.imulRegRegImm32 rax, rdx, 10
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#16
+  modTen:
+    x64.movRegImm32 r12, 6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.movRegImm rax, 2635249153387078803
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rcx, rax, rdx
+    x64.shrRegImm8 rcx, rcx, 3
+  __rc_ok#58:
+    x64.movRegImm rax, 2635249153387078803
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 3
+  __il_cont#54:
+    x64.cmpRegReg rcx, rax
+    x64.jcc equal, ifcont#18
+  divFourteen:
+    x64.movRegImm32 r12, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#18:
+    x64.movRegImm rax, 2635249153387078803
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 3
+    x64.imulRegRegImm32 rax, rax, 14
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 14
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#20
+  modFourteen:
+    x64.movRegImm32 r12, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#20:
+    x64.movRegImm rax, 5165088340638674453
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rcx, rax, rdx
+    x64.shrRegImm8 rcx, rcx, 6
+  __rc_ok#65:
+    x64.movRegImm rax, 5165088340638674453
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 6
+  __il_cont#61:
+    x64.cmpRegReg rcx, rax
+    x64.jcc equal, ifcont#22
+  divHundred:
+    x64.movRegImm32 r12, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#22:
+    x64.movRegImm rax, 5165088340638674453
+    x64.mulHighReg r13
+    x64.movRegReg rax, r13
+    x64.subRegReg rax, r13, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 6
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 100
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#24
+  modHundred:
+    x64.movRegImm32 r12, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#24:
+    x64.movRegImm rax, 14734372801465351681
+    x64.mulHighReg r13
+    x64.movRegReg rcx, rdx
+    x64.shrRegImm8 rcx, rdx, 9
+  __rc_ok#72:
+    x64.movRegImm rax, 14734372801465351681
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 9
+  __il_cont#68:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, ifcont#26
+  divSixFortyOne:
+    x64.movRegImm32 r12, 11
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#26:
+    x64.movRegImm rax, 14734372801465351681
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 9
+    x64.imulRegRegImm32 rax, rdx, 641
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 641
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#28
+  modSixFortyOne:
+    x64.movRegImm32 r12, 12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#28:
+    x64.movRegImm rax, 15474250491067253437
+    x64.mulHighReg r13
+    x64.movRegReg rcx, rdx
+    x64.shrRegImm8 rcx, rdx, 23
+  __rc_ok#79:
+    x64.movRegImm rax, 15474250491067253437
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 23
+  __il_cont#75:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, ifcont#30
+  divTenMillion:
+    x64.movRegImm32 r12, 13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#30:
+    x64.movRegImm rax, 15474250491067253437
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 23
+    x64.imulRegRegImm32 rax, rdx, 10000000
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+    x64.movRegImm32 rdx, 10000000
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, ifcont#32
+  modTenMillion:
+    x64.movRegImm32 r12, 14
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#32:
+    x64.movRegImm rax, 9223372039002259457
+    x64.mulHighReg r13
+    x64.movRegReg rcx, rdx
+    x64.shrRegImm8 rcx, rdx, 31
+  __rc_ok#86:
+    x64.movRegImm rax, 9223372039002259457
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 31
+  __il_cont#82:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, ifcont#34
+  divFourGig:
+    x64.movRegImm32 r12, 15
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#34:
+    x64.movRegImm rax, 9223372039002259457
+    x64.mulHighReg r13
+    x64.shrRegImm8 rdx, rdx, 31
+    x64.movRegImm32 rax, 4294967295
+    x64.imulRegReg rdx, rdx, rax
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rdx
+    x64.movRegImm32 rdx, 4294967295
+    x64.movRegReg rcx, r13
+    x64.callDirect refUMod
+    x64.cmpRegReg r14, r8
+    x64.jcc equal, forstep
+  modFourGig:
+    x64.movRegImm32 r12, 16
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r12, rax
+    x64.jcc less, each
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

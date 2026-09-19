@@ -179,6 +179,7 @@ func @main {
     arm64.b.ne tryerr#2
   tryok#1:
     arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x22
     arm64.bl __managed_vacate
     arm64.movRegReg x0, x22
     arm64.bl __gt_try_await
@@ -250,7 +251,7 @@ func @Slow.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=value] @__jumptable_9
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=value] @__jumptable_11
   __shutdown:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
@@ -299,7 +300,7 @@ func @Slow.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=value] @__jumptable_10
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=value] @__jumptable_12
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0

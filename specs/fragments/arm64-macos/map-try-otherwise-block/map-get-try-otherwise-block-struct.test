@@ -69,7 +69,7 @@ func @Entry.create {
     arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_30  ; "panic at map-get-try-otherwise-block-struct.test:8: Range check failed: value outside typealias 'SmallInt'\x0a"
+    arm64.leaRdata x0, __str_blob_32  ; "panic at map-get-try-otherwise-block-struct.test:8: Range check failed: value outside typealias 'SmallInt'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -102,6 +102,7 @@ func @getEntry {
 func @main {
   entry:
     arm64.prologue 80
+    arm64.storeSlotReg slot7, x26
     arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
@@ -135,16 +136,18 @@ func @main {
   __il_cont#9:
     arm64.movImm x23, 0
     arm64.movImm x24, 0
-    arm64.movImm x0, 48
+    arm64.movImm x25, 0
+    arm64.movImm x0, 56
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x25, x0
-    arm64.storeBaseDispReg.word64 [x25 + 0], x20
-    arm64.storeBaseDispReg.word64 [x25 + 8], x19
-    arm64.storeBaseDispReg.word64 [x25 + 16], x21
-    arm64.storeBaseDispReg.word64 [x25 + 24], x22
-    arm64.storeBaseDispReg.word64 [x25 + 32], x23
-    arm64.storeBaseDispReg.word64 [x25 + 40], x24
+    arm64.movRegReg x26, x0
+    arm64.storeBaseDispReg.word64 [x26 + 0], x20
+    arm64.storeBaseDispReg.word64 [x26 + 8], x19
+    arm64.storeBaseDispReg.word64 [x26 + 16], x21
+    arm64.storeBaseDispReg.word64 [x26 + 24], x22
+    arm64.storeBaseDispReg.word64 [x26 + 32], x23
+    arm64.storeBaseDispReg.word64 [x26 + 40], x24
+    arm64.storeBaseDispReg.word64 [x26 + 48], x25
   __il_cont#7:
     arm64.leaRdata x19, __str_rec_3  ; "key"
     arm64.leaRdata x0, __str_rec_4  ; "hello"
@@ -192,7 +195,7 @@ func @main {
     arm64.leaRdata x3, __layout_Map_String_Entry
     arm64.leaRdata x4, __witness_String.Hashable
     arm64.leaRdata x5, __witness_String.Equatable
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x26
     arm64.movRegReg x1, x22
     arm64.movRegReg x2, x20
     arm64.bl Map.insert
@@ -200,7 +203,7 @@ func @main {
     arm64.b.ne trycont#3
   trycont#3:
     arm64.leaRdata x1, __str_rec_3  ; "key"
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x26
     arm64.bl getEntry
     arm64.cmp x9, 0
     arm64.b.eq trycont#6
@@ -231,7 +234,7 @@ func @main {
   trycont#6:
     arm64.loadRegBaseDisp.word64 x19, [x0 + 8]
     arm64.bl __destruct_Entry
-    arm64.movRegReg x0, x25
+    arm64.movRegReg x0, x26
     arm64.bl __destruct_Map_String_Entry
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
@@ -241,6 +244,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
     arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
     arm64.ret
 }

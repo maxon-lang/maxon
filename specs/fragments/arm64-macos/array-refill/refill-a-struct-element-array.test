@@ -88,7 +88,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr#16:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at Array.maxon:541: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at Array.maxon:444: Array.fillPublished: fill OOB \xe2\x80\x94 the window is inside the length the caller just published\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
@@ -174,7 +174,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq forstep#20
   tryerr#23:
-    arm64.leaRdata x0, __str_rec_5  ; "panic at Array.maxon:547: "
+    arm64.leaRdata x0, __str_rec_5  ; "panic at Array.maxon:450: "
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
     arm64.leaRdata x0, __str_rec_6  ; "Array.fillPublished: set OOB at "
@@ -266,6 +266,8 @@ func @main {
     arm64.movRegReg x1, x22
     arm64.bl __drop_type_param
   __il_cont:
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
     arm64.movImm x20, 0
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
@@ -282,8 +284,6 @@ func @main {
     arm64.cmp x0, x1
     arm64.b.lt sum
   forexit:
-    arm64.movRegReg x0, x21
-    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.cmp x20, 0

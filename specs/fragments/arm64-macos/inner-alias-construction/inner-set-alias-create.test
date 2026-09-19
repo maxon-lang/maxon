@@ -31,7 +31,8 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 64
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
     arm64.storeSlotReg slot5, x24
     arm64.storeSlotReg slot4, x23
     arm64.storeSlotReg slot3, x22
@@ -62,32 +63,34 @@ func @main {
   __il_cont#12:
     arm64.movImm x22, 0
     arm64.movImm x23, 0
-    arm64.movImm x0, 40
+    arm64.movImm x24, 0
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x24, x0
-    arm64.storeBaseDispReg.word64 [x24 + 0], x19
-    arm64.storeBaseDispReg.word64 [x24 + 8], x20
-    arm64.storeBaseDispReg.word64 [x24 + 16], x21
-    arm64.storeBaseDispReg.word64 [x24 + 24], x22
-    arm64.storeBaseDispReg.word64 [x24 + 32], x23
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x19
+    arm64.storeBaseDispReg.word64 [x25 + 8], x20
+    arm64.storeBaseDispReg.word64 [x25 + 16], x21
+    arm64.storeBaseDispReg.word64 [x25 + 24], x22
+    arm64.storeBaseDispReg.word64 [x25 + 32], x23
+    arm64.storeBaseDispReg.word64 [x25 + 40], x24
   __il_cont#10:
     arm64.movImm x1, 3
     arm64.leaRdata x2, __layout_Set_ExitCode$0_125
     arm64.leaRdata x3, __witness_int.Hashable
     arm64.leaRdata x4, __witness_int.Equatable
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl Set.insert
     arm64.movImm x1, 3
     arm64.leaRdata x2, __layout_Set_ExitCode$0_125
     arm64.leaRdata x3, __witness_int.Hashable
     arm64.leaRdata x4, __witness_int.Equatable
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl Set.insert
     arm64.leaRdata x0, __witness_int.Hashable
     arm64.leaRdata x0, __witness_int.Equatable
   __il_body#6:
-    arm64.loadRegBaseDisp.word64 x19, [x24 + 24]
+    arm64.loadRegBaseDisp.word64 x19, [x25 + 24]
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -95,7 +98,7 @@ func @main {
     arm64.cmp x19, x0
     arm64.b.gt __rc_panic
   __il_cont#5:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl __destruct_Set_ExitCode$0_125
   __il_cont#3:
     arm64.cmp x19, 1
@@ -108,7 +111,8 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   ifcont:
     arm64.movImm x0, 1
@@ -118,10 +122,11 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_26  ; "panic at Set.maxon:312: Range check failed: value outside typealias 'MemberCount'\x0a"
+    arm64.leaRdata x0, __str_blob_26  ; "panic at Set.maxon:325: Range check failed: value outside typealias 'MemberCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -130,6 +135,7 @@ func @main {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
     arm64.ret
 }

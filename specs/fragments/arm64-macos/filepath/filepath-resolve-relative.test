@@ -42,14 +42,17 @@ func @main {
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_cont#16:
     arm64.cmp x0, 1
-    arm64.b.lo ifcont
-  checkSlash:
+    arm64.movImm x0, 0
+    arm64.b.lo scmerge
+  andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.movImm x1, 0
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne ifcont
-  isAbsUnix:
+    arm64.cset x0, eq
+  scmerge:
+    arm64.cbz x0, ifcont
+  leadingSeparator:
     arm64.movImm x0, 1
     arm64.b __il_cont#10
   ifcont:

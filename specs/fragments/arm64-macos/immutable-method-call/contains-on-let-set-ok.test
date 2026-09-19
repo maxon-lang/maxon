@@ -52,22 +52,24 @@ func @main {
   __il_cont#74:
     arm64.movImm x22, 0
     arm64.movImm x23, 0
-    arm64.movImm x0, 40
+    arm64.movImm x24, 0
+    arm64.movImm x0, 48
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x24, x0
-    arm64.storeBaseDispReg.word64 [x24 + 0], x19
-    arm64.storeBaseDispReg.word64 [x24 + 8], x20
-    arm64.storeBaseDispReg.word64 [x24 + 16], x21
-    arm64.storeBaseDispReg.word64 [x24 + 24], x22
-    arm64.storeBaseDispReg.word64 [x24 + 32], x23
+    arm64.movRegReg x25, x0
+    arm64.storeBaseDispReg.word64 [x25 + 0], x19
+    arm64.storeBaseDispReg.word64 [x25 + 8], x20
+    arm64.storeBaseDispReg.word64 [x25 + 16], x21
+    arm64.storeBaseDispReg.word64 [x25 + 24], x22
+    arm64.storeBaseDispReg.word64 [x25 + 32], x23
+    arm64.storeBaseDispReg.word64 [x25 + 40], x24
   __il_cont#72:
     arm64.movImm x19, 1
     arm64.leaRdata x0, __layout_Set_Integer
     arm64.leaRdata x1, __witness_int.Hashable
     arm64.leaRdata x20, __witness_int.Equatable
   __il_body#7:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 32]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
     arm64.cmp x0, 0
     arm64.b.ne ifcont#9
   empty_check:
@@ -75,18 +77,18 @@ func @main {
     arm64.b __il_cont#6
   ifcont#9:
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x1 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x1 + 40]
     arm64.blr x16
     arm64.movRegReg x21, x0
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 32]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
     arm64.sub x22, x0, 1
     arm64.movRegReg x0, x21
     arm64.bl spreadHash
     arm64.and x23, x0, x22
-    arm64.movImm x25, 0
+    arm64.movImm x24, 0
     arm64.b whilehdr
   probe:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 8]
     arm64.cmp x23, 0
     arm64.b.lt __rc_panic#45
   __rc_ok#44:
@@ -162,7 +164,7 @@ func @main {
   matchcont#31:
     arm64.cbz x0, ifcont#43
   check_found:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 16]
   __rc_ok#46:
     arm64.movRegReg x1, x23
     arm64.bl __managed_get
@@ -174,7 +176,7 @@ func @main {
     arm64.cmp x0, x21
     arm64.b.ne ifcont#43
   hash_match:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 0]
   __rc_ok#48:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 24]
     arm64.cmp x1, 8
@@ -221,7 +223,7 @@ func @main {
     arm64.b.ne ifcont#43
   get_existing:
     arm64.movRegReg x1, x19
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 24]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
     arm64.blr x16
     arm64.cbz x0, ifcont#43
   found:
@@ -230,11 +232,11 @@ func @main {
   ifcont#43:
     arm64.add x0, x23, 1
     arm64.and x0, x0, x22
-    arm64.add x25, x25, 1
+    arm64.add x24, x24, 1
     arm64.movRegReg x23, x0
   whilehdr:
-    arm64.loadRegBaseDisp.word64 x0, [x24 + 32]
-    arm64.cmp x25, x0
+    arm64.loadRegBaseDisp.word64 x0, [x25 + 32]
+    arm64.cmp x24, x0
     arm64.b.lt probe
     arm64.b whileexit
   matchdead#28:
@@ -245,7 +247,7 @@ func @main {
     arm64.cbz x0, ifcont#2
   h:
     arm64.movImm x19, 1
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl __destruct_Set_Integer
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
@@ -261,7 +263,7 @@ func @main {
     arm64.leaRdata x0, __witness_int.Hashable
     arm64.leaRdata x0, __witness_int.Equatable
   __il_body#68:
-    arm64.loadRegBaseDisp.word64 x19, [x24 + 24]
+    arm64.loadRegBaseDisp.word64 x19, [x25 + 24]
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic#70
   __rc_chk#71:
@@ -272,7 +274,7 @@ func @main {
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic#4
   __rc_ok#3:
-    arm64.movRegReg x0, x24
+    arm64.movRegReg x0, x25
     arm64.bl __destruct_Set_Integer
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
@@ -285,7 +287,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   __rc_panic#45:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at Set.maxon:212: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_27  ; "panic at Set.maxon:224: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -298,7 +300,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   __rc_panic#70:
-    arm64.leaRdata x0, __str_blob_30  ; "panic at Set.maxon:312: Range check failed: value outside typealias 'MemberCount'\x0a"
+    arm64.leaRdata x0, __str_blob_30  ; "panic at Set.maxon:325: Range check failed: value outside typealias 'MemberCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

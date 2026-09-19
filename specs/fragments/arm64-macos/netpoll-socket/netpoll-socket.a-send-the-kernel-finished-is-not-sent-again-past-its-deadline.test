@@ -607,7 +607,7 @@ func @__ms_send_from {
   msviewb:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-  __il_body#21:
+  __il_body#22:
     arm64.asr x2, x1, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x3, x2, x16
@@ -617,16 +617,16 @@ func @__ms_send_from {
     arm64.and x2, x4, x2
     arm64.and x1, x1, x3
     arm64.orr x1, x2, x1
-  __il_cont#20:
+  __il_cont#21:
     arm64.mul x0, x0, x1
-  __il_body#22:
+  __il_body#23:
     arm64.add x0, x0, 7
     arm64.lsr x0, x0, 3
     arm64.b mschkcap
   msownb:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 24]
-  __il_body#27:
+  __il_body#28:
     arm64.asr x2, x1, 63
     arm64.movImm x16, 18446744073709551615
     arm64.eor x3, x2, x16
@@ -636,9 +636,9 @@ func @__ms_send_from {
     arm64.and x2, x4, x2
     arm64.and x1, x1, x3
     arm64.orr x1, x2, x1
-  __il_cont#26:
+  __il_cont#27:
     arm64.mul x0, x0, x1
-  __il_body#28:
+  __il_body#29:
     arm64.add x0, x0, 7
     arm64.lsr x0, x0, 3
   mschkcap:
@@ -657,6 +657,9 @@ func @__ms_send_from {
     arm64.ret
   mssend:
     arm64.bl __gt_io_park
+    arm64.cmp x0, 0
+    arm64.b.ne msfail
+  mssendgo:
     arm64.movRegReg x0, x22
     arm64.bl __np_pd_op_begin
     arm64.movRegReg x23, x0
@@ -690,7 +693,7 @@ func @__ms_send_from {
     arm64.movRegReg x1, x19
     arm64.movRegReg x2, x21
     arm64.movImm x3, 524288
-    arm64.importCall 68
+    arm64.importCall 69
     arm64.bl mrt_host_socket_size_status
     arm64.cmp x0, 0
     arm64.b.lt msclassify

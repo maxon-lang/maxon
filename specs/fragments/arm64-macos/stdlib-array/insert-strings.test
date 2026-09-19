@@ -73,81 +73,19 @@ func @main {
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 24], x0
     arm64.leaRdata x0, __layout_Array_String
-  __rc_ok#36:
+  __rc_ok#34:
     arm64.loadRegBaseDisp.word64 x21, [x19 + 8]
     arm64.cmp x21, 1
     arm64.b.ge ifcont#27
   clampHigh:
     arm64.movRegReg x20, x21
   ifcont#27:
-    arm64.add x22, x21, 1
-  __il_body#54:
-    arm64.cmp x22, 0
+    arm64.add x1, x21, 1
+    arm64.cmp x1, 0
     arm64.b.lt __rc_panic
-  __rc_ok#59:
+  __rc_ok#36:
     arm64.movRegReg x0, x19
-    arm64.bl __managed_capacity
-    arm64.cmp x22, x0
-    arm64.b.le __il_cont#53
-  __il_body#69:
-    arm64.add x1, x0, x0
-    arm64.cmp x22, x1
-    arm64.b.le ifcont#63
-  __rc_ok#78:
-    arm64.cmp x22, 4
-    arm64.b.hs ifcont#77
-  raise#76:
-    arm64.movImm x0, 4
-    arm64.b __il_cont#74
-  ifcont#77:
-    arm64.movRegReg x0, x22
-  __il_cont#74:
-    arm64.movRegReg x1, x0
-    arm64.b __il_cont#61
-  ifcont#63:
-    arm64.cmp x0, 256
-    arm64.b.ge whilehdr
-  __rc_ok#84:
-    arm64.cmp x1, 4
-    arm64.b.hs ifcont#83
-  raise#82:
-    arm64.movImm x0, 4
-    arm64.b __il_cont#80
-  ifcont#83:
-    arm64.movRegReg x0, x1
-  __il_cont#80:
-    arm64.movRegReg x1, x0
-    arm64.b __il_cont#61
-  ease:
-    arm64.add x1, x0, 768
-    arm64.asr x2, x1, 63
-    arm64.lsr x2, x2, 62
-    arm64.add x1, x1, x2
-    arm64.asr x1, x1, 2
-    arm64.add x0, x0, x1
-  whilehdr:
-    arm64.cmp x0, x22
-    arm64.b.lt ease
-  __rc_ok#72:
-    arm64.movRegReg x1, x0
-  __il_cont#61:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_mem_grow
-    arm64.cmp x9, 0
-    arm64.b.eq __il_cont#53
-  tryerr#57:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at Array.maxon:304: Array.ensureCapacity: grow failed \xe2\x80\x94 grownCapacity never returns below the current capacity\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.epilogue 80
-    arm64.ret
-  __il_cont#53:
+    arm64.bl __managed_resize
     arm64.cmp x20, x21
     arm64.b.ge ifcont#31
   shift:
@@ -158,7 +96,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq ifcont#31
   tryerr#30:
-    arm64.leaRdata x0, __str_blob_9  ; "panic at Array.maxon:382: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within ensured capacity\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at Array.maxon:275: Array.insert: shiftRight OOB \xe2\x80\x94 index and count are within the resized length\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -196,7 +134,7 @@ func @main {
     arm64.b.ne __im_slow#39
   __im_store#47:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x20*8 + 0], x23
-    arm64.b tryok#32
+    arm64.b __il_cont
   __im_stride:
     arm64.cmp x0, 1
     arm64.b.ne __im_slow#39
@@ -224,16 +162,16 @@ func @main {
   __im_store#52:
     arm64.add x0, x0, x20
     arm64.storeBaseDispReg.byte [x0 + 0], x23
-    arm64.b tryok#32
+    arm64.b __il_cont
   __im_slow#39:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
     arm64.movRegReg x2, x23
     arm64.bl __managed_mem_set
     arm64.cmp x9, 0
-    arm64.b.eq tryok#32
+    arm64.b.eq __il_cont
   tryerr#33:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at Array.maxon:387: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and capacity ensured\x0a"
+    arm64.leaRdata x0, __str_blob_9  ; "panic at Array.maxon:280: Array.insert: set OOB \xe2\x80\x94 index clamped to [0, len] and resized to len + 1\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
@@ -244,25 +182,7 @@ func @main {
     arm64.loadRegSlot x24, slot6
     arm64.epilogue 80
     arm64.ret
-  tryok#32:
-    arm64.add x1, x21, 1
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_set_length
-    arm64.cmp x9, 0
-    arm64.b.eq __il_cont#24
-  tryerr#35:
-    arm64.leaRdata x0, __str_blob_11  ; "panic at Array.maxon:391: Array.insert: setLength OOB \xe2\x80\x94 capacity ensured for len+1\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.loadRegSlot x21, slot3
-    arm64.loadRegSlot x22, slot4
-    arm64.loadRegSlot x23, slot5
-    arm64.loadRegSlot x24, slot6
-    arm64.epilogue 80
-    arm64.ret
-  __il_cont#24:
+  __il_cont:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 3
     arm64.b.eq ifcont#2
@@ -290,14 +210,14 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#86
+    arm64.b.eq critsplit#53
   __im_empty#15:
     arm64.cmp x0, 0
     arm64.b.eq __im_slow#13
-  critsplit#87:
+  critsplit#54:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#12
-  critsplit#86:
+  critsplit#53:
     arm64.movRegReg x9, x2
   __im_cont#12:
     arm64.cmp x9, 0
@@ -316,15 +236,15 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x19 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#88
+    arm64.b.eq critsplit#55
   __im_empty#19:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow#17
-  critsplit#89:
+  critsplit#56:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
     arm64.b __im_cont#16
-  critsplit#88:
+  critsplit#55:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
   __im_cont#16:
@@ -347,15 +267,15 @@ func @main {
     arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x4, [x19 + 40]
     arm64.cmp x4, 0
-    arm64.b.eq critsplit#90
+    arm64.b.eq critsplit#57
   __im_empty#23:
     arm64.cmp x2, 0
     arm64.b.eq __im_slow#21
-  critsplit#91:
+  critsplit#58:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
     arm64.b __im_cont#20
-  critsplit#90:
+  critsplit#57:
     arm64.movRegReg x1, x2
     arm64.movRegReg x9, x3
   __im_cont#20:
@@ -385,7 +305,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_17  ; "panic at Array.maxon:299: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_12  ; "panic at Array.maxon:271: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot1
