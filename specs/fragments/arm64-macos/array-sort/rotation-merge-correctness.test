@@ -6,6 +6,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	// Left half [0, 5): ascending. Right half [5, 10): ascending.
@@ -20,7 +24,7 @@ function main() returns ExitCode
 	a.push(7)
 	a.push(9)
 	Log.startCapture()
-	a.mergeRotation(0, mid: 5, hi: 10, cmp: ascending)
+	a.mergeRotation(0, mid: 5, hi: 10, cmp: ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "rotationMerge.fire") 'rf'
 		print("rotationMerge.fire ")
@@ -64,9 +68,30 @@ func @ascending {
     arm64.ret
 }
 
+func @captureTrace {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+  __il_body:
+    arm64.leaGlobal x1, __data_capturing
+    arm64.loadRegBaseDisp.byte x1, [x1 + 0]
+    arm64.cbz x1, __il_cont
+  on:
+    arm64.leaGlobal x1, __data_captured
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __il_cont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
 func @main {
   entry:
-    arm64.prologue 96
+    arm64.prologue 112 record@8
     arm64.storeSlotReg slot9, x28
     arm64.storeSlotReg slot8, x27
     arm64.storeSlotReg slot7, x26
@@ -129,8 +154,11 @@ func @main {
     arm64.movImm x2, 5
     arm64.movImm x3, 10
     arm64.leaFuncAddr x4, __fnref_ascending
-    arm64.movImm x5, 0
-    arm64.leaRdata x6, __layout_Array_Integer
+    arm64.leaFuncAddr x5, __fnref_captureTrace
+    arm64.movImm x6, 0
+    arm64.movImm x7, 0
+    arm64.leaRdata x0, __layout_Array_Integer
+    arm64.storeOutgoingArg [sp + arg0], x0
     arm64.movRegReg x0, x19
     arm64.bl Array.mergeRotation
   __il_body#20:
@@ -152,7 +180,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
-    arm64.leaRdata x0, __str_blob_8  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    arm64.leaRdata x0, __str_blob_8  ; "panic at Array.maxon:80: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -165,7 +193,7 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.loadRegSlot x27, slot8
     arm64.loadRegSlot x28, slot9
-    arm64.epilogue 96
+    arm64.epilogue 112 record@8
     arm64.ret
   tryok:
     arm64.movRegReg x0, x20
@@ -284,6 +312,6 @@ func @main {
     arm64.loadRegSlot x26, slot7
     arm64.loadRegSlot x27, slot8
     arm64.loadRegSlot x28, slot9
-    arm64.epilogue 96
+    arm64.epilogue 112 record@8
     arm64.ret
 }

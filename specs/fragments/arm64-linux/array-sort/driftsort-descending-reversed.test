@@ -6,6 +6,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(35)
@@ -44,7 +48,7 @@ function main() returns ExitCode
 	a.push(2)
 	a.push(1)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "findRun.descending") 'fd'
 		print("descending ")
@@ -88,6 +92,27 @@ func @ascending {
     arm64.movImm x0, 1
   __il_cont:
     arm64.epilogue 16
+    arm64.ret
+}
+
+func @captureTrace {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+  __il_body:
+    arm64.leaGlobal x1, __data_capturing
+    arm64.loadRegBaseDisp.byte x1, [x1 + 0]
+    arm64.cbz x1, __il_cont
+  on:
+    arm64.leaGlobal x1, __data_captured
+    arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  __il_cont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
     arm64.ret
 }
 
@@ -213,7 +238,7 @@ func @main {
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-  __il_body#12:
+  __il_body#11:
     arm64.leaGlobal x0, __data_captured
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.movRegReg x0, x20
@@ -226,16 +251,15 @@ func @main {
     arm64.movImm x0, 1
     arm64.leaGlobal x1, __data_capturing
     arm64.storeBaseDispReg.byte [x1 + 0], x0
-  __il_cont#11:
-    arm64.leaFuncAddr x3, __fnref_ascending
+  __il_cont#10:
+    arm64.leaFuncAddr x1, __fnref_ascending
+    arm64.leaFuncAddr x2, __fnref_captureTrace
+    arm64.movImm x3, 0
     arm64.movImm x4, 0
     arm64.leaRdata x5, __layout_Array_Integer
-  __il_body#13:
-    arm64.movImm x1, 0
-    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.movRegReg x0, x19
-    arm64.bl Array.driftsortRange
-  __il_body#15:
+    arm64.bl Array.sort#Array.SortComparator#Array.SortTrace
+  __il_body#13:
     arm64.movImm x0, 0
     arm64.leaGlobal x1, __data_capturing
     arm64.storeBaseDispReg.byte [x1 + 0], x0
@@ -245,7 +269,7 @@ func @main {
     arm64.bl __managed_retain
     arm64.movRegReg x21, x0
     arm64.leaRdata x3, __layout_Array_String
-  __il_body#17:
+  __il_body#15:
     arm64.loadRegBaseDisp.word64 x2, [x20 + 8]
     arm64.movImm x1, 0
     arm64.movRegReg x0, x20
@@ -254,7 +278,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.eq tryok
   tryerr:
-    arm64.leaRdata x0, __str_blob_29  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    arm64.leaRdata x0, __str_blob_29  ; "panic at Array.maxon:80: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -275,7 +299,7 @@ func @main {
     arm64.movRegReg x22, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  __il_cont#16:
+  __il_cont#14:
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
     arm64.leaGlobal x0, __data_captured
@@ -287,7 +311,7 @@ func @main {
     arm64.bl Array.clear
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-  __il_cont#14:
+  __il_cont#12:
     arm64.leaRdata x1, __str_rec_21  ; "findRun.descending"
     arm64.movRegReg x0, x22
     arm64.bl Log.fired
