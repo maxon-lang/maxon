@@ -1,0 +1,39 @@
+let FieldBelowLine = 15 as LspCoordinate
+let FieldBelowCharacter = 14 as LspCoordinate
+
+test 'receiver type: a field below a method wins over a local above it'
+	let rendering = try hoverRendering(fieldBelowFixture(), line: FieldBelowLine, character: FieldBelowCharacter)
+
+	try Expect.contains(rendering, needle: "public var items as StringArray", message: "hovering `items` in `c.items` did not render the field `Cart` declares. The field sits BELOW the method, and the only other `items` in the buffer is that method's local. It rendered: {rendering}")
+
+	try Expect.contains(rendering, needle: "Field of `Cart`", message: "the hover rendered the right declaration but did not call it a field of `Cart`. What a binding IS is half the answer, and a field read as something else is an editor telling the author their own type wrong. It rendered: {rendering}")
+
+	try Expect.isFalse(rendering.contains("none"), message: "the hover rendered the LOCAL `var items = \"none\"` from inside `describe()`. It is not a member of `Cart` at all — it wins only by sitting above the field. It rendered: {rendering}")
+
+	try Expect.isFalse(rendering.contains("Local variable"), message: "the hover called `Cart.items` a local. It is a declared field of the type the receiver names. It rendered: {rendering}")
+end 'receiver type: a field below a method wins over a local above it'
+
+function fieldBelowFixture() returns String
+	return String.from(b"type Cart
+    public static function describe() returns String
+        var items = \"none\"
+        items = \"some\"
+        return items
+    end 'describe'
+
+    public var items as StringArray
+
+    public static function create() returns Cart
+        return Cart{items: StringArray.create()}
+    end 'create'
+end 'Cart'
+
+function report(c Cart) returns bool
+    return c.items.isEmpty()
+end 'report'
+
+function main() returns ExitCode
+    print(Cart.describe())
+    return 0 if report(Cart.create()) else 1
+end 'main'")
+end 'fieldBelowFixture'

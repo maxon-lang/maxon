@@ -1,0 +1,34 @@
+let UnterminatedMemberFieldLine = 9 as LspCoordinate
+let UnterminatedMemberFieldCharacter = 14 as LspCoordinate
+let UnterminatedMemberLocalLine = 10 as LspCoordinate
+let UnterminatedMemberLocalCharacter = 14 as LspCoordinate
+let UnterminatedMemberDotCharacter = 12 as LspCoordinate
+
+test 'receiver type: an unterminated method hides its locals from the type'
+	let control = try hoverRendering(unterminatedMemberFixture(), line: UnterminatedMemberFieldLine, character: UnterminatedMemberFieldCharacter)
+
+	try Expect.contains(control, needle: "Field of `Point`", message: "hovering `total` in `p.total` did not reach the field `Point` declares. This buffer CANNOT COMPILE — `scale()` has no `end` — so the build guard every other fixture leans on is unavailable here, and this control is the only thing saying the member lookup ran at all. Without it the absence asserted below would pass on a buffer nothing read. It rendered: {control}")
+
+	try expectNoHover(unterminatedMemberFixture(), line: UnterminatedMemberLocalLine, character: UnterminatedMemberLocalCharacter, note: "hovering `factor` in `p.factor` answered something, but `Point` declares no member `factor`. The only `factor` in the buffer is a local of `scale()`, which is unreachable through a value of `Point` — it is offered up as a member only because the method has not been given its `end` yet.")
+
+	let labels = try completionLabelsFor(unterminatedMemberFixture(), line: UnterminatedMemberLocalLine, character: UnterminatedMemberDotCharacter, after: "`p.`")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "total"), message: "completion after `p.` did not offer the field `total`, which `Point` declares two lines below its own header. The list is the control for the absence asserted next: an empty list would pass that absence saying nothing.")
+
+	try Expect.isFalse(completionOffersLabel(labels, label: "factor"), message: "completion after `p.` offered `factor`, a LOCAL of the half-typed method `scale()`. An author writing a method would watch every temporary in it appear in the completion list of the type they are writing it on.")
+end 'receiver type: an unterminated method hides its locals from the type'
+
+function unterminatedMemberFixture() returns String
+	return String.from(b"type Point
+    let total as ExitCode
+
+    function scale()
+        var factor = 2
+        return total
+end 'Point'
+
+function report(p Point)
+    print(p.total)
+    print(p.factor)
+end 'report'")
+end 'unterminatedMemberFixture'

@@ -1,0 +1,21 @@
+let ProjectOwnTextErrorDirName = "maxon-tests-lsp-diagnostics-project-own-text-error"
+let ProjectOwnTextErrorDeclaringFileName = "slot.maxon"
+let ProjectOwnTextErrorBufferFileName = "main.maxon"
+let ProjectOwnTextErrorDeclaringSource = "export typealias OwnTextErrorSlot = int(0 to u64.max)\n"
+let ProjectOwnTextErrorSavedSource = "function main() returns ExitCode\n\tlet n = 1 as OwnTextErrorSlot\n\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectOwnTextErrorTypedSource = "function main() returns ExitCode\n\tlet n = 99999999999999999999999\n\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectOwnTextErrorCode = "E2011"
+
+test 'an error in the buffers own text is published while the buffer is modified'
+	let root = stagedProjectDiagnosticsRoot(ProjectOwnTextErrorDirName)
+	writeCorpusFile(root, fileName: ProjectOwnTextErrorDeclaringFileName, content: ProjectOwnTextErrorDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectOwnTextErrorBufferFileName, content: ProjectOwnTextErrorSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectOwnTextErrorBufferFileName, content: ProjectOwnTextErrorSavedSource, editedContent: ProjectOwnTextErrorTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, which `maxon build` of the staged project compiles. This publish is the CONTROL.")
+
+	let reported = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` replaced the initializer with a literal past the range of `int`, and named nothing a sibling file declares.")
+
+	try Expect.equal(reported.code, expected: ProjectOwnTextErrorCode, message: "⛔ THE WITHHOLDING IS SCOPED TO THE NAME-DEPENDENT FAMILY, NOT TO THE MODIFIED-BUFFER ROAD. This literal is out of range on its own bytes — no declaration in any file can bring it inside `int` — so the author owns the error and must be told about it on the same road that withholds a claim about a sibling.")
+end 'an error in the buffers own text is published while the buffer is modified'

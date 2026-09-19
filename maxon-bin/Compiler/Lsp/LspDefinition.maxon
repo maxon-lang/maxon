@@ -318,7 +318,7 @@ function definitionAcrossFiles(request LspRequest, tokens TokenArray, offset Byt
 	end 'notAName'
 
 	match lspWorkspaceCorpus(lspDocumentPath(request.uri)) 'corpus'
-		loaded(project, signatures, readerPath) then return project.definitionInTheCorpus(signatures, tokens: tokens, cursor: cursor, readerPath: readerPath)
+		loaded(project, signatures, readerPath) then return project.definitionInTheCorpus(signatures, text: request.text, tokens: tokens, cursor: cursor, readerPath: readerPath)
 		unavailable then return LspAnswer.nothing()
 	end 'corpus'
 end 'definitionAcrossFiles'
@@ -335,8 +335,8 @@ extension Project
 	// ⚠ And an index position is not in the unit an answer is spelled in. `lspSpanRangeNode` converts a
 	// byte span to LSP's UTF-16 coordinates, while the index holds 1-based compiler coordinates; a second
 	// converter here is the defect `tests/lsp/position-characters.test.maxon` exists to catch.
-	module function definitionInTheCorpus(signatures ProgramSignatures, tokens TokenArray, cursor TokenIndex, readerPath FilePath) returns LspAnswer
-		let declFile = try lspDeclaringFileOfTheCursor(signatures, tokens: tokens, cursor: cursor, readerPath: readerPath) otherwise return LspAnswer.nothing()
+	module function definitionInTheCorpus(signatures ProgramSignatures, text String, tokens TokenArray, cursor TokenIndex, readerPath FilePath) returns LspAnswer
+		let declFile = try lspDeclaringFileOfTheCursor(signatures, text: text, tokens: tokens, keywords: self.keywords, cursor: cursor, readerPath: readerPath) otherwise return LspAnswer.nothing()
 		return self.definitionInAnotherFile(declFile, name: lspTokenAt(tokens, index: cursor).value)
 	end 'definitionInTheCorpus'
 

@@ -408,9 +408,16 @@ end 'compositeSourceHash'
 // which is exactly what the composite hash tracks.
 //
 // It is keyed on the SOURCE, and it KEYS the parse on the DECLARATIONS. That asymmetry is
-// deliberate and it is what preserves incrementality: a body edit rebuilds the index (cheap: a
-// token sweep, and every unchanged file's tokens are a memo hit) and the rebuilt index hashes
-// IDENTICALLY, so not one other file re-parses.
+// deliberate and it is what preserves incrementality in the common case: a body edit rebuilds the
+// index (cheap: a token sweep, and every unchanged file's tokens are a memo hit) and the rebuilt
+// index usually hashes identically, so not one other file re-parses.
+//
+// ⚠ **USUALLY, AND NOT ALWAYS: THE INDEX CARRIES BODY-DERIVED FACTS THAT A BODY EDIT CAN MOVE.**
+// `ProgramSignatures.settleBaseline` mixes `descriptorNeeds`, `fixedElementCountNeeds` and
+// `instantiatedByAParse` into the hash, and each is decided by scanning bodies. So "a body edit cannot
+// have moved the index" is not a premise anything may rest on — a parse run against an index the
+// current sources did not produce ends in a panic, which
+// `tests/lsp/diagnostics-project-an-unsaved-declaration-still-falls-back.test.maxon` records verbatim.
 export function signaturesCacheValid(project Project) returns bool
 	if not project.db.signatureCache.computed 'never'
 		return false

@@ -1,0 +1,219 @@
+// Which diagnostics a buffer the author has typed into may still be published. It is asked only where
+// the buffer-only compile was blind to a name the project declares — `refusalsThisRoadMayPublish` owns
+// that scope and is the only caller.
+//
+// The membership rule: a code belongs on the `true` side iff EVERY sentence it can carry is a claim
+// about this file's text — its shape, its tokens, its literals. One sentence it can carry that is a
+// claim about what some declaration says puts it on the `false` side, because the compile that raised
+// it could not see the declarations the author's other files hold.
+//
+// ⛔ The match has no `default`, and that is what makes this a roster rather than a guess. A case added
+// to `ErrorCodeRegistry.maxon` breaks this build until someone answers the question for it; a default
+// arm would file every new code silently on one side, and either side is a wrong answer — a real error
+// hidden from the author, or an invented one shown to them.
+function diagnosticIsTrueOfThisFilesTextAlone(code ErrorCode) returns bool
+	match code 'family'
+		lexerUnterminatedString or
+			lexerInvalidEscape or
+			lexerUnescapedBrace or
+			lexerUnterminatedBlockComment or
+			lexerUnexpectedEof or
+			lexerUnknownDirective or
+			parserUnexpectedToken or
+			parserUnexpectedEof or
+			parserMismatchedEndLabel or
+			parserExpectedToken or
+			parserLiteralOverflow or
+			duplicateParameter or
+			parserInvalidCharacterLiteral or
+			matchFallthroughWithReturn or
+			matchDefaultNotLast or
+			matchMissingBlockId or
+			matchMismatchedBlockId or
+			controlOutsideLoop or
+			labelTargetsOwnLoop or
+			matchBlockStatement or
+			otherwiseBlockMissingBinding or
+			reservedIdentifier or
+			callFirstArgNamed or
+			callArgMissingLabel or
+			parserTestOutsideTestFile or
+			parserTestEmptyName or
+			parserCallerLocationOutsideDefault or
+			genericBarePrimitiveArg or
+			directiveUnbalanced or
+			directiveUnknownPredicate or
+			directiveMalformedCondition or
+			builtinArgNamed or
+			parserMalformedNumericLiteral or
+			ucdTableLabelUnknown or
+			semanticSelfAssignment or
+			semanticUnreachableCode or
+			matchQualifiedCaseName or
+			semanticEmptyBlock or
+			semanticDuplicateTestName or
+			matchOrChainNeedsOwnLine then return true
+		parserExpectedType or
+			parserExpressionError or
+			parserCircularDependency or
+			assignToImmutable or
+			parserUnsupportedFeature or
+			matchNotExhaustive or
+			matchDuplicatePattern or
+			matchTypeMismatch or
+			parserNonConstantInitializer or
+			matchDefaultEnumMustThrow or
+			shiftCountNegative or
+			genericBaseNotGeneric or
+			genericArityMismatch or
+			genericFloatTypeArg or
+			conformanceWithArgSurplus or
+			vectorSizeMalformed or
+			unknownStaticMember or
+			noMainFunction or
+			mainWrongReturnType or
+			callUnknownFunction or
+			typeMismatch or
+			duplicateDefinition or
+			semanticAmbiguousOverload or
+			symbolNotExported or
+			semanticUnsafeCast or
+			semanticUnneededCast or
+			unknownType or
+			semanticUnusedVariable or
+			missingReturn or
+			unexportedFieldAccess or
+			semanticUnknownInterface or
+			semanticPartialInterfaceImpl or
+			semanticWhereConstraintViolation or
+			semanticUnknownField or
+			semanticImmutableRefToMutatingParam or
+			enumDuplicateCase or
+			enumDuplicateRawValue or
+			enumRawValueTypeMismatch or
+			enumUnknownCase or
+			enumWrongBindingCount or
+			callArgCountMismatch or
+			callUnknownArgLabel or
+			callDuplicateArg or
+			mainCannotThrow or
+			tryRequiresThrowingFunction or
+			throwingFunctionRequiresTry or
+			otherwiseRequiresTry or
+			errorTypeMismatch or
+			semanticDuplicateTypeAlias or
+			semanticUnusedTypeAlias or
+			semanticAmbiguousTypeAlias or
+			semanticDiscardedPureResult or
+			semanticDiscardedImpureResult or
+			semanticEnumNotComparable or
+			refIdentityOnPrimitive or
+			semanticBorrowConflict or
+			semanticBuiltinTypeConstruction or
+			asyncNonYielding or
+			semanticSubprocessUnsupportedTarget or
+			semanticConstructorRestriction or
+			semanticVarShouldBeLet or
+			semanticVarFromImmutable or
+			semanticMatchDiscardedBindings or
+			tryBlockNoThrows or
+			tryBlockBindingNotMatched or
+			unionMatchPatternAmbiguous or
+			semanticFieldNotInitialized or
+			redundantContainsGet or
+			symbolNotInModuleScope or
+			semanticTypeResolutionCycle or
+			semanticUnusedExportedSymbol or
+			semanticExportableAsModule or
+			semanticUnusedModuleSymbol or
+			semanticAmbiguousCrossFileCall or
+			semanticEnumAccessorComparison or
+			promiseErrorTypeMismatch or
+			capturingClosureEscapes or
+			promiseAlreadyAwaited or
+			throwingFunctionAsValue or
+			useAfterMove or
+			semanticDivisionByZero or
+			targetUnsupportedConstruct or
+			semanticTypeAliasUnderlyingConflict or
+			semanticArrayResizeManagedElement or
+			semanticBufferSetManagedElement or
+			semanticBufferByteAccessManagedElement or
+			semanticConflictingInterfaceConformance or
+			stdlibShadowedNameIsAlsoAMember or
+			throwsTypeNotAnErrorEnum or
+			semanticAmbiguousWitnessDispatch or
+			semanticNoWitnessRequirementForArgCount or
+			semanticStaticRequirementNotDispatchable or
+			rawByteFillNarrowElement or
+			rawByteWriteSlotDomain or
+			associatedTypeAbiDisagreement or
+			associatedTypeReturnNotMachineWord or
+			floatWidenedToExistential or
+			ifTryDiscardsResult or
+			interfaceInstantiationBindingDisagreement or
+			heldAssociatedTypeBindingNotConforming or
+			existentialWideningBindingDisagreement or
+			semanticSharedConformanceReadsDictionary or
+			matchArmPayloadBindingConflict or
+			semanticGrantedConformanceMemberMismatch or
+			castTargetIsAContainer or
+			semanticParametricConstraintWitnessRead or
+			semanticWhereConstraintBindingDisagreement or
+			semanticServiceNotASpawnTarget or
+			semanticServiceValueNotTransferable or
+			semanticServiceNotAMessage or
+			semanticServiceReplyAliasesState or
+			semanticServiceArgumentNotUnique or
+			semanticServiceCallCycle or
+			semanticServiceReplyNotCarriable or
+			semanticPromiseCannotBeBorrowed or
+			semanticPromiseAlreadyConsumed or
+			semanticSharedGlobalAccessFromGreenThread or
+			semanticUnknownPayloadName or
+			semanticServiceReplyInstanceUnknown or
+			matchEnumCaseRange or
+			semanticIllegalBitWidth or
+			defineNoSuchConstant or
+			defineAmbiguous or
+			defineNotAStringLiteral or
+			rawIntrinsicOutsideRuntimeTier or
+			managedValueInRuntimeSource or
+			wideVisibilityInRuntimeSource or
+			reservedNameAsFunctionValue or
+			interfaceParameterInFunctionValueTarget or
+			contradictoryFrameDirectives or
+			alwaysSplicedBodyIsStillCalled or
+			semanticWriteThroughImmutableRecord or
+			semanticLentGraphEscapes or
+			errorMatchNotExactlyOnce or
+			bareGenericSubjectUnbound or
+			semanticUnmarkableLetReadByAMessage or
+			semanticSpawnDuringGlobalInitialization or
+			semanticLetInitializerReachesAVar or
+			semanticVarInitializerTakesALetRecord or
+			invalidFieldAccess or
+			irTypeCycle or
+			declarationTakesCompilerOwnedName or
+			builtinErrorEnumMismatch or
+			registerPressure or
+			codeEmitterCoverageNeedsDebugInfo or
+			binaryOutputNotReplaceable or
+			binaryOutputNotWritten or
+			binaryOutputDirectoryNotCreated or
+			binaryWasmComponentNotProduced or
+			internalDroppedSignature then return false
+	end 'family'
+end 'diagnosticIsTrueOfThisFilesTextAlone'
+
+module function refusalsTrueOfTheBuffersOwnText(reported DiagnosticArray) returns DiagnosticArray
+	var kept = DiagnosticArray.create()
+
+	for diagnostic in reported 'eachRefusal'
+		if diagnosticIsTrueOfThisFilesTextAlone(diagnostic.code) 'trueOfTheBytesInFront'
+			kept.push(diagnostic)
+		end 'trueOfTheBytesInFront'
+	end 'eachRefusal'
+
+	return kept
+end 'refusalsTrueOfTheBuffersOwnText'

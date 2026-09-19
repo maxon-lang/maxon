@@ -36,18 +36,54 @@ let LspErrorSeverity = 1 as LspDiagnosticSeverity
 // What an editor groups and filters these by.
 let DiagnosticSourceName = "maxon"
 
-// Compile `text` as the document `uri` names and publish what the compile reported.
-//
+let DiagnosticNameQuote = "'"
+let QuotedNameSegment = 1
+
 // ⚠ **A PROJECT THAT COULD NOT BE ASSEMBLED PUBLISHES NOTHING, AND AN EMPTY ARRAY WOULD BE A WRONG
 // ANSWER.** `[]` is a POSITIVE claim — "this document has no problems" — while a server that could not
 // locate `stdlib/` has checked nothing and knows nothing. Saying nothing leaves the editor showing what
 // it already had, which is what "not checked" looks like.
 module function publishBufferDiagnostics(uri String, text String)
-	match lspDocumentProject(lspDocumentPath(uri), content: text) 'buffer'
-		loaded(project) then project.publishCheckedDiagnostics(uri, text: text)
+	let path = lspDocumentPath(uri)
+
+	match lspDocumentProject(path, content: text) 'buffer'
+		loaded(project) then project.publishDocumentDiagnostics(uri, path: path, text: text)
 		unavailable then return
 	end 'buffer'
 end 'publishBufferDiagnostics'
+
+union BufferParse
+	refused(reported DiagnosticArray)
+	compilable
+end 'BufferParse'
+
+union SweptParse
+	parsed(published DiagnosticArray)
+	bufferHasBeenTypedInto
+	unavailable
+end 'SweptParse'
+
+union DiagnosticSubject
+	named(name ByteArray, index TokenIndex)
+	unattributable
+end 'DiagnosticSubject'
+
+union SubjectDeclaration
+	declared(declFilePath FilePath)
+	undeclared
+end 'SubjectDeclaration'
+
+union QuotedName
+	spelled(text String)
+	unquoted
+end 'QuotedName'
+
+union RefusalRoad
+	aCleanParsesCheck
+	aModifiedBuffersParse
+end 'RefusalRoad'
+
+typealias SiblingVerdictMap = Map with (ByteArray, bool)
 
 // Tell the editor this document has nothing on it — the notification a closed document is owed.
 module function clearPublishedDiagnostics(uri String)
@@ -64,6 +100,12 @@ extension Project
 	// drain this server's stderr — `tests/lsp/LspClient.maxon`'s header states why it cannot, and that a
 	// full pipe buffer leaves both processes waiting on each other for ever. The capture is where those
 	// bytes go instead; the ARRAY standing on the project is what a caller reports.
+	//
+	// ⚠ **THE PARSE ROADS BELOW DELIBERATELY RUN WITHOUT ONE**, and that is safe only because a query
+	// REPORTS a diagnostic onto the project without emitting it: `emitDiagnosticLine` is reached from
+	// `printDiagnostics` alone, whose only caller is `refuseCompile`, which only a compile runs. A road
+	// that emits has to be brought inside a capture rather than left to stderr — and not by nesting one,
+	// because `beginDiagnosticCapture` panics on a second open.
 	module function compileBufferCaptured() returns CheckedCompile
 		beginDiagnosticCapture()
 		let outcome = checkWithoutWriting(self)
@@ -71,56 +113,416 @@ extension Project
 		return outcome
 	end 'compileBufferCaptured'
 
-	// Drive the checks over this project and publish everything they reported about this document.
-	function publishCheckedDiagnostics(uri String, text String)
+	function publishDocumentDiagnostics(uri String, path FilePath, text String)
+		let tokens = lspDocumentTokens(text, keywords: self.keywords)
+
+		writeDocumentDiagnostics(uri, text: text, tokens: tokens, diagnostics: self.documentDiagnostics(path, text: text, tokens: tokens), path: path)
+	end 'publishDocumentDiagnostics'
+
+	function documentDiagnostics(path FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		if not clientNamedARootOver(path) 'noStatedWorkspace'
+			return self.checkedDiagnostics()
+		end 'noStatedWorkspace'
+
+		match self.bufferParse(path) 'parse'
+			compilable then return self.correctedCheck(path, text: text, tokens: tokens)
+			refused(reported) then return self.correctedRefusal(reported, buffer: path, text: text, tokens: tokens)
+		end 'parse'
+	end 'documentDiagnostics'
+
+	function checkedDiagnostics() returns DiagnosticArray
 		_ = compileBufferCaptured()
 
-		var doc = JsonDoc.create()
-		let index = LspLineIndex.build(text)
-		let tokens = lspDocumentTokens(text, keywords: self.keywords)
-		let path = lspDocumentPath(uri)
-		var items = JsonNodeIdArray.create()
+		return self.diagnostics.clone()
+	end 'checkedDiagnostics'
 
-		for diagnostic in self.diagnostics 'each'
-			if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
+	function correctedCheck(buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		let reported = thisDocumentsOwn(self.checkedDiagnostics(), path: buffer)
+
+		if reported.isEmpty() 'nothingToExplain'
+			return reported
+		end 'nothingToExplain'
+
+		return self.explainedByTheCorpus(reported, buffer: buffer, text: text, tokens: tokens)
+	end 'correctedCheck'
+
+	function explainedByTheCorpus(reported DiagnosticArray, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match lspProjectCorpus(buffer) 'corpus'
+			loaded(_, signatures, readerPath) then return self.unsuppressedRefusals(reported, signatures: signatures, reader: readerPath, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aCleanParsesCheck)
+			unavailable then return reported
+		end 'corpus'
+	end 'explainedByTheCorpus'
+
+	// ⚠ A parse stops at its FIRST refusal — `FileParseOutcome.failed` carries one error — so an error
+	// BELOW a name-dependent one is never raised at all, and no filter downstream can recover it.
+	function bufferParse(path FilePath) returns BufferParse
+		let before = self.diagnostics.count()
+
+		_ = try queryParseOps(self, path: path) otherwise return BufferParse.compilable
+
+		if self.diagnostics.count() == before 'parsedCleanly'
+			return BufferParse.compilable
+		end 'parsedCleanly'
+
+		let reported = try self.diagnostics.slice(before, endIndex: self.diagnostics.count()) otherwise panic("bufferParse: `before` is this very array's earlier count, so it bounds a slice of it")
+
+		self.diagnostics.clear()
+
+		return BufferParse.refused(thisDocumentsOwn(reported, path: path))
+	end 'bufferParse'
+
+	function correctedRefusal(reported DiagnosticArray, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match lspProjectCorpus(buffer) 'corpus'
+			loaded(corpus, signatures, readerPath) then return self.refusalCorrectedBy(corpus, signatures: signatures, reader: readerPath, buffer: buffer, reported: reported, text: text, tokens: tokens)
+			unavailable then return reported
+		end 'corpus'
+	end 'correctedRefusal'
+
+	function refusalCorrectedBy(corpus Project, signatures ProgramSignatures, reader FilePath, buffer FilePath, reported DiagnosticArray, text String, tokens TokenArray) returns DiagnosticArray
+		let live = try queryActiveTokens(self, path: buffer) otherwise return reported
+
+		match corpus.sweptParseDiagnostics(reader, signatures: signatures, live: live) 'sweptParse'
+			parsed(published) then return published
+			unavailable then return reported
+			bufferHasBeenTypedInto then return self.unsuppressedRefusals(reported, signatures: signatures, reader: reader, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aModifiedBuffersParse)
+		end 'sweptParse'
+	end 'refusalCorrectedBy'
+
+	module function sweptParseDiagnostics(reader FilePath, signatures ProgramSignatures, live TokenArray) returns SweptParse
+		let swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
+
+		if not tokenStreamsAgree(live, swept: swept) 'theAuthorHasTyped'
+			return SweptParse.bufferHasBeenTypedInto
+		end 'theAuthorHasTyped'
+
+		let query = try parseQueryOf(self, path: reader) otherwise return SweptParse.unavailable
+
+		return match query 'query'
+			memoized(artifact) gives SweptParse.parsed(artifact.diagnostics)
+			needed(job, sweptTokens, overrides, keyHash) gives self.landedSweptParse(job, tokens: sweptTokens, overrides: overrides, keyHash: keyHash, signatures: signatures, reader: reader)
+		end 'query'
+	end 'sweptParseDiagnostics'
+
+	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, keyHash HashDigest, signatures ProgramSignatures, reader FilePath) returns SweptParse
+		self.diagnostics.clear()
+
+		let artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: signatures), keyHash: keyHash)
+		var published = self.diagnostics.clone()
+		published.append(artifact.diagnostics)
+
+		return SweptParse.parsed(published)
+	end 'landedSweptParse'
+
+	function unsuppressedRefusals(reported DiagnosticArray, signatures ProgramSignatures, reader FilePath, buffer FilePath, text String, tokens TokenArray, road RefusalRoad) returns DiagnosticArray
+		if reported.isEmpty() 'nothingToAttribute'
+			return reported
+		end 'nothingToAttribute'
+
+		let own = try queryProgramSignatures(self) otherwise return reported
+		let document = HoverDocument.ofTokens(text, tokens: tokens, keywords: self.keywords)
+		var verdicts = SiblingVerdictMap.create()
+		var kept = DiagnosticArray.create()
+
+		for diagnostic in reported 'eachRefusal'
+			if theProjectDeclaresTheRefusedName(diagnostic, verdicts: verdicts, buffer: buffer, document: document, tokens: tokens, corpus: signatures, reader: reader, own: own) 'blindToASibling'
 				continue
-			end 'notThisDocuments'
+			end 'blindToASibling'
 
-			items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
-		end 'each'
+			kept.push(diagnostic)
+		end 'eachRefusal'
 
-		writeDiagnosticsNotification(uri, items: items, doc: doc)
-	end 'publishCheckedDiagnostics'
+		return refusalsThisRoadMayPublish(kept, road: road, verdicts: verdicts, buffer: buffer, document: document, tokens: tokens, corpus: signatures, reader: reader, own: own)
+	end 'unsuppressedRefusals'
 end 'Project'
 
+function writeDocumentDiagnostics(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath)
+	var doc = JsonDoc.create()
+	let index = LspLineIndex.build(text)
+	var items = JsonNodeIdArray.create()
+
+	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
+		items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
+	end 'each'
+
+	writeDiagnosticsNotification(uri, items: items, doc: doc)
+end 'writeDocumentDiagnostics'
+
+function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns DiagnosticArray
+	var kept = DiagnosticArray.create()
+
+	for diagnostic in diagnostics 'each'
+		if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
+			continue
+		end 'notThisDocuments'
+
+		kept.push(diagnostic)
+	end 'each'
+
+	return kept
+end 'thisDocumentsOwn'
+
+function tokenStreamsAgree(live TokenArray, swept TokenArray) returns bool
+	if live.count() != swept.count() 'differentLengths'
+		return false
+	end 'differentLengths'
+
+	for (iter, token) in live.withIterator() 'eachToken'
+		let sweptToken = try swept.get(iter.index() as TokenIndex) otherwise panic("tokenStreamsAgree: the two streams were compared equal in length one line above, so {iter.index()} indexes both")
+
+		if token.kind != sweptToken.kind or token.line != sweptToken.line or token.column != sweptToken.column or not token.value.equals(sweptToken.value) 'differsHere'
+			return false
+		end 'differsHere'
+	end 'eachToken'
+
+	return true
+end 'tokenStreamsAgree'
+
+// ⛔⛔ **THE FAMILY FILTER IS THE PRICE OF BLINDNESS, AND IT APPLIES ONLY WHERE THE COMPILE WAS BLIND.**
+// A modified buffer is compiled alone, so a name only a sibling declares is a name it could not resolve —
+// and once one such name is in the file, every refusal downstream of it is suspect, not just the ones
+// `theProjectDeclaresTheRefusedName` could attribute. But a modified buffer that resolved every name it
+// used is not blind at all, and filtering there would mute the author's own errors while they type. So the
+// scope is asked first, and only then is the answer narrowed to what is true of this file's text alone.
+function refusalsThisRoadMayPublish(kept DiagnosticArray, road RefusalRoad, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns DiagnosticArray
+	match road 'road'
+		aCleanParsesCheck then return kept
+		aModifiedBuffersParse then break 'road'
+	end 'road'
+
+	if kept.isEmpty() 'nothingSurvivedTheOracle'
+		return kept
+	end 'nothingSurvivedTheOracle'
+
+	if not aNameOnlyTheProjectDeclares(tokens, verdicts: verdicts, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own) 'sawEveryNameItUsed'
+		return kept
+	end 'sawEveryNameItUsed'
+
+	return refusalsTrueOfTheBuffersOwnText(kept)
+end 'refusalsThisRoadMayPublish'
+
+function aNameOnlyTheProjectDeclares(tokens TokenArray, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		let index = iter.index() as TokenIndex
+
+		if token.kind != TokenKind.identifier or lspCursorNamesAMember(tokens, cursor: index) 'notANameThisFileHadToResolve'
+			continue
+		end 'notANameThisFileHadToResolve'
+
+		if settledVerdictFor(token.value, verdicts: verdicts, index: index, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own) 'onlyTheProjectHasIt'
+			return true
+		end 'onlyTheProjectHasIt'
+	end 'eachToken'
+
+	return false
+end 'aNameOnlyTheProjectDeclares'
+
+// ⚠ No confident subject means PUBLISH: a diagnostic nothing can be attributed to is shown rather than
+// dropped, because a suppression that guesses hides a real error and a squiggle that survives does not.
+function theProjectDeclaresTheRefusedName(diagnostic Diagnostic, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
+	match diagnosticSubject(diagnostic, tokens: tokens) 'subject'
+		unattributable then return false
+		named(name, index) then return settledVerdictFor(name, verdicts: verdicts, index: index, buffer: buffer, document: document, corpus: corpus, reader: reader, own: own)
+	end 'subject'
+end 'theProjectDeclaresTheRefusedName'
+
+function settledVerdictFor(name ByteArray, verdicts SiblingVerdictMap, index TokenIndex, buffer FilePath, document HoverDocument, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns bool
+	if let settled = try verdicts.get(name) 'askedAlready'
+		return settled
+	end 'askedAlready'
+
+	let verdict = declaredOutsideTheReader(corpus, name: name, reader: reader) and not theBufferBindsTheName(name, index: index, document: document, own: own, buffer: buffer)
+	verdicts.upsert(name, value: verdict)
+
+	return verdict
+end 'settledVerdictFor'
+
+// ⛔ **THE READER'S OWN DECLARATION NEVER COUNTS.** The corpus holds the SAVED copy of the file being
+// edited, so a declaration it finds in that file is the buffer's business and the buffer is the live
+// authority on it. Admit one here and an author renaming a declaration is told nothing about the uses of
+// the old name they have left standing, because the corpus's stale copy still declares it.
+function declaredOutsideTheReader(corpus ProgramSignatures, name ByteArray, reader FilePath) returns bool
+	match declaringFileOfTheSubject(corpus, name: name, reader: reader) 'declaration'
+		declared(declFilePath) then return not namesTheSameFile(declFilePath, other: reader)
+		undeclared then return false
+	end 'declaration'
+end 'declaredOutsideTheReader'
+
+function theBufferBindsTheName(name ByteArray, index TokenIndex, document HoverDocument, own ProgramSignatures, buffer FilePath) returns bool
+	match declaringFileOfTheSubject(own, name: name, reader: buffer) 'atTopLevel'
+		declared then return true
+		undeclared then break 'atTopLevel'
+	end 'atTopLevel'
+
+	return document.bindsTheName(name, near: index)
+end 'theBufferBindsTheName'
+
+// ⚠ Every door here asks the DECLARATION question and none asks for a VALUE. `constantValueOf` is the
+// door that would answer for a top-level constant, and it notes a cross-file read into the index's
+// `checkUnusedExports` bookkeeping — so asking it would let an editor query decide what a held corpus
+// later reports as unused.
+function declaringFileOfTheSubject(signatures ProgramSignatures, name ByteArray, reader FilePath) returns SubjectDeclaration
+	match signatures.typeNameDeclaredIn(name, readerFilePath: reader) 'aType'
+		declared(declFilePath) then return SubjectDeclaration.declared(declFilePath)
+		undeclared then break 'aType'
+	end 'aType'
+
+	match calleeDeclaringFile(signatures, name: name, reader: reader) 'aCallee'
+		declared(declFilePath) then return SubjectDeclaration.declared(declFilePath)
+		undeclared then break 'aCallee'
+	end 'aCallee'
+
+	match signatures.bindingFor(name, readerFilePath: reader) 'aBinding'
+		declared(declFilePath) then return SubjectDeclaration.declared(declFilePath)
+		undeclared then return SubjectDeclaration.undeclared
+	end 'aBinding'
+end 'declaringFileOfTheSubject'
+
+function calleeDeclaringFile(signatures ProgramSignatures, name ByteArray, reader FilePath) returns SubjectDeclaration
+	match signatures.resolveFunctionName(name, readerFilePath: reader) 'resolution'
+		declaration(resolved) then return visibleCalleeDeclaringFile(signatures, callee: resolved, reader: reader)
+		ambiguous or
+			undeclared then return SubjectDeclaration.undeclared
+	end 'resolution'
+end 'calleeDeclaringFile'
+
+function visibleCalleeDeclaringFile(signatures ProgramSignatures, callee ByteArray, reader FilePath) returns SubjectDeclaration
+	if not signatures.declaresCallee(callee) 'noDeclarationAtAll'
+		return SubjectDeclaration.undeclared
+	end 'noDeclarationAtAll'
+
+	match signatures.calleeVisibilityFrom(callee, readerFilePath: reader) 'visibility'
+		visible then return SubjectDeclaration.declared(signatures.declaringFileOf(callee))
+		hidden then return SubjectDeclaration.undeclared
+	end 'visibility'
+end 'visibleCalleeDeclaringFile'
+
+function diagnosticSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
+	if diagnostic.line == 0 'noAnchorToReadFrom'
+		return reconstructedUnknownTypeSubject(diagnostic, tokens: tokens)
+	end 'noAnchorToReadFrom'
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if token.line > diagnostic.line 'pastTheAnchorsLine'
+			break
+		end 'pastTheAnchorsLine'
+
+		if token.line != diagnostic.line or token.column != diagnostic.column 'notTheAnchor'
+			continue
+		end 'notTheAnchor'
+
+		return subjectBesideAnchor(tokens, anchor: iter.index() as TokenIndex)
+	end 'eachToken'
+
+	return DiagnosticSubject.unattributable
+end 'diagnosticSubject'
+
+function reconstructedUnknownTypeSubject(diagnostic Diagnostic, tokens TokenArray) returns DiagnosticSubject
+	match quotedNameIn(diagnostic.message) 'quoted'
+		unquoted then return DiagnosticSubject.unattributable
+		spelled(typeName) then return unknownTypeSubjectNamed(diagnostic, tokens: tokens, typeName: typeName)
+	end 'quoted'
+end 'reconstructedUnknownTypeSubject'
+
+// The sentence is REBUILT through `unknownTypeMessage` and compared whole, never parsed: a quoted name
+// appears in many diagnostics, and attributing one of those to a token it is not about silences a real
+// error. Rebuilding also leaves the wording with one writer rather than a second copy here.
+function unknownTypeSubjectNamed(diagnostic Diagnostic, tokens TokenArray, typeName String) returns DiagnosticSubject
+	if unknownTypeMessage(typeName) != diagnostic.message 'anotherSentenceEntirely'
+		return DiagnosticSubject.unattributable
+	end 'anotherSentenceEntirely'
+
+	let name = typeName.toByteArray()
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if token.kind != TokenKind.identifier or not token.value.equals(name) 'notTheName'
+			continue
+		end 'notTheName'
+
+		return DiagnosticSubject.named(token.value, index: iter.index() as TokenIndex)
+	end 'eachToken'
+
+	return DiagnosticSubject.unattributable
+end 'unknownTypeSubjectNamed'
+
+function quotedNameIn(message String) returns QuotedName
+	let segments = message.split(DiagnosticNameQuote)
+
+	if segments.count() <= QuotedNameSegment 'nothingQuoted'
+		return QuotedName.unquoted
+	end 'nothingQuoted'
+
+	return QuotedName.spelled(try segments.get(QuotedNameSegment) otherwise panic("quotedNameIn: the split produced more than {QuotedNameSegment} segments one line above"))
+end 'quotedNameIn'
+
+// ⛔ **THE DOTTED BASE IS ASKED FOR BEFORE THE BARE NAME, AND SWAPPING THE TWO UNDOES THE FEATURE.** The
+// anchor of `CompilePhase.load` is `load`, which IS an identifier — so a bare-name rule asked first
+// answers `load`, finds no declaration of it anywhere, and publishes the invented refusal the base would
+// have explained.
+function subjectBesideAnchor(tokens TokenArray, anchor TokenIndex) returns DiagnosticSubject
+	let anchored = try tokens.get(anchor) otherwise panic("subjectBesideAnchor: {anchor} is the index the walk above stopped at, inside [0, {tokens.count()})")
+
+	if anchored.kind == TokenKind.as 'aCastTarget'
+		return identifierSubjectAt(tokens, index: (anchor + 1) as TokenIndex)
+	end 'aCastTarget'
+
+	if not lspCursorNamesAMember(tokens, cursor: anchor) 'aBareName'
+		return identifierSubjectAt(tokens, index: anchor)
+	end 'aBareName'
+
+	if anchor < TokensBetweenAReceiverAndItsMember 'noRoomForABase'
+		return DiagnosticSubject.unattributable
+	end 'noRoomForABase'
+
+	return identifierSubjectAt(tokens, index: (anchor - TokensBetweenAReceiverAndItsMember) as TokenIndex)
+end 'subjectBesideAnchor'
+
+function identifierSubjectAt(tokens TokenArray, index TokenIndex) returns DiagnosticSubject
+	let token = try tokens.get(index) otherwise return DiagnosticSubject.unattributable
+
+	if token.kind != TokenKind.identifier 'notAName'
+		return DiagnosticSubject.unattributable
+	end 'notAName'
+
+	return DiagnosticSubject.named(token.value, index: index)
+end 'identifierSubjectAt'
+
 // ⛔⛔ **A SINGLE-BUFFER COMPILE CANNOT HONESTLY PUBLISH A WHOLE-PROGRAM CLAIM.** "This program declares
-// no entry point" is a property of a PROGRAM; this server holds one FILE plus `stdlib/` and never the
-// author's other sources, which `LspDocumentProject.maxon` states and names project discovery as the cure
-// for. A library file — most of what an editor has open — would otherwise carry a red squiggle on its
-// first line for ever, and the sentence would be TRUE of what this server compiled and FALSE of the file
-// the author is looking at.
+// no entry point" is a property of a PROGRAM, and the compile that raises it holds one FILE plus the
+// library tiers. A library file — most of what an editor has open — would otherwise carry a red squiggle
+// on its first line for ever, and the sentence would be TRUE of what this server compiled and FALSE of
+// the file the author is looking at. The corpus does not rescue it: it is lexed and folded, never
+// checked, so no road here ever compiles a whole program.
 //
 // ⚠ **A SECOND MEMBER IS ADDED BY MEASUREMENT, NEVER BY GUESSING.** Suppressing a diagnostic that is
 // genuinely about this file HIDES A REAL ERROR, which is a worse outcome than the squiggle this removes;
 // and the leading digit cannot stand in for the question, because it names the STAGE that raised the
-// diagnostic rather than the SCOPE it claims. MEASURED over library buffers holding exported functions,
-// types, constants and enums, and over a `module` function: E3001 is the only code that reaches the
-// publish. The unused-export family (E3092/E3093/E3094) structurally cannot — `checkUnusedExports`
-// returns before it seeds anything below `MinimumUserFilesToAudit` author files, and a buffer is one.
+// diagnostic rather than the SCOPE it claims. The unused-export family (E3092/E3093/E3094) needs no
+// member here — `checkUnusedExports` returns before it seeds anything below `MinimumUserFilesToAudit`
+// author files, and a buffer is one.
 function claimsAboutTheWholeProgram(code ErrorCode) returns bool
 	return code == ErrorCode.noMainFunction
 end 'claimsAboutTheWholeProgram'
 
 // Does this diagnostic report on THIS document's text?
 //
-// ⭐ A diagnostic naming no file at all was reported without a position (`Diagnostic`'s header: "empty
-// when program-wide"), and the only source this compile holds beyond `stdlib/` is this buffer — so it is
-// about this buffer, once the question above has taken the whole-program claims out. One naming another
-// file is `stdlib/`'s, and painting it into the author's document would put a squiggle on a line they did
-// not write.
+// A diagnostic naming no file at all was reported without a position (`Diagnostic`'s header: "empty
+// when program-wide"), and it is taken to be this document's because every road that reaches here
+// reported over this document alone — the buffer compile holds one file plus the library tiers, and the
+// corpus road parses the reader's file and nothing else. ⚠ A positionless diagnostic carries nothing to
+// narrow BY, so a road that ever reports over more than this document owes its own narrowing before it
+// gets here. One naming ANOTHER file is a library's, and painting it into the author's document would put
+// a squiggle on a line they did not write.
 module function reportsOn(diagnostic Diagnostic, path FilePath) returns bool
-	return diagnostic.filePath.isEmpty() or diagnostic.filePath.toString() == path.toString()
+	return diagnostic.filePath.isEmpty() or namesTheSameFile(diagnostic.filePath, other: path)
 end 'reportsOn'
+
+// Resolved and normalized rather than compared as text: the corpus reports under the spelling it
+// registered a file by, which is not always the spelling the request arrived with (`corpusSpellingOf`
+// owns that rule). A text compare drops every one of those diagnostics and publishes an empty array,
+// which reads as "this document is clean".
+function namesTheSameFile(one FilePath, other FilePath) returns bool
+	return one.resolve(Directory.currentPath()).normalize().equals(other.resolve(Directory.currentPath()).normalize())
+end 'namesTheSameFile'
 
 function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
 	var item = LspJsonObject.create(doc)
@@ -145,10 +547,9 @@ end 'diagnosticNode'
 // Two anchors have no token, and both fall back to a ONE-BYTE span converted through the same path:
 //
 //   * **A diagnostic reported WITHOUT a position**, which `Diagnostic` marks by a `line` of 0 — 1-based
-//     lines start at 1, so 0 is unreachable for a real span. It is placed at the start of the document,
-//     because the only source this compile holds beyond `stdlib/` IS this document and there is nowhere
-//     better inside it. `E3002` (`main` returning something other than `ExitCode`) is one that reaches
-//     the publish.
+//     lines start at 1, so 0 is unreachable for a real span. `reportsOn` has already established it is
+//     this document's, and there is nowhere better inside it than the start. `E3002` (`main` returning
+//     something other than `ExitCode`) is one that reaches the publish.
 //   * **A position no token BEGINS at.** The lexer records a span only for tokens whose text it sliced,
 //     so every punctuator carries `startByte == endByte == 0` (`LspCursor.maxon` states the same fact
 //     from the other side) — `tokenSpanAt` finds one by line and column and hands back a span that is

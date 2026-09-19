@@ -1,0 +1,33 @@
+// receiver-type-probe.test.maxon — the one buffer both `self` cases drive, held here so neither case
+// file depends on the other. It declares no tests.
+//
+// `receiver-type-self-names-the-enclosing-type` hovers `items` at line 4 column 21 and
+// `receiver-type-self-offers-the-enclosing-types-members` completes at line 4 column 20, the byte
+// immediately after the dot. Both numbers are columns counted against these exact bytes.
+//
+// ⚠ A `b"…"` byte literal, closing quote IMMEDIATELY after the last source character: byte-exact, a raw
+// newline in one IS the byte it spells, and it neither strips indentation nor appends a trailing
+// newline. The four-space indentation is part of the fixture, so adding or trimming one byte shifts
+// every column above.
+//
+// ⭐ The buffer COMPILES — `create` and `main` are here for no other reason. A fixture the project
+// cannot build would leave a red saying only that, and say nothing about the receiver walk.
+
+export function receiverSelfFixture() returns String
+	return String.from(b"type ReceiverProbe
+    public var items as StringArray
+
+    public function isEmpty() returns bool
+        return self.items.isEmpty()
+    end 'isEmpty'
+
+    public static function create() returns ReceiverProbe
+        return ReceiverProbe{items: StringArray.create()}
+    end 'create'
+end 'ReceiverProbe'
+
+function main() returns ExitCode
+    let probe = ReceiverProbe.create()
+    return 0 if probe.isEmpty() else 1
+end 'main'")
+end 'receiverSelfFixture'

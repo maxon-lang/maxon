@@ -1,0 +1,29 @@
+let NoEndFormSeparatorLine = 1 as LspCoordinate
+let NoEndFormSeparatorCharacter = 10 as LspCoordinate
+let NoEndFormBelowLine = 8 as LspCoordinate
+let NoEndFormBelowCharacter = 9 as LspCoordinate
+
+test 'receiver type: a line with no end of its own opens no unterminated block'
+	let control = try hoverRendering(noEndFormFixture(), line: NoEndFormSeparatorLine, character: NoEndFormSeparatorCharacter)
+
+	try Expect.contains(control, needle: "Field of `Lexer`", message: "hovering `separator` did not call it a field of `Lexer`. Its line ENDS IN A CHARACTER LITERAL, which is how this language spells a block label — so a walk that took the line for a block header would read the field as the header of one. It rendered: {control}")
+
+	let rendering = try hoverRendering(noEndFormFixture(), line: NoEndFormBelowLine, character: NoEndFormBelowCharacter)
+
+	try Expect.contains(rendering, needle: "Field of `Lexer`", message: "hovering `mode` did not call it a field of `Lexer`. Two lines above it have no `end` of their own — a field ending in a character literal and a closure literal — and neither opens a block. One taken for an unterminated opener would cover every line below it and swallow the rest of the type's own members. It rendered: {rendering}")
+
+	try Expect.isFalse(rendering.contains("Local"), message: "hovering `mode` called it a local. It is declared directly in the body of `Lexer`, below two lines that spell no `end` because they open nothing. It rendered: {rendering}")
+end 'receiver type: a line with no end of its own opens no unterminated block'
+
+function noEndFormFixture() returns String
+	return String.from(b"type Lexer
+    let separator = ','
+
+    function scale() returns ExitCode
+        let doubler = function(n ExitCode) gives n * 2
+        return doubler(2)
+    end 'scale'
+
+    let mode as ExitCode
+end 'Lexer'")
+end 'noEndFormFixture'

@@ -1,0 +1,28 @@
+// diagnostics-project-a-declaration-only-in-the-buffer-is-known.test.maxon — a type the author has TYPED
+// but not SAVED is theirs to use: the buffer declares it and uses it, the file on disk does not declare it
+// at all, and the publish is EMPTY.
+//
+// ⭐⭐ **THIS IS WHAT DISCRIMINATES THE TWO-VIEW RULE FROM THE ONE THAT WAS REJECTED.** Under "compile the
+// buffer against the corpus index ALONE" this case goes RED, because the corpus holds this file as it is ON
+// DISK — the saved version, which declares nothing — and the author would be told their own half-typed
+// declaration does not exist. The corpus's view of the open file is the SAVED one, and the buffer's view of
+// itself is the LIVE one; a name either view knows is a name the author may use.
+//
+// The buffer here does not match the file on disk, so it is compiled alone — the live view — and nothing
+// is published. The staged project's buffer text is a REAL one — `maxon build` of it
+// compiles — so a red here cannot mean the fixture is broken. The session, the staging and the assertions
+// are `diagnostics-project-probe.test.maxon`'s.
+
+let ProjectUnsavedTypeDirName = "maxon-tests-lsp-diagnostics-project-unsaved-type"
+let ProjectUnsavedTypeFileName = "main.maxon"
+let ProjectUnsavedTypeSavedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let ProjectUnsavedTypeBufferSource = "type ProjectUnsavedWidget\n\texport let width as ExitCode\n\n\tstatic function create(width ExitCode) returns ProjectUnsavedWidget\n\t\treturn Self\{width: width\}\n\tend 'create'\nend 'ProjectUnsavedWidget'\n\nfunction main() returns ExitCode\n\tlet widget = ProjectUnsavedWidget.create(0)\n\treturn widget.width\nend 'main'\n"
+
+test 'a declaration only the buffer holds is a name the buffer may use'
+	let root = stagedProjectDiagnosticsRoot(ProjectUnsavedTypeDirName)
+	writeCorpusFile(root, fileName: ProjectUnsavedTypeFileName, content: ProjectUnsavedTypeSavedSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectUnsavedTypeFileName, content: ProjectUnsavedTypeBufferSource)
+
+	try expectNoProjectDiagnostics(probe, note: "`ProjectUnsavedWidget` is declared and used in the OPEN BUFFER, and the copy of this same file on disk declares no such thing. Typing a declaration and then using it is the most ordinary minute of editing there is; a server that answers out of the saved corpus alone reports the author's own new type as unknown until they press save.")
+end 'a declaration only the buffer holds is a name the buffer may use'

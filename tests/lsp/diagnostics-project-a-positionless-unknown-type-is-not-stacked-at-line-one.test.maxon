@@ -1,0 +1,15 @@
+let ProjectPositionlessTypeDirName = "maxon-tests-lsp-diagnostics-project-positionless-type"
+let ProjectPositionlessTypeDeclaringFileName = "slot.maxon"
+let ProjectPositionlessTypeBufferFileName = "main.maxon"
+let ProjectPositionlessTypeDeclaringSource = "export typealias ProjectPositionlessSlot = int(0 to u64.max)\n"
+let ProjectPositionlessTypeBufferSource = "function projectPositionlessWiden(n ProjectPositionlessSlot) returns ExitCode\n\treturn n as ExitCode\nend 'projectPositionlessWiden'\n\nfunction main() returns ExitCode\n\treturn projectPositionlessWiden(0)\nend 'main'\n"
+
+test 'a sibling type in a declaration is not an unknown type stacked at line one'
+	let root = stagedProjectDiagnosticsRoot(ProjectPositionlessTypeDirName)
+	writeCorpusFile(root, fileName: ProjectPositionlessTypeDeclaringFileName, content: ProjectPositionlessTypeDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectPositionlessTypeBufferFileName, content: ProjectPositionlessTypeBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectPositionlessTypeBufferFileName, content: ProjectPositionlessTypeBufferSource)
+
+	try expectNoProjectDiagnostics(probe, note: "`ProjectPositionlessSlot` names the sibling's `export typealias` in a PARAMETER DECLARATION, which the parse accepts and records as a name for `resolveTypes` to settle — so the refusal is `TypeResolution.resolveNamedType`'s POSITION-LESS E3011 and not the cast target's positioned one. A `maxon build` of the staged project exits 0, and a buffer-only compile of this same text renders `error E3011: Unknown type 'ProjectPositionlessSlot'` with no file, line or column at all. ⛔ WITH NO ANCHOR, `diagnosticSpan` PLACES IT AT THE START OF THE DOCUMENT, so a file with eleven of them stacks eleven red squiggles on line one — every one of them about a name the project declares.")
+end 'a sibling type in a declaration is not an unknown type stacked at line one'

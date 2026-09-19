@@ -1,8 +1,9 @@
 // The declarations of a whole PROJECT, for the editor features that have to look outside the buffer in
 // front of the author: which file declares a name (`LspDefinition`) and which members a type publishes
-// (`LspCompletion`). `LspDocumentProject` is the other half of the pair and answers about the buffer
-// ALONE — that is what `textDocument/publishDiagnostics` still uses, so a diagnostic remains a statement
-// about one file and never about a sibling the author did not open.
+// (`LspCompletion`), and which names `textDocument/publishDiagnostics` may not call undeclared.
+// `LspDocumentProject` is the other half of the pair and answers about the buffer ALONE. A diagnostic is
+// still CHECKED there and never here: this corpus is lexed and its declarations folded, never compiled,
+// so it can say what a name means and never what is wrong with a program.
 //
 // ⚠ A document's project root is a ladder, and the ORDER of its rungs is the design.
 // `workspaceRootOf` holds it: a library tier's file gets the tiers alone; otherwise the nearest
@@ -90,14 +91,43 @@ end 'lspRememberClientRoot'
 
 module function lspWorkspaceCorpus(readerPath FilePath) returns LspCorpus
 	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
+
+	return capturedCorpus(workspaceRootOf(readerPath, tiers: tiers), tiers: tiers, readerPath: readerPath)
+end 'lspWorkspaceCorpus'
+
+// The corpus a diagnostic may be corrected against, admitted only where the author has STATED the
+// project: a root the client named in `initialize`, holding this document. Without one the ladder roots a
+// document at its OWN DIRECTORY, so an unrelated neighbouring file would count as a sibling and could
+// silence a real error about a name no part of the author's project declares. A library-tier document
+// answers `unavailable` because its corpus is the two tiers the buffer compile already holds.
+module function lspProjectCorpus(readerPath FilePath) returns LspCorpus
+	if not clientNamedARootOver(readerPath) 'noStatedWorkspace'
+		return LspCorpus.unavailable
+	end 'noStatedWorkspace'
+
+	let tiers = try LibraryTiers.locate() otherwise return LspCorpus.unavailable
 	let root = workspaceRootOf(readerPath, tiers: tiers)
 
+	return match root 'root'
+		userDirectory gives capturedCorpus(root, tiers: tiers, readerPath: readerPath)
+		libraryTierOnly gives LspCorpus.unavailable
+	end 'root'
+end 'lspProjectCorpus'
+
+module function clientNamedARootOver(readerPath FilePath) returns bool
+	return match namedClientRoot 'client'
+		named(dir) gives readerPath.normalize().isInside(dir.normalize())
+		unset gives false
+	end 'client'
+end 'clientNamedARootOver'
+
+function capturedCorpus(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
 	beginDiagnosticCapture()
 	let corpus = sweptWorkspace(root, tiers: tiers, readerPath: readerPath)
 	discardDiagnosticCapture()
 
 	return corpus
-end 'lspWorkspaceCorpus'
+end 'capturedCorpus'
 
 function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
 	let compileRoot = compileRootOf(root, readerPath: readerPath)

@@ -3859,8 +3859,10 @@ See [Build System](#build-system) and [Project Structure](CLI_REFERENCE.md#proje
 what a project directory contains.
 
 **The language server checks open files.** It checks a document together with the standard library, not with the sibling files a
-`maxon build` of its directory would compile. A diagnostic that depends on what another file declares may
-differ from what the build reports.
+`maxon build` of its directory would compile. It does read the rest of the project to find out which names
+those files declare, so it no longer reports an error the build does not — but it can still miss one: a
+diagnostic that only the merged program raises is out of reach, and while a buffer is unsaved the
+name-dependent diagnostics are withheld until it matches disk again. The build remains the authority.
 
 ---
 

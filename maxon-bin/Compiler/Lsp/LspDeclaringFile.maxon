@@ -14,7 +14,7 @@ module enum LspDeclarationLookupError implements Error
 	nothingThere
 end 'LspDeclarationLookupError'
 
-let TokensBetweenAReceiverAndItsMember = 2 as TokenIndex
+module let TokensBetweenAReceiverAndItsMember = 2 as TokenIndex
 
 module function lspCursorNamesAMember(tokens TokenArray, cursor TokenIndex) returns bool
 	if cursor == 0 'nothingBefore'
@@ -25,22 +25,22 @@ module function lspCursorNamesAMember(tokens TokenArray, cursor TokenIndex) retu
 	return before.kind == TokenKind.dot
 end 'lspCursorNamesAMember'
 
-module function lspDeclaringFileOfTheCursor(signatures ProgramSignatures, tokens TokenArray, cursor TokenIndex, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+module function lspDeclaringFileOfTheCursor(signatures ProgramSignatures, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	let name = lspTokenAt(tokens, index: cursor).value
 
 	if lspCursorNamesAMember(tokens, cursor: cursor) 'aMember'
-		return try declaringFileOfAMember(signatures, tokens: tokens, cursor: cursor, member: name, readerPath: readerPath)
+		return try declaringFileOfAMember(signatures, text: text, tokens: tokens, keywords: keywords, cursor: cursor, member: name, readerPath: readerPath)
 	end 'aMember'
 
 	return try declaringFileOfABareName(signatures, name: name, readerPath: readerPath)
 end 'lspDeclaringFileOfTheCursor'
 
-function declaringFileOfAMember(signatures ProgramSignatures, tokens TokenArray, cursor TokenIndex, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+function declaringFileOfAMember(signatures ProgramSignatures, text String, tokens TokenArray, keywords KeywordTable, cursor TokenIndex, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
 	if cursor < TokensBetweenAReceiverAndItsMember 'nothingBeforeTheDot'
 		throw LspDeclarationLookupError.nothingThere
 	end 'nothingBeforeTheDot'
 
-	let subject = lspSubjectOfReceiver(tokens, blocks: lspDocumentBlocks(tokens), receiver: cursor - TokensBetweenAReceiverAndItsMember)
+	let subject = lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: cursor - TokensBetweenAReceiverAndItsMember)
 	let typeName = lspSubjectTypeName(subject)
 
 	if typeName.isEmpty() 'noReceiverType'

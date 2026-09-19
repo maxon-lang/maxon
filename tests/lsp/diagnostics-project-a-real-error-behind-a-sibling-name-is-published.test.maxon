@@ -1,0 +1,21 @@
+let ProjectRealErrorBehindDirName = "maxon-tests-lsp-diagnostics-project-real-error-behind"
+let ProjectRealErrorBehindDeclaringFileName = "slot.maxon"
+let ProjectRealErrorBehindBufferFileName = "main.maxon"
+let ProjectRealErrorBehindDeclaringSource = "export typealias ProjectRealErrorBehindSlot = int(0 to u64.max)\n"
+let ProjectRealErrorBehindBufferSource = "function main() returns ExitCode\n\tlet n = 1 as ProjectRealErrorBehindSlot\n\tlet m = 2 as ProjectRealErrorBehindNowhere\n\treturn (n + m) as ExitCode\nend 'main'\n"
+let ProjectRealErrorBehindCode = "E3011"
+let ProjectRealErrorBehindLine = 2 as LspCoordinate
+
+test 'a real error behind a sibling name is the one that is published'
+	let root = stagedProjectDiagnosticsRoot(ProjectRealErrorBehindDirName)
+	writeCorpusFile(root, fileName: ProjectRealErrorBehindDeclaringFileName, content: ProjectRealErrorBehindDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectRealErrorBehindBufferFileName, content: ProjectRealErrorBehindBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectRealErrorBehindBufferFileName, content: ProjectRealErrorBehindBufferSource)
+
+	let reported = try onlyProjectDiagnostic(probe, note: "the buffer names the sibling's `ProjectRealErrorBehindSlot` on an EARLY line and the undeclared `ProjectRealErrorBehindNowhere` on a LATER one, and a `maxon build` of this very project reports the later one and nothing else.")
+
+	try Expect.equal(reported.code, expected: ProjectRealErrorBehindCode, message: "a parse ABORTS at its first refusal, so a server that cannot see the sibling declaration stops on the EARLY line and the author's real typo below it is never reported at all.")
+
+	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectRealErrorBehindLine as AssertedInt, message: "the anchor is the whole point: line 2 is `ProjectRealErrorBehindNowhere`, which is declared nowhere, and line 1 is `ProjectRealErrorBehindSlot`, which the sibling file exports. A diagnostic on line 1 is the invented one wearing the right code.")
+end 'a real error behind a sibling name is the one that is published'

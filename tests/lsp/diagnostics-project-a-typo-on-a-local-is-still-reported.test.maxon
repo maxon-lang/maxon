@@ -1,0 +1,24 @@
+let ProjectLocalTypoDirName = "maxon-tests-lsp-diagnostics-project-local-typo"
+let ProjectLocalTypoDeclaringFileName = "helpers.maxon"
+let ProjectLocalTypoDriverFileName = "driver.maxon"
+let ProjectLocalTypoBufferFileName = "report.maxon"
+let ProjectLocalTypoDeclaringSource = "module function projectLocalTypoFormat(n ExitCode) returns String\n\treturn \"count: \{n\}\"\nend 'projectLocalTypoFormat'\n"
+let ProjectLocalTypoDriverSource = "function main() returns ExitCode\n\tprint(projectLocalTypoFormat(1))\n\tprint(projectLocalTypoReport(0))\n\n\treturn 0 as ExitCode\nend 'main'\n"
+let ProjectLocalTypoSavedSource = "module function projectLocalTypoReport(n ExitCode) returns String\n\tlet projectLocalTypoFormat = \"count: \{n\}\"\n\n\treturn projectLocalTypoFormat\nend 'projectLocalTypoReport'\n"
+let ProjectLocalTypoTypedSource = "module function projectLocalTypoReport(n ExitCode) returns String\n\tlet projectLocalTypoFormat = \"count: \{n\}\"\n\n\treturn projectLocalTypoFormat.trm()\nend 'projectLocalTypoReport'\n"
+let ProjectLocalTypoCode = "E2015"
+
+test 'a typo on a local whose name a sibling file also declares is still reported'
+	let root = stagedProjectDiagnosticsRoot(ProjectLocalTypoDirName)
+	writeCorpusFile(root, fileName: ProjectLocalTypoDeclaringFileName, content: ProjectLocalTypoDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectLocalTypoDriverFileName, content: ProjectLocalTypoDriverSource)
+	writeCorpusFile(root, fileName: ProjectLocalTypoBufferFileName, content: ProjectLocalTypoSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectLocalTypoBufferFileName, content: ProjectLocalTypoSavedSource, editedContent: ProjectLocalTypoTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
+
+	let reported = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` typed `.trm()` onto a LOCAL named `projectLocalTypoFormat`, which is also the name of a function the sibling `helpers.maxon` declares. A `maxon build` of the staged tree holding the edited text reports exactly one `E2015` about the member and nothing else.")
+
+	try Expect.equal(reported.code, expected: ProjectLocalTypoCode, message: "the diagnostic is anchored at the MEMBER, so the subject taken from the token stream is the RECEIVER — the local. A name oracle that asks only whether the project's TOP-LEVEL index declares that name answers `no` for every local, parameter and field there is, and the sibling's function of the same name then silences a typo the author has this second finished typing.")
+end 'a typo on a local whose name a sibling file also declares is still reported'

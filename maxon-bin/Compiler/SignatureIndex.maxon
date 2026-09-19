@@ -2773,6 +2773,11 @@ module union DeclaredBinding
 	undeclared
 end 'DeclaredBinding'
 
+module union DeclaredTypeFile
+	declared(declFilePath FilePath)
+	undeclared
+end 'DeclaredTypeFile'
+
 // ⭐ **THE KINDS OF RECORD THAT MAY LIE WITHIN A RECORD** (`ProgramSignatures.recordKindsWithinAggregate`). A kind
 // is a declared struct's or union's name, a generic instance's compiled name (`mangleGenericInstance`, which no
 // declaration shares), `HeldTupleKind` for every tuple, or `HeldByteRecordKind` for a `String` or a `Character`;
@@ -20291,6 +20296,75 @@ export type ProgramSignatures
 
 		return self.enumInAnyFile(name)
 	end 'enumFor'
+
+	module function typeNameDeclaredIn(name ByteArray, readerFilePath FilePath) returns DeclaredTypeFile
+		match self.aliasFormDeclaredIn(name, readerFilePath: readerFilePath) 'anAliasForm'
+			declared(declFilePath) then return DeclaredTypeFile.declared(declFilePath)
+			undeclared then break 'anAliasForm'
+		end 'anAliasForm'
+
+		match self.structFor(name, readerFilePath: readerFilePath) 'aStruct'
+			declared(layout) then return DeclaredTypeFile.declared(layout.declFilePath)
+			undeclared then break 'aStruct'
+		end 'aStruct'
+
+		match self.enumFor(name, readerFilePath: readerFilePath) 'anEnum'
+			declared(layout) then return DeclaredTypeFile.declared(layout.declFilePath)
+			undeclared then break 'anEnum'
+		end 'anEnum'
+
+		match self.aliasOf(name, readerFilePath: readerFilePath) 'aRangedAlias'
+			declared(alias) then return DeclaredTypeFile.declared(alias.declFilePath)
+			undeclared then break 'aRangedAlias'
+		end 'aRangedAlias'
+
+		return self.interfaceDeclaredIn(name)
+	end 'typeNameDeclaredIn'
+
+	function aliasFormDeclaredIn(name ByteArray, readerFilePath FilePath) returns DeclaredTypeFile
+		if self.isGenericAliasFor(name, readerFilePath: readerFilePath) 'aGenericAlias'
+			return self.genericAliasDeclaredIn(name)
+		end 'aGenericAlias'
+
+		if self.isFunctionAliasFor(name, readerFilePath: readerFilePath) 'aFunctionAlias'
+			return self.functionAliasDeclaredIn(name)
+		end 'aFunctionAlias'
+
+		if not self.isTupleAliasFor(name, readerFilePath: readerFilePath) 'noAliasFormHoldsIt'
+			return DeclaredTypeFile.undeclared
+		end 'noAliasFormHoldsIt'
+
+		let tuple = try self.tupleAliases.get(name) otherwise return DeclaredTypeFile.undeclared
+
+		return DeclaredTypeFile.declared(tuple.claim.declFilePath)
+	end 'aliasFormDeclaredIn'
+
+	function genericAliasDeclaredIn(name ByteArray) returns DeclaredTypeFile
+		for decl in self.genericAliasDecls 'eachDeclaration'
+			if decl.aliasName.equals(name) 'thisAlias'
+				return DeclaredTypeFile.declared(decl.filePath)
+			end 'thisAlias'
+		end 'eachDeclaration'
+
+		return DeclaredTypeFile.undeclared
+	end 'genericAliasDeclaredIn'
+
+	function functionAliasDeclaredIn(name ByteArray) returns DeclaredTypeFile
+		match self.functionAliasInAnyFile(name) 'aFunctionAlias'
+			declared(alias) then return DeclaredTypeFile.declared(alias.declFilePath)
+			undeclared then return DeclaredTypeFile.undeclared
+		end 'aFunctionAlias'
+	end 'functionAliasDeclaredIn'
+
+	function interfaceDeclaredIn(name ByteArray) returns DeclaredTypeFile
+		for site in self.interfaceDeclSites 'eachSite'
+			if site.name.equals(name) 'thisInterface'
+				return DeclaredTypeFile.declared(site.path)
+			end 'thisInterface'
+		end 'eachSite'
+
+		return DeclaredTypeFile.undeclared
+	end 'interfaceDeclaredIn'
 
 	// ⭐⭐ **`containsStructInAnyFile` WITH THE CONTEST APPLIED — "does a `type` of this name answer for THIS
 	// FILE?"** Every door that decides what a WRITTEN name means asks this one; only a reader with no file

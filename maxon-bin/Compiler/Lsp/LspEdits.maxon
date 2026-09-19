@@ -81,7 +81,11 @@ end 'LspNamedPair'
 // quotes — so the first hit is the only hit and there is no innermost-wins rule to get wrong.
 function namedPairAt(blocks LspDocumentBlockArray, offset ByteOffset) returns LspNamedPair
 	for block in blocks 'eachBlock'
-		if lspSpanHolds(block.nameSpan, offset: offset) or lspSpanHolds(block.endNameSpan, offset: offset) 'onThisName'
+		if not lspBlockIsTerminated(block) 'noSecondNameToPairWith'
+			continue
+		end 'noSecondNameToPairWith'
+
+		if lspSpanHolds(block.nameSpan, offset: offset) or lspSpanHolds(lspBlockEndNameSpan(block), offset: offset) 'onThisName'
 			return LspNamedPair.found(block)
 		end 'onThisName'
 	end 'eachBlock'
@@ -95,7 +99,7 @@ function linkedEditingAnswer(source String, index LspLineIndex, block LspDocumen
 	var doc = JsonDoc.create()
 	var ranges = JsonNodeIdArray.create()
 	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: block.nameSpan))
-	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: block.endNameSpan))
+	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: lspBlockEndNameSpan(block)))
 
 	var result = LspJsonObject.create(doc)
 	result.putNode(RangesKey, value: doc.add(JsonNode.arrayNode(ranges)))
@@ -113,7 +117,7 @@ function renameAnswer(request LspRequest, index LspLineIndex, block LspDocumentB
 	var doc = JsonDoc.create()
 	var edits = JsonNodeIdArray.create()
 	edits.push(textEditNode(doc, source: request.text, index: index, span: block.nameSpan, newText: newName))
-	edits.push(textEditNode(doc, source: request.text, index: index, span: block.endNameSpan, newText: newName))
+	edits.push(textEditNode(doc, source: request.text, index: index, span: lspBlockEndNameSpan(block), newText: newName))
 
 	return LspAnswer.of(doc, result: workspaceEditNode(doc, uri: request.uri, edits: edits))
 end 'renameAnswer'

@@ -8,7 +8,13 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - **Go to definition and hover across files**: F12 on a name declared in another file of your project, or
   in the standard library, opens that file, and hovering one renders its declaration. The project is the
   nearest directory above the file that holds a `build.maxon`, searched no higher than the workspace root;
-  failing that, the workspace root itself. Diagnostics are still reported per buffer.
+  failing that, the workspace root itself. Hover and completion also resolve a receiver typed by `self`,
+  by a call, by a `try … otherwise`, by a field of the enclosing type, or by a `for … in` loop variable.
+- **Diagnostics that know about your other files**: the server no longer reports a name as undeclared
+  when a sibling file of the project declares it. Checking is still done per buffer, so an error only the
+  whole program could raise is not reported; and while a file is unsaved, errors about its own text are
+  published immediately while name-dependent ones wait until you save. It needs a workspace root — with
+  none open, diagnostics are per buffer as before.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to

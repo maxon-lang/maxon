@@ -1,0 +1,18 @@
+let ProjectSiblingCascadeDirName = "maxon-tests-lsp-diagnostics-project-sibling-cascade"
+let ProjectSiblingCascadeDeclaringFileName = "slot.maxon"
+let ProjectSiblingCascadeBufferFileName = "main.maxon"
+let ProjectSiblingCascadeDeclaringSource = "export typealias SiblingCascadeSlot = int(0 to u64.max)\nexport typealias SiblingCascadeSlotArray = Array with SiblingCascadeSlot\n"
+let ProjectSiblingCascadeSavedSource = "function main() returns ExitCode\n\tvar xs = SiblingCascadeSlotArray.create()\n\txs.push(1 as SiblingCascadeSlot)\n\tvar total = 0\n\n\tfor x in xs 'eachSlot'\n\t\ttotal = total + x\n\tend 'eachSlot'\n\n\treturn total as ExitCode\nend 'main'\n"
+let ProjectSiblingCascadeTypedSource = "function main() returns ExitCode\n\t// the author just typed a note to themselves\n\tvar xs = SiblingCascadeSlotArray.create()\n\txs.push(1 as SiblingCascadeSlot)\n\tvar total = 0\n\n\tfor x in xs 'eachSlot'\n\t\ttotal = total + x\n\tend 'eachSlot'\n\n\treturn total as ExitCode\nend 'main'\n"
+
+test 'a refusal derived from a sibling name is withheld while the buffer is modified'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingCascadeDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingCascadeDeclaringFileName, content: ProjectSiblingCascadeDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingCascadeBufferFileName, content: ProjectSiblingCascadeSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectSiblingCascadeBufferFileName, content: ProjectSiblingCascadeSavedSource, editedContent: ProjectSiblingCascadeTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, which `maxon build` of the staged project compiles. This publish is the CONTROL.")
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "⛔ THE SENTENCE CARRIES NO NAME TO LOOK UP. A buffer-only compile cannot see `SiblingCascadeSlotArray`, so `xs` has no type and the refusal it raises is `E2015 Unsupported: `for … in` over a `unknown` value` — anchored on the `for` keyword, naming nothing the corpus could be asked about. Attributing a refusal to a NAME cannot reach this one; what reaches it is that the claim is about a TYPE, which a compile of this file alone is not entitled to make.")
+end 'a refusal derived from a sibling name is withheld while the buffer is modified'

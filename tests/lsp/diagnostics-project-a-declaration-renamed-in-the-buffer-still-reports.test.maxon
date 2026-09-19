@@ -1,0 +1,21 @@
+let ProjectRenamedDeclDirName = "maxon-tests-lsp-diagnostics-project-renamed-decl"
+let ProjectRenamedDeclFileName = "slot.maxon"
+let ProjectRenamedDeclSavedSource = "export typealias ProjectRenamedSlot = int(0 to u64.max)\n\nfunction main() returns ExitCode\n\tlet n = 1 as ProjectRenamedSlot\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectRenamedDeclTypedSource = "export typealias ProjectRenamedLine = int(0 to u64.max)\n\nfunction main() returns ExitCode\n\tlet n = 1 as ProjectRenamedSlot\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectRenamedDeclCode = "E3011"
+let ProjectRenamedDeclMessage = "Unknown type 'ProjectRenamedSlot'"
+
+test 'a declaration renamed in the buffer still reports the use left behind'
+	let root = stagedProjectDiagnosticsRoot(ProjectRenamedDeclDirName)
+	writeCorpusFile(root, fileName: ProjectRenamedDeclFileName, content: ProjectRenamedDeclSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectRenamedDeclFileName, content: ProjectRenamedDeclSavedSource, editedContent: ProjectRenamedDeclTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
+
+	let reported = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` renamed this file's OWN `typealias ProjectRenamedSlot` to `ProjectRenamedLine` and left the `as ProjectRenamedSlot` below it standing. A `maxon build` of the staged tree holding the edited text reports exactly one `E3011: Unknown type 'ProjectRenamedSlot'` and nothing else.")
+
+	try Expect.equal(reported.code, expected: ProjectRenamedDeclCode, message: "the only declaration of `ProjectRenamedSlot` anywhere in this project was in THIS file, and the author has just renamed it. The corpus's copy of this file is the SAVED one, so a name oracle that counts the reader's own stale declaration answers that the project still declares it and the error is silenced — leaving the author renaming a declaration with every use of the old name invisible.")
+
+	try Expect.equal(reported.message, expected: ProjectRenamedDeclMessage, message: "the published sentence must be the compiler's own about the name left behind, not a diagnostic that happens to wear the same code.")
+end 'a declaration renamed in the buffer still reports the use left behind'

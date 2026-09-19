@@ -60,7 +60,11 @@ end 'LspBlockKind'
 // How many blocks enclose a block. 0 is top level.
 module typealias LspBlockDepth = int(0 to u64.max)
 
-// One closed block of a document.
+module union LspBlockClosing
+	spelled(nameSpan LspSpan)
+	unterminated
+end 'LspBlockClosing'
+
 module type LspDocumentBlock
 	module let kind as LspBlockKind
 
@@ -72,14 +76,13 @@ module type LspDocumentBlock
 	// replace so that the quotes are left standing.
 	module let nameSpan as LspSpan
 
-	// Where `end '<name>'` spells it, likewise inside the quotes.
-	module let endNameSpan as LspSpan
+	module let closing as LspBlockClosing
 	module let startLine as LspLineNumber
 	module let endLine as LspLineNumber
 	module let depth as LspBlockDepth
 
-	module static function create(kind LspBlockKind, name ByteArray, nameSpan LspSpan, endNameSpan LspSpan, startLine LspLineNumber, endLine LspLineNumber, depth LspBlockDepth) returns LspDocumentBlock
-		return Self{kind: kind, name: name, nameSpan: nameSpan, endNameSpan: endNameSpan, startLine: startLine, endLine: endLine, depth: depth}
+	module static function create(kind LspBlockKind, name ByteArray, nameSpan LspSpan, closing LspBlockClosing, startLine LspLineNumber, endLine LspLineNumber, depth LspBlockDepth) returns LspDocumentBlock
+		return Self{kind: kind, name: name, nameSpan: nameSpan, closing: closing, startLine: startLine, endLine: endLine, depth: depth}
 	end 'create'
 end 'LspDocumentBlock'
 
@@ -121,6 +124,10 @@ function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) retur
 			continue
 		end 'notATopLevelDeclaration'
 
+		if not lspBlockIsTerminated(block) 'stillBeingWritten'
+			continue
+		end 'stillBeingWritten'
+
 		let kind = symbolKindOf(block.kind)
 
 		var symbol = LspJsonObject.create(doc)
@@ -161,6 +168,10 @@ function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
 	var ranges = JsonNodeIdArray.create()
 
 	for block in blocks 'eachBlock'
+		if not lspBlockIsTerminated(block) 'stillBeingWritten'
+			continue
+		end 'stillBeingWritten'
+
 		if block.endLine <= block.startLine 'nothingToCollapse'
 			continue
 		end 'nothingToCollapse'
@@ -179,7 +190,7 @@ end 'foldingRangeAnswer'
 // carries no byte offsets at all (`Token.startByte` is 0 for every one), so a line-final `)` cannot say
 // where it is.
 function blockRangeNode(doc JsonDoc, source String, index LspLineIndex, block LspDocumentBlock) returns JsonNodeId
-	let finish = index.positionOf(source, offset: block.endNameSpan.endByte + 1)
+	let finish = index.positionOf(source, offset: lspBlockEndNameSpan(block).endByte + 1)
 	return lspRangeNode(doc, startLine: block.startLine, startCharacter: 0, endLine: finish.line, endCharacter: finish.character)
 end 'blockRangeNode'
 
@@ -260,8 +271,18 @@ module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArr
 		openDeclarationOrLabelledBlock(open, tokens: tokens, tokenLine: tokenLine)
 	end 'eachLine'
 
+	recordUnterminated(open, closed: closed, endLine: pastTheLastLine(lines), depth: 0)
 	return closed
 end 'lspDocumentBlocks'
+
+function pastTheLastLine(lines LspTokenLineArray) returns LspLineNumber
+	if lines.isEmpty() 'noLines'
+		return 0
+	end 'noLines'
+
+	let last = try lines.get(lines.count() - 1) otherwise panic("pastTheLastLine: the array is not empty, so its last index exists")
+	return lspLineOf(last.line) + 1
+end 'pastTheLastLine'
 
 // A line that opens a declaration block's KEYWORD without opening a BODY, so nothing is pushed for it.
 //
@@ -330,19 +351,35 @@ function closeMatching(open OpenBlockArray, closed LspDocumentBlockArray, label 
 		let candidate = try open.get(depth) otherwise panic("closeMatching: depth is below the count it was seeded from and OpenBlockArray is dense")
 
 		if candidate.name.equals(label.value) 'matched'
-			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, endNameSpan: LspSpan.create(label.startByte, endByte: label.endByte), startLine: candidate.startLine, endLine: lspLineOf(label.line), depth: depth))
-			discardAbove(open, depth: depth)
+			let endLine = lspLineOf(label.line)
+			closed.push(LspDocumentBlock.create(candidate.kind, name: candidate.name, nameSpan: candidate.nameSpan, closing: LspBlockClosing.spelled(LspSpan.create(label.startByte, endByte: label.endByte)), startLine: candidate.startLine, endLine: endLine, depth: depth))
+			recordUnterminated(open, closed: closed, endLine: endLine, depth: depth + 1)
+			_ = try open.pop() otherwise panic("closeMatching: the unwind stopped just above the match, so the match itself is still on the stack")
 			return
 		end 'matched'
 	end 'findTheMatch'
 end 'closeMatching'
 
-// Drop the matched block and every unmatched candidate that had been pushed on top of it.
-function discardAbove(open OpenBlockArray, depth LspBlockDepth)
+// A block the author has not closed yet is still a block: a member walk that cannot see one reads the
+// locals of a half-written method as fields of the type around it.
+//
+// ⛔ **AN UNMATCHED LABEL CANDIDATE IS EVIDENCE IT WAS NEVER A BLOCK, so it is dropped rather than
+// recorded.** A declaration keyword opens a body whatever follows it, while a trailing quoted word only
+// MIGHT be a label — `let separator = ','` ends in a character literal that reads exactly like one.
+//
+// ⚠ The extent is the ENCLOSING `end`, never the end of the buffer. `lspBlockDirectlyHoldsLine` discards
+// a block reaching past its own container, so one drained to EOF would be invisible again.
+function recordUnterminated(open OpenBlockArray, closed LspDocumentBlockArray, endLine LspLineNumber, depth LspBlockDepth)
 	while open.count() > depth 'unwind'
-		_ = try open.pop() otherwise panic("discardAbove: the count is above `depth` and so at least one entry remains")
+		let unmatched = try open.pop() otherwise panic("recordUnterminated: the count is above `depth` and so at least one entry remains")
+
+		if unmatched.kind == LspBlockKind.labelled 'neverOpenedABlock'
+			continue
+		end 'neverOpenedABlock'
+
+		closed.push(LspDocumentBlock.create(unmatched.kind, name: unmatched.name, nameSpan: unmatched.nameSpan, closing: LspBlockClosing.unterminated, startLine: unmatched.startLine, endLine: endLine, depth: open.count()))
 	end 'unwind'
-end 'discardAbove'
+end 'recordUnterminated'
 
 function innermostKindIs(open OpenBlockArray, kind LspBlockKind) returns bool
 	if open.isEmpty() 'nothingOpen'
@@ -426,6 +463,20 @@ end 'lspIsDeclarationModifier'
 module function lspBlockHoldsLine(block LspDocumentBlock, line LspLineNumber) returns bool
 	return line > block.startLine and line < block.endLine
 end 'lspBlockHoldsLine'
+
+module function lspBlockIsTerminated(block LspDocumentBlock) returns bool
+	return match block.closing 'closing'
+		spelled gives true
+		unterminated gives false
+	end 'closing'
+end 'lspBlockIsTerminated'
+
+module function lspBlockEndNameSpan(block LspDocumentBlock) returns LspSpan
+	match block.closing 'closing'
+		spelled(nameSpan) then return nameSpan
+		unterminated then panic("lspBlockEndNameSpan: an unterminated block spells no `end` label — `lspBlockIsTerminated` is the gate, and every caller asks it before asking this")
+	end 'closing'
+end 'lspBlockEndNameSpan'
 
 /// Does the cursor sit on this span? A cursor one past the last byte is still on it — an editor puts the
 /// caret at the end of a name the author has just finished typing.

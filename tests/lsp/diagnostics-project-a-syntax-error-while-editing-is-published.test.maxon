@@ -1,0 +1,21 @@
+let ProjectSyntaxWhileEditingDirName = "maxon-tests-lsp-diagnostics-project-syntax-while-editing"
+let ProjectSyntaxWhileEditingDeclaringFileName = "slot.maxon"
+let ProjectSyntaxWhileEditingBufferFileName = "main.maxon"
+let ProjectSyntaxWhileEditingDeclaringSource = "export typealias SyntaxWhileEditingSlot = int(0 to u64.max)\n"
+let ProjectSyntaxWhileEditingSavedSource = "function main() returns ExitCode\n\tlet n = 1 as SyntaxWhileEditingSlot\n\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectSyntaxWhileEditingTypedSource = "function main() returns ExitCode\n\tlet\n\tlet n = 1 as SyntaxWhileEditingSlot\n\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectSyntaxWhileEditingCode = "E2010"
+
+test 'a structural error the author types is published while the buffer is modified'
+	let root = stagedProjectDiagnosticsRoot(ProjectSyntaxWhileEditingDirName)
+	writeCorpusFile(root, fileName: ProjectSyntaxWhileEditingDeclaringFileName, content: ProjectSyntaxWhileEditingDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSyntaxWhileEditingBufferFileName, content: ProjectSyntaxWhileEditingSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectSyntaxWhileEditingBufferFileName, content: ProjectSyntaxWhileEditingSavedSource, editedContent: ProjectSyntaxWhileEditingTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, which `maxon build` of the staged project compiles. This publish is the CONTROL.")
+
+	let reported = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` left a `let` with no name after it, one line ABOVE the sibling-typed binding — a refusal of these BYTES that no declaration anywhere in the program can make well formed.")
+
+	try Expect.equal(reported.code, expected: ProjectSyntaxWhileEditingCode, message: "⛔ THIS IS THE CONTROL THAT STOPS THE MODIFIED-BUFFER RULE BECOMING A BLANKET MUTE. A structural refusal is true of the text in front of the author whatever the project declares, and it is the error they most want while typing — an editor that withholds it reports a clean file the compiler will not build. ⚠ The half-typed `let` is placed ABOVE the sibling-typed binding DELIBERATELY: a buffer-only parse STOPS at its first refusal, so a structural error below one the project would have answered is never raised at all, and a case that put it there would be measuring the parser's stop rather than this rule.")
+end 'a structural error the author types is published while the buffer is modified'

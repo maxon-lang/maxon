@@ -1,0 +1,31 @@
+let ExtensionMemberLine = 16 as LspCoordinate
+let ExtensionMemberCharacter = 23 as LspCoordinate
+
+test 'receiver type: an extension adds to the types own members'
+	let labels = try completionLabelsFor(extensionSurfaceFixture(), line: ExtensionMemberLine, character: ExtensionMemberCharacter, after: "`basket.`, where `Basket` is declared by a `type` and extended by an `extension` in the same buffer")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "goods"), message: "completion after `basket.` did not offer the field `goods`, which `type Basket` declares.")
+
+	try Expect.isTrue(completionOffersLabel(labels, label: "isBare"), message: "completion after `basket.` did not offer `isBare`, which `extension Basket` declares. A name may open more than one body, and a list built from the first one found is half a type's surface presented as all of it.")
+end 'receiver type: an extension adds to the types own members'
+
+function extensionSurfaceFixture() returns String
+	return String.from(b"type Basket
+    public var goods as StringArray
+
+    public static function create() returns Basket
+        return Basket{goods: StringArray.create()}
+    end 'create'
+end 'Basket'
+
+extension Basket
+    public function isBare() returns bool
+        return self.goods.isEmpty()
+    end 'isBare'
+end 'Basket'
+
+function main() returns ExitCode
+    let basket = Basket.create()
+    return 0 if basket.isBare() else 1
+end 'main'")
+end 'extensionSurfaceFixture'

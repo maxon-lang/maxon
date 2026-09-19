@@ -78,7 +78,7 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	var doc = JsonDoc.create()
 	var items = JsonNodeIdArray.create()
 
-	for offer in offersAt(tokens, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri) 'eachOffer'
+	for offer in offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri) 'eachOffer'
 		var item = LspJsonObject.create(doc)
 		item.put(LabelKey, value: JsonNode.stringNode(offer.label))
 		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind as JsonFloat))
@@ -105,11 +105,11 @@ typealias CompletionOfferArray = Array with CompletionOffer
 // the author has to read twice.
 typealias OfferedLabelSet = Set with String
 
-function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOffset, uri String) returns CompletionOfferArray
+function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks LspDocumentBlockArray, offset ByteOffset, uri String) returns CompletionOfferArray
 	var offers = CompletionOfferArray.create()
 	var offered = OfferedLabelSet.create()
 
-	let subject = lspSubjectAt(tokens, blocks: blocks, offset: offset)
+	let subject = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset)
 	let typeName = lspSubjectTypeName(subject)
 
 	if typeName.isEmpty() 'nothingToComplete'
@@ -118,10 +118,16 @@ function offersAt(tokens TokenArray, blocks LspDocumentBlockArray, offset ByteOf
 
 	// A type the buffer declares is answered from the buffer, whatever a compiled `stdlib/` says about a
 	// type of the same name: the author is looking at the declaration in front of them.
-	match lspBlockDeclaring(blocks, typeName: typeName) 'declaredHere'
-		found(block) then addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject)
-		notInThisBuffer then addStdlibMembers(offers, offered: offered, typeName: typeName, uri: uri, subject: subject)
-	end 'declaredHere'
+	let declaring = lspBlocksDeclaring(blocks, typeName: typeName)
+
+	if declaring.isEmpty() 'notInThisBuffer'
+		addStdlibMembers(offers, offered: offered, typeName: typeName, uri: uri, subject: subject)
+		return offers
+	end 'notInThisBuffer'
+
+	for block in declaring 'eachDeclaringBody'
+		addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject)
+	end 'eachDeclaringBody'
 
 	return offers
 end 'offersAt'
@@ -129,8 +135,8 @@ end 'offersAt'
 // --- Members of a type the BUFFER declares ----------------------------------------------------
 
 // ⚠ **ONLY THE BLOCK'S OWN LINES, NOT EVERY LINE BETWEEN ITS ENDS.** A `var` written inside a method body
-// is a local and not a field, and `directlyInside` is what tells the two apart — without it a type's
-// completion list would carry every temporary its methods declare.
+// is a local and not a field, and `lspBlockDirectlyHoldsLine` is what tells the two apart — without it a
+// type's completion list would carry every temporary its methods declare.
 function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, blocks LspDocumentBlockArray, block LspDocumentBlock, subject LspSubject)
 	let wantsStatics = lspSubjectIsStatic(subject)
 	let caseList = block.kind == LspBlockKind.enumBody or block.kind == LspBlockKind.unionBody
@@ -138,13 +144,9 @@ function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, 
 	for tokenLine in lspTokenLines(tokens) 'eachLine'
 		let line = lspLineOf(tokenLine.line)
 
-		if not lspBlockHoldsLine(block, line: line) 'outsideTheBody'
+		if not lspBlockDirectlyHoldsLine(blocks, block: block, line: line) 'notAMemberLine'
 			continue
-		end 'outsideTheBody'
-
-		if not directlyInside(blocks, line: line, block: block) 'nestedDeeper'
-			continue
-		end 'nestedDeeper'
+		end 'notAMemberLine'
 
 		if caseList 'aCaseName'
 			// A case is reached through the TYPE (`Color.red`), never through a value of it.
@@ -204,25 +206,6 @@ function addMemberOnLine(offers CompletionOfferArray, offered OfferedLabelSet, t
 		addOffer(offers, offered: offered, label: String.from(name.value), kind: FieldCompletionKind)
 	end 'aField'
 end 'addMemberOnLine'
-
-// Is `line` a direct member line of `block` — inside it, and inside nothing that is itself inside it?
-function directlyInside(blocks LspDocumentBlockArray, line LspLineNumber, block LspDocumentBlock) returns bool
-	for other in blocks 'eachBlock'
-		if other.startLine < block.startLine or other.endLine > block.endLine 'notWithinTheType'
-			continue
-		end 'notWithinTheType'
-
-		if other.startLine == block.startLine and other.endLine == block.endLine 'theTypeItself'
-			continue
-		end 'theTypeItself'
-
-		if lspBlockHoldsLine(other, line: line) 'insideAMember'
-			return false
-		end 'insideAMember'
-	end 'eachBlock'
-
-	return true
-end 'directlyInside'
 
 // --- Members of a type the CORPUS declares ----------------------------------------------------
 

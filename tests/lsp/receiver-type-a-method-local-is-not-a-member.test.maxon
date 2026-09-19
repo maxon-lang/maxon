@@ -1,0 +1,25 @@
+let MethodLocalRoutineLine = 1 as LspCoordinate
+let MethodLocalRoutineCharacter = 14 as LspCoordinate
+let MethodLocalMemberLine = 8 as LspCoordinate
+let MethodLocalMemberCharacter = 13 as LspCoordinate
+
+test 'receiver type: a method local is not a member of the enclosing type'
+	let control = try hoverRendering(methodLocalFixture(), line: MethodLocalRoutineLine, character: MethodLocalRoutineCharacter)
+
+	try Expect.contains(control, needle: "function total", message: "hovering `total` in this buffer did not render its declaration, so the document is not being read at all and the absence asserted below would be vacuous.")
+
+	try expectNoHover(methodLocalFixture(), line: MethodLocalMemberLine, character: MethodLocalMemberCharacter, note: "hovering `items` in `c.items` answered something, but `Cart` declares no member `items` — the only `items` in the buffer is a local of `total()`, which is not reachable through a value of `Cart`.")
+end 'receiver type: a method local is not a member of the enclosing type'
+
+function methodLocalFixture() returns String
+	return String.from(b"type Cart
+    function total() returns int
+        var items = 0
+        return items
+    end 'total'
+end 'Cart'
+
+function report(c Cart)
+    print(c.items)
+end 'report'")
+end 'methodLocalFixture'

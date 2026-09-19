@@ -1,0 +1,39 @@
+// diagnostics-project-an-edit-inside-a-body-publishes-no-sibling-error.test.maxon — after the author edits
+// a function BODY, the server still publishes NO error about a name the project declares. The sibling's
+// `typealias` was known at `didOpen` and is known one keystroke later.
+//
+// ⭐⭐ **WHAT IS PINNED IS THE ANSWER, NOT THE ROAD TO IT: no false diagnostic about a name the project
+// declares, whether or not the buffer matches disk.** This case deliberately says nothing about HOW that is
+// reached. A buffer identical to disk and a buffer the author has typed into are served by two different
+// paths — one parses against the corpus's index, the other compiles the buffer and consults the corpus only
+// as a name oracle — and a case named after either would have to be rewritten the next time that split
+// moves. The author cannot see the split and must not be able to.
+//
+// ⛔⛔ **THE DEFECT IT CLOSES IS THAT THE ANSWER SURVIVED EXACTLY UNTIL THE AUTHOR TYPED.** `didOpen` was
+// clean; one keystroke later the same text was compiled alone and the invented `E3011: Unknown type '…'`
+// came back — which is every minute of editing after the first. MEASURED on
+// `maxon-bin/Compiler/Compiler.maxon`: 1947.7 ms clean at open, then 234.4 ms with a false
+// `E2010 @ 163:61 Expected 'min or max' but got 'load'` after a trailing space, and clean again the moment
+// the disk bytes were restored.
+//
+// The staged project is a REAL one and so is the edited text: both build, so a red here cannot mean the
+// fixture is broken. The session, the staging and the assertions are `diagnostics-project-probe.test.maxon`'s.
+
+let ProjectBodyEditDirName = "maxon-tests-lsp-diagnostics-project-body-edit"
+let ProjectBodyEditDeclaringFileName = "slot.maxon"
+let ProjectBodyEditBufferFileName = "main.maxon"
+let ProjectBodyEditDeclaringSource = "export typealias ProjectBodyEditSlot = int(0 to u64.max)\n"
+let ProjectBodyEditSavedSource = "function main() returns ExitCode\n\tlet n = 1 as ProjectBodyEditSlot\n\treturn n as ExitCode\nend 'main'\n"
+let ProjectBodyEditTypedSource = "function main() returns ExitCode\n\tlet n = 2 as ProjectBodyEditSlot\n\tlet bumped = n\n\treturn bumped as ExitCode\nend 'main'\n"
+
+test 'an edit inside a function body publishes no error about a sibling name'
+	let root = stagedProjectDiagnosticsRoot(ProjectBodyEditDirName)
+	writeCorpusFile(root, fileName: ProjectBodyEditDeclaringFileName, content: ProjectBodyEditDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectBodyEditBufferFileName, content: ProjectBodyEditSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectBodyEditBufferFileName, content: ProjectBodyEditSavedSource, editedContent: ProjectBodyEditTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and `ProjectBodyEditSlot` is `export typealias`ed by the sibling file. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` altered one LITERAL and added one LOCAL binding inside `main`'s body. `ProjectBodyEditSlot` is still `export typealias`ed by the sibling file, a `maxon build` of the staged project still compiles the edited text, and the author is still owed the same answer they were owed one keystroke ago. A diagnostic here is the invented `E3011` returning because they typed — a red squiggle on a correct line, in every file of every project, for as long as the file is being edited.")
+end 'an edit inside a function body publishes no error about a sibling name'

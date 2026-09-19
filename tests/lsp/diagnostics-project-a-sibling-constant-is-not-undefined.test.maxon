@@ -1,0 +1,18 @@
+let ProjectSiblingConstDirName = "maxon-tests-lsp-diagnostics-project-sibling-constant"
+let ProjectSiblingConstDeclaringFileName = "base.maxon"
+let ProjectSiblingConstBufferFileName = "main.maxon"
+let ProjectSiblingConstDeclaringSource = "export let ProjectSiblingConstBase = 0 as ExitCode\n"
+let ProjectSiblingConstSavedSource = "let projectSiblingConstHere = ProjectSiblingConstBase\n\nfunction main() returns ExitCode\n\treturn projectSiblingConstHere\nend 'main'\n"
+let ProjectSiblingConstTypedSource = "// the author just typed a note to themselves\nlet projectSiblingConstHere = ProjectSiblingConstBase\n\nfunction main() returns ExitCode\n\treturn projectSiblingConstHere\nend 'main'\n"
+
+test 'a constant a sibling file exports is not an undefined constant'
+	let root = stagedProjectDiagnosticsRoot(ProjectSiblingConstDirName)
+	writeCorpusFile(root, fileName: ProjectSiblingConstDeclaringFileName, content: ProjectSiblingConstDeclaringSource)
+	writeCorpusFile(root, fileName: ProjectSiblingConstBufferFileName, content: ProjectSiblingConstSavedSource)
+
+	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectSiblingConstBufferFileName, content: ProjectSiblingConstSavedSource, editedContent: ProjectSiblingConstTypedSource)
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and `ProjectSiblingConstBase` is `export let` in the sibling file. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
+
+	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` added ONE COMMENT LINE, `ProjectSiblingConstBase` is still `export let` in the sibling file, and a `maxon build` of the staged project EXITS 0. A CONSTANT is a third KIND of name — neither a type nor a callee — so a rule that asks only the type and function authorities republishes `Undefined constant` the moment the author types. MEASURED in this repository at `maxon-bin/Compiler/Runtime/StringRuntime.maxon:49`, against `export let ManagedRecordBufferOffset` in `Runtime/BufferOwnership.maxon`, where it survives on BOTH roads.")
+end 'a constant a sibling file exports is not an undefined constant'
