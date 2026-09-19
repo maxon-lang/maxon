@@ -6,12 +6,16 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(2)
 	a.push(1)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "smallSort.network") 'n'
 		print("network ")
@@ -62,6 +66,31 @@ func @ascending {
     x64.ret
 }
 
+func @captureTrace {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body:
+    x64.leaRegGlobal rax, __data_capturing
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont
+  on:
+    x64.leaRegGlobal rax, __data_captured
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  __il_cont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -82,7 +111,7 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-  __il_body#12:
+  __il_body#11:
     x64.leaRegGlobal rax, __data_captured
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
@@ -95,16 +124,15 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __data_capturing
     x64.storeBaseDispReg.byte [rcx + 0], rax
-  __il_cont#11:
-    x64.leaRegFunc r9, [rip + __fnref_ascending]
+  __il_cont#10:
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.leaRegFunc rax, [rip + __fnref_captureTrace]
+    x64.movRegImm32 r9, 0
     x64.movRegImm32 rsi, 0
     x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
-  __il_body#13:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.driftsortRange
-  __il_body#15:
+    x64.callDirect Array.sort#Array.SortComparator#Array.SortTrace
+  __il_body#13:
     x64.movRegImm32 rax, 0
     x64.leaRegGlobal rcx, __data_capturing
     x64.storeBaseDispReg.byte [rcx + 0], rax
@@ -114,7 +142,7 @@ func @main {
     x64.callDirect __managed_retain
     x64.movRegReg r13, r8
     x64.leaRegRdata r9, [rip + __layout_Array_String]
-  __il_body#17:
+  __il_body#15:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
@@ -123,7 +151,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at Array.maxon:80: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -141,7 +169,7 @@ func @main {
     x64.storeSlotReg slot0, r14
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_cont#16:
+  __il_cont#14:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.leaRegGlobal rax, __data_captured
@@ -153,7 +181,7 @@ func @main {
     x64.callDirect Array.clear
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-  __il_cont#14:
+  __il_cont#12:
     x64.leaRegRdata rdx, [rip + __str_rec_21]  ; "smallSort.network"
     x64.movRegReg rcx, r14
     x64.callDirect Log.fired

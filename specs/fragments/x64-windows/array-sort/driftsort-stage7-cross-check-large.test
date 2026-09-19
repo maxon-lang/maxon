@@ -109,41 +109,52 @@ function main() returns ExitCode
 	a.push(48)
 	a.push(49)
 	a.push(50)
-	var b = IntArray.create()
-	for x in a 'copy'
-		b.push(x)
-	end 'copy'
+	let n = a.count()
+	var sum = 0
+	var squares = 0
+
+	for x in a 'tally'
+		sum = sum + x
+		squares = squares + x * x
+	end 'tally'
+
 	a.sort(ascending)
-	b.referenceMergeSort(ascending)
-	var equal = a.count() == b.count()
-	if equal 'check'
-		for i in 0 upto a.count() 'walk'
-			let av = try a.get(i) otherwise return 99
-			let bv = try b.get(i) otherwise return 99
-			if av != bv 'diff'
-				equal = false
-			end 'diff'
-		end 'walk'
-	end 'check'
-	if equal 'eq'
-		print("equal\n")
-	end 'eq' else 'ne'
-		print("diverged\n")
-	end 'ne'
+
+	var ordered = a.count() == n
+	var sumAfter = 0
+	var squaresAfter = 0
+
+	for i in 0 upto a.count() 'walk'
+		let v = try a.get(i) otherwise return 99
+		sumAfter = sumAfter + v
+		squaresAfter = squaresAfter + v * v
+
+		if i > 0 'pair'
+			let p = try a.get(i - 1) otherwise return 99
+
+			if p > v 'oop'
+				ordered = false
+			end 'oop'
+		end 'pair'
+	end 'walk'
+
+	if ordered and sumAfter == sum and squaresAfter == squares 'ok'
+		print("sorted\n")
+	end 'ok' else 'bad'
+		print("BROKEN\n")
+	end 'bad'
 	return 0
 end 'main'
 ---
 ExitCode: 0
 ---
 data {
-  __data_captured@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __data_capturing@32 = i1 0
-  __mrt_console_probe_stdin@33 = i8 0
-  __mrt_console_probe_stdout@34 = i8 0
-  __mrt_console_probe_stderr@35 = i8 0
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
 }
 
 func @ascending {
@@ -176,7 +187,8 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 88
+    x64.pushReg r14
+    x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -481,130 +493,103 @@ func @main {
     x64.movRegImm32 rdx, 50
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr#1
-  copy:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseIndexScale.word64 rdx, [rax + r13*8 + 0]
-  __im_cont:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_push
-  forstep#3:
-    x64.leaRegRegImm32 r13, r13, 1
-  forhdr#1:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.cmpRegReg r13, rax
-    x64.jcc less, copy
-  forexit:
-    x64.leaRegFunc r9, [rip + __fnref_ascending]
-    x64.movRegImm32 rsi, 0
-    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
-  __il_body#28:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.movRegReg rcx, rbx
-    x64.callDirect Array.driftsortRange
-  __il_cont#27:
-    x64.leaRegFunc r9, [rip + __fnref_ascending]
-    x64.movRegImm32 rsi, 0
-    x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
-  __il_body#30:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.movRegReg rcx, r12
-    x64.callDirect Array.mergeSortRange
-  __il_cont#29:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
-    x64.cmpRegReg rax, rcx
-    x64.setccReg equal, rax
-    x64.jcc notEqual, ifcont#16
-  check:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
-  __us_test:
-    x64.loadRegBaseDisp.word64 rsi, [r12 + 8]
-    x64.loadRegBaseDisp.word64 rdi, [r12 + 0]
-    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
-    x64.jmp forhdr#6
-  __im_load#23:
-    x64.loadRegBaseIndexScale.word64 r9, [r8 + rdx*8 + 0]
-  tryok#10:
-    x64.cmpRegReg rdx, rsi
-    x64.jcc aboveEqual, __im_slow
-    x64.jmp __im_load#26
-  tryerr:
-    x64.movRegImm32 r13, 99
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 88
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __im_load#26:
-    x64.loadRegBaseIndexScale.word64 r10, [rdi + rdx*8 + 0]
-    x64.movRegReg r11, r10
-  tryok#12:
-    x64.cmpRegReg r9, r11
-    x64.jcc equal, forstep#8
-  diff:
+    x64.movRegImm32 r14, 0
     x64.movRegImm32 rax, 0
-  forstep#8:
-    x64.leaRegRegImm32 rdx, rdx, 1
-  forhdr#6:
-    x64.cmpRegReg rdx, rcx
-    x64.jcc less, __im_load#23
-  ifcont#16:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
+    x64.jmp forhdr#1
+  tally:
+    x64.loadRegBaseIndexScale.word64 rsi, [rdx + rax*8 + 0]
+  __im_cont:
+    x64.leaRegRegReg r13, r13, rsi
+    x64.imulRegReg rsi, rsi, rsi
+    x64.leaRegRegReg r14, r14, rsi
+  forstep#3:
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr#1:
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, tally
+  forexit#4:
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.sort#Array.SortComparator
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg rax, r12
+    x64.setccReg equal, rax
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rsi, 0
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 8]
+  __us_test:
+    x64.loadRegBaseDisp.word64 r8, [rbx + 0]
+    x64.jmp forhdr#5
+  __im_load#29:
+    x64.loadRegBaseIndexScale.word64 r9, [r8 + rsi*8 + 0]
+  tryok#9:
+    x64.leaRegRegReg rcx, rcx, r9
+    x64.movRegReg r10, r9
+    x64.imulRegReg r10, r9, r9
+    x64.leaRegRegReg rdx, rdx, r10
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc lessEqual, forstep#7
+  pair:
+    x64.leaRegRegImm32 r10, rsi, -1
+  __im_load#32:
+    x64.loadRegBaseIndexScale.word64 r10, [r8 + r10*8 + 0]
+  tryok#12:
+    x64.cmpRegReg r10, r9
+    x64.jcc lessEqual, forstep#7
+  oop:
+    x64.movRegImm32 rax, 0
+  forstep#7:
+    x64.leaRegRegImm32 rsi, rsi, 1
+  forhdr#5:
+    x64.cmpRegReg rsi, rdi
+    x64.jcc less, __im_load#29
+  forexit#8:
+    x64.movRegImm32 rsi, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#34
+  andrhs#17:
+    x64.cmpRegReg rcx, r13
+    x64.setccReg equal, rax
+    x64.jmp scmerge#18
+  critsplit#34:
+    x64.movRegReg rax, rsi
+  scmerge#18:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#37
+  andrhs#19:
+    x64.cmpRegReg rdx, r14
+    x64.setccReg equal, rax
+    x64.jmp scmerge#20
+  critsplit#37:
+    x64.movRegReg rax, rcx
+  scmerge#20:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifelse
-  eq:
-    x64.leaRegRdata rcx, [rip + __str_rec_21]  ; "equal\x0a"
+  ok:
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "sorted\x0a"
     x64.callDirect print
-    x64.jmp ifcont#19
+    x64.jmp ifcont
   ifelse:
-    x64.leaRegRdata rcx, [rip + __str_rec_22]  ; "diverged\x0a"
+    x64.leaRegRdata rcx, [rip + __str_rec_20]  ; "BROKEN\x0a"
     x64.callDirect print
-  ifcont#19:
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
+  ifcont:
+    x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 88
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow:
-    x64.storeSlotReg slot0, rax
-    x64.storeSlotReg slot1, rcx
-    x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, rsi
-    x64.storeSlotReg slot4, rdi
-    x64.storeSlotReg slot5, r8
-    x64.storeSlotReg slot6, r9
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.movRegReg r11, r8
-    x64.loadRegSlot rax, slot0
-    x64.loadRegSlot rcx, slot1
-    x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot rsi, slot3
-    x64.loadRegSlot rdi, slot4
-    x64.loadRegSlot r8, slot5
-    x64.loadRegSlot r9, slot6
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok#12
 }

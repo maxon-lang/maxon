@@ -569,62 +569,70 @@ public extension Array where Element is Equatable
 	end 'contains'
 end 'Array'
 
-// Sort entry points. Four overloads cover (stable vs unstable) × (Comparable
-// default vs explicit comparator). All bodies live in this file as thin
-// dispatchers; the algorithms themselves are in stdlib/helpers/sort/*.maxon.
+// The sort entry points. The bodies here dispatch; the algorithms are in stdlib/helpers/sort/.
 //
-// Algorithm routing:
-//   sort()      / sort(cmp)      → driftsort (adaptive stable sort with
-//                                  bidirectional run detection + powersort
-//                                  merge policy over a bounded buffer).
-//                                  Reference bottom-up merge sort stays
-//                                  callable as `referenceMergeSort` for
-//                                  cross-check tests.
-//   sortUnstable() / sortUnstable(cmp) → pdqsort (pattern-defeating quicksort).
+// The dispatch trace is a per-call sink and not a module-level channel, which is what keeps the
+// whole sort cone free of module storage — E3143 refuses a module `var` read by anything a service
+// message can reach, so a handler sorting one of its own fields would otherwise be refused, with a
+// cure its author cannot apply.
 //
-// All four delegate to algorithm-specific entries that short-circuit to
-// `smallSortRange` for n ≤ 32, avoiding the per-call setup cost of
-// driftsort's run stack / scratch buffer or pdqsort's pivot machinery on
-// tiny slices.
+// The sink is a separate ARITY and not a defaulted parameter: a default on a name declared more
+// than once is refused (E2015), because a short call is filled at parse time, a pass before the
+// overload is resolved, and `sort()` is another declaration of `sort`.
 //
-// The Comparable overloads pass an inline closure
-// `function(x Element, y Element) gives x.compare(y)`. The closure body
-// dispatches `x.compare(y)` through the enclosing extension's
-// `where Element is Comparable` witness slot via closure-env inheritance.
+// ⚠ The sink is the LAST argument and never argument 0. Two overloads declaring different function
+// types at one argument withhold closure-parameter inference there
+// (specs/closure-param-type-inference.md), so a `SortTrace` beside `SortComparator` at argument 0
+// would refuse every `a.sort(function(x, y) gives …)` in every program.
+//
+// The Comparable overloads pass an inline closure whose `x.compare(y)` dispatches through the
+// enclosing extension's `where Element is Comparable` witness slot by closure-env inheritance.
 public extension Array where Element is Comparable
 	/// Sort in place using the element's `Comparable.compare` ordering.
 	/// Stable: equal elements keep their relative order.
 	public function sort()
-		let lo = 0 as SortIndex
-		let hi = managed.length()
-		self.driftsortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
+		self.sort(function(x Element, y Element) gives x.compare(y))
 	end 'sort'
 
 	/// Sort in place using the element's `Comparable.compare` ordering.
 	/// Unstable: relative order of equal elements is not preserved.
 	public function sortUnstable()
-		let lo = 0 as SortIndex
-		let hi = managed.length()
-		self.pdqsortRange(lo, hi: hi, cmp: function(x Element, y Element) gives x.compare(y))
+		self.sortUnstable(function(x Element, y Element) gives x.compare(y))
 	end 'sortUnstable'
 end 'Array'
 
-// Comparator overloads. No Comparable constraint — the caller provides the
-// ordering. Useful for sorting by a derived key, descending order, or
-// element types that don't implement Comparable.
+// Declared here and not beside `SortTrace` in helpers/, because the roster
+// `tests/docs/stdlib-reference-documents-every-public-api.test.maxon` builds does not descend into
+// `stdlib/helpers/` — a public name left there is invisible to that gate forever.
+/// The sink the sort entries that take no trace hand down. It discards every key.
+public function ignoreSortTrace(_ String)
+end 'ignoreSortTrace'
+
 public extension Array
 	/// Sort in place using the supplied comparator. Stable.
 	public function sort(cmp SortComparator)
+		self.sort(cmp, trace: ignoreSortTrace)
+	end 'sort'
+
+	/// Sort in place with the supplied comparator, reporting each dispatch decision to `trace`.
+	/// Stable.
+	public function sort(cmp SortComparator, trace SortTrace)
 		let lo = 0 as SortIndex
 		let hi = managed.length()
-		self.driftsortRange(lo, hi: hi, cmp: cmp)
+		self.driftsortRange(lo, hi: hi, cmp: cmp, trace: trace)
 	end 'sort'
 
 	/// Sort in place using the supplied comparator. Unstable.
 	public function sortUnstable(cmp SortComparator)
+		self.sortUnstable(cmp, trace: ignoreSortTrace)
+	end 'sortUnstable'
+
+	/// Sort in place with the supplied comparator, reporting each dispatch decision to `trace`.
+	/// Unstable.
+	public function sortUnstable(cmp SortComparator, trace SortTrace)
 		let lo = 0 as SortIndex
 		let hi = managed.length()
-		self.pdqsortRange(lo, hi: hi, cmp: cmp)
+		self.pdqsortRange(lo, hi: hi, cmp: cmp, trace: trace)
 	end 'sortUnstable'
 end 'Array'
 

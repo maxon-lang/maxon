@@ -1,31 +1,43 @@
-// Test: a-handler-may-write-its-own-field
-type Counter
-	var count as Integer
+// Test: a-handler-may-sort-its-own-field
+type Sorter
+	var items as IntArray
 
 	static function create() returns Self
-		return Self{count: 0}
+		return Self{items: IntArray.create()}
 	end 'create'
 
-	export function add(by Integer)
-		self.count = self.count + by
+	export function add(n Integer)
+		self.items.push(n)
 	end 'add'
 
-	export function total() returns Integer
-		return self.count
-	end 'total'
-end 'Counter'
+	export function arrange() returns Integer
+		self.items.sortUnstable()
+		self.items.sort()
+		self.items.sortUnstable(function(a, b) gives b.compare(a))
+		self.items.sort(function(a, b) gives a.compare(b))
+		let low = try self.items.get(0) otherwise 0
+		let high = try self.items.get(39) otherwise 0
+		return low + high
+	end 'arrange'
+end 'Sorter'
 
 function main() returns ExitCode
-	let h = spawn Counter.create()
-	h.add(3)
-	h.add(4)
-	let n = try await h.total() otherwise 0
-	print("count={n}\n")
-	return n as ExitCode
+	let h = spawn Sorter.create()
+	var n = 40
+
+	while n > 0 'fill'
+		h.add(n)
+		n = n - 1
+	end 'fill'
+
+	let span = try await h.arrange() otherwise 0
+	print("span={span}\n")
+	return span as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 ---
-ExitCode: 7
+ExitCode: 41
 ---
 data {
   __gt_run_queue_head@0 = i64 0
@@ -91,6 +103,52 @@ data {
   __mrt_console_probe_stderr@466 = i8 0
 }
 
+func @Sorter.arrange$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc greaterEqual, ifcont#4
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#4:
+    x64.cmpRegReg rdx, rcx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Sorter.arrange$closure_1 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __il_body:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greaterEqual, ifcont#4
+  lt:
+    x64.movRegImm32 r8, 0
+    x64.jmp __il_cont
+  ifcont#4:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc lessEqual, ifcont#6
+  gt:
+    x64.movRegImm32 r8, 2
+    x64.jmp __il_cont
+  ifcont#6:
+    x64.movRegImm32 r8, 1
+  __il_cont:
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -101,16 +159,25 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 88
-  __il_body#8:
-    x64.movRegImm32 rbx, 0
+  __il_body#11:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-  __il_cont#7:
-    x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegReg rdx, r8
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#10:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __sole_Sorter
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_walk_settle
+    x64.leaRegFunc rcx, [rip + Sorter.__loop]
+    x64.leaRegFunc rax, [rip + Sorter.__abandon]
+    x64.movRegReg rdx, r12
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -119,7 +186,9 @@ func @main {
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
-    x64.movRegImm32 rbx, 3
+    x64.movRegImm32 rbx, 40
+    x64.jmp whilehdr
+  fill:
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -129,16 +198,11 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
-    x64.movRegImm32 rbx, 4
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_send
+    x64.leaRegRegImm32 rbx, rbx, -1
+  whilehdr:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc greater, fill
+  whileexit:
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
@@ -162,7 +226,7 @@ func @main {
     x64.movRegReg rbx, r8
   trycont:
     x64.storeSlotReg slot1, rbx
-    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "count="
+    x64.leaRegRdata rax, [rip + __str_rec_23]  ; "span="
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 21
@@ -173,7 +237,7 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_3]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_24]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot5, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -212,10 +276,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-  __il_body#10:
+  __il_body#13:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __write_stdout
-  __il_cont#9:
+  __il_cont#12:
     x64.loadRegSlot rcx, slot3
     x64.callDirect __str_decref
     x64.loadRegSlot rax, slot1
@@ -239,7 +303,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-handler-may-write-its-own-field.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_123]  ; "panic at a-handler-may-sort-its-own-field.test:35: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 88
@@ -252,7 +316,7 @@ func @main {
     x64.ret
 }
 
-func @Counter.__loop {
+func @Sorter.__loop {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -260,21 +324,24 @@ func @Counter.__loop {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 88
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
   serve:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.cmpRegImm32 r13, 0
     x64.jcc equal, stopping
   dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=add, [2]=total] @__jumptable_13
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=add, [2]=arrange] @__jumptable_153
   __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
   stopping:
     x64.movRegReg rcx, r12
@@ -286,11 +353,12 @@ func @Counter.__loop {
     x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
+    x64.callDirect __destruct_Sorter
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
     x64.movRegReg rax, r8
-    x64.epilogue 32
+    x64.epilogue 88
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -303,28 +371,125 @@ func @Counter.__loop {
     x64.callDirect __mbox_abandon
     x64.jmp drain
   add:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.loadRegBaseDisp.word64 rdx, [r13 + 8]
   __il_body#11:
-    x64.aluBaseDispReg.add [rbx + 0], rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __managed_push
   __il_cont#10:
-    x64.movRegReg rcx, r8
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.jmp serve
-  total:
-    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+  arrange:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.storeSlotReg slot0, rax
   __il_body#13:
-    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
-  __il_cont#12:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.leaRegRdata rax, [rip + __layout_Array_Integer]
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRdata r14, [rip + __witness_int.Comparable]
+  __il_body#28:
+    x64.leaRegFunc rax, [rip + Array.sortUnstable$closure_0]
+    x64.storeSlotReg slot5, rax
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r14
+    x64.loadRegSlot r9, slot3
+    x64.loadRegSlot rdx, slot5
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, r15
+    x64.callDirect Array.sortUnstable#Array.SortComparator
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_cont#27:
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.leaRegRdata rax, [rip + __layout_Array_Integer]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRdata r14, [rip + __witness_int.Comparable]
+  __il_body#29:
+    x64.leaRegFunc rax, [rip + Array.sort$closure_0]
+    x64.storeSlotReg slot4, rax
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r14
+    x64.loadRegSlot r9, slot2
+    x64.loadRegSlot rdx, slot4
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, r15
+    x64.callDirect Array.sort#Array.SortComparator
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_cont#26:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegFunc rdx, [rip + Sorter.arrange$closure_0]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.callDirect Array.sortUnstable#Array.SortComparator
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.leaRegFunc rdx, [rip + Sorter.arrange$closure_1]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Array_Integer]
+    x64.callDirect Array.sort#Array.SortComparator
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#21
+    x64.jmp __im_load#22
+  tryerr#15:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#16
+  __im_load#22:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegReg r8, rax
+  tryok#14:
+    x64.movRegReg rax, r8
+  trycont#16:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 39
+    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
+    x64.cmpRegImm32 rsi, 39
+    x64.jcc belowEqual, __im_slow#24
+    x64.jmp __im_load#25
+  tryerr#18:
+    x64.movRegImm32 rcx, 0
+    x64.jmp trycont#19
+  __im_load#25:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegImm32 rcx, rcx, 312
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.movRegReg r8, rcx
+  tryok#17:
     x64.movRegReg rcx, r8
+  trycont#19:
+    x64.leaRegRegReg r13, rax, rcx
+  __il_cont#12:
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r14
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r13
     x64.callDirect __gt_cell_complete
     x64.jmp serve
+  __im_slow#21:
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#15
+    x64.jmp tryok#14
+  __im_slow#24:
+    x64.storeSlotReg slot6, rax
+    x64.callDirect __managed_get
+    x64.loadRegSlot rax, slot6
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#18
+    x64.jmp tryok#17
 }
 
-func @Counter.__abandon {
+func @Sorter.__abandon {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -332,14 +497,14 @@ func @Counter.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=total] @__jumptable_14
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=abandondrop, [2]=arrange] @__jumptable_154
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
     x64.jmp abandondrop
-  total:
+  arrange:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1

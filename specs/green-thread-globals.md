@@ -457,6 +457,61 @@ count=7
 7
 ```
 
+<!-- test: a-handler-may-sort-its-own-field -->
+**THE STANDARD LIBRARY'S LARGEST ALGORITHM RUNS ON A MESSAGE.** `Array.sort` reaches no module storage, so
+sorting a field of `self` is the cure this rule prescribes rather than something it refuses. All four entries
+run — both `Comparable` overloads, which pass a comparator closure through the extension's witness slot, and
+both explicit-comparator ones — over forty elements, which is past the small-sort short-circuit, so driftsort's
+run stack and pdqsort's pivot machinery are both on the message's green thread.
+
+The sort is observed through an awaited reply: the lowest and highest elements summed, so an ordering that
+came back wrong at either end changes the exit code.
+```maxon
+type Sorter
+	var items as IntArray
+
+	static function create() returns Self
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function add(n Integer)
+		self.items.push(n)
+	end 'add'
+
+	export function arrange() returns Integer
+		self.items.sortUnstable()
+		self.items.sort()
+		self.items.sortUnstable(function(a, b) gives b.compare(a))
+		self.items.sort(function(a, b) gives a.compare(b))
+		let low = try self.items.get(0) otherwise 0
+		let high = try self.items.get(39) otherwise 0
+		return low + high
+	end 'arrange'
+end 'Sorter'
+
+function main() returns ExitCode
+	let h = spawn Sorter.create()
+	var n = 40
+
+	while n > 0 'fill'
+		h.add(n)
+		n = n - 1
+	end 'fill'
+
+	let span = try await h.arrange() otherwise 0
+	print("span={span}\n")
+	return span as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+```
+```stdout
+span=41
+```
+```exitcode
+41
+```
+
 <!-- test: a-handler-may-read-an-immutable-global -->
 **THE RULE IS ABOUT THE WRITE, AND A `let` HAS NONE.** A module-level `let` is written once before any
 green thread exists and never again, so every M that reads it reads the same word and no interleaving can

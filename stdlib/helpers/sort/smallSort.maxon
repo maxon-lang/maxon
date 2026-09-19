@@ -8,16 +8,9 @@
 // fall through to insertion sort because optimal networks for those sizes
 // grow quickly without proportional gain.
 //
-// Public surface (called from the four public sort entries via the small-n
-// short-circuit, and from inside pdqsort / merge sort at recursion leaves):
-//   - `smallSortRange(lo, hi, cmp)` — entry that picks the right network
-//     or falls through to insertion sort.
-//   - `swap(i, j)` — unconditional swap helper, also used by pdqsort.
-//   - `compareAndSwap(i, j, cmp)` — the network primitive.
-//
-// Trace keys emitted:
-//   - `smallSort.network`   — a fixed-size network ran (size 2, 4, or 8)
-//   - `smallSort.insertion` — insertion sort ran (n ∈ {3, 5, 6, 7, 9..32})
+// `smallSortRange` is reached from driftsort's and pdqsort's small-n short-circuits and again at
+// their recursion leaves; `swap` and `compareAndSwap` are shared with pdqsort's pivot shuffle and
+// heapsort.
 
 public extension Array
 	// Unconditional swap of elements at positions i and j. Used by pdqsort's
@@ -34,7 +27,7 @@ public extension Array
 
 	// Reverse the slice [lo, hi) in place by swapping from both ends inward.
 	// Shared by driftsort's run detection (flipping a strictly-descending run
-	// into ascending) and merge sort's three-reverse rotation. Reversing a
+	// into ascending) and the rotation merge's three-reverse rotation. Reversing a
 	// strictly-descending run is stability-preserving because it contains no
 	// equal elements — `<` is strict.
 	public function reverseRange(lo SortIndex, hi SortIndex)
@@ -124,28 +117,28 @@ public extension Array
 	// The 9..32 cutoff comes from driftsort/pdqsort — beyond 8 elements
 	// the network's hardcoded comparison count outpaces insertion sort's
 	// adaptive shifts on already-mostly-sorted input.
-	public function smallSortRange(lo SortIndex, hi SortIndex, cmp SortComparator)
+	public function smallSortRange(lo SortIndex, hi SortIndex, cmp SortComparator, trace SortTrace)
 		let n = hi - lo
 
 		if n == 2 'n2'
-			Log.trace("smallSort.network")
+			trace("smallSort.network")
 			self.sortNetwork2(lo, cmp: cmp)
 			return
 		end 'n2'
 
 		if n == 4 'n4'
-			Log.trace("smallSort.network")
+			trace("smallSort.network")
 			self.sortNetwork4(lo, cmp: cmp)
 			return
 		end 'n4'
 
 		if n == 8 'n8'
-			Log.trace("smallSort.network")
+			trace("smallSort.network")
 			self.sortNetwork8(lo, cmp: cmp)
 			return
 		end 'n8'
 
-		Log.trace("smallSort.insertion")
-		self.internalInsertionSortRange(lo, hi: hi, cmp: cmp)
+		trace("smallSort.insertion")
+		self.internalInsertionSortRange(lo, hi: hi, cmp: cmp, trace: trace)
 	end 'smallSortRange'
 end 'Array'

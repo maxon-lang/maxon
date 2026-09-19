@@ -583,6 +583,27 @@ An array grows by doubling while small and eases toward 1.25x once it is large.
 | `sortUnstable()` | Unstable sort (pattern-defeating quicksort). Requires `Element is Comparable`. |
 | `sort(cmp function(Element, Element) returns Ordering)` | Stable sort by a comparator; any element type. |
 | `sortUnstable(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
+| `sort(cmp, trace function(String))` | Stable sort by a comparator, reporting each dispatch decision to `trace`. |
+| `sortUnstable(cmp, trace function(String))` | Unstable sort by a comparator, reporting each dispatch decision to `trace`. |
+
+A sort reads no module-level state, so it may run inside a service message handler: the dispatch trace
+is a sink the caller passes, never a module `var`. The sink is a `function(String)` that receives a
+stable dotted key — `insertionSort.run`, `smallSort.network`, `driftsort.push`, `pdq.partition` — at
+each decision point, and it is the last argument of its overload, not the first, so a comparator
+written as an untyped closure still infers its parameter types. The four entries that take no sink
+pass `ignoreSortTrace(_ String)`, a top-level function with an empty body that discards every key.
+
+To collect the keys, pass a sink that forwards to `Log`:
+
+```maxon
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
+Log.startCapture()
+a.sort(ascending, trace: captureTrace)
+let keys = Log.stopCapture()
+```
 
 ### Iterating
 
@@ -1252,6 +1273,9 @@ Run as `program --mode=fast`, it prints `2 fast a=b`.
 
 `Log` records trace keys so a test can check which internal path ran. It is not a general logger: there are
 no levels or outputs. While capture is off, `trace` does nothing.
+
+Standard-library algorithms never call `trace` themselves — they emit their keys into a sink the caller
+supplies, so a capture sees a sort only when that sort was handed one. The `Array` sorting members describe the sink they take.
 
 | Method | Returns | Description |
 |--------|---------|-------------|

@@ -256,6 +256,9 @@ Run as `program --mode=fast`, it prints `2 fast a=b`.
 `Log` records trace keys so a test can check which internal path ran. It is not a general logger: there are
 no levels or outputs. While capture is off, `trace` does nothing.
 
+Standard-library algorithms never call `trace` themselves — they emit their keys into a sink the caller
+supplies, so a capture sees a sort only when that sort was handed one. The `Array` sorting members describe the sink they take.
+
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `Log.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |

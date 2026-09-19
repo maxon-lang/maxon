@@ -9,16 +9,18 @@ category: collections
 
 ## Documentation
 
-`Array<T>` exposes four sort entry points:
+`Array<T>` exposes six sort entry points:
 
 - `sort()` — stable sort using the element's `Comparable.compare` ordering. Requires `Element is Comparable`.
 - `sort(cmp)` — stable sort using a caller-supplied comparator `function(Element, Element) returns Ordering`.
-- `sortUnstable()` — unstable sort via the element's `Comparable.compare` ordering. Requires `Element is Comparable`. Routed through the same `comparableInsertionSort` helper as `sort()` until the self-hosted compiler implements interface-method dispatch on type-parameter receivers (Phase 11.4); the API distinction is reserved so callers can opt out of stability up front.
+- `sort(cmp, trace)` — the same sort, with a caller-supplied trace sink `function(String)` that receives the dispatch keys.
+- `sortUnstable()` — unstable sort via the element's `Comparable.compare` ordering. Requires `Element is Comparable`.
 - `sortUnstable(cmp)` — unstable sort using a caller-supplied comparator.
+- `sortUnstable(cmp, trace)` — the same unstable sort, with a trace sink.
 
-Stage 1: all four entries route to insertion sort. Stage 2 layers in sorting networks for small slices, Stage 3 routes the unstable entries to pdqsort, and Stages 4–7 build up driftsort (an adaptive stable powersort-merge sort, from the same family as Rust's standard-library `slice::sort`) for the stable entries.
+Stage 1: every entry routes to insertion sort. Stage 2 layers in sorting networks for small slices, Stage 3 routes the unstable entries to pdqsort, and Stages 4 onward build up driftsort (an adaptive stable powersort-merge sort, from the same family as Rust's standard-library `slice::sort`) for the stable entries.
 
-Dispatch verification uses `Log.trace`: the insertion-sort body emits `insertionSort.run` so tests can assert which algorithm engaged.
+Dispatch verification goes through the trace sink, not through `Log`. The sort helpers emit keys such as `insertionSort.run` into the `trace` parameter they are handed; a test passes a sink that forwards to `Log.trace` and then asserts on the capture. The four entry points that take no sink pass `ignoreSortTrace`, a top-level function with an empty body — so an ordinary `a.sort()` writes nothing into `Log` and cannot contaminate a capture some other part of the program is running.
 
 ## Tests
 
@@ -309,10 +311,16 @@ end 'main'
 2 4 7 9 
 ```
 
-<!-- test: sort-dispatch-trace -->
-`Log.trace("insertionSort.run")` fires when the insertion-sort body runs.
-A later stage will reroute big inputs through other algorithms, and the
-dispatch test there will assert this key *does not* fire for large arrays.
+<!-- test: sort-default-entry-emits-no-trace -->
+The zero-argument `sort()` writes NOTHING into `Log`. The dispatch keys the
+sort helpers emit go to a per-call sink the caller supplies, and the default
+entry points supply one that discards them — so a `Log` capture that brackets
+`a.sort()` comes back empty even though the insertion path is exactly what a
+three-element array takes. A capture live somewhere else in the program
+therefore cannot be contaminated by an unrelated sort, and the sort cone
+touches no module storage at all, which is what lets a service handler run it.
+The array is printed too, so a sort that emitted nothing
+because it did nothing still fails.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -325,11 +333,20 @@ function main() returns ExitCode
 	Log.startCapture()
 	a.sort()
 	let keys = Log.stopCapture()
+
+	for v in a 'p'
+		print("{v} ")
+	end 'p'
+	print("\n")
+
+	print("captured={keys.count()} ")
+
 	if Log.fired(keys, key: "insertionSort.run") 'k'
-		print("insertion-fired\n")
+		print("insertion-LEAKED\n")
 	end 'k' else 'nk'
-		print("insertion-MISSING\n")
+		print("insertion-silent\n")
 	end 'nk'
+
 	return 0
 end 'main'
 ```
@@ -337,7 +354,8 @@ end 'main'
 0
 ```
 ```stdout
-insertion-fired
+1 2 3 
+captured=0 insertion-silent
 ```
 
 <!-- test: sort-stability -->
@@ -406,12 +424,16 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(2)
 	a.push(1)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "smallSort.network") 'n'
 		print("network ")
@@ -443,6 +465,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(4)
@@ -450,7 +476,7 @@ function main() returns ExitCode
 	a.push(3)
 	a.push(1)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "smallSort.network") 'n'
 		print("network ")
@@ -479,6 +505,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(8)
@@ -490,7 +520,7 @@ function main() returns ExitCode
 	a.push(4)
 	a.push(5)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "smallSort.network") 'n'
 		print("network ")
@@ -519,13 +549,17 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	for i in 0 upto 16 'fill'
 		a.push(16 - i)
 	end 'fill'
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if not Log.fired(keys, key: "smallSort.network") 'nn'
 		print("no-network ")
@@ -573,13 +607,17 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	for v in [50, 40, 30, 20, 10, 45, 35, 25, 15, 5, 48, 38, 28, 18, 8, 46, 36, 26, 16, 6, 44, 34, 24, 14, 4, 42, 32, 22, 12, 2, 49, 39, 29, 19, 9, 47, 37, 27, 17, 7] 'fill'
 		a.push(v)
 	end 'fill'
 	Log.startCapture()
-	a.sortUnstable(ascending)
+	a.sortUnstable(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "pdq.partition") 'p'
 		print("partition ")
@@ -611,6 +649,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(8)
@@ -622,7 +664,7 @@ function main() returns ExitCode
 	a.push(4)
 	a.push(5)
 	Log.startCapture()
-	a.sortUnstable(ascending)
+	a.sortUnstable(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if not Log.fired(keys, key: "pdq.partition") 'p'
 		print("no-partition ")
@@ -750,13 +792,17 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	for _ in 0 upto 35 'fill'
 		a.push(7)
 	end 'fill'
 	Log.startCapture()
-	a.sortUnstable(ascending)
+	a.sortUnstable(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "pdq.equalElements") 'e'
 		print("equal-path-fired\n")
@@ -844,16 +890,14 @@ end 'main'
 0
 ```
 
-## Stage 4: Bottom-up stable merge sort (oracle)
+## Stage 4: the stable path above the small-sort cutoff
 
-`sort(cmp)` for n > 32 routes through driftsort (Stage 5 and later); the
-bottom-up stable merge sort that drove Stage 4 is still callable as
-`referenceMergeSort(cmp)` so driftsort tests can cross-check their output
-against a slow-but-known-good baseline.
+`sort(cmp)` for n > 32 routes through driftsort (Stage 5 and later). The library holds one stable sort
+and no second implementation to compare it against: the cross-checks below verify the result against
+the definition of a sort instead.
 
-The dispatch test for the stable path now asserts driftsort's trace keys
-(`findRun.ascending` / `driftsort.push`) instead of the Stage 4
-`mergeSort.pass` / `merge.twoPointer`.
+The dispatch test for the stable path asserts driftsort's trace keys
+(`findRun.ascending` / `driftsort.push`).
 
 <!-- test: driftsort-dispatch-large -->
 For n > 32, `sort(cmp)` routes through driftsort. Run detection finds the
@@ -866,6 +910,10 @@ typealias IntArray = Array with Integer
 function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
+
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
 
 function main() returns ExitCode
 	var a = IntArray.create()
@@ -910,7 +958,7 @@ function main() returns ExitCode
 	a.push(17)
 	a.push(7)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "findRun.descending") 'fd'
 		print("findRun.descending ")
@@ -943,6 +991,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(8)
@@ -954,7 +1006,7 @@ function main() returns ExitCode
 	a.push(4)
 	a.push(5)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if not Log.fired(keys, key: "driftsort.push") 'np'
 		print("no-driftsort ")
@@ -1177,6 +1229,10 @@ function byKey(a Labelled, b Labelled) returns Ordering
 	return a.key.compare(b.key)
 end 'byKey'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = LabelledArray.create()
 	var blk = 0
@@ -1192,7 +1248,7 @@ function main() returns ExitCode
 		blk = blk + 1
 	end 'blocks'
 	Log.startCapture()
-	a.sort(byKey)
+	a.sort(byKey, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "driftQuicksort.partition") 'partitioned'
 		print("partitioned ")
@@ -1235,43 +1291,6 @@ end 'main'
 ```
 ```stdout
 partitioned sorted stable intact
-```
-
-<!-- test: referenceMergeSort-callable -->
-`referenceMergeSort(cmp)` is the public entry that Stage 5+ driftsort tests
-cross-check against. Same output as `sort(cmp)` for the same input.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
-function ascending(x Integer, y Integer) returns Ordering
-	return x.compare(y)
-end 'ascending'
-
-function main() returns ExitCode
-	var a = IntArray.create()
-	a.push(7)
-	a.push(3)
-	a.push(9)
-	a.push(1)
-	a.push(5)
-	a.push(2)
-	a.push(8)
-	a.push(4)
-	a.push(6)
-	a.referenceMergeSort(ascending)
-	for x in a 'p'
-		print("{x} ")
-	end 'p'
-	print("\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 2 3 4 5 6 7 8 9 
 ```
 
 ## Stage 5: Driftsort run creation + powersort merge policy
@@ -1323,6 +1342,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	var base = 0
@@ -1336,7 +1359,7 @@ function main() returns ExitCode
 		blk = blk + 1
 	end 'blocks'
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "driftsort.eagerRun") 'er'
 		print("eagerRun ")
@@ -1380,6 +1403,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	var base = 0
@@ -1393,7 +1420,7 @@ function main() returns ExitCode
 		blk = blk + 1
 	end 'blocks'
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "driftsort.logicalRun") 'lr'
 		print("logicalRun ")
@@ -1433,6 +1460,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(1)
@@ -1471,7 +1502,7 @@ function main() returns ExitCode
 	a.push(34)
 	a.push(35)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "findRun.ascending") 'fa'
 		print("ascending ")
@@ -1504,6 +1535,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(35)
@@ -1542,7 +1577,7 @@ function main() returns ExitCode
 	a.push(2)
 	a.push(1)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "findRun.descending") 'fd'
 		print("descending ")
@@ -1564,9 +1599,13 @@ end 'main'
 descending no-merge 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 
 ```
 
-<!-- test: driftsort-cross-check-with-reference -->
-Cross-check: driftsort and `referenceMergeSort` produce byte-identical output
-on a scrambled input. This is the oracle pattern Stages 6-7 will rely on.
+<!-- test: driftsort-sorted-and-multiset-preserved -->
+Driftsort's output on a scrambled 40-element input is verified
+against the definition of a sort rather than against a second implementation.
+Every adjacent pair must be ordered, and the multiset must survive — the
+element count, the sum and the sum of squares taken before the sort must all
+come back unchanged, so an output that is ordered because the sort dropped,
+duplicated or invented an element fails here.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -1617,27 +1656,40 @@ function main() returns ExitCode
 	a.push(38)
 	a.push(32)
 	a.push(36)
-	var b = IntArray.create()
-	for x in a 'copy'
-		b.push(x)
-	end 'copy'
+	let n = a.count()
+	var sum = 0
+	var squares = 0
+
+	for x in a 'tally'
+		sum = sum + x
+		squares = squares + x * x
+	end 'tally'
+
 	a.sort(ascending)
-	b.referenceMergeSort(ascending)
-	var equal = a.count() == b.count()
-	if equal 'check'
-		for i in 0 upto a.count() 'walk'
-			let av = try a.get(i) otherwise return 99
-			let bv = try b.get(i) otherwise return 99
-			if av != bv 'diff'
-				equal = false
-			end 'diff'
-		end 'walk'
-	end 'check'
-	if equal 'eq'
-		print("equal\n")
-	end 'eq' else 'ne'
-		print("diverged\n")
-	end 'ne'
+
+	var ordered = a.count() == n
+	var sumAfter = 0
+	var squaresAfter = 0
+
+	for i in 0 upto a.count() 'walk'
+		let v = try a.get(i) otherwise return 99
+		sumAfter = sumAfter + v
+		squaresAfter = squaresAfter + v * v
+
+		if i > 0 'pair'
+			let p = try a.get(i - 1) otherwise return 99
+
+			if p > v 'oop'
+				ordered = false
+			end 'oop'
+		end 'pair'
+	end 'walk'
+
+	if ordered and sumAfter == sum and squaresAfter == squares 'ok'
+		print("sorted\n")
+	end 'ok' else 'bad'
+		print("BROKEN\n")
+	end 'bad'
 	return 0
 end 'main'
 ```
@@ -1645,7 +1697,7 @@ end 'main'
 0
 ```
 ```stdout
-equal
+sorted
 ```
 
 ## Stage 6: Logarithmic auxiliary buffer + rotation-merge fallback
@@ -1689,6 +1741,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(11)
@@ -1732,7 +1788,7 @@ function main() returns ExitCode
 	a.push(32)
 	a.push(36)
 	Log.startCapture()
-	a.sort(ascending)
+	a.sort(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "buffer.alloc") 'ba'
 		print("buffer.alloc ")
@@ -1766,6 +1822,10 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	// Left half [0, 5): ascending. Right half [5, 10): ascending.
@@ -1780,7 +1840,7 @@ function main() returns ExitCode
 	a.push(7)
 	a.push(9)
 	Log.startCapture()
-	a.mergeRotation(0, mid: 5, hi: 10, cmp: ascending)
+	a.mergeRotation(0, mid: 5, hi: 10, cmp: ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "rotationMerge.fire") 'rf'
 		print("rotationMerge.fire ")
@@ -1799,151 +1859,21 @@ end 'main'
 rotationMerge.fire 1 2 3 4 5 6 7 8 9 10 
 ```
 
-## Stage 7: Quicksort-flavored stable partition merge (experimental, off the default path)
+## Cross-checks: the sorted result checked against the definition of a sort
 
-`mergePartition` is a quicksort-flavored stable merge: when merging two large sorted runs that both exceed the scratch buffer, pick a pivot from the longer run's midpoint, use binary search to find where that pivot lands in the shorter run, rotate the middle block so the partition is in place, then recurse on the two smaller sub-merges. Each recursion halves the larger run, so after O(log(maxRunLen / scratchCap)) levels each sub-merge's smaller side fits in scratch and `mergeBuffered` finishes in O(n) time. Stable: equal-keyed elements on the left run retain their position before equal-keyed right-run elements (`lowerBound` / `upperBound` semantics).
-
-This is glidesort's signature large-run speedup. It is NOT on driftsort's default path: `mergeAdaptive` uses the in-place rotation merge for the large-both-sides case instead. `mergePartition` is kept compiled and directly tested (the tests below call it explicitly) so it can be benchmarked and potentially re-enabled after profiling, but `Array.sort` never reaches it. The performance primitives needed for true Rust parity (branchless small-sort, uninitialized scratch, refcount-bypassing element moves) are deferred until after profiling.
-
-Trace keys:
-
-- `partitionMerge.fire`   — the quicksort-flavored stable partition ran on a slice
-- `rotationMerge.fire`    — the in-place rotation fallback ran (the rotation merge is the default large-run fallback)
-
-<!-- test: partition-merge-direct-correctness -->
-Direct exercise of `mergePartition` with a tiny scratch cap, forcing the
-partition path. Inputs: two sorted runs (odds then evens). Expected: fully
-merged ascending output.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
-function ascending(x Integer, y Integer) returns Ordering
-	return x.compare(y)
-end 'ascending'
-
-function main() returns ExitCode
-	var a = IntArray.create()
-	for i in 0 upto 20 'l'
-		a.push(i * 2 + 1)
-	end 'l'
-	for j in 0 upto 20 'r'
-		a.push(j * 2 + 2)
-	end 'r'
-	var scratch = IntArray.create()
-	scratch.resize(4)
-	Log.startCapture()
-	a.mergePartition(0, mid: 20, hi: 40, scratch: scratch, scratchCap: 4, cmp: ascending)
-	let keys = Log.stopCapture()
-	if Log.fired(keys, key: "partitionMerge.fire") 'pf'
-		print("partitionMerge.fire ")
-	end 'pf'
-	for x in a 'p'
-		print("{x} ")
-	end 'p'
-	print("\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-partitionMerge.fire 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 
-```
-
-<!-- test: partition-merge-stability -->
-Stability check: partition merge with duplicate keys. Tagged tuples sorted
-by key; equal-key elements from the LEFT run must come before equal-key
-elements from the RIGHT run (use lowerBound for ascending positions).
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Tagged implements Comparable
-	export var key as Integer
-	export var tag as Integer
-
-	export static function init(key Integer, tag Integer) returns Self
-		return Self{key: key, tag: tag}
-	end 'init'
-
-	export function compare(other Self) returns Ordering
-		return key.compare(other.key)
-	end 'compare'
-end 'Tagged'
-
-typealias TaggedArr = Array with Tagged
-
-function byKey(a Tagged, b Tagged) returns Ordering
-	return a.key.compare(b.key)
-end 'byKey'
-
-function main() returns ExitCode
-	var a = TaggedArr.create()
-	// Left run: keys 1,1,2,2,3 with tags 0..4
-	a.push(Tagged.init(1, tag: 0))
-	a.push(Tagged.init(1, tag: 1))
-	a.push(Tagged.init(2, tag: 2))
-	a.push(Tagged.init(2, tag: 3))
-	a.push(Tagged.init(3, tag: 4))
-	a.push(Tagged.init(3, tag: 5))
-	a.push(Tagged.init(4, tag: 6))
-	a.push(Tagged.init(4, tag: 7))
-	a.push(Tagged.init(5, tag: 8))
-	a.push(Tagged.init(5, tag: 9))
-	// Right run: keys 1,2,3,4,5 with tags 100..109 (interleaved values).
-	a.push(Tagged.init(1, tag: 100))
-	a.push(Tagged.init(1, tag: 101))
-	a.push(Tagged.init(2, tag: 102))
-	a.push(Tagged.init(2, tag: 103))
-	a.push(Tagged.init(3, tag: 104))
-	a.push(Tagged.init(3, tag: 105))
-	a.push(Tagged.init(4, tag: 106))
-	a.push(Tagged.init(4, tag: 107))
-	a.push(Tagged.init(5, tag: 108))
-	a.push(Tagged.init(5, tag: 109))
-	var scratch = TaggedArr.create()
-	scratch.growFilled(4, value: Tagged.init(0, tag: 0))
-	a.mergePartition(0, mid: 10, hi: 20, scratch: scratch, scratchCap: 4, cmp: byKey)
-	// Check stability: within each key, all tag-< 100 elements come first.
-	var stable = true
-	var prevKey = 0
-	var seenRight = false
-	for i in 0 upto a.count() 'walk'
-		let cur = try a.get(i) otherwise return 99
-		if cur.key != prevKey 'newGroup'
-			prevKey = cur.key
-			seenRight = false
-		end 'newGroup'
-		if cur.tag >= 100 'isRight'
-			seenRight = true
-		end 'isRight' else 'isLeft'
-			if seenRight 'leftAfterRight'
-				stable = false
-			end 'leftAfterRight'
-		end 'isLeft'
-	end 'walk'
-	if stable 'ok'
-		print("stable\n")
-	end 'ok' else 'no'
-		print("unstable\n")
-	end 'no'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-stable
-```
+Each case checks its own output rather than a second sort's: a second
+implementation is one more sort to maintain, and a bug the two shared would
+read as agreement. Every adjacent pair must be ordered by the comparator and
+the multiset must survive — the element count, the sum and the sum of squares
+taken before the sort all unchanged after it, so an output that is ordered
+because an element was dropped, duplicated or invented still fails.
 
 <!-- test: driftsort-stage7-cross-check-large -->
-Large cross-check: driftsort vs `referenceMergeSort` on a 100-element
-input that mixes ascending and descending runs. Both algorithms must
-produce byte-identical output. On driftsort's default path this exercises
-the buffered and rotation merges depending on run sizes (the partition
-merge is off the default path).
+Large cross-check on a 100-element input that mixes a long descending run
+with a long ascending one — the shape that exercises the buffered and
+rotation merges depending on run sizes. The sorted result must be ordered
+pairwise and must hold the same multiset it started with: same count, same
+sum, same sum of squares.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2055,27 +1985,40 @@ function main() returns ExitCode
 	a.push(48)
 	a.push(49)
 	a.push(50)
-	var b = IntArray.create()
-	for x in a 'copy'
-		b.push(x)
-	end 'copy'
+	let n = a.count()
+	var sum = 0
+	var squares = 0
+
+	for x in a 'tally'
+		sum = sum + x
+		squares = squares + x * x
+	end 'tally'
+
 	a.sort(ascending)
-	b.referenceMergeSort(ascending)
-	var equal = a.count() == b.count()
-	if equal 'check'
-		for i in 0 upto a.count() 'walk'
-			let av = try a.get(i) otherwise return 99
-			let bv = try b.get(i) otherwise return 99
-			if av != bv 'diff'
-				equal = false
-			end 'diff'
-		end 'walk'
-	end 'check'
-	if equal 'eq'
-		print("equal\n")
-	end 'eq' else 'ne'
-		print("diverged\n")
-	end 'ne'
+
+	var ordered = a.count() == n
+	var sumAfter = 0
+	var squaresAfter = 0
+
+	for i in 0 upto a.count() 'walk'
+		let v = try a.get(i) otherwise return 99
+		sumAfter = sumAfter + v
+		squaresAfter = squaresAfter + v * v
+
+		if i > 0 'pair'
+			let p = try a.get(i - 1) otherwise return 99
+
+			if p > v 'oop'
+				ordered = false
+			end 'oop'
+		end 'pair'
+	end 'walk'
+
+	if ordered and sumAfter == sum and squaresAfter == squares 'ok'
+		print("sorted\n")
+	end 'ok' else 'bad'
+		print("BROKEN\n")
+	end 'bad'
 	return 0
 end 'main'
 ```
@@ -2083,13 +2026,14 @@ end 'main'
 0
 ```
 ```stdout
-equal
+sorted
 ```
 
 <!-- test: driftsort-stage6-cross-check -->
-Cross-check (Stage 5 + Stage 6 combined): driftsort now uses bounded scratch
-and may fall back to rotation merge. Output must still match
-`referenceMergeSort` byte-for-byte.
+Cross-check (Stage 5 + Stage 6 combined): driftsort uses bounded scratch and
+may fall back to the rotation merge. Whichever merge path the 40-element
+input takes, the result must come out ordered pairwise with its multiset
+intact — same count, same sum, same sum of squares.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2140,27 +2084,40 @@ function main() returns ExitCode
 	a.push(14)
 	a.push(74)
 	a.push(6)
-	var b = IntArray.create()
-	for x in a 'copy'
-		b.push(x)
-	end 'copy'
+	let n = a.count()
+	var sum = 0
+	var squares = 0
+
+	for x in a 'tally'
+		sum = sum + x
+		squares = squares + x * x
+	end 'tally'
+
 	a.sort(ascending)
-	b.referenceMergeSort(ascending)
-	var equal = a.count() == b.count()
-	if equal 'check'
-		for i in 0 upto a.count() 'walk'
-			let av = try a.get(i) otherwise return 99
-			let bv = try b.get(i) otherwise return 99
-			if av != bv 'diff'
-				equal = false
-			end 'diff'
-		end 'walk'
-	end 'check'
-	if equal 'eq'
-		print("equal\n")
-	end 'eq' else 'ne'
-		print("diverged\n")
-	end 'ne'
+
+	var ordered = a.count() == n
+	var sumAfter = 0
+	var squaresAfter = 0
+
+	for i in 0 upto a.count() 'walk'
+		let v = try a.get(i) otherwise return 99
+		sumAfter = sumAfter + v
+		squaresAfter = squaresAfter + v * v
+
+		if i > 0 'pair'
+			let p = try a.get(i - 1) otherwise return 99
+
+			if p > v 'oop'
+				ordered = false
+			end 'oop'
+		end 'pair'
+	end 'walk'
+
+	if ordered and sumAfter == sum and squaresAfter == squares 'ok'
+		print("sorted\n")
+	end 'ok' else 'bad'
+		print("BROKEN\n")
+	end 'bad'
 	return 0
 end 'main'
 ```
@@ -2168,14 +2125,16 @@ end 'main'
 0
 ```
 ```stdout
-equal
+sorted
 ```
 
 <!-- test: driftsort-large-sqrt-cross-check -->
 Large cross-check crossing the n > 4096 boundary, where `minGoodRunLen`
 switches to `floor(sqrt(n))` and run creation uses the stable quicksort
 (including its partition path on runs > 32). A pseudo-random 5000-element
-input must sort identically to `referenceMergeSort`, byte-for-byte.
+input — with duplicate keys, since the values are masked to 16 bits — must
+come out ordered pairwise and carrying the same multiset: same count, same
+sum, same sum of squares.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2186,31 +2145,47 @@ end 'ascending'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	var b = IntArray.create()
 	var r = 2463534242
+
 	for i in 0 upto 5000 'fill'
 		r = (r * 1103515245 + 12345) and 0x7FFFFFFF
-		let v = r and 0xFFFF
-		a.push(v)
-		b.push(v)
+		a.push(r and 0xFFFF)
 	end 'fill'
+
+	let n = a.count()
+	var sum = 0
+	var squares = 0
+
+	for x in a 'tally'
+		sum = sum + x
+		squares = squares + x * x
+	end 'tally'
+
 	a.sort(ascending)
-	b.referenceMergeSort(ascending)
-	var equal = a.count() == b.count()
-	if equal 'check'
-		for i in 0 upto a.count() 'walk'
-			let av = try a.get(i) otherwise return 99
-			let bv = try b.get(i) otherwise return 99
-			if av != bv 'diff'
-				equal = false
-			end 'diff'
-		end 'walk'
-	end 'check'
-	if equal 'eq'
-		print("equal\n")
-	end 'eq' else 'ne'
-		print("diverged\n")
-	end 'ne'
+
+	var ordered = a.count() == n
+	var sumAfter = 0
+	var squaresAfter = 0
+
+	for i in 0 upto a.count() 'walk'
+		let v = try a.get(i) otherwise return 99
+		sumAfter = sumAfter + v
+		squaresAfter = squaresAfter + v * v
+
+		if i > 0 'pair'
+			let p = try a.get(i - 1) otherwise return 99
+
+			if p > v 'oop'
+				ordered = false
+			end 'oop'
+		end 'pair'
+	end 'walk'
+
+	if ordered and sumAfter == sum and squaresAfter == squares 'ok'
+		print("sorted\n")
+	end 'ok' else 'bad'
+		print("BROKEN\n")
+	end 'bad'
 	return 0
 end 'main'
 ```
@@ -2218,6 +2193,6 @@ end 'main'
 0
 ```
 ```stdout
-equal
+sorted
 ```
 

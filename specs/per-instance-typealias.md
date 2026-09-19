@@ -435,8 +435,9 @@ in one file may spell a member `type Foo` — or another `extension Foo` — dec
 exactly as it may call a method declared somewhere else.
 
 `stdlib/helpers/sort/` is the case this exists for. Six files each write `export extension Array`;
-`insertionSort.maxon:14-15` declares `SortIndex` and `SortComparator`, `mergeSort.maxon:25` declares
-`MergeScratchArray`, and the other five spell all three BARE from their own bodies.
+`insertionSort.maxon:17-19` declares `SortIndex`, `SortComparator` and `SortTrace`, `mergeSort.maxon:8`
+declares `MergeScratchArray`, and every one of the six spells BARE from its own body whichever of the
+four it needs, without regard to which file wrote the declaration.
 
 ⛔ **A FLAT, PROGRAM-WIDE NAME CANNOT DIAGNOSE TWO TYPES DECLARING ONE MEMBER NAME, AND the compiler
 DELIBERATELY DOES NOT USE ONE.** Here the widening is the ENCLOSING TYPE's
@@ -499,8 +500,8 @@ end 'main'
 ### A generic-instance member declared in another file's extension body
 
 <!-- test: cross-file-extension-declares-the-generic-instance-member -->
-`MergeScratchArray = Array with Element` is `stdlib/helpers/sort/mergeSort.maxon:25`'s shape, spelled
-from five sibling files. Here `Bag = Array with Num` is declared in `a.maxon`'s extension body and
+`MergeScratchArray = Array with Element` is `stdlib/helpers/sort/mergeSort.maxon:8`'s shape, spelled
+from sibling files. Here `Bag = Array with Num` is declared in `a.maxon`'s extension body and
 named from `b.maxon`'s — a different registry from the ranged case above
 (`genericAliases`, not `innerAliases`), which is why it is its own case.
 ```maxon

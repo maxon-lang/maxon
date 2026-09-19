@@ -6,13 +6,17 @@ function ascending(x Integer, y Integer) returns Ordering
 	return x.compare(y)
 end 'ascending'
 
+function captureTrace(key String)
+	Log.trace(key)
+end 'captureTrace'
+
 function main() returns ExitCode
 	var a = IntArray.create()
 	for _ in 0 upto 35 'fill'
 		a.push(7)
 	end 'fill'
 	Log.startCapture()
-	a.sortUnstable(ascending)
+	a.sortUnstable(ascending, trace: captureTrace)
 	let keys = Log.stopCapture()
 	if Log.fired(keys, key: "pdq.equalElements") 'e'
 		print("equal-path-fired\n")
@@ -53,6 +57,31 @@ func @ascending {
     x64.ret
 }
 
+func @captureTrace {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body:
+    x64.leaRegGlobal rax, __data_capturing
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_cont
+  on:
+    x64.leaRegGlobal rax, __data_captured
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  __il_cont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
@@ -77,7 +106,7 @@ func @main {
   forhdr#1:
     x64.cmpRegImm32 r12, 35
     x64.jcc less, fill
-  __il_body#10:
+  __il_body#9:
     x64.leaRegGlobal rax, __data_captured
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
@@ -90,16 +119,15 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.leaRegGlobal rcx, __data_capturing
     x64.storeBaseDispReg.byte [rcx + 0], rax
-  __il_cont#9:
-    x64.leaRegFunc r9, [rip + __fnref_ascending]
+  __il_cont#8:
+    x64.leaRegFunc rdx, [rip + __fnref_ascending]
+    x64.leaRegFunc rax, [rip + __fnref_captureTrace]
+    x64.movRegImm32 r9, 0
     x64.movRegImm32 rsi, 0
     x64.leaRegRdata rdi, [rip + __layout_Array_Integer]
-  __il_body#11:
-    x64.movRegImm32 rdx, 0
-    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.movRegReg rcx, rbx
-    x64.callDirect Array.pdqsortRange
-  __il_body#23:
+    x64.callDirect Array.sortUnstable#Array.SortComparator#Array.SortTrace
+  __il_body#21:
     x64.movRegImm32 rax, 0
     x64.leaRegGlobal rcx, __data_capturing
     x64.storeBaseDispReg.byte [rcx + 0], rax
@@ -109,7 +137,7 @@ func @main {
     x64.callDirect __managed_retain
     x64.movRegReg r13, r8
     x64.leaRegRdata r9, [rip + __layout_Array_String]
-  __il_body#25:
+  __il_body#23:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
@@ -118,7 +146,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Array.maxon:172: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_12]  ; "panic at Array.maxon:80: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -134,7 +162,7 @@ func @main {
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_cont#24:
+  __il_cont#22:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
     x64.leaRegGlobal rax, __data_captured
@@ -146,11 +174,11 @@ func @main {
     x64.callDirect Array.clear
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-  __il_cont#22:
+  __il_cont#20:
     x64.leaRegRdata r12, [rip + __str_rec_10]  ; "pdq.equalElements"
-  __il_body#12:
+  __il_body#10:
     x64.movRegImm32 r13, 0
-    x64.jmp forhdr#13
+    x64.jmp forhdr#11
   scan:
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
     x64.loadRegBaseIndexScale.word64 rcx, [rax + r13*8 + 0]
@@ -158,13 +186,13 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, forstep#15
+    x64.jcc equal, forstep#13
   match:
     x64.movRegImm32 rax, 1
     x64.jmp __il_cont#7
-  forstep#15:
+  forstep#13:
     x64.leaRegRegImm32 r13, r13, 1
-  forhdr#13:
+  forhdr#11:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.cmpRegReg r13, rax
     x64.jcc less, scan
@@ -175,7 +203,7 @@ func @main {
     x64.jcc equal, ifcont
   e:
     x64.leaRegRdata rcx, [rip + __str_rec_11]  ; "equal-path-fired\x0a"
-  __il_body#21:
+  __il_body#19:
     x64.callDirect __write_stdout
   ifcont:
     x64.movRegImm32 r12, 0

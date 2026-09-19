@@ -1,19 +1,24 @@
 /// Lightweight trace event capture for stdlib instrumentation.
 ///
 /// This is not a full logger — there are no severity levels, no categories, no
-/// output streams. It exists so stdlib code (currently: sort algorithms) can
-/// emit stable dotted keys at decision points, and tests can verify that the
-/// correct internal path executed.
+/// output streams. It exists so a test can record the stable dotted keys an
+/// instrumented algorithm emits at its decision points and then verify that the
+/// internal path it expected executed.
 ///
-/// Usage from stdlib code:
-///   Log.trace("partitionMerge.fire")
+/// Nothing in the standard library calls `trace` itself. Instrumented stdlib code emits its keys into
+/// a sink the caller passes in, and this is the sink a test injects — an `arr.sort()` that was handed
+/// no sink writes nothing here, so one part of a program cannot contaminate another's capture.
 ///
 /// Usage from tests:
+///   function captureTrace(key String)
+///     Log.trace(key)
+///   end 'captureTrace'
+///
 ///   Log.startCapture()
-///   arr.sort()
+///   arr.sort(ascending, trace: captureTrace)
 ///   let captured = Log.stopCapture()
-///   if not Log.fired(captured, key: "partitionMerge.fire") 'missing'
-///     panic("partition-merge path did not engage on random input")
+///   if not Log.fired(captured, key: "insertionSort.run") 'missing'
+///     panic("the insertion path did not engage on this input")
 ///   end 'missing'
 ///
 /// Capture is off by default. When off, trace() is a single bool load + branch
@@ -28,7 +33,7 @@ var captured = TraceKeyArray.create()
 
 public type Log
 	/// Emit a trace key. No-op when capture is off.
-	/// Pass a stable identifier like "partitionMerge.fire" — keys are matched
+	/// Pass a stable identifier like "insertionSort.run" — keys are matched
 	/// literally by tests, so they should not embed run-specific data.
 	public static function trace(key String)
 		if capturing 'on'

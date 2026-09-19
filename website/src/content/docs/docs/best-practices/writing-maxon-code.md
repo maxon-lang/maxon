@@ -725,6 +725,8 @@ arr.sort()                                // in-place stable sort (Element is Co
 arr.sortUnstable()                        // in-place unstable sort (Element is Comparable)
 arr.sort(cmp)                             // sort with comparator: function(Element, Element) returns Ordering
 arr.sortUnstable(cmp)                     // unstable sort with comparator
+arr.sort(cmp, trace: sink)                // sort, reporting dispatch keys to sink: function(String)
+arr.sortUnstable(cmp, trace: sink)        // unstable sort, reporting dispatch keys
 ```
 
 ### Maps
