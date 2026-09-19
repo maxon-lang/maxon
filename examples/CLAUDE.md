@@ -12,12 +12,12 @@ count formula; there is no C arm because `vendor/` holds no C binary-trees.
 
 ## msort.maxon
 
-The parallel sorter carries its own merge sort because **the merge is what the program needs at two
-scales, and only one of them is a sort**: `mergedPair` combines two sorted runs, used inside a worker
-by `sortedRun` to sort its chunk and again across workers by `mergeChunks` to join the finished
-chunks. `Array.sort` would serve the first and cannot serve the second — a chunk merge is handed two
-already-sorted arrays and must consume them pairwise — so a stdlib sort in `sortedRun` would leave
-`mergedPair` written anyway, with two merge implementations to keep in agreement instead of one.
+A worker sorts its own chunk with `Array.sort`, from inside a service message — the sort cone reaches
+no module-level `var`, so E3143 does not refuse it. What the program still writes for itself is
+`mergedPair`, because **joining runs that are already ordered is not a sort and the library has no
+call for it**: `mergeChunks` is handed the finished chunks and must consume them pairwise. That is the
+one piece of sorting machinery here, and it is stable for the same reason `sort` is — an equal key
+takes the left run.
 
 Its chunks are built line by line **at the send**, not in a helper: a call result is a legal message
 argument only when the fresh-return summary proves it, and that summary treats `x.push(…)` on a

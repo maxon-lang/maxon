@@ -437,8 +437,9 @@ type Sorter
 	end 'sortLines'
 
 	function sortRows(lines LineArray) returns RowArray
-		let rows = rowsFrom(lines, maker: self.maker)
-		return sortedRun(rows, first: 0, stop: rows.count(), compare: self.compare)
+		var rows = rowsFrom(lines, maker: self.maker)
+		rows.sort(function(left, right) gives self.compare(left, right))
+		return rows
 	end 'sortRows'
 end 'Sorter'
 
@@ -555,21 +556,6 @@ end 'sortedChunks'
 function rowAt(rows RowArray, position LineCount) returns Row
 	return try rows.get(position) otherwise panic("rowAt: every caller checks the position against count()")
 end 'rowAt'
-
-function sortedRun(rows RowArray, first LineCount, stop LineCount, compare RowComparator) returns RowArray
-	if stop - first > 1 'severalRows'
-		let middle = first + (stop - first) / 2
-		return mergedPair(sortedRun(rows, first: first, stop: middle, compare: compare), right: sortedRun(rows, first: middle, stop: stop, compare: compare), compare: compare)
-	end 'severalRows'
-
-	var run = RowArray.create()
-
-	if stop > first 'oneRow'
-		run.push(rowAt(rows, position: first))
-	end 'oneRow'
-
-	return run
-end 'sortedRun'
 
 function mergedPair(left RowArray, right RowArray, compare RowComparator) returns RowArray
 	var merged = RowArray.create()

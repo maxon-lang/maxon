@@ -269,7 +269,7 @@ comparison — is the single decision that makes the program fast, and it is fou
 will need just avoids the copies.
 </TourStep>
 
-<TourStep from={419} to={443}>
+<TourStep from={419} to={444}>
 **This is the type that becomes a service, and it is an ordinary type.**
 
 `export` on a method means something sharper here than on a field: it marks the **message API** —
@@ -286,7 +286,7 @@ copies. Maxon tracks that statically: without the clone, this program does not c
 
 ## Reading the input
 
-<TourStep from={445} to={480}>
+<TourStep from={446} to={481}>
 `File.readText` throws `FileReadError`; `readLines` turns that into its own `ReadError`, because the
 caller's concern is "this file could not be read", not which layer noticed.
 
@@ -298,7 +298,7 @@ has to get right once.
 to check and forget.
 </TourStep>
 
-<TourStep from={482} to={507}>
+<TourStep from={483} to={508}>
 **`async` starts a coroutine.** `async readLines(path)` returns immediately with a
 `Promise with (LineArray, ReadError)` — the answer, or the failure, later. Starting one per file lets
 the waiting overlap: while the operating system fetches the first file, the second request is already
@@ -316,7 +316,7 @@ overlapping *waiting*; they do not use a second processor. That is what the next
 
 ## Using the processors
 
-<TourStep from={509} to={534}>
+<TourStep from={510} to={535}>
 **`spawn` turns a type into a service running on its own green thread**, scheduled across the
 machine's processors. `spawn Sorter.create(settings.clone())` runs the factory *over there* and hands
 back a `Sorter.handle`.
@@ -337,7 +337,7 @@ is written where it happens, rather than hidden inside a helper.
 `sorter.sortLines(chunk)` does not block. It posts the message and hands back a promise.
 </TourStep>
 
-<TourStep from={536} to={553}>
+<TourStep from={537} to={554}>
 The replies come back **in the order they were sent**, not the order the workers finished — which is
 what makes the output deterministic. The same input gives the same bytes at one worker or at
 sixty-four.
@@ -351,21 +351,21 @@ merge. Then every worker is shut down explicitly, because a service outlives the
 spawned it until someone says otherwise.
 </TourStep>
 
-<TourStep from={555} to={597}>
-The sort, and the reason the program contains one at all: `mergedPair` is used **twice**, at two
-different scales.
-
-`sortedRun` is a recursive merge sort over one worker's rows: split, sort each half, merge. A run of
-one row is already sorted, which is where it bottoms out.
+<TourStep from={556} to={583}>
+The merge, and the reason the program contains one at all. Sorting a worker's own rows is
+`rows.sort(self.compare)` — the standard library's stable sort, called from inside a service message,
+on the service's own field. Combining rows that are **already ordered** is a different job, and there
+is no library call for it, so `mergedPair` is the one piece of sorting machinery this program writes
+for itself.
 
 `mergedPair` walks two ordered runs and takes the lower head each time. The condition is written as
 *"take the right one only if it sorts strictly lower"* — so equal keys always take the left, and the
-sort comes out **stable**. Reversing that comparison would produce output that is still sorted and no
-longer reproducible.
+merge stays **stable**, exactly as the sort feeding it is. Reversing that comparison would produce
+output that is still sorted and no longer reproducible.
 </TourStep>
 
-<TourStep from={599} to={638}>
-The cross-worker merge: the same `mergedPair`, applied in **rounds**. Twelve chunks become six, then
+<TourStep from={585} to={624}>
+The cross-worker merge: `mergedPair` again, now applied in **rounds**. Twelve chunks become six, then
 three, then two, then one. Merging them one after another into a growing array would copy the early
 rows once per chunk; halving the list copies each row `log₂ k` times instead.
 
@@ -377,7 +377,7 @@ who runs it.
 
 ## Finishing
 
-<TourStep from={640} to={689}>
+<TourStep from={626} to={675}>
 `-u` is a pass over the sorted rows that keeps the first of each run of equal keys. It asks the same
 comparator the sort used, so "equal" means exactly what it meant a moment ago.
 
@@ -389,7 +389,7 @@ the enum. The two options that take a value are printed beside it, with their bo
 same constants that enforce them.
 </TourStep>
 
-<TourStep from={691} to={716}>
+<TourStep from={677} to={702}>
 `main` returns an `ExitCode`, and `Outcome.troubled` *is* one, because the enum's raw values are the
 exit codes.
 
