@@ -356,11 +356,15 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaFuncAddr x1, __fnref_byKey
-    arm64.movImm x2, 0
-    arm64.leaRdata x3, __layout_Array_KeyTag
+    arm64.leaFuncAddr x3, __fnref_byKey
+    arm64.movImm x4, 0
+    arm64.leaRdata x5, __layout_Array_KeyTag
+  __il_body:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.movRegReg x0, x19
-    arm64.bl Array.sort#Array.SortComparator
+    arm64.bl Array.driftsortRange
+  __il_cont:
     arm64.movImm x0, 1
     arm64.movImm x20, 1
     arm64.b whilehdr
@@ -376,14 +380,14 @@ func @main {
     arm64.movImm x2, 0
     arm64.loadRegBaseDisp.word64 x3, [x19 + 40]
     arm64.cmp x3, 0
-    arm64.b.eq critsplit#28
+    arm64.b.eq critsplit#30
   __im_empty#21:
     arm64.cmp x21, 0
     arm64.b.eq __im_slow#19
-  critsplit#29:
+  critsplit#31:
     arm64.movRegReg x9, x2
     arm64.b __im_cont#18
-  critsplit#28:
+  critsplit#30:
     arm64.movRegReg x9, x2
   __im_cont#18:
     arm64.cmp x9, 0
@@ -415,14 +419,14 @@ func @main {
     arm64.movImm x1, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#30
+    arm64.b.eq critsplit#32
   __im_empty#25:
     arm64.cmp x22, 0
     arm64.b.eq __im_slow#23
-  critsplit#31:
+  critsplit#33:
     arm64.movRegReg x9, x1
     arm64.b __im_cont#22
-  critsplit#30:
+  critsplit#32:
     arm64.movRegReg x9, x1
   __im_cont#22:
     arm64.cmp x9, 0
@@ -457,7 +461,7 @@ func @main {
   outOfOrder:
     arm64.movImm x0, 0
     arm64.storeSlotReg slot0, x0
-    arm64.leaRdata x0, __str_rec_23  ; "instability at i="
+    arm64.leaRdata x0, __str_rec_6  ; "instability at i="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot15, x1
     arm64.loadRegBaseDisp.word64 x23, [x0 + 8]
@@ -469,7 +473,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __int_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_24  ; ": ("
+    arm64.leaRdata x0, __str_rec_7  ; ": ("
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot13, x1
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
@@ -482,7 +486,7 @@ func @main {
     arm64.movRegReg x0, x25
     arm64.bl __int_to_string
     arm64.movRegReg x25, x0
-    arm64.leaRdata x0, __str_rec_25  ; ","
+    arm64.leaRdata x0, __str_rec_8  ; ","
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot11, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
@@ -495,7 +499,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __int_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_26  ; ") before ("
+    arm64.leaRdata x0, __str_rec_9  ; ") before ("
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot9, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
@@ -508,7 +512,7 @@ func @main {
     arm64.movRegReg x0, x28
     arm64.bl __int_to_string
     arm64.movRegReg x28, x0
-    arm64.leaRdata x0, __str_rec_25  ; ","
+    arm64.leaRdata x0, __str_rec_8  ; ","
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot7, x1
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
@@ -522,7 +526,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __int_to_string
     arm64.storeSlotReg slot6, x0
-    arm64.leaRdata x1, __str_rec_27  ; ")\x0a"
+    arm64.leaRdata x1, __str_rec_10  ; ")\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeSlotReg slot5, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
@@ -637,7 +641,7 @@ func @main {
   whileexit:
     arm64.cbz x0, ifcont#13
   stable:
-    arm64.leaRdata x0, __str_rec_28  ; "stable\x0a"
+    arm64.leaRdata x0, __str_rec_11  ; "stable\x0a"
     arm64.bl print
   ifcont#13:
     arm64.movImm x20, 0

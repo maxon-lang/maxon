@@ -105,7 +105,7 @@ func @main {
     arm64.movImm x19, 0
     arm64.movImm x20, 0
     arm64.b whilehdr#1
-  __il_body#8:
+  __il_body#9:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __managed_create
@@ -144,11 +144,11 @@ func @main {
   pick:
     arm64.loadRegBaseDisp.word64 x1, [x23 + 8]
     arm64.cmp x24, x1
-    arm64.b.hs __im_slow#30
-  __im_load#31:
+    arm64.b.hs __im_slow#31
+  __im_load#32:
     arm64.loadRegBaseDisp.word64 x1, [x23 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x1 + x24*8 + 0]
-  tryok#13:
+  tryok#14:
     arm64.movImm x2, 9223372036854775808
     arm64.eor x2, x0, x2
     arm64.movImm x16, 18446744073709551615
@@ -163,35 +163,35 @@ func @main {
     arm64.sdiv x25, x0, x3
     arm64.cmp x2, 0
     arm64.cset x2, ne
-    arm64.b.ne tryerr#18
-  tryok#17:
+    arm64.b.ne tryerr#19
+  tryok#18:
     arm64.cmp x1, -1
     arm64.cset x1, eq
     arm64.add x1, x1, -1
     arm64.and x0, x0, x1
     arm64.sdiv x16, x0, x3
     arm64.msub x26, x16, x3, x0
-    arm64.cbnz x2, tryerr#20
-  tryok#19:
+    arm64.cbnz x2, tryerr#21
+  tryok#20:
     arm64.cmp x25, 0
     arm64.b.lt __rc_panic
-  __rc_ok#25:
+  __rc_ok#26:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x25, x0
-    arm64.b.hs __im_slow#33
-  __im_load#34:
+    arm64.b.hs __im_slow#34
+  __im_load#35:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseIndexScale.word64 x1, [x0 + x25*8 + 0]
-  tryok#21:
+  tryok#22:
     arm64.movRegReg x0, x22
     arm64.bl __managed_push
-  __rc_ok#27:
+  __rc_ok#28:
     arm64.leaRdata x2, __layout_Array_Integer
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x25
     arm64.bl Array.remove
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#24
+    arm64.b.ne tryerr#25
   forstep:
     arm64.add x24, x24, 1
     arm64.movRegReg x0, x26
@@ -203,57 +203,60 @@ func @main {
     arm64.bl __managed_decref
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-  __il_cont#7:
-    arm64.leaFuncAddr x1, __fnref_ascending
-    arm64.movImm x2, 0
-    arm64.leaRdata x3, __layout_Array_Integer
+  __il_cont#8:
+    arm64.leaFuncAddr x3, __fnref_ascending
+    arm64.movImm x4, 0
+    arm64.leaRdata x5, __layout_Array_Integer
+  __il_body#36:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
     arm64.movRegReg x0, x22
-    arm64.bl Array.sort#Array.SortComparator
-  __il_body#35:
+    arm64.bl Array.driftsortRange
+  __il_body#37:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
     arm64.cmp x0, 1
-    arm64.b.gt ifcont#37
+    arm64.b.gt ifcont#39
   trivial:
     arm64.movImm x0, 1
     arm64.b __il_cont#6
-  ifcont#37:
+  ifcont#39:
     arm64.movImm x1, 1
   __us_test:
     arm64.loadRegBaseDisp.word64 x2, [x22 + 8]
     arm64.loadRegBaseDisp.word64 x3, [x22 + 0]
-    arm64.b whilehdr#38
+    arm64.b whilehdr#40
   scan:
     arm64.sub x4, x1, 1
-  __rc_ok#47:
-    arm64.cmp x4, x2
-    arm64.b.hs __im_slow#52
-    arm64.b __im_load#53
-  tryerr#42:
-    arm64.movImm x0, 0
-    arm64.b __il_cont#6
-  __im_load#53:
-    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x4*8 + 0]
   __rc_ok#49:
-    arm64.cmp x1, x2
-    arm64.b.hs __im_slow#55
-    arm64.b __im_load#56
+    arm64.cmp x4, x2
+    arm64.b.hs __im_slow#54
+    arm64.b __im_load#55
   tryerr#44:
     arm64.movImm x0, 0
     arm64.b __il_cont#6
-  __im_load#56:
+  __im_load#55:
+    arm64.loadRegBaseIndexScale.word64 x4, [x3 + x4*8 + 0]
+  __rc_ok#51:
+    arm64.cmp x1, x2
+    arm64.b.hs __im_slow#57
+    arm64.b __im_load#58
+  tryerr#46:
+    arm64.movImm x0, 0
+    arm64.b __il_cont#6
+  __im_load#58:
     arm64.loadRegBaseIndexScale.word64 x5, [x3 + x1*8 + 0]
-  tryok#43:
+  tryok#45:
     arm64.cmp x4, x5
-    arm64.b.le ifcont#46
+    arm64.b.le ifcont#48
   oop:
     arm64.movImm x0, 0
     arm64.b __il_cont#6
-  ifcont#46:
+  ifcont#48:
     arm64.add x1, x1, 1
-  whilehdr#38:
+  whilehdr#40:
     arm64.cmp x1, x0
     arm64.b.lt scan
-  whileexit#40:
+  whileexit#42:
     arm64.movImm x0, 1
   __il_cont#6:
     arm64.eor x0, x0, 1
@@ -266,7 +269,7 @@ func @main {
     arm64.bl __managed_decref
   whilehdr#1:
     arm64.cmp x19, 24
-    arm64.b.lt __il_body#8
+    arm64.b.lt __il_body#9
   whileexit#3:
     arm64.movImm x0, 21
     arm64.movImm x1, 0
@@ -276,7 +279,7 @@ func @main {
     arm64.movRegReg x1, x19
     arm64.bl __int_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_25  ; "\x0a"
+    arm64.leaRdata x0, __str_rec_8  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.add x23, x20, x22
@@ -303,10 +306,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x24 + 24], x0
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
-  __il_body#58:
+  __il_body#60:
     arm64.movRegReg x0, x24
     arm64.bl __write_stdout
-  __il_cont#57:
+  __il_cont#59:
     arm64.movRegReg x0, x24
     arm64.bl __str_decref
     arm64.movImm x0, 0
@@ -320,7 +323,7 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  __im_slow#30:
+  __im_slow#31:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x24
@@ -328,9 +331,9 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#13
-  tryerr#14:
-    arm64.leaRdata x0, __str_blob_19  ; "panic at small-sort-network-n4-all-perms.test:37: divs OOB\x0a"
+    arm64.b.eq tryok#14
+  tryerr#15:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at small-sort-network-n4-all-perms.test:37: divs OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -344,7 +347,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   divovf:
-    arm64.leaRdata x0, __str_blob_20  ; "panic: integer overflow\x0a"
+    arm64.leaRdata x0, __str_blob_3  ; "panic: integer overflow\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -357,8 +360,8 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  tryerr#18:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at small-sort-network-n4-all-perms.test:40: nthPerm4: divs entry was 0\x0a"
+  tryerr#19:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at small-sort-network-n4-all-perms.test:40: nthPerm4: divs entry was 0\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -371,8 +374,8 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  tryerr#20:
-    arm64.leaRdata x0, __str_blob_22  ; "panic at small-sort-network-n4-all-perms.test:41: nthPerm4: divs entry was 0\x0a"
+  tryerr#21:
+    arm64.leaRdata x0, __str_blob_5  ; "panic at small-sort-network-n4-all-perms.test:41: nthPerm4: divs entry was 0\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -386,7 +389,7 @@ func @main {
     arm64.epilogue 128
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_112  ; "panic at small-sort-network-n4-all-perms.test:42: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_78  ; "panic at small-sort-network-n4-all-perms.test:42: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -399,14 +402,14 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  __im_slow#33:
+  __im_slow#34:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x25
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq critsplit
-  tryerr#22:
-    arm64.leaRdata x0, __str_blob_23  ; "panic at small-sort-network-n4-all-perms.test:42: pool OOB\x0a"
+  tryerr#23:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at small-sort-network-n4-all-perms.test:42: pool OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -421,9 +424,9 @@ func @main {
     arm64.ret
   critsplit:
     arm64.movRegReg x1, x0
-    arm64.b tryok#21
-  tryerr#24:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at small-sort-network-n4-all-perms.test:44: pool.remove OOB\x0a"
+    arm64.b tryok#22
+  tryerr#25:
+    arm64.leaRdata x0, __str_blob_7  ; "panic at small-sort-network-n4-all-perms.test:44: pool.remove OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot5
@@ -436,7 +439,7 @@ func @main {
     arm64.loadRegSlot x26, slot12
     arm64.epilogue 128
     arm64.ret
-  __im_slow#52:
+  __im_slow#54:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -450,9 +453,9 @@ func @main {
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#42
-    arm64.b __rc_ok#49
-  __im_slow#55:
+    arm64.b.ne tryerr#44
+    arm64.b __rc_ok#51
+  __im_slow#57:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -467,6 +470,6 @@ func @main {
     arm64.loadRegSlot x3, slot3
     arm64.loadRegSlot x4, slot4
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#44
-    arm64.b tryok#43
+    arm64.b.ne tryerr#46
+    arm64.b tryok#45
 }

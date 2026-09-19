@@ -506,11 +506,15 @@ func @main {
     arm64.cmp x0, x1
     arm64.b.lt tally
   forexit#4:
-    arm64.leaFuncAddr x1, __fnref_ascending
-    arm64.movImm x2, 0
-    arm64.leaRdata x3, __layout_Array_Integer
+    arm64.leaFuncAddr x3, __fnref_ascending
+    arm64.movImm x4, 0
+    arm64.leaRdata x5, __layout_Array_Integer
+  __il_body:
+    arm64.movImm x1, 0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
     arm64.movRegReg x0, x19
-    arm64.bl Array.sort#Array.SortComparator
+    arm64.bl Array.driftsortRange
+  __il_cont:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, x20
     arm64.cset x0, eq
@@ -545,30 +549,30 @@ func @main {
     arm64.b.lt __im_load#29
   forexit#8:
     arm64.movImm x3, 0
-    arm64.cbz x0, critsplit#34
+    arm64.cbz x0, critsplit#36
   andrhs#17:
     arm64.cmp x1, x21
     arm64.cset x0, eq
     arm64.b scmerge#18
-  critsplit#34:
+  critsplit#36:
     arm64.movRegReg x0, x3
   scmerge#18:
     arm64.movImm x1, 0
-    arm64.cbz x0, critsplit#37
+    arm64.cbz x0, critsplit#39
   andrhs#19:
     arm64.cmp x2, x22
     arm64.cset x0, eq
     arm64.b scmerge#20
-  critsplit#37:
+  critsplit#39:
     arm64.movRegReg x0, x1
   scmerge#20:
     arm64.cbz x0, ifelse
   ok:
-    arm64.leaRdata x0, __str_rec_19  ; "sorted\x0a"
+    arm64.leaRdata x0, __str_rec_2  ; "sorted\x0a"
     arm64.bl print
     arm64.b ifcont
   ifelse:
-    arm64.leaRdata x0, __str_rec_20  ; "BROKEN\x0a"
+    arm64.leaRdata x0, __str_rec_3  ; "BROKEN\x0a"
     arm64.bl print
   ifcont:
     arm64.movImm x20, 0
