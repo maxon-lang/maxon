@@ -84,37 +84,63 @@ union ManifestDirectory
 	none
 end 'ManifestDirectory'
 
+// A walk that could not list a directory answers `walkFailed`, never an empty list: the sweep's
+// result is what decides which files are unregistered, and one folder that cannot be listed — a
+// branch switch, a build in the same tree, a denied ACL — would otherwise unregister every file
+// of the project.
+union SourceSweep
+	swept(sources MaxonSourcePathArray)
+	walkFailed
+end 'SourceSweep'
+
 // A held project and the source list it was built over. ⚠ The directory walk that takes that list
 // runs only on a miss, or once `WorkspaceResweepIntervalMs` has passed: hover, definition and
 // completion each ask for a corpus as fast as an editor can send, and a walk hoisted ahead of the
 // held-project probe costs one per request with nothing failing to say so.
 //
-// The LIST is what goes stale — a file created on disk is invisible until the next walk, which is
-// what the interval bounds, while a file's CONTENT is re-read every request.
+// A file created on disk and a file deleted from it are both noticed at that walk and not before,
+// while a file's content is re-read every request.
+//
 // `tests/lsp/definition-notices-a-file-created-on-disk.test.maxon` holds the re-walk in place.
 type HeldWorkspace
 	let project as Project
-	module var sources as MaxonSourcePathArray
+	module var sweep as SourceSweep
 	var sweptAtMs as InstantMs
 
-	static function create(project Project, sources MaxonSourcePathArray, sweptAtMs InstantMs) returns HeldWorkspace
-		return Self{project: project, sources: sources, sweptAtMs: sweptAtMs}
+	static function create(project Project, sweep SourceSweep, sweptAtMs InstantMs) returns HeldWorkspace
+		return Self{project: project, sweep: sweep, sweptAtMs: sweptAtMs}
 	end 'create'
 
 	function corpusFor(root WorkspaceRoot, readerPath FilePath) returns LspCorpus
 		resweep(root)
 
-		return self.project.sweptOver(self.sources, readerPath: readerPath)
+		return self.project.sweptOver(self.sweep, readerPath: readerPath)
 	end 'corpusFor'
 
 	function resweep(root WorkspaceRoot)
-		if Clock.elapsedMs(self.sweptAtMs) < WorkspaceResweepIntervalMs 'sweptRecently'
+		if sweepIsFresh() 'sweptRecently'
 			return
 		end 'sweptRecently'
 
-		self.sources = sourcesUnder(root)
-		self.sweptAtMs = Clock.nowMs()
+		let walk = sourcesUnder(root)
+
+		match walk 'walk'
+			swept then holdCompletedWalk(walk)
+			walkFailed then return
+		end 'walk'
 	end 'resweep'
+
+	function sweepIsFresh() returns bool
+		return match self.sweep 'sweep'
+			swept gives Clock.elapsedMs(self.sweptAtMs) < WorkspaceResweepIntervalMs
+			walkFailed gives false
+		end 'sweep'
+	end 'sweepIsFresh'
+
+	function holdCompletedWalk(walk SourceSweep)
+		self.sweep = walk
+		self.sweptAtMs = Clock.nowMs()
+	end 'holdCompletedWalk'
 end 'HeldWorkspace'
 
 typealias HeldProjectMap = Map with (String, HeldWorkspace)
@@ -255,7 +281,10 @@ function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspPr
 	let compileRoot = compileRootOf(root, readerPath: readerPath)
 	let held = try heldProjects.get(compileRoot.toString()) otherwise return LspProjectFacts.unswept(compileRoot)
 
-	return LspProjectFacts.swept(compileRoot, fileCount: held.sources.count() as LspProjectFileCount)
+	return match held.sweep 'sweep'
+		swept(sources) gives LspProjectFacts.swept(compileRoot, fileCount: sources.count() as LspProjectFileCount)
+		walkFailed gives LspProjectFacts.unswept(compileRoot)
+	end 'sweep'
 end 'heldProjectFacts'
 
 module function lspDocumentCorpus(uri String) returns LspCorpus
@@ -358,7 +387,7 @@ function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FileP
 	end 'alreadySeenThisRoot'
 
 	let project = try libraryTierProject(compileRoot, tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
-	var fresh = HeldWorkspace.create(project, sources: sourcesUnder(root), sweptAtMs: Clock.nowMs())
+	var fresh = HeldWorkspace.create(project, sweep: sourcesUnder(root), sweptAtMs: Clock.nowMs())
 
 	let corpus = fresh.corpusFor(root, readerPath: readerPath)
 
@@ -403,19 +432,19 @@ function compileRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	end 'root'
 end 'compileRootOf'
 
-function sourcesUnder(root WorkspaceRoot) returns MaxonSourcePathArray
+function sourcesUnder(root WorkspaceRoot) returns SourceSweep
 	return match root 'root'
 		userDirectory(dir) gives maxonSourcesIn(dir)
-		libraryTierOnly gives MaxonSourcePathArray.create()
+		libraryTierOnly gives SourceSweep.swept(MaxonSourcePathArray.create())
 	end 'root'
 end 'sourcesUnder'
 
-function maxonSourcesIn(dir FilePath) returns MaxonSourcePathArray
+function maxonSourcesIn(dir FilePath) returns SourceSweep
 	var sources = MaxonSourcePathArray.create()
 
-	_ = try collectMaxonSources(dir, into: sources, selection: SourceSelection.productionOnly) otherwise return MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(dir, into: sources, selection: SourceSelection.productionOnly) otherwise return SourceSweep.walkFailed
 
-	return sources
+	return SourceSweep.swept(sources)
 end 'maxonSourcesIn'
 
 // ⚠ The tier test comes FIRST, and a library file must never reach the manifest climb. The checkout
@@ -498,12 +527,30 @@ extension Project
 	// It is also the expensive half. Lexing and folding signatures is what a name-to-file question
 	// actually needs; parse and merge cost more than the two of them together and answer nothing asked
 	// here.
-	module function sweptOver(sources MaxonSourcePathArray, readerPath FilePath) returns LspCorpus
-		for path in sources 'eachSource'
-			try loadOneSourceFileIfChanged(self, path: path) otherwise return LspCorpus.unavailable
+	module function sweptOver(walk SourceSweep, readerPath FilePath) returns LspCorpus
+		var kept = MaxonSourcePathSet.create()
+
+		// Seeded from the array the library loops index (`StdlibSource.growStdlibBodyDemand` and its two
+		// siblings), so the keep-set and their domain cannot drift apart. `registerTheReader` names what
+		// a library file missing from the corpus costs.
+		for path in self.librarySourcePaths 'eachLibraryFile'
+			kept.insert(path)
+		end 'eachLibraryFile'
+
+		for path in sweptSourcesOf(walk) 'eachSource'
+			// Kept because the walk listed it, not because it could be read: a file that will not open is
+			// as often held by a save or a scanner as deleted. Only a path the walk no longer lists is
+			// unregistered, and one file that will not open leaves the rest of the corpus answering.
+			kept.insert(path)
+
+			try loadOneSourceFileIfChanged(self, path: path) otherwise ignore
 		end 'eachSource'
 
 		let reader = corpusSpellingOf(self, reader: readerPath.resolve(Directory.currentPath()).normalize())
+		kept.insert(reader)
+
+		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
+
 		registerTheReader(self, readerPath: reader)
 
 		var pool = FrontEndPool.create()
@@ -519,6 +566,32 @@ extension Project
 		return LspCorpus.loaded(self, signatures: signatures, readerPath: reader)
 	end 'sweptOver'
 end 'Project'
+
+function sweptSourcesOf(walk SourceSweep) returns MaxonSourcePathArray
+	return match walk 'walk'
+		swept(sources) gives sources
+		walkFailed gives MaxonSourcePathArray.create()
+	end 'walk'
+end 'sweptSourcesOf'
+
+function unregisterWhatTheWalkNoLongerLists(project Project, walk SourceSweep, kept MaxonSourcePathSet)
+	match walk 'walk'
+		swept then filesRemoved(project, paths: pathsTheSweepDropped(project, kept: kept))
+		walkFailed then return
+	end 'walk'
+end 'unregisterWhatTheWalkNoLongerLists'
+
+function pathsTheSweepDropped(project Project, kept MaxonSourcePathSet) returns MaxonSourcePathSet
+	var dropped = MaxonSourcePathSet.create()
+
+	for path in project.db.sourcePaths 'eachRegistered'
+		if not kept.contains(path) 'noLongerSwept'
+			dropped.insert(path)
+		end 'noLongerSwept'
+	end 'eachRegistered'
+
+	return dropped
+end 'pathsTheSweepDropped'
 
 // The spelling this corpus already registered the reader's file under, which is not always the spelling
 // the request arrived with. ⚠ `FilePath` compares case-insensitively on Windows, so `db.sourceFiles`

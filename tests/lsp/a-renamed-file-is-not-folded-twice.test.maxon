@@ -1,0 +1,49 @@
+let RenamedDirName = "temp/lsp/a-renamed-file-is-not-folded-twice"
+let RenamedReaderName = "reader.maxon"
+let RenamedBeforeName = "before.maxon"
+let RenamedAfterName = "after.maxon"
+
+let RenamedReaderSource = "function main() returns ExitCode\n\treturn renamedAnswer()\nend 'main'\n"
+let RenamedDeclarationSource = "export function renamedAnswer() returns ExitCode\n\treturn 0\nend 'renamedAnswer'\n"
+
+let RenamedCallLine = 1 as LspCoordinate
+let RenamedCallCharacter = 12 as LspCoordinate
+let RenamedDeclarationLine = 0 as LspCoordinate
+
+let RenamedWindowMs = 2500 as DurationMs
+let RenamedPauseMs = 100 as Milliseconds
+
+test 'stale source: a renamed file is not folded twice'
+	let directory = stagedCorpusDirectory(RenamedDirName)
+	removeRenamedDestination(directory)
+	writeCorpusFile(directory, fileName: RenamedReaderName, content: RenamedReaderSource)
+	writeCorpusFile(directory, fileName: RenamedBeforeName, content: RenamedDeclarationSource)
+
+	let answers = runCorpusStaleSourceSession(renamedRun(directory))
+
+	try requireRenamedAnswerNamesOnlyTheNewFile(answers)
+end 'stale source: a renamed file is not folded twice'
+
+function requireRenamedAnswerNamesOnlyTheNewFile(answers CorpusStaleSourceAnswers) throws TestFailure
+	try expectDefinitionInFile(answers.before, fileTail: RenamedBeforeName, startLine: RenamedDeclarationLine, note: "the FIRST request, before the rename, did not resolve into `{RenamedBeforeName}`. That half is the control: without it a green second half would only mean the fixture never resolved at all.")
+
+	try expectDefinitionInFile(answers.after, fileTail: RenamedAfterName, startLine: RenamedDeclarationLine, note: "`{RenamedBeforeName}` was renamed to `{RenamedAfterName}` — the same declaration, written to the new path and deleted from the old one — and the jump did not land in `{RenamedAfterName}`. The old path is never unregistered, so one declaration is folded from TWO files at once and the answer is whichever of the two the fold wrote last.")
+end 'requireRenamedAnswerNamesOnlyTheNewFile'
+
+function removeRenamedDestination(directory FilePath)
+	if not File.exists(directory.join(RenamedAfterName)) 'alreadyAbsent'
+		return
+	end 'alreadyAbsent'
+
+	deleteCorpusFile(directory, fileName: RenamedAfterName)
+end 'removeRenamedDestination'
+
+function renamedRun(directory FilePath) returns CorpusStaleSourceRun
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.wrote(directory, fileName: RenamedAfterName, content: RenamedDeclarationSource))
+	edits.push(CorpusDiskEdit.deleted(directory, fileName: RenamedBeforeName))
+
+	let reader = CorpusProbePoint.at(fileUriOf(directory.join(RenamedReaderName)), line: RenamedCallLine, character: RenamedCallCharacter)
+
+	return CorpusStaleSourceRun.create(reader, readerSource: RenamedReaderSource, edits: edits, settledWhen: CorpusSettledWhen.theAnswerNames(RenamedAfterName), windowMs: RenamedWindowMs, pauseMs: RenamedPauseMs, alsoAsk: CorpusProbePointArray.create())
+end 'renamedRun'

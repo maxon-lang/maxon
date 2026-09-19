@@ -1,0 +1,38 @@
+let DeletedSiblingDirName = "temp/lsp/a-deleted-sibling-stops-answering"
+let DeletedSiblingReaderName = "reader.maxon"
+let DeletedSiblingName = "sibling.maxon"
+
+let DeletedSiblingReaderSource = "function main() returns ExitCode\n\treturn siblingAnswer()\nend 'main'\n"
+let DeletedSiblingSource = "export function siblingAnswer() returns ExitCode\n\treturn 0\nend 'siblingAnswer'\n"
+
+let DeletedSiblingCallLine = 1 as LspCoordinate
+let DeletedSiblingCallCharacter = 12 as LspCoordinate
+let DeletedSiblingDeclarationLine = 0 as LspCoordinate
+
+let DeletedSiblingWindowMs = 1500 as DurationMs
+let DeletedSiblingPauseMs = 100 as Milliseconds
+
+test 'stale source: a deleted sibling stops answering'
+	let directory = stagedCorpusDirectory(DeletedSiblingDirName)
+	writeCorpusFile(directory, fileName: DeletedSiblingReaderName, content: DeletedSiblingReaderSource)
+	writeCorpusFile(directory, fileName: DeletedSiblingName, content: DeletedSiblingSource)
+
+	let answers = runCorpusStaleSourceSession(deletedSiblingRun(directory))
+
+	try requireDeletedSiblingStoppedAnswering(answers)
+end 'stale source: a deleted sibling stops answering'
+
+function requireDeletedSiblingStoppedAnswering(answers CorpusStaleSourceAnswers) throws TestFailure
+	try expectDefinitionInFile(answers.before, fileTail: DeletedSiblingName, startLine: DeletedSiblingDeclarationLine, note: "the FIRST request, while `{DeletedSiblingName}` was still on disk, did not resolve into it. That half is the control: without it a green second half would only mean the fixture never resolved at all.")
+
+	try expectNoDefinitionInProject(answers.after, note: "`{DeletedSiblingName}` was deleted from disk, and {DeletedSiblingWindowMs}ms later — past the re-sweep that walks the project again — the session was still jumping into it. Nothing in the corpus ever removes a path once it is registered, so a deleted file's declarations keep answering for the rest of the session and the client is handed a `file://` uri for a file that is not there.")
+end 'requireDeletedSiblingStoppedAnswering'
+
+function deletedSiblingRun(directory FilePath) returns CorpusStaleSourceRun
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.deleted(directory, fileName: DeletedSiblingName))
+
+	let reader = CorpusProbePoint.at(fileUriOf(directory.join(DeletedSiblingReaderName)), line: DeletedSiblingCallLine, character: DeletedSiblingCallCharacter)
+
+	return CorpusStaleSourceRun.create(reader, readerSource: DeletedSiblingReaderSource, edits: edits, settledWhen: CorpusSettledWhen.theWindowCloses, windowMs: DeletedSiblingWindowMs, pauseMs: DeletedSiblingPauseMs, alsoAsk: CorpusProbePointArray.create())
+end 'deletedSiblingRun'

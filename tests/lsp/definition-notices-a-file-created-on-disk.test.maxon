@@ -27,55 +27,42 @@ let CreatedCallLine = 1 as LspCoordinate
 let CreatedCallCharacter = 12 as LspCoordinate
 let CreatedDeclarationLine = 0 as LspCoordinate
 
-// Generous against a loaded CI runner, and unrelated to the server's own interval: the case fails only if
-// the file is NEVER noticed.
-let CreatedDeadlineMs = 15000 as Milliseconds
-let CreatedRetryPauseMs = 250 as Milliseconds
+// What the case waits out is one re-sweep interval, with room for a loaded runner: it fails only if
+// the file is never noticed.
+let CreatedWindowMs = 3000 as DurationMs
+let CreatedPauseMs = 100 as Milliseconds
 
 test 'a definition notices a file created on disk after the corpus was built'
 	let directory = stagedCorpusDirectory(CreatedDirName)
 	removeCreatedHelper(directory)
 	writeCorpusFile(directory, fileName: CreatedReaderName, content: CreatedReaderSource)
 
-	let uri = fileUriOf(directory.join(CreatedReaderName))
+	let answers = runCorpusStaleSourceSession(createdRun(directory))
 
-	let before = probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: uri, content: CreatedReaderSource, line: CreatedCallLine, character: CreatedCallCharacter)
-	try expectNoDefinitionInProject(before, note: "`appearsLater` is declared in no file yet, so the first request must answer nothing — otherwise this case cannot tell a re-sweep from a stale answer that happened to be right.")
-
-	writeCorpusFile(directory, fileName: CreatedHelperName, content: CreatedHelperSource)
-
-	let after = createdHelperResolved(uri)
-	try expectDefinitionInFile(after, fileTail: CreatedHelperName, startLine: CreatedDeclarationLine, note: "`{CreatedHelperName}` was created on disk after the corpus had been built, and a definition asked repeatedly for {CreatedDeadlineMs}ms never resolved into it. The corpus caches the project's source LIST; a file that appears later is seen only when that list is walked again.")
+	try requireCreatedHelperWasNoticed(answers)
 end 'a definition notices a file created on disk after the corpus was built'
 
-// Ask until the declaration is found or the deadline passes, and hand back the LAST answer either way so
-// the failure reports what the server actually said rather than that a loop ended.
-function createdHelperResolved(uri String) returns CorpusDefinitionProbe
-	let started = Clock.nowMs()
-	var latest = probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: uri, content: CreatedReaderSource, line: CreatedCallLine, character: CreatedCallCharacter)
+function requireCreatedHelperWasNoticed(answers CorpusStaleSourceAnswers) throws TestFailure
+	try expectNoDefinitionInProject(answers.before, note: "`appearsLater` is declared in no file yet, so the first request must answer nothing — otherwise this case cannot tell a re-sweep from a stale answer that happened to be right.")
 
-	while Clock.elapsedMs(started) < CreatedDeadlineMs 'untilNoticed'
-		match latest 'answer'
-			located then return latest
-			absent then sleep(CreatedRetryPauseMs)
-			refused then return latest
-			broke then return latest
-		end 'answer'
-
-		latest = probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: uri, content: CreatedReaderSource, line: CreatedCallLine, character: CreatedCallCharacter)
-	end 'untilNoticed'
-
-	return latest
-end 'createdHelperResolved'
+	try expectDefinitionInFile(answers.after, fileTail: CreatedHelperName, startLine: CreatedDeclarationLine, note: "`{CreatedHelperName}` was created on disk after the corpus had been built, and a definition asked repeatedly on the SAME session for {CreatedWindowMs}ms never resolved into it. The corpus caches the project's source LIST; a file that appears later is seen only when the held workspace walks that list again.")
+end 'requireCreatedHelperWasNoticed'
 
 // The staging directory outlives a run, so a helper left by the previous one would make the first request
 // resolve and the case would prove nothing.
 function removeCreatedHelper(directory FilePath)
-	let helper = directory.join(CreatedHelperName)
-
-	if not File.exists(helper) 'alreadyAbsent'
+	if not File.exists(directory.join(CreatedHelperName)) 'alreadyAbsent'
 		return
 	end 'alreadyAbsent'
 
-	try File.delete(helper) otherwise panic("definition notices a created file: the test could not run — could not remove {helper.toString()} left by a previous run")
+	deleteCorpusFile(directory, fileName: CreatedHelperName)
 end 'removeCreatedHelper'
+
+function createdRun(directory FilePath) returns CorpusStaleSourceRun
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.wrote(directory, fileName: CreatedHelperName, content: CreatedHelperSource))
+
+	let reader = CorpusProbePoint.at(fileUriOf(directory.join(CreatedReaderName)), line: CreatedCallLine, character: CreatedCallCharacter)
+
+	return CorpusStaleSourceRun.create(reader, readerSource: CreatedReaderSource, edits: edits, settledWhen: CorpusSettledWhen.anAnswerArrives, windowMs: CreatedWindowMs, pauseMs: CreatedPauseMs, alsoAsk: CorpusProbePointArray.create())
+end 'createdRun'

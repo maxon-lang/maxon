@@ -1,0 +1,41 @@
+let BlindedDirName = "temp/lsp/a-delete-does-not-blind-the-whole-project"
+let BlindedReaderName = "reader.maxon"
+let BlindedKeptName = "kept.maxon"
+let BlindedDoomedName = "doomed.maxon"
+
+let BlindedReaderSource = "function main() returns ExitCode\n\treturn keptAnswer()\nend 'main'\n"
+let BlindedKeptSource = "export function keptAnswer() returns ExitCode\n\treturn 0\nend 'keptAnswer'\n"
+let BlindedDoomedSource = "export function doomedAnswer() returns ExitCode\n\treturn 0\nend 'doomedAnswer'\n"
+
+let BlindedCallLine = 1 as LspCoordinate
+let BlindedCallCharacter = 12 as LspCoordinate
+let BlindedDeclarationLine = 0 as LspCoordinate
+
+let BlindedWindowMs = 400 as DurationMs
+let BlindedPauseMs = 25 as Milliseconds
+
+test 'stale source: a delete does not blind the whole project'
+	let directory = stagedCorpusDirectory(BlindedDirName)
+	writeCorpusFile(directory, fileName: BlindedReaderName, content: BlindedReaderSource)
+	writeCorpusFile(directory, fileName: BlindedKeptName, content: BlindedKeptSource)
+	writeCorpusFile(directory, fileName: BlindedDoomedName, content: BlindedDoomedSource)
+
+	let answers = runCorpusStaleSourceSession(blindedRun(directory))
+
+	try requireUnrelatedJumpSurvived(answers)
+end 'stale source: a delete does not blind the whole project'
+
+function requireUnrelatedJumpSurvived(answers CorpusStaleSourceAnswers) throws TestFailure
+	try expectDefinitionInFile(answers.before, fileTail: BlindedKeptName, startLine: BlindedDeclarationLine, note: "the FIRST request, before anything was deleted, did not resolve into `{BlindedKeptName}`. That half is the control: without it a green second half would only mean the fixture never resolved at all.")
+
+	try expectDefinitionInFile(answers.after, fileTail: BlindedKeptName, startLine: BlindedDeclarationLine, note: "`{BlindedDoomedName}` was deleted and a jump into `{BlindedKeptName}` — a file the delete did not touch and the reader's only callee — stopped resolving inside the {BlindedWindowMs}ms that follow. The deleted path is still in the source list the sweep walks until the next re-sweep, and the read of it throws out of the whole sweep, so definition, hover, completion and project diagnostics go dead for EVERY file of the project rather than for the one that was deleted.")
+end 'requireUnrelatedJumpSurvived'
+
+function blindedRun(directory FilePath) returns CorpusStaleSourceRun
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.deleted(directory, fileName: BlindedDoomedName))
+
+	let reader = CorpusProbePoint.at(fileUriOf(directory.join(BlindedReaderName)), line: BlindedCallLine, character: BlindedCallCharacter)
+
+	return CorpusStaleSourceRun.create(reader, readerSource: BlindedReaderSource, edits: edits, settledWhen: CorpusSettledWhen.theAnswerStops, windowMs: BlindedWindowMs, pauseMs: BlindedPauseMs, alsoAsk: CorpusProbePointArray.create())
+end 'blindedRun'

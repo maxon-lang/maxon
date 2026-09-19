@@ -1237,7 +1237,13 @@ renegotiated.
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
 held under it. The list of files under a root is re-walked at most once a second, so a file created on
-disk after the project was built is resolved into shortly afterwards rather than at once.
+disk after the project was built is resolved into shortly afterwards rather than at once, and a file
+deleted from disk leaves the project at that same walk — definition, hover and completion stop resolving
+into it, and a name it was the only declaration of stops being one the project declares. A rename is the
+two together: the answer moves to the new path, rather than one declaration being answered out of both.
+Creating and deleting are noticed at the next walk, a change to a file's contents on the next request. A
+walk that cannot list a directory leaves the previous list standing rather than treating the files under
+it as gone.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,

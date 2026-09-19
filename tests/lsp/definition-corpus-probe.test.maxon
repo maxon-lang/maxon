@@ -104,6 +104,11 @@ export function writeCorpusFile(directory FilePath, fileName String, content Str
 	try File.writeText(file, content: content) otherwise panic("definition corpus: the test could not run — could not write {file.toString()}")
 end 'writeCorpusFile'
 
+export function deleteCorpusFile(directory FilePath, fileName String)
+	let file = directory.join(fileName)
+	try File.delete(file) otherwise panic("definition corpus: the test could not run — could not delete {file.toString()}")
+end 'deleteCorpusFile'
+
 export function probeCorpusDefinition(directory FilePath, fileName String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
 	writeCorpusFile(directory, fileName: fileName, content: content)
 
@@ -136,8 +141,12 @@ export function expectNoDefinitionInProject(probe CorpusDefinitionProbe, note St
 	end 'probe'
 end 'expectNoDefinitionInProject'
 
+function corpusFoldedUri(uri String) returns String
+	return uri.replace(CorpusBackslash, with: CorpusSlash)
+end 'corpusFoldedUri'
+
 function requireCorpusLocation(uri String, range LspRange, fileTail String, startLine LspCoordinate, note String) throws TestFailure
-	let folded = uri.replace(CorpusBackslash, with: CorpusSlash)
+	let folded = corpusFoldedUri(uri)
 
 	try Expect.isTrue(folded.endsWith(fileTail), message: "{note} The answer names {uri}, which does not end with {fileTail}.")
 
@@ -154,14 +163,22 @@ function collectCorpusDefinition(client LspClient, root CorpusSessionRoot, uri S
 		probe = corpusProbeOf(client.definition(uri, line: line, character: character))
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
-			transportFailed(detail) then probe = CorpusDefinitionProbe.broke("the framed stream broke — {detail}")
-			malformedResponse(detail) then probe = CorpusDefinitionProbe.broke("a reply was not the shape LSP defines for `textDocument/definition` — {detail}")
-			serverRefused(code, message) then probe = CorpusDefinitionProbe.refused(code, message: message)
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = corpusProbeOfFailure(e)
 		end 'reason'
 	end 'failed'
 
 	return probe
 end 'collectCorpusDefinition'
+
+function corpusProbeOfFailure(e LspClientError) returns CorpusDefinitionProbe
+	return match e 'reason'
+		transportFailed(detail) gives CorpusDefinitionProbe.broke("the framed stream broke — {detail}")
+		malformedResponse(detail) gives CorpusDefinitionProbe.broke("a reply was not the shape LSP defines for `textDocument/definition` — {detail}")
+		serverRefused(code, message) gives CorpusDefinitionProbe.refused(code, message: message)
+	end 'reason'
+end 'corpusProbeOfFailure'
 
 function openCorpusSession(client LspClient, root CorpusSessionRoot) throws LspClientError
 	match root 'shape'
@@ -183,3 +200,172 @@ end 'corpusProbeOf'
 export function corpusRefusalSentence(code JsonRpcErrorCode, message String) returns String
 	return "`textDocument/definition` was refused with JSON-RPC {code}: {message}. The definition handler IS served, so a refusal here is a REGRESSION rather than an answer."
 end 'corpusRefusalSentence'
+
+export union CorpusSettledWhen
+	anAnswerArrives
+	theAnswerStops
+	theAnswerNames(fileTail String)
+
+	// Never settles: the poll spends the whole window and the case reads the last answer. An answer
+	// asked before the re-sweep a case is waiting out is not evidence about where the server settles.
+	theWindowCloses
+end 'CorpusSettledWhen'
+
+export union CorpusDiskEdit
+	wrote(directory FilePath, fileName String, content String)
+	deleted(directory FilePath, fileName String)
+end 'CorpusDiskEdit'
+
+export typealias CorpusDiskEditArray = Array with CorpusDiskEdit
+
+export type CorpusProbePoint
+	module let uri as String
+	module let line as LspCoordinate
+	module let character as LspCoordinate
+
+	export static function at(uri String, line LspCoordinate, character LspCoordinate) returns CorpusProbePoint
+		return Self{uri: uri, line: line, character: character}
+	end 'at'
+end 'CorpusProbePoint'
+
+export typealias CorpusProbePointArray = Array with CorpusProbePoint
+
+typealias CorpusDefinitionProbeArray = Array with CorpusDefinitionProbe
+
+export type CorpusStaleSourceRun
+	module let reader as CorpusProbePoint
+	module let readerSource as String
+	module let edits as CorpusDiskEditArray
+	module let settledWhen as CorpusSettledWhen
+	module let windowMs as DurationMs
+	module let pauseMs as Milliseconds
+	module let alsoAsk as CorpusProbePointArray
+
+	export static function create(reader CorpusProbePoint, readerSource String, edits CorpusDiskEditArray, settledWhen CorpusSettledWhen, windowMs DurationMs, pauseMs Milliseconds, alsoAsk CorpusProbePointArray) returns CorpusStaleSourceRun
+		return Self{reader: reader, readerSource: readerSource, edits: edits, settledWhen: settledWhen, windowMs: windowMs, pauseMs: pauseMs, alsoAsk: alsoAsk}
+	end 'create'
+end 'CorpusStaleSourceRun'
+
+export type CorpusStaleSourceAnswers
+	export let before as CorpusDefinitionProbe
+	export let after as CorpusDefinitionProbe
+	export let alsoAsked as CorpusDefinitionProbeArray
+
+	static function of(before CorpusDefinitionProbe, after CorpusDefinitionProbe, alsoAsked CorpusDefinitionProbeArray) returns CorpusStaleSourceAnswers
+		return Self{before: before, after: after, alsoAsked: alsoAsked}
+	end 'of'
+end 'CorpusStaleSourceAnswers'
+
+// One session spans the disk edit: the corpus is held per session, so a case that opened a fresh
+// client per probe would rebuild from disk every time and could never see a stale answer.
+export function runCorpusStaleSourceSession(run CorpusStaleSourceRun) returns CorpusStaleSourceAnswers
+	var client = LspClient.start()
+	let answers = collectCorpusStaleSourceSession(client, run: run)
+	client.release()
+
+	return answers
+end 'runCorpusStaleSourceSession'
+
+function collectCorpusStaleSourceSession(client LspClient, run CorpusStaleSourceRun) returns CorpusStaleSourceAnswers
+	var answers = corpusAnswersThatAllSay(CorpusDefinitionProbe.broke("the session ended without saying how"), run: run)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(run.reader.uri, content: run.readerSource)
+
+		let before = corpusProbeAt(client, point: run.reader)
+
+		applyCorpusDiskEdits(run.edits)
+
+		let after = corpusAnswerAcrossTheWindow(client, run: run)
+		answers = CorpusStaleSourceAnswers.of(before, after: after, alsoAsked: corpusProbesAt(client, points: run.alsoAsk))
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then answers = corpusAnswersThatAllSay(corpusProbeOfFailure(e), run: run)
+		end 'reason'
+	end 'failed'
+
+	return answers
+end 'collectCorpusStaleSourceSession'
+
+function corpusAnswersThatAllSay(probe CorpusDefinitionProbe, run CorpusStaleSourceRun) returns CorpusStaleSourceAnswers
+	var alsoAsked = CorpusDefinitionProbeArray.create()
+
+	for _ in 0 upto run.alsoAsk.count() 'eachPointNeverReached'
+		alsoAsked.push(probe)
+	end 'eachPointNeverReached'
+
+	return CorpusStaleSourceAnswers.of(probe, after: probe, alsoAsked: alsoAsked)
+end 'corpusAnswersThatAllSay'
+
+function applyCorpusDiskEdits(edits CorpusDiskEditArray)
+	for edit in edits 'eachEdit'
+		match edit 'edit'
+			wrote(directory, fileName, content) then writeCorpusFile(directory, fileName: fileName, content: content)
+			deleted(directory, fileName) then deleteCorpusFile(directory, fileName: fileName)
+		end 'edit'
+	end 'eachEdit'
+end 'applyCorpusDiskEdits'
+
+// Hands back the last answer either way, so a failure reports what the server said rather than that
+// a loop ended.
+function corpusAnswerAcrossTheWindow(client LspClient, run CorpusStaleSourceRun) returns CorpusDefinitionProbe throws LspClientError
+	let started = Clock.nowMs()
+	var latest = try corpusProbeAt(client, point: run.reader)
+
+	while Clock.elapsedMs(started) < run.windowMs 'untilSettled'
+		if corpusProbeSettled(latest, when: run.settledWhen) 'settled'
+			return latest
+		end 'settled'
+
+		sleep(run.pauseMs)
+		latest = try corpusProbeAt(client, point: run.reader)
+	end 'untilSettled'
+
+	return latest
+end 'corpusAnswerAcrossTheWindow'
+
+function corpusProbesAt(client LspClient, points CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
+	var probes = CorpusDefinitionProbeArray.create()
+
+	for point in points 'eachPoint'
+		let probe = try corpusProbeAt(client, point: point)
+		probes.push(probe)
+	end 'eachPoint'
+
+	return probes
+end 'corpusProbesAt'
+
+function corpusProbeAt(client LspClient, point CorpusProbePoint) returns CorpusDefinitionProbe throws LspClientError
+	return corpusProbeOf(try client.definition(point.uri, line: point.line, character: point.character))
+end 'corpusProbeAt'
+
+function corpusProbeSettled(probe CorpusDefinitionProbe, when CorpusSettledWhen) returns bool
+	return match probe 'probe'
+		located(uri, _) gives corpusLocatedAnswerSettles(uri, when: when)
+		absent gives corpusAbsentAnswerSettles(when)
+		refused or
+			broke gives true
+	end 'probe'
+end 'corpusProbeSettled'
+
+function corpusLocatedAnswerSettles(uri String, when CorpusSettledWhen) returns bool
+	return match when 'when'
+		anAnswerArrives gives true
+		theAnswerStops gives false
+		theAnswerNames(fileTail) gives corpusFoldedUri(uri).endsWith(fileTail)
+		theWindowCloses gives false
+	end 'when'
+end 'corpusLocatedAnswerSettles'
+
+function corpusAbsentAnswerSettles(when CorpusSettledWhen) returns bool
+	return match when 'when'
+		anAnswerArrives gives false
+		theAnswerStops gives true
+		theAnswerNames gives false
+		theWindowCloses gives false
+	end 'when'
+end 'corpusAbsentAnswerSettles'

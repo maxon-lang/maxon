@@ -30,12 +30,44 @@ export function fileChanged(project Project, path FilePath, content String)
 
 	project.db.sourceFiles.upsert(path, value: SourceFileEntry.create(content, contentHash: hash))
 
-	// THE ONLY WRITER of the composite-hash memo's dirty flag, because this is the only thing that
-	// can move the composite hash: it is a fold over exactly these entries. The early return above is
-	// on the path where nothing changed, so it must NOT invalidate — an unchanged re-register is a
-	// no-op all the way down.
 	project.db.compositeHashValid = false
 end 'fileChanged'
+
+// ⚠ The flag clear at the end is not bookkeeping. `ProgramSignatures` is keyed on the composite
+// hash and `moduleDirectoryOfPathText` panics on a path it does not hold, so an index left standing
+// over a path set that has moved takes the server down on the next visibility question.
+module function filesRemoved(project Project, paths MaxonSourcePathSet)
+	if paths.count() == 0 'nothingWentAway'
+		return
+	end 'nothingWentAway'
+
+	var kept = FilePathArray.create()
+
+	// `path` is a borrow of an element of the array being walked, so nothing here may write
+	// `project.db.sourcePaths` — the kept list replaces it only once the walk is over.
+	for path in project.db.sourcePaths 'eachRegistered'
+		if not paths.contains(path) 'stillRegistered'
+			kept.push(path)
+			continue
+		end 'stillRegistered'
+
+		forgetOneSourceFile(project, path: path)
+	end 'eachRegistered'
+
+	project.db.sourcePaths = kept
+	project.db.compositeHashValid = false
+end 'filesRemoved'
+
+function forgetOneSourceFile(project Project, path FilePath)
+	_ = project.db.sourceFiles.remove(path)
+	_ = project.db.sourceStamps.remove(path)
+	_ = project.db.tokenCache.remove(path)
+	_ = project.db.activeTokenCache.remove(path)
+	_ = project.db.parseCache.remove(path)
+	_ = project.db.fileProvenance.remove(path)
+
+	project.db.rowSetOverrides.forget(path)
+end 'forgetOneSourceFile'
 
 // --- The memo that outlives a `Project` ---
 //
@@ -373,19 +405,13 @@ export function currentParseMemoKey(project Project, path FilePath, signatureHas
 	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies, coverage: project.coverage, overridesDigest: overrides.digest)
 end 'currentParseMemoKey'
 
-// The composite whole-program hash: every source file's content hash folded in source-path order.
-// The whole-program memos (the signature index, the merged module) key on it, so any file changing —
-// or the file SET changing — invalidates them while leaving the unchanged files' per-file memos hot.
+// Memoized, and it has to be. The fold is O(files) and it is asked once per file — every
+// `queryParseOps` validates the signature index before it can validate itself, and that validation
+// is this hash — so recomputing it per call makes the query spine O(files²). That is the
+// standing hazard of putting a whole-program query underneath a per-file one.
 //
-// **MEMOIZED, AND IT HAS TO BE.** The fold is O(files), and since the signature index landed it is
-// asked ONCE PER FILE — every `queryParseOps` must validate the index before it can validate itself,
-// and that validation is this hash. Recomputing it per call made the query spine **O(files²)**: the
-// same shape as the `clearDepsFor` quadratic, discovered the same way (an alloc delta that grew x3
-// per rung on a ladder that doubles), and it is the standing hazard of putting a WHOLE-PROGRAM query
-// underneath a PER-FILE one.
-//
-// The memo has exactly one invalidator — `fileChanged` — because the hash is a fold over exactly the
-// entries `fileChanged` writes. Nothing else can move it, so nothing else may clear the flag.
+// Every mutation of the registered path set or of a file's content clears the flag; an unchanged
+// re-register does not, or a held `Project` rebuilds the whole-program memos on every request.
 export function compositeSourceHash(project Project) returns HashDigest
 	if project.db.compositeHashValid 'memoized'
 		return project.db.compositeHash
@@ -395,6 +421,11 @@ export function compositeSourceHash(project Project) returns HashDigest
 
 	for path in project.db.sourcePaths 'each'
 		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
+		// The path is folded beside the content hash: the digest is a function of the (path, content)
+		// sequence, not of the contents alone. A rename moves no content, so a fold over contents alone
+		// recomputes to the same value, the signature-index memo reads valid, and the index keeps
+		// answering out of the file that is gone.
+		h = Hasher.combined(h, bytes: path.toString().toByteArray())
 		h = Hasher.combined(h, value: entry.contentHash)
 	end 'each'
 

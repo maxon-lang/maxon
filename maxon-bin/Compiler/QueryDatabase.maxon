@@ -300,6 +300,10 @@ export type RowSetOverrides
 	export function file(path FilePath, table RowSetOverrideTable)
 		self.tables.upsert(path, value: table)
 	end 'file'
+
+	export function forget(path FilePath)
+		_ = self.tables.remove(path)
+	end 'forget'
 end 'RowSetOverrides'
 
 // ⭐ **THE GENERIC TYPES A PARSE INSTANTIATED THAT NO DECLARATION DID.** Which methods carry a layout descriptor is
@@ -347,9 +351,8 @@ export type QueryDatabase
 
 	module var sourceStamps as SourceFileStampMap
 
-	// The composite whole-program source hash, MEMOIZED — every whole-program memo keys on it, and
-	// since the signature index landed it is asked once per FILE, which made re-folding it O(files²).
-	// `fileChanged` is its only invalidator (see QueryEngine.compositeSourceHash).
+	// The composite whole-program source hash, memoized — every whole-program memo keys on it and it
+	// is asked once per file, so re-folding it per ask is O(files²).
 	export var compositeHash as HashDigest
 	export var compositeHashValid as bool
 

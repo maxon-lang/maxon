@@ -1,0 +1,68 @@
+let CrossDirRootName = "temp/lsp/a-renamed-file-across-directories-is-not-folded-twice"
+let CrossDirBeforeDirName = "temp/lsp/a-renamed-file-across-directories-is-not-folded-twice/alpha"
+let CrossDirAfterDirName = "temp/lsp/a-renamed-file-across-directories-is-not-folded-twice/beta"
+
+let CrossDirReaderName = "reader.maxon"
+let CrossDirDeclarationName = "thing.maxon"
+let CrossDirSteadyName = "steady.maxon"
+let CrossDirBeforeTail = "alpha/thing.maxon"
+let CrossDirAfterTail = "beta/thing.maxon"
+
+let CrossDirReaderSource = "function main() returns ExitCode\n\treturn movedAnswer() + steadyAnswer()\nend 'main'\n"
+let CrossDirDeclarationSource = "export function movedAnswer() returns ExitCode\n\treturn 0\nend 'movedAnswer'\n"
+let CrossDirSteadySource = "export function steadyAnswer() returns ExitCode\n\treturn 0\nend 'steadyAnswer'\n"
+
+let CrossDirCallLine = 1 as LspCoordinate
+let CrossDirMovedCallCharacter = 12 as LspCoordinate
+let CrossDirSteadyCallCharacter = 28 as LspCoordinate
+let CrossDirDeclarationLine = 0 as LspCoordinate
+
+let CrossDirWindowMs = 2000 as DurationMs
+let CrossDirPauseMs = 100 as Milliseconds
+
+test 'stale source: a renamed file across directories is not folded twice'
+	let root = stagedCorpusDirectory(CrossDirRootName)
+	let beforeDirectory = stagedCorpusDirectory(CrossDirBeforeDirName)
+	let afterDirectory = stagedCorpusDirectory(CrossDirAfterDirName)
+
+	removeCrossDirDestination(afterDirectory)
+	writeCorpusFile(root, fileName: CrossDirReaderName, content: CrossDirReaderSource)
+	writeCorpusFile(root, fileName: CrossDirSteadyName, content: CrossDirSteadySource)
+	writeCorpusFile(beforeDirectory, fileName: CrossDirDeclarationName, content: CrossDirDeclarationSource)
+
+	let answers = runCorpusStaleSourceSession(crossDirRun(root, afterDirectory: afterDirectory, beforeDirectory: beforeDirectory))
+
+	try requireCrossDirAnswerNamesOnlyTheNewDirectory(answers)
+end 'stale source: a renamed file across directories is not folded twice'
+
+function requireCrossDirAnswerNamesOnlyTheNewDirectory(answers CorpusStaleSourceAnswers) throws TestFailure
+	let steady = try answers.alsoAsked.get(0) otherwise panic("a renamed file across directories is not folded twice: the run asks one further point, so the session hands back one further answer")
+
+	try expectDefinitionInFile(answers.before, fileTail: CrossDirBeforeTail, startLine: CrossDirDeclarationLine, note: "the FIRST request, before the move, did not resolve into `{CrossDirBeforeTail}`. That half is the control: a bare call into the ONE directory that declares the name has to resolve before the two-directory answer below means anything.")
+
+	try expectDefinitionInFile(steady, fileTail: CrossDirSteadyName, startLine: CrossDirDeclarationLine, note: "a jump into `{CrossDirSteadyName}` — a file the move never touched, holding a name neither directory contests — had also stopped resolving by the end of the move. That makes the whole corpus dead rather than the moved name wrong, so nothing below can be read as a statement about how a contested name resolves: fix this first.")
+
+	try expectDefinitionInFile(answers.after, fileTail: CrossDirAfterTail, startLine: CrossDirDeclarationLine, note: "`{CrossDirBeforeTail}` was moved to `{CrossDirAfterTail}` — the same declaration, written under the new directory and deleted from the old one — and the jump did not land in `{CrossDirAfterTail}`, while the untouched jump above still resolved. The old path is never unregistered, so ONE declaration is folded from two files in two module directories at once: the name becomes a contested free function with two visible spellings, and a call the compiler would bind to exactly one declaration is answered as though the author had written something ambiguous.")
+end 'requireCrossDirAnswerNamesOnlyTheNewDirectory'
+
+function removeCrossDirDestination(afterDirectory FilePath)
+	if not File.exists(afterDirectory.join(CrossDirDeclarationName)) 'alreadyAbsent'
+		return
+	end 'alreadyAbsent'
+
+	deleteCorpusFile(afterDirectory, fileName: CrossDirDeclarationName)
+end 'removeCrossDirDestination'
+
+function crossDirRun(root FilePath, afterDirectory FilePath, beforeDirectory FilePath) returns CorpusStaleSourceRun
+	var edits = CorpusDiskEditArray.create()
+	edits.push(CorpusDiskEdit.wrote(afterDirectory, fileName: CrossDirDeclarationName, content: CrossDirDeclarationSource))
+	edits.push(CorpusDiskEdit.deleted(beforeDirectory, fileName: CrossDirDeclarationName))
+
+	let uri = fileUriOf(root.join(CrossDirReaderName))
+	let reader = CorpusProbePoint.at(uri, line: CrossDirCallLine, character: CrossDirMovedCallCharacter)
+
+	var alsoAsk = CorpusProbePointArray.create()
+	alsoAsk.push(CorpusProbePoint.at(uri, line: CrossDirCallLine, character: CrossDirSteadyCallCharacter))
+
+	return CorpusStaleSourceRun.create(reader, readerSource: CrossDirReaderSource, edits: edits, settledWhen: CorpusSettledWhen.theAnswerNames(CrossDirAfterTail), windowMs: CrossDirWindowMs, pauseMs: CrossDirPauseMs, alsoAsk: alsoAsk)
+end 'crossDirRun'
