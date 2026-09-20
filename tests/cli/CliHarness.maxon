@@ -49,7 +49,7 @@ export let OutputFlag = "-o"
 // The command that fills the cache, the command that empties it, and the variable naming the directory
 // the cache is kept under. Respelled here because this corpus is a separate program and cannot read the
 // driver's own constants.
-export let RunCommandWord = "run"
+export let ExecuteCommandWord = "execute"
 export let CacheCommandWord = "cache"
 export let CacheClearVerb = "clear"
 export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
@@ -612,14 +612,14 @@ function publishCachedBuildUnder(dir FilePath, naming EnvMap, owned FilePath, pr
 	let source = dir.join(program)
 	try File.writeText(source, content: CachedProgramSource) otherwise panic("CliHarness: the gate could not run - could not write {source.toString()}, the program a case caches a build of.")
 
-	let run = runWithCacheRoots([RunCommandWord, source.toString()], naming: naming, workingDirectory: dir)
+	let run = runWithCacheRoots([ExecuteCommandWord, source.toString()], naming: naming, workingDirectory: dir)
 
 	if run.exitCode() != 0 'didNotRun'
-		panic("CliHarness: the gate could not run - `maxon {RunCommandWord}` did not compile the staged program, so there is no cached build to act on. It wrote to stdout: {run.stdout} and to stderr: {run.stderr}")
+		panic("CliHarness: the gate could not run - `maxon {ExecuteCommandWord}` did not compile the staged program, so there is no cached build to act on. It wrote to stdout: {run.stdout} and to stderr: {run.stderr}")
 	end 'didNotRun'
 
 	if not Directory.isDirectory(owned) 'nothingCached'
-		panic("CliHarness: the gate could not run - `maxon {RunCommandWord}` left nothing under {owned.toString()}, so a case about clearing the cache would be about an empty one.")
+		panic("CliHarness: the gate could not run - `maxon {ExecuteCommandWord}` left nothing under {owned.toString()}, so a case about clearing the cache would be about an empty one.")
 	end 'nothingCached'
 end 'publishCachedBuildUnder'
 

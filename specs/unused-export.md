@@ -616,7 +616,7 @@ The same defect one route over: `a`'s type is INFERRED from a callee's declared 
 needs `Rec` visible for `a.n` and never writes the name. E3092 reported it and E4006 refused the access once
 the advice was taken.
 ```maxon
-// --- file: api/build.maxon
+// --- file: api/project.maxon
 typealias Integer = int(i64.min to i64.max)
 
 export type Rec

@@ -1,0 +1,64 @@
+export typealias TaskNameArray = Array with String
+
+typealias TokenCursor = int(0 to u64.max)
+
+// A task is declared at the left margin. Without the column test a `type`'s exported methods are
+// offered as tasks, and asking for one compiles a manifest whose entry point is a method.
+let TopLevelColumn = 1
+
+export function taskNamesIn(source String) returns TaskNameArray
+	var names = TaskNameArray.create()
+
+	let tokens = try tokenize(source, keywords: KeywordTable.create()) otherwise return names
+	let count = tokens.count()
+
+	if count < 4 'tooShortToDeclareOne'
+		return names
+	end 'tooShortToDeclareOne'
+
+	var i = 0 as TokenCursor
+
+	while i + 3 < count 'scan'
+		let named = try taskNameAt(tokens, at: i) otherwise 'notADeclaration'
+			i = i + 1
+			continue
+		end 'notADeclaration'
+
+		names.push(named)
+		i = i + 4
+	end 'scan'
+
+	return names
+end 'taskNamesIn'
+
+union TaskScanError implements Error
+	notATaskDeclaration
+end 'TaskScanError'
+
+function taskNameAt(tokens TokenArray, at TokenCursor) returns String throws TaskScanError
+	let keyword = try tokens.get(at) otherwise throw TaskScanError.notATaskDeclaration
+
+	if keyword.kind != TokenKind.export or keyword.column != TopLevelColumn 'notAnExportedTopLevelDeclaration'
+		throw TaskScanError.notATaskDeclaration
+	end 'notAnExportedTopLevelDeclaration'
+
+	let declaration = try tokens.get(at + 1) otherwise throw TaskScanError.notATaskDeclaration
+
+	if declaration.kind != TokenKind.function 'notAFunction'
+		throw TaskScanError.notATaskDeclaration
+	end 'notAFunction'
+
+	let named = try tokens.get(at + 2) otherwise throw TaskScanError.notATaskDeclaration
+
+	if named.kind != TokenKind.identifier 'notANamedFunction'
+		throw TaskScanError.notATaskDeclaration
+	end 'notANamedFunction'
+
+	let opened = try tokens.get(at + 3) otherwise throw TaskScanError.notATaskDeclaration
+
+	if opened.kind != TokenKind.leftParen 'notAParameterList'
+		throw TaskScanError.notATaskDeclaration
+	end 'notAParameterList'
+
+	return String.from(named.value)
+end 'taskNameAt'

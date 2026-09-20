@@ -93,7 +93,7 @@ maxon verify-recheck <file|dir>
 ## A typical loop
 
 ```bash
-./maxon-bin/.maxon/maxon build maxon-bin              # rebuild the compiler with itself
+./maxon-bin/.maxon/maxon run build                    # rebuild the compiler with itself
 ./maxon-bin/.maxon/maxon spec-test --filter=arrays    # the specs you touched
 ./maxon-bin/.maxon/maxon spec-test > temp/spec.log 2>&1   # the whole suite, read from the file
 ./maxon-bin/.maxon/maxon scale-test                   # after a change to a compiler pass

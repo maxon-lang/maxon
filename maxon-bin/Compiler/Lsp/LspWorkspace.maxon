@@ -7,16 +7,16 @@
 //
 // A document's project root is a ladder, and the ORDER of its rungs is the design. `workspaceRootOf`
 // holds it: a library tier's file gets the tiers alone; otherwise the nearest ancestor holding a
-// `build.maxon`, climbed no higher than the nearest client-named root that holds this document; then
+// `project.maxon`, climbed no higher than the nearest client-named root that holds this document; then
 // that named root, for a document inside it; then the document's own directory. The manifest climb is
-// unbounded and this checkout carries a `build.maxon` at its own root, so a named root consulted after
-// an uncapped climb would decide nothing, while one consulted before the climb would root a document
-// under `<root>/sub/build.maxon` at `<root>`. Capping the climb is what leaves both rungs right. A
-// client that names no root leaves the climb and the document's own directory.
+// unbounded, and a directory ABOVE the one the client opened may hold a `project.maxon` of its own, so a
+// named root consulted after an uncapped climb would decide nothing, while one consulted before the
+// climb would root a document under `<root>/sub/project.maxon` at `<root>`. Capping the climb is what
+// leaves both rungs right. A client that names no root leaves the climb and the document's own directory.
 //
 // The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
 // a removed root takes every project held under it. The sweep under a root is never pruned at a nested
-// `build.maxon` — the build system has no nested projects, so two projects are siblings.
+// `project.maxon` — the build system has no nested projects, so two projects are siblings.
 //
 // ⚠ Answering `unavailable` costs a feature its cross-file half and leaves the in-buffer half standing,
 // which is what an editor should see: fewer answers, never a refused request.
@@ -447,11 +447,12 @@ function maxonSourcesIn(dir FilePath) returns SourceSweep
 	return SourceSweep.swept(sources)
 end 'maxonSourcesIn'
 
-// ⚠ The tier test comes FIRST, and a library file must never reach the manifest climb. The checkout
-// this compiler is built from holds a `build.maxon` at its root, so a `stdlib/` file climbing for one
-// would root its project at the whole checkout and sweep every source in the tree to answer one jump.
+// ⚠ The tier test comes FIRST, and a library file must never reach the manifest climb: a `stdlib/` file
+// climbing for a manifest would root its project at whatever tree the tier sits in and sweep every source
+// in it to answer one jump.
 //
-// `build.maxon` is used purely as a MARKER of where a project begins — it is never read and never run.
+// `project.maxon` is used purely as a MARKER of where a project begins — it is never read and never run,
+// and a `tasks.maxon` beside it marks nothing at all.
 function workspaceRootOf(document ReaderDocument, tiers LibraryTiers, workingDirectory FilePath) returns WorkspaceRoot
 	if document.normalized.isInside(tiers.stdlibDir.normalize()) or document.normalized.isInside(tiers.runtimeDir.normalize()) 'aLibraryFile'
 		return WorkspaceRoot.libraryTierOnly
@@ -490,7 +491,7 @@ function nearestManifestDirectory(directory FilePath, noHigherThan StatedRoot, w
 	var current = directory.resolve(workingDirectory).clone()
 
 	while true 'upwards'
-		if File.exists(current.join("{BuildManifestFileName}")) 'holdsAManifest'
+		if File.exists(current.join("{ProjectManifestFileName}")) 'holdsAManifest'
 			return ManifestDirectory.found(current)
 		end 'holdsAManifest'
 

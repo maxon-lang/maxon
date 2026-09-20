@@ -67,7 +67,13 @@ let ProfileCommandName = "profile"
 // Also reached with no word at all: a first argument ending in `MaxonSourceExtension`, which is
 // what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`. See
 // `MaxonArgs.parse`. `module` because `Run/RunCommand.maxon` names the command in its own refusals.
+module let ExecuteCommandName = "execute"
+
 module let RunCommandName = "run"
+
+module let InitCommandName = "init"
+
+module let MainSourceFileName = "main.maxon"
 
 // `module` because `Upgrade/UpgradeCommand.maxon` names both in its own refusals and usage line.
 module let UpgradeCommandName = "upgrade"
@@ -187,7 +193,7 @@ module let CoverageFlag = "--coverage"
 // Assembled from the flag names, so a rename cannot leave the sentence naming a flag that no longer
 // exists.
 function coverageNeedsDebugInfoMessage() returns String
-	return "{CoverageFlag} requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a {MxcovDataExtension} written by this binary could never be interpreted. Drop {NoDebugInfoFlag} (or `debugInfo: false` in {BuildManifestFileName}), or drop {CoverageFlag}."
+	return "{CoverageFlag} requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a {MxcovDataExtension} written by this binary could never be interpreted. Drop {NoDebugInfoFlag} (or `debugInfo: false` in {ProjectManifestFileName}), or drop {CoverageFlag}."
 end 'coverageNeedsDebugInfoMessage'
 
 // Names withheld functions the IR sidecar must also render: a golden otherwise shows only functions
@@ -296,13 +302,15 @@ function main() returns ExitCode
 		cache gives runCache(args)
 		coverage gives runCoverage(args)
 		debug gives runDebugCommand(args)
+		execute gives runExecute(args)
 		fmt gives runFmt(args)
+		init gives runInit(args)
 		help gives runHelp(args)
 		lspServer gives runLspServer()
 		mcpServer gives runMcpServerCommand(args)
 		monitor gives runMonitor(args)
 		profile gives runProfile(args)
-		run gives runRun(args)
+		run gives runTask(args)
 		scaleTest gives runScaleTest(args)
 		specTest gives runSpecTest(args)
 		test gives runTest(args)
@@ -385,11 +393,35 @@ let ManifestSourcesKey = "sources"
 let ManifestVersionKey = "version"
 let ManifestDefinesKey = "defines"
 let ManifestDebugInfoKey = "debug_info"
+let ManifestDirectoryKey = "directory"
+let ManifestDelegateTargetKey = "target"
+
+// The channel a manifest describes its build over, so that its stdout stays the task's own. The
+// compiler cannot read a stdlib constant, so `stdlib/Build.maxon` spells this name too: the two
+// copies must agree, or every manifest describes nothing and every path-less build refuses.
+let BuildDescriptionVariable = "MAXON_BUILD_DESCRIPTION"
+
+let BuildDescriptionSuffix = ".build.json"
+
+let MaxDelegationDepth = 8 as DelegationDepth
+
+typealias DelegationDepth = int(0 to 64)
+
+module union ManifestBase
+	workingDirectory
+	directory(dir FilePath)
+end 'ManifestBase'
+
+module union ManifestProgramRun
+	described(text String)
+	describedNothing(code ExitCode)
+	notRun
+end 'ManifestProgramRun'
 
 // A name that is not a target is not an error: `maxon build <x>` may mean the path x, so a manifest
 // declaring no `x` answers `noSuchTarget` and the caller falls back to path semantics. Refusing
 // would let a manifest break builds it was never part of.
-union ManifestRun
+module union ManifestRun
 	ran(code ExitCode)
 	noSuchTarget
 end 'ManifestRun'
@@ -416,11 +448,11 @@ function manifestTargetName(doc JsonDoc, build JsonNodeId) returns String
 	return try doc.getString(build, key: ManifestNameKey) otherwise ""
 end 'manifestTargetName'
 
-// `build.maxon` is a Maxon program, not a config file, so the paths it compiles can be computed.
+// `project.maxon` is a Maxon program, not a config file, so the paths it compiles can be computed.
 // The compiler compiles and runs it and reads `stdlib/Build.maxon`'s JSON from its stdout, so both
 // ends share one description of a build.
 function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
-	let manifest = Directory.currentPath().join(BuildManifestFileName)
+	let manifest = Directory.currentPath().join(ProjectManifestFileName)
 
 	if not File.exists(manifest) 'noManifest'
 		if not targetName.isEmpty() 'nameWithoutManifest'
@@ -429,54 +461,121 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 
 		printError("Usage: maxon build <file|directory|target>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
 		printError("\n")
-		printError("With no path, `maxon build` runs the {BuildManifestFileName} in the current directory. There is none here.\n")
+		printError("With no path, `maxon build` runs the {ProjectManifestFileName} in the current directory. There is none here.\n")
 		return ManifestRun.ran(1)
 	end 'noManifest'
 
-	// Built for this host whatever `--target` says: this machine is about to run it. The flag
-	// describes the program the manifest asks for.
-	//
-	// Kept in the run cache, never in the project: a path inside the project is written by every
-	// concurrent build of it, and which lock would apply is known only once the manifest has run.
-	//
-	// ⭐ **ONLY THIS COMPILE IS SILENCED, AND THE LEVEL GOES BACK BEFORE THE NEXT ONE.** The build the
-	// manifest goes on to describe is what the caller asked for, and its own report is their answer;
-	// the runner is scaffolding, so it owes them one line rather than a second build's worth of it.
+	return buildThroughManifest(manifest, args: args, targetName: targetName, base: ManifestBase.workingDirectory, depth: 0)
+end 'runBuildManifest'
+
+function buildThroughManifest(manifest FilePath, args MaxonArgs, targetName String, base ManifestBase, depth DelegationDepth) returns ManifestRun
+	let outcome = runManifestProgram(manifest, entry: ManifestEntryFunction, speaker: BuildSubcommandName, base: base, arguments: StringArray.create(), args: args, announce: true)
+
+	return match outcome 'outcome'
+		described(text) gives buildFromManifestOutput(text, args: args, targetName: targetName, manifest: manifest, base: base, depth: depth)
+		describedNothing(code) gives describedNoBuild(manifest, code: code)
+		notRun gives ManifestRun.ran(1)
+	end 'outcome'
+end 'buildThroughManifest'
+
+function describedNoBuild(manifest FilePath, code ExitCode) returns ManifestRun
+	printError("error: {manifest.filename()} exited {code} and described no build\n")
+	return ManifestRun.ran(1 if code == 0 else code)
+end 'describedNoBuild'
+
+// Built for this host whatever `--target` says: this machine is about to run it, and the flag
+// describes the program the manifest asks for. Kept in the run cache and never in the project: a
+// path inside the project is written by every concurrent build of it, and which lock would apply is
+// known only once the manifest has run.
+//
+// Only this compile is silenced, and the level goes back before the next one. The build the manifest
+// goes on to describe is what the caller asked for, and its own report is their answer.
+module function runManifestProgram(manifest FilePath, entry ByteArray, speaker String, base ManifestBase, arguments StringArray, args MaxonArgs, announce bool) returns ManifestProgramRun
 	let spoke = quietTheBuildChatter(args)
 
-	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: ManifestEntryFunction, speaker: BuildSubcommandName) otherwise 'manifestNotBuilt'
+	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: entry, speaker: speaker) otherwise 'manifestNotBuilt'
 		setLogLevel(spoke)
-		printError("error: {BuildManifestFileName} could not be built — the reason is above\n")
-		return ManifestRun.ran(1)
+		printError("error: {manifest.filename()} could not be built — the reason is above\n")
+		return ManifestProgramRun.notRun
 	end 'manifestNotBuilt'
 
 	setLogLevel(spoke)
-	reportBuildRunner(runner.compiled)
 
-	let run = try Subprocess.run(Executable.path(runner.executable), arguments: StringArray.create()) otherwise 'manifestRunErr'
-		printError("error: {BuildManifestFileName} compiled but could not be run\n")
-		return ManifestRun.ran(1)
-	end 'manifestRunErr'
+	if announce 'tellTheReader'
+		reportBuildRunner(runner.compiled, manifest: manifest)
+	end 'tellTheReader'
 
-	if run.exitCode() != 0 'manifestFailed'
-		printError("error: {BuildManifestFileName} exited {run.exitCode()} and described no build\n")
+	let description = buildDescriptionPath(runner)
+	discardDescription(description)
 
-		if not run.stderr.isEmpty() 'hasStderr'
-			printError("{run.stderr}\n")
-		end 'hasStderr'
+	var overrides = EnvMap.create()
+	overrides.upsert(BuildDescriptionVariable, value: description.toString())
 
-		return ManifestRun.ran(1)
-	end 'manifestFailed'
+	let code = spawnForwarding(Executable.path(runner.executable), arguments: arguments, environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: baseDirectory(base), speaker: speaker)
 
-	return buildFromManifestOutput(run.stdout, args: args, targetName: targetName)
-end 'runBuildManifest'
+	if code != 0 'taskFailed'
+		discardDescription(description)
+		return ManifestProgramRun.describedNothing(code)
+	end 'taskFailed'
+
+	if not File.exists(description) 'describedNothing'
+		return ManifestProgramRun.describedNothing(0)
+	end 'describedNothing'
+
+	let text = try File.readText(description) otherwise 'unreadable'
+		discardDescription(description)
+		printError("error: {manifest.filename()} described a build that could not be read back from {description.toString()}\n")
+		return ManifestProgramRun.notRun
+	end 'unreadable'
+
+	discardDescription(description)
+	return ManifestProgramRun.described(text)
+end 'runManifestProgram'
+
+// The name carries this process's id because two concurrent builds of one manifest share the cache
+// slot the runner lives in, and each would otherwise read back the other's description.
+function buildDescriptionPath(runner CachedProgram) returns FilePath
+	return try FilePath.from("{runner.executable.toString()}.{__Builtins.currentProcessId()}{BuildDescriptionSuffix}") otherwise panic("buildDescriptionPath: '{runner.executable.toString()}' is a path, so it is one with a suffix on the end")
+end 'buildDescriptionPath'
+
+function discardDescription(description FilePath)
+	try File.delete(description) otherwise ignore
+end 'discardDescription'
+
+function baseDirectory(base ManifestBase) returns FilePath
+	return match base 'base'
+		workingDirectory gives inheritedWorkingDirectory()
+		directory(dir) gives dir
+	end 'base'
+end 'baseDirectory'
+
+// The empty path is `Subprocess.Configuration`'s sentinel for "inherit this process's directory".
+module function inheritedWorkingDirectory() returns FilePath
+	return try FilePath.from("") otherwise panic("inheritedWorkingDirectory: the empty path is the inherit-cwd sentinel and always parses")
+end 'inheritedWorkingDirectory'
+
+// A relative path a delegated manifest states is its own directory's, because that is the directory
+// it was run in. Rebasing a manifest run in the working directory would make an absolute path of
+// every output the caller spelled, which is what `Compiled -> <path>` and the tree lock read.
+function rebasedOnManifest(spelling String, base ManifestBase) returns String
+	return match base 'base'
+		workingDirectory gives spelling
+		directory(dir) gives resolvedUnder(spelling, dir: dir)
+	end 'base'
+end 'rebasedOnManifest'
+
+function resolvedUnder(spelling String, dir FilePath) returns String
+	let stated = try FilePath.from(spelling) otherwise return spelling
+
+	return stated.resolve(dir).toString()
+end 'resolvedUnder'
 
 // One line on stdout, ahead of the build's own report: which of the two things happened to the
-// program that describes the build. A reader waiting on a cold `build.maxon` compile is otherwise
-// told nothing at all.
-function reportBuildRunner(compiled bool)
+// program that describes the build. A reader waiting on a cold manifest compile is otherwise told
+// nothing at all.
+function reportBuildRunner(compiled bool, manifest FilePath)
 	let said = "Compiled the build runner" if compiled else "Used the cached build runner"
-	print("{said} ({BuildManifestFileName})\n")
+	print("{said} ({manifest.filename()})\n")
 end 'reportBuildRunner'
 
 // A function rather than a reassignment, which would clone a `String` neither branch changes.
@@ -490,11 +589,11 @@ end 'chosenOutput'
 
 // A field the description states and this cannot use is an error, never a default: a guess is how a
 // build compiles the wrong thing while reporting success.
-function buildFromManifestOutput(stdout String, args MaxonArgs, targetName String) returns ManifestRun
-	let doc = try Json.parse(stdout) otherwise 'badJson'
-		printError("error: {BuildManifestFileName} printed something that is not a build description.\n")
-		printError("It must print what `Build.build(source, output:)` or `Build.buildWithConfig(config)` writes. It printed:\n")
-		printError("{stdout}\n")
+module function buildFromManifestOutput(described String, args MaxonArgs, targetName String, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ManifestRun
+	let doc = try Json.parse(described) otherwise 'badJson'
+		printError("error: {manifest.filename()} described something that is not a build.\n")
+		printError("It must write what `Build.build(source, output:)` or `Build.buildWithConfig(config)` writes. It wrote:\n")
+		printError("{described}\n")
 		return ManifestRun.ran(1)
 	end 'badJson'
 
@@ -507,7 +606,7 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 
 	if targetName.isEmpty() 'noNameGiven'
 		if buildCount != 1 'severalTargets'
-			printError("{BuildManifestFileName} declares {buildCount} targets. Name one:\n")
+			printError("{manifest.filename()} declares {buildCount} targets. Name one:\n")
 
 			for id in builds 'eachTargetName'
 				printError("  {manifestTargetName(doc, build: id)}\n")
@@ -532,43 +631,63 @@ function buildFromManifestOutput(stdout String, args MaxonArgs, targetName Strin
 		end 'noSuchName'
 	end 'nameGiven'
 
+	let delegateDirectory = try manifestDelegateDirectory(doc, build: chosen) otherwise (e) 'badDirectory'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestDirectoryKey, error: e, manifest: manifest))
+	end 'badDirectory'
+
 	let output = try manifestOutput(doc, build: chosen) otherwise (e) 'badOutput'
-		return ManifestRun.ran(reportMalformedManifestField(ManifestOutputKey, error: e))
+		return ManifestRun.ran(reportMalformedManifestField(ManifestOutputKey, error: e, manifest: manifest))
 	end 'badOutput'
 
-	let inputPaths = try manifestSources(doc, build: chosen) otherwise (e) 'badSources'
-		return ManifestRun.ran(reportMalformedManifestField(ManifestSourcesKey, error: e))
+	let statedSources = try manifestSources(doc, build: chosen, base: base) otherwise (e) 'badSources'
+		return ManifestRun.ran(reportMalformedManifestField(ManifestSourcesKey, error: e, manifest: manifest))
 	end 'badSources'
+
+	if not delegateDirectory.isEmpty() 'delegated'
+		if statedSources.count() != 0 'bothWays'
+			printError("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{ManifestSourcesKey}`.\n")
+			printError("A delegated target hands the whole description to that directory's {ProjectManifestFileName}; it cannot also name sources of its own.\n")
+			return ManifestRun.ran(1)
+		end 'bothWays'
+
+		let delegateTarget = try manifestDelegateTarget(doc, build: chosen) otherwise (e) 'badDelegateTarget'
+			return ManifestRun.ran(reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest))
+		end 'badDelegateTarget'
+
+		return delegateBuild(delegateDirectory, args: args, targetName: delegateTarget, manifest: manifest, base: base, depth: depth)
+	end 'delegated'
+
+	let inputPaths = statedSources
 
 	// An empty `sources` is refused, not read as this directory: that would compile the whole tree
 	// under a command that named nothing. `Build.build(".", output: …)` says so explicitly.
 	if inputPaths.count() == 0 'noPaths'
-		printError("error: {BuildManifestFileName} named no sources to compile.\n")
+		printError("error: {manifest.filename()} named no sources to compile.\n")
 		printError("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.\n")
 		return ManifestRun.ran(1)
 	end 'noPaths'
 
 	// `-o` outranks the manifest: the person typing answers a narrower question than the file does.
-	let outputOverride = chosenOutput(output, fromFlag: args.outputOverride)
+	let outputOverride = chosenOutput(rebasedOnManifest(output, base: base), fromFlag: args.outputOverride)
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return ManifestRun.ran(1)
 
 	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
 	// positive twin, and a manifest saying `false` means the project never wants one.
 	let manifestWantsDebugInfo = try manifestDebugInfo(doc, build: chosen) otherwise (e) 'badDebugInfo'
-		return ManifestRun.ran(reportMalformedManifestField(ManifestDebugInfoKey, error: e))
+		return ManifestRun.ran(reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: manifest))
 	end 'badDebugInfo'
 
 	// The description's `name` is not the product name: it is whatever selected this build, which for
 	// `Build.build` is the source path, often `.`. The product is named by the output.
 	let productVersion = try manifestVersion(doc, build: chosen, target: target) otherwise (e) 'badVersion'
-		return ManifestRun.ran(reportMalformedManifestField(ManifestVersionKey, error: e))
+		return ManifestRun.ran(reportMalformedManifestField(ManifestVersionKey, error: e, manifest: manifest))
 	end 'badVersion'
 
 	// The manifest's defines come first, so a command-line `--define` overrides one it computed: a
 	// later stamp replaces an earlier one, so order expresses the precedence.
 	var defines = try manifestDefines(doc, build: chosen) otherwise (e) 'badDefines'
-		return ManifestRun.ran(reportMalformedManifestField(ManifestDefinesKey, error: e))
+		return ManifestRun.ran(reportMalformedManifestField(ManifestDefinesKey, error: e, manifest: manifest))
 	end 'badDefines'
 
 	for supplied in args.defines 'eachCommandLineDefine'
@@ -590,7 +709,7 @@ union ManifestFieldError implements Error
 	notStampable(problem ProductVersionError)
 end 'ManifestFieldError'
 
-function reportMalformedManifestField(key String, error ManifestFieldError) returns ExitCode
+function reportMalformedManifestField(key String, error ManifestFieldError, manifest FilePath) returns ExitCode
 	let problem = match error 'whatIsWrong'
 		missing gives "is missing"
 		notABool gives "is not true or false"
@@ -601,7 +720,7 @@ function reportMalformedManifestField(key String, error ManifestFieldError) retu
 		notStampable(versionProblem) gives productVersionProblem(versionProblem)
 	end 'whatIsWrong'
 
-	printError("error: {BuildManifestFileName}'s `{key}` {problem}\n")
+	printError("error: {manifest.filename()}'s `{key}` {problem}\n")
 	return 1
 end 'reportMalformedManifestField'
 
@@ -613,16 +732,50 @@ function manifestOutput(doc JsonDoc, build JsonNodeId) returns String throws Man
 	return try manifestString(doc.get(valueId))
 end 'manifestOutput'
 
-function manifestSources(doc JsonDoc, build JsonNodeId) returns MaxonSourcePathArray throws ManifestFieldError
+function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
 	let listId = try doc.getChild(build, key: ManifestSourcesKey) otherwise throw ManifestFieldError.missing
 	var sources = MaxonSourcePathArray.create()
 
 	for spelling in try manifestStrings(doc, list: doc.get(listId)) 'eachSource'
-		sources.push(try FilePath.from(spelling) otherwise throw ManifestFieldError.notAPath(spelling))
+		let stated = rebasedOnManifest(spelling, base: base)
+		sources.push(try FilePath.from(stated) otherwise throw ManifestFieldError.notAPath(spelling))
 	end 'eachSource'
 
 	return sources
 end 'manifestSources'
+
+function manifestDelegateDirectory(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestDirectoryKey) otherwise return ""
+	return try manifestString(doc.get(valueId))
+end 'manifestDelegateDirectory'
+
+function manifestDelegateTarget(doc JsonDoc, build JsonNodeId) returns String throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestDelegateTargetKey) otherwise return ""
+	return try manifestString(doc.get(valueId))
+end 'manifestDelegateTarget'
+
+// The depth bound is what ends a cycle: two manifests delegating to each other would otherwise
+// recurse until the process died with nothing said.
+function delegateBuild(directory String, args MaxonArgs, targetName String, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ManifestRun
+	if depth >= MaxDelegationDepth 'tooDeep'
+		printError("error: {manifest.filename()} delegates more than {MaxDelegationDepth} deep, which is a cycle.\n")
+		return ManifestRun.ran(1)
+	end 'tooDeep'
+
+	let stated = try FilePath.from(rebasedOnManifest(directory, base: base)) otherwise 'notAPath'
+		printError("error: {manifest.filename()}'s `{ManifestDirectoryKey}` holds `{directory}`, which is not a path\n")
+		return ManifestRun.ran(1)
+	end 'notAPath'
+
+	let delegated = stated.join(ProjectManifestFileName)
+
+	if not File.exists(delegated) 'nothingToDelegateTo'
+		printError("error: {manifest.filename()} delegates to `{directory}`, which holds no {ProjectManifestFileName}\n")
+		return ManifestRun.ran(1)
+	end 'nothingToDelegateTo'
+
+	return buildThroughManifest(delegated, args: args, targetName: targetName, base: ManifestBase.directory(stated), depth: depth + 1)
+end 'delegateBuild'
 
 function manifestDebugInfo(doc JsonDoc, build JsonNodeId) returns bool throws ManifestFieldError
 	let valueId = try doc.getChild(build, key: ManifestDebugInfoKey) otherwise return true
@@ -1239,11 +1392,12 @@ typealias SignalNumber = int(0 to u32.max)
 // install script). `module` so both commands share one spawn configuration.
 //
 // `timeoutMs = 0`: a deadline would kill a long-running child the caller launched deliberately.
-module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, speaker String) returns ExitCode
+module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory FilePath, speaker String) returns ExitCode
 	var config = Configuration.create(executable)
 	config.arguments = arguments
 	config.environment = environment
 	config.standardInput = standardInput
+	config.workingDirectory = workingDirectory
 	config.standardOutput = OutputDestination.inherit
 	config.standardError = OutputDestination.inherit
 	config.timeoutMs = 0
@@ -1399,13 +1553,15 @@ function refusedCommandLineExit(command MaxonCommand) returns ExitCode
 		cache gives 1
 		coverage gives 1
 		debug gives 1
+		execute gives OwnFailureExit
 		fmt gives 1
 		help gives 1
+		init gives 1
 		lspServer gives 1
 		mcpServer gives 1
 		monitor gives 1
 		profile gives 1
-		run gives OwnFailureExit
+		run gives 1
 		scaleTest gives 1
 		specTest gives 1
 		upgrade gives OwnFailureExit
@@ -1511,16 +1667,18 @@ end 'CommandReference'
 function commandReference(command MaxonCommand) returns CommandReference throws HelpReferenceError
 	return match command 'whichCommand'
 		build gives CommandReference.create(BuildSubcommandName, arguments: "<file|directory>...", summary: "Compile a Maxon program to an executable.", detail: "Several paths are compiled as ONE program, in the order given.", audience: CommandAudience.usingTheCompiler)
-		cache gives CommandReference.create(CacheCommandName, arguments: "[{CacheClearVerb}]", summary: "Report what this compiler has cached on the host, or remove it.", detail: "With no verb it reports, on stdout: a line per cache directory this host keeps, naming the one a run will use, how many builds it holds and how much disk. A build is the executable; the debug sidecar beside one is not a build, and its bytes are counted in the size because clearing gives them back. A directory that cannot be read says so and the command exits 1.{ParagraphSeparator}`{CacheClearVerb}` removes the compiled programs `{RunCommandName}` and a path-less `{BuildSubcommandName}` keep, the directories holding them, and the Maxon directory above those. It removes nothing else in a directory you named through {RunCacheRootVariable}, which Maxon does not own. Nothing to remove is an ordinary state and is reported as success.{ParagraphSeparator}The cache is the first of {cacheRootChain()} whose variable names a directory this compiler can create, and both the report and `{CacheClearVerb}` reach every one of them this host names, because a build published while a different one ranked first is stranded under it otherwise.", audience: CommandAudience.usingTheCompiler)
+		cache gives CommandReference.create(CacheCommandName, arguments: "[{CacheClearVerb}]", summary: "Report what this compiler has cached on the host, or remove it.", detail: "With no verb it reports, on stdout: a line per cache directory this host keeps, naming the one a run will use, how many builds it holds and how much disk. A build is the executable; the debug sidecar beside one is not a build, and its bytes are counted in the size because clearing gives them back. A directory that cannot be read says so and the command exits 1.{ParagraphSeparator}`{CacheClearVerb}` removes the compiled programs `{ExecuteCommandName}` and a path-less `{BuildSubcommandName}` keep, the directories holding them, and the Maxon directory above those. It removes nothing else in a directory you named through {RunCacheRootVariable}, which Maxon does not own. Nothing to remove is an ordinary state and is reported as success.{ParagraphSeparator}The cache is the first of {cacheRootChain()} whose variable names a directory this compiler can create, and both the report and `{CacheClearVerb}` reach every one of them this host names, because a build published while a different one ranked first is stranded under it otherwise.", audience: CommandAudience.usingTheCompiler)
 		coverage gives CommandReference.create(CoverageCommandName, arguments: "<run|report> <exe>", summary: "Run a {CoverageFlag} binary and report line + branch coverage.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		debug gives CommandReference.create(DebugCommandName, arguments: "<subcommand> <exe>", summary: "Read back the `.mxdbg` debug-info sidecar beside a binary.", detail: "`--dump-info <exe>` prints the sidecar; `--symbolize <exe> <offset>...` resolves `.text` code offsets to file:line:col.", audience: CommandAudience.usingTheCompiler)
-		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `.maxon` files, skipping `build.maxon`, anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
+		fmt gives CommandReference.create(FmtCommandName, arguments: "[<file|directory>]", summary: "Re-print Maxon sources in canonical layout, IN PLACE.", detail: "With no path it formats the working directory. A named FILE is formatted whatever it is called; a DIRECTORY is walked for `.maxon` files, skipping `{ProjectManifestFileName}` and `{TaskFileName}`, anything under a `.maxonignore`, and any subdirectory that is its own checkout. Takes no options.", audience: CommandAudience.usingTheCompiler)
 		help gives CommandReference.create(HelpCommandName, arguments: "[<command>]", summary: "Print this reference: every command's options, or one command's.", detail: "`maxon` with no arguments prints the short list instead.", audience: CommandAudience.usingTheCompiler)
+		init gives CommandReference.create(InitCommandName, arguments: "[<directory>]", summary: "Scaffold a new project: `{ProjectManifestFileName}` and `{MainSourceFileName}`.", detail: "With no directory it initializes the working directory, and with one it creates that directory. The project is named after the directory, which is the output name `{ProjectManifestFileName}` builds to.{ParagraphSeparator}It never overwrites: if either file is already there, NOTHING is written and the existing path is named.", audience: CommandAudience.usingTheCompiler)
 		lspServer gives CommandReference.create(LspServerCommandName, arguments: "", summary: "Speak the Language Server Protocol over stdio.", detail: "JSON-RPC bodies under Content-Length framing, the initialize / shutdown / exit lifecycle, and full text-document synchronisation.", audience: CommandAudience.usingTheCompiler)
 		mcpServer gives CommandReference.create(McpServerCommandName, arguments: "[{DevFlag}]", summary: "Speak the Model Context Protocol over stdio.", detail: "JSON-RPC bodies over newline-delimited stdio, providing MCP tools for compiling, testing, inspecting, and formatting Maxon code. With {DevFlag}, also exposes compiler development tools.", audience: CommandAudience.usingTheCompiler)
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
-		run gives CommandReference.create(RunCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory this compiler can create, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
+		execute gives CommandReference.create(ExecuteCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory this compiler can create, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
+		run gives CommandReference.create(RunCommandName, arguments: "[<task> [args...]]", summary: "Run a task declared in `{TaskFileName}`.", detail: "A task is an exported function of no parameters returning `ExitCode`. With no task named, the tasks are listed. Everything after the task name reaches it as its own command line, and its stdin, stdout, stderr and exit code are this command's own.{ParagraphSeparator}A task that describes a build (`Build.build`, `Build.target` or `Build.delegate`) has that build performed once it exits 0, and `{OutputFlagName}`, `{TargetFlagPrefix}<cpu>-<os>` and `{DefineFlagPrefix}<name>=<value>` apply to it exactly as they do to `{BuildSubcommandName}`.", audience: CommandAudience.usingTheCompiler)
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
@@ -1720,7 +1878,7 @@ end 'printOverview'
 // ASCII only, because a Windows console renders stdout in its own code page.
 let EarlyPreviewNotice = "warning: Maxon is an early preview. The language, standard library and tools may change incompatibly between releases."
 
-function printVersionHeader()
+module function printVersionHeader()
 	print("{versionLine()}\n{EarlyPreviewNotice}\n")
 end 'printVersionHeader'
 
@@ -1843,9 +2001,12 @@ enum MaxonCommand
 
 	debug
 
+	execute
+
 	fmt
 
 	help
+	init
 	lspServer
 	mcpServer
 
@@ -2033,13 +2194,13 @@ module type MaxonArgs
 
 			// A `.maxon` first argument is `run`: a kernel execs the interpreter for a `#!/usr/bin/env
 			// maxon` script with the script's path first. The tail keeps the file, so both doors hand
-			// `runRun` the program at position 0. Position 1 only, and no command word ends in that
+			// `runExecute` the program at position 0. Position 1 only, and no command word ends in that
 			// extension, so this cannot swallow a word the chain owns.
-			if i == 1 and parsed.command == MaxonCommand.unknown and arg.endsWith(MaxonSourceExtension) 'wordlessRun'
-				parsed.command = MaxonCommand.run
+			if i == 1 and parsed.command == MaxonCommand.unknown and arg.endsWith(MaxonSourceExtension) 'wordlessExecute'
+				parsed.command = MaxonCommand.execute
 				parsed.paths = monitorTail(args, from: i)
 				break
-			end 'wordlessRun'
+			end 'wordlessExecute'
 
 			// Tail-stopping: the arms below are order-independent, so a child's `--filter=mm` would become
 			// `spec-test`'s selection and an unimplemented flag would abort the run before the child is
@@ -2068,11 +2229,11 @@ module type MaxonArgs
 				break
 			end 'profileCmd'
 
-			if arg == RunCommandName and parsed.command == MaxonCommand.unknown 'runCmd'
-				parsed.command = MaxonCommand.run
+			if arg == ExecuteCommandName and parsed.command == MaxonCommand.unknown 'executeCmd'
+				parsed.command = MaxonCommand.execute
 				parsed.paths = monitorTail(args, from: i + 1)
 				break
-			end 'runCmd'
+			end 'executeCmd'
 
 			// Cleared, not merely remembered, so an arm re-selecting the same command is detectable: `maxon
 			// fmt fmt` would otherwise read as no change. Nothing between here and the restore reads the

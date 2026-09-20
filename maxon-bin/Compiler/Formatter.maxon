@@ -1822,7 +1822,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 	let tiers = libraryTierRoots()
 
 	var pending = PendingFormatDirectoryArray.create()
-	pending.push(PendingFormatDirectory.create(root, inLibraryTier: isInsideAnyTier(root, tiers: tiers, cwd: cwd)))
+	pending.push(PendingFormatDirectory.create(root, inLibraryTier: isInsideAnyTier(root, tiers: tiers, cwd: cwd), atProjectRoot: true))
 
 	while pending.count() > 0 'walk'
 		let dir = try pending.pop() otherwise panic("collectFormattableFiles: the stack is non-empty on the line above")
@@ -1837,7 +1837,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 					subdirectories.push(entry)
 				end 'kept'
 			end 'isSubdirectory' else 'isFile'
-				if formattableFileName(entry.filename(), inLibraryTier: dir.inLibraryTier) 'isASource'
+				if formattableFileName(entry.filename(), inLibraryTier: dir.inLibraryTier, atProjectRoot: dir.atProjectRoot) 'isASource'
 					here.push(entry)
 				end 'isASource'
 			end 'isFile'
@@ -1852,7 +1852,7 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray
 		// A subdirectory enters a tier only at the tier's own root; below that it inherits its parent's answer.
 		for subdirectory in subdirectories 'eachSubdirectory'
 			let inLibraryTier = dir.inLibraryTier or isInsideAnyTier(subdirectory, tiers: tiers, cwd: cwd)
-			pending.push(PendingFormatDirectory.create(subdirectory, inLibraryTier: inLibraryTier))
+			pending.push(PendingFormatDirectory.create(subdirectory, inLibraryTier: inLibraryTier, atProjectRoot: false))
 		end 'eachSubdirectory'
 
 		for file in here 'eachFile'
@@ -1867,9 +1867,10 @@ end 'collectFormattableFiles'
 type PendingFormatDirectory
 	module let path as FilePath
 	module let inLibraryTier as bool
+	module let atProjectRoot as bool
 
-	static function create(path FilePath, inLibraryTier bool) returns PendingFormatDirectory
-		return Self{path: path, inLibraryTier: inLibraryTier}
+	static function create(path FilePath, inLibraryTier bool, atProjectRoot bool) returns PendingFormatDirectory
+		return Self{path: path, inLibraryTier: inLibraryTier, atProjectRoot: atProjectRoot}
 	end 'create'
 end 'PendingFormatDirectory'
 
@@ -1906,13 +1907,13 @@ function prunedSubdirectory(dir FilePath) returns bool
 	return holdsIgnoreMarker(dir) or Directory.exists(marker) or File.exists(marker)
 end 'prunedSubdirectory'
 
-// A file the walk formats. A project's build manifest is left alone — it is a build SCRIPT the compiler
+// A file the walk formats. The walk ROOT's own manifest and task file are left alone — it is a build SCRIPT the compiler
 // runs, not part of the program; a library tier has none.
 //
-// ⚠ Naming a path OUTRIGHT escapes this, exactly as it escapes `.maxonignore`: `maxon fmt build.maxon`
+// ⚠ Naming a path OUTRIGHT escapes this, exactly as it escapes `.maxonignore`: `maxon fmt project.maxon`
 // formats it. See `runFmt`.
-function formattableFileName(name String, inLibraryTier bool) returns bool
-	return name.endsWith(MaxonSourceExtension) and (inLibraryTier or not isBuildManifestFileName(name))
+function formattableFileName(name String, inLibraryTier bool, atProjectRoot bool) returns bool
+	return name.endsWith(MaxonSourceExtension) and (inLibraryTier or not atProjectRoot or not isDriverFileName(name))
 end 'formattableFileName'
 
 // Order two discovered paths by their spelling. A `FilePath` is not `Comparable`, and the ordering wanted

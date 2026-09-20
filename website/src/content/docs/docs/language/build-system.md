@@ -7,11 +7,12 @@ sidebar:
 
 A Maxon project is a directory of `.maxon` files — there is nothing to declare. `maxon build <directory>`
 compiles every source file beneath it. A directory that wants to say *how* it is built puts a
-**`build.maxon`** beside its sources, and `maxon build` with no path runs it.
+**`project.maxon`** beside its sources, and `maxon build` with no path runs it.
 
 ```text
 myproject/
-├── build.maxon          # the build manifest, if the project needs one
+├── project.maxon        # the build manifest, if the project needs one
+├── tasks.maxon          # the tasks `maxon run` offers, if it has any
 ├── main.maxon           # entry point
 ├── lib.maxon
 ├── lib.test.maxon       # tests: compiled only by maxon test
@@ -21,7 +22,9 @@ myproject/
 
 A directory walk skips three things:
 
-- **`build.maxon`** — it describes the build and is never part of the program being built.
+- **`project.maxon` and `tasks.maxon` at the directory you named** — one describes the build and the
+  other holds the tasks `maxon run` offers, and neither is part of the program being built. Deeper in
+  the tree a file of either name is ordinary source.
 - **`*.test.maxon`** — test files; [`maxon test`](/docs/language/testing/) compiles them.
 - **any directory containing a `.maxonignore` file**, with everything beneath it.
 
@@ -31,7 +34,7 @@ line — a file or a directory — compiles it regardless of a marker above it o
 
 ## A Manifest Is a Program
 
-`build.maxon` is ordinary Maxon with the whole standard library available. The compiler does not parse it
+`project.maxon` is ordinary Maxon with the whole standard library available. The compiler does not parse it
 as configuration: it compiles it for the host, runs it, and performs the build it describes. A build can
 therefore **compute** what it compiles — list a directory, choose sources by host, derive a version from
 git — instead of only spelling it out.
@@ -59,6 +62,8 @@ The output path omits the extension: the compiler adds the target's (`.exe` on W
 | `Build.target(name, source:, output:, debugInfo: true, version: "", defines:)` | describe one named target, returning a `BuildConfig` |
 | `Build.buildTargets(targets)` | declare several named targets (a `BuildConfigArray`) |
 | `Build.buildWithConfig(config)` | build one `BuildConfig`, whose `sources` may list several files and directories compiled as one program, in order |
+| `Build.delegate(name, directory:, target: "")` | hand the whole description to another directory's `project.maxon`, run there |
+| `Build.delegateTarget(name, directory:, target: "")` | the same as one named target, returning a `BuildConfig` |
 
 - `debugInfo` controls the debug-information sidecar written beside the executable.
 - `version` stamps a dotted version into the executable's metadata.
@@ -95,7 +100,7 @@ function build() returns ExitCode
 end 'build'
 ```
 
-Sources are compiled in exactly the order listed. An empty `sources` list is refused (`build.maxon named
+Sources are compiled in exactly the order listed. An empty `sources` list is refused (`project.maxon named
 no sources to compile`) rather than read as "everything here".
 
 ## The Command Line Wins
@@ -105,3 +110,25 @@ the target (the manifest itself always runs on the host), a `--define` is applie
 defines, and debug information is written only if both the manifest and the command line allow it.
 
 The [CLI reference](/docs/cli/) documents `maxon build` and its flags.
+
+## Tasks
+
+A directory may also hold a **`tasks.maxon`**, and `maxon run <task>` runs one of its exported
+no-parameter `ExitCode` functions with the caller's own streams and exit code. It is the same language
+and the same standard library as a manifest, and the two files divide one job in two:
+
+```maxon
+// tasks.maxon
+export function build() returns ExitCode
+	Build.delegate("compiler", directory: "compiler")
+	return 0
+end 'build'
+
+export function fmt() returns ExitCode
+	return 0
+end 'fmt'
+```
+
+**`tasks.maxon` marks nothing.** A directory holding one is not thereby a project: what says where a
+project begins is a `project.maxon`. A task may describe a build, as `build` does above, and the
+compiler performs it once the task exits 0.

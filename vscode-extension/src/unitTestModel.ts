@@ -7,7 +7,7 @@ import * as path from 'path';
 export const TestFileSuffix = '.test.maxon';
 const MaxonSourceSuffix = '.maxon';
 const IgnoreMarkerName = '.maxonignore';
-const BuildManifestName = 'build.maxon';
+const DriverFileNames = ['project.maxon', 'tasks.maxon'];
 
 export interface DeclaredTest {
 	name: string;
@@ -115,7 +115,7 @@ export function isIgnoredDirectory(dir: string): boolean {
 function holdsMaxonSource(dir: string): boolean {
 	try {
 		return fs.readdirSync(dir, { withFileTypes: true })
-			.some(entry => entry.isFile() && entry.name.toLowerCase() !== BuildManifestName && entry.name.endsWith(MaxonSourceSuffix));
+			.some(entry => entry.isFile() && !DriverFileNames.includes(entry.name.toLowerCase()) && entry.name.endsWith(MaxonSourceSuffix));
 	} catch {
 		return false;
 	}
@@ -128,7 +128,7 @@ function holdsMaxonSource(dir: string): boolean {
  * where a project begins. The project is therefore the highest directory reachable from the test file's own
  * directory through parents that each hold a `.maxon` file, never above the workspace folder: sources that
  * sit together are compiled together, and a directory holding none (`tests/` above `tests/cli/`) separates
- * independent projects. A `build.maxon`, in any letter case, is not counted: `maxon test` does not compile it.
+ * independent projects. A `project.maxon` or `tasks.maxon`, in any letter case, is not counted: `maxon test` compiles neither.
  */
 export function testProjectDirectory(testFile: string, workspaceFolder: string): string {
 	const root = path.resolve(workspaceFolder);

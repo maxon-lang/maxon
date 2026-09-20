@@ -187,7 +187,7 @@ suite('testFilterFor', () => {
 
 suite('testProjectDirectory', () => {
 	test('climbs through directories holding sources, stopping at one that holds none', () => {
-		withTree(['build.maxon', 'tests/README.md', 'tests/cli/Harness.maxon', 'tests/cli/help.test.maxon'], root => {
+		withTree(['project.maxon', 'tests/README.md', 'tests/cli/Harness.maxon', 'tests/cli/help.test.maxon'], root => {
 			assert.strictEqual(testProjectDirectory(path.join(root, 'tests', 'cli', 'help.test.maxon'), root), path.join(root, 'tests', 'cli'));
 		});
 	});

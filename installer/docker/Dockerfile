@@ -14,7 +14,7 @@
 #
 # Both set TMPDIR because a container run with a numeric `--user` that has no passwd entry gets
 # HOME=/, which nothing can be created under — leaving the compiler no directory to keep a build in,
-# so `maxon run` refuses every program.
+# so `maxon execute` refuses every program.
 
 ARG VERSION
 

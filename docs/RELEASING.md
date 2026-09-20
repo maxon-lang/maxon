@@ -43,7 +43,7 @@ a patch left to rot no longer applies, turning the next genuine refusal into a c
 
 ## The version lives in the binary
 
-Nothing writes the version down. `build.maxon` derives it from git and hands it to the compiler as
+Nothing writes the version down. `project.maxon` derives it from git and hands it to the compiler as
 `--define`, the way go's `-ldflags -X` does — a tag `vX.Y.Z` or a branch `release/X.Y.Z` gives the
 number, and anything else is `dev`.
 
@@ -68,10 +68,10 @@ different releases — a binary built before a version bump reports the old one,
 artifact is the only way to notice.
 
 ⛔ **THE WORKFLOWS BUILD TWICE: THE SEED BUILDS `C1`, AND `C1` BUILDS THE COMPILER THAT SHIPS**
-([`scripts/build-from-seed.sh`](../scripts/build-from-seed.sh)). A seed older than named manifest
-targets reads `maxon-bin` as a path, so it never runs `build.maxon` — where the version comes from —
-and its output reports `dev`; that output's own runtime is also the seed's. `C1` builds by name, so the
-second build runs the manifest and carries this ref's version and runtime. MEASURED on the 0.1.1
+([`scripts/build-from-seed.sh`](../scripts/build-from-seed.sh)). The seed builds `maxon-bin` as a
+PATH, so it never runs `project.maxon` — where the version comes from — and its output reports `dev`;
+that output's own runtime is also the seed's. `C1` then runs `maxon run build`, so the second build
+goes through the manifest and carries this ref's version and runtime. MEASURED on the 0.1.1
 rehearsal: one build produced `maxon-dev-x64-windows`.
 
 ⇒ **Cut a `release/X.Y.Z` branch or tag `vX.Y.Z`, then rebuild, then package.** The number follows

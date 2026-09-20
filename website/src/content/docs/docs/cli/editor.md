@@ -110,7 +110,7 @@ behaviour described below.
 
 **The project root is a ladder, and the client's workspace folders are one of its rungs.** A file inside
 the compiler's own `stdlib/` or `runtime/` gets those two tiers and nothing else. Any other document is
-rooted at the nearest ancestor directory holding a `build.maxon`, searched no higher than the nearest
+rooted at the nearest ancestor directory holding a `project.maxon`, searched no higher than the nearest
 root the client named that contains the document. Failing that it is rooted at that named root itself;
 failing that, at its own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is
 read only when the folders name none — so a multi-root window has as many roots as it has folders, each

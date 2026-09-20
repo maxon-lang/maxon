@@ -1034,14 +1034,14 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 One compiler builds this tree and it is written in Maxon: source `maxon-bin/`, binary
 `maxon-bin/.maxon/maxon.exe` (`maxon` on macOS and Linux). A released `maxon` binary at
 `.bootstrap/maxon` seeds the first build; afterwards `build` with no path, run from the root by the
-compiler inside this checkout, runs the root `build.maxon` and rebuilds it.
+compiler inside this checkout, runs the root `project.maxon` and rebuilds it.
 
 ### Compiling
 
 ```bash
 ./maxon-bin/.maxon/maxon.exe build hello.maxon                    # single file
 ./maxon-bin/.maxon/maxon.exe build src/                           # multi-file project: every .maxon under the directory
-./maxon-bin/.maxon/maxon.exe build                                # run the build.maxon in the current directory
+./maxon-bin/.maxon/maxon.exe build                                # run the project.maxon in the current directory
 ./maxon-bin/.maxon/maxon.exe build hello.maxon --emit-ir          # also write the lowered Target IR
 ```
 

@@ -21,7 +21,7 @@ Maxon is a compiler, so the interesting cases are about what it *emits* and what
 ordinary issue — that path is faster and gets the same attention.
 
 Compiling untrusted source is not a sandbox and is not treated as one: a Maxon program can run
-arbitrary code the moment you run it, and the build manifest (`build.maxon`) is itself a program the
+arbitrary code the moment you run it, and the build manifest (`project.maxon`) is itself a program the
 compiler executes. Treat compiling an untrusted project exactly as you would treat running one.
 
 ## Releases

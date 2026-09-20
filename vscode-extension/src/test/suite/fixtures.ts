@@ -43,7 +43,7 @@ export async function activateMaxonExtension(): Promise<vscode.Extension<unknown
  *
  * `temp/` is gitignored and carries a `.maxonignore`, so a fixture written here is in neither the
  * repository nor any project walk rooted above it. The server's own sweep is rooted at the
- * fixture's `build.maxon` and reads `collectMaxonSources` from there, which never consults a marker
+ * fixture's `project.maxon` and reads `collectMaxonSources` from there, which never consults a marker
  * above its root — so the fixture is still a project to the server. `tests/lsp/` stages the same way.
  *
  * The marker is written here too, so the fixture root excludes itself whatever `temp/` carries.
@@ -60,19 +60,19 @@ function fixturesRoot(): string {
 }
 
 /**
- * A fixture project of its own, staged on disk and rooted by an empty `build.maxon`.
+ * A fixture project of its own, staged on disk and rooted by an empty `project.maxon`.
  *
  * ⚠ THE FILES ARE WRITTEN, NOT EDITED INTO EXISTENCE. A `WorkspaceEdit` leaves the text unsaved, so
  * a sibling staged that way is empty on disk — and a cross-file answer is read from disk.
  *
- * The `build.maxon` marker is what stops the server rooting the project at the checkout's own
+ * The `project.maxon` marker is what stops the server rooting the project at the checkout's own
  * manifest and sweeping the whole tree for one two-file fixture.
  */
 export function stageProject(name: string, files: Record<string, string>): string {
     const dir = path.join(fixturesRoot(), name);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'build.maxon'), '');
+    fs.writeFileSync(path.join(dir, 'project.maxon'), '');
 
     for (const [fileName, content] of Object.entries(files)) {
         fs.writeFileSync(path.join(dir, fileName), content);

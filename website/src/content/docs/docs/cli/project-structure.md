@@ -12,7 +12,8 @@ and how files map to namespaces in [Namespaces](/docs/language/namespaces/).
 
 ```text
 myproject/
-├── build.maxon          # optional: the build manifest
+├── project.maxon        # optional: the build manifest
+├── tasks.maxon          # optional: the tasks `maxon run` offers
 ├── main.maxon           # the entry point (contains main)
 ├── utils.maxon
 ├── lib/
@@ -28,8 +29,11 @@ myproject/
 
 `maxon build <directory>` compiles every `.maxon` file beneath the directory as one program, except:
 
-1. **`build.maxon`**, the build manifest, which is a program of its own. Naming it explicitly still
-   compiles it.
+1. **`project.maxon` and `tasks.maxon` AT THE DIRECTORY YOU NAMED.** Each is a program of its own, and
+   the exclusion is exactly where the driver looks for one — the walk root — so a `Project.maxon`
+   deeper in the tree is ordinary source and is compiled. The match at the root ignores case, because
+   on a case-insensitive filesystem `PROJECT.maxon` is the file `maxon build` would run. Naming either
+   path explicitly still compiles it.
 2. **`*.test.maxon`** files. Test sources are a separate category that only `maxon test` compiles. The
    match ignores case, so `Suite.TEST.maxon` is a test file too.
 3. **Anything under a `.maxonignore`** (below).
@@ -39,7 +43,7 @@ executable, so nothing in the project refers to it. See the [Standard Library](/
 
 ## The build manifest
 
-`maxon build` with no path looks for **`build.maxon`** in the current directory, compiles it, runs it,
+`maxon build` with no path looks for **`project.maxon`** in the current directory, compiles it, runs it,
 and performs the build it describes.
 
 **A manifest is a program, not a configuration file.** It is ordinary Maxon with the whole standard
@@ -61,26 +65,33 @@ it. It is compiled on its own (the project's other files are not part of it) and
 That compile is **silent**, and says only which of the two things happened to it:
 
 ```text
-Compiled the build runner (build.maxon)     # nothing in the cache matched, so it was compiled
-Used the cached build runner (build.maxon)  # the cache had it, and nothing was compiled
+Compiled the build runner (project.maxon)     # nothing in the cache matched, so it was compiled
+Used the cached build runner (project.maxon)  # the cache had it, and nothing was compiled
 ```
 
 The line goes to stdout, ahead of the build's own report. The runner is scaffolding, so a reader gets
 one line about it rather than a second build's worth of output mixed into the answer they asked for —
-but **silenced is not silent**: a `build.maxon` that does not compile still prints its diagnostics, and
+but **silenced is not silent**: a `project.maxon` that does not compile still prints its diagnostics, and
 `--log=` anywhere on the command line leaves the runner's compile as loud as any other.
 
 ### Describing a build
 
-The manifest describes its builds by calling `stdlib/Build.maxon`, which prints them as JSON on
-stdout. The compiler reads that JSON back.
+The manifest describes its builds by calling `stdlib/Build.maxon`, which writes them as JSON to the
+file the driver names in **`MAXON_BUILD_DESCRIPTION`**. The compiler reads that file back.
+
+**The description has a channel of its own so that stdout stays the program's.** A manifest or a task
+can print whatever it likes as it works, and it streams to the caller live. With the variable unset —
+a manifest run by hand with `maxon execute project.maxon` — the description goes to stdout instead,
+which is the only way to inspect one directly.
 
 | Call | Meaning |
 |---|---|
-| `Build.build(source, output:, debugInfo:, version:, defines:)` | Build one file or directory to one output, and print it. The common case. |
-| `Build.target(name, source:, output:, debugInfo:, version:, defines:)` | Return one **named** target, for a manifest that describes several. Prints nothing. |
-| `Build.buildTargets(targets)` | Print several named targets (a `BuildConfigArray`). |
-| `Build.buildWithConfig(config)` | Print one `BuildConfig`, which can list several sources, compiled as one program in order. |
+| `Build.build(source, output:, debugInfo:, version:, defines:)` | Build one file or directory to one output, and write it. The common case. |
+| `Build.target(name, source:, output:, debugInfo:, version:, defines:)` | Return one **named** target, for a manifest that describes several. Writes nothing. |
+| `Build.buildTargets(targets)` | Write several named targets (a `BuildConfigArray`). |
+| `Build.buildWithConfig(config)` | Write one `BuildConfig`, which can list several sources, compiled as one program in order. |
+| `Build.delegate(name, directory:, target:)` | Hand the whole description to another directory's `project.maxon`. |
+| `Build.delegateTarget(name, directory:, target:)` | Return one delegated target, for `Build.buildTargets`. Writes nothing. |
 
 `debugInfo` defaults to `true`, `version` to `""` and `defines` to an empty list. The keys the driver
 reads from the JSON are:
@@ -88,15 +99,48 @@ reads from the JSON are:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `name` | string | What `maxon build <name>` selects. `Build.build` sets it to the source path. |
-| `output` | string, required | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. |
-| `sources` | list of strings, required | The files and directories to compile, in order. An empty list is refused. |
+| `output` | string, required unless `directory` | Where the executable goes, without the extension. The compiler adds `.exe` for Windows, `.wasm` for `wasm32-wasi`, and nothing for Linux and macOS. Relative to the current directory. |
+| `sources` | list of strings, required unless `directory` | The files and directories to compile, in order. An empty list is refused. |
+| `directory` | string | A directory whose own `project.maxon` describes this build. Stating it alongside `sources` is refused. |
+| `target` | string | With `directory`, which of the delegated manifest's targets to build; empty means its sole one. |
 | `debug_info` | `true` or `false` | Whether to write the `.mxdbg` sidecar (default `true`). |
 | `version` | string | A dotted version stamped into the binary: a `VS_VERSIONINFO` resource on Windows and `LC_SOURCE_VERSION` on macOS. Linux and `wasm32-wasi` binaries carry no product version. Without it, the binary reports `0.0.0.0`, and a missing component is 0. A component that is not a number is refused on every target, and one the target's field cannot hold is refused too: each Windows component holds 0 to 65535 (four at most); on macOS the first holds 0 to 16777215 and the next four 0 to 1023. |
 | `defines` | list of `name=value` strings | The same as [`--define=`](/docs/cli/#defines) on the command line. |
 
 A field that is present but malformed is **refused** rather than guessed at, naming the key, for
-example ``error: build.maxon's `sources` is not a list of strings``. Output that is not JSON at all is
-refused with what the manifest printed.
+example ``error: project.maxon's `sources` is not a list of strings``. A description that is not JSON
+at all is refused with what the manifest wrote, and a manifest that exits 0 having written none is
+refused as describing no build.
+
+### Delegating to another directory
+
+A manifest can hand the whole description to another directory's `project.maxon`:
+
+```maxon
+export function build() returns ExitCode
+	Build.delegate("maxon-bin", directory: "maxon-bin")
+	return 0
+end 'build'
+```
+
+The compiler runs that directory's manifest **with the directory as its working directory**, and
+resolves the relative `sources` and `output` it states against it — so the delegated project builds
+the same thing whether it is reached from above or built from inside. The command line's `-o`,
+`--target`, `--define` and `--no-debug-info` are applied afterwards, exactly as they are to a build
+described in place. Delegation more than eight deep is refused as a cycle.
+
+### The task file
+
+`tasks.maxon` beside `project.maxon` holds the tasks [`maxon run`](/docs/cli/#maxon-run) offers. The two files
+are separate on purpose:
+
+- **`project.maxon` says what the project IS.** Its presence marks where a project begins — the
+  editor's project root ([Editor Support](/docs/cli/editor/)) — and its `build` task describes the
+  build.
+- **`tasks.maxon` says what a person DOES here.** It marks nothing, so a directory of scripts is not
+  turned into a project by holding one.
+
+Neither is compiled into the program (see [Which files a build includes](#which-files-a-build-includes)).
 
 ### Named targets
 

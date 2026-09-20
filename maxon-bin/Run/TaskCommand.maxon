@@ -1,0 +1,95 @@
+export function runTask(args MaxonArgs) returns ExitCode
+	let taskFile = Directory.currentPath().join(TaskFileName)
+
+	if not File.exists(taskFile) 'noTaskFile'
+		printError("Usage: maxon {RunCommandName} [<task> [args...]]\n")
+		printError("\n")
+		printError("A task is an exported function of no parameters returning ExitCode, declared in the {TaskFileName} in the current directory. There is none here.\n")
+		return 1
+	end 'noTaskFile'
+
+	let declared = declaredTasks(taskFile)
+
+	if args.paths.count() == 0 'noTaskNamed'
+		return listTasks(declared)
+	end 'noTaskNamed'
+
+	let named = try args.paths.get(0) otherwise panic("runTask: paths.get(0) OOB despite a non-zero count")
+
+	if not declaredTasksHold(declared, named: named) 'noSuchTask'
+		printError("error: {TaskFileName} declares no task `{named}`.\n")
+		_ = listTasks(declared)
+		return 1
+	end 'noSuchTask'
+
+	return runDeclaredTask(taskFile, named: named, args: args)
+end 'runTask'
+
+function runDeclaredTask(taskFile FilePath, named String, args MaxonArgs) returns ExitCode
+	let outcome = runManifestProgram(taskFile, entry: named.toByteArray(), speaker: RunCommandName, base: ManifestBase.workingDirectory, arguments: taskArguments(args.paths), args: args, announce: false)
+
+	return match outcome 'outcome'
+		described(text) gives buildDescribedByTask(text, args: args, taskFile: taskFile)
+		describedNothing(code) gives code
+		notRun gives OwnFailureExit
+	end 'outcome'
+end 'runDeclaredTask'
+
+function buildDescribedByTask(described String, args MaxonArgs, taskFile FilePath) returns ExitCode
+	printVersionHeader()
+
+	match buildFromManifestOutput(described, args: args, targetName: "", manifest: taskFile, base: ManifestBase.workingDirectory, depth: 0) 'built'
+		ran(code) then return code
+		noSuchTarget then panic("buildDescribedByTask: the description was asked for no target and cannot answer noSuchTarget")
+	end 'built'
+end 'buildDescribedByTask'
+
+function taskArguments(paths SourcePathSpellingArray) returns StringArray
+	var arguments = StringArray.create()
+
+	for position in 1 upto paths.count() 'eachArgument'
+		arguments.push(try paths.get(position) otherwise panic("taskArguments: index {position} is past paths.count() despite the upto bound"))
+	end 'eachArgument'
+
+	return arguments
+end 'taskArguments'
+
+// A file that cannot be read answers the empty roster, so a task file with no read permission is
+// reported as declaring no tasks rather than as unreadable.
+function declaredTasks(taskFile FilePath) returns TaskNameArray
+	var offered = TaskNameArray.create()
+	let source = try File.readText(taskFile) otherwise return offered
+
+	for named in taskNamesIn(source) 'eachDeclaration'
+		if not named.startsWith(ReservedTaskPrefix) 'anOfferedTask'
+			offered.push(named)
+		end 'anOfferedTask'
+	end 'eachDeclaration'
+
+	return offered
+end 'declaredTasks'
+
+let ReservedTaskPrefix = "__"
+
+function declaredTasksHold(declared TaskNameArray, named String) returns bool
+	for offered in declared 'eachTask'
+		if offered == named 'theSameTask'
+			return true
+		end 'theSameTask'
+	end 'eachTask'
+
+	return false
+end 'declaredTasksHold'
+
+function listTasks(declared TaskNameArray) returns ExitCode
+	if declared.count() == 0 'noTasks'
+		printError("{TaskFileName} declares no tasks.\n")
+		return 1
+	end 'noTasks'
+
+	for offered in declared 'eachTask'
+		print("{offered}\n")
+	end 'eachTask'
+
+	return 0
+end 'listTasks'

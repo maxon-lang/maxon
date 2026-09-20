@@ -318,12 +318,12 @@ function upgradeScriptInstall(root FilePath, dryRun bool) returns ExitCode
 	printError("{commandAsTyped()}: updating the install in {root.toString()} (maxon {CompilerVersion})\n")
 
 	#if os(Windows)
-		return spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment.childEnvironment(), standardInput: InputSource.none, speaker: commandAsTyped())
+		return spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment.childEnvironment(), standardInput: InputSource.none, workingDirectory: inheritedWorkingDirectory(), speaker: commandAsTyped())
 	#else
 		// ⭐ **TWO STEPS, NOT `curl | sh`**: a pipeline's status is its last command's, so a download that
 		// failed would hand `sh` an empty script and report success.
 		return match downloadScript(download) 'download'
-			fetched(script) gives spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment.childEnvironment(), standardInput: InputSource.bytes(script), speaker: commandAsTyped())
+			fetched(script) gives spawnForwarding(installer.executable, arguments: installer.arguments, environment: environment.childEnvironment(), standardInput: InputSource.bytes(script), workingDirectory: inheritedWorkingDirectory(), speaker: commandAsTyped())
 			failed(reason) gives refuse(reason)
 		end 'download'
 	#endif

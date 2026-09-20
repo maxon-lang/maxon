@@ -1,9 +1,9 @@
-// RunHarness.maxon — the shared half every case under `tests/run/` reaches for: the driver it spawns,
+// ExecuteHarness.maxon — the shared half every case under `tests/execute/` reaches for: the driver it spawns,
 // staging a fixture into a tree of its own, confining that run's build cache to that tree, and reading
 // back what one run said and what it left in the cache.
 //
 // ⭐⭐ **THE RUNNER AND THE SUBJECT ARE THE SAME BINARY, AND NOTHING OUTSIDE CLOSES THAT.** `maxon test
-// tests/run` both runs these cases and provides the `maxon run` they spawn — named by `TestedCompilerStem`
+// tests/execute` both runs these cases and provides the `maxon execute` they spawn — named by `TestedCompilerStem`
 // and by nothing else — so a runner broken badly enough to report green having run nothing cannot detect
 // itself. READ THE PASS COUNT.
 //
@@ -35,7 +35,7 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 // driver's own constants. Every such respelling is in THIS file — the command word and the cache variable
 // below, and the slot layout further down — so a rename in the driver is one file to follow it into, and
 // it goes red rather than quiet: a case cannot find its slot, or finds an entry it cannot classify.
-export let RunCommandName = "run"
+export let ExecuteCommandName = "execute"
 export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 
 // ⚠ **THE VARIABLE NAMING THE USER'S HOME DIRECTORY, RESPELLED HERE FOR THE REASON ABOVE**: this corpus
@@ -80,9 +80,9 @@ export let ForwardedExitCode = 7
 
 // Where the corpus lives and where a runnable copy is built, both relative to the checkout root. Staging
 // goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the checkout rewrites.
-export let FixturesDirName = "tests/run/fixtures"
-export let ProjectDirName = "tests/run"
-let StagingRootDirName = "temp/run"
+export let FixturesDirName = "tests/execute/fixtures"
+export let ProjectDirName = "tests/execute"
+let StagingRootDirName = "temp/execute"
 
 // The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
 export let StoredFixtureSuffix = ".fixture"
@@ -122,7 +122,7 @@ let PlantedBuildContent = "a build another cache format left"
 // ordinary source allowed to sit in this corpus. Read by the guards in `corpus.test.maxon`.
 export let TestSourceSuffix = ".test.maxon"
 export let MaxonSourceSuffix = ".maxon"
-export let SharedHelperFileName = "RunHarness.maxon"
+export let SharedHelperFileName = "ExecuteHarness.maxon"
 
 // The separator this file's own paths are spelled with, folded into the host's by `FilePath`.
 let PathSeparator = "/"
@@ -228,7 +228,7 @@ end 'rewriteStagedMain'
 // `maxon run <program>` — the ordinary command line, with the program made absolute.
 export function runArguments(program FilePath) returns StringArray
 	var arguments = StringArray.create()
-	arguments.push(RunCommandName)
+	arguments.push(ExecuteCommandName)
 	arguments.push(program.toString())
 
 	return arguments

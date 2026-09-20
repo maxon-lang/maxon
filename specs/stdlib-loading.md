@@ -687,12 +687,12 @@ ideographic
 ```
 
 <!-- test: stdlib-loading.build-config-from-stdlib -->
-`Build.build(source, output:)` emits the JSON a `build.maxon` hands the compiler. It is the one new entry that
+`Build.build(source, output:)` emits the JSON a `project.maxon` hands the compiler. It is the one new entry that
 is neither a byte walk nor a classifier — a `type` with fields, a `static`, and an `Array with
 String` — so what it pins is that a stdlib module of ordinary shape reaches user code intact.
 
-⚠ The JSON comes out on ONE line: `print` writes no trailing newline and `emitBuildConfig` supplies
-none, so the module's per-line `print` calls run together.
+⚠ It comes out on stdout HERE because `MAXON_BUILD_DESCRIPTION` is unset: a program running outside
+`maxon build` has no description file to write to, and printing is what lets one be inspected.
 ```maxon
 function main() returns ExitCode
 	Build.build("src", output: ".maxon/demo")
@@ -703,14 +703,23 @@ end 'main'
 0
 ```
 ```stdout
-{  "name": "src",  "output": ".maxon/demo",  "sources": [    "src"  ],  "debug_info": true,  "version": "",  "defines": [  ]}
+{
+  "name": "src",
+  "output": ".maxon/demo",
+  "directory": "",
+  "target": "",
+  "sources": ["src"],
+  "debug_info": true,
+  "version": "",
+  "defines": []
+}
 ```
 
 <!-- test: stdlib-loading.build-config-escapes-strings -->
 ⛔ **EVERY STRING THE CONFIG PRINTS IS JSON-ESCAPED.** A `"` in a target's name would otherwise close the
 JSON string early, and a Windows path's `\` would start an escape the compiler's JSON reader rejects or
 misreads — so the name comes out as `a\"b` and the source as `src\\app`, and the document stays the same
-one-line shape `build-config-from-stdlib` pins.
+shape `build-config-from-stdlib` pins.
 ```maxon
 function main() returns ExitCode
 	Build.buildWithConfig(Build.target("a\"b", source: "src\\app", output: ".maxon/demo"))
@@ -721,7 +730,16 @@ end 'main'
 0
 ```
 ```stdout
-{  "name": "a\"b",  "output": ".maxon/demo",  "sources": [    "src\\app"  ],  "debug_info": true,  "version": "",  "defines": [  ]}
+{
+  "name": "a\"b",
+  "output": ".maxon/demo",
+  "directory": "",
+  "target": "",
+  "sources": ["src\\app"],
+  "debug_info": true,
+  "version": "",
+  "defines": []
+}
 ```
 
 <!-- test: stdlib-loading.ascii-classifiers-from-stdlib -->

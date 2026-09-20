@@ -204,7 +204,7 @@ export function executeBuildTool(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 
 	// ⛔ A TRIPLE IS A FLAG, NOT A POSITIONAL. `maxon build` reads a bare word as another SOURCE PATH,
 	// so a target pushed positionally compiles a file named `wasm32-wasi`. A name declared in
-	// build.maxon IS a positional, and is told apart by carrying no `-`.
+	// project.maxon IS a positional, and is told apart by carrying no `-`.
 	let targetArg = getOptionalStringArg(reqDoc, args: args, key: "target", defaultVal: "")
 
 	if not targetArg.isEmpty() 'hasTgt'
@@ -222,7 +222,7 @@ export function executeBuildTool(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 	runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: "build", timeoutMs: LongRunTimeoutMs)
 end 'executeBuildTool'
 
-export function executeRunTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
+export function executeExecuteTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
 	let tree = hostOrTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)
 
 	if not tree.ready 'answered'
@@ -232,17 +232,17 @@ export function executeRunTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalN
 	let target = resolveSourceTarget(reqDoc, args: args)
 
 	if not target.ok() 'bad'
-		sendToolError(reqDoc, idNode: idNode, message: "run: {target.error}", repoRoot: tree.ctx.repoRootLabel)
+		sendToolError(reqDoc, idNode: idNode, message: "execute: {target.error}", repoRoot: tree.ctx.repoRootLabel)
 		return
 	end 'bad'
 
 	if not target.named 'nothingToRun'
-		sendToolError(reqDoc, idNode: idNode, message: "run: give either `path` or `source`.", repoRoot: tree.ctx.repoRootLabel)
+		sendToolError(reqDoc, idNode: idNode, message: "execute: give either `path` or `source`.", repoRoot: tree.ctx.repoRootLabel)
 		return
 	end 'nothingToRun'
 
 	var argv = StringArray.create()
-	argv.push("run")
+	argv.push("execute")
 	argv.push(target.file.path)
 
 	for a in getOptionalStringArrayArg(reqDoc, args: args, key: "arguments") 'each'
@@ -250,7 +250,7 @@ export function executeRunTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalN
 	end 'each'
 
 	runAndReport(reqDoc, idNode: idNode, ctx: tree.ctx, argv: argv, what: "the program", timeoutMs: LongRunTimeoutMs)
-end 'executeRunTool'
+end 'executeExecuteTool'
 
 export function executeTestTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath)
 	let tree = hostOrTreeContext(reqDoc, idNode: idNode, args: args, exePath: exePath)

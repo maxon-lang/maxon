@@ -74,15 +74,15 @@ Compiles a source file, a directory, a manifest target or an inline snippet, as 
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string | Source file or project directory. Omitted, the working directory's `build.maxon` runs. |
+| `path` | string | Source file or project directory. Omitted, the working directory's `project.maxon` runs. |
 | `source` | string | Inline Maxon source to build instead of a path. Give `path` or `source`, not both. |
 | `output` | string | Output executable path (`-o`) |
-| `target` | string | A target such as `wasm32-wasi` (a value containing `-` is passed as `--target=`), or the name of a target declared in `build.maxon` (a bare word) |
+| `target` | string | A target such as `wasm32-wasi` (a value containing `-` is passed as `--target=`), or the name of a target declared in `project.maxon` (a bare word) |
 | `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
 
 ### `run`
 
-Compiles, or reuses a cached build of, a program and runs it, as `maxon run` does.
+Compiles, or reuses a cached build of, a program and runs it, as `maxon execute` does.
 
 | Argument | Type | Description |
 |----------|------|-------------|

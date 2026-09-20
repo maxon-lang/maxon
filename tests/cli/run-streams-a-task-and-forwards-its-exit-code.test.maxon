@@ -1,0 +1,20 @@
+let CaseDirName = "run-streams-a-task-and-forwards-its-exit-code"
+let TaskFileName = "tasks.maxon"
+let RunCommandWord = "run"
+let TaskExitCode = 7
+let TaskGreeting = "the task spoke"
+
+let TasksSource = "typealias ExitCode = int(0 to 255)\n\nexport function report() returns ExitCode\n\tfor argument in CommandLine.args() 'eachArgument'\n\t\tprint(argument)\n\t\tprint(\"\\n\")\n\tend 'eachArgument'\n\n\tprint(\"the task spoke\\n\")\n\treturn 7\nend 'report'\n"
+
+test 'a task prints on the callers stdout and its exit code is the commands'
+	let dir = freshCaseDir(CaseDirName)
+	let tasks = dir.join(TaskFileName)
+	try File.writeText(tasks, content: TasksSource) otherwise panic("run-streams-a-task-and-forwards-its-exit-code: the gate could not run - could not write {tasks.toString()}")
+
+	let ran = runDriver([RunCommandWord, "report", "alpha"], workingDirectory: dir)
+	let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
+
+	try Expect.equal(ran.exitCode() as AssertedInt, expected: TaskExitCode as AssertedInt, message: "`maxon {RunCommandWord} report` did not exit with the code the task returned. {said}")
+	try Expect.contains(ran.stdout, needle: TaskGreeting, message: "the task's own stdout did not reach the caller. {said}")
+	try Expect.contains(ran.stdout, needle: "alpha", message: "the task did not receive the argument typed after its name. {said}")
+end 'a task prints on the callers stdout and its exit code is the commands'

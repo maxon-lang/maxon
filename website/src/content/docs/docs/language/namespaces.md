@@ -142,10 +142,10 @@ compiled:
 ```text
 workspace/
 ├── project-a/
-│   ├── build.maxon      # how project A is built
+│   ├── project.maxon    # how project A is built
 │   └── main.maxon
 └── project-b/
-    ├── build.maxon      # how project B is built
+    ├── project.maxon    # how project B is built
     └── main.maxon
 ```
 

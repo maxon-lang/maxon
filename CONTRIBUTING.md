@@ -95,7 +95,7 @@ release has, and an out-of-date seed fails the first build.
 ```bash
 scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
 ./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
-./maxon-bin/.maxon/maxon build maxon-bin      # afterwards, it rebuilds itself
+./maxon-bin/.maxon/maxon run build            # afterwards, it rebuilds itself
 ./maxon-bin/.maxon/maxon spec-test
 ```
 
@@ -114,7 +114,7 @@ binaries are byte-identical.
 Run a program with the freshly built compiler:
 
 ```bash
-maxon-bin/.maxon/maxon run examples/basic.maxon
+maxon-bin/.maxon/maxon execute examples/basic.maxon
 ```
 
 `run` compiles the program, caches the build and launches it, forwarding its streams and its exit

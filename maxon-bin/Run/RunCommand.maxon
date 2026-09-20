@@ -20,7 +20,7 @@
 // rule it enforces is met anyway: everything this writes goes to the cache slot it was told to write to,
 // never to `<project>/.maxon/`, so running a program from inside a checkout cannot race a build of it.
 
-export function runRun(args MaxonArgs) returns ExitCode
+export function runExecute(args MaxonArgs) returns ExitCode
 	let spelling = try args.paths.get(0) otherwise 'noProgram'
 		printError("Usage: {runUsageLine()}\n")
 		printError("No program was named. Give a `{MaxonSourceExtension}` file, or a directory to compile as one project.\n")
@@ -46,7 +46,7 @@ export function runRun(args MaxonArgs) returns ExitCode
 	_ = quietTheBuildChatter(args)
 
 	return runProgram(program, isProject: isProject, arguments: programArguments(args.paths))
-end 'runRun'
+end 'runExecute'
 
 // The one sentence a cache failure reaches a reader through: the arm IS the fact and its payload is the
 // sentence, so there is nothing to decide here. `module` so `CacheCommand` reports a cache it cannot
@@ -58,7 +58,7 @@ module function reportCacheError(e RunCacheError, speaker String)
 end 'reportCacheError'
 
 function runUsageLine() returns String
-	return "maxon {RunCommandName} <file|directory> [args...]"
+	return "maxon {ExecuteCommandName} <file|directory> [args...]"
 end 'runUsageLine'
 
 // The PROGRAM's own command line: everything the driver was handed after the path. ONE reader for both
@@ -75,9 +75,9 @@ function programArguments(paths SourcePathSpellingArray) returns StringArray
 end 'programArguments'
 
 function runProgram(program FilePath, isProject bool, arguments StringArray) returns ExitCode
-	let built = try cachedBuild(program, isProject: isProject, target: detectHostTarget(), entryFunction: MainFunctionName, speaker: RunCommandName) otherwise return OwnFailureExit
+	let built = try cachedBuild(program, isProject: isProject, target: detectHostTarget(), entryFunction: MainFunctionName, speaker: ExecuteCommandName) otherwise return OwnFailureExit
 
-	return spawnForwarding(Executable.path(built.executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, speaker: RunCommandName)
+	return spawnForwarding(Executable.path(built.executable), arguments: arguments, environment: Environment.inherit, standardInput: InputSource.inherit, workingDirectory: inheritedWorkingDirectory(), speaker: ExecuteCommandName)
 end 'runProgram'
 
 // Why there is no cached build to run. Every cause has already been reported, in `speaker`'s words.
@@ -98,7 +98,7 @@ export type CachedProgram
 end 'CachedProgram'
 
 // The run cache's build of `program` from `entryFunction`: the one already published under these inputs'
-// key, or a fresh one compiled and published first. `maxon run` and a `build.maxon` manifest both come
+// key, or a fresh one compiled and published first. `maxon execute`, `maxon run` and a `project.maxon` manifest all come
 // through here, so neither writes a compiled program into the project it was run from.
 //
 // A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing

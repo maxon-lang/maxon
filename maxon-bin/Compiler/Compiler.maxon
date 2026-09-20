@@ -1772,7 +1772,8 @@ end 'reportBindingHygieneDiagnostics'
 
 // ⭐⭐ **REGISTER EVERY SOURCE THE CALLER NAMED, IN THE ORDER THE CALLER NAMED IT (A3m).** A single
 // `.maxon` file loads directly; a directory loads every `.maxon` file beneath it (except
-// `build.maxon`, and except the subtrees a `.maxonignore` excludes — see `collectMaxonSources`).
+// a `project.maxon` or `tasks.maxon` AT THAT DIRECTORY, and except the subtrees a `.maxonignore`
+// excludes — see `collectMaxonSources`).
 // Throws when a path does not exist or the whole list yields no sources. (`.test`-fragment stripping
 // grows back when the spec runner needs it.)
 //
@@ -1903,7 +1904,7 @@ end 'loadSourceDirectory'
 // (`Formatter.collectFormattableFiles`), because it is asking a DIFFERENT question: it formats
 // `*.test.maxon`, which no `selection` here admits alongside a plain build root, and it prunes any
 // subdirectory holding a `.git`, which this walk must NOT do — pruning there would change which files
-// get COMPILED. What the two DO share — `isBuildManifestFileName`, `MaxonSourceExtension`,
+// get COMPILED. What the two DO share — `isDriverFileName`, `MaxonSourceExtension`,
 // `holdsIgnoreMarker` — it reaches through those same names rather than respelling any of them.
 //
 // The `.maxonignore` rule, in three facts:
@@ -1932,7 +1933,7 @@ end 'loadSourceDirectory'
 // constant in the trend log (see `printLibraryWalkCensus`), and the count is returned from
 // the recursion rather than re-derived by a second traversal because a second traversal would be free
 // to disagree the moment this one grows an exclusion.
-export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly) returns DirectoryWalkCount throws CompileError
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, atProjectRoot bool = true) returns DirectoryWalkCount throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 
 	// `dir` itself was listed, so a leaf directory answers 1.
@@ -1947,12 +1948,12 @@ export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, sel
 				continue
 			end 'ignoredSubtree'
 
-			let below = try collectMaxonSources(entry, into: into, selection: selection)
+			let below = try collectMaxonSources(entry, into: into, selection: selection, atProjectRoot: false)
 			walked = walked + below
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
 
-			if name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name) 'isSource'
+			if name.endsWith(MaxonSourceExtension) and selectionAdmits(selection, name: name, atProjectRoot: atProjectRoot) 'isSource'
 				into.push(entry)
 			end 'isSource'
 		end 'isFile'
@@ -1985,7 +1986,7 @@ end 'holdsIgnoreMarker'
 // every marker. `Testing/SpecTestRunner.compilationUnitsAmong` is the one caller, and the ancestry
 // half is there for it — a staged spec fragment is asked about by path, with no walk to have pruned
 // it, and it must be asked with this predicate rather than with "did a walk return it", because a
-// walk also drops a `build.maxon`, which naming DOES compile. See there.
+// walk also drops the root's `project.maxon` and `tasks.maxon`, which naming DOES compile. See there.
 export function isIgnoredDirectory(dir FilePath) returns bool
 	// Resolved first: the climb runs out of parents at a relative spelling's own first component while
 	// the directories that could hold a marker are still above it, so a relative `dir` would ask about
@@ -2060,14 +2061,24 @@ let RetiredImageInfix = ".retired-"
 // What a build manifest and a Maxon source are called, and what says a directory holds none: file-discovery
 // contracts stated once for every walk over a source tree — `collectMaxonSources` below and `maxon fmt`'s
 // separate walk, `Formatter.collectFormattableFiles` — and the driver, which runs the manifest.
-export let BuildManifestFileName = "build.maxon"
+export let ProjectManifestFileName = "project.maxon"
 
-// Is a file of this name a project's build manifest? Case-insensitive, because on the filesystem most
-// checkouts live on `BUILD.maxon` IS `build.maxon`. A library tier holds no manifest and does not ask
+export let TaskFileName = "tasks.maxon"
+
+// Case-insensitive, because on the filesystem most checkouts live on, `PROJECT.maxon` IS the file
+// `maxon build` would run. A library tier holds no manifest and does not ask
 // (`SourceSelection.libraryTier`).
-module function isBuildManifestFileName(name String) returns bool
-	return equalsIgnoringAsciiCase(name.toByteArray(), b: BuildManifestFileName.toByteArray())
-end 'isBuildManifestFileName'
+function isProjectManifestFileName(name String) returns bool
+	return equalsIgnoringAsciiCase(name.toByteArray(), b: ProjectManifestFileName.toByteArray())
+end 'isProjectManifestFileName'
+
+function isTaskFileName(name String) returns bool
+	return equalsIgnoringAsciiCase(name.toByteArray(), b: TaskFileName.toByteArray())
+end 'isTaskFileName'
+
+module function isDriverFileName(name String) returns bool
+	return isProjectManifestFileName(name) or isTaskFileName(name)
+end 'isDriverFileName'
 
 // ⭐ **`export` BECAUSE WHAT A MAXON SOURCE IS CALLED IS NOT ONLY A COMPILER'S QUESTION.**
 // `Main.MaxonArgs.parse` reads a first argument ending in it as `maxon run`, which is how a
@@ -2120,10 +2131,17 @@ end 'SourceSelection'
 // Does this walk want a file with this name? Every OTHER clause of "is this a source file" is asked at the
 // walk itself and is the same for both selections; this is the one that varies, so it is the one that is
 // asked here — through `isTestSourceName`, so neither answer restates the rule.
-function selectionAdmits(selection SourceSelection, name String) returns bool
+// ⚠ A driver file is excluded only AT THE WALK ROOT, which is the one directory `maxon build` looks
+// for a manifest in. Excluded at any depth, `Compiler/Project.maxon` — an ordinary source whose name
+// folds onto the manifest's — is dropped from every build of this compiler, and what surfaces is a
+// hundred unknown-type errors in the files that read it rather than a word about the file that went
+// missing.
+function selectionAdmits(selection SourceSelection, name String, atProjectRoot bool) returns bool
+	let aDriverFile = atProjectRoot and isDriverFileName(name)
+
 	return match selection 'selection'
-		productionOnly gives not isTestSourceName(name) and not isBuildManifestFileName(name)
-		productionAndTests gives not isBuildManifestFileName(name)
+		productionOnly gives not isTestSourceName(name) and not aDriverFile
+		productionAndTests gives not aDriverFile
 		libraryTier gives not isTestSourceName(name)
 	end 'selection'
 end 'selectionAdmits'

@@ -1,0 +1,117 @@
+// How this compiler is built. `maxon run build` at the repository root reaches it through the root
+// `tasks.maxon`'s `Build.delegate`, and `maxon build` inside this directory runs it in place; both
+// are this file, so both stamp the same version.
+//
+// ⛔ THE OUTPUT IS THE COMPILER'S OWN SLOT, so this REPLACES THE BINARY RUNNING IT. Once the compile
+// succeeds, the compiler renames its running image to `maxon.previous` — an OS will not let a
+// running executable be deleted, but will let one be renamed — and writes the new one in its place.
+// A failed build leaves the running compiler in the slot, so it can build the fix.
+//
+// ⭐⭐ THE VERSION IS DERIVED FROM GIT AND HANDED TO `--define`, WHICH IS WHAT go's `-ldflags -X`
+// DOES. A release is identified by the REF and not by a number somebody remembered to edit: a tag
+// `vX.Y.Z` or a branch `release/X.Y.Z` gives the version, and anything else is `dev`. The tag is
+// checked first because CI builds from one, where `rev-parse --abbrev-ref HEAD` answers `HEAD`.
+// `release.sh --publish` compares the tag against what the binary reports and refuses a
+// disagreement, so the two cannot drift.
+//
+// ⛔ THE VALUES ARE HANDED TO THE COMPILER, NEVER WRITTEN INTO A FILE. Generating a `Version.maxon`
+// needs a compiler, and the compiler cannot be built without it — so a fresh checkout would have no
+// `CompilerVersion` and no lane could compile at all. That file is tracked source carrying honest
+// defaults, and these three names replace them.
+//
+// ⚠ Namespace-qualified, because a bare name is not promised to be unique: a namespace is the module
+// DIRECTORY, so `Compiler.` is `maxon-bin/Compiler/`. `--define` refuses a name matching two
+// declarations rather than choosing between them.
+typealias ExitCode = int(0 to 255)
+
+let VersionDefineName = "Compiler.CompilerVersion"
+let CommitDefineName = "Compiler.CompilerCommit"
+let CommitDateDefineName = "Compiler.CompilerCommitDate"
+let ReleaseBranchPrefix = "release/"
+let ReleaseTagPrefix = "v"
+let DevVersion = "dev"
+let UnknownField = "unknown"
+
+// A missing git is not a build failure: a source tarball has no repository and must still build, so
+// every caller falls back rather than refusing.
+function gitOutput(args StringArray) returns String
+	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise 'noGit'
+		return ""
+	end 'noGit'
+
+	if not result.succeeded() 'gitFailed'
+		return ""
+	end 'gitFailed'
+
+	return result.stdout.trim()
+end 'gitOutput'
+
+function afterPrefix(text String, prefix String) returns String
+	let parts = text.split(prefix)
+
+	if parts.count() < 2 'noTail'
+		return DevVersion
+	end 'noTail'
+
+	return try parts.get(1) otherwise DevVersion
+end 'afterPrefix'
+
+function releaseVersion() returns String
+	var tagArgs = StringArray.create()
+	tagArgs.push("describe")
+	tagArgs.push("--exact-match")
+	tagArgs.push("--tags")
+	let tag = gitOutput(tagArgs)
+
+	if tag.startsWith(ReleaseTagPrefix) 'taggedRelease'
+		return afterPrefix(tag, prefix: ReleaseTagPrefix)
+	end 'taggedRelease'
+
+	var branchArgs = StringArray.create()
+	branchArgs.push("rev-parse")
+	branchArgs.push("--abbrev-ref")
+	branchArgs.push("HEAD")
+	let branch = gitOutput(branchArgs)
+
+	if branch.startsWith(ReleaseBranchPrefix) 'releaseBranch'
+		return afterPrefix(branch, prefix: ReleaseBranchPrefix)
+	end 'releaseBranch'
+
+	return DevVersion
+end 'releaseVersion'
+
+function versionDefines(version String) returns StringArray
+	var hashArgs = StringArray.create()
+	hashArgs.push("rev-parse")
+	hashArgs.push("--short")
+	hashArgs.push("HEAD")
+	let commit = gitOutput(hashArgs)
+
+	var dateArgs = StringArray.create()
+	dateArgs.push("log")
+	dateArgs.push("-1")
+	dateArgs.push("--format=%cd")
+	dateArgs.push("--date=short")
+	let date = gitOutput(dateArgs)
+
+	let commitField = commit if not commit.isEmpty() else UnknownField
+	let dateField = date if not date.isEmpty() else UnknownField
+
+	var defines = StringArray.create()
+	defines.push("{VersionDefineName}={version}")
+	defines.push("{CommitDefineName}={commitField}")
+	defines.push("{CommitDateDefineName}={dateField}")
+	return defines
+end 'versionDefines'
+
+export function build() returns ExitCode
+	// A `dev` build is unversioned in the binary and stamps as 0.0.0.0: a binary's numeric version
+	// fields exist for installers and upgrade rules, and an unreleased build has no place in that
+	// ordering (`dev` is not a number, which a manifest `version` must be). `--version` still reports
+	// `dev` and the commit it was built from.
+	let version = releaseVersion()
+	let stampedVersion = "" if version == DevVersion else version
+
+	Build.build(".", output: ".maxon/maxon", version: stampedVersion, defines: versionDefines(version))
+	return 0
+end 'build'

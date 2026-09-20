@@ -238,8 +238,8 @@ end 'an option ahead of the command word is still refused'
 // ⭐⭐ **A LIBRARY TIER HOLDS NO MANIFEST, SO `stdlib/Build.maxon` IS FORMATTED.** The manifest name is
 // matched without regard to case, and `Build.maxon` is the stdlib's `Build` API. What makes it library
 // source is WHERE it is — inside the `stdlib/` the compiler reads — so the case stages a compiler of its own
-// below a `stdlib/`, which is the only way a staged tree can be that directory. A project's `build.maxon`
-// beside it, in the same walk, is still skipped.
+// below a `stdlib/`, which is the only way a staged tree can be that directory. The walk ROOT's own
+// `project.maxon`, in the same walk, is still skipped.
 //
 // ⭐ `1 changed, 0 unchanged` is the load-bearing half, for `build-manifest-case-folded`'s reason: the
 // library file was visited and the manifest never was.
@@ -254,7 +254,7 @@ test 'a library tier formats its Build.maxon and a project still skips its manif
 
 	let unformatted = "let    f=6\n"
 	let librarySource = writableDir("{StagingRootDirName}/library-tier-build-source/stdlib").join("Build.maxon")
-	let manifest = writableDir("{StagingRootDirName}/library-tier-build-source/app").join("build.maxon")
+	let manifest = staged.join("project.maxon")
 	try File.writeText(librarySource, content: unformatted) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {librarySource.toString()}.")
 	try File.writeText(manifest, content: unformatted) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {manifest.toString()}.")
 
@@ -266,9 +266,9 @@ test 'a library tier formats its Build.maxon and a project still skips its manif
 
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 	try Expect.equal(run.exitCode() as AssertedInt, expected: SuccessExitCode, message: "`{TestedCommandName}` over a tree holding a library tier did not succeed. {said}")
-	try Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(1, unchanged: 0), message: "`{TestedCommandName}` did not visit exactly one file: the library tier's `Build.maxon` must be formatted and the project's `build.maxon` never reached. {said}")
+	try Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(1, unchanged: 0), message: "`{TestedCommandName}` did not visit exactly one file: the library tier's `Build.maxon` must be formatted and the project's `project.maxon` never reached. {said}")
 	try Expect.notEqual(fileBody(librarySource), expected: unformatted, message: "`stdlib/Build.maxon` was left unformatted: the walk read library source as a build manifest. {said}")
-	try Expect.equal(fileBody(manifest), expected: unformatted, message: "the project's `build.maxon` was rewritten: a manifest outside a library tier must not be walked. {said}")
+	try Expect.equal(fileBody(manifest), expected: unformatted, message: "the project's `project.maxon` was rewritten: a manifest outside a library tier must not be walked. {said}")
 end 'a library tier formats its Build.maxon and a project still skips its manifest'
 
 // ============================================================================================
@@ -861,15 +861,15 @@ test 'an already-formatted source is found and left alone'
 end 'an already-formatted source is found and left alone'
 
 // build-manifest-case-folded.test.maxon — the build manifest is recognised WITHOUT REGARD TO
-// CASE, so a `BUILD.maxon` is skipped exactly as `build.maxon` is.
+// CASE, so a `PROJECT.maxon` is skipped exactly as `project.maxon` is.
 //
 // ⭐ `0 changed, 0 unchanged` is the load-bearing half: it says the walk never counted the file
 // at all. `0 changed, 1 unchanged` would mean the manifest was found and merely left as it was,
 // which is a different implementation passing the same stdout check.
 //
-test 'a manifest named BUILD.maxon is skipped like build.maxon'
+test 'a manifest named PROJECT.maxon is skipped like project.maxon'
 	try checkFixture("build-manifest-case-folded")
-end 'a manifest named BUILD.maxon is skipped like build.maxon'
+end 'a manifest named PROJECT.maxon is skipped like project.maxon'
 
 // build-manifest-skipped.test.maxon — a directory walk formats the sources and never reaches the
 // build manifest beside them. The manifest is a project declaration the compiler reads, not a
@@ -878,9 +878,9 @@ end 'a manifest named BUILD.maxon is skipped like build.maxon'
 // ⭐ `1 changed, 0 unchanged` proves the skip happened in the WALK: had the manifest been visited
 // and declined, it would be counted as unchanged.
 //
-test 'a directory walk formats the sources and never visits build.maxon'
+test 'a directory walk formats the sources and never visits project.maxon'
 	try checkFixture("build-manifest-skipped")
-end 'a directory walk formats the sources and never visits build.maxon'
+end 'a directory walk formats the sources and never visits project.maxon'
 
 // command-word-as-path — ⛔⛔ **A DIRECTORY WHOSE NAME SPELLS A COMMAND IS STILL A PATH, AND THE
 // SPELLING THAT FAILS IS `fmt fmt`.** This driver's argument parser is ORDER-INDEPENDENT — one loop,
@@ -999,7 +999,7 @@ test 'a file named on the command line is formatted despite a .maxonignore'
 end 'a file named on the command line is formatted despite a .maxonignore'
 
 // named-path-escapes-manifest.test.maxon — the build manifest is skipped by the WALK, not exempted
-// from formatting: named on the command line, `build.maxon` is formatted like any other source.
+// from formatting: named on the command line, `project.maxon` is formatted like any other source.
 // The two facts are easy to conflate into one "manifests are never touched" rule, and this case
 // is the half that would go red if they were.
 //
@@ -1166,7 +1166,7 @@ let DocCommentMarker = "///"
 
 // What a staged file is called: the source's path with its separators folded into one name, so a flat
 // staging directory holds sources from anywhere in the tree without two of them colliding. It also
-// guarantees no staged file is named `build.maxon`, which the walk skips by name
+// guarantees no staged file is named `project.maxon`, which the walk skips by name
 // (`build-manifest-skipped`).
 let StagedNameSeparator = "_"
 

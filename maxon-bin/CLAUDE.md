@@ -389,9 +389,11 @@ Four doors are still standing open rather than shut:
   emits nothing. `targetProvidesFacility` spells wasm32-wasi as its OWN BLOCK rather than reaching the
   fallthrough `false`, which is what lets that row be stated at all.
 
-- **Build it:** `./maxon-bin/.maxon/maxon build maxon-bin` at the repo root. `build.maxon` there
-  declares the one target, so a bare `maxon build` builds it; name it anyway, because the seed rule
-  below turns a bare invocation into a path build.
+- **Build it:** `./maxon-bin/.maxon/maxon run build` at the repo root. The root `tasks.maxon`'s `build`
+  task delegates to `maxon-bin/project.maxon`, which is where the git-derived version comes from;
+  `cd maxon-bin && maxon build` is the same build said from inside. ⛔ **`maxon build maxon-bin` is now
+  a PATH build** — it compiles the same sources and stamps NO version, which is what the seed rule
+  below relies on and what you do not want for the slot.
 - **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the latest release's binary at
   `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **Re-run it after every
   release:** the stdlib may call a `__Builtins` intrinsic once a published release has it, so an older
@@ -529,7 +531,7 @@ refused the same way.
 Always pair `updateRequired` with a `filter` — unfiltered, it rewrites every golden in the suite.
 
 ⛔ **`build`'s `target:` TELLS A TRIPLE FROM A MANIFEST TARGET BY THE DASH.** `wasm32-wasi` becomes
-`--target=wasm32-wasi`; a bare word becomes a positional naming a target in `build.maxon`. `maxon
+`--target=wasm32-wasi`; a bare word becomes a positional naming a target in `project.maxon`. `maxon
 build` reads a bare word as another SOURCE PATH, so the two cannot be passed the same way.
 
 **A `spec-test` filter is ONE CASE-SENSITIVE substring** of the `<spec>/<test>` label (`maxon test`

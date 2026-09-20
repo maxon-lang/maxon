@@ -294,7 +294,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | a promise consumed through a second read of one array slot | exit code **118** |
 | deadlock | exit code **92** |
 
-`maxon run` and `maxon test` report these exit codes; see the [CLI reference](/docs/cli/).
+`maxon execute` and `maxon test` report these exit codes; see the [CLI reference](/docs/cli/).
 
 ## Best Practices for AI Agents
 

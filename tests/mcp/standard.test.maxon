@@ -37,7 +37,7 @@ test 'standard mcp-server advertises exactly the eight user-facing tools'
 	try Expect.equal(names.count() as AssertedInt, expected: 8, message: "standard mode must advertise exactly 8 tools")
 
 	try Expect.isTrue(containsString(names, target: "build"), message: "missing build")
-	try Expect.isTrue(containsString(names, target: "run"), message: "missing run")
+	try Expect.isTrue(containsString(names, target: "execute"), message: "missing execute")
 	try Expect.isTrue(containsString(names, target: "test"), message: "missing test")
 	try Expect.isTrue(containsString(names, target: "fmt"), message: "missing fmt")
 	try Expect.isTrue(containsString(names, target: "check"), message: "missing check")
@@ -65,7 +65,7 @@ test 'standard mcp-server build schema hides the contributor arguments'
 	// `run`, `test` and `fmt` take `repoRoot` too, and it is contributor-only on them for the same reason it
 	// is on `build`: it names a CHECKOUT and runs that tree's own compiler, which is not a thing a user of
 	// the language has.
-	for tool in ["run", "test", "fmt"] 'eachUserFacingTool'
+	for tool in ["execute", "test", "fmt"] 'eachUserFacingTool'
 		try Expect.isFalse(containsString(toolPropertyKeys(listTools(), toolName: tool), target: "repoRoot"), message: "{tool} must not advertise repoRoot in user mode")
 	end 'eachUserFacingTool'
 end 'standard mcp-server build schema hides the contributor arguments'
@@ -126,7 +126,7 @@ test 'standard mcp-server refuses an argument no tool declares'
 end 'standard mcp-server refuses an argument no tool declares'
 
 test 'standard mcp-server refuses a contributor argument in user mode'
-	for tool in ["build", "run", "test", "fmt"] 'eachToolTakingARepoRoot'
+	for tool in ["build", "execute", "test", "fmt"] 'eachToolTakingARepoRoot'
 		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"/somewhere\"\}")
 
 		try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602, message: "{tool} answered a user-mode repoRoot instead of refusing it")

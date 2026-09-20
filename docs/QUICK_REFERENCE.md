@@ -1120,8 +1120,8 @@ info.isReadOnly        // bool
 ### Commands
 ```bash
 maxon build <file|dir>       # Compile a file or a directory to an executable
-maxon build                  # Run the build.maxon in the current directory
-maxon run <file|dir> [args]  # Compile (or reuse a cached build) and run; args are the PROGRAM's
+maxon build                  # Run the project.maxon in the current directory
+maxon execute <file|dir> [args] # Compile (or reuse a cached build) and run; args are the PROGRAM's
 maxon <file>.maxon [args]    # The same, with no word — what a `#!/usr/bin/env maxon` script arrives as
 maxon test [dir]             # Run a PROJECT's unit tests (its *.test.maxon files)
 maxon fmt [file|dir]         # Re-print sources in canonical layout, in place

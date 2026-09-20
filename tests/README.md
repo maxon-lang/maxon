@@ -29,11 +29,11 @@ SERVER its tests spawn.
 | `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
-| `build-manifest/` | `maxon test`, under the compiler | `TestedCompilerStem` in `BuildManifestHarness.maxon` — the binary it spawns: the compiler under test, which is also the driver that runs each fixture's `build.maxon` and builds what it describes |
+| `build-manifest/` | `maxon test`, under the compiler | `TestedCompilerStem` in `BuildManifestHarness.maxon` — the binary it spawns: the compiler under test, which is also the driver that runs each fixture's `project.maxon` and builds what it describes |
 | `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
 | `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test, or a copy of it staged under `temp/cli/` where an install would put it |
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
-| `run/` | `maxon test`, under the compiler | `TestedCompilerStem` in `RunHarness.maxon` — the binary it spawns: the compiler under test, which is also the `run` DRIVER under test and what every cached build is made by |
+| `execute/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExecuteHarness.maxon` — the binary it spawns: the compiler under test, which is also the `execute` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.test.maxon` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
@@ -102,7 +102,7 @@ tests/
     version-component-past-the-pe-field-refused.test.maxon    a `version` component past 65535 is refused for x64-windows, and writes nothing
     version-component-past-the-macho-field-refused.test.maxon a second `version` component past 1023 is refused for arm64-macos, and writes nothing
     version-component-not-a-number-refused.test.maxon         a `version` component that is not a number is refused, and writes nothing
-    fixtures/<project>/build.maxon.fixture  main.maxon.fixture   stored names only - see rule 1
+    fixtures/<project>/project.maxon.fixture  main.maxon.fixture   stored names only - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
@@ -149,8 +149,8 @@ tests/
     profile-greenthreads.test.maxon         two green threads as themselves, the scheduler absent
     fixtures/hotwarm/main.maxon.fixture     stored name only - see rule 1
     fixtures/greenthreads/main.maxon.fixture   stored name only - see rule 1
-  run/
-    RunHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers
+  execute/
+    ExecuteHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers
     corpus.test.maxon                       the fixture roster, and the corpus's own file rules
     hello.test.maxon                        the program's stdout, NOTHING on stderr, exit 0
     exit-code.test.maxon                    the program's exit code is the command's
@@ -229,7 +229,7 @@ Two independent reasons, and the second is the one that bites:
 ⚠ **This rule is `fmt/`'s, and the live `.maxon` under `tests/` are no longer only the
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
-`profile/ProfileHarness.maxon`, `run/RunHarness.maxon`, `cli/CliHarness.maxon`,
+`profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`, `cli/CliHarness.maxon`,
 `define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
 named so the runner does not take them for test files. That is fine and is not an exception being
 smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
@@ -459,12 +459,12 @@ stacks and both tasks ranked, not their names in the stacks table.
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory under `temp/profile/`), and it keeps rule 5: one spawning `test`, one file.
 
-## `run/` — compile a program and run it, and do not compile it again
+## `execute/` — compile a program and run it, and do not compile it again
 
-Thirteen cases in twelve files over one subject: `maxon run <file|directory> [args...]` compiles a program (or reuses a
+Thirteen cases in twelve files over one subject: `maxon execute <file|directory> [args...]` compiles a program (or reuses a
 cached build of it) and runs it, forwarding stdin, stdout, stderr and the exit code. The shared half —
 the driver stem, the staging, the per-case cache root, the two spawners and the slot readers — lives in
-`RunHarness.maxon`; see the note under `debug/`.
+`ExecuteHarness.maxon`; see the note under `debug/`.
 
 ⭐⭐ **EVERY CASE POINTS THE DRIVER AT A CACHE OF ITS OWN**, through `MAXON_RUN_CACHE_ROOT` in the child's
 environment, and that is two facts at once: `maxon test` runs files CONCURRENTLY, so two cases sharing a
@@ -513,19 +513,19 @@ abort over a flag it does not implement; bland arguments would be green through 
 of FILES and leaves its directories standing, so a case's slot directory survives from its previous run
 and `Directory.create` short-circuits on it. Simultaneous
 children racing to create one is therefore only reachable against a cache root that has never held this
-program's slot: `rm -rf` the root and launch several `maxon run` of one script by hand. MEASURED that way,
+program's slot: `rm -rf` the root and launch several `maxon execute` of one script by hand. MEASURED that way,
 six children reddened it about one attempt in three, with `could not create <slot>` on the loser's stderr —
 which is why `slotDirectory` asks whether the directory is THERE rather than whether this run made it.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in its staging
-directory under `temp/run/`), and it keeps rule 5: one spawning `test`, one file. `corpus.test.maxon` is
+directory under `temp/execute/`), and it keeps rule 5: one spawning `test`, one file. `corpus.test.maxon` is
 the exception and spawns nothing — it holds the two guards that are about the corpus rather than about the
 driver: every fixture directory is one the harness's roster names and every name in that roster is a
 directory, and no ordinary `.maxon` sits beside the case files nor any live one under `fixtures/`.
 
-## `build-manifest/` — what a `build.maxon` says about the build, honoured as the command line's flags are
+## `build-manifest/` — what a `project.maxon` says about the build, honoured as the command line's flags are
 
-One subject: `maxon build` with NO path runs the staged project's `build.maxon` and builds what it
+One subject: `maxon build` with NO path runs the staged project's `project.maxon` and builds what it
 describes. A manifest is a second way to say what a flag says, so the build it describes is held to the
 same rules as a path build — the sidecar the manifest turned off is not written, `--coverage` without the
 sidecar is refused whichever of the two turned it off, a busy checkout refuses it, and a description field

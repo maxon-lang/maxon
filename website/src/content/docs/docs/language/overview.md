@@ -25,7 +25,7 @@ end 'main'
 The value `main` returns is the process exit code. `ExitCode`'s range depends on the target: `0` to
 `u32.max` on Windows, `0` to `255` on Linux, macOS and WASI. A literal outside that range is a compile error,
 and a computed one panics at the `return`. A project run with [`maxon test`](/docs/language/testing/)
-needs no `main`; a program compiled with `maxon build` or `maxon run` without one is **E3001**.
+needs no `main`; a program compiled with `maxon build` or `maxon execute` without one is **E3001**.
 
 ### Files and Projects
 
@@ -149,7 +149,7 @@ end 'main'
 
 The line must start at the very first byte of the file; `#!` anywhere else is **E1009** (`Unknown compiler
 directive`). Line numbers in diagnostics still count the shebang line. `maxon fmt` keeps it as written.
-Running such a file is [`maxon run`](/docs/cli/).
+Running such a file is [`maxon execute`](/docs/cli/).
 
 ### Identifiers
 

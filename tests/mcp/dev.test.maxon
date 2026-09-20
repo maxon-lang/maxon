@@ -33,7 +33,7 @@ test 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 	try Expect.isTrue(containsString(buildProps, target: "repoRoot"), message: "build must take repoRoot in dev mode")
 	try Expect.isTrue(containsString(buildProps, target: "from"), message: "build must take from in dev mode")
 
-	for tool in ["run_spec_test", "run_scale_test", "spec_test_outcome", "run", "test", "fmt"] 'each'
+	for tool in ["run_spec_test", "run_scale_test", "spec_test_outcome", "execute", "test", "fmt"] 'each'
 		try Expect.isTrue(containsString(toolPropertyKeys(doc, toolName: tool), target: "repoRoot"), message: "{tool} must take repoRoot")
 	end 'each'
 end 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
@@ -42,7 +42,7 @@ end 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 // documented design and stays untouched — so what a `repoRoot` buys is the one thing a caller in a worktree
 // cannot otherwise get: the named tree's OWN compiler, and an answer that says which tree it was.
 test 'dev mcp-server runs the named tree on run, test and fmt'
-	for tool in ["run", "test", "fmt"] 'eachHostTool'
+	for tool in ["execute", "test", "fmt"] 'eachHostTool'
 		let refused = callTool(tool, argumentsJson: "\{\"repoRoot\":\"{NonCheckoutDir}\"\}", devMode: true)
 
 		try Expect.isTrue(toolCallIsError(refused), message: "{tool} must refuse a repoRoot that is not a checkout")
@@ -54,7 +54,7 @@ test 'dev mcp-server runs the named tree on run, test and fmt'
 		try Expect.contains(toolCallText(relative), needle: "is relative. It must be an absolute path")
 	end 'eachHostTool'
 
-	let answered = callTool("run", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"path\":\"no-such-source.maxon\"\}", devMode: true)
+	let answered = callTool("execute", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
 	try Expect.equal(payloadString(answered, key: "repoRoot"), expected: thisCheckout())
 	try Expect.contains(payloadString(answered, key: "command"), needle: "no-such-source.maxon")
@@ -64,7 +64,7 @@ end 'dev mcp-server runs the named tree on run, test and fmt'
 // `test .` and a bare `fmt` all resolve their paths against the caller's cwd. An answer that named a tree
 // here would be an answer about a different directory than the one the argument was written for.
 test 'dev mcp-server names no tree on run when no repoRoot is given'
-	let doc = callTool("run", argumentsJson: "\{\"path\":\"no-such-source.maxon\"\}", devMode: true)
+	let doc = callTool("execute", argumentsJson: "\{\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
 	try Expect.isFalse(payloadHasKey(doc, key: "repoRoot"), message: "an unnamed tree must not be reported as one: {toolCallText(doc)}")
 	try Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
