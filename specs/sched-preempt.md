@@ -315,9 +315,23 @@ prompt=true spinners=true ping=1
 waits (`async` is a coroutine, not a thread), so its owner and its siblings may observe what it wrote only
 at those points. `busy` writes `phase = 1`, computes for 150 ms without waiting, then writes `phase = 2`.
 `main` and `nap` both become runnable 30 ms in, while `busy` is being preempted every 10 ms; neither may run
-until `busy` has finished, so both read 2.
+until `busy` has finished, so both read 2. One ATTEMPT owns its disturbance: a host that holds the
+process off a core for most of those 30 ms leaves `busy` still at its own `sleep(1)` when `main`'s
+deadline comes due, `__gt_timer_check` fires what is due in `(deadline, seq)` order, and
+`__gt_ready_locked` puts a woken OWNER at the FRONT of its strand queue and a woken coroutine at the
+back — so `main` runs ahead of a `busy` that has not started and reads 0, having exercised nothing.
+`seenByOwner == 0 and seenBySibling == 2` is that trace and nothing else, so an attempt matching it is
+discarded and retried; a 1 in either reading is the regression this case exists for, reaches the print
+and reddens the pinned line, so the retry is not a tolerance. `seenBySibling` is never the 0: `nap` is
+enqueued behind `busy` at its `async`, holds the later of the two deadlines so pop-min wakes `busy`
+first, and `busy` never waits once started. `attemptCap` is a time budget, every attempt paying the
+full 150 ms spin, and exhausting it prints its own non-matching line and exits 3. `preempted` reads
+`schedPreemptCount()` against a baseline taken inside the attempt: the counter is process-global and
+monotonic, so a discarded attempt's spin would otherwise leave it true for nothing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+
+let attemptCap = 8
 
 var phase = 0
 
@@ -351,14 +365,27 @@ function nap() returns Integer
 end 'nap'
 
 function main() returns ExitCode
-	let a = async busy()
-	let b = async nap()
-	sleep(30)
-	let seenByOwner = phase
-	let q = await a
-	let seenBySibling = await b
-	print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
-	return 0 as ExitCode
+	var tries = 0
+	while tries < attemptCap 'attempts'
+		tries = tries + 1
+		phase = 0
+		let preemptsBefore = __Builtins.schedPreemptCount()
+		let a = async busy()
+		let b = async nap()
+		sleep(30)
+		let seenByOwner = phase
+		let q = await a
+		let seenBySibling = await b
+		if seenByOwner == 0 and seenBySibling == 2 'neverStarted'
+			continue
+		end 'neverStarted'
+
+		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={__Builtins.schedPreemptCount() > preemptsBefore}\n")
+		return 0 as ExitCode
+	end 'attempts'
+
+	print("busy had not started in {attemptCap} attempts\n")
+	return 3 as ExitCode
 end 'main'
 ```
 ```stdout
