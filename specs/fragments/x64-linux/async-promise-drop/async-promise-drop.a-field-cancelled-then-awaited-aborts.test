@@ -1,26 +1,27 @@
-// Test: async-promise-drop.a-struct-field-drops-the-promise-it-holds
+// Test: async-promise-drop.a-field-cancelled-then-awaited-aborts
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
-function plain() returns Integer
-		_ = File.exists(FilePath from "noyield.txt")
-		return 7
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
 end 'plain'
 
 type Holder
-		public let p as IntPromise
+	public let p as IntPromise
 
-		static function of(p IntPromise) returns Holder
-				return Holder{p: p}
-		end 'of'
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
 end 'Holder'
 
 function main() returns ExitCode
-		let h = Holder.of(async plain())
-		return (await h.p) as ExitCode
+	let h = Holder.of(async plain(7))
+	h.p.cancel()
+	return (await h.p) as ExitCode
 end 'main'
 ---
-ExitCode: 7
+ExitCode: 118
 ---
 data {
   __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
@@ -93,28 +94,31 @@ func @plain {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
     x64.leaRegRdata rcx, [rip + __str_rec_17]  ; "noyield.txt"
   __il_body#3:
     x64.callDirect FilePath.create
-    x64.movRegReg rbx, r8
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
   __il_body#6:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.callDirect String.addressableBytes
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mf_exists
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __mf_exists
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r14, 0
   __il_cont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __destruct_FilePath
-    x64.movRegImm32 r8, 7
-    x64.epilogue 40
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -124,7 +128,8 @@ func @plain {
     x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -139,42 +144,51 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
+    x64.movRegImm32 rbx, 7
     x64.leaRegFunc rcx, [rip + plain]
     x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __gt_ready
   __il_body:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-  __il_cont:
-    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, rbx
-    x64.callDirect __gt_promise_field_vacate
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_await
     x64.movRegReg rbx, r8
-    x64.cmpRegImm32 rbx, 0
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+  __il_cont:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __gt_promise_field_vacate
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_promise_drop
+    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __gt_promise_field_vacate
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 rbx, 255
+    x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_86]  ; "panic at async-promise-drop.a-struct-field-drops-the-promise-it-holds.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_86]  ; "panic at async-promise-drop.a-field-cancelled-then-awaited-aborts.test:21: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

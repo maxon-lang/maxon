@@ -1,0 +1,399 @@
+// Test: async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function pick() returns bool
+	return File.exists(FilePath from "definitely-not-here.txt")
+end 'pick'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	var c = IntPromiseArray.create()
+
+	if pick() 'x'
+		b.push(p)
+	end 'x' else 'y'
+		c.push(p)
+	end 'y'
+
+	if b.count() == 1 'heldByB'
+		let q = try b.get(0) otherwise panic("holds it")
+		return (await q) as ExitCode
+	end 'heldByB'
+
+	let r = try c.get(0) otherwise panic("holds it")
+	return (await r) as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_trace_counter@64 = i64 0
+  __gt_live_count@72 = i64 0
+  __gt_seed_bytes@80 = i64 2048
+  __gt_stack_bytes_sum@88 = i64 0
+  __gt_stack_bytes_count@96 = i64 0
+  __gt_seed_sum_seen@104 = i64 0
+  __gt_seed_count_seen@112 = i64 0
+  __gt_keeps_cpu_clock@120 = i64 0
+  __sched_active_workers@128 = i64 1
+  __sched_max_active_workers@136 = i64 1
+  __sched_tls_index@144 = i64 0
+  __sched_tls_teb_offset@152 = i64 0
+  __sched_procs@160 = i64 0
+  __sched_allm@168 = i64 0
+  __sched_midle@176 = i64 0
+  __sched_pidle@184 = i64 0
+  __gt_gfree_head@192 = i64 0
+  __sched_arena_cursor@200 = i64 0
+  __sched_arena_limit@208 = i64 0
+  __gt_records_carved@216 = i64 0
+  __sched_npidle@224 = i64 0
+  __sched_runq_size@232 = i64 0
+  __sched_global_pushes@240 = i64 0
+  __sched_timer_scan_steps@248 = i64 0
+  __sched_mcount@256 = i64 0
+  __sched_nmidle@264 = i64 0
+  __sched_main_m@272 = i64 0
+  __sched_phase@280 = i64 0
+  __sched_lastpoll@288 = i64 0
+  __sched_poll_until@296 = i64 0
+  __sched_regain_head@304 = i64 0
+  __np_poller@312 = i64 0
+  __np_break@320 = i64 0
+  __np_wake_sig@328 = i64 0
+  __np_pd_table@336 = i64 0
+  __np_pd_cap@344 = i64 0
+  __np_waiters@352 = i64 0
+  __sched_num_procs@360 = i64 0
+  __sched_shutdown_flag@368 = i64 0
+  __sched_lock@376 = i64 0
+  __sched_lock_depth_sink@384 = i64 0
+  __sched_nmspinning@392 = i64 0
+  __sched_needspinning@400 = i64 0
+  __sched_sysmon_event@408 = i64 0
+  __sched_sysmon_wait@416 = i64 0
+  __sched_timer_starts@424 = i64 0
+  __mrt_envp@432 = i64 0
+  __mrt_tls_next_key@440 = i64 0
+  __mrt_errno@448 = i64 0
+  __mrt_tls_ready@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
+}
+
+func @plain {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "noyield.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect File.exists
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 7
+    x64.leaRegFunc rcx, [rip + plain]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#19
+  __im_load#20:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#32
+  __im_empty#21:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, __im_slow#19
+  critsplit#33:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#18
+  critsplit#32:
+    x64.movRegReg r10, rax
+  __im_cont#18:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot0, r8
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_19]  ; "definitely-not-here.txt"
+    x64.callDirect FilePath.init
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect File.exists
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+  __il_cont:
+    x64.cmpRegImm32 r15, 0
+    x64.jcc equal, ifelse
+  x:
+    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rax, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+    x64.jmp ifcont#5
+  ifelse:
+    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rax, r12
+    x64.callDirect __managed_vacate
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  ifcont#5:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, ifcont#9
+  heldByB:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#23
+  __im_load#24:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#34
+  __im_empty#25:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, __im_slow#23
+  critsplit#35:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#22
+  critsplit#34:
+    x64.movRegReg r10, rax
+  __im_cont#22:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#8
+  tryok#7:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#13
+  __rc_chk#14:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#13
+  __rc_ok#12:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#9:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#27
+  __im_load#28:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rcx + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rax, [rax + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#36
+  __im_empty#29:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc equal, __im_slow#27
+  critsplit#37:
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#26
+  critsplit#36:
+    x64.movRegReg r10, rcx
+  __im_cont#26:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#11
+  tryok#10:
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rax, r12
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#16
+  __rc_chk#17:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic#16
+  __rc_ok#15:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#19:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont#18
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once.test:19: has one\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#23:
+    x64.storeSlotReg slot1, rdx
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.loadRegSlot rdx, slot1
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont#22
+  tryerr#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once.test:31: holds it\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#13:
+    x64.leaRegRdata rcx, [rip + __str_blob_91]  ; "panic at async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once.test:32: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#27:
+    x64.loadRegSlot rcx, slot0
+    x64.storeSlotReg slot1, rdx
+    x64.callDirect __managed_get
+    x64.loadRegSlot rdx, slot1
+    x64.movRegReg r12, r8
+    x64.jmp __im_cont#26
+  tryerr#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once.test:35: holds it\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_92]  ; "panic at async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
