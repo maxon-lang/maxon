@@ -1,0 +1,57 @@
+let InternerCaseDirName = "interner-presize"
+let InternerAppDirName = "app"
+
+let InternerLogFlag = "--log=compiler:debug"
+
+let InternerLinePrefix = "[CMP] DEBUG: typeNames "
+let InternerNoRegrowthsSuffix = "regrowths 0"
+
+let InternerMainFileName = "main.maxon"
+let InternerShapeFileName = "shape.maxon"
+let InternerLabelFileName = "label.maxon"
+
+let InternerMainSource = "function main() returns ExitCode\n\tlet shape = Shape.create(3)\n\tlet label = Label.create(3)\n\n\tif label.rank == 3 and shape.side == 3 'matched'\n\t\treturn 0\n\tend 'matched'\n\n\treturn 1\nend 'main'\n"
+let InternerShapeSource = "export typealias ShapeSide = int(0 to 4096)\n\nexport type Shape\n\texport var side as ShapeSide\n\n\texport static function create(side ShapeSide) returns Shape\n\t\treturn Shape\{side: side\}\n\tend 'create'\nend 'Shape'\n"
+let InternerLabelSource = "export typealias LabelRank = int(0 to 4096)\n\nexport type Label\n\texport var rank as LabelRank\n\n\texport static function create(rank LabelRank) returns Label\n\t\treturn Label\{rank: rank\}\n\tend 'create'\nend 'Label'\n"
+
+function writeInternerFixture(directory FilePath, name String, content String)
+	try File.writeText(directory.join(name), content: content) otherwise panic("interner-presize: the gate could not run - could not write {name}")
+end 'writeInternerFixture'
+
+test 'the type-name interner is pre-sized and never regrows'
+	let dir = freshOutsideCheckoutDir(InternerCaseDirName)
+	let app = dir.join(InternerAppDirName)
+
+	if not Directory.create(app) and not Directory.isDirectory(app) 'couldNotCreate'
+		panic("interner-presize: the gate could not run - could not create {app.toString()}")
+	end 'couldNotCreate'
+
+	writeInternerFixture(app, name: InternerMainFileName, content: InternerMainSource)
+	writeInternerFixture(app, name: InternerShapeFileName, content: InternerShapeSource)
+	writeInternerFixture(app, name: InternerLabelFileName, content: InternerLabelSource)
+
+	let built = runDriver([BuildCommandWord, InternerAppDirName, InternerLogFlag], workingDirectory: dir)
+	let said = "It wrote to stderr: {built.stderr}"
+
+	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "a three-file directory did not build under {InternerLogFlag}. {said}")
+
+	var seen = 0
+	var regrown = ""
+
+	for rawLine in built.stderr.split("\n") 'eachLine'
+		let line = rawLine.trimEnd()
+
+		if not line.startsWith(InternerLinePrefix) 'notOurs'
+			continue
+		end 'notOurs'
+
+		seen = seen + 1
+
+		if not line.endsWith(InternerNoRegrowthsSuffix) 'regrew'
+			regrown.append("\n{line}")
+		end 'regrew'
+	end 'eachLine'
+
+	try Expect.isTrue(seen >= 3, message: "{InternerLogFlag} printed {seen} lines starting `{InternerLinePrefix}`, and a three-file project interns type names in every one of its files, so there must be at least one per file. {said}")
+	try Expect.isTrue(regrown.isEmpty(), message: "the type-name interner regrew for these files, so its pre-size heuristic did not hold: {regrown}")
+end 'the type-name interner is pre-sized and never regrows'

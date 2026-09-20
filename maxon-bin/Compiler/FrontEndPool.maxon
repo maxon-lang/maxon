@@ -439,6 +439,11 @@ module type FrontEndPool
 		let signatures = self.baselineIndex()
 		var worker = self.workerAt(workerSlot)
 
+		// Dropped before the copy is taken: `clone()` is the compiler's synthesized deep clone, which copies a
+		// field's columns rather than calling any `clone` the field's type declares, so every name this thread
+		// has materialized would otherwise be copied into every worker. The cache refills on demand.
+		signatures.releaseTypeNameViews()
+
 		// A TEMPORARY, so the send moves it: the copy is the worker's alone.
 		worker.adopt(signatures.clone())
 		try self.adopted.set(workerSlot, value: true) otherwise panic("FrontEndPool.requireAdopted: adopted.set OOB at {workerSlot} below count {self.adopted.count()}")

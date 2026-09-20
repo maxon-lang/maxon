@@ -59,6 +59,25 @@ let sharedNoInstanceIds = GenericInstanceIdArray.create()
 
 export typealias FileParseArtifactArray = Array with FileParseArtifact
 
+export typealias SourceByteCount = int(0 to u32.max)
+
+// Calibrated so no file of this tree regrows its table;
+// `tests/cli/interner-presize-never-regrows.test.maxon` fails when one does.
+let MinimumInternedTypeNames = 128 as NameId
+let SourceBytesPerTypeName = 512
+let ArenaBytesPerTypeName = 20
+
+// The table is sized once, from the only figure available before a name is interned. A miss costs a
+// regrowth and never a refusal, so the bias is high.
+export function internedNameHintFor(sourceBytes SourceByteCount) returns NameId
+	let estimate = sourceBytes / SourceBytesPerTypeName
+	return MinimumInternedTypeNames if estimate < MinimumInternedTypeNames else estimate
+end 'internedNameHintFor'
+
+export function internedArenaHintFor(nameHint NameId) returns NameByteCount
+	return nameHint * ArenaBytesPerTypeName
+end 'internedArenaHintFor'
+
 // ⭐ **WHAT A `Parser` IS BUILT FROM, AS VALUES RATHER THAN A `Project`** — every per-file fact the caller derived from
 // the project (`Queries.parseJobFor`), so a parse on a pool worker needs nothing the main thread owns.
 export type ParseJob
@@ -504,7 +523,7 @@ export type FileParseArtifact
 	// ids until a merge renumbers them, then the ids the latest merge adopted the rows under.
 	export var instanceIdsInUse as GenericInstanceIdArray
 
-	export static function create(filePath FilePath, livesUnderStdlibDirectory bool) returns FileParseArtifact
+	export static function create(filePath FilePath, livesUnderStdlibDirectory bool, sourceBytes SourceByteCount) returns FileParseArtifact
 		return Self{
 			filePath: filePath,
 			livesUnderStdlibDirectory: livesUnderStdlibDirectory,
@@ -537,7 +556,7 @@ export type FileParseArtifact
 			conformances: sharedEmptyConformances,
 			literalInitSites: sharedEmptyLiteralInitSites,
 			inferredInstantiationSites: sharedEmptyInferredInstantiationSites,
-			typeNames: TypeNameInterner.create(),
+			typeNames: TypeNameInterner.createForSource(sourceBytes),
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: noDeferredNameDiagnostics,

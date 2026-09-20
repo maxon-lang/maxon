@@ -4307,28 +4307,21 @@ let DetachedBlockLabel = b"detached"
 // this says which one it is.
 let MethodNameSeparator = "."
 
-// The same separator as a BYTE, for the join's INVERSE (`isQualifiedUnderTypeName`), which compares one
-// byte of a callee name and must not allocate.
+// The same separator as bytes — what `qualifiedMethodName` joins through and what the byte probes around
+// `isQualifiedUnderTypeName` compare against. Both run once per method declaration, once per method call
+// site and again in the declaration pre-scan, so a cost here is linear in the program: rendering one
+// spelling into the other per ask is what the second constant buys off, and the String above stays for
+// `splitQualifiedName`, which splits a String.
 //
-// ⚠ **YES, THIS IS THE SEPARATOR WRITTEN DOWN TWICE — DELIBERATELY, AND WITH A CHECK BETWEEN THE COPIES.**
-// The single-constant version was written first and MEASURED: rendering a `ByteArray` separator into the
-// join costs one extra `String.from` per `qualifiedMethodName` call, and that function runs once per method
-// DECLARATION, once per method CALL SITE and again in the declaration pre-scan — so the cost is LINEAR in
-// the program. scale-test read it as +338/+570/+1,034/+1,962/+3,818/+7,530 allocations across the doubling
-// ladder (a ratio converging to 2.00 from below: a linear term, not the flat install cost it was mistaken
-// for). A cosmetic single-spelling is not worth a linear term on the compiler's hottest name mangler.
-//
-// What makes the duplication safe is not this comment: it is that the two copies have a TEST between them.
+// What makes the duplication safe is not this comment: it is that the two copies have a test between them.
 // Every direct builtin-conformance dispatch resolves through `isCompilerInternalCallee` →
 // `isBuiltinConformanceImplName` → `splitQualifiedName`, so a byte here that disagrees with the join
-// above makes EVERY direct builtin-conformance call fail to be recognized as compiler-owned, and every
-// `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` case goes RED with E3004. The
+// above makes every direct builtin-conformance call fail to be recognized as compiler-owned, and every
+// `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` case goes red with E3004. The
 // copies cannot drift silently.
 //
-// ⚠ It deliberately quotes neither the impl roster nor a case COUNT. Both were written out here, and both
-// were stale within one rung of being written — the count said "eight" when there were nineteen. What the
-// check is worth does not depend on the number, and a number nothing verifies is just a second place to be
-// wrong.
+// ⚠ It deliberately quotes neither the impl roster nor a case count. What the check is worth does not
+// depend on the number, and a number nothing verifies is just a second place to be wrong.
 let MethodNameSeparatorBytes = b"."
 
 // ⭐ **ONE FIELD OF A `call` REPLACED — ITS CALLEE — AND EVERY OTHER CARRIED THROUGH.** The whole edit
@@ -4382,9 +4375,14 @@ end 'stringLiteralOpBytes'
 
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
 // `Parser.declaredMethodName` (the declaration) and `Parser.parseQualifiedCall` (the use). See
-// `MethodNameSeparator` for what a second spelling would cost.
+// `MethodNameSeparatorBytes` for why the separator is written twice.
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
-	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
+	var joined = ByteArray.create()
+	joined.reserve(typeName.count() + MethodNameSeparatorBytes.count() + methodName.count())
+	joined.append(typeName)
+	joined.append(MethodNameSeparatorBytes)
+	joined.append(methodName)
+	return joined
 end 'qualifiedMethodName'
 
 // ⭐ **HOW MANY DOTS A `Type.method` NAME CARRIES — EXACTLY ONE (N1b).** It is the boundary between the two
@@ -15855,13 +15853,31 @@ export type Parser
 		return renamed
 	end 'shadowRenamedTokens'
 
+	// The last spanned token's end offset is the file's byte count. EOF and every synthetic token carry 0
+	// for both offsets, so the walk is from the end rather than off `last()` — which would answer 0 for
+	// every file and leave every table at its floor, silently.
+	static function sourceByteCountOf(tokens TokenArray) returns SourceByteCount
+		var position = tokens.count()
+
+		while position > 0 'backFromTheEnd'
+			position = position - 1
+			let tok = try tokens.get(position) otherwise panic("Parser.sourceByteCountOf: tokens.get OOB at {position} below the {tokens.count()} just read")
+
+			if tok.endByte != 0 'aSpannedToken'
+				return tok.endByte as SourceByteCount
+			end 'aSpannedToken'
+		end 'backFromTheEnd'
+
+		return 0
+	end 'sourceByteCountOf'
+
 	export static function create(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
 		return Self{
 			tokens: shadowRenamedTokens(tokens, signatures: signatures, isStdlibSource: job.isStdlibSource),
 			pos: 0,
 			filePath: job.path,
 			namespace: job.namespace,
-			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory),
+			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory, sourceBytes: sourceByteCountOf(tokens)),
 			scope: Scope.create(),
 			libraryBlame: LibraryBlame.unblamed,
 			topLevelBorrowSubjects: noTopLevelBorrowSubjects,
@@ -16146,7 +16162,7 @@ export type Parser
 	// where the parse stopped. Copied rather than aliased: two artifacts sharing one array is the
 	// hazard `IrBlock`'s header states, and this path is cold.
 	export function abortedParseArtifact() returns FileParseArtifact
-		var salvaged = FileParseArtifact.create(self.filePath, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory)
+		var salvaged = FileParseArtifact.create(self.filePath, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, sourceBytes: sourceByteCountOf(self.tokens))
 
 		for decl in self.artifact.typeNameDecls 'eachDecl'
 			salvaged.recordTypeNameDecl(decl)
@@ -34449,7 +34465,7 @@ export type Parser
 	// two committed codes, so the split is where they actually differ and nowhere else — the non-tuple
 	// refusal stays one sentence assembled from the caller's nouns.
 	function requireTupleLayout(value ValueId, keywordTok Token, patternSubject String, sourceNoun String, needsClause String) returns StructLayout throws ParseError
-		if not tagNamesADeclaredType(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
+		if not tagNamesADeclaredType(self.tagOf(value)) or not self.valueTypeNameIsATuple(value) 'notATuple'
 			throw ParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
 		end 'notATuple'
 
@@ -34506,6 +34522,10 @@ export type Parser
 	function valueTypeName(value ValueId) returns ByteArray
 		return self.internedName(self.valueNameId(value))
 	end 'valueTypeName'
+
+	function valueTypeNameIsATuple(value ValueId) returns bool
+		return internedNameIsATupleTypeName(self.artifact.typeNames, id: self.valueNameId(value))
+	end 'valueTypeNameIsATuple'
 
 	// Open a lexical block — an `if` / `else` / `while` body. THREE things are scoped to
 	// it and must be opened and closed TOGETHER: the Scope frame its declarations land
@@ -67423,7 +67443,7 @@ export type Parser
 			return true
 		end 'nestedOrOpaque'
 
-		return tagNamesADeclaredType(tag) and isTupleTypeName(self.valueTypeName(value))
+		return tagNamesADeclaredType(tag) and self.valueTypeNameIsATuple(value)
 	end 'carriesDeclarationView'
 
 	// ⚠ **A LAYOUT DESCRIPTOR IS FORWARDED FROM THE CALLER'S OWN SLOT, SO THE CALLER MUST HOLD ONE** (P1.6-B1).
@@ -68763,15 +68783,15 @@ export type Parser
 	// the language does have. (R4.1 shipped the narrow test because its one enabled case bound the box
 	// DIRECTLY — the only spelling `structRef` alone serves.)
 	//
-	// ⚠ **IT READS THE NAME BEHIND THE ID; IT DOES NOT INTERN ONE.** `internedName(id).equals(name)` is a
-	// dense-column index plus a byte compare — the form `isStringIndexType` and `isCharacterSetType` both
-	// use. The `nameId == self.managedFileNameId()` spelling it replaces asked the same question by HASHING
-	// `__ManagedFile` and probing the interner on EVERY method dispatch in the program, and on a miss it
-	// INSERTED — so a file that merely calls a method on some struct acquired a `__ManagedFile` entry it has
-	// no use for. R4.2 widening the tag gate to `named` put that on the enum/alias receivers too, one arm
-	// above the enum test whose own comment explains that it gates on the tag FIRST precisely so the interner
-	// is not touched for a receiver that is not its business. The mint site (`parseManagedFileOpen`) still
-	// interns, which is where the id genuinely has to exist.
+	// ⚠ **IT READS THE NAME BEHIND THE ID; IT DOES NOT INTERN ONE.** `typeNames.equalsAt(id, other: name)`
+	// is a dense-column index plus a byte compare against the arena, materializing nothing — the form
+	// `isStringIndexType` and `isCharacterSetType` both use. A `nameId == self.managedFileNameId()` spelling
+	// would ask the same question by HASHING `__ManagedFile` and probing the interner on EVERY method
+	// dispatch in the program, and would INSERT on a miss — so a file that merely calls a method on some
+	// struct would acquire a `__ManagedFile` entry it has no use for, on the enum/alias receivers too, since
+	// the tag gate here admits `named`. The enum test one arm below gates on the tag FIRST for the same
+	// reason: the interner is not touched for a receiver that is not its business. The mint site
+	// (`parseManagedFileOpen`) interns, which is where the id genuinely has to exist.
 	function isManagedFileType(tag ValueTypeTag, nameId TypeNameId) returns bool
 		return self.receiverIsNamedAggregate(tag, nameId: nameId, typeName: ManagedFileTypeName)
 	end 'isManagedFileType'
@@ -68807,7 +68827,7 @@ export type Parser
 			return false
 		end 'notAnAggregateRef'
 
-		return self.internedName(nameId).equals(typeName)
+		return self.artifact.typeNames.equalsAt(nameId, other: typeName)
 	end 'receiverIsNamedAggregate'
 
 	// ⭐ **THE FOUR `__ManagedFile` INSTANCE METHODS — `close`, `size`, `read`, `write` (R4.2 completes
@@ -69192,7 +69212,7 @@ export type Parser
 	function valueSatisfiesConformanceSelf(actual ValueId, target DirectConformanceTarget) returns bool
 		match target 'target'
 			builtinValue(conformer) then return self.valueIsConformer(actual, conformer: conformer)
-			enumTagValue(enumName) then return self.tagOf(actual) == ValueTypeTag.named and self.internedName(self.valueNameId(actual)).equals(enumName)
+			enumTagValue(enumName) then return self.tagOf(actual) == ValueTypeTag.named and self.artifact.typeNames.equalsAt(self.valueNameId(actual), other: enumName)
 		end 'target'
 	end 'valueSatisfiesConformanceSelf'
 

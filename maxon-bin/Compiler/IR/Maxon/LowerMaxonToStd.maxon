@@ -1825,7 +1825,7 @@ type MaxonToStdLowering
 			end 'eachSlot'
 		end 'firstUse'
 
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: table.recordLabel.toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(table.recordLabel)))
 	end 'emitImmortalStringTable'
 
 	// ⭐⭐ **AN IMAGED RECORD BOX, IN `.rdata`, ADDRESSED BY ONE `lea`.** The payload is the synthetic
@@ -1849,7 +1849,7 @@ type MaxonToStdLowering
 
 	function emitImmortalStructRecord(result ValueId, nodes ImmortalBoxNodeArray, root ImmortalBoxNodeId, dstBlock IrBlock)
 		let label = self.ensureImmortalBoxNode(nodes, node: root, below: nodes.count() as ImmortalBoxNodeId)
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(label)))
 	end 'emitImmortalStructRecord'
 
 	// ⭐⭐ **THE SLOTS' OBJECTS FIRST, THEN THE BOX THAT NAMES THEM** — a `Map`/`Set` `let`'s five `.rdata`
@@ -2041,9 +2041,9 @@ type MaxonToStdLowering
 			slabArenaListAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabArenaListLabel))
 			slabArenaMapL1Addr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabArenaMapL1Label))
 			slabStateAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SlabStateLabel))
-			slabSizeToClass8Addr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabSizeToClass8Label.toByteArray()))
-			slabSizeToClass128Addr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabSizeToClass128Label.toByteArray()))
-			slabClassGeomAddr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabClassGeomLabel.toByteArray()))
+			slabSizeToClass8Addr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabSizeToClass8LabelBytes))
+			slabSizeToClass128Addr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabSizeToClass128LabelBytes))
+			slabClassGeomAddr then self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: SlabClassGeomLabelBytes))
 			dsBaseAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: DsBaseLabel))
 			dsAllocIdAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: DsAllocIdLabel))
 			tlsSlotLoad then self.stdModule.appendOp(dstBlock, op: StdOp.tlsSlotLoad(result, tebOffsetId: rawWordOperand(args, index: 0, intrinsic: intrinsic)))
@@ -2068,7 +2068,7 @@ type MaxonToStdLowering
 	end 'lowerRawIntrinsic'
 
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: registerStringLiteralRecord(self.globalData, bytes: bytes, debugStream: self.debugStream).toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(registerStringLiteralRecord(self.globalData, bytes: bytes, debugStream: self.debugStream))))
 	end 'lowerStringLiteral'
 
 	// ⭐ **A CONSTANT ARRAY LITERAL OVER AN IMMORTAL `.rdata` BLOB** — the Array analogue of
@@ -2110,7 +2110,7 @@ type MaxonToStdLowering
 				containerBox panic("lowerConstArrayLiteral: a `constArrayLiteral` site is marked as a CONTAINER BOX, which is a struct box and not a `__ManagedMemory` record — `Parser.emitImageRecordRead` emits `immortalStructRecord` for that shape and files no mark")
 			end 'shape'
 
-			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(label)))
 			return
 		end 'imageData'
 
@@ -2128,7 +2128,7 @@ type MaxonToStdLowering
 
 		// buffer@0 = &blob (immortal `.rdata`, materialized by a RIP-relative lea — never freed).
 		let blobAddr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(blobAddr, label: blobLabel.toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(blobAddr, label: self.globalData.labelBytesOf(blobLabel)))
 		self.emitConstArrayField(result, offset: ManagedRecordBufferOffset, value: blobAddr, dstBlock: dstBlock)
 
 		// length@8 = the ELEMENT count, which equals the byte count only when an element is a byte.
@@ -2526,7 +2526,7 @@ type MaxonToStdLowering
 
 			let label = self.ensureWitnessTable(concreteType, instance: argInstance, interfaceName: constraint.interfaceName)
 			let addrId = self.mintStdValueId()
-			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
+			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: self.globalData.labelBytesOf(label)))
 			return addrId
 		end 'concrete'
 
@@ -3101,7 +3101,7 @@ type MaxonToStdLowering
 	function appendInstanceAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, gid GenericInstanceId, sig FuncSignature)
 		if self.layoutNeedingFuncs.contains(request.implName) 'aLayoutDescriptor'
 			let descId = args.count()
-			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
+			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid))))
 			args.push(descId)
 		end 'aLayoutDescriptor'
 
@@ -3123,7 +3123,7 @@ type MaxonToStdLowering
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendInstanceAdapterDictionary: whereConstraints.get OOB at {i} for '{String.from(request.implName)}'")
 			let witnessId = args.count()
-			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(witnessId, label: self.instanceConstraintWitnessLabel(gid, constraint: constraint, implName: request.implName).toByteArray()))
+			self.stdModule.appendOp(entry, op: StdOp.rdataAddr(witnessId, label: self.globalData.labelBytesOf(self.instanceConstraintWitnessLabel(gid, constraint: constraint, implName: request.implName))))
 			args.push(witnessId)
 		end 'eachConstraint'
 
@@ -3509,7 +3509,7 @@ type MaxonToStdLowering
 		end 'forwardsTheCallersOwnRun'
 
 		let descId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid as GenericInstanceId).toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.globalData.labelBytesOf(self.ensureLayoutDescriptor(gid as GenericInstanceId))))
 		return descId
 	end 'emitInstanceDescriptorAddr'
 
@@ -4185,7 +4185,7 @@ type MaxonToStdLowering
 
 	function emitWitnessTableAddr(result ValueId, conformerType ByteArray, instance WitnessTableInstance, interfaceName ByteArray, dstBlock IrBlock)
 		let label = self.ensureWitnessTable(conformerType, instance: instance, interfaceName: interfaceName)
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: label.toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(label)))
 	end 'emitWitnessTableAddr'
 
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments — the
@@ -5841,7 +5841,7 @@ type MaxonToStdLowering
 	// `mrt_panic` with a NUL-terminated line; only where the bytes live differs.
 	function lowerPanicAbort(message ByteArray, dstBlock IrBlock)
 		let blobLabel = registerStringBlob(self.globalData, bytes: message)
-		self.stdModule.appendOp(dstBlock, op: StdOp.osPanic(blobLabel.toByteArray()))
+		self.stdModule.appendOp(dstBlock, op: StdOp.osPanic(self.globalData.labelBytesOf(blobLabel)))
 	end 'lowerPanicAbort'
 
 	// A fresh `const 0` (i64) — the ZERO ERROR FLAG (always a GPR value) needs one, at several sites, so

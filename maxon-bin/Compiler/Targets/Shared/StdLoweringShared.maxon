@@ -147,11 +147,6 @@ end 'memoryDisplacement'
 // XMM), and an array would heap-box one small array for EVERY function in the module — most all-integer
 // and never the target of a float-argument call. The result side is the class itself.
 
-// A callee's row in the table's columns. A probe slot holds a row, or the slot count — which no row
-// reaches, since the slots outnumber the rows — for an empty slot.
-typealias CalleeRow = int(0 to u64.max)
-typealias CalleeRowArray = Array with CalleeRow
-typealias NameStartArray = Array with ElementIndex
 typealias ArgFloatMaskArray = Array with ArgFloatMask
 typealias CalleeResultClassArray = Array with RegClass
 
@@ -174,47 +169,38 @@ export type LoweredUnit
 	end 'create'
 end 'LoweredUnit'
 
-// ⛔ **COLUMNS UNDER AN OPEN-ADDRESSING INDEX, NOT A `Map`.** A `Map` hashes its key through a witness
-// slot, and a message that dispatches through a witness the compiler cannot name is refused outright
-// (E3143) — the lookups run on a pool worker. `Array.hash` on the callee's own bytes is a named call that
-// reads the name once; the isel asks three or four times per call op, and a bisection over the sorted
-// names would walk the shared prefix of thirteen of them on every ask.
+// ⛔ A `NameTable`, not a `Map`. A `Map` hashes its key through a witness slot, and a message that
+// dispatches through a witness the compiler cannot name is refused outright (E3143) — the lookups run on
+// a pool worker. `NameTable`'s index names no witness; the isel asks three or four times per call op, and
+// a bisection over the sorted names would walk the shared prefix of thirteen of them on every ask.
 //
-// Every name lives in ONE flat byte array, so a worker's copy is five array clones rather than two
-// allocations per callee per worker.
+// Every name lives in that one arena, so a worker's copy is seven array clones — five of them the name
+// table's — rather than two allocations per callee per worker.
 export type CalleeAbiTable
-	// Row r's name is `names[nameStarts[r], nameStarts[r + 1])`; the checked index holds each name once.
-	var names as ByteArray
-	var nameStarts as NameStartArray
+	// A row IS a `NameId`, so the two columns below are indexed by what the lookup already answers.
+	var names as NameTable
 	var paramFloatMasks as ArgFloatMaskArray
 	var resultClasses as CalleeResultClassArray
 
-	// Linear probing over the low bits of the name's hash. A power of two holding `SlotsPerRow` slots per
-	// row, so `and (count - 1)` is the modulus and a probe always meets an empty slot.
-	var slots as CalleeRowArray
-
 	// ⭐ **IT TAKES THE CHECKED INDEX, NOT THE MODULE** — so its key set is provably the one
 	// `FunctionNameIndex.create` refused a duplicate over, rather than whatever the module happened to hold
-	// when someone called it. Which is also why a row is claimed without an equality probe: no name is
-	// already in the table.
+	// when someone called it. Which is also why a name's id is its row: no name is interned twice, so
+	// `intern` appends in `functions` order and the columns are pushed in that same order.
 	export static function build(funcNames FunctionNameIndex) returns CalleeAbiTable
 		let rowCount = funcNames.functions.count()
-		var table = Self{names: ByteArray.create(), nameStarts: NameStartArray.create(), paramFloatMasks: ArgFloatMaskArray.create(), resultClasses: CalleeResultClassArray.create(), slots: CalleeRowArray.create()}
-		table.nameStarts.reserve(rowCount + 1)
-		table.paramFloatMasks.reserve(rowCount)
-		table.resultClasses.reserve(rowCount)
-		table.nameStarts.push(0)
-
-		let slotCount = roundUpToPowerOfTwo((rowCount * SlotsPerRow) as BytePos) as ElementIndex
-		table.slots.refill(slotCount, value: slotCount as CalleeRow)
+		var table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(), resultClasses: CalleeResultClassArray.create()}
+		table.paramFloatMasks.reserve(rowCount as ElementIndex)
+		table.resultClasses.reserve(rowCount as ElementIndex)
 
 		for func in funcNames.functions 'eachFunc'
-			let row = table.paramFloatMasks.count() as CalleeRow
-			table.names.append(func.name)
-			table.nameStarts.push(table.names.count())
+			let row = table.names.intern(func.name)
+
+			if row != (table.paramFloatMasks.count() as NameId) 'nameAlreadyInterned'
+				panic("CalleeAbiTable.build: callee '{String.from(func.name)}' interned as id {row} where the columns hold {table.paramFloatMasks.count()} rows — `FunctionNameIndex.create` refused a duplicate name, so every intern here must append")
+			end 'nameAlreadyInterned'
+
 			table.paramFloatMasks.push(floatParamMaskOf(func.paramTypes))
 			table.resultClasses.push(returnTypeResultClass(func.returnType))
-			table.claimSlot(func.name, row: row)
 		end 'eachFunc'
 
 		return table
@@ -223,91 +209,27 @@ export type CalleeAbiTable
 	// A table nothing else holds, with `source`'s rows in `source`'s order — what a worker is spawned
 	// with, since a spawn's factory arguments move and the driver keeps its own for the E5001 re-run.
 	export static function copyOf(source CalleeAbiTable) returns CalleeAbiTable
-		return Self{names: source.names.clone(), nameStarts: source.nameStarts.clone(), paramFloatMasks: source.paramFloatMasks.clone(), resultClasses: source.resultClasses.clone(), slots: source.slots.clone()}
+		return Self{names: NameTable.copyOf(source.names), paramFloatMasks: source.paramFloatMasks.clone(), resultClasses: source.resultClasses.clone()}
 	end 'copyOf'
 
 	export function paramFloatMaskOf(callee ByteArray) returns ArgFloatMask throws CalleeAbiLookup
 		let row = try self.rowFor(callee)
-		return try self.paramFloatMasks.get(row) otherwise panic("CalleeAbiTable.paramFloatMaskOf: row {row} is past the {self.paramFloatMasks.count()} rows the index was built over")
+		return try self.paramFloatMasks.get(row as ElementIndex) otherwise panic("CalleeAbiTable.paramFloatMaskOf: row {row} is past the {self.paramFloatMasks.count()} rows the index was built over")
 	end 'paramFloatMaskOf'
 
 	export function resultClassOf(callee ByteArray) returns RegClass throws CalleeAbiLookup
 		let row = try self.rowFor(callee)
-		return try self.resultClasses.get(row) otherwise panic("CalleeAbiTable.resultClassOf: row {row} is past the {self.resultClasses.count()} rows the index was built over")
+		return try self.resultClasses.get(row as ElementIndex) otherwise panic("CalleeAbiTable.resultClassOf: row {row} is past the {self.resultClasses.count()} rows the index was built over")
 	end 'resultClassOf'
 
-	function emptySlot() returns CalleeRow
-		return self.slots.count() as CalleeRow
-	end 'emptySlot'
-
-	function firstSlotFor(name ByteArray) returns ElementIndex
-		return (name.hash() as ElementIndex) and (self.slots.count() - 1)
-	end 'firstSlotFor'
-
-	function nextSlotAfter(slot ElementIndex) returns ElementIndex
-		return (slot + 1) and (self.slots.count() - 1)
-	end 'nextSlotAfter'
-
-	function claimSlot(name ByteArray, row CalleeRow)
-		var slot = self.firstSlotFor(name)
-
-		for _ in 0 upto self.slots.count() 'probe'
-			let held = try self.slots.get(slot) otherwise panic("CalleeAbiTable.claimSlot: slots.get OOB at {slot} under the mask of {self.slots.count()} slots")
-
-			if held == self.emptySlot() 'free'
-				try self.slots.set(slot, value: row) otherwise panic("CalleeAbiTable.claimSlot: slots.set OOB at {slot} just read")
-				return
-			end 'free'
-
-			slot = self.nextSlotAfter(slot)
-		end 'probe'
-
-		panic("CalleeAbiTable.claimSlot: no empty slot for row {row} among {self.slots.count()} — the slots are sized to at least twice the rows")
-	end 'claimSlot'
-
-	function rowFor(callee ByteArray) returns CalleeRow throws CalleeAbiLookup
-		var slot = self.firstSlotFor(callee)
-
-		for _ in 0 upto self.slots.count() 'probe'
-			let row = try self.slots.get(slot) otherwise panic("CalleeAbiTable.rowFor: slots.get OOB at {slot} under the mask of {self.slots.count()} slots")
-
-			if row == self.emptySlot() 'notHere'
-				throw CalleeAbiLookup.unknownCallee
-			end 'notHere'
-
-			if self.rowNamed(row, callee: callee) 'hit'
-				return row
-			end 'hit'
-
-			slot = self.nextSlotAfter(slot)
-		end 'probe'
-
-		panic("CalleeAbiTable.rowFor: probed every one of {self.slots.count()} slots without meeting an empty one — the slots are sized to at least twice the rows")
+	function rowFor(callee ByteArray) returns NameId throws CalleeAbiLookup
+		return try self.names.idOf(callee) otherwise throw CalleeAbiLookup.unknownCallee
 	end 'rowFor'
-
-	function rowNamed(row CalleeRow, callee ByteArray) returns bool
-		let start = try self.nameStarts.get(row) otherwise panic("CalleeAbiTable.rowNamed: nameStarts.get OOB at row {row} of {self.nameStarts.count() - 1}")
-		let stop = try self.nameStarts.get(row + 1) otherwise panic("CalleeAbiTable.rowNamed: nameStarts.get OOB at row {row + 1} of {self.nameStarts.count() - 1} — the column carries one more start than there are rows")
-
-		if stop - start != callee.count() 'differentLength'
-			return false
-		end 'differentLength'
-
-		for i in 0 upto callee.count() 'eachByte'
-			let a = try self.names.get(start + i) otherwise panic("CalleeAbiTable.rowNamed: names.get OOB at {start + i} below the row's end {stop}")
-			let b = try callee.get(i) otherwise panic("CalleeAbiTable.rowNamed: callee.get OOB at {i} below its count {callee.count()}")
-
-			if a != b 'differ'
-				return false
-			end 'differ'
-		end 'eachByte'
-
-		return true
-	end 'rowNamed'
 end 'CalleeAbiTable'
 
-// Slots per row: a load factor of at most one half keeps a linear probe short.
-let SlotsPerRow = 2
+// An average rather than a bound — the runtime entry points and the program's own mangled names sit
+// either side of it, and a miss costs one regrowth rather than a refusal.
+let CalleeNameByteEstimate = 32
 
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
 // nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in

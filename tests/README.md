@@ -141,6 +141,7 @@ tests/
     build-directory-without-output-names-the-directory.test.maxon   `build <dir>` with no `-o` writes `<dir>/<dirname><ext>`, staged outside the checkout
     build-walk-skips-a-case-folded-manifest.test.maxon      a `BUILD.maxon` beside the program is not compiled as source
     census-by-tag-reports-a-table.test.maxon                `--census-by-tag` prints the residency census's per-tag table, and nothing prints it without the flag
+    interner-presize-never-regrows.test.maxon               every source file's type-name interner reports itself under `--log=compiler:debug`, and none of them regrew
     wasm-build-without-tools-is-an-error-not-a-panic.test.maxon     an install-shaped copy outside the checkout, with no `vendor/`: exit 1 naming `wasm-tools`, no panic
     wasm-build-reports-the-module-size.test.maxon           a wasm32-wasi build's `Wrote N bytes of code` has N > 0
   profile/

@@ -240,12 +240,20 @@ let SlabRawShardRow = SlabMaxShards - 1
 let SlabClassGeomSlotShift = 32
 let SlabClassGeomSlotMask = 0xFFFFFFFF
 
-// Exported because a `__Raw` address row names each of them at the lowering and nowhere else
-// (`LowerMaxonToStd.lowerRawIntrinsic`), so the label this file registers and the label a tier body reads
-// are one constant.
-export let SlabSizeToClass8Label = "__slab_size_to_class8"
-export let SlabSizeToClass128Label = "__slab_size_to_class128"
-export let SlabClassGeomLabel = "__slab_class_geom"
+// The label this file registers each table under.
+let SlabSizeToClass8Label = "__slab_size_to_class8"
+let SlabSizeToClass128Label = "__slab_size_to_class128"
+let SlabClassGeomLabel = "__slab_class_geom"
+
+// ⚠ The same three spellings as bytes, and the pair cannot collapse into `GlobalDataTable.labelBytesOf`.
+// `lowerRawIntrinsic` emits a `rdataAddr` for each of these from tier source, inside `pipeline.run()`,
+// and the payloads are not registered until `installSlabRuntime` several steps later
+// (`Compiler.compileToCodeResult`) — so a shared record fetched by label would be a lookup of a payload
+// that does not exist yet. A drift between a pair is not silent: nothing would register the payload the
+// emitted op names, and `GlobalDataTable.rdataOffsetOf` panics by name on it at relocation time.
+export let SlabSizeToClass8LabelBytes = b"__slab_size_to_class8"
+export let SlabSizeToClass128LabelBytes = b"__slab_size_to_class128"
+export let SlabClassGeomLabelBytes = b"__slab_class_geom"
 
 // ⭐ **THE TWO REVERSE LOOKUPS' DIVISORS, AS SHIFTS.** `SlabClasses.maxon` states the divisors
 // (`SlabSmallSizeDiv` 8, `SlabLargeSizeDiv` 128); the emitted code divides by them, and a divide by a power
@@ -476,6 +484,7 @@ export let SlabCensusBucketBytesName = b"__slab_census_bytes"
 // `runtime/SlabRuntime.maxon` holds the other copy of every kind below. A drift swaps two figures over,
 // which no run would notice.
 let SlabCensusName = b"__slab_census"
+
 // A locked entry point and the tier body it calls are named separately. The tier file is INPUT to the
 // build running now, so `callee` must name a body that file already carries — a tier body and the
 // emitter constant naming it cannot be respelled by one build.
@@ -845,7 +854,7 @@ end 'emitSlabSizeRouting'
 // `class_idx` alone costs. See `SlabClassGeomSlotShift`.
 function emitClassGeometry(module StdModule, block IrBlock, classIdx ValueId, ids ValueMinter) returns ValueId
 	let base = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(base, label: SlabClassGeomLabel.toByteArray()))
+	module.appendOp(block, op: StdOp.rdataAddr(base, label: SlabClassGeomLabelBytes))
 	return emitWordSlotLoad(module, block: block, base: base, index: classIdx, ids: ids)
 end 'emitClassGeometry'
 
@@ -1700,11 +1709,11 @@ function emitSlabClassIndex(module StdModule, func IrFunction, cur IrBlock, size
 	let aboveSmallTable = emitCmp(module, block: cur, a: size, b: tableBoundary, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(aboveSmallTable, thenBlockId: largeTable.id, elseBlockId: smallTable.id))
 
-	let small = emitReverseTableLookup(module, block: smallTable, size: size, subtract: 0, divShift: SlabSmallSizeDivShift, divisor: SlabSmallSizeDiv, label: SlabSizeToClass8Label, ids: ids)
+	let small = emitReverseTableLookup(module, block: smallTable, size: size, subtract: 0, divShift: SlabSmallSizeDivShift, divisor: SlabSmallSizeDiv, label: SlabSizeToClass8LabelBytes, ids: ids)
 	module.setTerminator(smallTable, op: StdOp.branch(merge.id))
 	smallTable.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(small)))
 
-	let large = emitReverseTableLookup(module, block: largeTable, size: size, subtract: SlabSmallSizeMax, divShift: SlabLargeSizeDivShift, divisor: SlabLargeSizeDiv, label: SlabSizeToClass128Label, ids: ids)
+	let large = emitReverseTableLookup(module, block: largeTable, size: size, subtract: SlabSmallSizeMax, divShift: SlabLargeSizeDivShift, divisor: SlabLargeSizeDiv, label: SlabSizeToClass128LabelBytes, ids: ids)
 	module.setTerminator(largeTable, op: StdOp.branch(merge.id))
 	largeTable.branchEdges.push(BranchEdge.create(merge.id, argIds: argsOf(large)))
 
@@ -1718,14 +1727,14 @@ end 'emitSlabClassIndex'
 // The rounding is `(x + divisor - 1) shr divShift`, and it is exact for both arms because every value
 // reaching either is positive: the small arm sees `size <= 1016` and the large arm sees `size >= 1017`, so
 // `size - 1024 + 127 >= 120`.
-function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract ParsedInt, divShift ParsedInt, divisor ParsedInt, label String, ids ValueMinter) returns ValueId
+function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract ParsedInt, divShift ParsedInt, divisor ParsedInt, label ByteArray, ids ValueMinter) returns ValueId
 	let bias = emitConst(module, block: block, value: divisor - 1 - subtract, ids: ids)
 	let raised = emitBin(module, block: block, a: size, b: bias, opcode: StdBinOpcode.add, ids: ids)
 	let shift = emitConst(module, block: block, value: divShift, ids: ids)
 	let index = emitBin(module, block: block, a: raised, b: shift, opcode: StdBinOpcode.shr, ids: ids)
 
 	let base = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(base, label: label.toByteArray()))
+	module.appendOp(block, op: StdOp.rdataAddr(base, label: label))
 	return emitLoadByteIndexed(module, block: block, base: base, index: index, ids: ids)
 end 'emitReverseTableLookup'
 

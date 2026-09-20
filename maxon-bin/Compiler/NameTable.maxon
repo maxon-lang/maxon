@@ -1,0 +1,473 @@
+export typealias NameId = int(0 to u32.max)
+export typealias NameByteCount = int(0 to u32.max)
+export typealias NameTableRegrowthCount = int(0 to u64.max)
+
+typealias NameIdArray = Array with NameId
+typealias NameSpanArray = Array with NameSpan
+typealias NameDigestArray = Array with HashDigest
+
+let NameTableMinimumSlots = 16 as TableCapacity
+let NameTableSlotsPerName = 2
+let NameTableLoadNumerator = 3
+let NameTableLoadDenominator = 4
+export let NameTableIdLimit = u32.max
+let NameTableArenaByteLimit = u32.max
+let NameTableMinimumReservedNames = 1
+let NameTableMinimumReservedBytes = 1
+let NameTableSlotHashMask = 0xFFFFFFFF as HashDigest
+
+export enum NameTableError implements Error
+	unknownId
+	unknownName
+end 'NameTableError'
+
+// An all-`let` record of two narrow fields: one inline machine word where the compiler packs such a
+// record, a heap box where it does not. Nothing here takes a `NameSpan` apart with `is`, `sizeof`, `==`
+// or `Array.resize`, which is what makes the code correct under either shape.
+type NameSpan
+	export let offset as NameByteCount
+	export let size as NameByteCount
+
+	export static function create(offset NameByteCount, size NameByteCount) returns NameSpan
+		return Self{offset: offset, size: size}
+	end 'create'
+end 'NameSpan'
+
+export type NameTable
+	var bytes as ByteArray
+	var spans as NameSpanArray
+	var hashes as NameDigestArray
+	var slotIds as NameIdArray
+	var slotStates as SlotStateArray
+	var views as ByteArrayArray
+	var viewCached as BoolArray
+	var tombstones as NameId
+	var reservedNames as NameId
+	var reservedBytes as NameByteCount
+	var regrown as NameTableRegrowthCount
+	var rehashed as NameTableRegrowthCount
+
+	export static function create(nameHint NameId, byteHint NameByteCount) returns NameTable
+		let names = NameTableMinimumReservedNames if nameHint < NameTableMinimumReservedNames else nameHint
+		let arena = NameTableMinimumReservedBytes if byteHint < NameTableMinimumReservedBytes else byteHint
+		var table = Self{bytes: ByteArray.create(), spans: NameSpanArray.create(), hashes: NameDigestArray.create(), slotIds: NameIdArray.create(), slotStates: SlotStateArray.create(), views: ByteArrayArray.create(), viewCached: BoolArray.create(), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
+		table.bytes.reserve(arena as ElementIndex)
+		table.reserveColumns(names)
+		table.rebuildIndex(slotsForNames(names))
+		return table
+	end 'create'
+
+	// A table nothing else holds, with `source`'s names under `source`'s ids: five array clones whatever
+	// the name count. The view cache is not carried — a copy materializes only what it is itself asked for.
+	export static function copyOf(source NameTable) returns NameTable
+		return Self{bytes: source.bytes.clone(), spans: source.spans.clone(), hashes: source.hashes.clone(), slotIds: source.slotIds.clone(), slotStates: source.slotStates.clone(), views: ByteArrayArray.create(), viewCached: BoolArray.create(), tombstones: source.tombstones, reservedNames: source.reservedNames, reservedBytes: source.reservedBytes, regrown: source.regrown, rehashed: source.rehashed}
+	end 'copyOf'
+
+	export function releaseViewCache()
+		self.views.clear()
+		self.viewCached.clear()
+	end 'releaseViewCache'
+
+	export function count() returns NameId
+		return self.spans.count()
+	end 'count'
+
+	export function arenaByteCount() returns NameByteCount
+		return self.bytes.count()
+	end 'arenaByteCount'
+
+	export function reservedNameCount() returns NameId
+		return self.reservedNames
+	end 'reservedNameCount'
+
+	export function reservedArenaByteCount() returns NameByteCount
+		return self.reservedBytes
+	end 'reservedArenaByteCount'
+
+	export function regrowths() returns NameTableRegrowthCount
+		return self.regrown
+	end 'regrowths'
+
+	export function rehashes() returns NameTableRegrowthCount
+		return self.rehashed
+	end 'rehashes'
+
+	export function reserveFor(nameHint NameId, byteHint NameByteCount)
+		if nameHint > self.reservedNames 'moreNames'
+			self.reservedNames = nameHint
+			self.reserveColumns(nameHint)
+			self.growIndexTo(nameHint)
+		end 'moreNames'
+
+		if byteHint > self.reservedBytes 'moreBytes'
+			self.reservedBytes = byteHint
+			self.bytes.reserve(byteHint as ElementIndex)
+		end 'moreBytes'
+	end 'reserveFor'
+
+	export function intern(name ByteArray) returns NameId
+		return self.internWindow(name, start: 0, size: name.count(), digest: Hasher.combined(Hasher.empty(), bytes: name))
+	end 'intern'
+
+	// The fold, without materialising a view of the source's name: the probe and the append both read the
+	// source's arena directly.
+	export function internFrom(source NameTable, id NameId) returns NameId
+		let span = source.spanAt(id)
+		return self.internWindow(source.bytes, start: span.offset, size: span.size, digest: source.hashAt(id))
+	end 'internFrom'
+
+	export function idOf(name ByteArray) returns NameId throws NameTableError
+		return try self.findWindow(name, start: 0, size: name.count(), digest: Hasher.combined(Hasher.empty(), bytes: name))
+	end 'idOf'
+
+	// The cache holds owned copies, never views. A view would share the arena's buffer, and the next
+	// `intern`'s reserve detaches a shared buffer by copying the whole arena — so interleaved interning and
+	// reading would be quadratic in the arena. A name nothing ever asks for costs nothing.
+	export function nameOf(id NameId) returns ByteArray throws NameTableError
+		if id >= self.spans.count() 'noSuchName'
+			throw NameTableError.unknownId
+		end 'noSuchName'
+
+		self.growViewColumns()
+
+		let alreadyMaterialized = try self.viewCached.get(id) otherwise panic("NameTable.nameOf: viewCached.get OOB at {id} of {self.viewCached.count()}")
+
+		if alreadyMaterialized 'cached'
+			return try self.views.get(id) otherwise panic("NameTable.nameOf: views.get OOB at {id} of {self.views.count()}")
+		end 'cached'
+
+		let materialized = self.ownedCopyOf(id)
+		try self.views.set(id, value: materialized) otherwise panic("NameTable.nameOf: views.set OOB at {id} of {self.views.count()}")
+		try self.viewCached.set(id, value: true) otherwise panic("NameTable.nameOf: viewCached.set OOB at {id} of {self.viewCached.count()}")
+		return materialized
+	end 'nameOf'
+
+	// A copy nothing else holds — what a caller handing the name to another thread needs.
+	export function ownedCopyOf(id NameId) returns ByteArray
+		let span = self.spanAt(id)
+		var copy = ByteArray.create()
+		copy.reserve(span.size as ElementIndex)
+		appendArenaWindow(copy, source: self.bytes, start: span.offset, size: span.size)
+		return copy
+	end 'ownedCopyOf'
+
+	export function equalsAt(id NameId, other ByteArray) returns bool
+		let span = self.spanAt(id)
+
+		if span.size != other.count() 'differentLength'
+			return false
+		end 'differentLength'
+
+		return self.windowMatches(span.offset, other: other, start: 0, size: span.size)
+	end 'equalsAt'
+
+	export function startsWith(id NameId, prefix ByteArray) returns bool
+		let span = self.spanAt(id)
+
+		if prefix.count() > span.size 'longerThanTheName'
+			return false
+		end 'longerThanTheName'
+
+		return self.windowMatches(span.offset, other: prefix, start: 0, size: prefix.count())
+	end 'startsWith'
+
+	// The view columns go first, so no cached record outlives the span that describes it. The index keeps
+	// tombstones rather than being rebuilt: a restore runs after every parse band, and a rebuild would be
+	// O(baseline) each time.
+	export function truncateTo(keep NameId)
+		if keep >= self.spans.count() 'nothingAbove'
+			return
+		end 'nothingAbove'
+
+		self.truncateViewColumns(keep)
+
+		for id in keep upto self.spans.count() 'eachDropped'
+			self.tombstoneSlotOf(id)
+		end 'eachDropped'
+
+		let arenaEnd = self.spanAt(keep).offset
+		self.spans.truncate(keep as ElementIndex)
+		self.hashes.truncate(keep as ElementIndex)
+		self.bytes.truncate(arenaEnd as ElementIndex)
+	end 'truncateTo'
+
+	// --- interning ---
+
+	function internWindow(source ByteArray, start NameByteCount, size NameByteCount, digest HashDigest) returns NameId
+		if let existing = try self.findWindow(source, start: start, size: size, digest: digest) 'seen'
+			return existing
+		end 'seen'
+
+		let id = self.spans.count()
+
+		if id > NameTableIdLimit 'tooManyNames'
+			panic("NameTable: a name table reached {id} names, and an id is a 32-bit value — the table cannot hold more than {NameTableIdLimit}")
+		end 'tooManyNames'
+
+		let offset = self.bytes.count()
+
+		if offset + size > NameTableArenaByteLimit 'arenaTooLarge'
+			panic("NameTable: a name arena reached {offset} bytes and a further {size} would pass the 32-bit span limit of {NameTableArenaByteLimit}")
+		end 'arenaTooLarge'
+
+		self.noteArenaGrowth(size)
+		appendArenaWindow(self.bytes, source: source, start: start, size: size)
+		self.noteColumnGrowth()
+		self.ensureIndexRoomFor(id + 1)
+		self.spans.push(NameSpan.create(offset, size: size))
+		self.hashes.push(digest)
+		self.claimSlotFor(id, digest: digest)
+		return id
+	end 'internWindow'
+
+	function noteArenaGrowth(size NameByteCount)
+		if self.bytes.count() + size <= self.reservedBytes 'withinTheReservation'
+			return
+		end 'withinTheReservation'
+
+		self.regrown = self.regrown + 1
+		var wanted = self.reservedBytes + self.reservedBytes
+
+		if wanted < self.bytes.count() + size 'stillShort'
+			wanted = self.bytes.count() + size
+		end 'stillShort'
+
+		self.reservedBytes = wanted
+		self.bytes.reserve(wanted as ElementIndex)
+	end 'noteArenaGrowth'
+
+	function noteColumnGrowth()
+		if self.spans.count() + 1 <= self.reservedNames 'withinTheReservation'
+			return
+		end 'withinTheReservation'
+
+		self.regrown = self.regrown + 1
+		self.reservedNames = self.reservedNames + self.reservedNames
+		self.reserveColumns(self.reservedNames)
+	end 'noteColumnGrowth'
+
+	function reserveColumns(names NameId)
+		self.spans.reserve(names as ElementIndex)
+		self.hashes.reserve(names as ElementIndex)
+	end 'reserveColumns'
+
+	// --- the name index ---
+
+	function slotMask() returns TableSlotIndex
+		return self.slotStates.count() - 1
+	end 'slotMask'
+
+	// The spread digest picks the slot, never the raw one — `spreadHash`'s header owns the reason.
+	function firstSlotFor(digest HashDigest) returns TableSlotIndex
+		return (spreadHash((digest and NameTableSlotHashMask) as HashValue) as TableSlotIndex) and self.slotMask()
+	end 'firstSlotFor'
+
+	function nextSlotAfter(slot TableSlotIndex) returns TableSlotIndex
+		return (slot + 1) and self.slotMask()
+	end 'nextSlotAfter'
+
+	function findWindow(source ByteArray, start NameByteCount, size NameByteCount, digest HashDigest) returns NameId throws NameTableError
+		var slot = self.firstSlotFor(digest)
+
+		for _ in 0 upto self.slotStates.count() 'probe'
+			let state = try self.slotStates.get(slot) otherwise panic("NameTable.findWindow: slotStates.get OOB at {slot} under the mask of {self.slotStates.count()} slots")
+
+			let isEmpty = match state 'se'
+				Empty gives true
+				Occupied gives false
+				Deleted gives false
+			end 'se'
+
+			if isEmpty 'notHere'
+				throw NameTableError.unknownName
+			end 'notHere'
+
+			let isOccupied = match state 'so'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so'
+
+			if isOccupied 'aCandidate'
+				let candidate = try self.slotIds.get(slot) otherwise panic("NameTable.findWindow: slotIds.get OOB at {slot} under the mask of {self.slotIds.count()} slots")
+				let span = self.spanAt(candidate)
+
+				if self.hashAt(candidate) == digest and span.size == size and self.windowMatches(span.offset, other: source, start: start, size: size) 'hit'
+					return candidate
+				end 'hit'
+			end 'aCandidate'
+
+			slot = self.nextSlotAfter(slot)
+		end 'probe'
+
+		panic("NameTable.findWindow: probed every one of {self.slotStates.count()} slots without meeting an empty one — the load factor keeps at least a quarter of them empty")
+	end 'findWindow'
+
+	function claimSlotFor(id NameId, digest HashDigest)
+		var slot = self.firstSlotFor(digest)
+
+		for _ in 0 upto self.slotStates.count() 'probe'
+			let state = try self.slotStates.get(slot) otherwise panic("NameTable.claimSlotFor: slotStates.get OOB at {slot} under the mask of {self.slotStates.count()} slots")
+
+			let isOccupied = match state 'so'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so'
+
+			if not isOccupied 'vacant'
+				let isDeleted = match state 'sd'
+					Deleted gives true
+					Empty gives false
+					Occupied gives false
+				end 'sd'
+
+				if isDeleted 'reclaimsATombstone'
+					self.tombstones = self.tombstones - 1
+				end 'reclaimsATombstone'
+
+				try self.slotIds.set(slot, value: id) otherwise panic("NameTable.claimSlotFor: slotIds.set OOB at {slot} just read")
+				try self.slotStates.set(slot, value: SlotState.Occupied) otherwise panic("NameTable.claimSlotFor: slotStates.set OOB at {slot} just read")
+				return
+			end 'vacant'
+
+			slot = self.nextSlotAfter(slot)
+		end 'probe'
+
+		panic("NameTable.claimSlotFor: no vacant slot for id {id} among {self.slotStates.count()} — the load factor keeps at least a quarter of them empty")
+	end 'claimSlotFor'
+
+	function tombstoneSlotOf(id NameId)
+		var slot = self.firstSlotFor(self.hashAt(id))
+
+		for _ in 0 upto self.slotStates.count() 'probe'
+			let state = try self.slotStates.get(slot) otherwise panic("NameTable.tombstoneSlotOf: slotStates.get OOB at {slot} under the mask of {self.slotStates.count()} slots")
+
+			let isEmpty = match state 'se'
+				Empty gives true
+				Occupied gives false
+				Deleted gives false
+			end 'se'
+
+			if isEmpty 'notIndexed'
+				panic("NameTable.tombstoneSlotOf: id {id} is in no slot — every id the table holds was claimed when it was interned")
+			end 'notIndexed'
+
+			let isOccupied = match state 'so'
+				Occupied gives true
+				Empty gives false
+				Deleted gives false
+			end 'so'
+
+			if isOccupied and (try self.slotIds.get(slot) otherwise panic("NameTable.tombstoneSlotOf: slotIds.get OOB at {slot} under the mask of {self.slotIds.count()} slots")) == id 'found'
+				try self.slotStates.set(slot, value: SlotState.Deleted) otherwise panic("NameTable.tombstoneSlotOf: slotStates.set OOB at {slot} just read")
+				self.tombstones = self.tombstones + 1
+				return
+			end 'found'
+
+			slot = self.nextSlotAfter(slot)
+		end 'probe'
+
+		panic("NameTable.tombstoneSlotOf: probed every one of {self.slotStates.count()} slots without meeting id {id} or an empty slot")
+	end 'tombstoneSlotOf'
+
+	// A tombstone occupies a probe path, so the occupancy a rehash is decided on counts them (`Map.maxon`
+	// owns that rule): a table interned into and restored in turn would otherwise spend its empty slots one
+	// at a time and end up probing its whole capacity for every name it does not hold.
+	function ensureIndexRoomFor(live NameId)
+		let occupancy = live + self.tombstones
+
+		if occupancy * NameTableLoadDenominator < self.slotStates.count() * NameTableLoadNumerator 'roomLeft'
+			return
+		end 'roomLeft'
+
+		var wanted = self.slotStates.count()
+		let needed = slotsForNames(live)
+
+		if needed > wanted 'growsTheIndex'
+			wanted = needed
+			self.regrown = self.regrown + 1
+		end 'growsTheIndex' else 'compactsTombstones'
+			self.rehashed = self.rehashed + 1
+		end 'compactsTombstones'
+
+		self.rebuildIndex(wanted)
+	end 'ensureIndexRoomFor'
+
+	function growIndexTo(names NameId)
+		let needed = slotsForNames(names)
+
+		if needed > self.slotStates.count() 'grows'
+			self.rebuildIndex(needed)
+		end 'grows'
+	end 'growIndexTo'
+
+	function rebuildIndex(slots TableCapacity)
+		self.slotIds.refill(slots as ElementIndex, value: 0)
+		self.slotStates.refill(slots as ElementIndex, value: SlotState.Empty)
+		self.tombstones = 0
+
+		for id in 0 upto self.spans.count() 'eachLiveName'
+			self.claimSlotFor(id, digest: self.hashAt(id))
+		end 'eachLiveName'
+	end 'rebuildIndex'
+
+	// --- the columns ---
+
+	function spanAt(id NameId) returns NameSpan
+		return try self.spans.get(id) otherwise panic("NameTable.spanAt: spans.get OOB at {id} of the {self.spans.count()} names this table holds")
+	end 'spanAt'
+
+	function hashAt(id NameId) returns HashDigest
+		return try self.hashes.get(id) otherwise panic("NameTable.hashAt: hashes.get OOB at {id} of the {self.hashes.count()} names this table holds")
+	end 'hashAt'
+
+	function windowMatches(offset NameByteCount, other ByteArray, start NameByteCount, size NameByteCount) returns bool
+		for k in 0 upto size 'eachByte'
+			let mine = try self.bytes.get(offset + k) otherwise panic("NameTable.windowMatches: bytes.get OOB at {offset + k} below the arena's {self.bytes.count()}")
+			let theirs = try other.get(start + k) otherwise panic("NameTable.windowMatches: the candidate's get OOB at {start + k} below its {other.count()}")
+
+			if mine != theirs 'differ'
+				return false
+			end 'differ'
+		end 'eachByte'
+
+		return true
+	end 'windowMatches'
+
+	function growViewColumns()
+		let wanted = self.spans.count()
+
+		if self.viewCached.count() >= wanted 'longEnough'
+			return
+		end 'longEnough'
+
+		self.views.growFilled(wanted as ElementIndex, value: EmptySourceText)
+		self.viewCached.growFilled(wanted as ElementIndex, value: false)
+	end 'growViewColumns'
+
+	function truncateViewColumns(keep NameId)
+		if self.viewCached.count() <= keep 'shorterAlready'
+			return
+		end 'shorterAlready'
+
+		self.views.truncate(keep as ElementIndex)
+		self.viewCached.truncate(keep as ElementIndex)
+	end 'truncateViewColumns'
+end 'NameTable'
+
+function slotsForNames(names NameId) returns TableCapacity
+	let wanted = roundUpToPowerOfTwo((names * NameTableSlotsPerName) as BytePos) as TableCapacity
+	return NameTableMinimumSlots if wanted < NameTableMinimumSlots else wanted
+end 'slotsForNames'
+
+// `append` over the whole source when the window IS the whole source, and over a COW slice otherwise: the
+// slice is dropped before the sink's next write, so no buffer stays shared and no write detaches one.
+function appendArenaWindow(sink ByteArray, source ByteArray, start NameByteCount, size NameByteCount)
+	if start == 0 and size == source.count() 'theWholeSource'
+		sink.append(source)
+		return
+	end 'theWholeSource'
+
+	sink.append(try source.slice(start as ElementIndex, endIndex: (start + size) as ElementIndex) otherwise panic("appendArenaWindow: slice [{start}, {start + size}) is outside a buffer of {source.count()} bytes"))
+end 'appendArenaWindow'

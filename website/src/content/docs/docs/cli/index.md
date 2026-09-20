@@ -627,6 +627,11 @@ maxon build app.maxon --log=compiler:debug   # per-phase time and memory as a ta
 maxon build app.maxon --log=error            # only errors
 ```
 
+**The type-name table.** `--log=compiler:debug` also prints one line per source file per fold round —
+`typeNames <path>: <N> names, <B> bytes, reserved <RN> names / <RB> bytes, rehashes <H>, regrowths <G>` —
+the names that file interned and the arena bytes they occupy, what its table reserved ahead of them, and
+how many times the table rehashed or had to grow.
+
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
 top five buckets for every phase sampled, then the whole table for the phase whose *live* level was

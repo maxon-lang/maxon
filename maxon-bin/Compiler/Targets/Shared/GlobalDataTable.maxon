@@ -417,6 +417,10 @@ typealias DataBlobEntryArray = Array with DataBlobEntry
 
 export type GlobalDataTable
 	export var names as StringArray
+
+	// Each name's bytes, minted once per payload and handed to every op that addresses it, so a label
+	// reaching N `rdataAddr` ops costs one record rather than N.
+	export var nameBytes as ByteArrayArray
 	export var values as ByteArrayArray
 
 	// Monotonic id for minting synthetic `__str_<id>` names for ad-hoc payloads.
@@ -554,7 +558,7 @@ export type GlobalDataTable
 	export var debugStreamNames as DebugStreamNameTable
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), dataBlobs: DataBlobEntryArray.create(), dataBlobIndex: DataSectionIndexMap.create(), dataLaidOut: false, rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, pendingRdataAbsRelocs: PendingRdataAbsRelocArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
+		return Self{names: StringArray.create(), nameBytes: ByteArrayArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), payloadKinds: RdataPayloadKindArray.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), dataBlobs: DataBlobEntryArray.create(), dataBlobIndex: DataSectionIndexMap.create(), dataLaidOut: false, rdataOffsets: RdataOffsetMap.create(), rdataLabelOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, pendingRdataAbsRelocs: PendingRdataAbsRelocArray.create(), recordBlobLabels: RecordBlobLabelMap.create(), floatConstantLabels: FloatConstantLabelMap.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTags: DebugStreamNameTable.create(mmTagRosterNames()), debugStreamNames: DebugStreamNameTable.create(debugStreamNameRosterSeed())}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -642,6 +646,7 @@ export type GlobalDataTable
 		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count()
 		self.nameIndex.upsert(label, value: self.names.count())
 		self.names.push(label)
+		self.nameBytes.push(label.toByteArray())
 		self.values.push(payload)
 		self.payloadKinds.push(kind)
 	end 'appendRdataPayload'
@@ -851,8 +856,8 @@ export type GlobalDataTable
 	// until some later `payloadKindOf` gave a `leaRegRdata` the kind of a DIFFERENT payload — a note
 	// describing the wrong slot, or bytes rendered as text that are not text.
 	function requireColumnsAgree()
-		if self.names.count() != self.values.count() or self.payloadKinds.count() != self.values.count() 'columnDrift'
-			panic("GlobalDataTable.requireColumnsAgree: the .rdata columns have drifted — {self.names.count()} names, {self.values.count()} payloads, {self.payloadKinds.count()} kinds — `appendRdataPayload` pushes all three in one call and is the only writer, so a second writer has been cut")
+		if self.names.count() != self.values.count() or self.payloadKinds.count() != self.values.count() or self.nameBytes.count() != self.values.count() 'columnDrift'
+			panic("GlobalDataTable.requireColumnsAgree: the .rdata columns have drifted — {self.names.count()} names, {self.nameBytes.count()} name spellings, {self.values.count()} payloads, {self.payloadKinds.count()} kinds — `appendRdataPayload` pushes all four in one call and is the only writer, so a second writer has been cut")
 		end 'columnDrift'
 	end 'requireColumnsAgree'
 
@@ -894,6 +899,14 @@ export type GlobalDataTable
 		let index = self.payloadIndexOf(label, what: "payloadOf")
 		return try self.values.get(index) otherwise panic("GlobalDataTable.payloadOf: nameIndex maps '{label}' to {index}, which values does not hold — the two columns are pushed together and cannot disagree")
 	end 'payloadOf'
+
+	// One record, shared by every op that addresses this payload. That is sound because a Std op's label is
+	// read-only to every reader of it, and because the real Std module never crosses a thread — a `StdUnit`
+	// is a deep clone.
+	export function labelBytesOf(label String) returns ByteArray
+		let index = self.payloadIndexOf(label, what: "labelBytesOf")
+		return try self.nameBytes.get(index) otherwise panic("GlobalDataTable.labelBytesOf: nameIndex maps '{label}' to {index}, which nameBytes does not hold — the spelling is pushed in the same `appendRdataPayload` call as the name and the payload, so the columns cannot disagree")
+	end 'labelBytesOf'
 
 	// WHAT the payload under `label` is — see `RdataPayloadKind`. The question a reader of the table must
 	// ask before interpreting any of its bytes.

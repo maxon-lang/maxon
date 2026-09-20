@@ -234,6 +234,17 @@ end 'activeTokensAreHeld'
 // would be O(files²). It is not: the memo makes it run once per build, and the constant evaluation
 // below is O(declarations), not O(files) per file.
 
+// O(files), which the note above admits: the query this runs inside runs once per build.
+function programSourceByteCount(project Project) returns SourceByteCount
+	var total = 0 as SourceByteCount
+
+	for (_, entry) in project.db.sourceFiles 'eachSource'
+		total = total + (entry.content.byteLength() as SourceByteCount)
+	end 'eachSource'
+
+	return total
+end 'programSourceByteCount'
+
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
@@ -243,6 +254,11 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	project.db.signatureMisses = project.db.signatureMisses + 1
 
 	var signatures = ProgramSignatures.create(project.target.os)
+
+	// Only the project table is sized from the whole program: it accumulates every file's names and is
+	// never cloned. The index's own table holds the baseline plus one parse band and is sized by
+	// `settleBaseline` — a whole-program hint there would be slots and an arena copied into every worker.
+	project.typeNames.reserveForSource(programSourceByteCount(project))
 	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
@@ -1280,6 +1296,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	for position in 0 upto artifacts.count() 'eachArtifact'
 		var artifact = try artifacts.get(position) otherwise panic("foldVerdict: artifacts.get OOB at {position}")
+		logTypeNameTable(artifact)
 		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 		mergeArtifact(project, target: into, artifact: artifact, signatures: signatures)
 		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
@@ -1317,6 +1334,19 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	return FoldVerdict.answersMoved if rowSetAnswersMoved(project, artifacts: artifacts, signatures: signatures) else FoldVerdict.stands
 end 'foldVerdict'
+
+// Reported from the merge rather than from the parse: a worker structurally cannot log through `Logger`
+// (`Diagnostics.maxon` owns that rule), so this is the first place a file's own table can be read out.
+function logTypeNameTable(artifact FileParseArtifact)
+	// The level is read before the message is built: a lazy message is still a capturing closure the
+	// caller allocates whether or not the sink prints it, and this runs once per file per fold round.
+	if effectiveLogLevelOf(LogCategory.compiler).ordinal < LogLevel.DEBUG.ordinal 'notLogging'
+		return
+	end 'notLogging'
+
+	let names = artifact.typeNames
+	logDebug(LogCategory.compiler, message: function() gives "typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
+end 'logTypeNameTable'
 
 // A name filed or dropped in one front end moves once: the rows a parse mints do not depend on whether a type is
 // filed, so a name that moved back would be a fold that never settles.

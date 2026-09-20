@@ -11,70 +11,56 @@
 // interner into the project's interner in source-path order (`foldInto`),
 // returning a `TypeIdRemap` from the file-local ids to the project-global ids
 // it was assigned, which the merge then applies to the file's ops and registry
-// contributions. For M1 (one file, one named type `ExitCode`) the project
-// interner starts empty, so the fold assigns identical ids and the remap is the
-// identity — but the machinery is real, not a placeholder.
-
-// Wide range: the interner is unbounded (one id per distinct named reference).
-// `TypeNameIdArray` is declared beside `TypeNameId` itself, in `IR/Maxon/MaxonDialect.maxon`; the flat
-// namespace check refuses a second identical declaration here.
-export typealias TypeNameIdMap = Map with (ByteArray, TypeNameId)
-
-// Raised when a `TypeNameId` is looked up that this interner never assigned —
-// always a compiler bug (an id must come from the same interner it is resolved
-// against), never user input.
-export union TypeNameInternerError implements Error
-	unknownId(id TypeNameId)
-
-	// `idOf` was asked for a name this interner never saw — an ANSWER ("no type of that name has been
-	// interned"), not a bug, unlike `unknownId`.
-	unknownName(name ByteArray)
-end 'TypeNameInternerError'
+// contributions.
 
 export type TypeNameInterner
-	// id -> name (index is the TypeNameId). Each name is a view the interner owns over the bytes it was interned
-	// from — no copy of them until a thread crossing detaches it.
-	var names as ByteArrayArray
-
-	// name -> id, for O(1) interning of an already-seen name.
-	var ids as TypeNameIdMap
+	var table as NameTable
 
 	// How many names the interner held when the signature index was settled. Only the index's own interner is
 	// ever settled; every other interner keeps 0 and never restores.
 	var baselineCount as TypeNameId
+	var baselineArenaBytes as NameByteCount
 
 	// ⭐ **ID 0 IS THE EMPTY NAME, IN EVERY INTERNER.** `UnnamedTypeId` is the filler a scalar's slot and an
 	// unbranded value's slot carry, and interning the empty name first is what makes that filler a NAME
 	// rather than a collision with whichever real name a file happened to intern first. `foldInto` then
 	// maps it to itself, so a remap needs no special case for it either.
-	export static function create() returns TypeNameInterner
-		var interner = Self{names: ByteArrayArray.create(), ids: TypeNameIdMap.create(), baselineCount: 0}
+	export static function createForSource(sourceBytes SourceByteCount) returns TypeNameInterner
+		let nameHint = internedNameHintFor(sourceBytes)
+		var interner = Self{table: NameTable.create(nameHint, byteHint: internedArenaHintFor(nameHint)), baselineCount: 0, baselineArenaBytes: 0}
 		_ = interner.intern(EmptySourceText)
 		return interner
-	end 'create'
+	end 'createForSource'
+
+	export function reserveForSource(sourceBytes SourceByteCount)
+		let nameHint = internedNameHintFor(sourceBytes)
+		table.reserveFor(nameHint, byteHint: internedArenaHintFor(nameHint))
+	end 'reserveForSource'
 
 	export function settleBaseline()
-		self.baselineCount = names.count()
+		self.baselineCount = table.count() as TypeNameId
+		self.baselineArenaBytes = table.arenaByteCount()
+
+		// A parse band interns into this table and is truncated back after it, so the reservation covers the
+		// baseline plus one band and no band regrows the arena or the columns.
+		table.reserveFor((self.baselineCount + self.baselineCount) as NameId, byteHint: (self.baselineArenaBytes + self.baselineArenaBytes) as NameByteCount)
 	end 'settleBaseline'
 
 	// Copies of the names interned since the baseline, in id order: the one at position `k` holds id `baselineCount + k`.
-	// Copies, because a restore does not release every record this interner took: a removed map key may stay in its slot.
+	// Copies, because they cross a thread: a record the worker's own table also holds would give the reply
+	// a second owner.
 	export function namesSinceBaseline() returns ByteArrayArray
 		var added = ByteArrayArray.create()
 
-		for id in self.baselineCount upto names.count() 'eachAdded'
-			added.push((try names.get(id) otherwise panic("TypeNameInterner.namesSinceBaseline: names.get OOB at {id}")).clone())
+		for id in (self.baselineCount as NameId) upto table.count() 'eachAdded'
+			added.push(table.ownedCopyOf(id))
 		end 'eachAdded'
 
 		return added
 	end 'namesSinceBaseline'
 
 	export function restoreBaseline()
-		for id in self.baselineCount upto names.count() 'eachAdded'
-			_ = ids.remove(try names.get(id) otherwise panic("TypeNameInterner.restoreBaseline: names.get OOB at {id}"))
-		end 'eachAdded'
-
-		names.truncate(self.baselineCount as ElementIndex)
+		table.truncateTo(self.baselineCount as NameId)
 	end 'restoreBaseline'
 
 	export function baselineNameCount() returns TypeNameId
@@ -83,31 +69,25 @@ export type TypeNameInterner
 
 	export function noteFingerprint(fingerprint IndexFingerprint, group String)
 		fingerprint.openGroup(group)
-		fingerprint.note("names", value: names.count())
-		fingerprint.note("ids", value: ids.count())
+		fingerprint.note("names", value: table.count() as EntryCount)
+		fingerprint.note("ids", value: table.count() as EntryCount)
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 
 	// Intern `name`, returning its stable id. Idempotent: a name already present
 	// returns its existing id without appending a duplicate.
 	export function intern(name ByteArray) returns TypeNameId
-		if let existing = try ids.get(name) 'seen'
-			return existing
-		end 'seen'
-
-		// A VIEW of its own over the caller's bytes: an artifact's interner is handed names the worker's private
-		// index holds, and a record both held would give the artifact an owner outside it when it crosses back.
-		let owned = name.clone()
-		let id = names.count()
-		names.push(owned)
-		ids.upsert(owned, value: id)
-		return id
+		return table.intern(name)
 	end 'intern'
 
 	// Resolve an id back to its name. Throws for an id this interner never
-	// assigned (a compiler bug — see TypeNameInternerError).
-	export function nameOf(id TypeNameId) returns ByteArray throws TypeNameInternerError
-		return try names.get(id) otherwise throw TypeNameInternerError.unknownId(id)
+	// assigned (a compiler bug — an id must come from the same interner it is resolved against).
+	export function nameOf(id TypeNameId) returns ByteArray throws NameTableError
+		if id > NameTableIdLimit 'pastEveryIdATableCanHoldAtAll'
+			throw NameTableError.unknownId
+		end 'pastEveryIdATableCanHoldAtAll'
+
+		return try table.nameOf(id as NameId)
 	end 'nameOf'
 
 	// Resolve a NAME to its id WITHOUT interning it — the read-only half of `intern`, for a caller
@@ -116,22 +96,54 @@ export type TypeNameInterner
 	// which moves `count()` and every id assigned after it, and those ids reach the emitted mangling —
 	// so a mere lookup by a caller holding a name that is not a type would silently rewrite output.
 	// Unlike `nameOf`'s, this throw is not a compiler bug: "no such type name" is a legitimate answer.
-	export function idOf(name ByteArray) returns TypeNameId throws TypeNameInternerError
-		return try ids.get(name) otherwise throw TypeNameInternerError.unknownName(name)
+	export function idOf(name ByteArray) returns TypeNameId throws NameTableError
+		return try table.idOf(name)
 	end 'idOf'
 
+	export function equalsAt(id TypeNameId, other ByteArray) returns bool
+		return id <= NameTableIdLimit and table.equalsAt(id as NameId, other: other)
+	end 'equalsAt'
+
+	export function startsWith(id TypeNameId, prefix ByteArray) returns bool
+		return id <= NameTableIdLimit and table.startsWith(id as NameId, prefix: prefix)
+	end 'startsWith'
+
 	export function count() returns TypeNameId
-		return names.count()
+		return table.count()
 	end 'count'
+
+	export function arenaByteCount() returns NameByteCount
+		return table.arenaByteCount()
+	end 'arenaByteCount'
+
+	export function reservedNameCount() returns NameId
+		return table.reservedNameCount()
+	end 'reservedNameCount'
+
+	export function reservedArenaByteCount() returns NameByteCount
+		return table.reservedArenaByteCount()
+	end 'reservedArenaByteCount'
+
+	export function regrowths() returns NameTableRegrowthCount
+		return table.regrowths()
+	end 'regrowths'
+
+	export function rehashes() returns NameTableRegrowthCount
+		return table.rehashes()
+	end 'rehashes'
+
+	export function releaseViewCache()
+		table.releaseViewCache()
+	end 'releaseViewCache'
 
 	// Fold every name of `source` (a file-local interner) into `self` (the project interner) in id order,
 	// returning the renumbering from each source id to the id it was assigned in `self`.
 	export function foldInto(source TypeNameInterner) returns TypeIdRemap
 		var mapping = TypeNameIdArray.create()
+		mapping.reserve(source.table.count() as ElementIndex)
 
-		for srcId in 0 upto source.names.count() 'each'
-			let name = try source.names.get(srcId) otherwise panic("foldInto: source.names.get OOB at {srcId}")
-			mapping.push(self.intern(name))
+		for srcId in 0 upto source.table.count() 'each'
+			mapping.push(self.table.internFrom(source.table, id: srcId))
 		end 'each'
 
 		return TypeIdRemap.create(mapping, namesBase: 0, instances: GenericInstanceIdMap.create())

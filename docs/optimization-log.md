@@ -1244,3 +1244,27 @@ which is how two defects a spec set cannot see were found: a word-valued field s
 managed payload (`__mm_incref` on 0 in `Project.create`), and a module-level inline-record `let` reaching
 `mixValueTag`'s "unreachable" arm. Both appear only in the compiler the featured compiler builds, so every
 verdict here is from a second-generation binary.
+
+### Result — 2026-09-20, the type-name interner on a packed-span name table
+
+`Compiler/NameTable.maxon` holds names as `(offset, size)` spans — an inline packed record, one word each —
+into one byte arena, indexed by its own open-addressing table over the arena bytes; no `ByteArray` key
+and no view per name. `TypeNameInterner` is rebuilt on it, each file's table pre-sized from its source
+byte count (`SourceBytesPerTypeName` 512, `ArenaBytesPerTypeName` 20, floor 128 names — calibrated so no
+file of the tree regrows: 1,700 per-file readings, 0 regrowths, ~4.2 MB reserved transiently against
+188 KB used), and the pool workers' index clones no longer copy a record per name because the view cache
+is released at the send. The thirteen per-op rdata-label views and `qualifiedMethodName`'s three
+Strings per ask are gone too.
+
+**Ladder against the stage-2 tree (`temp/inline/ladder2.json`), same path, same session:** total
+allocations −39,474 at rung 0 to −181,342 at rung 5 (−0.2%), in `frontEndPool` (−154,377), `parse`
+(−104,151) and `signatures` (−20,467); ratios 1.34 1.54 1.70 1.84 1.92 per doubling, unchanged. The
+front-end term is the per-worker index clone that used to copy the interner's name column and its map
+key column, ~4 records per name per worker; the parse term is the per-name `clone()` at `intern` and
+`qualifiedMethodName`.
+
+⚠ A cached VIEW over the arena is the wrong shape: a view shares the arena's buffer, and the next
+`intern`'s reserve detaches a shared buffer by copying the whole arena, so interleaved intern/nameOf is
+quadratic in the arena. The cache holds owned copies (two objects, once per name ever asked, none for a
+name never asked). `tokens.last().endByte` is 0 (EOF carries no span), so the size hint walks back to the
+last real token.
