@@ -1,0 +1,376 @@
+// Test: slab-census.dropping-the-population-returns-the-bucket
+typealias WidgetField = int(0 to 65536)
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+let Population = 1000
+let SizeClassMode = 1
+let BucketCount = 2048
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	export static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	var before = TallyArray.create()
+	before.reserve(BucketCount)
+	for _ in 0 upto BucketCount 'sizeTheSnapshot'
+		before.push(0)
+	end 'sizeTheSnapshot'
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theFirstTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theFirstTallysOwnWalkMissedTheLevel'
+
+	for i in 0 upto BucketCount 'snapshot'
+		try before.set(i, value: __Builtins.slabCensusBucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
+	end 'snapshot'
+
+	let liveHolding = __Builtins.slabLiveBytes()
+	let freeHolding = __Builtins.slabFreeBytes()
+
+	holder = Widgets.create()
+
+	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theSecondTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theSecondTallysOwnWalkMissedTheLevel'
+
+	var biggestFall = 0
+	for i in 0 upto BucketCount 'compare'
+		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
+		let now = __Builtins.slabCensusBucketCount(i)
+
+		if (was - now) > biggestFall 'fell'
+			biggestFall = was - now
+		end 'fell'
+	end 'compare'
+
+	if biggestFall != Population 'noBucketFellByThePopulation'
+		return 2
+	end 'noBucketFellByThePopulation'
+
+	if (__Builtins.slabLiveBytes() + __Builtins.slabFreeBytes()) > (liveHolding + freeHolding) 'slotsAppearedFromNowhere'
+		return 3
+	end 'slotsAppearedFromNowhere'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 80
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1000
+    arm64.movRegReg x0, x19
+    arm64.bl Array.reserve
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 2048
+    arm64.movRegReg x0, x20
+    arm64.bl Array.reserve
+    arm64.movImm x21, 0
+    arm64.b forhdr#1
+  sizeTheSnapshot:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_push
+  forstep#3:
+    arm64.add x21, x21, 1
+  forhdr#1:
+    arm64.cmp x21, 2048
+    arm64.b.lt sizeTheSnapshot
+  forexit#4:
+    arm64.movImm x21, 0
+    arm64.b forhdr#5
+  buildWidgets:
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 48
+    arm64.add x0, x21, x0
+    arm64.asr x0, x0, 16
+    arm64.lsl x0, x0, 16
+    arm64.sub x22, x21, x0
+  __rc_ok#31:
+    arm64.add x0, x21, 1
+    arm64.asr x1, x0, 63
+    arm64.lsr x1, x1, 48
+    arm64.add x1, x0, x1
+    arm64.asr x1, x1, 16
+    arm64.lsl x1, x1, 16
+    arm64.sub x23, x0, x1
+  __rc_ok#53:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x22
+    arm64.storeBaseDispReg.word64 [x1 + 8], x23
+  __il_cont:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep#7:
+    arm64.add x21, x21, 1
+  forhdr#5:
+    arm64.cmp x21, 1000
+    arm64.b.lt buildWidgets
+  forexit#8:
+    arm64.movImm x0, 1
+    arm64.bl __slab_census_tally
+    arm64.movRegReg x21, x0
+    arm64.bl __slab_live_bytes
+    arm64.cmp x21, x0
+    arm64.b.eq ifcont#10
+  theFirstTallysOwnWalkMissedTheLevel:
+    arm64.movImm x21, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x21, 0
+    arm64.b forhdr#11
+  snapshot:
+    arm64.movRegReg x0, x21
+    arm64.bl __slab_census_count
+    arm64.movRegReg x2, x0
+    arm64.cmp x2, 0
+    arm64.b.lt __rc_panic
+  __rc_ok#37:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 16]
+    arm64.cmp x0, 0
+    arm64.b.lt __im_slow#43
+  __im_bounds:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x21, x0
+    arm64.b.hs __im_slow#43
+  __im_buffer:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.b.eq __im_slow#43
+  __im_viewed:
+    arm64.sub x1, x0, 24
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 16]
+    arm64.cmp x1, 0
+    arm64.b.ne __im_slow#43
+  __im_store:
+    arm64.storeBaseIndexScaleReg.word64 [x0 + x21*8 + 0], x2
+  forstep#13:
+    arm64.add x21, x21, 1
+  forhdr#11:
+    arm64.cmp x21, 2048
+    arm64.b.lt snapshot
+  forexit#14:
+    arm64.bl __slab_live_bytes
+    arm64.movRegReg x21, x0
+    arm64.bl __slab_free_bytes
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movImm x0, 1
+    arm64.bl __slab_census_tally
+    arm64.movRegReg x19, x0
+    arm64.bl __slab_live_bytes
+    arm64.cmp x19, x0
+    arm64.b.eq ifcont#18
+  theSecondTallysOwnWalkMissedTheLevel:
+    arm64.movImm x19, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#18:
+    arm64.movImm x19, 0
+    arm64.movImm x24, 0
+    arm64.b forhdr#19
+  compare:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.cmp x24, x0
+    arm64.b.hs __im_slow#40
+  __im_load:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.loadRegBaseIndexScale.word64 x25, [x0 + x24*8 + 0]
+  tryok:
+    arm64.movRegReg x0, x24
+    arm64.bl __slab_census_count
+    arm64.sub x0, x25, x0
+    arm64.cmp x0, x19
+    arm64.b.gt forstep#21
+  critsplit#56:
+    arm64.movRegReg x0, x19
+  forstep#21:
+    arm64.add x24, x24, 1
+    arm64.movRegReg x19, x0
+  forhdr#19:
+    arm64.cmp x24, 2048
+    arm64.b.lt compare
+  forexit#22:
+    arm64.cmp x19, 1000
+    arm64.b.eq ifcont#28
+  noBucketFellByThePopulation:
+    arm64.movImm x19, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#28:
+    arm64.bl __slab_live_bytes
+    arm64.movRegReg x19, x0
+    arm64.bl __slab_free_bytes
+    arm64.add x0, x19, x0
+    arm64.add x1, x21, x22
+    arm64.cmp x0, x1
+    arm64.b.le ifcont#30
+  slotsAppearedFromNowhere:
+    arm64.movImm x19, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  ifcont#30:
+    arm64.movImm x19, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_6  ; "panic at slab-census.dropping-the-population-returns-the-bucket.test:40: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __im_slow#43:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __managed_set
+    arm64.cmp x9, 0
+    arm64.b.eq forstep#13
+  tryerr#16:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at slab-census.dropping-the-population-returns-the-bucket.test:40: the snapshot is sized to every bucket\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  __im_slow#40:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x24
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.eq critsplit#57
+  tryerr#24:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at slab-census.dropping-the-population-returns-the-bucket.test:54: the snapshot is sized to every bucket\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.epilogue 80
+    arm64.ret
+  critsplit#57:
+    arm64.movRegReg x25, x0
+    arm64.b tryok
+}

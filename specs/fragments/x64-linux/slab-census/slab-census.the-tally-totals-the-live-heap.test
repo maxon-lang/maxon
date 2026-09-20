@@ -1,0 +1,238 @@
+// Test: slab-census.the-tally-totals-the-live-heap
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias Seed = int(0 to 65536)
+
+let Population = 16000
+let PayloadBytes = 96
+let SizeClassMode = 1
+let BucketCount = 2048
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(PayloadBytes)
+	for i in 0 upto PayloadBytes 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var bufs = Bufs.create()
+	for k in 0 upto Population 'alloc'
+		bufs.push(build((k mod 65536) as Seed))
+	end 'alloc'
+
+	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theTallysOwnWalkMissedTheLevel'
+
+	var total = 0
+	for i in 0 upto BucketCount 'sum'
+		total = total + __Builtins.slabCensusBucketBytes(i)
+	end 'sum'
+
+	if total != __Builtins.slabLiveBytes() 'theCensusDisagreesWithTheLevel'
+		return 2
+	end 'theCensusDisagreesWithTheLevel'
+
+	if __Builtins.mmRawAllocLive() < 0 'rawSlotsWentNegative'
+		return 3
+	end 'rawSlotsWentNegative'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  alloc:
+    x64.movRegReg rax, r12
+    x64.sarRegImm8 rax, r12, 63
+    x64.shrRegImm8 rax, rax, 48
+    x64.leaRegRegReg rax, r12, rax
+    x64.sarRegImm8 rax, rax, 16
+    x64.imulRegRegImm32 rax, rax, 65536
+    x64.movRegReg r13, r12
+    x64.subRegReg r13, r12, rax
+  __rc_ok#24:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.movRegImm32 r15, 96
+  __rc_ok#36:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 96
+    x64.jcc greaterEqual, __il_cont#30
+  grow:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#30
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#30:
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr#20
+  fill:
+    x64.leaRegRegReg rcx, r13, r15
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#27:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_push
+  forstep#22:
+    x64.leaRegRegImm32 r15, r15, 1
+  forhdr#20:
+    x64.cmpRegImm32 r15, 96
+    x64.jcc less, fill
+  __il_cont#18:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 16000
+    x64.jcc less, alloc
+  forexit#4:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __slab_census_tally
+    x64.movRegReg r12, r8
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg r12, r8
+    x64.jcc equal, ifcont#6
+  theTallysOwnWalkMissedTheLevel:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#7
+  sum:
+    x64.movRegReg rcx, r13
+    x64.callDirect __slab_census_bytes
+    x64.leaRegRegReg r12, r12, r8
+  forstep#9:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#7:
+    x64.cmpRegImm32 r13, 2048
+    x64.jcc less, sum
+  forexit#10:
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg r12, r8
+    x64.jcc equal, ifcont#12
+  theCensusDisagreesWithTheLevel:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.callDirect __mm_counter_raw_alloc_live
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greaterEqual, ifcont#14
+  rawSlotsWentNegative:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.the-tally-totals-the-live-heap.test:16: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

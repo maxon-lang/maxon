@@ -1,0 +1,169 @@
+// Test: slab-census.raw-live-slots-do-not-count-boxes
+typealias WidgetField = int(0 to 65536)
+typealias Delta = int(i64.min to i64.max)
+
+let Population = 1000
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	export static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	let before = __Builtins.mmRawAllocLive() as Delta
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	let rose = (__Builtins.mmRawAllocLive() as Delta) - before
+
+	if holder.count() != Population 'theWidgetsWereNotHeld'
+		return 1
+	end 'theWidgetsWereNotHeld'
+
+	if rose >= (Population / 2) 'theBoxesWereCountedAsHeaderLessSlots'
+		return 2
+	end 'theBoxesWereCountedAsHeaderLessSlots'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 1000
+  __rc_ok#21:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_capacity
+    arm64.cmp x0, 1000
+    arm64.b.ge __il_cont#15
+  grow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_mem_grow
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#15
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  __il_cont#15:
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  buildWidgets:
+    arm64.asr x0, x21, 63
+    arm64.lsr x0, x0, 48
+    arm64.add x0, x21, x0
+    arm64.asr x0, x0, 16
+    arm64.lsl x0, x0, 16
+    arm64.sub x22, x21, x0
+  __rc_ok#9:
+    arm64.add x0, x21, 1
+    arm64.asr x1, x0, 63
+    arm64.lsr x1, x1, 48
+    arm64.add x1, x0, x1
+    arm64.asr x1, x1, 16
+    arm64.lsl x1, x1, 16
+    arm64.sub x23, x0, x1
+  __rc_ok#28:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x22
+    arm64.storeBaseDispReg.word64 [x1 + 8], x23
+  __il_cont#23:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep:
+    arm64.add x21, x21, 1
+  forhdr:
+    arm64.cmp x21, 1000
+    arm64.b.lt buildWidgets
+  forexit:
+    arm64.bl __mm_counter_raw_alloc_live
+    arm64.sub x0, x0, x20
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.cmp x1, 1000
+    arm64.b.eq ifcont#6
+  theWidgetsWereNotHeld:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x1, 1000
+    arm64.asr x1, x1, 63
+    arm64.lsr x1, x1, 63
+    arm64.add x1, x1, 1000
+    arm64.asr x1, x1, 1
+    arm64.cmp x0, x1
+    arm64.b.lt ifcont#8
+  theBoxesWereCountedAsHeaderLessSlots:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

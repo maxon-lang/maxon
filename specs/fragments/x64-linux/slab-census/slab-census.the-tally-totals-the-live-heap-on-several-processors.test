@@ -1,0 +1,555 @@
+// Test: slab-census.the-tally-totals-the-live-heap-on-several-processors
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+typealias BufPromise = Promise with ByteArray
+typealias PromiseArray = Array with BufPromise
+typealias Seed = int(0 to 65536)
+
+let Workers = 32
+let Churn = 200
+let PayloadBytes = 96
+let SizeClassMode = 1
+let BucketCount = 2048
+
+function build(seed Seed) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(PayloadBytes)
+	for i in 0 upto PayloadBytes 'fill'
+		b.push(((seed + i) mod 251) as Byte)
+	end 'fill'
+	return b
+end 'build'
+
+function churn(idx Integer) returns ByteArray
+	let survivor = build((idx mod 65536) as Seed)
+
+	for j in 0 upto Churn 'churn'
+		let tmp = build(((idx + j) mod 65536) as Seed)
+
+		if tmp.count() != PayloadBytes 'short'
+			return ByteArray.create()
+		end 'short'
+	end 'churn'
+
+	return survivor
+end 'churn'
+
+function main() returns ExitCode
+	var spawned = PromiseArray.create()
+	for i in 0 upto Workers 'spawn'
+		spawned.push(async churn(i))
+	end 'spawn'
+
+	var kept = Bufs.create()
+	for p in spawned 'awaitAll'
+		kept.push(await p)
+	end 'awaitAll'
+
+	if kept.count() != Workers 'populationLost'
+		return 1
+	end 'populationLost'
+
+	for k in 0 upto Workers 'dropHalfOnMain'
+		if (k mod 2) == 0 'even'
+			try kept.set(k, value: ByteArray.create()) otherwise return 1
+		end 'even'
+	end 'dropHalfOnMain'
+
+	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theTallysOwnWalkMissedTheLevel'
+
+	var total = 0
+	for i in 0 upto BucketCount 'sum'
+		total = total + __Builtins.slabCensusBucketBytes(i)
+	end 'sum'
+
+	if total != __Builtins.slabLiveBytes() 'theCensusDisagreesWithTheLevel'
+		return 2
+	end 'theCensusDisagreesWithTheLevel'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __gt_run_queue_head@0 = i64 0
+  __gt_run_queue_tail@8 = i64 0
+  __gt_timer_count@16 = i64 0
+  __gt_timer_heap_base@24 = i64 0
+  __gt_timer_capacity@32 = i64 0
+  __gt_timer_seq@40 = i64 0
+  __gt_timer_when@48 = i64 9223372036854775807
+  __gt_trace_counter@56 = i64 0
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 2048
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __mrt_envp@424 = i64 0
+  __mrt_tls_next_key@432 = i64 0
+  __mrt_errno@440 = i64 0
+  __mrt_tls_ready@448 = i64 0
+  __slab_arena_list@456 = i64 0
+  __slab_arena_map_l1@464 = i64 0
+  __slab_state@472 = i64 0
+}
+
+func @build {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic#6
+  __rc_chk#7:
+    x64.cmpRegImm32 rbx, 65536
+    x64.jcc greater, __rc_panic#6
+  __rc_ok#5:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 96
+  __rc_ok#17:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 96
+    x64.jcc greaterEqual, __il_cont
+  grow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  fill:
+    x64.leaRegRegReg rcx, rbx, r13
+    x64.movRegImm rax, 367465021388636487
+    x64.mulHighReg rcx
+    x64.movRegReg rax, rcx
+    x64.subRegReg rax, rcx, rdx
+    x64.shrRegImm8 rax, rax, 1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.shrRegImm8 rax, rax, 7
+    x64.imulRegRegImm32 rax, rax, 251
+    x64.movRegReg rdx, rcx
+    x64.subRegReg rdx, rcx, rax
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic#9
+  __rc_chk#10:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic#9
+  __rc_ok#8:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 96
+    x64.jcc less, fill
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at slab-census.the-tally-totals-the-live-heap-on-several-processors.test:16: Range check failed: value outside typealias 'Seed'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at slab-census.the-tally-totals-the-live-heap-on-several-processors.test:20: Range check failed: value outside typealias 'Byte'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rax, rbx
+    x64.sarRegImm8 rax, rbx, 63
+    x64.shrRegImm8 rax, rax, 48
+    x64.leaRegRegReg rax, rbx, rax
+    x64.sarRegImm8 rax, rax, 16
+    x64.imulRegRegImm32 rax, rax, 65536
+    x64.movRegReg rcx, rbx
+    x64.subRegReg rcx, rbx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#8
+  __rc_chk#9:
+    x64.cmpRegImm32 rcx, 65536
+    x64.jcc greater, __rc_panic#8
+  __rc_ok#7:
+    x64.callDirect build
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  churn:
+    x64.leaRegRegReg rax, rbx, r13
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 48
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 16
+    x64.imulRegRegImm32 rcx, rcx, 65536
+    x64.subRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic#11
+  __rc_chk#12:
+    x64.cmpRegImm32 rax, 65536
+    x64.jcc greater, __rc_panic#11
+  __rc_ok#10:
+    x64.movRegReg rcx, rax
+    x64.callDirect build
+    x64.movRegReg r14, r8
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.cmpRegImm32 rax, 96
+    x64.jcc equal, ifcont
+  short:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr:
+    x64.cmpRegImm32 r13, 200
+    x64.jcc less, churn
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#8:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at slab-census.the-tally-totals-the-live-heap-on-several-processors.test:26: Range check failed: value outside typealias 'Seed'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#11:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at slab-census.the-tally-totals-the-live-heap-on-several-processors.test:29: Range check failed: value outside typealias 'Seed'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  spawn:
+    x64.leaRegFunc rcx, [rip + churn]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.leaRegFunc rax, [rip + __gt_release_churn]
+    x64.storeBaseDispReg.word64 [r13 + 176], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 32
+    x64.jcc less, spawn
+  forexit#4:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#5
+  awaitAll:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseIndexScale.word64 r14, [rax + r13*8 + 0]
+  __im_cont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r14
+    x64.callDirect __gt_await
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#7:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#5:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, awaitAll
+  forexit#8:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 32
+    x64.jcc equal, ifcont#10
+  populationLost:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#11
+  dropHalfOnMain:
+    x64.movRegReg rax, r13
+    x64.sarRegImm8 rax, r13, 63
+    x64.shrRegImm8 rax, rax, 63
+    x64.leaRegRegReg rax, r13, rax
+    x64.sarRegImm8 rax, rax, 1
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.movRegReg rcx, r13
+    x64.subRegReg rcx, r13, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, forstep#13
+  even:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.loadRegBaseDisp.word64 rax, [r12 + 40]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __im_slow
+  __im_owned:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_store
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#13
+  tryerr:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_store:
+    x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r8
+  forstep#13:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#11:
+    x64.cmpRegImm32 r13, 32
+    x64.jcc less, dropHalfOnMain
+  forexit#14:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __slab_census_tally
+    x64.movRegReg r13, r8
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg r13, r8
+    x64.jcc equal, ifcont#20
+  theTallysOwnWalkMissedTheLevel:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#20:
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr#21
+  sum:
+    x64.movRegReg rcx, r14
+    x64.callDirect __slab_census_bytes
+    x64.leaRegRegReg r13, r13, r8
+  forstep#23:
+    x64.leaRegRegImm32 r14, r14, 1
+  forhdr#21:
+    x64.cmpRegImm32 r14, 2048
+    x64.jcc less, sum
+  forexit#24:
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg r13, r8
+    x64.jcc equal, ifcont#26
+  theCensusDisagreesWithTheLevel:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#26:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
