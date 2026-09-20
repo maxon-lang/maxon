@@ -79,8 +79,8 @@ When a program's stdout differs by target (e.g. `FilePath` prints `\` on
 x64-windows but `/` on wasm32-wasi), use target-qualified `Stdout:<target>`
 blocks instead of the bare `stdout` block. The runner picks the block matching
 the target under test; a bare `stdout` block, if also present, is the fallback
-for targets without a qualified block. This mirrors the `RequiredIR:<target>`
-mechanism.
+for targets without a qualified block. `Maxoncstderr:<target>` and
+`Stderr:<target>` are the other two fences that take this qualifier.
 
 ```Stdout:x64-windows
 C:\Users\test
@@ -114,51 +114,29 @@ Stack trace:
   in mrt_start
 ```
 
-### IR Verification
+### Pinning emitted code
 
-To verify the compiler's IR at all pipeline stages, include a `RequiredIR` block. The block contains all stages concatenated, separated by `=== stagename` markers. The test will fail if the generated IR doesn't match exactly (after whitespace normalization).
+**There is no `RequiredIR` block.** The fences the harness implements are the `*Fence` constants in
+`maxon-bin/Testing/SpecParser.maxon`, and `RequiredIR` is not among them — a block no fence arm claims
+would be walked over and read as prose, pinning nothing while reading as coverage, so a **live** case that
+opens one is refused outright (`SpecParser.isUnimplementedFenceOpen`), naming the case and the fence. A
+`disabled-test:` case may keep one as a note for whoever enables it.
 
-Current pipeline stages: `maxon`, `standard`, `x86`.
+Three things pin what the compiler emits, and only the third is a gate:
 
-```maxon
-function main() returns ExitCode
-		return 42
-end 'main'
-```
-```exitcode
-42
-```
-```RequiredIR
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.constant {value = 42 : i64}
-    maxon.return %0
-  }
-}
-=== standard
-module {
-  func @main() -> i64 {
-  entry:
-    %1 = arith.constant {value = 42 : i64}
-    func.return %1
-  }
-}
-=== x86
-module {
-  func @main() -> i64 {
-  entry:
-    x86.push rbp
-    x86.mov rbp, rsp
-    x86.mov eax, 42
-    x86.pop rbp
-    x86.ret
-  }
-}
-```
-
-The `RequiredIR` block is optional. When present, the entire block is compared as one string against the generated IR from all pipeline stages.
+- **The minted fragment golden**, `specs/fragments/<target>/<spec>/<test>.test`, which records the Target
+  IR of every function the case's own source declares. A case with no golden mints one on the host where
+  it passed; a golden whose bytes differ is reported as drift and changes no verdict. Goldens are
+  **reference, not a gate** (user ruling, 2026-08-02) — see `SpecTestRunner.maxon`'s fragment-layout note
+  for why a gate there hides real defects. `--update-required --filter=<spec>` rewrites them.
+- **A `RequiredRuntime` block**, which opts a body the golden would otherwise withhold — an emitted
+  runtime function, or a `stdlib/` body the program reaches — into that same golden, one name per line.
+  `specs/emitted-runtime-body.md` is the subject and the canonical example. It is still a golden, so it
+  is still reference; and it says nothing about the run, so it does not satisfy `pinsAnyResult` — a case
+  carrying it still owes an exit code, a stdout or a stderr block.
+- **A `tests/` case over `--emit-ir` or `--emit-ir-runtime=<name>` output**, which spawns the compiler at
+  a fixture and reads the printed IR itself. This is where an emitted-code property that must go RED
+  belongs; `tests/emitted-runtime/` is the corpus, and `tests/README.md` states what each one costs.
 
 ### Rdata Verification
 
@@ -489,7 +467,7 @@ CompilerError:
 <normalized compiler stderr>
 ```
 
-The `// Test:` header is exactly one line, and the source section is byte-for-byte the file the compiler was handed — so a `line:col` in the diagnostic reads directly against it. Pinned stdout/stderr and `RequiredIR` blocks are not in the fragment: they are test inputs, checked by the run, and a golden only tracks the code.
+The `// Test:` header is exactly one line, and the source section is byte-for-byte the file the compiler was handed — so a `line:col` in the diagnostic reads directly against it. Pinned stdout and stderr blocks are not in the fragment: they are test inputs, checked by the run, and a golden only tracks the code.
 
 #### Example (run case)
 
@@ -527,7 +505,7 @@ error E3061: <fragment>:3:11: Duplicate typealias 'Score'
 # Run only tests matching a pattern; a case with no golden mints one, a drifted golden is reported
 ./maxon-bin/.maxon/maxon.exe spec-test --filter=arithmetic
 
-# Rewrite the committed goldens and RequiredIR blocks of the matching cases
+# Rewrite the committed goldens of the matching cases
 ./maxon-bin/.maxon/maxon.exe spec-test --update-required --filter=arithmetic
 ```
 

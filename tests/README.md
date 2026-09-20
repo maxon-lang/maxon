@@ -6,7 +6,7 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Twenty corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Twenty-one corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
 
@@ -35,6 +35,7 @@ SERVER its tests spawn.
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `execute/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExecuteHarness.maxon` — the binary it spawns: the compiler under test, which is also the `execute` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
+| `emitted-runtime/` | `maxon test`, under the compiler | `TestedCompilerStem` in `steal-reads-the-victim-ring-with-acquire-loads.test.maxon` — the binary it spawns: the compiler under test, which is also what PRINTS the Target IR the case reads |
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.test.maxon` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
 | `warm-rebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `WarmRebuildHarness.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
@@ -170,6 +171,9 @@ tests/
   console-write/
     console-write-imports.test.maxon        which console API an emitted x64-windows image imports
     fixtures/hello/main.maxon.fixture       stored name only - see rule 1
+  emitted-runtime/
+    steal-reads-the-victim-ring-with-acquire-loads.test.maxon  the thief reads another P's runqHead, runqTail and runnext with `ldar`, on both arm64 lanes
+    fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
   examples/
     ExamplesHarness.maxon                   the shared half: build one example, or one document's program, into temp/examples/<name>/, run it, check its answer
     basic.test.maxon                        exits 42, the value its `main` returns
@@ -575,6 +579,50 @@ works in both directions: a name that IS imported is found, and one that is not 
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
 directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.
+
+## `emitted-runtime/` — the ORDERING the emitted scheduler reads another processor's ring with
+
+One case, and its subject is a body no author wrote: `__sched_steal`, the green-thread scheduler's
+thief, which the back end synthesizes into every program that spawns. The case builds a two-line
+`spawn` fixture for `arm64-macos` and for `arm64-linux` with
+`--emit-ir-runtime=__sched_steal`, cuts `func @__sched_steal` out of the printed Target IR, and asks
+how that body reads the victim's `runqHead`, `runqTail` and `runnext`: with `ldar`, or with a plain
+`ldr`.
+
+⭐⭐ **THE TARGET IR IS THE ONLY PLACE THE ANSWER IS.** The victim publishes its tail with a
+read-modify-write and claims a head with a compare-and-swap, so the WRITER's half of the pair is
+ordered; the reader's half is one instruction selection, and a program cannot see which instruction
+carried its own load. Nor can an exit code: a thief that reads a stale tail copies a slot the victim
+has not written yet and runs whatever word was there, which on a wrapped ring is a green thread that
+is already running — a corruption whose symptom is a crash somewhere else entirely, and only
+sometimes.
+
+⭐ **BOTH ARM64 LANES ARE BUILT, AND x64 IS NOT.** TSO never reorders load with load, so the same
+Std op lowers to the plain `mov` there and an x64 build would assert nothing. The two arm64 targets
+share one lowering (`StdToArm64Conversion`), and building both is what keeps a cure that reaches only
+one of them from reading as a cure.
+
+⛔ **THE VICTIM'S REGISTER IS READ OUT OF THE BODY, NEVER ASSUMED.** The case takes the register the
+prologue moves the second argument into, then REQUIRES the body to claim a head through it
+(`arm64AtomicCas … [<victim>]`) before any load is attributed to a field. A register that is not the
+victim's would make every absence demand below it true by holding nothing, so failing to attribute it
+panics rather than passes.
+
+⛔ **THE COUNT IS ASSERTED BESIDE THE THREE ABSENCES.** A body with no plain load of a ring word and
+no acquire load either is a body whose shape has moved; requiring three `ldar.word64` alongside is
+what makes the absences a reading rather than a search that found nothing.
+
+⚠ **THE FIELD OFFSETS ARE THIS FILE'S OWN CONSTANTS** (`P+0`, `P+8`, `P+88`), because a test program
+cannot import the compiler's `SchedRuntime` constants. They are the one thing here that can rot
+silently in the absence half — which is the other reason the acquire COUNT is asserted too.
+
+⚠ **NOTHING IN `ci.yml` RUNS THIS CORPUS**: that workflow runs `spec-test` and `tests/lsp` only, so
+this gate is one a `/land` battery or a contributor runs by name —
+`maxon test tests/emitted-runtime`.
+
+It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
+directory under `temp/emitted-runtime/`), and it keeps rule 5 at the budget `parallel-compile/`
+prices: one spawning `test`, one file, two compiles, well inside the 5,000 ms deadline.
 
 ## `examples/` — every program in `examples/`, and every complete program the docs show, still builds and still computes its known answer
 

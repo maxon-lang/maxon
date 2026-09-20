@@ -1325,3 +1325,77 @@ done=1200 steals=0
 ```exitcode
 0
 ```
+
+<!-- test: sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads -->
+<!-- procs: 1 -->
+⭐⭐ **A THIEF READS ANOTHER P's RING WITH ACQUIRE LOADS, BECAUSE THE TAIL IT READS IS A PUBLICATION AND
+THE SLOT IT DESCRIBES IS THE THING PUBLISHED.** `__sched_runq_put` writes the green thread into
+`runq[tail % n]` and only then advances the tail, and that advance is ordered — `emitRunqPublishTail`
+makes it a read-modify-write, so the slot store cannot sink past it. That is one half of a pair and it is
+worthless alone. The other half is the READER: `__sched_steal` loads the victim's `runqHead` and
+`runqTail` — and its `runnext` — off another P's struct, and a plain load of the tail may be satisfied
+from a stale line while the load of the slot it announces is satisfied from a fresh one. The thief then
+copies a slot the victim has not written yet, and whatever word was there before is run as a green
+thread: on a ring that has wrapped, a green thread that is already running on the victim, twice.
+
+⛔ **x64 CANNOT SEE THIS AND NEITHER CAN THREE OF THE FOUR LANES.** TSO never reorders load with load, so
+the plain `mov` pair is already an acquire pair there and the `wasm32-wasi` lane is single-threaded; the
+window belongs to arm64, where a `ldr` pair may complete in either order. What a green thread run twice
+looks like is a compiler that dies in its own pass workers — exit 86, a fault inside a refcount step, or
+the leak gate — and the pass pool is the one program in this tree that keeps every P's ring full for
+minutes at a time. **This window is one member of that class, found by reading and closed; the deaths
+measured on arm64-macos (five of six full-suite runs before the change, and still one in the first run
+after it) are not claimed to be this window alone.**
+
+⇒ the three reads are `StdOp.loadAcquire`, which is `ldar` on arm64 and the same plain `mov` on x64: the
+ordering is a property of the OP, so the lane that needs the barrier gets it and the lane that does not
+pays nothing.
+
+⚖ **WHAT THIS CASE IS, EXACTLY: THE REFERENCE, NOT THE GATE.** Its ```RequiredRuntime block renders
+`__sched_steal`'s emitted body into this case's own fragment, and
+`specs/fragments/arm64-macos/sched-runqueue/sched-runqueue.a-thief-reads-the-victims-ring-with-acquire-loads.test`
+is where a reader sees `arm64.ldar.word64` standing against the victim's `runqHead`, `runqTail` and
+`runnext`. A fragment is REFERENCE, NOT A GATE (`SpecTestRunner.maxon:85`, user ruling 2026-08-02):
+drift in it is reported and reddens nothing, and on the x64 lanes the golden could not move at all,
+because an acquire load lowers there to the same plain `mov`. ⇒ **what this case checks by itself is
+`hits=1` and exit 0** — that a spawned service still answers its one message.
+
+⇒ **THE ORDERING IS GATED TWICE, AND NEITHER GATE IS HERE.**
+`tests/emitted-runtime/steal-reads-the-victim-ring-with-acquire-loads.test.maxon` cross-builds this
+same shape for `arm64-macos` and `arm64-linux`, cuts `func @__sched_steal` out of the printed Target
+IR and FAILS on a plain `ldr` of any of the three words, naming it. And the compiler refuses one
+before it is ever emitted, on every target and so on lanes no golden here can show:
+`assertRunQueueObservationIsOrdered` (`SchedRuntime.maxon`) walks the finished module and panics on a
+plain read of one of those three words — wherever it can attribute the base the read goes through to a
+processor, which is the reach of that check and the limit of what it promises.
+```maxon
+type Ping
+	var hits as Integer
+
+	static function create() returns Self
+		return Self{hits: 0}
+	end 'create'
+
+	export function hit() returns Integer
+		self.hits = self.hits + 1
+		return self.hits
+	end 'hit'
+end 'Ping'
+
+function main() returns ExitCode
+	let service = spawn Ping.create()
+	let seen = try await service.hit() otherwise panic("the one message this frame sends to a service it owns cannot fail")
+	print("hits={seen}")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+hits=1
+```
+```exitcode
+0
+```
+```RequiredRuntime
+__sched_steal
+```

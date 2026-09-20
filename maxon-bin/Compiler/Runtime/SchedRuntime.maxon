@@ -55,9 +55,10 @@
 //
 // ⚠ **WHAT THE CLASS CANNOT REACH IS AN ARGUMENT ELSEWHERE IN THE TREE WHOSE WARRANT IS THE MACHINE COUNT.**
 // `MultiMSharing` covers the `.data` slots structurally and nothing else. The live ones are the compiler's
-// four module-level latches and `Diagnostics`' capture latch — this compiler has no `spawn`, so its `async`
-// frames are members of one strand, which runs one member at a time at every count — and, in the spec
-// harness, `SpecWorkerPool`'s one-M section. **A comment that justifies a real property with a premise that
+// four module-level latches and `Diagnostics`' capture latch — and this compiler DOES spawn services, from
+// `FrontEndPool`, `BackendPool` and `StdPassPool`, so a latch a worker reaches is reached from as many
+// machines as its pool has workers and no machine-count premise excuses one — and, in the spec harness,
+// `SpecWorkerPool`'s one-M section. **A comment that justifies a real property with a premise that
 // has expired is caught by nothing the compiler runs.**
 //
 // ⚠⚠ **WHAT EVERY SHARED WORD IN THIS RUNTIME RESTS ON — THE SHORT FORM. The long form is at each slot.**
@@ -1713,6 +1714,10 @@ let SchedDrainRunqName = b"__sched_drain_runq"
 // `__sched_steal(p, victim, stealRunNext) -> gt` — grab half of `victim`'s ring into `p`'s and answer one of
 // them, or 0; with `stealRunNext` an empty ring falls back to the victim's slot. Go's `runqgrab` + `runqsteal`.
 let SchedStealName = b"__sched_steal"
+
+let SchedStealThiefParamIndex = 0 as ParsedInt
+let SchedStealVictimParamIndex = 1 as ParsedInt
+let SchedPreemptOneMachineParamIndex = 0 as ParsedInt
 
 // ⭐⭐ `__sched_find_runnable() -> gt` — **THE ONE PLACE THE SCHEDULER DECIDES WHAT RUNS NEXT**, and 0 when
 // there is nothing. Go's `findRunnable`, minus everything the compiler has no equivalent of.
@@ -3504,7 +3509,7 @@ function buildSchedRunqPut(module StdModule)
 	// machine ever stores a thread here, but a thief's last steal round may clear it at any instant, so a plain
 	// store could drop a thread a thief had just taken back into a slot the thief believes it emptied. A lost
 	// exchange re-reads, which is Go's `goto retryNext`.
-	let oldNext = emitLoadField(module, block: slotPut, record: p, offset: POffRunnext, ids: ids)
+	let oldNext = emitLoadAcquireField(module, block: slotPut, record: p, offset: POffRunnext, ids: ids)
 	let slotAddr = emitFieldAddr(module, block: slotPut, record: p, offset: POffRunnext, ids: ids)
 	let exchanged = ids.mint()
 	module.appendOp(slotPut, op: StdOp.atomicCas(exchanged, addrId: slotAddr, expectedId: oldNext, replacementId: gt))
@@ -3519,10 +3524,11 @@ function buildSchedRunqPut(module StdModule)
 	module.setTerminator(slotOnly, op: StdOp.retVoid)
 
 	// retry: read both counters and ask whether the ring is full. `tail - head` IS the length — see
-	// `POffRunqHead` for why no third word says so. A plain load of the head is a load-ACQUIRE on the one
-	// lane that has green threads (x64 never reorders load/load), which is the ordering Go spells out.
-	let head = emitLoadField(module, block: retry, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: retry, record: p, offset: POffRunqTail, ids: ids)
+	// `POffRunqHead` for why no third word says so. Both are read ACQUIRE: this is the reader's half of the
+	// pair with `emitRunqPublishTail`'s release, and on a lane that reorders load against load a plain load
+	// of either counter may be answered before the slot store it announces.
+	let head = emitLoadAcquireField(module, block: retry, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadAcquireField(module, block: retry, record: p, offset: POffRunqTail, ids: ids)
 	let queued = emitBin(module, block: retry, a: tail, b: head, opcode: StdBinOpcode.sub, ids: ids)
 	let capacity = emitConst(module, block: retry, value: RunqSlots, ids: ids)
 	let full = emitCmp(module, block: retry, a: queued, b: capacity, pred: StdCmpPred.ge, ids: ids)
@@ -3629,8 +3635,8 @@ function buildSchedRunqGet(module StdModule)
 	let p = 0 as ValueId
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
 
-	let head = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
+	let head = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
 	let empty = emitCmp(module, block: loopHdr, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(loopHdr, op: StdOp.condBranch(empty, thenBlockId: emptyBlock.id, elseBlockId: take.id))
 
@@ -3669,7 +3675,7 @@ function buildSchedRunqNext(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let p = 0 as ValueId
 
-	let next = emitLoadField(module, block: entry, record: p, offset: POffRunnext, ids: ids)
+	let next = emitLoadAcquireField(module, block: entry, record: p, offset: POffRunnext, ids: ids)
 	let noNext = emitCmp(module, block: entry, a: next, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(noNext, thenBlockId: emptyBlock.id, elseBlockId: take.id))
 
@@ -3710,10 +3716,10 @@ function buildSchedRunqEmpty(module StdModule)
 	let p = 0 as ValueId
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
 
-	let head = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
-	let tail = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
-	let next = emitLoadField(module, block: loopHdr, record: p, offset: POffRunnext, ids: ids)
-	let tailAgain = emitLoadField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
+	let head = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
+	let tail = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
+	let next = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunnext, ids: ids)
+	let tailAgain = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
 	let tailMoved = emitCmp(module, block: loopHdr, a: tailAgain, b: tail, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(loopHdr, op: StdOp.condBranch(tailMoved, thenBlockId: loopHdr.id, elseBlockId: settled.id))
 
@@ -3822,11 +3828,11 @@ function buildSchedSteal(module StdModule)
 	let stealRunNext = 2 as ValueId
 
 	// Our own tail, read once: nobody else writes it, and the copy addresses slots relative to it.
-	let ourTail = emitLoadField(module, block: entry, record: p, offset: POffRunqTail, ids: ids)
+	let ourTail = emitLoadAcquireField(module, block: entry, record: p, offset: POffRunqTail, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(grabHdr.id))
 
-	let vHead = emitLoadField(module, block: grabHdr, record: victim, offset: POffRunqHead, ids: ids)
-	let vTail = emitLoadField(module, block: grabHdr, record: victim, offset: POffRunqTail, ids: ids)
+	let vHead = emitLoadAcquireField(module, block: grabHdr, record: victim, offset: POffRunqHead, ids: ids)
+	let vTail = emitLoadAcquireField(module, block: grabHdr, record: victim, offset: POffRunqTail, ids: ids)
 	let vLen = emitBin(module, block: grabHdr, a: vTail, b: vHead, opcode: StdBinOpcode.sub, ids: ids)
 	let halfShift = emitConst(module, block: grabHdr, value: 1, ids: ids)
 	let vHalf = emitBin(module, block: grabHdr, a: vLen, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
@@ -3841,7 +3847,7 @@ function buildSchedSteal(module StdModule)
 	// slotArm: the ring gave nothing. Go's `stealRunNextG` arm — only the last round asks, and an empty slot
 	// is the end of this victim.
 	let mayTakeSlot = emitCmp(module, block: slotArm, a: stealRunNext, b: grabZero, pred: StdCmpPred.ne, ids: ids)
-	let vNext = emitLoadField(module, block: slotArm, record: victim, offset: POffRunnext, ids: ids)
+	let vNext = emitLoadAcquireField(module, block: slotArm, record: victim, offset: POffRunnext, ids: ids)
 	let slotHasOne = emitCmp(module, block: slotArm, a: vNext, b: grabZero, pred: StdCmpPred.ne, ids: ids)
 
 	// Both operands are `cmp` results, so they are 0 or 1 and a bitwise AND is the logical one.
@@ -3879,6 +3885,10 @@ function buildSchedSteal(module StdModule)
 	let copied = emitCmp(module, block: copyHdr, a: copyIndex, b: grabCount, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(copyHdr, op: StdOp.condBranch(copied, thenBlockId: commit.id, elseBlockId: copyBody.id))
 
+	// The slot read is PLAIN, and that is the pair working rather than a hole in it: it follows the acquire of
+	// the victim's head and tail, which is what makes the slot store those counters announce visible, and
+	// nothing copied here is kept unless the commit below wins the head the counters were read with. An
+	// acquire on this load would order it against nothing the counters have not already ordered.
 	let fromCounter = emitBin(module, block: copyBody, a: vHead, b: copyIndex, opcode: StdBinOpcode.add, ids: ids)
 	let stolenGt = emitLoadField(module, block: copyBody, record: emitRunqSlotAddr(module, block: copyBody, p: victim, counter: fromCounter, ids: ids), offset: 0, ids: ids)
 	let toCounter = emitBin(module, block: copyBody, a: ourTail, b: copyIndex, opcode: StdBinOpcode.add, ids: ids)
@@ -3916,6 +3926,566 @@ function buildSchedSteal(module StdModule)
 
 	module.functions.push(func)
 end 'buildSchedSteal'
+
+// ==========================================================================
+// The ring's ordering check — `assertRunQueueObservationIsOrdered`
+// ==========================================================================
+
+function isRunqWordDisplacement(displacement ParsedInt) returns bool
+	return displacement == (POffRunqHead as ParsedInt) or displacement == (POffRunqTail as ParsedInt) or displacement == (POffRunnext as ParsedInt)
+end 'isRunqWordDisplacement'
+
+function runqWordNameOf(offset ByteOffset) returns String
+	if offset == POffRunqHead 'head'
+		return "runqHead"
+	end 'head'
+
+	if offset == POffRunqTail 'tail'
+		return "runqTail"
+	end 'tail'
+
+	if offset == POffRunnext 'slot'
+		return "runnext"
+	end 'slot'
+
+	panic("runqWordNameOf: offset {offset} is not one of a processor's three run-queue words — every caller gates on `isRunqWordDisplacement` first")
+end 'runqWordNameOf'
+
+let RunQueueCheckName = "assertRunQueueObservationIsOrdered"
+
+function pushCalleeName(column ByteArrayArray, callee ByteArray)
+	var name = ByteArray.create()
+	name.append(callee)
+	column.push(name)
+end 'pushCalleeName'
+
+function isMachineLinkOffset(offset ByteOffset) returns bool
+	return offset == MOffAllNext or offset == MOffIdleNext or offset == MOffIdlePrev or offset == MOffRegainNext
+end 'isMachineLinkOffset'
+
+function isProcessorFieldOfAMachine(offset ByteOffset) returns bool
+	return offset == MOffCurrentP or offset == MOffNextP
+end 'isProcessorFieldOfAMachine'
+
+function isMachineFieldOfAProcessor(offset ByteOffset) returns bool
+	return offset == POffM or offset == POffOldM
+end 'isMachineFieldOfAProcessor'
+
+function isMachineListLabel(label ByteArray) returns bool
+	return label == SchedAllMLabel or label == SchedMidleLabel or label == SchedRegainHeadLabel
+end 'isMachineListLabel'
+
+type RunqTaintChannel
+	export var values as StdValueUseSet
+	export var argCallees as ByteArrayArray
+	export var argIndices as ParsedIntArray
+	export var returningCallees as ByteArrayArray
+	export var crossedAFunction as bool
+
+	static function create() returns Self
+		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: ByteArrayArray.create(), argIndices: ParsedIntArray.create(), returningCallees: ByteArrayArray.create(), crossedAFunction: false}
+	end 'create'
+
+	// A value id means something only inside the function that minted it, so the ids go at each function.
+	// What crosses a boundary is the callee-and-parameter fact, which is module-wide and kept — dropping it
+	// here would stop the fixed point at the first call and the check would refuse nothing.
+	export function beginFunction()
+		self.values.clear()
+	end 'beginFunction'
+
+	export function beginRound()
+		self.crossedAFunction = false
+	end 'beginRound'
+
+	export function paramIsTainted(funcName ByteArray, index ParsedInt) returns bool
+		for i in 0 upto self.argCallees.count() 'eachPair'
+			let callee = try self.argCallees.get(i) otherwise panic("RunqTaintChannel.paramIsTainted: argCallees.get OOB at {i}, inside a loop bounded by its own count")
+
+			if callee != funcName 'anotherCallee'
+				continue
+			end 'anotherCallee'
+
+			let position = try self.argIndices.get(i) otherwise panic("RunqTaintChannel.paramIsTainted: argIndices.get OOB at {i} against the callee column it is parallel to")
+
+			if position == index 'thisParameter'
+				return true
+			end 'thisParameter'
+		end 'eachPair'
+
+		return false
+	end 'paramIsTainted'
+
+	export function calleeReturnsTainted(callee ByteArray) returns bool
+		for name in self.returningCallees 'eachCallee'
+			if name == callee 'itDoes'
+				return true
+			end 'itDoes'
+		end 'eachCallee'
+
+		return false
+	end 'calleeReturnsTainted'
+
+	export function noteArgument(callee ByteArray, index ParsedInt) returns bool
+		if self.paramIsTainted(callee, index: index) 'alreadyKnown'
+			return false
+		end 'alreadyKnown'
+
+		pushCalleeName(self.argCallees, callee: callee)
+		self.argIndices.push(index)
+		self.crossedAFunction = true
+		return true
+	end 'noteArgument'
+
+	export function noteReturn(callee ByteArray) returns bool
+		if self.calleeReturnsTainted(callee) 'alreadyKnown'
+			return false
+		end 'alreadyKnown'
+
+		pushCalleeName(self.returningCallees, callee: callee)
+		self.crossedAFunction = true
+		return true
+	end 'noteReturn'
+end 'RunqTaintChannel'
+
+type RunqRingTaint
+	export var processorChannel as RunqTaintChannel
+	export var machineChannel as RunqTaintChannel
+	export var machineListGlobalAddrs as StdValueUseSet
+	export var procsGlobalAddrs as StdValueUseSet
+	export var procsArrayBases as StdValueUseSet
+	export var procsSlotAddrs as StdValueUseSet
+	export var runqWordAddrs as StdValueUseSet
+	export var runqOffsetConsts as StdValueUseSet
+
+	static function create() returns Self
+		return Self{processorChannel: RunqTaintChannel.create(), machineChannel: RunqTaintChannel.create(), machineListGlobalAddrs: StdValueUseSet.createRecordingIds(), procsGlobalAddrs: StdValueUseSet.createRecordingIds(), procsArrayBases: StdValueUseSet.createRecordingIds(), procsSlotAddrs: StdValueUseSet.createRecordingIds(), runqWordAddrs: StdValueUseSet.createRecordingIds(), runqOffsetConsts: StdValueUseSet.createRecordingIds()}
+	end 'create'
+
+	export function beginFunction()
+		self.processorChannel.beginFunction()
+		self.machineChannel.beginFunction()
+		self.machineListGlobalAddrs.clear()
+		self.procsGlobalAddrs.clear()
+		self.procsArrayBases.clear()
+		self.procsSlotAddrs.clear()
+		self.runqWordAddrs.clear()
+		self.runqOffsetConsts.clear()
+	end 'beginFunction'
+
+	export function beginRound()
+		self.processorChannel.beginRound()
+		self.machineChannel.beginRound()
+	end 'beginRound'
+
+	export function crossedAFunction() returns bool
+		return self.processorChannel.crossedAFunction or self.machineChannel.crossedAFunction
+	end 'crossedAFunction'
+end 'RunqRingTaint'
+
+function noteTaintedValue(taint StdValueUseSet, valueId ValueId) returns bool
+	if taint.contains(valueId) 'alreadyKnown'
+		return false
+	end 'alreadyKnown'
+
+	taint.insert(valueId)
+	return true
+end 'noteTaintedValue'
+
+function runqTaintCarriesValue(taint RunqRingTaint, valueId ValueId) returns bool
+	return taint.processorChannel.values.contains(valueId) or taint.machineChannel.values.contains(valueId)
+end 'runqTaintCarriesValue'
+
+// The reader's half of the run-queue pair, checked rather than trusted: a plain load of `runqHead`,
+// `runqTail` or `runnext` is refused wherever the base it is read through can be attributed to a processor.
+//
+// ⚠ The displacement alone cannot be the key, which is the whole reason the attribution exists. 0x00, 0x08
+// and 0x58 are `MOffCurrentP`, `MOffCurrentGt` and `GtOffThrew` as well, and `GtOffSp`/`GtOffFp` on a green
+// thread, so an offset-only test would refuse the emitted runtime's plain reads of records that have no
+// ring at all.
+//
+// The two walks are ordered. Attribution crosses a function boundary only by argument and by return, so it
+// must settle over the whole module before any load is judged; and the second walk collects each function
+// again before refusing anything in it, because the value ids are dropped at every function's start.
+export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex FuncIndex)
+	var taint = RunqRingTaint.create()
+	let funcLimit = module.funcCount() as FuncIndex
+	var opIndices = OpIndexArray.create()
+	var settling = true
+
+	while settling 'toAFixedPoint'
+		taint.beginRound()
+
+		for index in firstFuncIndex upto funcLimit 'eachFunc'
+			collectRunqTaintIn(module, func: module.getFunc(index), taint: taint, opIndices: opIndices)
+		end 'eachFunc'
+
+		settling = taint.crossedAFunction()
+	end 'toAFixedPoint'
+
+	requireRingTaintReachedTheThief(taint)
+	requireMachineTaintReachedThePreemptor(taint)
+
+	var load = StdLoadOperands.create()
+
+	for index in firstFuncIndex upto funcLimit 'eachFunc'
+		let func = module.getFunc(index)
+		collectRunqTaintIn(module, func: func, taint: taint, opIndices: opIndices)
+		requireOrderedRingReadsIn(module, func: func, taint: taint, load: load, opIndices: opIndices)
+	end 'eachFunc'
+end 'assertRunQueueObservationIsOrdered'
+
+// Two proofs that the collector still reaches its subject. A rule that stops following a spelling leaves the
+// walk above refusing nothing, which reads exactly like a module that is already ordered; each panic names
+// the seed and the chain it expects so the break is repaired rather than rediscovered.
+//
+// ⚠ They pin the argument rule only. The machine-list seed, the link chains and the branch-edge rule are
+// exercised by `__sched_stop_workers`' walk of `__sched_allm` and proved by nothing, and no function in this
+// runtime returns a processor or a machine, so the return rule has no producer to prove it either.
+function requireRingTaintReachedTheThief(taint RunqRingTaint)
+	if not taint.processorChannel.paramIsTainted(SchedStealName, index: SchedStealThiefParamIndex) 'theThiefIsNotAProcessor'
+		panic("assertRunQueueObservationIsOrdered: nothing in the module marks parameter {SchedStealThiefParamIndex} of '{String.from(SchedStealName)}' as a processor, so the walk below can refuse no plain read through it. The seed is the `tlsSlotLoad` of this OS thread's machine and the `{MOffCurrentP}` field off it (`emitLoadCurrentP`), carried into '{String.from(SchedStealName)}' by `__sched_find_runnable`'s call; a spelling of that walk this collector does not follow leaves the check green and blind")
+	end 'theThiefIsNotAProcessor'
+
+	if not taint.processorChannel.paramIsTainted(SchedStealName, index: SchedStealVictimParamIndex) 'theVictimIsNotAProcessor'
+		panic("assertRunQueueObservationIsOrdered: nothing in the module marks parameter {SchedStealVictimParamIndex} of '{String.from(SchedStealName)}' as a processor, so the victim's ring words — the whole subject of this check — are read through a value it cannot attribute. The seed is an entry of `{String.from(SchedProcsLabel)}` (`emitLoadProc`), carried in by `__sched_find_runnable`'s call; a spelling of that walk this collector does not follow leaves the check green and blind")
+	end 'theVictimIsNotAProcessor'
+end 'requireRingTaintReachedTheThief'
+
+function requireMachineTaintReachedThePreemptor(taint RunqRingTaint)
+	if not taint.machineChannel.paramIsTainted(SchedPreemptOneName, index: SchedPreemptOneMachineParamIndex) 'theSubjectIsNotAMachine'
+		panic("assertRunQueueObservationIsOrdered: nothing in the module marks parameter {SchedPreemptOneMachineParamIndex} of '{String.from(SchedPreemptOneName)}' as a machine, so the machine channel carries nothing and a processor reached through an M — `{MOffCurrentP}` or `{MOffNextP}` off one — would be attributed to nobody. The chain is an entry of `{String.from(SchedProcsLabel)}`, its `{POffM}` field, and `__sysmon`'s call")
+	end 'theSubjectIsNotAMachine'
+end 'requireMachineTaintReachedThePreemptor'
+
+function collectRunqTaintIn(module StdModule, func IrFunction, taint RunqRingTaint, opIndices OpIndexArray)
+	taint.beginFunction()
+	module.collectLiveOpIndices(func, into: opIndices)
+
+	var localGrew = true
+
+	while localGrew 'toALocalFixedPoint'
+		localGrew = false
+
+		for opIdx in opIndices 'eachOp'
+			localGrew = recordRunqTaintOfOp(func, op: liveRuntimeOpAt(module, opIdx: opIdx, reader: RunQueueCheckName), taint: taint) or localGrew
+		end 'eachOp'
+
+		localGrew = recordRunqTaintAcrossEdges(module, func: func, taint: taint) or localGrew
+	end 'toALocalFixedPoint'
+end 'collectRunqTaintIn'
+
+function recordRunqTaintAcrossEdges(module StdModule, func IrFunction, taint RunqRingTaint) returns bool
+	var grew = false
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for edge in block.branchEdges 'eachEdge'
+			let target = try module.getBlockByIdIn(func, id: edge.targetBlockId) otherwise panic("assertRunQueueObservationIsOrdered: block {block.id} branches to {edge.targetBlockId}, which is not a block of '{String.from(func.name)}'")
+
+			for k in 0 upto edge.argIds.count() 'eachArg'
+				let passed = try edge.argIds.get(k) otherwise panic("assertRunQueueObservationIsOrdered: argIds.get OOB at {k}, inside a loop bounded by its own count")
+
+				if not runqTaintCarriesValue(taint, valueId: passed) 'carriesNeitherRecord'
+					continue
+				end 'carriesNeitherRecord'
+
+				let received = try target.blockArgs.get(k) otherwise panic("assertRunQueueObservationIsOrdered: block {target.id} takes {target.blockArgs.count()} argument(s) and an edge into it passes at least {k + 1}")
+				grew = recordTaintedEdgeArg(taint.processorChannel, passed: passed, received: received.valueId) or grew
+				grew = recordTaintedEdgeArg(taint.machineChannel, passed: passed, received: received.valueId) or grew
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	return grew
+end 'recordRunqTaintAcrossEdges'
+
+function recordTaintedEdgeArg(channel RunqTaintChannel, passed ValueId, received ValueId) returns bool
+	if not channel.values.contains(passed) 'notThisChannels'
+		return false
+	end 'notThisChannels'
+
+	return noteTaintedValue(channel.values, valueId: received)
+end 'recordTaintedEdgeArg'
+
+function recordTaintedCall(channel RunqTaintChannel, resultId ValueId, callee ByteArray, args ValueIdArray) returns bool
+	var grew = false
+
+	for i in 0 upto args.count() 'eachArgument'
+		let passed = try args.get(i) otherwise panic("assertRunQueueObservationIsOrdered: args.get OOB at {i}, inside a loop bounded by its own count")
+
+		if not channel.values.contains(passed) 'notThisChannels'
+			continue
+		end 'notThisChannels'
+
+		grew = channel.noteArgument(callee, index: i as ParsedInt) or grew
+	end 'eachArgument'
+
+	if channel.calleeReturnsTainted(callee) 'answersOne'
+		grew = noteTaintedValue(channel.values, valueId: resultId) or grew
+	end 'answersOne'
+
+	return grew
+end 'recordTaintedCall'
+
+function recordTaintedReturn(channel RunqTaintChannel, funcName ByteArray, retValId ValueId) returns bool
+	if not channel.values.contains(retValId) 'answersNone'
+		return false
+	end 'answersNone'
+
+	return channel.noteReturn(funcName)
+end 'recordTaintedReturn'
+
+function recordTaintedParam(channel RunqTaintChannel, funcName ByteArray, resultId ValueId, index ParsedInt) returns bool
+	if not channel.paramIsTainted(funcName, index: index) 'takesNoneThere'
+		return false
+	end 'takesNoneThere'
+
+	return noteTaintedValue(channel.values, valueId: resultId)
+end 'recordTaintedParam'
+
+function recordCallTaint(taint RunqRingTaint, resultId ValueId, callee ByteArray, args ValueIdArray) returns bool
+	let processorsMoved = recordTaintedCall(taint.processorChannel, resultId: resultId, callee: callee, args: args)
+
+	return recordTaintedCall(taint.machineChannel, resultId: resultId, callee: callee, args: args) or processorsMoved
+end 'recordCallTaint'
+
+function recordReturnTaint(taint RunqRingTaint, funcName ByteArray, retValId ValueId) returns bool
+	let processorsMoved = recordTaintedReturn(taint.processorChannel, funcName: funcName, retValId: retValId)
+
+	return recordTaintedReturn(taint.machineChannel, funcName: funcName, retValId: retValId) or processorsMoved
+end 'recordReturnTaint'
+
+function recordParamTaint(taint RunqRingTaint, funcName ByteArray, resultId ValueId, index ParsedInt) returns bool
+	let processorsMoved = recordTaintedParam(taint.processorChannel, funcName: funcName, resultId: resultId, index: index)
+
+	return recordTaintedParam(taint.machineChannel, funcName: funcName, resultId: resultId, index: index) or processorsMoved
+end 'recordParamTaint'
+
+// ⚠ `callIndirect` and `witnessCall` carry no callee name, so a processor handed to one is followed nowhere
+// and a plain ring read behind it would be refused by nothing. What this runtime passes through them is a
+// green thread, a box or an element.
+function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) returns bool
+	match op 'k'
+		const(resultId, value, _) then return recordRunqOffsetConst(taint, resultId: resultId, value: value)
+		binOp(resultId, lhs, rhs, opcode, _) then return recordAddressTaint(taint, resultId: resultId, lhs: lhs, rhs: rhs, opcode: opcode)
+		unaryOp or
+			cmp then return false
+		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
+		cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch then return false
+		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
+		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as ParsedInt)
+		call(resultId, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
+		retVoid then return false
+		globalAddr(resultId, label) then return recordSchedulerGlobalAddr(taint, resultId: resultId, label: label)
+		loadIndirect(resultId, addrId, offset, _) then return recordLoadedRecord(taint, resultId: resultId, addrId: addrId, offset: offset)
+		storeIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr then return false
+		tryCall(resultId, _, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
+		errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osProcessSpawn or
+			osProcessExitCode or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirRemove or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketSend or
+			osSocketError or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue then return false
+		tlsSlotLoad(resultId, _) then return noteTaintedValue(taint.machineChannel.values, valueId: resultId)
+		osSetEvent or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree then return false
+		loadAcquire(resultId, addrId, offset, _) then return recordLoadedRecord(taint, resultId: resultId, addrId: addrId, offset: offset)
+		storeRelease or
+			osHandleFileType or
+			osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample or
+			osNetpoll or
+			osSocketOverlapped or
+			osSocketServe then return false
+	end 'k'
+end 'recordRunqTaintOfOp'
+
+function recordRunqOffsetConst(taint RunqRingTaint, resultId ValueId, value ParsedInt) returns bool
+	if not isRunqWordDisplacement(value) 'namesNoRingWord'
+		return false
+	end 'namesNoRingWord'
+
+	return noteTaintedValue(taint.runqOffsetConsts, valueId: resultId)
+end 'recordRunqOffsetConst'
+
+function walksProcessorArray(taint RunqRingTaint, valueId ValueId) returns bool
+	return taint.procsArrayBases.contains(valueId) or taint.procsSlotAddrs.contains(valueId)
+end 'walksProcessorArray'
+
+// A record channel is extended by a LOAD of a field a machine or a processor owns and never by arithmetic,
+// so `p + k * stride` is an address rather than a processor. The two address sets are what keeps that rule
+// from going blind: a ring word reached through its own computed address is refused through `runqWordAddrs`,
+// and a step of the walk over `__sched_procs` becomes a processor only where it is loaded.
+function recordComputedAddress(taint RunqRingTaint, resultId ValueId, walksTheArray bool, addressesARingWord bool) returns bool
+	var grew = false
+
+	if walksTheArray 'walksTheProcessorArray'
+		grew = noteTaintedValue(taint.procsSlotAddrs, valueId: resultId) or grew
+	end 'walksTheProcessorArray'
+
+	if addressesARingWord 'addressesARingWord'
+		grew = noteTaintedValue(taint.runqWordAddrs, valueId: resultId) or grew
+	end 'addressesARingWord'
+
+	return grew
+end 'recordComputedAddress'
+
+function recordAddressTaint(taint RunqRingTaint, resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode) returns bool
+	let displaces = opcode == StdBinOpcode.add and ((taint.processorChannel.values.contains(lhs) and taint.runqOffsetConsts.contains(rhs)) or (taint.processorChannel.values.contains(rhs) and taint.runqOffsetConsts.contains(lhs)))
+
+	return recordComputedAddress(taint, resultId: resultId, walksTheArray: walksProcessorArray(taint, valueId: lhs) or walksProcessorArray(taint, valueId: rhs), addressesARingWord: displaces)
+end 'recordAddressTaint'
+
+function recordImmediateAddressTaint(taint RunqRingTaint, resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode) returns bool
+	let displaces = opcode == StdBinOpcode.add and taint.processorChannel.values.contains(lhs) and isRunqWordDisplacement(imm as ParsedInt)
+
+	return recordComputedAddress(taint, resultId: resultId, walksTheArray: walksProcessorArray(taint, valueId: lhs), addressesARingWord: displaces)
+end 'recordImmediateAddressTaint'
+
+function recordSchedulerGlobalAddr(taint RunqRingTaint, resultId ValueId, label ByteArray) returns bool
+	if label == SchedProcsLabel 'theProcessorArray'
+		return noteTaintedValue(taint.procsGlobalAddrs, valueId: resultId)
+	end 'theProcessorArray'
+
+	if isMachineListLabel(label) 'aMachineList'
+		return noteTaintedValue(taint.machineListGlobalAddrs, valueId: resultId)
+	end 'aMachineList'
+
+	return false
+end 'recordSchedulerGlobalAddr'
+
+function recordLoadedRecord(taint RunqRingTaint, resultId ValueId, addrId ValueId, offset ByteOffset) returns bool
+	if taint.machineChannel.values.contains(addrId) 'readThroughAMachine'
+		if isProcessorFieldOfAMachine(offset) 'aProcessorOfIts'
+			return noteTaintedValue(taint.processorChannel.values, valueId: resultId)
+		end 'aProcessorOfIts'
+
+		if isMachineLinkOffset(offset) 'theNextMachineOnAList'
+			return noteTaintedValue(taint.machineChannel.values, valueId: resultId)
+		end 'theNextMachineOnAList'
+	end 'readThroughAMachine'
+
+	if taint.processorChannel.values.contains(addrId) and isMachineFieldOfAProcessor(offset) 'theProcessorsMachine'
+		return noteTaintedValue(taint.machineChannel.values, valueId: resultId)
+	end 'theProcessorsMachine'
+
+	if taint.machineListGlobalAddrs.contains(addrId) and offset == 0 'aMachineListHead'
+		return noteTaintedValue(taint.machineChannel.values, valueId: resultId)
+	end 'aMachineListHead'
+
+	if taint.procsGlobalAddrs.contains(addrId) and offset == 0 'theProcessorArray'
+		return noteTaintedValue(taint.procsArrayBases, valueId: resultId)
+	end 'theProcessorArray'
+
+	if taint.procsSlotAddrs.contains(addrId) and offset == 0 'anEntryOfIt'
+		return noteTaintedValue(taint.processorChannel.values, valueId: resultId)
+	end 'anEntryOfIt'
+
+	return false
+end 'recordLoadedRecord'
+
+function requireOrderedRingReadsIn(module StdModule, func IrFunction, taint RunqRingTaint, load StdLoadOperands, opIndices OpIndexArray)
+	module.collectLiveOpIndices(func, into: opIndices)
+
+	for opIdx in opIndices 'eachOp'
+		classifyLoadOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: RunQueueCheckName), load: load)
+
+		if not load.isLoad() 'notAPlainLoad'
+			continue
+		end 'notAPlainLoad'
+
+		if taint.processorChannel.values.contains(load.addrId) and isRunqWordDisplacement(load.offset as ParsedInt) 'readsARingWordPlainly'
+			panic("assertRunQueueObservationIsOrdered: '{String.from(func.name)}' reads a processor's `{runqWordNameOf(load.offset)}` with a PLAIN load. That word is published by another OS thread's release — `emitRunqPublishTail`'s locked add, or a claim's compare-and-swap — and on a weakly-ordered ISA a plain load may answer the new counter while the ring slot it describes is still unwritten: a green thread run twice, not a crash. Read it through `emitLoadAcquireField`")
+		end 'readsARingWordPlainly'
+
+		if taint.runqWordAddrs.contains(load.addrId) and load.offset == 0 'readsARingWordThroughItsAddress'
+			panic("assertRunQueueObservationIsOrdered: '{String.from(func.name)}' reads a processor's run-queue word through its own address with a PLAIN load, which is the same unordered observation as reading it by field offset. Read it through `emitLoadAcquireField`")
+		end 'readsARingWordThroughItsAddress'
+	end 'eachOp'
+end 'requireOrderedRingReadsIn'
 
 // ==========================================================================
 // `__sched_find_runnable`
@@ -4073,7 +4643,7 @@ function buildSchedFindRunnable(module StdModule)
 	// global queue has already been consulted on the arm that led here.
 	let streak = emitLoadField(module, block: localPop, record: p, offset: POffRunnextStreak, ids: ids)
 	let streakSpent = emitCmp(module, block: localPop, a: streak, b: emitConst(module, block: localPop, value: RunnextStreakLimit, ids: ids), pred: StdCmpPred.ge, ids: ids)
-	let ringWaiting = emitCmp(module, block: localPop, a: emitLoadField(module, block: localPop, record: p, offset: POffRunqTail, ids: ids), b: emitLoadField(module, block: localPop, record: p, offset: POffRunqHead, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let ringWaiting = emitCmp(module, block: localPop, a: emitLoadAcquireField(module, block: localPop, record: p, offset: POffRunqTail, ids: ids), b: emitLoadAcquireField(module, block: localPop, record: p, offset: POffRunqHead, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	let globalWaiting = emitSchedGlobalQueueIs(module, block: localPop, pred: StdCmpPred.ne, ids: ids)
 
 	// Every operand is a `cmp` result, so each is 0 or 1 and the bitwise operators are the logical ones.
@@ -4132,7 +4702,7 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(batchCapMax, op: StdOp.branch(batchSized.id))
 	batchCapMax.branchEdges.push(BranchEdge.create(batchSized.id, argIds: argsOf(cappedQuota)))
 
-	let batchBase = emitLoadField(module, block: batchSized, record: p, offset: POffRunqTail, ids: ids)
+	let batchBase = emitLoadAcquireField(module, block: batchSized, record: p, offset: POffRunqTail, ids: ids)
 	let batchFirst = ids.mint()
 	module.appendOp(batchSized, op: StdOp.call(batchFirst, callee: GtDequeueName, args: ValueIdArray.create()))
 

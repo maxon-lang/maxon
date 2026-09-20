@@ -1,0 +1,20 @@
+type Ping
+	var hits as Integer
+
+	static function create() returns Self
+		return Self{hits: 0}
+	end 'create'
+
+	export function hit() returns Integer
+		self.hits = self.hits + 1
+		return self.hits
+	end 'hit'
+end 'Ping'
+
+function main() returns ExitCode
+	let service = spawn Ping.create()
+	let seen = try await service.hit() otherwise panic("the one message this frame sends to a service it owns cannot fail")
+	print("hits={seen}")
+	return 0 as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)

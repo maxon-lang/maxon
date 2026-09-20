@@ -2346,6 +2346,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	installMailboxRuntime(module)
 
 	assertCompletedPublicationIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
+	assertRunQueueObservationIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
 end 'installGtRuntime'
 
 // ⚠ **THE RUN-QUEUE LOCK IS UNCONDITIONAL**: every green-thread program has a second cross-thread mutator (a
@@ -4300,6 +4301,8 @@ function emitGtLoadPublishedStatus(module StdModule, block IrBlock, gt ValueId, 
 	return emitLoadAcquireField(module, block: block, record: gt, offset: GtOffStatus, ids: ids)
 end 'emitGtLoadPublishedStatus'
 
+let CompletedPublicationCheckName = "assertCompletedPublicationIsOrdered"
+
 // ⭐⭐⭐ **THE CHECK — because "publish `completed` with a release" must not be a CONVENTION FOUR CALL SITES
 // ARE TRUSTED TO HONOUR.** That is this project's signature failure written at the scheduler's most
 // dangerous word — a fact stated in a comment, honoured at three sites and checked at none.
@@ -4346,7 +4349,7 @@ function assertOneFuncPublishesInOrder(module StdModule, func IrFunction)
 	var plainStatusLoads = ValueIdArray.create()
 
 	for opIdx in opIndices 'collect'
-		collectCompletedWordDefs(publicationOpAt(module, opIdx: opIdx), completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+		collectCompletedWordDefs(liveRuntimeOpAt(module, opIdx: opIdx, reader: CompletedPublicationCheckName), completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
 	end 'collect'
 
 	// Nothing in this function names the constant, so neither pairing can exist in it — every `__gt_subp_`
@@ -4356,15 +4359,16 @@ function assertOneFuncPublishesInOrder(module StdModule, func IrFunction)
 	end 'namesNoCompletedWord'
 
 	for opIdx in opIndices 'check'
-		requireOrderedCompletedAccess(publicationOpAt(module, opIdx: opIdx), func: func, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+		requireOrderedCompletedAccess(liveRuntimeOpAt(module, opIdx: opIdx, reader: CompletedPublicationCheckName), func: func, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
 	end 'check'
 end 'assertOneFuncPublishesInOrder'
 
-// The op at an index `liveOpIndices` just handed out — so an out-of-range answer is a broken module rather
-// than a bad argument, and both walks above say so once instead of twice.
-function publicationOpAt(module StdModule, opIdx OpIndex) returns StdOp
-	return try module.ops.get(opIdx) otherwise panic("assertCompletedPublicationIsOrdered: opIdx {opIdx} from `liveOpIndices` is not in module.ops")
-end 'publicationOpAt'
+// The op at an index the live-op walk just handed out — so an out-of-range answer is a broken module rather
+// than a bad argument, and every walk over an installed runtime says so once instead of each spelling it.
+// `reader` names the checker, because the panic sends a reader to the walk that tripped it.
+export function liveRuntimeOpAt(module StdModule, opIdx OpIndex, reader String) returns StdOp
+	return try module.ops.get(opIdx) otherwise panic("{reader}: opIdx {opIdx} from the live-op walk is not in module.ops")
+end 'liveRuntimeOpAt'
 
 // Pass one: the two id sets. Exhaustive over `StdOp` with no bare `default`, so an op appended to the union
 // has to be classified here rather than silently escaping the check.

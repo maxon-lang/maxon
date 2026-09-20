@@ -1161,7 +1161,7 @@ Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 | Option | Description |
 |--------|-------------|
 | `--filter=PATTERN` | Run the cases whose `<spec>/<test>` label contains PATTERN — ONE case-SENSITIVE substring, never a list |
-| `--update-required` | Regenerate the committed RequiredIR blocks. Pair it with `--filter`; unfiltered it rewrites the whole suite |
+| `--update-required` | Rewrite the committed IR goldens. Pair it with `--filter`; unfiltered it rewrites the whole suite |
 | `--workers=N` | Set the number of parallel test workers |
 | `--target=ARCH-OS` | Compile the cases for another target |
 | `--network` | Also run the cases marked `<!-- network: live -->` |
