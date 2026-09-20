@@ -140,14 +140,26 @@ end 'main'
 finished and returns its index. It consumes nothing: every promise, the winner included, is still awaited
 (or dropped) afterwards. An already-finished promise is returned without parking.
 
-**Reading a promise out of an array.** A promise has one owner, so reading one out of the array that holds it
-borrows the array's slot: awaiting or cancelling the read empties that slot, and a read never consumed stays the
-array's and is dropped with it. `get(i)`, `first()`, `for p in array`, an array iterator's `current()` and
-`peek(n)`, and a destructured `for (iter, p) in array.withIterator()` all name their slot. A read that cannot
-name one is **E3141**: `last()`, a list's elements, a `Map`'s values, and a `withIterator()` pair bound whole.
-`pop` and `remove` move the promise out, and the caller owns it outright. Two reads of one slot hold one
-promise, so only one of them may be consumed; consuming the second is **E3141** where the compiler can see both
-name the slot, and otherwise aborts the program with exit code **118**.
+**Reading a promise out of storage.** A promise has one owner, so reading one out of the array or the struct
+field that holds it starts a MOVE out of that slot: consuming the read empties the slot, and a read never
+consumed stays the container's and is dropped with it. `get(i)`, `first()`, `for p in array`, an array
+iterator's `current()` and `peek(n)`, a destructured `for (iter, p) in array.withIterator()`, and a read of a
+promise-typed field all name their slot. A read that cannot name one is **E3141**: `last()`, a list's elements,
+a `Map`'s values, and a `withIterator()` pair bound whole. `pop` and `remove` move the promise out, and the
+caller owns it outright. Reading a promise out of a temporary — `try make().get(0)` — keeps that temporary
+alive to the end of the enclosing scope, so the promise outlives the expression it came from.
+
+**Consuming a promise.** `await`, `.cancel()`, a `push` or `set` into another container, a store into a field
+or a union case, and passing it to a call by value all consume it: each empties the slot the promise was read
+out of, and hands the thread either back to the runtime or to its new owner. A store into a promise field also
+releases the thread that field was holding, exactly once. Three refusals follow:
+
+- **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
+  hold one promise, so only one of them may be consumed; where the compiler cannot see that both name one slot,
+  the program aborts at run time with exit code **118** instead.
+- **E3102** — a promise already moved into storage is used again afterwards.
+- **E2015** — a promise read outside a loop is given away inside it, or inside a `while` condition. Read it
+  inside the loop instead.
 
 ## Cancellation and Dropped Promises
 

@@ -1,0 +1,34 @@
+// Test: async-promise-drop.error.a-slot-read-stored-in-one-arm-is-spent-past-the-join
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function pick() returns bool
+	return File.exists(FilePath from "definitely-not-here.txt")
+end 'pick'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	var c = IntPromiseArray.create()
+
+	if pick() 'x'
+		b.push(p)
+	end 'x'
+
+	c.push(p)
+
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:28:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment

@@ -1,23 +1,22 @@
-// Test: async-promise-drop.a-struct-field-drops-the-promise-it-holds
+// Test: promise-first-out-of-a-temporary-array
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
 
 function plain() returns Integer
-		_ = File.exists(FilePath from "noyield.txt")
-		return 7
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
 end 'plain'
 
-type Holder
-		public let p as IntPromise
-
-		static function of(p IntPromise) returns Holder
-				return Holder{p: p}
-		end 'of'
-end 'Holder'
+function make() returns IntPromiseArray
+	var s = IntPromiseArray.create()
+	s.push(async plain())
+	return s
+end 'make'
 
 function main() returns ExitCode
-		let h = Holder.of(async plain())
-		return (await h.p) as ExitCode
+	let p = try make().first() otherwise panic("has one")
+	return (await p) as ExitCode
 end 'main'
 ---
 ExitCode: 7
@@ -122,7 +121,7 @@ func @plain {
     x64.popReg rbp
     x64.ret
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at FilePath.maxon:34: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -139,47 +138,68 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegFunc rcx, [rip + plain]
-    x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_ready
+    x64.pushReg r13
+    x64.prologue 40
   __il_body:
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 0], rbx
-  __il_cont:
-    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, rbx
-    x64.callDirect __gt_promise_field_vacate
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_await
+    x64.leaRegFunc rdx, [rip + __gt_promise_drop]
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
-    x64.cmpRegImm32 rbx, 0
+    x64.leaRegFunc rcx, [rip + plain]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_ready
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+  __il_cont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_first
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __managed_vacate
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_await
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
+    x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Holder
-    x64.movRegReg r8, rbx
-    x64.epilogue 32
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at promise-first-out-of-a-temporary-array.test:18: has one\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_87]  ; "panic at async-promise-drop.a-struct-field-drops-the-promise-it-holds.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_88]  ; "panic at promise-first-out-of-a-temporary-array.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

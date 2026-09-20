@@ -291,7 +291,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | integer overflow | wraps around (two's complement), with no error |
 | an allocation never released | exit code **101** |
 | a green thread neither awaited nor dropped | exit code **75** |
-| a promise consumed through a second read of one array slot | exit code **118** |
+| a promise consumed through a second read of one container slot or struct field | exit code **118** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](/docs/cli/).

@@ -1109,6 +1109,21 @@ export let GtTryAwaitName = b"__gt_try_await"
 // `TargetPrinter.isRuntimeFunction` keeps it out of the goldens.
 export let GtPromiseDropName = b"__gt_promise_drop"
 
+// `__gt_promise_field_release(box, offset)` — drop whatever thread a promise FIELD still holds, before a
+// store puts another one there. The load is NULL-GUARDED because `__gt_promise_drop` is not: a field a
+// previous consume emptied holds 0, which is the re-armed case and must drop nothing.
+export let GtPromiseFieldReleaseName = b"__gt_promise_field_release"
+
+// `__gt_promise_field_vacate(box, offset, read)` — the struct-field twin of `__managed_vacate`, sharing its
+// occupant check (`ManagedMemoryRuntime.emitPromiseSlotVacateTail`) so a field consumed twice aborts exactly
+// as an array slot does.
+//
+// ⚠ **BOTH LIVE IN THIS FAMILY FOR THEIR PREFIX.** `__gt_` enrols them on `usesGt`, which every program
+// holding a promise already sets; under a `__managed_` name they would set `usesManagedMemory` and drag the
+// whole array runtime into a program whose only array-ness is one promise field (`__drop_type_param` is the
+// precedent).
+export let GtPromiseFieldVacateName = b"__gt_promise_field_vacate"
+
 // ⭐⭐ **THE THREE ENTRY POINTS OF THE TEARDOWN RENDEZVOUS — see `GtOffTeardown` for the protocol they
 // implement between them.**
 //
@@ -2287,6 +2302,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, asyncTrace: asyncTrace, tags: tags)
 	buildGtReplyWitness(module)
 	buildGtPromiseDrop(module)
+	buildGtPromiseFieldRelease(module)
+	buildGtPromiseFieldVacate(module)
 
 	// The three halves of the teardown rendezvous, beside the drop and the two awaits that step it.
 	// `__gt_reclaim` last, because it is what the other two call. See `GtOffTeardown` for the protocol.
@@ -3585,11 +3602,12 @@ export let PromiseSlotBytes = PointerFieldBytes
 // filled and the gap past the old length is always ZERO, so a zero inside `[0, length)` is a slot with no
 // promise in it.
 //
-// ⚠ **WHAT IT DOES NOT CHECK, AND CANNOT: A SLOT WHOSE PROMISE WAS ALREADY AWAITED.** `__gt_await` recycles
-// the GT struct and nothing writes the slot back, so the handle left behind is stale — the slot-level
-// linearity gap that makes `awaitAny` a function returning an index rather than a `select` statement consuming
-// a slot. A caller that selects repeatedly must overwrite a consumed slot, exactly as
-// `Testing/SpecWorkerPool.sendAndDrain` re-arms a drain with `set`.
+// ⚠ **IT CANNOT TELL A CONSUMED HANDLE FROM A LIVE ONE: `__gt_await` recycles the GT struct and writes
+// nothing back to the slot.** What keeps the scan honest is the consume at the READ door, which empties the
+// slot the promise was moved out of (`__managed_vacate`), leaving the zero this walk already skips. A handle
+// that reaches a slot by a road recording no such read stays visible here after it has been spent, which is
+// the slot-level linearity gap that makes `awaitAny` a function answering an INDEX rather than a `select`
+// statement consuming a slot.
 function buildGtAnyCompleted(module StdModule)
 	var func = IrFunction.createFromStd(GtAnyCompletedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -4653,6 +4671,52 @@ function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pr
 
 	panic("assertCompletedPublicationIsOrdered: '{String.from(func.name)}' tests a green thread's status word against `completed` after reading it with a PLAIN load. Without the acquire, `gt.result`/`gt.threw` may still be unwritten on this M when the flag reads as set. Read it through `emitGtLoadPublishedStatus`, which is the acquire load")
 end 'requireOrderedObservation'
+
+function buildGtPromiseFieldRelease(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseFieldReleaseName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var dropIt = module.addBlock(func, label: b"dropheld", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 2)
+	let box = 0 as ValueId
+	let offset = 1 as ValueId
+
+	let slot = emitBin(module, block: entry, a: box, b: offset, opcode: StdBinOpcode.add, ids: ids)
+	let held = emitLoadField(module, block: entry, record: slot, offset: 0 as ByteOffset, ids: ids)
+	let empty = emitConst(module, block: entry, value: 0, ids: ids)
+	let holdsAThread = emitCmp(module, block: entry, a: held, b: empty, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(holdsAThread, thenBlockId: dropIt.id, elseBlockId: done.id))
+
+	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: GtPromiseDropName, args: argsOf(held)))
+	module.setTerminator(dropIt, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtPromiseFieldRelease'
+
+// See `GtPromiseFieldVacateName` for the contract, and `emitPromiseSlotVacateTail` for the check it shares
+// with `__managed_vacate`.
+function buildGtPromiseFieldVacate(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseFieldVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var consumedTwice = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
+	var empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 3)
+	let box = 0 as ValueId
+	let offset = 1 as ValueId
+	let read = 2 as ValueId
+
+	let slot = emitBin(module, block: entry, a: box, b: offset, opcode: StdBinOpcode.add, ids: ids)
+
+	emitPromiseSlotVacateTail(module, func: func, entry: entry, consumedTwice: consumedTwice, empty: empty, slot: slot, read: read, ids: ids)
+
+	module.functions.push(func)
+end 'buildGtPromiseFieldVacate'
 
 // ⭐⭐ **`__gt_is_complete(gt) -> 1 when that green thread has reached `completed`, 0 otherwise** — the
 // floor of `__Builtins.gtIsComplete(promise.inner)`. See `GtIsCompleteName` for what it is for, why it must

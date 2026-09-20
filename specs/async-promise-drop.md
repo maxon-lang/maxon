@@ -1365,3 +1365,427 @@ end 'main'
 ```exitcode
 118
 ```
+
+<!-- test: async-promise-drop.a-field-awaited-twice-aborts -->
+The first await empties the field, so the second `h.p` is a fresh read of a slot that is already zero: it
+names no thread, and its vacate aborts with **118** (`RuntimeAbort.promiseSlotConsumedTwice`) rather than
+touching a null handle.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.of(async plain(7))
+	let a = await h.p
+	let b = await h.p
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+
+<!-- test: async-promise-drop.a-field-cancelled-then-awaited-aborts -->
+`cancel` is the other consume door, and it empties the field the same way — so the await behind it finds
+an empty slot and aborts with **118**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.of(async plain(7))
+	h.p.cancel()
+	return (await h.p) as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+
+<!-- test: async-promise-drop.a-field-rearmed-between-awaits-answers-both -->
+**CONTROL.** A field written again between two consumes holds a NEW thread, and the occupant check accepts
+what it finds rather than refusing the second await on the strength of the first. The field is `var` here
+because that is what a rearm needs; the two cases above keep `let`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+type Holder
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.of(async plain(4))
+	let a = await h.p
+	h.p = async plain(7)
+	let b = await h.p
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: async-promise-drop.a-promise-read-out-of-one-container-and-stored-into-another-moves -->
+Reading a promise out of one container and storing it into another is a MOVE between two slots: the store
+empties the source slot, so exactly one container owns the thread and exactly one holder may reclaim it.
+The await through the destination answers, and the source's element walk finds an empty slot.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	var b = IntPromiseArray.create()
+	b.push(try a.get(0) otherwise panic("has one"))
+
+	let p = try b.get(0) otherwise panic("has one")
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.a-slot-read-stored-twice -->
+The store above emptied `a`'s slot and handed the thread to `b`, so the name that read it out has stopped
+denoting a thread this frame can give away a second time. The refusal is the ordinary use-after-move, at the
+second store and naming the binding — the same sentence the spawn spelling of this mistake already earns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	b.push(p)
+
+	var c = IntPromiseArray.create()
+	c.push(p)
+
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-promise-drop.error.a-retired-slot-read-stored -->
+Two reads of one slot hold one thread, and the first store empties the slot both of them name — so `q` names
+a thread no frame owns any longer. Nothing moved `q` itself, which is why the refusal names the door it was
+carried through rather than a move: the sentence an author needs here is that the slot was already consumed
+by another read of it. Without the retire's half of the rule this program would compile and leave `b` and `c`
+naming one green thread.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+	let q = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	b.push(p)
+
+	var c = IntPromiseArray.create()
+	c.push(q)
+
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:22:4: a promise cannot be borrowed through 'push': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-promise-drop.a-slot-read-stored-in-exclusive-arms-is-owned-once -->
+**CONTROL.** Two stores of one slot read in MUTUALLY EXCLUSIVE arms are each the only store on their own
+path, so exactly one container ends up owning the thread and `a`'s slot is vacated whichever way the branch
+goes. The move state must therefore be rewound at the arm boundary rather than carried into the sibling
+path: a poison that outlives its own edge refuses this program.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function pick() returns bool
+	return File.exists(FilePath from "definitely-not-here.txt")
+end 'pick'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	var c = IntPromiseArray.create()
+
+	if pick() 'x'
+		b.push(p)
+	end 'x' else 'y'
+		c.push(p)
+	end 'y'
+
+	if b.count() == 1 'heldByB'
+		let q = try b.get(0) otherwise panic("holds it")
+		return (await q) as ExitCode
+	end 'heldByB'
+
+	let r = try c.get(0) otherwise panic("holds it")
+	return (await r) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.a-slot-read-stored-in-one-arm-is-spent-past-the-join -->
+The other side of the control above: a thread given away on ONE reaching edge is spent past the join, so the
+store after the `if` is a use of a name that no longer denotes a thread on every path. That is
+`reconcileMovesAtMerge`'s own rule, and the refusal is the ordinary use-after-move.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function pick() returns bool
+	return File.exists(FilePath from "definitely-not-here.txt")
+end 'pick'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	var c = IntPromiseArray.create()
+
+	if pick() 'x'
+		b.push(p)
+	end 'x'
+
+	c.push(p)
+
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:28:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: async-promise-drop.error.a-slot-read-stored-inside-a-loop-it-was-read-outside -->
+A store inside a loop is parsed ONCE and runs on every trip, so a slot read taken OUTSIDE the loop would
+empty `a`'s slot on the first trip and meet an already-empty one on the second, while `b` collected two
+entries naming one thread. That is the loop-escaping move an owned binding is already refused for, on the
+road that enrols no owned binding — so it earns the same refusal, and the cure is the same: read the
+element inside the loop body.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	var i = 0
+
+	while i < 2 'loop'
+		b.push(p)
+		i = i + 1
+	end 'loop'
+
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:5: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+```
+
+<!-- test: async-promise-drop.error.a-slot-read-awaited-inside-a-loop-it-was-read-outside -->
+<!-- unsupported-targets: wasm32-wasi -->
+**CONTROL for the refusal above.** The await twin of the same mistake is caught by a DIFFERENT road and must
+go on being caught by it: linearity is decided on the IR, where the await is reachable from itself across the
+back edge without re-passing an `async` that would re-arm the thread. Its sentence names the rule the author
+broke, so the store door's loop check must not reach this program and displace it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var acc = 0
+	var i = 0
+
+	while i < 2 'loop'
+		let s = await p
+		acc = acc + s
+		i = i + 1
+	end 'loop'
+
+	return acc as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3100: <fragment>:21:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-promise-drop.error.a-retired-slot-read-awaited -->
+The await spelling of the case above, and the one that fixes its sentence: the first await empties the slot
+both reads name, so the second names a thread no frame owns. It is not a move — nothing moved `q` — and the
+refusal must say what actually happened, which is that the slot was consumed by another read of it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+	let q = try a.get(0) otherwise panic("has one")
+
+	let first = await p
+	let second = await q
+
+	return (first + second) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:19:15: a promise cannot be borrowed through 'await': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-promise-drop.error.a-slot-read-given-away-in-a-while-condition -->
+A `while` CONDITION runs on every trip exactly as its body does, so giving a slot read away inside one
+escapes the loop the same way — passing a promise to a callee that awaits it is a move, and the second trip
+would hand over a thread the first already gave up. The loop's own context is not pushed until the condition
+has parsed, so the depth the body is measured against cannot see this; the refusal is the one an owned
+binding in this position already earns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function takes(p IntPromise) returns bool
+	let v = await p
+	return v > 0
+end 'takes'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	while takes(p) 'loop'
+		_ = File.exists(FilePath from "noyield.txt")
+	end 'loop'
+
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:22:2: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
+```

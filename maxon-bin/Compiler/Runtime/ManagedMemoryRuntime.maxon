@@ -3845,6 +3845,17 @@ function buildManagedVacate(module StdModule)
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let elementSize = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: index, elementSize: elementSize, ids: ids)
+
+	emitPromiseSlotVacateTail(module, func: func, entry: entry, consumedTwice: consumedTwice, empty: empty, slot: slot, read: read, ids: ids)
+
+	module.functions.push(func)
+end 'buildManagedVacate'
+
+// ⭐ **THE OCCUPANT CHECK AND THE ZERO STORE, SHARED BY THE TWO ENTRY POINTS THAT EMPTY A PROMISE SLOT** —
+// `__managed_vacate` and `GtRuntime`'s `__gt_promise_field_vacate`. They differ only in how the slot ADDRESS
+// is formed (a strided element, a field offset); the check that refuses a second consume is one body, so an
+// array slot and a struct field cannot come apart on it. `ManagedVacateName` carries the contract.
+module function emitPromiseSlotVacateTail(module StdModule, func IrFunction, entry IrBlock, consumedTwice IrBlock, empty IrBlock, slot ValueId, read ValueId, ids ValueMinter)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let occupant = emitLoadField(module, block: entry, record: slot, offset: 0 as ByteOffset, ids: ids)
 	let occupantMoved = emitCmp(module, block: entry, a: occupant, b: read, pred: StdCmpPred.ne, ids: ids)
@@ -3856,9 +3867,7 @@ function buildManagedVacate(module StdModule)
 
 	module.appendOp(empty, op: StdOp.storeIndirect(slot, offset: 0, valueId: zero, valueType: StdType.i64))
 	module.setTerminator(empty, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildManagedVacate'
+end 'emitPromiseSlotVacateTail'
 
 // `__managed_set(arr, index, value) -> (_, flag)` — LENGTH-bounded element write (throws indexOutOfBounds).
 //

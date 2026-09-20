@@ -1,0 +1,29 @@
+// Test: async-promise-drop.error.a-slot-read-stored-inside-a-loop-it-was-read-outside
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async plain(7))
+
+	let p = try a.get(0) otherwise panic("has one")
+
+	var b = IntPromiseArray.create()
+	var i = 0
+
+	while i < 2 'loop'
+		b.push(p)
+		i = i + 1
+	end 'loop'
+
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:5: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary

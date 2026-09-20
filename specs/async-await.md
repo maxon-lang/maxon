@@ -65,13 +65,17 @@ names, and awaiting through both is the same double free — E3100 catches it. C
 a promise binding RE-ARMS it: it names a new thread, so awaiting it again is legal, which is
 exactly what makes `for p in promises 'each' … await p … end` one await per promise.
 
-**Known boundary.** The check sees awaits of BINDINGS within one function's control flow. A promise
-that ESCAPES that is not tracked, and awaiting it twice still double-frees at runtime: the same
-container slot (`await arr[0]` twice) or a struct field (`await h.pr`), whose box holds a runtime
-handle naming no statically-known thread; and a promise passed as a call ARGUMENT to a callee that
-awaits it, whose second await lives in another frame. These need ownership tracked through storage
-and across frames — the compiler's ownership milestone. They are missed, never mis-reported: a promise out
-of storage is never spuriously equal to another, so the check stays silent rather than guessing.
+**Known boundary.** This check sees awaits of BINDINGS within one function's control flow. A promise
+that escapes that is tracked by a different mechanism — the SLOT it was read out of. Reading one out
+of a container element or a struct field starts a move, consuming the read empties that slot, and
+handing a promise to a callee that consumes it moves it there, so a second consume is refused at
+compile time: **E3141** for a read whose slot another read already spent, **E3102** for a name whose
+promise was moved into storage or into a callee.
+
+What no compile-time rule reaches is two reads the compiler cannot PROVE name one slot — a run-time
+index, two cursors over one array, a field read twice inline. There the second consume finds the slot
+already empty and aborts with exit code **118** (`async-promise-drop.a-field-awaited-twice-aborts`), so
+the double free is reported rather than performed.
 
 **Typed promises:**
 A promise is typed by BOTH what its thunk returns and what its thunk throws, because both come

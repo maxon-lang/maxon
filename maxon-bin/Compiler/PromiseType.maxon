@@ -54,12 +54,12 @@
 // (`promiseOptionalTrailingTypeParams`) rather than defaulted to something. It cannot be read off the
 // declaration, because the language has no syntax for an optional type parameter.
 //
-// ⭐ **THE THIRD FACT: A STORED PROMISE IS UNOWNED BY THE FRAME THAT READS IT.** `specs/async-await.md`'s
-// *"Known boundary"* paragraph states it: a promise that escapes into storage is not tracked, and awaiting
-// it twice still double-frees at run time. So a value read back out of a container is a promise for the
-// purposes of `await` (it answers `Parser.valueIsPromise`) and is NOT one for the purposes of ownership
-// (it never answers `Parser.valueOwnsGreenThread`). The two questions are separate doors in the parser for
-// exactly this reason.
+// ⭐ **THE THIRD FACT: A PROMISE READ OUT OF STORAGE IS ACCOUNTED FOR BY ITS SLOT, NEVER BY AN OWNERSHIP
+// MARK.** A value read back out of a container slot or a struct field is a promise for the purposes of
+// `await` (it answers `Parser.valueIsPromise`) and is not one for the purposes of ownership (only a spawn
+// sets `Parser.valueOwnsGreenThread`). What accounts for it is the pending move the read records
+// (`Parser.promiseSlotContainer`), which a consume finishes by emptying that slot. The two questions are
+// separate doors in the parser for exactly this reason.
 
 // The declared base name. The ONE spelling of it — every predicate below and
 // `ProgramSignatures.instanceIsPromiseHandle` compare against this rather than against their own literal.
@@ -94,24 +94,16 @@ export let PromiseCancelMethodName = b"cancel"
 // two doors a consume can come by are one list rather than two literals in two files.
 let PromiseAwaitDoorName = b"await"
 
-// ⭐⭐ **THE TWO WAYS A FRAME HANDS A GREEN THREAD BACK TO THE RUNTIME, AND THE THIRD STATE THAT IS NEITHER
-// (P1.5-B2c, widened at W232).** `await p` takes the thread's result and `__gt_await` reclaims its struct;
-// `p.cancel()` takes nothing and `__gt_promise_drop` reclaims its struct — so the two differ in what they
-// yield and agree exactly where it matters, which is that the GT is on the scheduler's free list afterwards.
-// ⚠ **THE RUNTIME NUMBERS BELOW ARE HISTORY, AND THE COMMENT MUST SAY SO — THEY ARE NOT REPRODUCIBLE ON
-// THIS COMPILER.** MEASURED at **P1.5-B2c**, on a tree where `cancel` had only just become able to compile
-// at all and where neither the move poison nor E3142 existed to refuse these programs: all three orderings
-// RAN, and `cancel` then `await` **SEGFAULTED (139)** while `cancel` twice and `await` then `cancel` both
-// **exited 75** with a corrupted scheduler. Every one of the three is now a COMPILE ERROR — E3102 once a
-// promise became move-only, E3142 since W232 — so re-running them today measures the refusal and not the
-// corruption. That is the point of the refusal; the numbers are kept as the evidence that bought it, dated,
-// rather than as a claim about what this binary does.
+// ⭐⭐ **WHAT HAS ALREADY BECOME OF A GREEN THREAD (P1.5-B2c, widened at W232).** Two arms are RECLAIMS:
+// `await p` takes the thread's result and `__gt_await` reclaims its struct, `p.cancel()` takes nothing and
+// `__gt_promise_drop` reclaims its struct — they differ in what they yield and agree exactly where it
+// matters, which is that the GT is on the scheduler's free list afterwards. `movedIntoStorage` is neither
+// reclaim: the thread runs on and another OWNER holds it. `siblingReadConsumedTheSlot` says nothing happened
+// to THIS read at all — another read of the slot it came out of took the thread first.
 //
-// ⭐ **`notConsumed` IS A REAL ARM AND NOT A NULL.** Two doors ask "what, if anything, has already taken this
-// thread?" — the parser's use guard (`Parser.requireBindingLive`) and the argument move, which hands the thread
-// to ANOTHER OWNER rather than to the runtime and so leaves nothing spent. Both need a word for "nothing did",
-// and giving them one is what makes every `match` on this enum exhaustive at the compiler's expense rather
-// than at a reader's.
+// ⭐ **`notConsumed` IS A REAL ARM AND NOT A NULL.** Every reader asks "what, if anything, has already taken
+// this thread?", and a word for "nothing did" is what makes each `match` on this enum exhaustive at the
+// compiler's expense rather than at a reader's.
 //
 // ⚠ It lives HERE and not beside either of its readers because it is read by BOTH the parser (which refuses a
 // use, E3142) and `SemanticCheck` (which words E3100 off the FIRST consume). Declared in one of them, the
@@ -120,15 +112,45 @@ export enum PromiseConsume
 	notConsumed
 	awaited
 	cancelled
+	movedIntoStorage
+	siblingReadConsumedTheSlot
 end 'PromiseConsume'
 
-// ⭐ **HOW THE SOURCE SPELLS THE DOOR A CONSUME CAME BY** — the word every diagnostic about a spent promise
-// quotes, derived from the consume rather than passed beside it so the sentence and the fact cannot disagree.
+// ⚠ **`siblingReadConsumedTheSlot` IS FALSE IN BOTH CLASSIFIERS, AND THAT IS THE POINT.**
+// `Parser.requireUnmovedAtUse` routes a door kind to E3142 and a moved kind to E3102, and lets this one fall
+// THROUGH so the consuming door refuses it instead — `requireConsumedPromiseIsOwned`, whose sentence names
+// the slot another read already took. Answering true in either classifier replaces that with a message about
+// a thread this read never consumed.
+export function promiseConsumeNamesADoor(kind PromiseConsume) returns bool
+	return match kind 'door'
+		notConsumed gives false
+		awaited gives true
+		cancelled gives true
+		movedIntoStorage gives false
+		siblingReadConsumedTheSlot gives false
+	end 'door'
+end 'promiseConsumeNamesADoor'
+
+export function promiseConsumeMovedItToAnotherOwner(kind PromiseConsume) returns bool
+	return match kind 'owner'
+		notConsumed gives false
+		awaited gives false
+		cancelled gives false
+		movedIntoStorage gives true
+		siblingReadConsumedTheSlot gives false
+	end 'owner'
+end 'promiseConsumeMovedItToAnotherOwner'
+
+// ⭐ **HOW THE SOURCE SPELLS A RECLAIMING DOOR** — the word E3142 quotes, derived from the consume rather
+// than passed beside it so the sentence and the fact cannot disagree. Only a reclaiming kind has such a word:
+// a door that GIVES the thread away is named by the author's own token, which the parser passes as text.
 export function promiseConsumeDoorName(kind PromiseConsume) returns ByteArray
 	match kind 'door'
 		notConsumed then panic("promiseConsumeDoorName: asked for the door of a promise nothing has consumed — every caller asks only after finding a recorded consume")
 		awaited then return PromiseAwaitDoorName
 		cancelled then return PromiseCancelMethodName
+		movedIntoStorage then panic("promiseConsumeDoorName: a promise moved into a container's slot reached no reclaiming door — its later use is the ordinary use-after-move, refused above this sentence")
+		siblingReadConsumedTheSlot then panic("promiseConsumeDoorName: this read passed through no door at all — another read of its slot consumed the thread, and the door the AUTHOR wrote names itself at `requireConsumedPromiseIsOwned`")
 	end 'door'
 end 'promiseConsumeDoorName'
 

@@ -933,6 +933,10 @@ export enum ErrorCode
 	// the source is left moved-from. A later read of the source is refused -- it would read a value another
 	// binding now owns and will drop, and dropping it twice is a double-free. A WRITE to a moved-from `var` is
 	// legal (it revives the binding).
+	// A PROMISE moves the same way and is refused here too: storing one into a container slot, a struct field
+	// or a union case, or passing it to a call by value, gives its green thread to that new owner, and a
+	// later use of the name it was stored from would name a thread this frame no longer holds. Awaiting or
+	// cancelling a promise is not a move but a consume, and is E3142.
 	useAfterMove = "E3102"
 
 	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
@@ -1670,6 +1674,10 @@ export enum ErrorCode
 	// record its source cannot be finished: a list's `value()` or its iterator's `current()`, `last()`, a
 	// library member handing back a pair that carries a promise the container still holds, and a consume
 	// of a promise no frame owns (read twice from one slot, or merged from two branches).
+	// A struct FIELD is a slot on the same terms as a container element, and every door that spends a
+	// promise asks this -- `await`, `.cancel()`, a store into a container, a store into a field or a union
+	// case, and a by-value argument -- so a read whose slot another read already consumed is refused
+	// wherever it is carried, naming the word the source wrote for that door.
 	// An array cursor's `current()`/`peek(n)` and a `for (it, p) in a.withIterator()` destructure are NOT
 	// refused: each names the array slot its cursor stands on at the read, so an `await` empties that slot.
 	// The cure is a read that names its slot -- `get(i)`, `first()`, `for ... in`, or an array cursor -- or a

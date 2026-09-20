@@ -10388,6 +10388,19 @@ end 'PromiseConsumeRecord'
 
 typealias PromiseConsumeRecordArray = Array with PromiseConsumeRecord
 
+typealias LoopNesting = int(0 to u64.max)
+
+type PromiseSlotRead
+	export let value as ValueId
+	export let loopNesting as LoopNesting
+
+	export static function create(value ValueId, loopNesting LoopNesting) returns PromiseSlotRead
+		return Self{value: value, loopNesting: loopNesting}
+	end 'create'
+end 'PromiseSlotRead'
+
+typealias PromiseSlotReadArray = Array with PromiseSlotRead
+
 // ⭐⭐ **ONE ENUM-ACCESSOR READ, the fact E3097 is decided from.** Keyed on the accessor result's own
 // `ValueId` and never on a NAME — that value IS the read's identity, and a `let o = c.ordinal` binds it
 // verbatim, so one record answers for the read and for every name of it at once. `PromiseConsumeRecord`
@@ -14380,15 +14393,19 @@ export type Parser
 	// ⭐⭐ **WHICH CONTAINER SLOT A PROMISE VALUE WAS READ OUT OF — the two columns that make a container
 	// read a PENDING MOVE rather than a copy** (`W217`). A promise has exactly one owner; reading one out of
 	// `arr.get(i)` does not make a second, it starts a move whose store has not been emitted yet. These
-	// record where to finish it: when the value is CONSUMED (awaited, cancelled), `vacateConsumedPromiseSlot`
-	// zeroes that slot so the container's element walk skips it.
+	// record where to finish it: whichever door consumes the value — an await, a cancel, or a store that
+	// gives it to another owner — `vacateConsumedPromiseSlot` zeroes that slot first, so the container's
+	// element walk skips it.
 	//
-	// ⛔ **WITHOUT THEM THE DROP STAMP IS A DOUBLE RECLAIM, AND THAT IS MEASURED, NOT FEARED.** With
-	// `element_destroy@40` stamped and no vacate, ELEVEN committed cases went to exit 75 at once —
-	// `promise-array`, `managed-args-many`, both `storage.*` cases, both `branch-store-*` cases,
-	// `timer-growth.beyond-seed-capacity` and the rest: the await reclaimed the thread and the array's walk
-	// reclaimed it again, driving `__gt_live_count` NEGATIVE (the gate is `!= 0`, so an over-release reports
-	// the same 75 a leak does). The stamp and the vacate are one change and must not be landed apart.
+	// ⛔ **WITHOUT THEM THE ELEMENT DESTRUCTOR IS A DOUBLE RECLAIM.** With `element_destroy@40` stamped and
+	// no vacate, the consume reclaims the thread and the container's walk reclaims it again, driving
+	// `__gt_live_count` NEGATIVE — and because the gate is `!= 0`, an over-release reports the same exit 75 a
+	// leak does. The stamp and the vacate are one mechanism and must not be separated.
+	//
+	// ⛔ **A READ'S ENTRY IS A STATIC RECORD AND IS NEVER CLEARED.** What retires a read is the consume
+	// recorded against its value, which `promiseValueCarriesAContainerSlot` asks about first. That record
+	// rides `MoveMark` and so is rewound at a branch join and unioned across one; clearing a column instead
+	// cannot be rewound, and a slot read given away on ONE arm of an `if` then reads as unread past the join.
 	//
 	// ⚠ **NOT-SET IS THE VALUE'S OWN ID**, `nodeHandleMintedFrom`'s convention one column up: a value can
 	// never be its own container, so the sentinel needs no reserved id and no parallel bool.
@@ -14401,6 +14418,17 @@ export type Parser
 	// they answer — "which slot does this pending move come out of" — is one question; only the store differs.
 	// For a field, `promiseSlotIndex` holds a minted literal of the field OFFSET.
 	var promiseSlotIsAField as BoolArray
+
+	// ⭐ **THE SPARSE INDEX OF THE COLUMNS ABOVE: exactly the values that recorded a slot, in read order.**
+	// `recordConsumablePromiseSlot` is the sole writer of all four, so an entry exists for every value whose
+	// columns are set. Retiring the siblings of a consumed slot walks this instead of the dense per-value
+	// column, which is asked once per consume and would otherwise be quadratic in a body's SSA values.
+	//
+	// ⛔ **NOTHING IS EVER REMOVED FROM IT.** An entry carries the read's loop nesting, which the vacate
+	// still needs after the read has been retired, and a compaction keyed on a path-sensitive fact could not
+	// be rewound at a join. Recreated — never cleared in place — at each per-body reset, because a closure
+	// body saves and restores the enclosing body's array.
+	var promiseSlotCarriers as PromiseSlotReadArray
 
 	// ⭐⭐ **WHICH VALUES WEAR A RANGED ALIAS NOTHING PROVED THEY SATISFY (G14)** — the column that stops a
 	// DECLARED type being read as a statement about a value's RANGE. Same lockstep as `valuePromiseMarks`:
@@ -15865,6 +15893,7 @@ export type Parser
 			promiseSlotContainer: ValueIdArray.create(),
 			promiseSlotIndex: ValueIdArray.create(),
 			promiseSlotIsAField: BoolArray.create(),
+			promiseSlotCarriers: PromiseSlotReadArray.create(),
 			aliasUnprovenMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
@@ -29164,6 +29193,7 @@ export type Parser
 		self.promiseSlotContainer = ValueIdArray.create()
 		self.promiseSlotIndex = ValueIdArray.create()
 		self.promiseSlotIsAField = BoolArray.create()
+		self.promiseSlotCarriers = PromiseSlotReadArray.create()
 		self.aliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -30825,6 +30855,7 @@ export type Parser
 		self.promiseSlotContainer = ValueIdArray.create()
 		self.promiseSlotIndex = ValueIdArray.create()
 		self.promiseSlotIsAField = BoolArray.create()
+		self.promiseSlotCarriers = PromiseSlotReadArray.create()
 		self.aliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -42362,14 +42393,14 @@ export type Parser
 
 	// ⭐⭐ **"IS THIS A PROMISE?" AND "DOES THIS FRAME OWN A GREEN THREAD?" ARE TWO QUESTIONS SINCE B2c, AND
 	// COLLAPSING THEM BACK IS A DOUBLE FREE.** Both were `valueIsPromise` while a promise could only ever be
-	// a spawn's own handle; storage split them, and the split is exactly what `specs/async-await.md`'s
-	// *"Known boundary"* paragraph describes:
+	// a spawn's own handle; storage is what split them:
 	//
 	//   • `valueIsPromise` — **may this be `await`ed?** True for a spawn's handle AND for a value whose TYPE
 	//     is a `Promise with (T[, E])`, because the storage type carries everything the await needs.
 	//   • `valueOwnsGreenThread` — **does THIS frame owe a `__gt_promise_drop`?** The MARK alone. A promise
-	//     read back out of a container is untracked by construction: the container holds the handle, this
-	//     frame merely read it, and enrolling it here would drop a thread the container still names.
+	//     read back out of a container wears no mark: the container holds the handle, this frame merely read
+	//     it, and enrolling it here would drop a thread the container still names. What accounts for such a
+	//     read is the slot it came from (`promiseSlotContainer`), which is a third answer and not this one.
 	//
 	// ⇒ every OWNERSHIP door (the binding enrolment, the re-arm, `decrefCalleeFor`, the merge phi) asks the
 	// second; the two AWAIT doors — `emitAwait`'s throwing-promise gate and `emitAwaitOp`'s E2015 refusal —
@@ -42980,17 +43011,21 @@ export type Parser
 	// untaken edge's thread — measured, still exit **75**. So the construct is cleanly refused rather than
 	// half-tracked, and the cure is to consume before the join.
 	//
-	// ⚠ **BOTH CONSUME DOORS ASK IT, AND FOR TWO WEEKS ONLY `await` DID.** `emitPromiseCancel` reaches the
-	// same `consumePromiseThread` and reclaims the same struct, so the same program with `cancel` for
-	// `await` was accepted and aborted 75 at run time — `async-promise-drop.error.cancel-a-promise-no-frame-owns`
-	// against its refused `await` twin. The door is a `PromiseConsume` rather than a string so the word in
-	// the message is derived from the consume that asked, and cannot drift from it.
-	function requireConsumedPromiseIsOwned(promise ValueId, anchor Token, door PromiseConsume) throws ParseError
+	// ⚠ **EVERY DOOR THAT SPENDS A PROMISE ASKS IT, NOT ONLY THE TWO THAT RECLAIM.** `await` and `cancel`
+	// hand the thread back to the runtime; a store into a container, a store into a field or a union case,
+	// and a by-value argument hand it to another owner. All five reach `consumePromiseThread` and all five
+	// empty the same source slot, so a promise no frame can account for is as wrong at one as at another.
+	// `async-promise-drop.error.cancel-a-promise-no-frame-owns` pins the second door against the first.
+	//
+	// `door` is a NOUN the caller supplies rather than a `PromiseConsume`: the reclaiming pair have keywords
+	// (`promiseConsumeDoorName`), while a give-away door is best named by the token the author actually
+	// wrote — `push`, the field name, the callee.
+	function requireConsumedPromiseIsOwned(promise ValueId, anchor Token, door ByteArray) throws ParseError
 		if self.valueOwnsGreenThread(promise) or self.promiseValueCarriesAContainerSlot(promise) 'accountedFor'
 			return
 		end 'accountedFor'
 
-		throw ParseError.promiseCannotBeBorrowed(String.from(promiseConsumeDoorName(door)), cure: "No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join", line: anchor.line, column: anchor.column)
+		throw ParseError.promiseCannotBeBorrowed(String.from(door), cure: "No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join", line: anchor.line, column: anchor.column)
 	end 'requireConsumedPromiseIsOwned'
 
 	//
@@ -43005,15 +43040,20 @@ export type Parser
 	// for the third caller, `transferConsumedArgs`: a promise ARGUMENT moves to another OWNER, which is not
 	// a reclaim and leaves the thread perfectly alive — so a later use of the source is an ordinary
 	// use-after-move (E3102, *"its ownership moved to another binding"*), which is exactly what it is.
-	function consumePromiseThread(promise ValueId, range SourceRange, reclaimedBy PromiseConsume)
-		if reclaimedBy != PromiseConsume.notConsumed and promiseConsumeIn(self.promiseConsumes, promise: promise) == PromiseConsume.notConsumed 'recordTheReclaim'
-			self.promiseConsumes.push(PromiseConsumeRecord.create(promise, kind: reclaimedBy))
-		end 'recordTheReclaim'
-
+	function consumePromiseThread(promise ValueId, range SourceRange, reclaimedBy PromiseConsume) throws ParseError
 		// ⭐⭐ **FIRST, BECAUSE THE SLOT MUST BE EMPTIED BEFORE ANYTHING ELSE CAN DROP IT.** If this promise
 		// was read out of a container, the frame has just finished MOVING it out; the container must stop
 		// naming it or its element walk reclaims a thread this consume already reclaimed.
-		self.vacateConsumedPromiseSlot(promise, range: range)
+		//
+		// ⛔ **AND BEFORE THE RECORD BELOW, NOT AFTER.** A recorded consume is what makes
+		// `promiseValueCarriesAContainerSlot` answer false, so recording first would suppress this frame's
+		// own vacate and leave the slot naming a thread this consume just spent.
+		try self.vacateConsumedPromiseSlot(promise, range: range, reclaimedBy: reclaimedBy)
+
+		if reclaimedBy != PromiseConsume.notConsumed 'recordTheReclaim'
+			self.recordPromiseConsume(promise, kind: reclaimedBy)
+		end 'recordTheReclaim'
+
 		self.removeFromPendingTemps(promise)
 
 		let index = self.liveOwnerIndexOf(promise)
@@ -43028,6 +43068,16 @@ export type Parser
 		owned.movedFrom = true
 	end 'consumePromiseThread'
 
+	// The one writer of `promiseConsumes`, and FIRST WINS: a door that reclaimed the thread must not be
+	// overwritten by a later record, or E3142 quotes a door that is not where the thread went.
+	function recordPromiseConsume(promise ValueId, kind PromiseConsume)
+		if promiseConsumeIn(self.promiseConsumes, promise: promise) != PromiseConsume.notConsumed 'alreadyRecorded'
+			return
+		end 'alreadyRecorded'
+
+		self.promiseConsumes.push(PromiseConsumeRecord.create(promise, kind: kind))
+	end 'recordPromiseConsume'
+
 	// ⭐ **RECORD THAT `value` WAS READ OUT OF `container[index]` — the read half of a move out of a slot.**
 	// Called at the container-read door for a green-thread element only; every other element is a borrow or a
 	// retain and has no move to finish.
@@ -43035,11 +43085,26 @@ export type Parser
 		try self.promiseSlotContainer.set(value, value: container) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot entry — every SSA value must be minted through mintValue, which seeds the columns")
 		try self.promiseSlotIndex.set(value, value: index) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot index entry — every SSA value must be minted through mintValue, which seeds the columns")
 		try self.promiseSlotIsAField.set(value, value: isField) otherwise panic("recordConsumablePromiseSlot: v{value} has no promise-slot kind entry — every SSA value must be minted through mintValue, which seeds the columns")
+		self.promiseSlotCarriers.push(PromiseSlotRead.create(value, loopNesting: self.loops.count()))
 	end 'recordConsumablePromiseSlot'
+
+	function promiseSlotReadNesting(value ValueId) returns LoopNesting
+		for read in self.promiseSlotCarriers 'eachRead'
+			if read.value == value 'thisRead'
+				return read.loopNesting
+			end 'thisRead'
+		end 'eachRead'
+
+		panic("promiseSlotReadNesting: v{value} is not in promiseSlotCarriers — every value whose slot columns are set was pushed there by `recordConsumablePromiseSlot`, and nothing removes an entry")
+	end 'promiseSlotReadNesting'
 
 	// Does this value still name a container slot it was read out of, and not yet vacated? NOT-SET is the
 	// value's own id — see the columns' header.
 	function promiseValueCarriesAContainerSlot(value ValueId) returns bool
+		if promiseConsumeIn(self.promiseConsumes, promise: value) != PromiseConsume.notConsumed 'givenAwayOnThisPath'
+			return false
+		end 'givenAwayOnThisPath'
+
 		return (try self.promiseSlotContainer.get(value) otherwise panic("promiseValueCarriesAContainerSlot: v{value} has no promise-slot entry — every SSA value must be minted through mintValue, which seeds the columns")) != value
 	end 'promiseValueCarriesAContainerSlot'
 
@@ -43048,46 +43113,64 @@ export type Parser
 	// reclaim) and no COW detach (that would copy the record and leave two of them naming one thread). The
 	// container's element walk null-guards every slot, so a vacated one is simply skipped.
 	//
-	// ⚠ **IT CLEARS THE COLUMNS AFTER EMITTING**, so a value consumed twice cannot vacate twice. The second
-	// consume is a compile error on its own (E3100 / E3102) and never reaches lowering — but a vacate that
-	// depended on that would be a second statement of it, and this one costs a store.
-	function vacateConsumedPromiseSlot(value ValueId, range SourceRange)
+	// ⚠ **WHAT STOPS A VALUE VACATING TWICE IS THE CONSUME IT RECORDS HERE**, which the carries-a-slot test
+	// above reads. The columns themselves are never cleared, for the reason their own header gives.
+	//
+	// ⛔ **A GIVE-AWAY INSIDE A LOOP THE READ WAS TAKEN OUTSIDE OF IS REFUSED.** One parse-time vacate runs
+	// once per trip: trip 2 finds the slot emptied (exit 118) and the destination holds N entries naming one
+	// thread. The owned road refuses the same shape through `poisonOwningBinding`, which a slot read cannot
+	// reach because it enrols no owned binding — so the nesting recorded at the READ is what answers here,
+	// and the detail string is spelled at this site because `loopEscapingMoveRefusal` needs a `VarInfo` this
+	// road has none of.
+	//
+	// ⚠ **GATED ON THE KIND, because `await`/`cancel` in such a loop are E3100's**, whose flow-sensitive
+	// linearity sentence is the sharper one and must not be displaced by this.
+	function vacateConsumedPromiseSlot(value ValueId, range SourceRange, reclaimedBy PromiseConsume) throws ParseError
 		if not self.promiseValueCarriesAContainerSlot(value) 'cameFromNoSlot'
 			return
 		end 'cameFromNoSlot'
 
+		if reclaimedBy == PromiseConsume.notConsumed and self.promiseSlotReadNesting(value) < self.loops.count() 'givenAwayInsideALoopItWasReadOutsideOf'
+			throw ParseError.unsupported(LoopEscapingMoveDetail, line: range.line, column: range.column)
+		end 'givenAwayInsideALoopItWasReadOutsideOf'
+
 		let container = try self.promiseSlotContainer.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot entry — the check above just read it")
 		let index = try self.promiseSlotIndex.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot index entry — the columns move in lockstep")
 
-		// A FIELD is emptied where it lives — a direct store at its offset, `moveOutManagedPayload`'s shape.
-		// A CONTAINER element goes through `__managed_vacate`, which must find the buffer and stride first.
 		let slotIsAField = try self.promiseSlotIsAField.get(value) otherwise panic("vacateConsumedPromiseSlot: v{value} has no promise-slot kind entry — the columns move in lockstep")
 
-		if slotIsAField 'aStructField'
-			self.emitEmptyPromiseField(container, offset: self.constOf(index) as ByteOffset, range: range)
-		end 'aStructField' else 'aContainerElement'
-			var args = ValueIdArray.create()
-			args.push(container)
-			args.push(index)
-			args.push(value)
-			_ = self.emitRuntimeCall(ManagedVacateName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'aContainerElement'
+		var args = ValueIdArray.create()
+		args.push(container)
+		args.push(index)
+		args.push(value)
+		_ = self.emitRuntimeCall(GtPromiseFieldVacateName if slotIsAField else ManagedVacateName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 
+		self.recordPromiseConsume(value, kind: PromiseConsume.movedIntoStorage if reclaimedBy == PromiseConsume.notConsumed else reclaimedBy)
 		self.retireEveryPendingReadOfSlot(container, index: index)
 	end 'vacateConsumedPromiseSlot'
 
-	// A promise FIELD is emptied where it lives: the record's destructor null-guards the slot, so a zero is a
-	// field that owns no thread.
+	// ⚠ **THE UNCHECKED EMPTY, and its one caller is why it is not the checked vacate.**
+	// `claimWithIteratorPromiseSlot` empties a pair's element field as bookkeeping — the field never owned
+	// the thread — and a second pass over an array whose slot an earlier await vacated legitimately finds a
+	// zero there. Routing it through `__gt_promise_field_vacate` aborts such a program at 118
+	// (`withIterator.nested-loops-over-two-promise-arrays`). A field a frame is MOVING a promise out of goes
+	// through the checked door instead.
 	function emitEmptyPromiseField(box ValueId, offset ByteOffset, range SourceRange)
 		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(box, offset: offset, value: zero, storageType: MaxonType.integer, range: range)
 	end 'emitEmptyPromiseField'
 
+	function emitPromiseFieldRelease(box ValueId, offset ByteOffset, range SourceRange)
+		let at = self.emitLiteral(offset as ParsedInt, valueType: MaxonType.integer, range: range)
+		_ = self.emitRuntimeCall(GtPromiseFieldReleaseName, args: pairArgs(box, second: at), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitPromiseFieldRelease'
+
 	// ⭐⭐ **EMPTYING A SLOT RETIRES EVERY PENDING READ OF IT, NOT JUST THE ONE BEING CONSUMED.** A slot can be
 	// read twice before either read is used — `let a = try s.get(0)…; let b = try s.get(0)…` — and both values
-	// then name ONE green thread. The first consume takes it; the second must not, and after this the second
-	// value carries neither an ownership mark nor a slot, so `requireConsumedPromiseIsOwned` refuses it with
-	// the reason rather than reclaiming a thread that is already gone.
+	// then name ONE green thread. The first consume takes it; the second must not, and the record left here
+	// says so: the retired value carries neither an ownership mark nor a slot, so whichever door it reaches
+	// refuses it through `requireConsumedPromiseIsOwned` rather than reclaiming a thread that is already
+	// gone. A record rather than a removal, because a removal could not be rewound at a branch join.
 	//
 	// ⚠ **THE INDEX IS MATCHED BY CONSTANT WHERE ONE IS KNOWN, NOT BY `ValueId`.** Two source-level `0`s mint
 	// two different literal values, so identity alone would call them different slots and see nothing.
@@ -43095,26 +43178,22 @@ export type Parser
 	// position and a buffer loaded out of a cursor are fresh values at every read, so two reads of one slot
 	// through them look like two slots here; `__managed_vacate` checks the occupant at run time for those.
 	function retireEveryPendingReadOfSlot(container ValueId, index ValueId)
-		for candidate in 0 upto self.promiseSlotContainer.count() 'eachValue'
-			let other = candidate as ValueId
+		for position in 0 upto self.promiseSlotCarriers.count() 'eachCarrier'
+			let other = (try self.promiseSlotCarriers.get(position) otherwise panic("retireEveryPendingReadOfSlot: promiseSlotCarriers.get OOB at {position} on a walk bounded by its own count")).value
 
-			if not self.promiseValueCarriesAContainerSlot(other) 'notAPendingRead'
+			if not self.promiseValueCarriesAContainerSlot(other) 'alreadyRetired'
 				continue
-			end 'notAPendingRead'
+			end 'alreadyRetired'
 
-			if (try self.promiseSlotContainer.get(other) otherwise panic("retireEveryPendingReadOfSlot: v{other} carries a slot by the test above")) != container 'anotherContainer'
-				continue
-			end 'anotherContainer'
-
+			let otherContainer = try self.promiseSlotContainer.get(other) otherwise panic("retireEveryPendingReadOfSlot: v{other} carries a slot by the test above")
 			let otherIndex = try self.promiseSlotIndex.get(other) otherwise panic("retireEveryPendingReadOfSlot: the slot columns move in lockstep")
 
-			if not self.slotIndicesDenoteTheSameSlot(otherIndex, b: index) 'anotherSlot'
+			if otherContainer != container or not self.slotIndicesDenoteTheSameSlot(otherIndex, b: index) 'anotherSlot'
 				continue
 			end 'anotherSlot'
 
-			try self.promiseSlotContainer.set(other, value: other) otherwise panic("retireEveryPendingReadOfSlot: v{other} carries a slot by the test above")
-			try self.promiseSlotIndex.set(other, value: other) otherwise panic("retireEveryPendingReadOfSlot: the slot columns move in lockstep")
-		end 'eachValue'
+			self.recordPromiseConsume(other, kind: PromiseConsume.siblingReadConsumedTheSlot)
+		end 'eachCarrier'
 	end 'retireEveryPendingReadOfSlot'
 
 	// Do these two index values name the same slot? The same SSA value always does; two values both known to
@@ -43313,7 +43392,17 @@ export type Parser
 	// A `while` condition runs on every trip, so a binding declared before the loop that it moves escapes the loop
 	// exactly as a move in the body does — refused the same way. Asked once the condition is parsed, because
 	// the loop's context is pushed only after it.
-	function requireLoopConditionMovesNothing(before MoveMark, anchor Token) throws ParseError
+	//
+	// ⛔ **A SLOT READ NEEDS THE SECOND WALK, BECAUSE `loops.count()` HAS NOT RISEN YET.** The nesting test
+	// the body's give-away takes cannot fire during a condition parsed outside the loop's context, so what
+	// says a read was spent here is a difference in its consume record across the parse. Only reads BELOW
+	// `carrierFloor` are examined: one pushed during the condition is re-taken on every trip and giving it
+	// away is legal.
+	//
+	// ⚠ **THE CALLER CAPTURES THE MARK WHEN EITHER POPULATION IS NON-EMPTY.** The shared empty mark carries
+	// no consumes, against which every consume already recorded before the loop reads as new, and a program
+	// that spent a slot read pages earlier is refused for it.
+	function requireLoopConditionMovesNothing(before MoveMark, carrierFloor ElementIndex, anchor Token) throws ParseError
 		let after = self.captureMoveMark()
 
 		for i in 0 upto before.moved.count() 'eachOwned'
@@ -43322,6 +43411,20 @@ export type Parser
 				throw loopEscapingMoveRefusal(owned, anchor: anchor)
 			end 'movedByTheCondition'
 		end 'eachOwned'
+
+		for position in 0 upto carrierFloor 'eachCarrierReadBeforeTheCondition'
+			let read = try self.promiseSlotCarriers.get(position) otherwise panic("requireLoopConditionMovesNothing: promiseSlotCarriers.get OOB at {position} — the floor was taken from this array's own count")
+
+			if promiseConsumeIn(before.consumes, promise: read.value) != PromiseConsume.notConsumed 'alreadyGivenAwayBeforeTheLoop'
+				continue
+			end 'alreadyGivenAwayBeforeTheLoop'
+
+			if promiseConsumeIn(self.promiseConsumes, promise: read.value) == PromiseConsume.notConsumed 'stillHeld'
+				continue
+			end 'stillHeld'
+
+			throw ParseError.unsupported(LoopEscapingMoveDetail, line: anchor.line, column: anchor.column)
+		end 'eachCarrierReadBeforeTheCondition'
 	end 'requireLoopConditionMovesNothing'
 
 	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY**, which is what the `binding` door spends;
@@ -45490,7 +45593,9 @@ export type Parser
 		let condOwnedFloor = self.ownedBindings.count()
 		var condEntryMoveMark = self.emptyMoveMark
 
-		if condOwnedFloor > 0 'bindingsToMove'
+		let condCarrierFloor = self.promiseSlotCarriers.count()
+
+		if condOwnedFloor > 0 or condCarrierFloor > 0 'bindingsToMove'
 			condEntryMoveMark = self.captureMoveMark()
 		end 'bindingsToMove'
 
@@ -45516,8 +45621,8 @@ export type Parser
 		// releasing here is sound as well as necessary — the short-circuit rhs's argument, one construct out.
 		self.dropArmScopedOwned(condOwnedFloor, exitBlock: condExit, anchor: whileTok)
 
-		if condOwnedFloor > 0 'conditionMayMove'
-			try self.requireLoopConditionMovesNothing(condEntryMoveMark, anchor: whileTok)
+		if condOwnedFloor > 0 or condCarrierFloor > 0 'conditionMayMove'
+			try self.requireLoopConditionMovesNothing(condEntryMoveMark, carrierFloor: condCarrierFloor, anchor: whileTok)
 		end 'conditionMayMove'
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
@@ -63653,7 +63758,8 @@ export type Parser
 		// ⚠ `notConsumed`: the union BOX becomes the thread's owner and the thread runs on, so a later read of
 		// the source name is an ordinary use-after-move (E3102) and not the spent-thread refusal E3142.
 		if payloadClassIsAGreenThread(class) 'aGreenThread'
-			self.consumePromiseThread(arg, range: range, reclaimedBy: PromiseConsume.notConsumed)
+			try self.requireConsumedPromiseIsOwned(arg, anchor: anchor, door: anchor.value)
+			try self.consumePromiseThread(arg, range: range, reclaimedBy: PromiseConsume.notConsumed)
 			return arg
 		end 'aGreenThread'
 
@@ -65803,8 +65909,8 @@ export type Parser
 		// cannot account for is not less wrong for being spelled `cancel`.** Anchored on the METHOD token,
 		// the analogue of the `await` keyword: the caret belongs on the door, not on the receiver that is
 		// perfectly well-formed. See `requireConsumedPromiseIsOwned` for the merge shape it catches.
-		try self.requireConsumedPromiseIsOwned(recv.value, anchor: methodTok, door: PromiseConsume.cancelled)
-		self.consumePromiseThread(recv.value, range: SourceRange.between(recv.anchor, last: methodTok), reclaimedBy: PromiseConsume.cancelled)
+		try self.requireConsumedPromiseIsOwned(recv.value, anchor: methodTok, door: promiseConsumeDoorName(PromiseConsume.cancelled))
+		try self.consumePromiseThread(recv.value, range: SourceRange.between(recv.anchor, last: methodTok), reclaimedBy: PromiseConsume.cancelled)
 		return self.emitRuntimeCall(GtPromiseDropName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 	end 'emitPromiseCancel'
 
@@ -75666,7 +75772,8 @@ export type Parser
 	// container's own lifetime: it is the BASE that is promoted, not the element that is retained.
 	function emitContainerElementAccessor(func IrFunction, callee ByteArray, container ValueId, args ValueIdArray, giid GenericInstanceId, reference ContainerElementReference, borrowSubjectName ByteArray, range SourceRange) returns ValueId throws ParseError
 		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing, so
-		// it is NEVER tracked owned, read or moved out (a decref of an integer would corrupt the count). An
+		// it is NEVER tracked owned, read or moved out (a decref of an integer would corrupt the count) — a
+		// PROMISE element takes this arm and is the one exception, tracked by the block below. An
 		// OPAQUE element is NOT trivial here — `typeIsManaged` is false for a `typeParameter`, but a managed
 		// instantiation's element DOES own heap — so it falls through to the opaque-aware path below.
 		//
@@ -75707,6 +75814,16 @@ export type Parser
 			let promiseSlot = self.promiseElementSlotOf(callee, container: container, args: args, giid: giid, reference: reference, range: range)
 			let slotValue = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
 			try self.notePromiseElementRead(slotValue, slot: promiseSlot, callee: callee, reference: reference, range: range)
+
+			// ⛔ **AND THE CONTAINER IS HELD TO SCOPE EXIT, THOUGH THE ELEMENT IS A BARE WORD.** The borrow arm
+			// promotes a temporary receiver because the element points into it; here the element points
+			// nowhere, and the temporary's DESTRUCTOR is what reclaims the thread — at statement end, before
+			// the await. Gated on the read carrying a slot, so a move-out (`pop`/`remove`), which owns its
+			// element outright, is not promoted. It emits no op, which is what leaves the accessor call last
+			// for the try-call rewrite above.
+			if self.promiseValueCarriesAContainerSlot(slotValue) 'aPromiseTheContainerStillHolds'
+				self.giveTemporaryScopeLifetime(container, name: BorrowSourceBindingName)
+			end 'aPromiseTheContainerStillHolds'
 
 			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The shared element
 			// load ZERO-EXTENDS — one compiled byte loop, strided by the record's runtime `element_size@24`,
@@ -76366,30 +76483,20 @@ export type Parser
 	//     records that it is GARBAGE for a non-throwing callee;
 	//   • the ERROR type itself, or one enum's ordinals are decoded under another's name.
 	//
-	// ⭐ **AND THE CONTAINER ADOPTS THE THREAD.** `consumePromiseThread` is the same door `await` uses: the
-	// spawn's handle leaves this frame's ownership, so the statement-end drain does not `__gt_promise_drop` a
-	// thread the array now holds. What the container does NOT gain is a drop — `specs/async-await.md`'s
-	// *"Known boundary"* paragraph says a promise that escapes into storage is untracked.
-	//
-	// ⛔⛔ **AND "UNTRACKED" MEANS NOTHING RECLAIMS IT. THERE IS NO EXIT DRAIN.** This door does not hand the
-	// thread to a later reclaimer — `consumePromiseThread`'s FIRST statement is `removeFromPendingTemps`, so
-	// it REMOVES the thread from the only reclaimer this frame had (the statement-end `drainPendingTemps`) —
-	// and no program-exit walk of live GTs exists to take over: `__gt_live_count` is a leak COUNTER read once
-	// by `__mm_leak_check`, never a worklist anything drains. So a promise stored in a container and never
-	// awaited LEAKS its GT struct, and since A2 it leaks with it the references the spawn took to the
-	// callee's managed arguments (`Runtime/AsyncReleaser.maxon` — the releaser runs at the await or at the
-	// drop, and this promise reaches neither).
-	//
-	// ⚠ **THE EXIT GATES DO SEE IT, WHICH IS THE ONE MERCY — IT IS A REPORTED LEAK, NOT A SILENT ONE.**
-	// MEASURED: a stored, never-awaited promise over a SCALAR-argument callee exits **75**
-	// (`RuntimeAbort.greenThreadLeak`, the `__gt_live_count != 0` gate); over a `String`-argument callee it
-	// exits **101** (`leakDetected` — the heap gate is tested first and the argument's outstanding reference
-	// trips it). Closing this needs a drop the CONTAINER owes for its promise elements, which is the
-	// documented boundary's own rung and not this door's to invent.
+	// ⭐ **AND THE STORAGE ADOPTS THE THREAD.** `consumePromiseThread` is the same door `await` uses: the
+	// handle leaves this frame's ownership, so the statement-end drain does not `__gt_promise_drop` a thread
+	// the container now holds. The drop travels with it — the container's element destructor reclaims an
+	// element nothing ever awaited, exactly as an owned binding's scope exit does.
 	function storedPromiseValue(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns ValueId throws ParseError
 		// A promise read back OUT of storage and put into another slot of the same type carries its claim
 		// already — it was checked when it was first stored, and there is no `asyncCall` left to re-check it
-		// against. Same instance means same claim, so this is an identity rather than a second verdict.
+		// against. Same instance means same claim, so this is an identity rather than a second verdict; the
+		// check below cannot serve instead, because on such a value `promiseSourceStoredHere` has no source
+		// to name and refuses a legal program.
+		//
+		// ⛔ **IT IS STILL A GIVE-AWAY AND STILL CONSUMES.** A slot read carries no ownership mark, so this
+		// arm answers for every container-to-container store; returning without the consume leaves the source
+		// slot naming the thread the destination now holds, and the two walks reclaim it twice (exit 75).
 		//
 		// ⛔⛔ **BUT "READ BACK OUT OF STORAGE" IS THE OWNERSHIP MARK, NOT THE TYPE — THE TYPE IS THE ONE THING A
 		// STORE SITE OVERWRITES.** `retypeValue` below stamps the storage instance onto the SPAWN's own ValueId,
@@ -76409,7 +76516,10 @@ export type Parser
 		// `__gt_promise_drop`?"*): the spawn sets it, a container read never does, and no store site rewrites
 		// it — so unlike the type it answers the same at the first door and at the fifth.
 		// `specs/async-promise-drop.md`'s two `branch-store-into-a-container-*` cases pin both orders.
+		try self.requireConsumedPromiseIsOwned(value, anchor: anchor, door: anchor.value)
+
 		if not self.valueOwnsGreenThread(value) and self.valueIsInstance(value, giid: storage) 'alreadyStored'
+			try self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
 			return value
 		end 'alreadyStored'
 
@@ -76418,7 +76528,7 @@ export type Parser
 
 		// `notConsumed` for `moveInPayload`'s reason: the CONTAINER takes ownership of a thread that is still
 		// running, so the source's later use is E3102 rather than E3142.
-		self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
+		try self.consumePromiseThread(value, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
 		self.retypeValue(value, valueType: MaxonType.genericInstance(storage))
 		return value
 	end 'storedPromiseValue'
@@ -78224,6 +78334,22 @@ export type Parser
 
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType, slotScopeFilePath: layout.declFilePath)
 
+		// ⭐⭐ **A PROMISE FIELD IS STORED IN THREE STEPS AND THE ORDER IS THE WHOLE CORRECTNESS ARGUMENT.**
+		// It sits above the managed test because a promise is not managed, and a bare store here leaves the
+		// spawn a statement-scoped pending temporary whose drain CANCELS the thread the field now holds.
+		//   • the MOVE-IN transfers ownership, and vacates the source slot if the value came out of one;
+		//   • the RELEASE then drops whatever the field still held, exactly once — a field a previous
+		//     consume emptied holds 0 and is skipped, which is the re-armed case;
+		//   • the STORE puts the new thread in.
+		// Release AFTER move-in is what makes an aliasing store (`g.p = h.p` on one box) correct: the
+		// move-in has already emptied the source, so the release reads 0 and drops nothing.
+		if payloadClassIsAGreenThread(class) 'aPromiseField'
+			let moved = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range, valueTok: valueTok)
+			self.emitPromiseFieldRelease(box, offset: layout.offsetOfField(index), range: range)
+			self.emitFieldStore(box, layout: layout, index: index, value: moved, range: range)
+			return
+		end 'aPromiseField'
+
 		if not payloadClassIsManaged(class) 'scalarField'
 			self.emitFieldStore(box, layout: layout, index: index, value: value, range: range)
 			return
@@ -78758,9 +78884,13 @@ export type Parser
 		// ⚠ **AND MORE SPECIFIC THAN THE `movedFrom` REFUSAL BELOW, WHICH IS WHY IT IS ABOVE IT TOO.** E3102
 		// says the value's ownership "moved to another binding" — true of a move, and false of a consume, where
 		// the thread went to the RUNTIME and no binding has it. Both refuse the program; only one describes it.
+		//
+		// ⚠ **A THIRD KIND REACHES NEITHER TEST ON PURPOSE.** A read retired because a SIBLING read of its
+		// slot was consumed had nothing done to it, so both sentences here would be false of it; it is
+		// refused at the door it is carried to, where the message can name the slot.
 		let consumedBy = promiseConsumeIn(self.promiseConsumes, promise: binding.boundValue)
 
-		if consumedBy != PromiseConsume.notConsumed 'threadAlreadyReclaimed'
+		if promiseConsumeNamesADoor(consumedBy) 'threadAlreadyReclaimed'
 			throw ParseError.promiseAlreadyConsumed(String.from(promiseConsumeDoorName(consumedBy)), line: nameTok.line, column: nameTok.column)
 		end 'threadAlreadyReclaimed'
 
@@ -78816,7 +78946,7 @@ export type Parser
 		// to another binding) and `partiallyMoved` (a binding-match moved a managed payload OUT of this
 		// union, nulling its slot) differ only in whether the binding still owes a DROP — a use is
 		// forbidden for both, and this is the one predicate that says so.
-		if binding.movedFrom or binding.partiallyMoved 'moved'
+		if binding.movedFrom or binding.partiallyMoved or promiseConsumeMovedItToAnotherOwner(consumedBy) 'moved'
 			throw ParseError.useAfterMove(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'moved'
 	end 'requireUnmovedAtUse'
@@ -81265,6 +81395,7 @@ export type Parser
 		let savedPromiseSlotContainer = self.promiseSlotContainer
 		let savedPromiseSlotIndex = self.promiseSlotIndex
 		let savedPromiseSlotIsAField = self.promiseSlotIsAField
+		let savedPromiseSlotCarriers = self.promiseSlotCarriers
 		let savedAliasUnprovenMarks = self.aliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedPromiseConsumes = self.promiseConsumes
@@ -81516,6 +81647,7 @@ export type Parser
 		self.promiseSlotContainer = ValueIdArray.create()
 		self.promiseSlotIndex = ValueIdArray.create()
 		self.promiseSlotIsAField = BoolArray.create()
+		self.promiseSlotCarriers = PromiseSlotReadArray.create()
 		self.aliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -81787,6 +81919,7 @@ export type Parser
 		self.promiseSlotContainer = savedPromiseSlotContainer
 		self.promiseSlotIndex = savedPromiseSlotIndex
 		self.promiseSlotIsAField = savedPromiseSlotIsAField
+		self.promiseSlotCarriers = savedPromiseSlotCarriers
 		self.aliasUnprovenMarks = savedAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
 		self.promiseConsumes = savedPromiseConsumes
@@ -89124,16 +89257,16 @@ export type Parser
 		// `__managed_vacate` call, so the rewrite retargets that instead — which is how the earlier attempt at
 		// this slice turned six committed `try await` cases into E3055. Emitting it first leaves the await op
 		// last, where the rewrite expects it. The rest of the consume (`consumePromiseThread`) has no emit and
-		// stays below; it finds the columns already cleared and does nothing further.
-		try self.requireConsumedPromiseIsOwned(promise, anchor: awaitTok, door: PromiseConsume.awaited)
-		self.vacateConsumedPromiseSlot(promise, range: SourceRange.ofToken(awaitTok))
+		// stays below; it finds the consume already recorded and vacates nothing a second time.
+		try self.requireConsumedPromiseIsOwned(promise, anchor: awaitTok, door: promiseConsumeDoorName(PromiseConsume.awaited))
+		try self.vacateConsumedPromiseSlot(promise, range: SourceRange.ofToken(awaitTok), reclaimedBy: PromiseConsume.awaited)
 		self.recordServiceReplyAwait(func, promise: promise, awaitTok: awaitTok)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
 
 		// The await consumes the thread — the runtime reclaims its struct here — so its owning binding must not
 		// also drop it at scope exit (P1.5-B2 #88). Covers `try await` too: `parseTryCallTarget` emits its target
 		// through this same `emitAwaitOp`, then rewrites the op to `tryAwait` (the consume is independent).
-		self.consumePromiseThread(promise, range: SourceRange.ofToken(awaitTok), reclaimedBy: PromiseConsume.awaited)
+		try self.consumePromiseThread(promise, range: SourceRange.ofToken(awaitTok), reclaimedBy: PromiseConsume.awaited)
 		return result
 	end 'emitAwaitOp'
 
@@ -89223,7 +89356,8 @@ export type Parser
 			// ordinary use-after-move (E3102 — *"its ownership moved to another binding"*, which is exactly
 			// what happened) rather than the spent-thread refusal `await`/`cancel` earn.
 			if self.valueIsPromise(argValue) 'aPromiseIsAlwaysMoved'
-				self.consumePromiseThread(argValue, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
+				try self.requireConsumedPromiseIsOwned(argValue, anchor: anchor, door: anchor.value)
+				try self.consumePromiseThread(argValue, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
 			end 'aPromiseIsAlwaysMoved'
 
 			// ⛔⛔ **THE THIRD ARRIVAL: A FEED HANDS THE CALLEE A VALUE IT WILL KEEP (BATCH41 arrival roster).**

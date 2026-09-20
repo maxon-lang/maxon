@@ -2638,6 +2638,8 @@ function alreadyConsumedMessage(first PromiseConsume) returns String
 		notConsumed then panic("alreadyConsumedMessage: asked for the words of a promise nothing consumed — every site this walk collects is an `await`, a `tryAwait` or a `__gt_promise_drop`, and each of those names its door")
 		awaited then return "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice"
 		cancelled then return "this promise has already been cancelled: 'cancel' reclaims the green thread's struct, so awaiting or cancelling it again reads a struct the scheduler may already have handed to another spawn"
+		movedIntoStorage then panic("alreadyConsumedMessage: a move into a container's slot emits no await, tryAwait or drop op, so this walk can collect no site of that kind — a later use of the moved name is refused in the parser as a use-after-move")
+		siblingReadConsumedTheSlot then panic("alreadyConsumedMessage: a read retired by another read of its slot emits no op at all, so this walk can collect no site of that kind — the door it is carried through refuses it in the parser")
 	end 'first'
 end 'alreadyConsumedMessage'
 
@@ -5182,7 +5184,7 @@ module function runtimeCalleeStoreShape(callee ByteArray) returns RuntimeStoreSh
 end 'runtimeCalleeStoreShape'
 
 function takesRecordsOutCallee(callee ByteArray) returns bool
-	return callee.equals(ManagedRemoveName) or callee.equals(ManagedVacateName) or callee.equals(ManagedClearName) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName)
+	return callee.equals(ManagedRemoveName) or callee.equals(ManagedVacateName) or callee.equals(GtPromiseFieldVacateName) or callee.equals(ManagedClearName) or callee.equals(ListRemoveNodeName) or callee.equals(ListDetachNodeName) or callee.equals(ListClearName)
 end 'takesRecordsOutCallee'
 
 function copiesItsSourceCallee(callee ByteArray) returns bool

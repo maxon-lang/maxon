@@ -61,6 +61,11 @@ already correct and stays untouched:
 | `let held = make()` then `held.get(0)` | a binding already has scope lifetime; a second enrolment would drop the one record twice |
 | `Leaf.make(4).tally` | a SCALAR field is copied, not borrowed |
 
+A PROMISE element is the exception to the trivial row. It is a bare word with no pointer to dangle, but
+the container's destructor reclaims the green thread it names — so a read of one out of a temporary IS
+promoted, on the same terms as a managed element (`promise-read-out-of-a-temporary-array`). A `pop` or
+`remove` of one is not: that already moves the element out.
+
 ### Whose scope, exactly
 
 The **innermost open scope frame** — which is the borrower's, because the binding that takes the
@@ -709,4 +714,61 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+<!-- test: promise-read-out-of-a-temporary-array -->
+A promise element is a bare word, so the accessor hands it back through the TRIVIAL arm — and the
+array's destructor still reclaims it (`__gt_promise_drop`). A temporary that hands one out must
+therefore live to the borrower's scope exactly as one holding a managed element does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function make() returns IntPromiseArray
+	var s = IntPromiseArray.create()
+	s.push(async plain())
+	return s
+end 'make'
+
+function main() returns ExitCode
+	let p = try make().get(0) otherwise panic("has one")
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: promise-first-out-of-a-temporary-array -->
+`first()` takes that same trivial arm and names slot 0 without an index argument, and it owes the
+promotion for the same reason.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+function make() returns IntPromiseArray
+	var s = IntPromiseArray.create()
+	s.push(async plain())
+	return s
+end 'make'
+
+function main() returns ExitCode
+	let p = try make().first() otherwise panic("has one")
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
