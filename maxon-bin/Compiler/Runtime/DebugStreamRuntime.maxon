@@ -691,6 +691,35 @@ let DsLockLabel = b"__ds_lock"
 // so the first allocation is #1 and a zero packed id can only mean "never stamped".
 export let DsAllocIdLabel = b"__mm_alloc_id"
 
+// The per-tag allocation tally: ONE `.data` run of 2048 (count, bytes) buckets rather than a registered
+// word per bucket, because the allocator indexes it with a computed stride and only a single run can
+// promise the buckets are contiguous at it. Every traced binary carries the 32 KiB whether or not it holds
+// a reader. The two checks in `dsAllocTallyImage` pin the stride against the shift the emitter indexes by.
+export let DsAllocTallyLabel = b"__mm_alloc_tally"
+
+let DsAllocTallyWordBytes = 8
+let DsAllocTallyBucketWords = 2
+let DsAllocTallyBucketBytes = DsAllocTallyBucketWords * DsAllocTallyWordBytes
+export let DsAllocTallyBucketShift = 4
+export let DsAllocTallyCountOffset = 0 as ByteOffset
+export let DsAllocTallyBytesOffset = DsAllocTallyWordBytes as ByteOffset
+let DsAllocTallyTableBytes = SlabCensusTagBuckets * DsAllocTallyBucketBytes
+let DsAllocTallyZeroByte = 0 as Byte
+
+function dsAllocTallyImage() returns ByteArray
+	if DsAllocTallyBucketBytes != (1 shl DsAllocTallyBucketShift) 'strideShiftDisagrees'
+		panic("DebugStream allocation tally: a bucket is {DsAllocTallyBucketBytes} bytes and the index shift scales by {1 shl DsAllocTallyBucketShift}")
+	end 'strideShiftDisagrees'
+
+	if DsAllocTallyBytesOffset >= (DsAllocTallyBucketBytes as ByteOffset) 'byteColumnOutsideTheBucket'
+		panic("DebugStream allocation tally: the byte column sits at {DsAllocTallyBytesOffset} of a {DsAllocTallyBucketBytes}-byte bucket")
+	end 'byteColumnOutsideTheBucket'
+
+	var image = ByteArray.create()
+	image.growFilled(DsAllocTallyTableBytes as ElementIndex, value: DsAllocTallyZeroByte)
+	return image
+end 'dsAllocTallyImage'
+
 // The bytes `__ds_init` asks `__slab_alloc` for: the CRITICAL_SECTION (5 words, matching `GtRuntime`'s
 // own reading of the structure) and the scratch buffer `GetEnvironmentVariableA` writes the segment name into.
 //
@@ -774,6 +803,8 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	var symdata = debugStreamNameBlob(DsTagBlobMagic, names: globalData.debugStreamTags.names)
 	symdata.append(debugStreamNameBlob(DsStrBlobMagic, names: globalData.debugStreamNames.names))
 	globalData.symdataImage = symdata
+
+	globalData.registerDataBlob(String.from(DsAllocTallyLabel), bytes: dsAllocTallyImage())
 
 	buildDsInit(module, envNameLabel: envNameLabel.toByteArray())
 	buildDsShutdown(module)

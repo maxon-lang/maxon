@@ -335,6 +335,13 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 		end 'byTag'
 	end 'census'
 
+	// Outside the residency gate on purpose: reading 2048 counter pairs costs nothing proportional to the
+	// heap, so the tally owes none of the census's sampling. Folded under that gate, a build asking only
+	// for the tally would sample no phase and report an empty table rather than saying anything.
+	if project.allocationsByTag and tagCensusCovers(project.allocationsPhase, phase: phase) 'churn'
+		project.memory.recordAllocTally(phase)
+	end 'churn'
+
 	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
 
 	// A CLOSED PHASE IS THE PROOF OF PROGRESS THE TREE LOCK'S HEARTBEAT NEEDS, and this is the only

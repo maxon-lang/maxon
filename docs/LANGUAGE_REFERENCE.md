@@ -4695,6 +4695,22 @@ than answering.
 The compiler's own build uses these through
 [`--census-by-tag`](CLI_REFERENCE.md#logging).
 
+### Attributing Allocation Churn
+
+A census says what is still held; it cannot see an allocation that was freed before it looked.
+`__Builtins.mmAllocTotalByTag(i)` and `__Builtins.mmAllocBytesByTag(i)` answer the other question — how
+many allocations tag `i` has made since the process started, and how many bytes they asked for. Nothing
+subtracts a free, so both figures only rise and a difference of two readings is the churn between them.
+
+The table is 2048 buckets, like the census's. Bucket 0 is the allocations the compiler had no declared
+type to tag, and bucket 2047 collects every tag past the end of the table. An index outside `0` to `2047`
+answers 0.
+
+Both are maintained only in a program built with `--debugstream`, which is what puts a tag on a box; in
+any other build they answer 0. Summed over every bucket they equal `__Builtins.mmAllocTotal()`, which is
+the cross-check to reach for. The compiler's own build uses them through
+[`--allocations-by-tag`](CLI_REFERENCE.md#logging).
+
 ### The Leak Checker
 
 Every program that uses the heap checks, when `main` returns, that every allocation was released. If any

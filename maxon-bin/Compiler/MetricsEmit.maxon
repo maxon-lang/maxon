@@ -101,6 +101,7 @@ export let MetricsKindRegAlloc = "regalloc"
 export let MetricsKindUnattributed = "unattributed"
 export let MetricsKindCode = "code"
 export let MetricsKindTag = "tag"
+export let MetricsKindChurn = "churn"
 
 let MetricsTagNameSeparator = "/"
 
@@ -168,42 +169,52 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, cost: timings.unattributedCost(), delta: memory.unattributed(timings.poolRowMask()), residency: PhaseResidency.zero()))
 
 	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: codeBytes as HeapByteCount), residency: PhaseResidency.zero()))
-	out.append(tagCensusMetricsRows(memory))
+
+	if memory.tagCensus.enabled 'censusRows'
+		out.append(tagBucketMetricsRows(memory.tagCensus.buckets, kind: TagRowLine.census(memory.tagCensus.buckets.mode)))
+	end 'censusRows'
+
+	if memory.allocTally.enabled 'churnRows'
+		out.append(tagBucketMetricsRows(memory.allocTally.buckets, kind: TagRowLine.churn))
+	end 'churnRows'
+
 	return out.build()
 end 'metricsText'
 
 // ⚠ A `tag` row's `allocs` and `livebytes` are LEVELS, not the cumulative figures those columns carry on
 // every other kind: the count of slots live at that boundary and their bytes. Summing them across phases
-// counts one live slot once per boundary it survived.
-function tagCensusMetricsRows(memory CompileMemory) returns String
-	let census = memory.tagCensus
-
-	if not census.enabled 'notRequested'
-		return ""
-	end 'notRequested'
-
-	let names = census.names
+// counts one live slot once per boundary it survived. A `churn` row is the opposite and sums correctly —
+// the allocations and bytes the phase itself asked for, in `allocs` and `bytes`.
+function tagBucketMetricsRows(columns TagBucketColumns, kind TagRowLine) returns String
+	let names = columns.names
 	var out = StringBuilder.create()
 
 	for phase in CompilePhase.allCases 'eachPhase'
-		if not census.sampledAt(phase.ordinal) 'neverSampled'
+		if not columns.sampledAt(phase.ordinal) 'neverSampled'
 			continue
 		end 'neverSampled'
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			let count = census.countAt(phase.ordinal, bucket: bucket)
-			let bytes = census.bytesAt(phase.ordinal, bucket: bucket)
+			let count = columns.countAt(phase.ordinal, bucket: bucket)
+			let bytes = columns.bytesAt(phase.ordinal, bucket: bucket)
 
 			if count == 0 and bytes == 0 'empty'
 				continue
 			end 'empty'
 
-			out.append(metricsRow(MetricsKindTag, name: "{phase.name}{MetricsTagNameSeparator}{tagCensusLabel(census.mode, bucket: bucket, names: names, count: count, bytes: bytes)}", cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: count, frees: 0, bytes: 0), residency: PhaseResidency.create(bytes, freeBytes: 0, cachedFreeBytes: 0, parkedBytes: 0, committedBytes: 0)))
+			out.append(tagBucketMetricsRow(kind, name: "{phase.name}{MetricsTagNameSeparator}{tagBucketLabel(bucket, kind: kind, names: names, count: count, bytes: bytes)}", count: count, bytes: bytes))
 		end 'eachBucket'
 	end 'eachPhase'
 
 	return out.build()
-end 'tagCensusMetricsRows'
+end 'tagBucketMetricsRows'
+
+function tagBucketMetricsRow(kind TagRowLine, name String, count AllocCount, bytes HeapByteCount) returns String
+	return match kind 'kind'
+		census gives metricsRow(MetricsKindTag, name: name, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: count, frees: 0, bytes: 0), residency: PhaseResidency.create(bytes, freeBytes: 0, cachedFreeBytes: 0, parkedBytes: 0, committedBytes: 0))
+		churn gives metricsRow(MetricsKindChurn, name: name, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: count, frees: 0, bytes: bytes), residency: PhaseResidency.zero())
+	end 'kind'
+end 'tagBucketMetricsRow'
 
 // One interpolation rather than a build-by-append: the compiler measures every part of an
 // interpolated string and allocates the row exactly once.

@@ -26,14 +26,21 @@ fails the seed's FIRST build with E2015 — not only in this tree but on every C
 runner, none of which has another compiler to reach for. Nothing later on `main` can fix that: the
 compiler that accepts the entry is the one the release has not shipped yet.
 
-`scripts/seed-shim/` closes it. Each patch there withdraws one such declaration, and
+`scripts/seed-shim/` closes it. Each patch there withdraws one thing the seed refuses, and
 `scripts/build-from-seed.sh` stages them only when a plain seed build has already been refused, then
 restores every file before `C1` builds `C2`.
 
-⭐ **A patch withdraws the DECLARATION and never the compiler source that implements the entry**, which
-is what makes this sound rather than a way of shipping a hobbled compiler: the seed accepts the
-compiler's own tables, so `C1` knows the builtin, and `C1` compiles the unshimmed tree. Only `C1`'s own
-copy of the withdrawn function is stubbed, and nothing in a build calls it.
+⭐ **A patch never withdraws the tables that teach `C1` the entry**, which is what makes this sound rather
+than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
+installer and name constants, so `C1` knows the builtin and compiles the unshimmed tree.
+
+There are two things a patch may withdraw. One is a `stdlib/` or `runtime/` declaration the seed refuses
+outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. The
+other is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
+an intrinsic this tree adds and the seed refuses it there with E3004 rather than at the declaration.
+Withdrawing the call leaves every table standing, and the first build is merely one whose instrument
+reports nothing. Keep such a patch to the single function that calls, so what the shimmed build loses is
+stated by the patch itself.
 
 ⛔ **Delete the patch in the release after the one that ships the entry.** It is inert from the moment a
 published seed accepts the declaration — the plain build succeeds and the directory is never read — and

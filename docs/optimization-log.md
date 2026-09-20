@@ -1268,3 +1268,63 @@ key column, ~4 records per name per worker; the parse term is the per-name `clon
 quadratic in the arena. The cache holds owned copies (two objects, once per name ever asked, none for a
 name never asked). `tokens.last().endByte` is 0 (EOF carries no span), so the size hint walks back to the
 last real token.
+
+### Result — 2026-09-20, every allocation attributed by tag and phase, and what the instrument costs
+
+`--allocations-by-tag[=<phase>]` counts every `__mm_alloc` a `--debugstream` compiler performs, by
+allocation tag and by compile phase: the traced `__mm_alloc` steps a 2048-bucket (count, bytes) table at
+a `.data` label with two atomic adds, the compiler samples the table at each main-thread phase boundary
+and folds the delta into the phase's row, `--metrics` carries it as `churn` rows, and
+`__Builtins.mmAllocTotalByTag(i)` / `mmAllocBytesByTag(i)` read it from any program. The residency
+census (above) ranks what is LIVE at a boundary; this ranks what was ASKED FOR, which the census cannot
+see when the object dies before the boundary.
+
+**The reading** (`--debugstream` self-compile of this tree, AMD Ryzen 7 5800X, x64-windows,
+`--log=compiler:debug --allocations-by-tag --metrics`): 308,491,126 allocations across the sampled
+boundaries, equal to `mmAllocTotal()` at the last one (the self-check); the TSV `total` row reads
+308,518,324, the difference being the report's own formatting after the last boundary. By phase:
+
+| phase | allocations | share |
+| --- | ---: | ---: |
+| regalloc | 164,329,279 | 53.3% |
+| frontEndPool | 58,283,765 | 18.9% |
+| merge | 30,704,684 | 10.0% |
+| stdFanOut | 16,672,989 | 5.4% |
+| lowerMaxonToStd | 7,475,906 | 2.4% |
+| semanticCheck | 6,068,753 | 2.0% |
+| inlineLeaves | 4,164,122 | 1.4% |
+| signatures | 4,128,967 | 1.3% |
+
+Within regalloc, `splitting` is 121,600,046 of the 164M. The whole table at regalloc, top ten:
+
+| tag | allocations | bytes |
+| --- | ---: | ---: |
+| `__Tuple4.bool.int.bool.int` | 50,711,248 | 1,622,759,936 |
+| `__Tuple2.bool.int` | 23,090,847 | 369,453,552 |
+| HallVerdict | 18,844,963 | 452,279,112 |
+| LiveAcrossSpan | 11,166,605 | 267,998,520 |
+| BlockLastUse | 10,796,165 | 172,738,640 |
+| TargetVReg | 9,637,625 | 154,202,000 |
+| ArrayRecord | 9,389,609 | 450,701,232 |
+| ElementBuffer | 7,858,608 | 4,550,863,296 |
+| TargetOp | 7,130,590 | 399,313,040 |
+| BlockPeakSlot | 3,599,506 | 86,388,144 |
+
+⭐ **74M of the compile's 308M allocations are two anonymous tuple boxes inside the register allocator**
+(`__Tuple4.bool.int.bool.int` and `__Tuple2.bool.int`), and another 41M are three small verdict/span
+records (`HallVerdict`, `LiveAcrossSpan`, `BlockLastUse`). None of them appears in the residency census
+because each dies within the call that made it. The front end's top rows are what the census already
+showed — `frontEndPool`: ArrayRecord 20.7M, ElementBuffer 16.2M, Token 4.67M, MaxonType 3.17M,
+StringRecord 2.09M; `merge`: ArrayRecord 13.1M, MaxonOp 5.47M, MaxonType 3.31M, ElementBuffer 3.28M,
+SourceRange 2.74M; `stdFanOut`: ArrayRecord 6.17M, ElementBuffer 5.02M, StdOp 2.46M.
+
+**Cost.** Traced compiler, self-compile: 40,951 ms without the flag against 48,963 ms with
+`--log=compiler:debug --allocations-by-tag --metrics` — an upper bound on the instrument, since the
+control carried neither the residency sampling nor the TSV write. The untraced `__mm_alloc` is unchanged
+(the `arrays`, `strings`, `stdlib-loading` and `mm-trace` fragments drifted by nothing but the 32 KiB
+`.data` table a traced build now carries ahead of `__slab_arena_list`).
+
+**Ladder against a control built from BASE `a218c9c941` through the same compiler, interleaved, two
+runs each:** total allocations +383…+442 at every rung — a flat constant (the two reader entries every
+heap program installs and optimizes: `installRuntime` +136, `optimizeEmittedBand` +128,
+`foldEmittedConstOperands` +88), no slope; ratios 1.34 1.54 1.70 1.84 1.92 per doubling, unchanged.

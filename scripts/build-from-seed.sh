@@ -26,9 +26,11 @@
 # release carries the entry.
 #
 # ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch
-# withdraws the STDLIB declaration alone and never the compiler source implementing the entry, so `C1`
-# knows the builtin and compiles the unshimmed tree. Left in place for the second build it would ship a
-# compiler whose withdrawn stdlib function is the one that runs.
+# withdraws a DECLARATION the seed refuses, or a CALL SITE in compiler source the seed refuses the tree
+# at — never the tables that teach `C1` the entry, and kept to one function so the shimmed build states
+# what it loses. `C1` therefore knows the entry and compiles the unshimmed tree. Left in place for the
+# second build it would ship a compiler built from the stubbed source.
+# `scripts/seed-shim/README.md` owns the rule.
 #
 # Usage:
 #   scripts/build-from-seed.sh

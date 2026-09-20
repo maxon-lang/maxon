@@ -1,0 +1,217 @@
+// Test: allocations-by-tag.an-untraced-build-tallies-nothing
+typealias WidgetField = int(0 to 65536)
+
+let Population = 1000
+let TallyBuckets = 2048
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	export static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	let totalBefore = __Builtins.mmAllocTotal()
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	if __Builtins.mmAllocTotal() <= totalBefore 'theProgramAllocatedNothing'
+		return 1
+	end 'theProgramAllocatedNothing'
+
+	for i in 0 upto TallyBuckets 'readCountBuckets'
+		if __Builtins.mmAllocTotalByTag(i) != 0 'aCountBucketWasTallied'
+			return 2
+		end 'aCountBucketWasTallied'
+	end 'readCountBuckets'
+
+	for i in 0 upto TallyBuckets 'readByteBuckets'
+		if __Builtins.mmAllocBytesByTag(i) != 0 'aByteBucketWasTallied'
+			return 3
+		end 'aByteBucketWasTallied'
+	end 'readByteBuckets'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 1000
+  __rc_ok#31:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greaterEqual, __il_cont#25
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#25
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#25:
+    x64.callDirect __mm_counter_alloc_total
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#1
+  buildWidgets:
+    x64.movRegReg rax, r13
+    x64.sarRegImm8 rax, r13, 63
+    x64.shrRegImm8 rax, rax, 48
+    x64.leaRegRegReg rax, r13, rax
+    x64.sarRegImm8 rax, rax, 16
+    x64.imulRegRegImm32 rax, rax, 65536
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+  __rc_ok#19:
+    x64.leaRegRegImm32 rax, r13, 1
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 48
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 16
+    x64.imulRegRegImm32 rcx, rcx, 65536
+    x64.movRegReg r15, rax
+    x64.subRegReg r15, rax, rcx
+  __rc_ok#38:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r14
+    x64.storeBaseDispReg.word64 [r8 + 8], r15
+  __il_cont#33:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, buildWidgets
+  forexit#4:
+    x64.callDirect __mm_counter_alloc_total
+    x64.cmpRegReg r8, r12
+    x64.jcc greater, ifcont
+  theProgramAllocatedNothing:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#7
+  readCountBuckets:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_counter_alloc_total_by_tag
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forstep#9
+  aCountBucketWasTallied:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep#9:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#7:
+    x64.cmpRegImm32 r12, 2048
+    x64.jcc less, readCountBuckets
+  forexit#10:
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#13
+  readByteBuckets:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_counter_alloc_bytes_by_tag
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, forstep#15
+  aByteBucketWasTallied:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep#15:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#13:
+    x64.cmpRegImm32 r12, 2048
+    x64.jcc less, readByteBuckets
+  forexit#16:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

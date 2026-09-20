@@ -285,6 +285,16 @@ export let MmCounterRawAllocTotalName = b"__mm_counter_raw_alloc_total"
 export let MmCounterRawAllocLiveName = b"__mm_counter_raw_alloc_live"
 export let MmCounterRawAllocBytesName = b"__mm_counter_raw_alloc_bytes"
 
+// Bucket `i`'s cumulative allocation count and bytes. Nothing subtracts a free, so these are CHURN and
+// never a level: a phase's share of them is the difference of two readings.
+export let MmCounterAllocTotalByTagName = b"__mm_counter_alloc_total_by_tag"
+export let MmCounterAllocBytesByTagName = b"__mm_counter_alloc_bytes_by_tag"
+
+let AllocTallyReaderArity = 1 as ParamCount
+let AllocTallyBucketParamPosition = 0 as ParamCount
+let AllocTallyLowestBucket = 0 as ParsedInt
+let MachineWordSignShift = 63 as ParsedInt
+
 // ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes asked of ONE GREEN THREAD.** Every
 // process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker would count
 // every other worker's. `GtRuntime.GtOffThreadAllocs` carries the ownership argument that lets them be
@@ -1602,6 +1612,8 @@ function buildMmAlloc(module StdModule, model MachineModel)
 		let prefix = emitConst(module, block: block, value: DebugStreamPackedIdBytes, ids: ids)
 		base = emitBin(module, block: block, a: allocation, b: prefix, opcode: StdBinOpcode.add, ids: ids)
 		payloadOffset = emitConst(module, block: block, value: HeaderBytes, ids: ids)
+
+		emitAllocTallyStep(module, block: block, tagIndex: tagIndex, size: size, ids: ids)
 	end 'stampPackedId'
 
 	module.appendOp(block, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
@@ -2674,7 +2686,76 @@ function buildMmCounterAccessors(module StdModule, model MachineModel)
 	buildFigureReader(module, name: MmCounterProcessAllocsName, figure: processWideFigure(CombinedCount.allocs))
 	buildFigureReader(module, name: MmCounterProcessFreesName, figure: processWideFigure(CombinedCount.frees))
 	buildFigureReader(module, name: MmCounterProcessAllocBytesName, figure: processWideFigure(CombinedCount.bytes))
+
+	buildAllocTallyReader(module, name: MmCounterAllocTotalByTagName, column: DsAllocTallyCountOffset)
+	buildAllocTallyReader(module, name: MmCounterAllocBytesByTagName, column: DsAllocTallyBytesOffset)
 end 'buildMmCounterAccessors'
+
+// Only a traced build registers the tally's `.data` run, so an untraced one has no label to address and
+// answers 0 — the figure an untraced build's own tag index stands for. Both ends of the index are checked
+// because it arrives from user code, and they are two compares rather than one because `StdCmpPred` has no
+// unsigned predicate to fold the negative side into the high one.
+function buildAllocTallyReader(module StdModule, name ByteArray, column ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: AllocTallyReaderArity, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(AllocTallyReaderArity)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: AllocTallyReaderArity)
+
+	if not module.debugStream 'untracedBuild'
+		emitConstReturn(module, block: entry, value: 0, ids: ids)
+		module.functions.push(func)
+		return
+	end 'untracedBuild'
+
+	let bucket = valueIdAtParamPosition(AllocTallyBucketParamPosition)
+	var aboveTheFloor = module.addBlock(func, label: b"above_floor", heat: BlockHeat.normal)
+	var read = module.addBlock(func, label: b"read", heat: BlockHeat.normal)
+	var outside = module.addBlock(func, label: b"outside", heat: BlockHeat.normal)
+
+	let floor = emitConst(module, block: entry, value: AllocTallyLowestBucket, ids: ids)
+	let notBelow = emitCmp(module, block: entry, a: bucket, b: floor, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(notBelow, thenBlockId: aboveTheFloor.id, elseBlockId: outside.id))
+
+	let ceiling = emitConst(module, block: aboveTheFloor, value: SlabCensusTagBuckets, ids: ids)
+	let inTable = emitCmp(module, block: aboveTheFloor, a: bucket, b: ceiling, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(aboveTheFloor, op: StdOp.condBranch(inTable, thenBlockId: read.id, elseBlockId: outside.id))
+
+	let row = emitAllocTallyRowAddr(module, block: read, bucket: bucket, ids: ids)
+	let answer = emitLoadField(module, block: read, record: row, offset: column, ids: ids)
+	module.setTerminator(read, op: StdOp.ret(answer))
+
+	emitConstReturn(module, block: outside, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildAllocTallyReader'
+
+function emitAllocTallyRowAddr(module StdModule, block IrBlock, bucket ValueId, ids ValueMinter) returns ValueId
+	let shift = emitConst(module, block: block, value: DsAllocTallyBucketShift, ids: ids)
+	let rowOffset = emitBin(module, block: block, a: bucket, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let base = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(base, label: DsAllocTallyLabel))
+
+	return emitBin(module, block: block, a: base, b: rowOffset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitAllocTallyRowAddr'
+
+// ⚠ The clamp to the last bucket is branchless because this is the body of every allocation a traced build
+// makes, and it rests on `shr` being ARITHMETIC in the Std dialect: `room` is negative exactly for a tag
+// past the table, so the sign bit smears into an all-ones mask and pulls the index back. Under a logical
+// shift the mask is 1 and every overflowing tag steps the bucket one above the one it belongs in. Only the
+// high side is clamped — every producer's tag is an enum ordinal, so it cannot arrive negative.
+function emitAllocTallyStep(module StdModule, block IrBlock, tagIndex ValueId, size ValueId, ids ValueMinter)
+	let lastBucket = emitConst(module, block: block, value: SlabCensusOverflowBucket, ids: ids)
+	let room = emitBin(module, block: block, a: lastBucket, b: tagIndex, opcode: StdBinOpcode.sub, ids: ids)
+	let signShift = emitConst(module, block: block, value: MachineWordSignShift, ids: ids)
+	let overflowMask = emitBin(module, block: block, a: room, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
+	let pullBack = emitBin(module, block: block, a: overflowMask, b: room, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let bucket = emitBin(module, block: block, a: tagIndex, b: pullBack, opcode: StdBinOpcode.add, ids: ids)
+	let row = emitAllocTallyRowAddr(module, block: block, bucket: bucket, ids: ids)
+
+	_ = emitFieldAccumulate(module, block: block, record: row, offset: DsAllocTallyCountOffset, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: true, ids: ids)
+	_ = emitFieldAccumulate(module, block: block, record: row, offset: DsAllocTallyBytesOffset, delta: size, multiM: true, ids: ids)
+end 'emitAllocTallyStep'
 
 // `name() -> i64` — one figure walked over every row.
 function buildFigureReader(module StdModule, name ByteArray, figure SlabTrafficFigure)

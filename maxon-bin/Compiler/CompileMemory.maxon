@@ -264,6 +264,16 @@ let TagCensusTopRows = 5
 let TagCensusTopSeparator = ", "
 let TagCensusUnattributableLabel = "(unattributable)"
 let TagCensusOverflowLabel = "(overflow)"
+let TagCensusUntaggedLabel = "(untagged)"
+let TagCensusNothingLive = "nothing live"
+let AllocTallyNothingAllocated = "nothing allocated"
+let TagCensusUntaggedBucket = 0 as TagBucketIndex
+
+let TagCensusTagColumnTitle = "tag"
+let TagCensusClassColumnTitle = "size class"
+let TagCensusLiveColumnTitle = "live"
+let AllocTallyAllocationsColumnTitle = "allocations"
+let TagTableBytesColumnTitle = "bytes"
 
 let TagLabelWidth = 34 as ColumnWidth
 let TagCensusRuleWidth = (TagLabelWidth + MemAllocsWidth + MemBytesWidth) as ColumnWidth
@@ -287,7 +297,7 @@ function requireTagCensusRangesCoverTheTable(phaseCount PhaseIndex)
 	end 'bucketRangeDrifted'
 
 	if TagRowCountCeiling != TagCensusTopRows 'topRowRangeDrifted'
-		panic("CompileMemory: `TagRowCount` is `int(0 to {TagRowCountCeiling})` and the line shows {TagCensusTopRows} rows — the typealias no longer covers what `tagCensusTopLine` counts")
+		panic("CompileMemory: `TagRowCount` is `int(0 to {TagRowCountCeiling})` and the line shows {TagCensusTopRows} rows — the typealias no longer covers what `tagTopLine` counts")
 	end 'topRowRangeDrifted'
 
 	if (phaseCount as ColumnLength) * (SlabCensusTagBuckets as ColumnLength) > ColumnSlotCeiling 'slotRangeDrifted'
@@ -343,35 +353,100 @@ export type PhaseTagCensus
 	end 'take'
 end 'PhaseTagCensus'
 
-export type PhaseTagCensusColumns
-	export var enabled as bool
+// The phase × bucket grid both tag tables are built on. ⚠ Their cells do not mean the same thing: a census
+// cell is the LEVEL at a phase boundary and a tally cell is the DELTA over the phase, so a helper added
+// here has to be correct read either way — anything that assumes one belongs on that table's own type.
+export type TagBucketColumns
 	export var mode as TagCensusMode
 	export var counts as PhaseColumnArray
 	export var bytes as PhaseColumnArray
-	export var liveBytes as PhaseColumnArray
-	export var rawLiveSlots as PhaseColumnArray
-	export var tallyBytes as PhaseColumnArray
 	export var sampled as BoolArray
-	export var scratch as PhaseTagCensus
 	export var names as StringArray
 
-	export static function off() returns PhaseTagCensusColumns
-		return Self{enabled: false, mode: SlabCensusClassMode, counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), liveBytes: PhaseColumnArray.create(), rawLiveSlots: PhaseColumnArray.create(), tallyBytes: PhaseColumnArray.create(), sampled: BoolArray.create(), scratch: PhaseTagCensus.empty(), names: StringArray.create()}
+	export static function off() returns TagBucketColumns
+		return Self{mode: SlabCensusClassMode, counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), sampled: BoolArray.create(), names: StringArray.create()}
 	end 'off'
 
-	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode)
+	export function size(phaseCount PhaseIndex, tallyMode TagCensusMode)
 		requireTagCensusRangesCoverTheTable(phaseCount)
 
-		self.enabled = true
 		self.mode = tallyMode
 		self.counts = phaseColumn((phaseCount * SlabCensusTagBuckets) as ColumnLength)
 		self.bytes = phaseColumn((phaseCount * SlabCensusTagBuckets) as ColumnLength)
+		self.sampled.resize(phaseCount)
+		self.names = tagCensusNames(tallyMode)
+	end 'size'
+
+	export function countAt(index PhaseIndex, bucket TagBucketIndex) returns AllocCount
+		return readColumn(self.counts, index: tagCensusSlotOf(index, bucket: bucket)) as AllocCount
+	end 'countAt'
+
+	export function bytesAt(index PhaseIndex, bucket TagBucketIndex) returns HeapByteCount
+		return readColumn(self.bytes, index: tagCensusSlotOf(index, bucket: bucket)) as HeapByteCount
+	end 'bytesAt'
+
+	export function totalCountAt(index PhaseIndex) returns AllocCount
+		var total = 0 as AllocCount
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			total = total + self.countAt(index, bucket: bucket)
+		end 'eachBucket'
+
+		return total
+	end 'totalCountAt'
+
+	export function totalBytesAt(index PhaseIndex) returns HeapByteCount
+		var total = 0 as HeapByteCount
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			total = total + self.bytesAt(index, bucket: bucket)
+		end 'eachBucket'
+
+		return total
+	end 'totalBytesAt'
+
+	export function setBucket(index PhaseIndex, bucket TagBucketIndex, countCell ColumnCell, bytesCell ColumnCell)
+		let slot = tagCensusSlotOf(index, bucket: bucket)
+
+		writeColumn(self.counts, index: slot, value: countCell)
+		writeColumn(self.bytes, index: slot, value: bytesCell)
+	end 'setBucket'
+
+	export function addToBucket(index PhaseIndex, bucket TagBucketIndex, countCell ColumnCell, bytesCell ColumnCell)
+		let slot = tagCensusSlotOf(index, bucket: bucket)
+
+		writeColumn(self.counts, index: slot, value: readColumn(self.counts, index: slot) + countCell)
+		writeColumn(self.bytes, index: slot, value: readColumn(self.bytes, index: slot) + bytesCell)
+	end 'addToBucket'
+
+	export function markSampled(index PhaseIndex)
+		try self.sampled.set(index, value: true) otherwise panic("TagBucketColumns.markSampled: the sampled column holds {self.sampled.count()} flags, so it was not sized to its phase enum")
+	end 'markSampled'
+
+	export function sampledAt(index PhaseIndex) returns bool
+		return try self.sampled.get(index) otherwise panic("TagBucketColumns.sampledAt: phase index {index} OOB — the column holds {self.sampled.count()}")
+	end 'sampledAt'
+end 'TagBucketColumns'
+
+export type PhaseTagCensusColumns
+	export var enabled as bool
+	export var buckets as TagBucketColumns
+	export var liveBytes as PhaseColumnArray
+	export var rawLiveSlots as PhaseColumnArray
+	export var tallyBytes as PhaseColumnArray
+	export var scratch as PhaseTagCensus
+
+	export static function off() returns PhaseTagCensusColumns
+		return Self{enabled: false, buckets: TagBucketColumns.off(), liveBytes: PhaseColumnArray.create(), rawLiveSlots: PhaseColumnArray.create(), tallyBytes: PhaseColumnArray.create(), scratch: PhaseTagCensus.empty()}
+	end 'off'
+
+	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode)
+		self.enabled = true
+		self.buckets.size(phaseCount, tallyMode: tallyMode)
 		self.liveBytes = phaseColumn(phaseCount as ColumnLength)
 		self.rawLiveSlots = phaseColumn(phaseCount as ColumnLength)
 		self.tallyBytes = phaseColumn(phaseCount as ColumnLength)
-		self.sampled.resize(phaseCount)
 		self.scratch = PhaseTagCensus.sized()
-		self.names = tagCensusNames(tallyMode)
 	end 'enable'
 
 	export function takeAt(index PhaseIndex)
@@ -384,29 +459,20 @@ export type PhaseTagCensusColumns
 	// figure no instant of the heap ever held, which the report's own self-check would then report as a
 	// disagreement it cannot explain.
 	function keepIfHighest(index PhaseIndex, reading PhaseTagCensus)
-		if self.sampledAt(index) and reading.liveBytes <= self.liveBytesAt(index) 'notTheHighest'
+		if self.buckets.sampledAt(index) and reading.liveBytes <= self.liveBytesAt(index) 'notTheHighest'
 			return
 		end 'notTheHighest'
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			let slot = tagCensusSlotOf(index, bucket: bucket)
-			writeColumn(self.bytes, index: slot, value: readColumn(reading.bytes, index: bucket as ColumnSlot))
-			writeColumn(self.counts, index: slot, value: readColumn(reading.counts, index: bucket as ColumnSlot))
+			let read = bucket as ColumnSlot
+			self.buckets.setBucket(index, bucket: bucket, countCell: readColumn(reading.counts, index: read), bytesCell: readColumn(reading.bytes, index: read))
 		end 'eachBucket'
 
 		writeColumn(self.liveBytes, index: index as ColumnSlot, value: reading.liveBytes as ColumnCell)
 		writeColumn(self.rawLiveSlots, index: index as ColumnSlot, value: reading.rawLiveSlots as ColumnCell)
 		writeColumn(self.tallyBytes, index: index as ColumnSlot, value: reading.tallyBytes as ColumnCell)
-		try self.sampled.set(index, value: true) otherwise panic("PhaseTagCensusColumns.keepIfHighest: the sampled column holds {self.sampled.count()} flags, so it was not sized to its phase enum")
+		self.buckets.markSampled(index)
 	end 'keepIfHighest'
-
-	export function countAt(index PhaseIndex, bucket TagBucketIndex) returns AllocCount
-		return readColumn(self.counts, index: tagCensusSlotOf(index, bucket: bucket)) as AllocCount
-	end 'countAt'
-
-	export function bytesAt(index PhaseIndex, bucket TagBucketIndex) returns HeapByteCount
-		return readColumn(self.bytes, index: tagCensusSlotOf(index, bucket: bucket)) as HeapByteCount
-	end 'bytesAt'
 
 	export function liveBytesAt(index PhaseIndex) returns HeapByteCount
 		return readColumn(self.liveBytes, index: index as ColumnSlot) as HeapByteCount
@@ -419,11 +485,74 @@ export type PhaseTagCensusColumns
 	export function tallyBytesAt(index PhaseIndex) returns HeapByteCount
 		return readColumn(self.tallyBytes, index: index as ColumnSlot) as HeapByteCount
 	end 'tallyBytesAt'
-
-	export function sampledAt(index PhaseIndex) returns bool
-		return try self.sampled.get(index) otherwise panic("PhaseTagCensusColumns.sampledAt: phase index {index} OOB — the column holds {self.sampled.count()}")
-	end 'sampledAt'
 end 'PhaseTagCensusColumns'
+
+// One reading of the run's per-tag totals. `take` allocates nothing — `sized()` gave the columns their
+// full width — because a sampling that grew an array would be counted by the very tally it is taking.
+export type PhaseAllocTally
+	export var counts as PhaseColumnArray
+	export var bytes as PhaseColumnArray
+	export var runTotal as AllocCount
+
+	export static function empty() returns PhaseAllocTally
+		return Self{counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), runTotal: 0}
+	end 'empty'
+
+	export static function sized() returns PhaseAllocTally
+		return Self{counts: phaseColumn(SlabCensusTagBuckets), bytes: phaseColumn(SlabCensusTagBuckets), runTotal: 0}
+	end 'sized'
+
+	export function take()
+		self.runTotal = __Builtins.mmAllocTotal() as AllocCount
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			writeColumn(self.counts, index: bucket as ColumnSlot, value: __Builtins.mmAllocTotalByTag(bucket) as ColumnCell)
+			writeColumn(self.bytes, index: bucket as ColumnSlot, value: __Builtins.mmAllocBytesByTag(bucket) as ColumnCell)
+		end 'eachBucket'
+	end 'take'
+end 'PhaseAllocTally'
+
+export type PhaseAllocTallyColumns
+	export var enabled as bool
+	export var buckets as TagBucketColumns
+	export var previous as PhaseAllocTally
+	export var scratch as PhaseAllocTally
+	export var runTotal as AllocCount
+
+	export static function off() returns PhaseAllocTallyColumns
+		return Self{enabled: false, buckets: TagBucketColumns.off(), previous: PhaseAllocTally.empty(), scratch: PhaseAllocTally.empty(), runTotal: 0}
+	end 'off'
+
+	export function enable(phaseCount PhaseIndex)
+		self.enabled = true
+		self.buckets.size(phaseCount, tallyMode: tagCensusModeForThisBuild())
+		self.previous = PhaseAllocTally.sized()
+		self.scratch = PhaseAllocTally.sized()
+	end 'enable'
+
+	// Each phase's cells are the rise since the previous boundary, folded ADDITIVELY where the census keeps
+	// one whole sampling: a count over an interval is not a level, so a phase entered twice owes the sum of
+	// both visits and a highest-wins fold would drop one. `previous` starts at zeros, so the first sampled
+	// phase absorbs everything allocated before its boundary and Σ over the sampled phases telescopes
+	// EXACTLY to the run's own total at the last one — which is what the report's self-check asserts, and
+	// what makes it hold when a single phase is named as well.
+	export function takeAt(index PhaseIndex)
+		self.scratch.take()
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			let read = bucket as ColumnSlot
+			let nowCount = readColumn(self.scratch.counts, index: read)
+			let nowBytes = readColumn(self.scratch.bytes, index: read)
+
+			self.buckets.addToBucket(index, bucket: bucket, countCell: nowCount - readColumn(self.previous.counts, index: read), bytesCell: nowBytes - readColumn(self.previous.bytes, index: read))
+			writeColumn(self.previous.counts, index: read, value: nowCount)
+			writeColumn(self.previous.bytes, index: read, value: nowBytes)
+		end 'eachBucket'
+
+		self.runTotal = self.scratch.runTotal
+		self.buckets.markSampled(index)
+	end 'takeAt'
+end 'PhaseAllocTallyColumns'
 
 // Per-compile memory attribution, owned by `Project` beside `timings` — for the same
 // reason: Project is already threaded through every phase, so no pass needs a new
@@ -437,6 +566,8 @@ export type CompileMemory
 
 	export var tagCensus as PhaseTagCensusColumns
 
+	export var allocTally as PhaseAllocTallyColumns
+
 	// The whole compile's memory, stamped once by `compile` — the denominator every
 	// phase's share is taken against, and the total the phases must reconcile to. Zero
 	// until then: the warm-rebuild gate drives `compileToCodeResult` directly and never
@@ -449,6 +580,7 @@ export type CompileMemory
 			columns: PhaseMemoryColumns.create(CompilePhase.allCases.count()),
 			residency: PhaseResidencyColumns.create(CompilePhase.allCases.count()),
 			tagCensus: PhaseTagCensusColumns.off(),
+			allocTally: PhaseAllocTallyColumns.off(),
 			total: PhaseDelta.zero(),
 			regAlloc: RegAllocMemory.create()
 		}
@@ -473,6 +605,14 @@ export type CompileMemory
 	export function recordTagCensus(phase CompilePhase)
 		self.tagCensus.takeAt(phase.ordinal)
 	end 'recordTagCensus'
+
+	export function enableAllocTally()
+		self.allocTally.enable(CompilePhase.allCases.count())
+	end 'enableAllocTally'
+
+	export function recordAllocTally(phase CompilePhase)
+		self.allocTally.takeAt(phase.ordinal)
+	end 'recordAllocTally'
 
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
 		let allocs = self.columns.allocsAt(phase.ordinal)
@@ -577,6 +717,7 @@ export function compileMemoryReport(memory CompileMemory, timings CompileTimings
 	msg.append(memoryRow("{MemRowIndent}attributed", delta: memory.attributed(poolRows)))
 	msg.append(memoryRow("{MemRowIndent}unattributed", delta: memory.unattributed(poolRows)))
 	msg.append(compileResidencyReport(memory))
+	msg.append(allocTallyReport(memory))
 	return msg.build()
 end 'compileMemoryReport'
 
@@ -639,37 +780,24 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) retur
 		return ""
 	end 'notRequested'
 
-	let names = census.names
+	let names = census.buckets.names
+	let style = tagCensusRowStyle(census.buckets.mode)
 	var msg = StringBuilder.create()
 
-	msg.append("\n{tagCensusHeadline(census.mode)}\n")
+	msg.append("\n{tagCensusHeadline(census.buckets.mode)}\n")
 
-	if census.mode == SlabCensusTagMode and names.count() == 0 'noNameTable'
+	if census.buckets.mode == SlabCensusTagMode and names.count() == 0 'noNameTable'
 		msg.append("{MemRowIndent}this binary carries no interned-name table, so every bucket is shown as `tag=<n>` — the same table `maxon monitor` reads to name a traced allocation\n")
 	end 'noNameTable'
 
-	let peakSampled = census.sampledAt(peakLivePhase.ordinal)
+	let peakSampled = census.buckets.sampledAt(peakLivePhase.ordinal)
 	var peakRows = TagCensusRowArray.create()
 
 	if peakSampled 'rankThePeakOnce'
-		peakRows = tagCensusRanked(census, index: peakLivePhase.ordinal, wholeTable: true)
+		peakRows = tagRowsRanked(census.buckets, index: peakLivePhase.ordinal, wholeTable: true, style: style)
 	end 'rankThePeakOnce'
 
-	for phase in CompilePhase.allCases 'eachPhase'
-		if not census.sampledAt(phase.ordinal) 'neverSampled'
-			continue
-		end 'neverSampled'
-
-		var line = ""
-
-		if phase == peakLivePhase and peakSampled 'thePeakIsAlreadyRanked'
-			line = tagCensusTopLine(peakRows, mode: census.mode, names: names)
-		end 'thePeakIsAlreadyRanked' else 'rankedForTheLineAlone'
-			line = tagCensusTopLine(tagCensusRanked(census, index: phase.ordinal, wholeTable: false), mode: census.mode, names: names)
-		end 'rankedForTheLineAlone'
-
-		msg.append("{MemRowIndent}{phase.name}: {line}\n")
-	end 'eachPhase'
+	msg.append(tagPhaseTopLines(census.buckets, style: style, peakPhase: peakLivePhase, peakRows: peakRows, peakRanked: peakSampled))
 
 	if not peakSampled 'peakNeverSampled'
 		msg.append("{MemRowIndent}the peak-live phase {peakLivePhase.name} was not censused, so there is no table to print for it\n")
@@ -677,23 +805,97 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) retur
 	end 'peakNeverSampled'
 
 	msg.append("{MemRowIndent}the whole table at {peakLivePhase.name}, the peak-LIVE phase\n")
-	msg.append("{padRight("{MemRowIndent}{tagCensusColumnTitle(census.mode)}", width: TagLabelWidth)}{padLeft("live", width: MemAllocsWidth)}{padLeft("bytes", width: MemBytesWidth)}\n")
-	msg.append(horizontalRule(TagCensusRuleWidth))
-
-	for row in peakRows 'eachRow'
-		msg.append(tagCensusRowText(row, mode: census.mode, names: names))
-	end 'eachRow'
-
-	msg.append(tagCensusRowText(tagCensusRowAt(census, index: peakLivePhase.ordinal, bucket: SlabCensusImplausibleBucket), mode: census.mode, names: names))
-	msg.append(tagCensusRowText(tagCensusRowAt(census, index: peakLivePhase.ordinal, bucket: SlabCensusOverflowBucket), mode: census.mode, names: names))
+	msg.append(tagTableBlock(peakRows, style: style, names: names, columnTitle: tagCensusColumnTitle(census.buckets.mode), countTitle: TagCensusLiveColumnTitle))
+	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal, bucket: SlabCensusImplausibleBucket, names: names))
+	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal, bucket: SlabCensusOverflowBucket, names: names))
 	msg.append(horizontalRule(TagCensusRuleWidth))
 
 	let committed = memory.residencyOf(peakLivePhase).committedBytes
 	msg.append("{MemRowIndent}os-direct: no row above counts a mapping the slab did not serve — committed {committed} bytes at this phase INCLUDES the OS-direct road's live mappings and the allocator's own overhead\n")
 	msg.append("{MemRowIndent}{census.rawLiveSlotsAt(peakLivePhase.ordinal)} live slots carry no box header — the rows above attribute each of them by whatever its first word holds, so they land in {TagCensusUnattributableLabel} or in a tag bucket that is not theirs\n")
-	msg.append("{MemRowIndent}{tagCensusSelfCheck(tagCensusTotalBytes(census, index: peakLivePhase.ordinal), tallyBytes: census.tallyBytesAt(peakLivePhase.ordinal), liveBytes: census.liveBytesAt(peakLivePhase.ordinal))}\n")
+	msg.append("{MemRowIndent}{tagCensusSelfCheck(census.buckets.totalBytesAt(peakLivePhase.ordinal), tallyBytes: census.tallyBytesAt(peakLivePhase.ordinal), liveBytes: census.liveBytesAt(peakLivePhase.ordinal))}\n")
 	return msg.build()
 end 'tagCensusReport'
+
+function allocTallyReport(memory CompileMemory) returns String
+	let tally = memory.allocTally
+
+	if not tally.enabled 'notRequested'
+		return ""
+	end 'notRequested'
+
+	var msg = StringBuilder.create()
+	msg.append("\n{allocTallyHeadline(tally.buckets.mode)}\n")
+
+	if tally.buckets.mode != SlabCensusTagMode 'noTagsToSplitBy'
+		return msg.build()
+	end 'noTagsToSplitBy'
+
+	let names = tally.buckets.names
+	let style = allocTallyRowStyle()
+	var peakPhase = CompilePhase.load
+	var peakAllocs = 0 as AllocCount
+	var bucketed = 0 as AllocCount
+
+	for phase in CompilePhase.allCases 'findThePeak'
+		if not tally.buckets.sampledAt(phase.ordinal) 'neverSampled'
+			continue
+		end 'neverSampled'
+
+		let allocs = tally.buckets.totalCountAt(phase.ordinal)
+		bucketed = bucketed + allocs
+
+		if allocs > peakAllocs 'highest'
+			peakAllocs = allocs
+			peakPhase = phase
+		end 'highest'
+	end 'findThePeak'
+
+	let peakRanked = peakAllocs > 0
+	var peakRows = TagCensusRowArray.create()
+
+	if peakRanked 'rankThePeakOnce'
+		peakRows = tagRowsRanked(tally.buckets, index: peakPhase.ordinal, wholeTable: true, style: style)
+	end 'rankThePeakOnce'
+
+	msg.append(tagPhaseTopLines(tally.buckets, style: style, peakPhase: peakPhase, peakRows: peakRows, peakRanked: peakRanked))
+
+	if not peakRanked 'nothingWasTallied'
+		msg.append("{MemRowIndent}no sampled phase allocated anything, so there is no table to print\n")
+		msg.append("{MemRowIndent}{allocTallySelfCheck(bucketed, runTotal: tally.runTotal)}\n")
+		return msg.build()
+	end 'nothingWasTallied'
+
+	msg.append("{MemRowIndent}the whole table at {peakPhase.name}, the phase that allocated MOST\n")
+	msg.append(tagTableBlock(peakRows, style: style, names: names, columnTitle: TagCensusTagColumnTitle, countTitle: AllocTallyAllocationsColumnTitle))
+	msg.append(horizontalRule(TagCensusRuleWidth))
+	msg.append("{MemRowIndent}{allocTallySelfCheck(bucketed, runTotal: tally.runTotal)}\n")
+	return msg.build()
+end 'allocTallyReport'
+
+function allocTallyHeadline(mode TagCensusMode) returns String
+	if mode == SlabCensusTagMode 'byTag'
+		return "allocations by tag — every allocation this compile ASKED FOR, by tag and by phase"
+	end 'byTag'
+
+	return "allocations by tag — this compiler carries no tags, so nothing was tallied ({DebugStreamFlag} is what mints them)"
+end 'allocTallyHeadline'
+
+function allocTallySelfCheck(bucketed AllocCount, runTotal AllocCount) returns String
+	return "Σ over the sampled phases and buckets = {bucketed}, the run's own allocation total at the last boundary = {runTotal}{allocTallyAgreement(bucketed, runTotal: runTotal)}"
+end 'allocTallySelfCheck'
+
+function allocTallyAgreement(bucketed AllocCount, runTotal AllocCount) returns String
+	if bucketed == runTotal 'agrees'
+		return " — equal"
+	end 'agrees'
+
+	if bucketed > runTotal 'higher'
+		return " — NOT equal: the buckets are {bucketed - runTotal} allocations HIGHER than the total they split, which no correct tally can be"
+	end 'higher'
+
+	return " — NOT equal: the buckets are {runTotal - bucketed} allocations SHORT of the total they split, which is an arrival the tally did not step"
+end 'allocTallyAgreement'
 
 function tagCensusHeadline(mode TagCensusMode) returns String
 	if mode == SlabCensusTagMode 'byTag'
@@ -705,13 +907,13 @@ end 'tagCensusHeadline'
 
 function tagCensusColumnTitle(mode TagCensusMode) returns String
 	if mode == SlabCensusTagMode 'byTag'
-		return "tag"
+		return TagCensusTagColumnTitle
 	end 'byTag'
 
-	return "size class"
+	return TagCensusClassColumnTitle
 end 'tagCensusColumnTitle'
 
-export function tagCensusLabel(mode TagCensusMode, bucket TagBucketIndex, names StringArray, count AllocCount, bytes HeapByteCount) returns String
+function tagCensusLabel(mode TagCensusMode, bucket TagBucketIndex, names StringArray, count AllocCount, bytes HeapByteCount) returns String
 	if bucket == SlabCensusImplausibleBucket 'noPackedIdExplainsIt'
 		return TagCensusUnattributableLabel
 	end 'noPackedIdExplainsIt'
@@ -721,13 +923,7 @@ export function tagCensusLabel(mode TagCensusMode, bucket TagBucketIndex, names 
 	end 'pastTheTable'
 
 	if mode == SlabCensusTagMode 'byTag'
-		let named = try names.get(bucket) otherwise ""
-
-		if named.isEmpty() 'unnamed'
-			return "tag={bucket}"
-		end 'unnamed'
-
-		return named
+		return tagNameOrIndex(bucket, names: names)
 	end 'byTag'
 
 	if count == 0 'noSlotToDivideBy'
@@ -739,53 +935,173 @@ export function tagCensusLabel(mode TagCensusMode, bucket TagBucketIndex, names 
 	return "class {bucket} ({slotBytes} bytes)"
 end 'tagCensusLabel'
 
-function tagCensusRowAt(census PhaseTagCensusColumns, index PhaseIndex, bucket TagBucketIndex) returns TagCensusRow
-	return TagCensusRow.create(bucket, count: census.countAt(index, bucket: bucket), bytes: census.bytesAt(index, bucket: bucket))
-end 'tagCensusRowAt'
+function tagNameOrIndex(bucket TagBucketIndex, names StringArray) returns String
+	if bucket == TagCensusUntaggedBucket 'noTagAtAll'
+		return TagCensusUntaggedLabel
+	end 'noTagAtAll'
 
-function tagCensusRanked(census PhaseTagCensusColumns, index PhaseIndex, wholeTable bool) returns TagCensusRowArray
+	let named = try names.get(bucket) otherwise ""
+
+	if named.isEmpty() 'unnamed'
+		return "tag={bucket}"
+	end 'unnamed'
+
+	return named
+end 'tagNameOrIndex'
+
+function allocTallyLabel(bucket TagBucketIndex, names StringArray) returns String
+	if bucket == SlabCensusOverflowBucket 'pastTheTable'
+		return TagCensusOverflowLabel
+	end 'pastTheTable'
+
+	return tagNameOrIndex(bucket, names: names)
+end 'allocTallyLabel'
+
+export function tagBucketLabel(bucket TagBucketIndex, kind TagRowLine, names StringArray, count AllocCount, bytes HeapByteCount) returns String
+	return match kind 'kind'
+		census(mode) gives tagCensusLabel(mode, bucket: bucket, names: names, count: count, bytes: bytes)
+		churn gives allocTallyLabel(bucket, names: names)
+	end 'kind'
+end 'tagBucketLabel'
+
+function tagCensusOwnRowText(census PhaseTagCensusColumns, index PhaseIndex, bucket TagBucketIndex, names StringArray) returns String
+	let count = census.buckets.countAt(index, bucket: bucket)
+	let bytes = census.buckets.bytesAt(index, bucket: bucket)
+
+	return tagTableRowText(tagCensusLabel(census.buckets.mode, bucket: bucket, names: names, count: count, bytes: bytes), count: count, bytes: bytes)
+end 'tagCensusOwnRowText'
+
+enum TagRowOrder
+	byBytes
+	byCount
+end 'TagRowOrder'
+
+enum TagRowSkip
+	nothing
+	censusOwnRows
+end 'TagRowSkip'
+
+export union TagRowLine
+	census(mode TagCensusMode)
+	churn
+end 'TagRowLine'
+
+type TagRowStyle
+	export var order as TagRowOrder
+	export var skip as TagRowSkip
+	export var kind as TagRowLine
+	export var whenEmpty as String
+
+	export static function create(order TagRowOrder, skip TagRowSkip, kind TagRowLine, whenEmpty String) returns TagRowStyle
+		return Self{order: order, skip: skip, kind: kind, whenEmpty: whenEmpty}
+	end 'create'
+end 'TagRowStyle'
+
+function tagCensusRowStyle(mode TagCensusMode) returns TagRowStyle
+	return TagRowStyle.create(TagRowOrder.byBytes, skip: TagRowSkip.censusOwnRows, kind: TagRowLine.census(mode), whenEmpty: TagCensusNothingLive)
+end 'tagCensusRowStyle'
+
+function allocTallyRowStyle() returns TagRowStyle
+	return TagRowStyle.create(TagRowOrder.byCount, skip: TagRowSkip.nothing, kind: TagRowLine.churn, whenEmpty: AllocTallyNothingAllocated)
+end 'allocTallyRowStyle'
+
+function tagRowIsShownSeparately(bucket TagBucketIndex, skip TagRowSkip) returns bool
+	return match skip 'skip'
+		nothing gives false
+		censusOwnRows gives bucket == SlabCensusImplausibleBucket or bucket == SlabCensusOverflowBucket
+	end 'skip'
+end 'tagRowIsShownSeparately'
+
+function tagRowsRanked(columns TagBucketColumns, index PhaseIndex, wholeTable bool, style TagRowStyle) returns TagCensusRowArray
+	let order = style.order
 	var rows = TagCensusRowArray.create()
 
 	for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-		if bucket == SlabCensusImplausibleBucket or bucket == SlabCensusOverflowBucket 'itsOwnRow'
+		if tagRowIsShownSeparately(bucket, skip: style.skip) 'itsOwnRow'
 			continue
 		end 'itsOwnRow'
 
-		let row = tagCensusRowAt(census, index: index, bucket: bucket)
+		let row = TagCensusRow.create(bucket, count: columns.countAt(index, bucket: bucket), bytes: columns.bytesAt(index, bucket: bucket))
 
 		if row.bytes == 0 and row.count == 0 'empty'
 			continue
 		end 'empty'
 
-		if wholeTable 'everyLiveBucket'
+		if wholeTable 'everyPopulatedBucket'
 			rows.push(row)
-		end 'everyLiveBucket' else 'theTopRowsAlone'
-			keepTagCensusTopRow(rows, row: row)
+		end 'everyPopulatedBucket' else 'theTopRowsAlone'
+			keepTagTopRow(rows, row: row, order: order)
 		end 'theTopRowsAlone'
 	end 'eachBucket'
 
 	if wholeTable 'sortWhatWasPushed'
-		rows.sort(function(left TagCensusRow, right TagCensusRow) gives tagCensusRank(left, against: right))
+		rows.sort(function(left TagCensusRow, right TagCensusRow) gives tagRowRank(left, against: right, order: order))
 	end 'sortWhatWasPushed'
 
 	return rows
-end 'tagCensusRanked'
+end 'tagRowsRanked'
 
-function tagCensusRank(row TagCensusRow, against TagCensusRow) returns Ordering
-	if row.bytes != against.bytes 'byBytes'
-		return against.bytes.compare(row.bytes)
-	end 'byBytes'
+function tagPhaseTopLines(columns TagBucketColumns, style TagRowStyle, peakPhase CompilePhase, peakRows TagCensusRowArray, peakRanked bool) returns String
+	let names = columns.names
+	var msg = StringBuilder.create()
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		if not columns.sampledAt(phase.ordinal) 'neverSampled'
+			continue
+		end 'neverSampled'
+
+		var line = ""
+
+		if phase == peakPhase and peakRanked 'thePeakIsAlreadyRanked'
+			line = tagTopLine(peakRows, style: style, names: names)
+		end 'thePeakIsAlreadyRanked' else 'rankedForTheLineAlone'
+			line = tagTopLine(tagRowsRanked(columns, index: phase.ordinal, wholeTable: false, style: style), style: style, names: names)
+		end 'rankedForTheLineAlone'
+
+		msg.append("{MemRowIndent}{phase.name}: {line}\n")
+	end 'eachPhase'
+
+	return msg.build()
+end 'tagPhaseTopLines'
+
+function tagTableBlock(rows TagCensusRowArray, style TagRowStyle, names StringArray, columnTitle String, countTitle String) returns String
+	var msg = StringBuilder.create()
+
+	msg.append("{padRight("{MemRowIndent}{columnTitle}", width: TagLabelWidth)}{padLeft(countTitle, width: MemAllocsWidth)}{padLeft(TagTableBytesColumnTitle, width: MemBytesWidth)}\n")
+	msg.append(horizontalRule(TagCensusRuleWidth))
+
+	for row in rows 'eachRow'
+		msg.append(tagTableRowText(tagBucketLabel(row.bucket, kind: style.kind, names: names, count: row.count, bytes: row.bytes), count: row.count, bytes: row.bytes))
+	end 'eachRow'
+
+	return msg.build()
+end 'tagTableBlock'
+
+function tagRowFigure(row TagCensusRow, order TagRowOrder) returns HeapByteCount
+	return match order 'order'
+		byBytes gives row.bytes
+		byCount gives row.count as HeapByteCount
+	end 'order'
+end 'tagRowFigure'
+
+function tagRowRank(row TagCensusRow, against TagCensusRow, order TagRowOrder) returns Ordering
+	let mine = tagRowFigure(row, order: order)
+	let theirs = tagRowFigure(against, order: order)
+
+	if mine != theirs 'byTheRankedColumn'
+		return theirs.compare(mine)
+	end 'byTheRankedColumn'
 
 	return row.bucket.compare(against.bucket)
-end 'tagCensusRank'
+end 'tagRowRank'
 
-function keepTagCensusTopRow(top TagCensusRowArray, row TagCensusRow)
+function keepTagTopRow(top TagCensusRowArray, row TagCensusRow, order TagRowOrder)
 	var at = top.count()
 
 	while at > 0 'findItsPlace'
-		let ahead = try top.get(at - 1) otherwise panic("keepTagCensusTopRow: slot {at - 1} of {top.count()} is not readable")
+		let ahead = try top.get(at - 1) otherwise panic("keepTagTopRow: slot {at - 1} of {top.count()} is not readable")
 
-		if tagCensusRank(ahead, against: row) == Ordering.lessThan 'inPlace'
+		if tagRowRank(ahead, against: row, order: order) == Ordering.lessThan 'inPlace'
 			break
 		end 'inPlace'
 
@@ -799,18 +1115,25 @@ function keepTagCensusTopRow(top TagCensusRowArray, row TagCensusRow)
 	top.insert(at, value: row)
 
 	if top.count() > TagCensusTopRows 'oneTooMany'
-		_ = try top.pop() otherwise panic("keepTagCensusTopRow: {top.count()} rows are held and none can be dropped")
+		_ = try top.pop() otherwise panic("keepTagTopRow: {top.count()} rows are held and none can be dropped")
 	end 'oneTooMany'
-end 'keepTagCensusTopRow'
+end 'keepTagTopRow'
 
-function tagCensusRowText(row TagCensusRow, mode TagCensusMode, names StringArray) returns String
-	return "{padRight("{MemRowIndent}{tagCensusLabel(mode, bucket: row.bucket, names: names, count: row.count, bytes: row.bytes)}", width: TagLabelWidth)}{padLeft("{row.count}", width: MemAllocsWidth)}{padLeft("{row.bytes}", width: MemBytesWidth)}\n"
-end 'tagCensusRowText'
+function tagTableRowText(label String, count AllocCount, bytes HeapByteCount) returns String
+	return "{padRight("{MemRowIndent}{label}", width: TagLabelWidth)}{padLeft("{count}", width: MemAllocsWidth)}{padLeft("{bytes}", width: MemBytesWidth)}\n"
+end 'tagTableRowText'
 
-function tagCensusTopLine(rows TagCensusRowArray, mode TagCensusMode, names StringArray) returns String
-	if rows.count() == 0 'nothingLive'
-		return "nothing live"
-	end 'nothingLive'
+function tagRowFigures(row TagCensusRow, order TagRowOrder) returns String
+	return match order 'order'
+		byBytes gives "{row.bytes}B/{row.count}"
+		byCount gives "{row.count}/{row.bytes}B"
+	end 'order'
+end 'tagRowFigures'
+
+function tagTopLine(rows TagCensusRowArray, style TagRowStyle, names StringArray) returns String
+	if rows.count() == 0 'nothingToShow'
+		return style.whenEmpty
+	end 'nothingToShow'
 
 	var shown = 0 as TagRowCount
 	var line = ""
@@ -820,22 +1143,12 @@ function tagCensusTopLine(rows TagCensusRowArray, mode TagCensusMode, names Stri
 			break
 		end 'enough'
 
-		line.append("{TagCensusTopSeparator if shown > 0 else ""}{tagCensusLabel(mode, bucket: row.bucket, names: names, count: row.count, bytes: row.bytes)} {row.bytes}B/{row.count}")
+		line.append("{TagCensusTopSeparator if shown > 0 else ""}{tagBucketLabel(row.bucket, kind: style.kind, names: names, count: row.count, bytes: row.bytes)} {tagRowFigures(row, order: style.order)}")
 		shown = shown + 1
 	end 'eachRow'
 
 	return line
-end 'tagCensusTopLine'
-
-function tagCensusTotalBytes(census PhaseTagCensusColumns, index PhaseIndex) returns HeapByteCount
-	var total = 0 as HeapByteCount
-
-	for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-		total = total + census.bytesAt(index, bucket: bucket)
-	end 'eachBucket'
-
-	return total
-end 'tagCensusTotalBytes'
+end 'tagTopLine'
 
 function tagCensusSelfCheck(totalBytes HeapByteCount, tallyBytes HeapByteCount, liveBytes HeapByteCount) returns String
 	return "Σ bytes = {totalBytes}, the tally walked {tallyBytes}, slabLiveBytes = {liveBytes}{tagCensusAgainstTheLevel("Σ bytes", figure: totalBytes, liveBytes: liveBytes)}{tagCensusAgainstTheLevel("the tally's own walk", figure: tallyBytes, liveBytes: liveBytes)}"

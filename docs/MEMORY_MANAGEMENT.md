@@ -429,6 +429,19 @@ to be attributed by, and lands in the census's `(unattributable)` bucket.
 `__Builtins.mmRawAllocLive()` is how many such slots are live, which bounds how much of a table can be wrong
 for that reason.
 
+### Counting allocations by tag
+
+A census is blind to an allocation that was freed before it looked, which is most of them: it answers what
+the heap holds, not what the program asked for. `__Builtins.mmAllocTotalByTag(i)` and
+`__Builtins.mmAllocBytesByTag(i)` answer the second question, described under
+[Attributing Allocation Churn](LANGUAGE_REFERENCE.md#attributing-allocation-churn) — the allocations and
+bytes tag `i` has asked for since the process started, which only rise. The compiler runs this on itself
+through [`maxon build --allocations-by-tag`](CLI_REFERENCE.md#logging).
+
+Their table is a 32 KiB run in `.data` that a `--debugstream` binary always carries, stepped by every
+allocation such a build makes. A binary built without the flag has neither the table nor the step, and
+both readers answer 0.
+
 ## Copy-on-Write (COW)
 
 Strings and arrays use copy-on-write semantics for efficient sharing:

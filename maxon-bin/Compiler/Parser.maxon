@@ -6218,6 +6218,11 @@ let BuiltinsMmRawAllocTotalName = b"__Builtins.mmRawAllocTotal"
 let BuiltinsMmRawAllocLiveName = b"__Builtins.mmRawAllocLive"
 let BuiltinsMmRawAllocBytesName = b"__Builtins.mmRawAllocBytes"
 
+let BuiltinsMmAllocTotalByTagName = b"__Builtins.mmAllocTotalByTag"
+let BuiltinsMmAllocBytesByTagName = b"__Builtins.mmAllocBytesByTag"
+
+let MmAllocByTagArity = 1 as ParamCount
+
 // ⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes of ONE GREEN THREAD**, both layers
 // summed. A process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker
 // reads these. `MmRuntime.MmCounterThreadAllocsName` owns what each answers and what a single-threaded
@@ -85874,6 +85879,14 @@ export type Parser
 			if callee.equals(BuiltinsMmRawAllocBytesName) 'mmRawAllocBytes'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsMmRawAllocBytesName, runtimeName: MmCounterRawAllocBytesName, arity: MmCounterArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'mmRawAllocBytes'
+
+			if callee.equals(BuiltinsMmAllocTotalByTagName) 'mmAllocTotalByTag'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: MmCounterAllocTotalByTagName, arity: MmAllocByTagArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'mmAllocTotalByTag'
+
+			if callee.equals(BuiltinsMmAllocBytesByTagName) 'mmAllocBytesByTag'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: MmCounterAllocBytesByTagName, arity: MmAllocByTagArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'mmAllocBytesByTag'
 
 			// ⭐ **THE THREE PER-THREAD COLUMNS**, on the six's own door and for the six's own reason. They
 			// sum both allocator layers where the six are per-layer, so there are three of them and not six.

@@ -1,0 +1,17 @@
+# The `mmAllocTotal()` read stays: it is not one of the new builtins, and withdrawing it too would
+# leave `take` with an empty body, which is E3082.
+diff --git a/maxon-bin/Compiler/CompileMemory.maxon b/maxon-bin/Compiler/CompileMemory.maxon
+--- a/maxon-bin/Compiler/CompileMemory.maxon
++++ b/maxon-bin/Compiler/CompileMemory.maxon
+@@ -444,11 +444,6 @@ export type PhaseAllocTally
+ 
+ 	export function take()
+ 		self.runTotal = __Builtins.mmAllocTotal() as AllocCount
+-
+-		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+-			writeColumn(self.counts, index: bucket as ColumnSlot, value: __Builtins.mmAllocTotalByTag(bucket) as ColumnCell)
+-			writeColumn(self.bytes, index: bucket as ColumnSlot, value: __Builtins.mmAllocBytesByTag(bucket) as ColumnCell)
+-		end 'eachBucket'
+ 	end 'take'
+ end 'PhaseAllocTally'
+ 
