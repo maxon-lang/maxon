@@ -3361,6 +3361,10 @@ type MaxonToStdLowering
 	// installer mints; an enum mints none, because its value IS an i64 tag and `int.hash`/`int.equals` already
 	// answer for it. `ProgramSignatures.enumConformanceImplName` is that decision's one home — shared with the
 	// direct `e.hash()` dispatch, so `Map with (Color, …)` and `Color.red.hash()` cannot reach two bodies.
+	//
+	// ⚠ This arm answers for an enum that declared no clause at all. One that names the protocol explicitly
+	// is accepted by `checkConformance`, so the lookup above answers first — with the symbol this arm would
+	// have given, since the acceptance reads that same one home. The two roads cannot stamp two addresses.
 	function witnessSlotImpl(typeName ByteArray, interfaceName ByteArray, method InterfaceMethodSig) returns ByteArray
 		if let selected = try self.witnessSlotImpls.get(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: method.name)) 'chosenByConformance'
 			return selected

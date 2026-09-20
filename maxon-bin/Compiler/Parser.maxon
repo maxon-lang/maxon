@@ -22314,10 +22314,10 @@ export type Parser
 		self.openTypeParamScope(layout)
 
 		// ⭐ **`implements I1, I2 [with …]` — THE NAMES AND THE FINAL `with` BINDINGS, AND THAT IS WHY IT IS
-		// STILL NOT `parseTypeImplementsClause`.** The sweep needs this for exactly one reader: an EXTENSION is
+		// STILL NOT `parseImplementsClause`.** The sweep needs this for exactly one reader: an EXTENSION is
 		// expanded onto every type whose clause names its interface — and, when the extension is CONDITIONAL,
 		// only onto those whose bindings satisfy its `where` clause — and that expansion must land in the
-		// whole-program signature index before any file is parsed. The real parse's `parseTypeImplementsClause`
+		// whole-program signature index before any file is parsed. The real parse's `parseImplementsClause`
 		// records the richer `ConformanceDecl` (bindings + POSITION) that `checkConformance` verifies from; see
 		// `StructLayout.conformsTo` for why the two records are deliberately not one.
 		//
@@ -26391,7 +26391,7 @@ export type Parser
 		// `type Name [uses …] [implements …]`. Records a whole-program ConformanceDecl (anchored on the
 		// type NAME token) that `checkConformance` validates; the declaration itself emits nothing.
 		self.openConformanceClauseAliasScope()
-		try self.parseTypeImplementsClause(nameTok)
+		_ = try self.parseImplementsClause(nameTok)
 		self.closeConformanceClauseAliasScope()
 
 		// `where T is <Interface> …` (P1.7a slice 2a) — parsed AFTER `implements` per the grammar
@@ -27049,19 +27049,24 @@ export type Parser
 		return renderDeclaredTypeName(t, declarationName: interfaceName, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
 	end 'renderInterfaceTypeName'
 
-	// The `implements I1, I2 [with …]` conformance clause of a `type` declaration (P1.7a slice 1). Records
-	// a ConformanceDecl anchored on the type NAME token, or does nothing when there is no clause. Each
-	// interface carries its own `with` bindings (R5), which `checkConformance` substitutes into that
-	// interface's requirements before it compares them.
-	function parseTypeImplementsClause(nameTok Token) throws ParseError
+	// The `implements I1, I2 [with …]` conformance clause of a `type`, `enum` or `union` declaration (P1.7a
+	// slice 1). Records a ConformanceDecl anchored on the declaration's NAME token, or does nothing when
+	// there is no clause. Each interface carries its own `with` bindings (R5), which `checkConformance`
+	// substitutes into that interface's requirements before it compares them.
+	//
+	// ⭐ **ONE PRODUCER FOR ALL THREE DECLARATION KINDS.** Every consumer of a conformance — the widening
+	// verdict, E3015/E3016, the witness-slot filing, the type-cycle edges, the mutation summary — reads
+	// `project.conformances` and nothing else, so a kind filed anywhere else is a kind those checks do not
+	// see at all.
+	function parseImplementsClause(nameTok Token) returns InterfaceConformanceArray throws ParseError
 		let interfaces = try self.readImplementsList()
 
-		if interfaces.isEmpty() 'noImplements'
-			return
-		end 'noImplements'
+		if not interfaces.isEmpty() 'declaresAConformance'
+			self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaces: interfaces, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
+		end 'declaresAConformance'
 
-		self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaces: interfaces, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
-	end 'parseTypeImplementsClause'
+		return interfaces
+	end 'parseImplementsClause'
 
 	// The conformance an `extension <T> implements …` declares on behalf of ONE conformer the `where` clause
 	// admits. Anchored on the extension's own name token, so a requirement the body fails to satisfy is
@@ -27121,24 +27126,21 @@ export type Parser
 	// Every argument is READ as a type reference and RENDERED to the source string `checkConformance`
 	// substitutes into a requirement's signature — the conformance's whole contribution.
 	//
-	// ⚠ **HOW MANY ARGUMENTS THE UNPARENTHESIZED FORM TAKES IS THE INTERFACE'S `uses` ARITY, and
-	// reading exactly one was a wrong answer.** `implements Pair with Integer, Float` against
-	// `interface Pair uses First, Second` left `, Float` to `parseTypeImplementsClause`'s comma loop,
-	// which pushed `Float` as a second INTERFACE and produced a spurious `E3015 … implements unknown
-	// interface 'Float'` on a legal program. The arity is consulted here rather than becoming a parser
-	// fix of its own.
+	// ⚠ **HOW MANY ARGUMENTS THE UNPARENTHESIZED FORM TAKES IS THE INTERFACE'S `uses` ARITY, and reading
+	// exactly one is a wrong answer.** `implements Pair with Integer, Float` against `interface Pair uses
+	// First, Second` would leave `, Float` to `parseImplementsClause`'s comma loop, which files `Float` as a
+	// second INTERFACE and reports a spurious `E3015 … implements unknown interface 'Float'` on a legal
+	// program. The arity is consulted here rather than at the clause loop.
 	//
 	// The arity is asked ONLY after a first argument is followed by a comma, so no program that parses
 	// today pays the lookup at all.
 	//
-	// ⚠ **THE PARENTHESIZED ARM USED TO SKIP BALANCED TOKENS, WHICH MADE IT A TYPE POSITION THE E3062
-	// USE CHECK COULD NOT SEE** (P1.9 review). `parseTypeReference` is where a written type name is
-	// recorded as USED (`recordTypeNameUse`), so a file whose only mention of an alias was
-	// `implements Container with (Score)` had that alias reported UNUSED — a legal program refused, and
-	// refused in only ONE of the two spellings, since the single-argument arm already went through the
-	// reference parser. Measured before that fix: `error E3062 … unused typealias: 'Score'` on a program
-	// naming it, with the same program clean the moment the parentheses came off. The two arms are one
-	// rule, so a use cannot be visible in one spelling of it and invisible in the other.
+	// ⚠ **BOTH ARMS GO THROUGH `parseTypeReference`, AND SKIPPING BALANCED TOKENS IN THE PARENTHESIZED ONE
+	// WOULD BE A TYPE POSITION THE E3062 USE CHECK CANNOT SEE.** That reader is where a written type name is
+	// recorded as USED (`recordTypeNameUse`), so a file whose only mention of an alias is
+	// `implements Container with (Score)` would have that alias reported `unused typealias` — a legal program
+	// refused, and refused in only ONE of the two spellings. The two arms are one rule, so a use may not be
+	// visible in one spelling of it and invisible in the other.
 	//
 	// It reads a LEAF reference per argument rather than reaching for `parseGenericArgNodes`: that
 	// reader also VALIDATES what it reads (`checkGenericInstance` / `checkGenericArgType`), and a
@@ -27440,7 +27442,14 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
-		let conformsTo = (try self.readOptionalImplementsClause()).names
+		// ⚠ **THE REAL PARSE READS THE CLAUSE THROUGH `readImplementsList`, NEVER THROUGH THE SWEEP'S
+		// `readOptionalImplementsClause`.** That reader stops at an unparenthesized `with` whose interface
+		// arity is not yet knowable, because the sweep is what builds the arity index; here the index is
+		// whole, so an interface named after a `with` reaches the layout instead of being dropped. It is also
+		// the only reader that yields the `with` bindings `checkOneConformance` substitutes.
+		self.openConformanceClauseAliasScope()
+		let conformsTo = conformanceInterfaceNames(try self.parseImplementsClause(nameTok))
+		self.closeConformanceClauseAliasScope()
 		try self.requireDeclarationHeaderLineEnd()
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
@@ -30135,10 +30144,6 @@ export type Parser
 	//
 	// Requirements are collected TRANSITIVELY through `extends` (`witnessSlotsOf`, the memoized walk the
 	// witness dispatch already uses), so a method satisfying an inherited requirement is waived too.
-	//
-	// A free function or a closure has no enclosing type, and an `enum`/`union` records no `ConformanceDecl`
-	// at all (its `implements` clause files names on the layout — see `ConformanceCheck`'s note, an enum has
-	// no methods for a requirement to be checked against), so both answer `false` after one `isEmpty` test.
 	function parametersAreInterfaceDictated(methodName ByteArray) returns bool
 		if self.enclosingType.isEmpty() 'notAMethod'
 			return false
@@ -31645,16 +31650,13 @@ export type Parser
 		throw ParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
 	end 'requireDeclarationHeaderLineEnd'
 
-	// The optional `implements <Interface>` clause on an enum/union declaration — error enums declare
-	// `implements Error`. Shared by the tolerant declaration sweep and the real parse, exactly as
-	// `parseOptionalThrowsClause` is, so the two record the same conformance.
+	// The optional `implements <Interface>` clause as the TOLERANT DECLARATION SWEEP reads it, on either
+	// declaration kind, and as `Queries.foldConformanceClauses` re-reads it whole-program. The real parse
+	// reads the same grammar through `readImplementsList`, which is the only reader that can be positioned
+	// on a declaration whose ConformanceDecl is filed.
 	//
-	// ⭐ **IT RECORDS THE CLAUSE RATHER THAN CONSUMING AND DISCARDING IT.** The abstract-`throws` narrowing
-	// asks whether a payload-free enum conforms to `Error`, and with no record to consult it narrows
-	// `throws Error` to ANY enum. See `EnumLayout.conformsTo`.
-	//
-	// A COMMA LIST, matching `parseTypeImplementsClause`'s: `enum E implements Error, Debuggable` names two.
-	// An enum that implements nothing returns the SHARED empty, so the common case allocates nothing.
+	// A COMMA LIST, matching `parseImplementsClause`'s: `enum E implements Error, Debuggable` names two.
+	// A declaration that implements nothing returns the SHARED empty, so the common case allocates nothing.
 	//
 	// ⭐ **IT ALSO READS THE `with <TypeArgs>` OF EVERY NAME THAT CARRIES ONE** (conditional extensions). The
 	// bindings are what a conditional extension's `where` clause is evaluated against
@@ -31664,9 +31666,9 @@ export type Parser
 	// ⭐⭐ **WHERE ONE `with` ENDS IS THE INTERFACE'S `uses` ARITY, SO THE CLAUSE'S EXTENT IS A WHOLE-PROGRAM
 	// FACT — AND THAT IS WHY THIS READER STOPS EARLY IN THE SWEEP AND NOWHERE ELSE.** Whether the comma
 	// after `with Score` opens a second ARGUMENT or a second INTERFACE is decided by `Score`'s interface's
-	// arity, which only the complete index holds. Two of this function's three callers run with that
-	// index whole (the real enum parse, and `Queries.foldConformanceClauses`); the DECLARATION SWEEP is the
-	// one that does not, because the sweep is what builds it.
+	// arity, which only the complete index holds. One of this function's three callers runs with that index
+	// whole (`Queries.foldConformanceClauses`); the two DECLARATION SWEEP arms do not, because the sweep is
+	// what builds it.
 	//
 	// So the loop asks the fact itself rather than being told which pass it is in: it continues past a `with`
 	// exactly when the boundary is UNAMBIGUOUS — the arguments were parenthesized (the `)` ends them whatever
@@ -92760,6 +92762,20 @@ export type Parser
 		end 'label'
 	end 'skipOptionalLabel'
 end 'Parser'
+
+function conformanceInterfaceNames(interfaces InterfaceConformanceArray) returns ByteArrayArray
+	if interfaces.isEmpty() 'declaresNothing'
+		return sharedEmptyDeclaredConformances
+	end 'declaresNothing'
+
+	var names = ByteArrayArray.create()
+
+	for conformance in interfaces 'eachInterface'
+		names.push(conformance.interfaceName)
+	end 'eachInterface'
+
+	return names
+end 'conformanceInterfaceNames'
 
 // A roster keeps a view of its own: the name may be a record the signature index holds, and the roster rides the
 // artifact, which crosses back from a pool worker whose index is that index.

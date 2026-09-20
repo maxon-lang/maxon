@@ -12200,13 +12200,11 @@ export type ProgramSignatures
 	// `int.hash` regardless would leave the two doors disagreeing about one enum.
 	//
 	// ⛔⛔ **AND THAT BRANCH IS SOUND ONLY BECAUSE E3130 REFUSES A MEMBER THAT DOES NOT IMPLEMENT THE
-	// REQUIREMENT — it was a WRONG ANSWER AND A LEAK before that check existed.** Nothing validates an enum's
-	// members against `Hashable`/`Equatable` the way `checkConformance` validates a declared `implements`:
-	// the grant is the compiler's, so there is no `ConformanceDecl` to walk and `witnessSlotImpls` never
-	// holds a selection for one. MEASURED with the branch unguarded: an enum declaring
-	// `hash() returns String` was stamped into a slot the probe calls as `returns` i64, so `map.get`
-	// answered **0 where 20 is correct, and the process exited 101** — a String pointer used as a hash
-	// and then leaked, compiling clean with no diagnostic anywhere.
+	// REQUIREMENT.** The grant is the compiler's and needs no clause, so an enum that names neither interface
+	// has no `ConformanceDecl` for `checkConformance` to validate and no `witnessSlotImpls` selection behind
+	// it — this join is the whole answer. Unguarded, an enum declaring `hash() returns String` is stamped
+	// into a slot the probe calls as returning i64: a String pointer used as a hash and then leaked, on a
+	// program that compiles clean with no diagnostic anywhere.
 	// ⇒ `ConformanceCheck.checkGrantedEnumConformance` is the other half of THIS function and may not be
 	// removed while this branch stands.
 	export function enumConformanceImplName(enumName ByteArray, methodName ByteArray) returns ByteArray
@@ -20962,10 +20960,12 @@ export type ProgramSignatures
 	// BidirectionalIterator` reaches `Iterator` twice and conforms once, which is what keeps the two halves
 	// above from publishing a signature twice and emitting one body.
 	//
-	// ⚠ **A `type` ONLY.** An `enum`/`union` carries the same `conformsTo` column and is deliberately not
-	// walked here: The compiler has no case where an extension method on an enum is reached, and the omission is a
-	// missing method (E3004 at the call) rather than a wrong one. `sweptConformanceIndex` is keyed off
-	// `structNamesInDeclOrder` too, so the index and this walk agree about that domain by construction.
+	// ⚠ **A `type` ONLY, AND THE DOMAIN IS THIS WALK'S ALONE.** An `enum`/`union` that declares the same
+	// interface has a row in `sweptConformanceIndex` and is deliberately not walked here: an interface
+	// extension is expanded over declared types, and an enum reaching one would be a missing method (E3004 at
+	// the call) rather than a wrong one. The narrowing therefore lives in the name list handed below, never
+	// in the index — a reader that widens it widens what an extension publishes a body for.
+	// `declaredConformersOf` is the walk that does want every declared conformer.
 	//
 	// A full walk per extension, not an interface⇒conformers index: a program declares a handful of
 	// extensions, this is asked twice per extension per compile, and the index would be built by every
@@ -20973,24 +20973,34 @@ export type ProgramSignatures
 	export function conformersOf(interfaceName ByteArray) returns ByteArrayArray
 		var conformers = ByteArrayArray.create()
 
-		// An INDEX loop, not `for … in`: the element is a BORROW of `structNamesInDeclOrder`, and the call below is
-		// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-		// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-		// ⚠ **THE SWEPT INDEX IS BUILT BEFORE THE WALK, NOT INSIDE IT.** It is memoized, so hoisting cannot
-		// change what it answers — and it must be hoisted: asked inside, it is a write of `self`'s storage
-		// standing between the element borrow and its use, which is the refusal the loop header names.
+		// ⚠ **THE SWEPT INDEX IS BUILT BEFORE THE NAME LIST IS LENT, NOT AFTER.** It is memoized, so hoisting
+		// cannot change what it answers — and it must be hoisted: asked in the argument list, it is a write of
+		// `self`'s storage standing between the borrow of `structNamesInDeclOrder` and its use.
 		let swept = self.sweptConformanceIndex()
-
-		for declaredTypeIndex in 0 upto self.structNamesInDeclOrder.count() 'eachDeclaredType'
-			let name = try self.structNamesInDeclOrder.get(declaredTypeIndex) otherwise panic("conformersOf: declaredTypeIndex {declaredTypeIndex} is below self.structNamesInDeclOrder.count()")
-
-			if typeDeclaresInterface(swept, interfaces: self.interfaces, typeName: name, interfaceName: interfaceName) 'conforms'
-				conformers.push(name)
-			end 'conforms'
-		end 'eachDeclaredType'
-
+		appendConformersDeclaring(interfaceName, names: self.structNamesInDeclOrder, swept: swept, interfaces: self.interfaces, into: conformers)
 		return conformers
 	end 'conformersOf'
+
+	// ⭐⭐ **EVERY DECLARED CONFORMER, AN `enum`/`union` INCLUDED — the roster a WITNESS DISPATCH is resolved
+	// against, which is a wider set than the one an interface extension is expanded over.** The mutation
+	// summary (`SemanticCheck.witnessDispatchImpls`) names no callee: what says a dispatch writes a parameter
+	// is the union over the interface's conformers. An enum conformer left out of that union is a write
+	// nobody records — E3019 silently withheld, and a `let`-bound array pushed into through the witness.
+	//
+	// Both halves ask the SAME swept index through the SAME loop, so the two rosters cannot come to disagree
+	// about what "declares this interface" means; the only difference is which names are offered.
+	export function declaredConformersOf(interfaceName ByteArray) returns ByteArrayArray
+		var conformers = self.conformersOf(interfaceName)
+		let swept = self.sweptConformanceIndex()
+		var enumNames = ByteArrayArray.create()
+
+		for (enumName, _) in self.enumTypes 'eachDeclaredEnum'
+			enumNames.push(enumName)
+		end 'eachDeclaredEnum'
+
+		appendConformersDeclaring(interfaceName, names: enumNames, swept: swept, interfaces: self.interfaces, into: conformers)
+		return conformers
+	end 'declaredConformersOf'
 
 	// ⭐⭐ **REPLACE WHAT THE SWEEP RECORDED FOR ONE `implements` CLAUSE WITH THE WHOLE-PROGRAM RE-READ'S
 	// ANSWER (W95)** — the write half of `Queries.foldConformanceClauses`. It writes THROUGH the registry's
@@ -21036,7 +21046,9 @@ export type ProgramSignatures
 	// from the only store that exists this early.** `declaredConformanceIndex(project)` reads
 	// `project.conformances`, which the REAL PARSE fills; a CONDITIONAL extension's `where` clause has to be
 	// decided inside `queryProgramSignatures`, before any file is parsed, so this reads the sweep's own column
-	// (`StructLayout.conformsTo`) instead. Two STORES of the declarations, at two moments — but one map type
+	// on both declaration kinds (`StructLayout.conformsTo`, `EnumLayout.conformsTo`) instead. It is the
+	// roster a `where T is I` verdict is decided against, so a kind missing from it is a kind that conforms
+	// nowhere this early. Two STORES of the declarations, at two moments — but one map type
 	// and one predicate (`typeConformsTo`), so what "conforms" MEANS is stated once.
 	//
 	// Memoized for `declaredConformanceIndex`'s reason: a conditional extension asks it once per conformer per
@@ -21050,19 +21062,12 @@ export type ProgramSignatures
 
 		for name in self.structNamesInDeclOrder 'eachDeclaredType'
 			let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.sweptConformanceIndex: `structNamesInDeclOrder` holds '{String.from(name)}' with no entry in `structTypes` — `recordStruct` writes both in one act")
-
-			if layout.conformsTo.count() == 0 'declaresNone'
-				continue
-			end 'declaresNone'
-
-			var declaredInterfaces = InterfaceNameSet.create()
-
-			for interfaceName in layout.conformsTo 'eachInterface'
-				declaredInterfaces.insert(interfaceName)
-			end 'eachInterface'
-
-			declared.upsert(name, value: declaredInterfaces)
+			recordSweptConformances(declared, name: name, conformsTo: layout.conformsTo)
 		end 'eachDeclaredType'
+
+		for (enumName, enumLayout) in self.enumTypes 'eachDeclaredEnum'
+			recordSweptConformances(declared, name: enumName, conformsTo: enumLayout.conformsTo)
+		end 'eachDeclaredEnum'
 
 		self.sweptConformances = declared
 		self.sweptConformancesBuilt = true
@@ -33964,6 +33969,30 @@ export type ProgramSignatures
 		return fingerprint
 	end 'fingerprint'
 end 'ProgramSignatures'
+
+function appendConformersDeclaring(interfaceName ByteArray, names ByteArrayArray, swept DeclaredConformanceMap, interfaces IrInterfaceMap, into ByteArrayArray)
+	for i in 0 upto names.count() 'eachDeclaredName'
+		let name = try names.get(i) otherwise panic("appendConformersDeclaring: names.get OOB at {i} below count {names.count()}")
+
+		if typeDeclaresInterface(swept, interfaces: interfaces, typeName: name, interfaceName: interfaceName) 'conforms'
+			into.push(name)
+		end 'conforms'
+	end 'eachDeclaredName'
+end 'appendConformersDeclaring'
+
+function recordSweptConformances(declared DeclaredConformanceMap, name ByteArray, conformsTo ByteArrayArray)
+	if conformsTo.count() == 0 'declaresNone'
+		return
+	end 'declaresNone'
+
+	var declaredInterfaces = InterfaceNameSet.create()
+
+	for interfaceName in conformsTo 'eachInterface'
+		declaredInterfaces.insert(interfaceName)
+	end 'eachInterface'
+
+	declared.upsert(name, value: declaredInterfaces)
+end 'recordSweptConformances'
 
 // ============================================================================================
 // THE SETTLED BASELINE (B2)

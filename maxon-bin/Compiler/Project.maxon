@@ -5690,17 +5690,16 @@ export type EnumLayout
 	// payload-free ones included — take the boxed form (a bare tag in a box).
 	export var casePayloads as PayloadFieldArrayArray
 
-	// ⭐ **THE INTERFACES THIS ENUM/UNION DECLARES `implements` (A1s wave 2).** Until now the clause was
-	// CONSUMED AND DISCARDED — `skipOptionalImplementsClause`'s own comment called the payload-free-enum
-	// conforms-to-`Error` check "a follow-up" — so the compiler had no record that `enum ParseError
-	// implements Error` says anything. It is the fact the abstract-`throws` narrowing needs
-	// (`ConformanceCheck.requireImplErrorConformsAndIsScalar`): without it, `throws Error` narrowed to ANY
-	// enum, including one that declares no conformance at all, which E3016 refuses.
+	// ⭐ **THE INTERFACE NAMES THIS ENUM/UNION'S `implements` CLAUSE WRITES** — the exact twin of
+	// `StructLayout.conformsTo`, which owns why the declaration sweep's copy is not the conformance
+	// checker's record. It is the fact the abstract-`throws` narrowing reads
+	// (`ConformanceCheck.requireImplErrorConformsAndIsScalar`): without it, `throws Error` would narrow to
+	// ANY enum, including one that declares no conformance at all.
 	//
-	// ⚠ It is NOT a `ConformanceDecl`, and that asymmetry with `type X implements I` is deliberate: a
-	// ConformanceDecl drives `checkConformance`'s METHOD checking, and an enum has no methods to check
-	// against a requirement. What is recorded here is the DECLARATION only — the nominal fact a narrowing
-	// asks for — which is exactly what the clause means for an error enum.
+	// ⚠ **THERE IS NO BINDINGS COLUMN BESIDE IT, and the asymmetry with `StructLayout` is deliberate.** The
+	// `with` arguments ride the `ConformanceDecl` the real parse files, which is their only reader
+	// (`checkConformance` substitutes them into a requirement); a conditional extension is expanded over
+	// declared types alone (`ProgramSignatures.conformersOf`), so a column here would have nothing to answer.
 	export var conformsTo as ByteArrayArray
 
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `enum Color` vs `module enum Color` vs
@@ -5762,10 +5761,8 @@ export type EnumLayout
 		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
 
-	// ⭐ **REPLACE THE `implements` LIST WITH THE WHOLE-PROGRAM RE-READ'S (W95)** — `StructLayout`'s twin, and
-	// it takes NO bindings for the reason `conformsTo` above already states: an enum has no conditional
-	// extension whose `where` clause a binding would be evaluated against, so the clause's arguments are read
-	// (a `with` still ends an interface name) and dropped. Wholesale, because the clause is read as a unit.
+	// The whole-program re-read's answer replacing the sweep's, which is a SUBSET of the clause when a `with`
+	// stopped the reader early (`Queries.foldConformanceClauses`). It takes no bindings — see `conformsTo`.
 	export function recordConformances(names ByteArrayArray)
 		self.conformsTo = names
 	end 'recordConformances'

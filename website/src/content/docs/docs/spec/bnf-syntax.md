@@ -299,7 +299,7 @@ static_method_decl
 
 ### 3.3 Enum Declaration
 
-Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values (use `union` for that). The backing type is inferred from the raw values and is never written; the header ends at the optional conformance clause.
+Enums define named constants with optional raw values. They auto-implement `Equatable` and `Hashable`, and support `==`/`!=` comparison. Enums do NOT support associated values (use `union` for that). The backing type is inferred from the raw values and is never written; the header ends at the optional conformance clause. That clause is the same `conformance_clause` a `type` header takes and means the same thing: the enum's methods satisfy the interface's requirements, and its values are accepted at that interface's type.
 
 ```
 enum_decl     = visibility_prefix 'enum' IDENTIFIER

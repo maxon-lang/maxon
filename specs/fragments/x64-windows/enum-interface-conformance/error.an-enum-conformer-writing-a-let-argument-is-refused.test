@@ -1,0 +1,29 @@
+// Test: error.an-enum-conformer-writing-a-let-argument-is-refused
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Grower
+	function grow(dest IntArray)
+end 'Grower'
+
+enum Step implements Grower
+	one
+	two
+
+	function grow(dest IntArray)
+		dest.push(9)
+	end 'grow'
+end 'Step'
+
+function through(g Grower, dest IntArray)
+	g.grow(dest)
+end 'through'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	through(Step.one, dest: a)
+	return try a.get(0) otherwise 55
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:24:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)

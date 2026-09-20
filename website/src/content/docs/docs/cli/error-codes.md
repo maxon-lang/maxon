@@ -281,7 +281,7 @@ An 'implements' clause names an interface that does not exist.
 
 ### E3016 — `semanticPartialInterfaceImpl`
 
-A type claims to implement an interface but does not define all of its members.
+A type, enum or union claims to implement an interface but does not define all of its members.
 
 ### E3017 — `semanticWhereConstraintViolation`
 

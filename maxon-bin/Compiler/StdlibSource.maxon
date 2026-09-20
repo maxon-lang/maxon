@@ -657,14 +657,15 @@ end 'classifyLibraryReach'
 // ⚠⚠ **THE CONFORMER KEY RESTS ON TWO PREMISES, NOT ONE, AND ONLY THE FIRST IS SELF-EVIDENT. BOTH WERE
 // PROBED AT THE W35 REVIEW.**
 //
-//   • **P1 — a value of a user-declared type `T` implies a reached function OF `T`.** This is E3076, and it
-//     is enforced: `Thing{tag: 1}` written outside `Thing` is *"type 'Thing' can only be constructed from
-//     within its own methods"*. The value kinds that could evade it are the ones that are not built by a call —
-//     an ENUM case, a generic INSTANCE — and both are REFUSED at the only place a table gets built, the
-//     widening: `enum Step implements Coded` with a method-carrying `Coded` is `E3005 … type 'Step' does
-//     not implement interface 'Coded'`, and `Box with ExitCode` into a `Printer` place is the same refusal.
-//     An `Error` enum DOES widen, and `Error` has zero requirements, so there is no slot to credit.
-//     ⇒ P1 holds today because the conformers that can reach a table are exactly the ones E3076 governs.
+//   • **P1 — a conformer whose values are built by a CALL implies a reached function OF it.** This is E3076,
+//     and it is enforced: `Thing{tag: 1}` written outside `Thing` is *"type 'Thing' can only be constructed
+//     from within its own methods"*. ⚠ **IT COVERS ONLY THAT KIND OF CONFORMER, AND AN ENUM IS NOT ONE.** An
+//     enum case is a TAG LITERAL — no function of the enum is reached for the value to exist, and the table
+//     is minted at the widening all the same. An enum or union that declares `implements` is therefore
+//     credited by the seed instead, per NAMED interface, exactly as the six builtin conformers are
+//     (`enumConformersByInterface`). A generic INSTANCE is the remaining value kind built by no call, and it
+//     is still REFUSED at the widening (`Box with ExitCode` into a `Printer` place is E3005), so it owes
+//     nothing. ⇒ P1 holds for the conformers E3076 governs, and the seed stands in for the ones it does not.
 //
 //   • **P2 — a BUILTIN conformer's requirement impls are never stdlib SOURCE. IT HAS EXPIRED TWICE AND IS NO
 //     LONGER A PREMISE AT ALL; the seed below is what stands in its place.** The conformer key structurally
@@ -806,6 +807,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// That is `Parser.arraySurfaceMemberNames`' measured lesson (**+1,023 allocations at rung 0 rising to
 	// +26,009 at rung 5** when its roster was per-call), and the same shape is refused here in advance.
 	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
+	let enumConformers = enumConformersByInterface(project)
 	var witnessInterfaces = InterfaceNameSet.create()
 	var witnessInterfaceOrder = ByteArrayArray.create()
 	var interfacesSeeded = 0 as FieldIndex
@@ -830,6 +832,12 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 			for conformerName in seedConformers 'eachSeededConformer'
 				markWitnessImplsOfConformer(conformerName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			end 'eachSeededConformer'
+
+			if let enumNames = try enumConformers.get(interfaceName) 'someEnumDeclaresIt'
+				for enumName in enumNames 'eachEnumConformer'
+					markWitnessImplsOfConformer(enumName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+				end 'eachEnumConformer'
+			end 'someEnumDeclaresIt'
 		end 'eachNewlyNamedInterface'
 	end 'seedRounds'
 
@@ -916,6 +924,55 @@ function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) re
 	names.push(BoolConformerName)
 	return names
 end 'conformersMintedWithoutTheirOwnMethods'
+
+// ⚠ **AN ENUM CONFORMER BELONGS TO THE SAME CLASS AND IS DELIBERATELY NOT LISTED ABOVE.** Membership of that
+// list is a property of the COMPILER — those six names are fixed, so crossing them with every named interface
+// is a constant — while which enums declare which interface is a property of the PROGRAM. Crossing the two
+// growing sets would be quadratic in a fixpoint, so the enums are INDEXED by the interface the seed loop
+// already iterates and the inner work stays one row lookup.
+typealias EnumConformersByInterface = Map with (ByteArray, ByteArrayArray)
+
+// ⭐ **THE ENUMS AND UNIONS WHOSE WITNESS SLOTS A NAMED INTERFACE OWES A CREDIT TO** — see P1 at
+// `classifyLibraryReach` for why a conformer that no call builds values of needs one at all.
+//
+// Transitively closed through `extends`, because a `Base`-typed place against an enum declaring `Derived`
+// builds `__witness_<Enum>.Base` and it is `Base`'s slots that are reached.
+//
+// ⚠ **BUILT ONCE PER WALK, OUTSIDE THE FIXPOINT**, for `conformersMintedWithoutTheirOwnMethods`' reason one
+// declaration up. An interface with no witness slots is left out rather than carried empty: the credit marks
+// one name per slot, so a slotless row could never mark anything — which is what keeps the corpus's several
+// hundred `implements Error` enums out of this map entirely.
+function enumConformersByInterface(project Project) returns EnumConformersByInterface
+	var byInterface = EnumConformersByInterface.create()
+	let declared = declaredConformanceIndex(project)
+
+	for (conformerName, declaredInterfaces) in declared 'eachDeclaredConformer'
+		if not project.enumTypes.contains(conformerName) 'itsValuesComeFromACall'
+			continue
+		end 'itsValuesComeFromACall'
+
+		var reached = InterfaceNameSet.create()
+		collectDeclaredInterfaceClosure(project.interfaces, declaredNames: declaredInterfaces, into: reached)
+
+		for interfaceName in reached 'eachReachedInterface'
+			recordEnumWitnessCredit(byInterface, project: project, interfaceName: interfaceName, enumName: conformerName)
+		end 'eachReachedInterface'
+	end 'eachDeclaredConformer'
+
+	return byInterface
+end 'enumConformersByInterface'
+
+function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project Project, interfaceName ByteArray, enumName ByteArray)
+	let iface = try project.interfaces.get(interfaceName) otherwise return
+
+	if interfaceWitnessSlots(project.interfaces, iface: iface).count() == 0 'noSlotToCredit'
+		return
+	end 'noSlotToCredit'
+
+	var conformers = try byInterface.get(interfaceName) otherwise ByteArrayArray.create()
+	conformers.push(enumName)
+	byInterface.upsert(interfaceName, value: conformers)
+end 'recordEnumWitnessCredit'
 
 // Drain the worklist to a fixpoint, answering whether anything it reached DEMANDS a witness table. Split out
 // of `reachableMaxonFunctionNames` because the walk runs twice — once to find the demand, once for the

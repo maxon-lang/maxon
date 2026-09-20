@@ -217,15 +217,17 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A type lists every interface it conforms to: `type Foo implements A, B`. A missing or mis-typed method is
-  **E3016**.
+- A type lists every interface it conforms to: `type Foo implements A, B`. An `enum` or a `union` declares
+  conformance the same way and on the same terms — see
+  [Enum Interface Conformance](/docs/language/enums-unions/#enum-interface-conformance). A missing or mis-typed method is **E3016**.
 - `Self` in a requirement means the conforming type.
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
   both, and satisfies parameters typed `Base`.
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
-does above: a parameter typed `Shape` accepts any conforming type, a function may return an interface,
+does above: a parameter typed `Shape` accepts any conforming type, `enum` and `union` conformers
+included, a function may return an interface,
 and a field may hold one. A struct literal (`Self{shape: Square.create(3)}`) or an assignment
 (`self.shape = Strip.create(5)`) stores a conforming value straight into such a field, exactly as passing it
 to a `Shape` parameter would; assigning a different conformer releases the one the field held. A value that

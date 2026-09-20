@@ -1075,15 +1075,17 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A type lists every interface it conforms to: `type Foo implements A, B`. A missing or mis-typed method is
-  **E3016**.
+- A type lists every interface it conforms to: `type Foo implements A, B`. An `enum` or a `union` declares
+  conformance the same way and on the same terms — see
+  [Enum Interface Conformance](#enum-interface-conformance). A missing or mis-typed method is **E3016**.
 - `Self` in a requirement means the conforming type.
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
   both, and satisfies parameters typed `Base`.
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
-does above: a parameter typed `Shape` accepts any conforming type, a function may return an interface,
+does above: a parameter typed `Shape` accepts any conforming type, `enum` and `union` conformers
+included, a function may return an interface,
 and a field may hold one. A struct literal (`Self{shape: Square.create(3)}`) or an assignment
 (`self.shape = Strip.create(5)`) stores a conforming value straight into such a field, exactly as passing it
 to a `Shape` parameter would; assigning a different conformer releases the one the field held. A value that
@@ -1740,7 +1742,8 @@ end 'main'
 
 ### Enum Interface Conformance
 
-An enum can declare conformances after its name:
+An enum or a union can declare conformances after its name, and the clause means exactly what a `type`'s
+means — most often `Error`, which has no requirements:
 
 ```maxon
 enum FileError implements Error
@@ -1757,6 +1760,48 @@ end 'HttpError'
 The header is only `enum Name` and an optional `implements` clause; the backing type is inferred from the
 raw values, never written. Anything else on the header line — `enum Colour int` — is **E2001**
 (`unexpected token: 'int'`), and the same holds for a `union` header.
+
+**An enum satisfies requirements with its own methods, and its values widen.** Any interface may be named,
+not only `Error`: the enum's [methods](#enum-methods) are checked against the interface's requirements the
+same way a type's are, and a value of the enum is then accepted wherever that interface is the declared
+type — an interface-typed parameter, an interface-typed return, or an interface-typed field. Calls on it
+dispatch through the witness table, as they do for any other conformer:
+
+```maxon
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+enum Step implements Greeter
+	one
+	two
+
+	function greet() returns Integer
+		return match self 'which'
+			one gives 41
+			two gives 7
+		end 'which'
+	end 'greet'
+end 'Step'
+
+function callGreet(g Greeter) returns Integer
+	return g.greet()
+end 'callGreet'
+
+function main() returns ExitCode
+	return callGreet(Step.one)    // 41
+end 'main'
+```
+
+A union conformer carrying a payload widens the same way; the widened value releases its box when it drops.
+
+A requirement no method of the enum matches is **E3016**, and a clause naming an interface that does not
+exist is **E3015** — both reported at the enum's name, exactly as for a `type`.
+
+A payload-free enum may also name [`Hashable`](#hashable-and-hasher) or `Equatable` explicitly. The
+compiler grants both to every payload-free enum already, and the granted implementation satisfies the
+declared requirement; writing the clause is a statement of intent, not a demand for a hand-written
+`hash()`.
 
 ---
 

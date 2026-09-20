@@ -1494,39 +1494,26 @@ export function typeDeclaresInterface(declared DeclaredConformanceMap, interface
 	return false
 end 'typeDeclaresInterface'
 
-// Check one `type X implements I1, I2` declaration against each named interface.
-//
-// The conforming type's `uses` names are read ONCE per declaration rather than per rendered type: they
-// depend only on the conforming type, and `project.structTypes` is a map lookup that would otherwise run
-// per rendered parameter.
+// Check one `implements I1, I2` declaration against each named interface.
 function checkOneConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, signatures ProgramSignatures)
 	// The conforming type's own `uses` names — the list a `typeParameter(token)` in one of its methods is
 	// re-spelled against (`typeParamPositionIn`, W14: a token is a digest of `(declaring type, parameter)`,
 	// not an index, so the position is recovered by re-spelling and never by subscripting this list), read
 	// ONCE per declaration rather than per rendered type (it is a map lookup, and it does not vary).
 	//
-	// ⛔⛔ **THIS PARAGRAPH CLAIMED A SOLE PRODUCER AND WAS ALREADY WRONG ABOUT ITS OWN INPUT, WHICH IS WHAT
-	// MADE THE PANIC BELOW A REACHABLE COMPILER ABORT (W133).** It read *"Only a `type` declaration records a
-	// ConformanceDecl (`Parser.parseTypeDeclaration` is the sole caller of `parseTypeImplementsClause`)"* —
-	// false since conditional extensions: `Parser.recordExtensionConformance` files one per CONFORMER of every
-	// `extension X implements …`. It was harmless only because every conformer such an extension could reach
-	// was a declared `type`, so the two producers happened to agree about what a conformer is. **W133 makes
-	// `extension int implements Hashable` a program, and `int` is in no struct registry and never will be** —
-	// a primitive has no fields, so there is nothing for a layout to describe. Left unnarrowed the check
-	// aborted the compiler on a legal program.
+	// ⚠ **THE TWO CONFORMER KINDS THAT COMMIT NO `StructLayout` ARE ADMITTED BY NAME, AND THE PANIC BEHIND
+	// THEM IS REACHABLE.** A `type` that recorded a conformance and committed no layout is a merge-invariant
+	// violation exactly as a signature-less module function is, so the lookup may not fall back. The two
+	// legitimate conformers with no layout of that kind are recognized by the SAME stores that admitted them
+	// at their own doors — `primitiveTagOfTypeName` for `extension int implements …`, `project.enumTypes`
+	// for an `enum`/`union` clause — so no two sites can come to disagree about which names those are.
 	//
-	// ⚠ **NARROWED, NOT DELETED.** What it protects is real for every conformer that names a DECLARATION: a
-	// `type` that recorded a conformance and committed no layout is a merge-invariant violation exactly as a
-	// signature-less module function is. The primitive is the one conformer that legitimately has none, and it
-	// is recognized by the SAME table (`primitiveTagOfTypeName`) that admitted it at the extension door, so
-	// the two cannot come to disagree about which names those are.
-	//
-	// A primitive declares no `uses` parameters, which is also what a non-generic type's layout already holds
-	// — so the empty list is not a fallback here, it is the answer.
+	// Neither declares `uses` parameters, which is also what a non-generic type's layout already holds — so
+	// the empty list is not a fallback here, it is the answer.
 	var typeParamNames = ByteArrayArray.create()
 
-	if primitiveTagOfTypeName(conformance.typeName) == ValueTypeTag.unresolved 'aDeclaredConformer'
-		let layout = try project.structTypes.get(conformance.typeName) otherwise panic("checkOneConformance: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — a ConformanceDecl comes from a declared `type` (which commits a StructLayout) or from an `extension` over a primitive (which is not a declared type and was admitted above)")
+	if primitiveTagOfTypeName(conformance.typeName) == ValueTypeTag.unresolved and not project.enumTypes.contains(conformance.typeName) 'aDeclaredConformer'
+		let layout = try project.structTypes.get(conformance.typeName) otherwise panic("checkOneConformance: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — a ConformanceDecl comes from a declared `type` (which commits a StructLayout), from a declared `enum`/`union` (which commits an EnumLayout and was admitted above) or from an `extension` over a primitive (which is not a declared type and was admitted above)")
 		typeParamNames = layout.typeParamNames
 	end 'aDeclaredConformer'
 
@@ -1968,8 +1955,33 @@ function checkOneMethod(project Project, functionsByName FunctionNameIndex, conf
 		return
 	end 'present'
 
+	if grantedConformanceServes(signatures, conformerName: conformance.typeName, interfaceName: collectedMethod.sourceInterfaceName) 'theCompilerServesIt'
+		recordWitnessSlotImpl(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: signatures.enumConformanceImplName(conformance.typeName, methodName: method.name), typeParamNames: typeParamNames, signatures: signatures)
+		return
+	end 'theCompilerServesIt'
+
 	pushMissingRequirement(missing, collectedMethod: collectedMethod, rootInterfaceName: rootInterfaceName)
 end 'checkOneMethod'
+
+// A payload-free enum that names `Hashable`/`Equatable` in its own clause supplies no member: the grant
+// already answers, so the requirement is satisfied rather than missing.
+//
+// ⚠ **THE SLOT THE CALLER FILES MUST NAME WHAT `LowerMaxonToStd.witnessSlotImpl` WOULD HAVE ANSWERED
+// UNFILED**, which is why the selection comes from `enumConformanceImplName` and not from the requirement's
+// join: that function is the one home of the `<Enum>.<method>`-or-`int.<method>` decision, shared with the
+// direct `e.hash()` dispatch, so a table and a call cannot reach two bodies for one enum.
+//
+// ⚠ **PAYLOAD-FREE ENUMS ONLY, and the narrowing is the point.** `isIntrinsicBuiltinConformance` also admits
+// a primitive, and admitting one here would waive E3016 for an `extension int implements …` whose body omits
+// a requirement. `checkGrantedEnumConformance` still holds the enum's own members to the requirement (E3130),
+// so an enum that both declares the protocol and writes a mismatched `hash()` is reported by both codes.
+function grantedConformanceServes(signatures ProgramSignatures, conformerName ByteArray, interfaceName ByteArray) returns bool
+	if not signatures.namesAPayloadFreeEnum(conformerName) 'writesEveryRequirementItself'
+		return false
+	end 'writesEveryRequirementItself'
+
+	return isIntrinsicBuiltinConformance(conformerName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(conformerName))
+end 'grantedConformanceServes'
 
 // The requirement's name is OVERLOADED: match it against every live member of the set and accept it when
 // EXACTLY ONE matches (R10).
@@ -2360,14 +2372,7 @@ end 'requireImplErrorIsANarrowableError'
 // type is refused with `error E3016: … Method 'Value.fromString' throws 'NotAnError' which does not
 // conform to Error`. `specs/parsable-interface.md`'s `error.throws-non-error-type` is the pin.
 //
-// ⚠ **THE ANSWER COMES OFF THE ENUM'S OWN LAYOUT, NOT OFF `project.conformances`.** A `ConformanceDecl` is
-// recorded only by `Parser.parseTypeDeclaration`; an `enum`/`union` `implements` clause is a different door
-// (`readOptionalImplementsClause`) and files its names on the layout instead, because an enum has no METHODS
-// for `checkConformance` to check against a requirement. Asking `project.conformances` here answers `false`
-// for EVERY error enum in the corpus — measured, on the first cut of this check: all five `Parsable`
-// conformers were refused, each naming its own `implements Error`.
-//
-// ⚠ **AND IT IS ASKED AFTER RESOLVABILITY, WHICH IS THE DIAGNOSTIC AND NOT AN ORDERING PREFERENCE.** A name
+// ⚠ **IT IS ASKED AFTER RESOLVABILITY, WHICH IS THE DIAGNOSTIC AND NOT AN ORDERING PREFERENCE.** A name
 // in no registry is refused by the arm above with the message that says exactly that; telling that author
 // their type "does not conform to Error" would blame the wrong thing about a type that does not exist.
 // `error.throws-unresolvable-impl-type-under-abstract-requirement` is the pin, and it caught this order
