@@ -1541,6 +1541,44 @@ typealias TPair = (Integer, Integer)
 16
 ```
 
+<!-- test: a-tuple-alias-type-argument-declared-below-its-instantiation-is-constructible -->
+
+⛔ The sibling above reads `sizeof(T)` through the shared body and never constructs one. CONSTRUCTING the
+instance was refused outright: the sweep recorded the argument of `Box with Pair` as a bare `named("Pair")`,
+that spelling is not a type identity, and the parameter it produced denoted no tuple at all — so the file's
+own `(6, 3)` could not be passed to the factory its own alias names.
+
+  error E3005: argument type mismatch for 'item': expected 'Pair', got '__Tuple2.int.int'
+
+One file, one declaration, nothing contested: the only condition is that `Pair` is declared BELOW the
+instantiation that names it, which is the same condition the sibling above pins for `sizeof`. A type
+argument is interned once and no later pass re-tags it, so the bare spelling had to be resolved where the
+instance is scoped rather than repaired at a read.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Box
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias BoxA = Box with Pair
+
+function main() returns ExitCode
+	let b = BoxA.create((6, 3))
+
+	return (b.item.0 - b.item.1) as ExitCode
+end 'main'
+
+typealias Pair = (Integer, Integer)
+```
+```exitcode
+3
+```
+
 <!-- test: shared-body-reassign-with-a-heap-owning-tuple-alias-instantiation -->
 
 ⭐ A shared generic body reassigns its opaque `T` field, and the SAME generic is ALSO instantiated at a tuple

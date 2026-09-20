@@ -8337,9 +8337,9 @@ export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
 
 // ⭐ ONE `typealias Pair = (Num, Num)` DECLARATION — the tuple it names, plus where and at what tier it was
 // written. The two travel together rather than in a second map keyed alike, because they are one
-// declaration: `ProgramSignatures.settleCrossKindContests` needs the file and the tier for exactly the
-// entries `tupleAliasTarget` reads the name out of, and a parallel map is a second place for one of them to
-// go missing.
+// declaration: `ProgramSignatures.scopedTupleAlias` keys on the file and tiers on the visibility, and
+// `settleCrossKindContests` needs both, for exactly the entries the name is read out of. A parallel map is a
+// second place for one of them to go missing.
 type DeclaredTupleAlias
 	export let tupleName as ByteArray
 	export let claim as TypeNameClaim
@@ -8351,6 +8351,10 @@ end 'DeclaredTupleAlias'
 
 // A tuple-alias NAME ⇒ its declaration. See `ProgramSignatures.tupleAliases`.
 export typealias DeclaredTupleAliasMap = Map with (ByteArray, DeclaredTupleAlias)
+
+typealias TupleAliasByDeclaringFile = Map with (String, DeclaredTupleAlias)
+
+typealias MultiplyDeclaredTupleAliasMap = Map with (ByteArray, TupleAliasByDeclaringFile)
 
 // ⭐ A type name ⇒ every declaration that holds it, when more than one KIND does. See
 // `ProgramSignatures.settleCrossKindContests`.
@@ -10560,9 +10564,14 @@ export type ProgramSignatures
 	// so `typealias Pair = (Num, Num)` is the only way to write one in a place that takes a bare identifier
 	// (`Array with Pair`). Like a RANGED alias and unlike a function/generic one it mints NO nominal identity
 	// — a `Pair` reference resolves straight through to the tuple's own `structRef` — so nothing downstream
-	// ever sees the alias name. Read through `tupleAliasTarget`, which canonicalizes: the sweep writes the
-	// spelling it saw and the real parse the canonical one, exactly as every other tuple name does.
+	// ever sees the alias name. One row per name, LAST-WINS: which declaration a reader means is
+	// `scopedTupleAlias`'s answer, and `tupleAliasTargetFrom` canonicalizes it — the sweep writes the spelling
+	// it saw and the real parse the canonical one, exactly as every other tuple name does.
 	var tupleAliases as DeclaredTupleAliasMap
+
+	var multiplyDeclaredTupleAliases as MultiplyDeclaredTupleAliasMap
+
+	var nameableTupleAliases as DeclaredTupleAliasMap
 
 	// ⭐ Which type names more than one KIND of declaration holds — see `settleCrossKindContests`, its one
 	// writer. Born `unwritten`, which is where it stays for every program in the corpus.
@@ -11674,7 +11683,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), nameableTupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -17060,6 +17069,10 @@ export type ProgramSignatures
 		end 'index'
 	end 'anyGenericAliasNameContested'
 
+	export function anyTupleAliasNameContested() returns bool
+		return self.multiplyDeclaredTupleAliases.count() > 0
+	end 'anyTupleAliasNameContested'
+
 	// The declaring-file group a contested alias name carries.
 	function genericAliasClaimantsOf(name ByteArray) returns GenericAliasByDeclaringFile throws MapError
 		match self.contestedGenericAliases 'index'
@@ -20080,10 +20093,11 @@ export type ProgramSignatures
 	// `noteCrossKindContest` has already proven two kinds hold, so the records it builds are built once per
 	// contested name in the program and never on an uncontested one.
 	//
-	// ⚠ **THE RANGED ARM COLLECTS *EVERY* DECLARING FILE, not one.** `contestedDeclarations` is that set
-	// when several files declare the name; when one does it is empty and the sole declaration is read
-	// through `declarationInAnyFile` — which is deliberately not `lookup`, whose job is to answer what a
-	// READER means and which synthesizes the builtin `ExitCode` for a name no file declares at all.
+	// ⚠ **THE RANGED AND TUPLE ARMS COLLECT *EVERY* DECLARING FILE, not one** — a file whose claim is dropped
+	// is told it meant a same-named `type`. The ranged set is `contestedDeclarations`; when one file declares
+	// the name that set is empty and the sole declaration is read through `declarationInAnyFile`, which is
+	// deliberately not `lookup` — whose job is to answer what a READER means, and which synthesizes the
+	// builtin `ExitCode` for a name no file declares at all.
 	function typeNameClaimsOf(name ByteArray, interfaceSitesByName InterfaceDeclSiteByName) returns TypeNameClaimArray
 		var claims = TypeNameClaimArray.create()
 
@@ -20127,6 +20141,14 @@ export type ProgramSignatures
 				claims.push(self.typeNameClaim(TypeDeclKind.genericAlias, visibility: entry.visibility, declFilePath: entry.filePath))
 			end 'thisOne'
 		end 'eachGenericAliasDecl'
+
+		if let byFile = try self.multiplyDeclaredTupleAliases.get(name) 'severalFilesDeclareTheTupleAlias'
+			for (_, tuple) in byFile 'eachDeclaringFile'
+				claims.push(tuple.claim)
+			end 'eachDeclaringFile'
+
+			return claims
+		end 'severalFilesDeclareTheTupleAlias'
 
 		if let tuple = try self.tupleAliases.get(name) 'aTupleAlias'
 			claims.push(tuple.claim)
@@ -20329,9 +20351,7 @@ export type ProgramSignatures
 			return DeclaredTypeFile.undeclared
 		end 'noAliasFormHoldsIt'
 
-		let tuple = try self.tupleAliases.get(name) otherwise return DeclaredTypeFile.undeclared
-
-		return DeclaredTypeFile.declared(tuple.claim.declFilePath)
+		return DeclaredTypeFile.declared(self.scopedTupleAlias(name, readerFilePath: readerFilePath).claim.declFilePath)
 	end 'aliasFormDeclaredIn'
 
 	function genericAliasDeclaredIn(name ByteArray) returns DeclaredTypeFile
@@ -22615,14 +22635,47 @@ export type ProgramSignatures
 		self.writeTupleAlias(name.clone(), alias: DeclaredTupleAlias.create(tupleName.clone(), claim: self.typeNameClaim(TypeDeclKind.tupleAlias, visibility: visibility, declFilePath: declFilePath.clone())))
 	end 'recordTupleAlias'
 
-	// The one writer of `tupleAliases`, journaling the value a write past the baseline replaces.
+	// The one writer of `tupleAliases` and of the two indexes derived from it, journaling the values a write
+	// past the baseline replaces.
 	function writeTupleAlias(name ByteArray, alias DeclaredTupleAlias)
 		if self.baseline.settled 'pastTheBaseline'
-			self.journal.noteTupleAliasWrite(name, prior: priorTupleAliasAt(self.tupleAliases, name: name))
+			self.journal.noteTupleAliasWrite(name, prior: priorTupleAliasAt(self.tupleAliases, name: name), priorClaimants: priorTupleAliasClaimantsAt(self.multiplyDeclaredTupleAliases, name: name, declPath: alias.claim.declFilePath.toString()), priorNameable: priorTupleAliasAt(self.nameableTupleAliases, name: name))
 		end 'pastTheBaseline'
 
+		// Ahead of the `upsert`: the incumbent `indexTupleAliasDeclaration` reads is the declaration this one
+		// displaces, and after the upsert every name would look singly declared.
+		self.indexTupleAliasDeclaration(name, alias: alias)
 		self.tupleAliases.upsert(name, value: alias)
 	end 'writeTupleAlias'
+
+	// The incumbent is filed WITH the newcomer for `RangedAliasRegistry.record`'s reason — see the "every
+	// declaration or none" note there.
+	//
+	// ⚠ Past the baseline this either CREATES an entry, which the journal undoes by removing the name, or
+	// adds exactly one `(name, declaringFile)` cell to one that already exists, which it undoes by that cell.
+	// A call that came to touch two cells of an existing entry would leave one of them behind at the restore.
+	function indexTupleAliasDeclaration(name ByteArray, alias DeclaredTupleAlias)
+		if nameableFromAnywhere(alias.claim.visibility) 'nameableAnywhere'
+			self.nameableTupleAliases.upsert(name, value: alias)
+		end 'nameableAnywhere'
+
+		let sole = try self.tupleAliases.get(name) otherwise return
+		let declPath = alias.claim.declFilePath.toString()
+		var byFile = try self.multiplyDeclaredTupleAliases.get(name) otherwise TupleAliasByDeclaringFile.create()
+
+		if byFile.count() == 0 'secondDeclarationOfThisName'
+			let solePath = sole.claim.declFilePath.toString()
+
+			if solePath.equals(declPath) 'oneFileWroteBoth'
+				return
+			end 'oneFileWroteBoth'
+
+			byFile.upsert(solePath, value: sole)
+		end 'secondDeclarationOfThisName'
+
+		byFile.upsert(declPath, value: alias)
+		self.multiplyDeclaredTupleAliases.upsert(name, value: byFile)
+	end 'indexTupleAliasDeclaration'
 
 	// Is `name` a TUPLE typealias? THE hot-path guard `parseTypeReference` asks of every bare type name, so
 	// it must allocate nothing (`Map.contains`) — the `isGenericAlias` twin.
@@ -22645,6 +22698,10 @@ export type ProgramSignatures
 	export function denotedAggregateName(name ByteArray) returns ByteArray
 		return self.tupleAliasTargetInAnyFile(name) if self.isTupleAliasInAnyFile(name) else name
 	end 'denotedAggregateName'
+
+	export function denotedAggregateNameFrom(name ByteArray, readerFilePath FilePath) returns ByteArray
+		return self.tupleAliasTargetFrom(name, readerFilePath: readerFilePath) if self.isTupleAliasInAnyFile(name) else name
+	end 'denotedAggregateNameFrom'
 
 	// **CAN A RAW SLOT TYPE'S TAG NAME A DECLARED AGGREGATE?** — a `structRef` (what a resolved reference
 	// carries, and what `Parser.enclosingSelfType` mints for a type's own name) or a bare `named` (what the
@@ -22685,9 +22742,36 @@ export type ProgramSignatures
 
 	// The tuple type `name` aliases, CANONICAL. Precondition: `isTupleAliasInAnyFile(name)`.
 	export function tupleAliasTargetInAnyFile(name ByteArray) returns ByteArray
-		let declared = try self.tupleAliases.get(name) otherwise panic("ProgramSignatures.tupleAliasTarget: '{String.from(name)}' is not a tuple typealias — every caller asks `isTupleAlias` first")
-		return self.canonicalNameOfStruct(declared.tupleName)
+		return self.canonicalNameOfStruct(self.bareTupleAlias(name).tupleName)
 	end 'tupleAliasTargetInAnyFile'
+
+	export function tupleAliasTargetFrom(name ByteArray, readerFilePath FilePath) returns ByteArray
+		return self.canonicalNameOfStruct(self.scopedTupleAlias(name, readerFilePath: readerFilePath).tupleName)
+	end 'tupleAliasTargetFrom'
+
+	export function tupleAliasIsDeclaredIn(name ByteArray, readerFilePath FilePath) returns bool
+		return self.scopedTupleAlias(name, readerFilePath: readerFilePath).claim.declFilePath.toString().equals(readerFilePath.toString())
+	end 'tupleAliasIsDeclaredIn'
+
+	// The tiers are `RangedAliasRegistry.lookup`'s, which holds the roster of every copy of this rule and the
+	// reason they cannot be one function.
+	function scopedTupleAlias(name ByteArray, readerFilePath FilePath) returns DeclaredTupleAlias
+		if let byFile = try self.multiplyDeclaredTupleAliases.get(name) 'contested'
+			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
+				return own
+			end 'readersOwnFile'
+
+			if let nameableHere = try self.nameableTupleAliases.get(name) 'someDeclarationIsNameable'
+				return nameableHere
+			end 'someDeclarationIsNameable'
+		end 'contested'
+
+		return self.bareTupleAlias(name)
+	end 'scopedTupleAlias'
+
+	function bareTupleAlias(name ByteArray) returns DeclaredTupleAlias
+		return try self.tupleAliases.get(name) otherwise panic("ProgramSignatures.tupleAliasTarget: '{String.from(name)}' is not a tuple typealias — every caller asks `isTupleAlias` first")
+	end 'bareTupleAlias'
 
 	// A tuple's field type ADOPTED into `into` — `fieldTypeOf`'s answer for every element at once, which is
 	// what the parser needs to build the artifact's own copy of the layout (`ParseStaging.rewriteTypeIds` rewrites
@@ -22888,27 +22972,14 @@ export type ProgramSignatures
 	end 'genericAliasInstanceFrom'
 
 	// ⭐⭐ **WHICH DECLARATION OF `name` DOES `readerFilePath` MEAN? (N3)** — the reader's OWN file's
-	// declaration first, then one the reader may actually NAME, and only then anyone else's. The identical
-	// three tiers `RangedAliasRegistry.lookup` resolves a ranged alias by, applied to the other alias registry
-	// a cross-file reference is resolved through, and each tier is there for the reason stated at that door:
-	//
-	//   1. a file that declares the name means its OWN declaration, whatever anyone else exported;
-	//   2. a file that declares none of it resolves to a declaration it may WRITE DOWN — a plain `typealias`
-	//      is file-local, so one the reader is forbidden to name cannot be the one it meant;
-	//   3. and only when NO declaration of the name is nameable from anywhere does it fall back to the bare
-	//      last-wins entry, which is the state the "declared, but hidden from you" diagnostics rest on.
-	//
-	// ⚠ **IT NARROWS THE LAST-WINS SET; IT DOES NOT ABOLISH IT**, exactly as `lookup` does not: two files that
-	// both `export` one generic alias still answer last-wins, on the strictly smaller set the reader may name.
-	// That is the E3063 ambiguity case, and its ranged twin was a rung of its own
-	// (`ProgramSignatures.ambiguousAliasCandidates`) because choosing between two LEGAL candidates needs the
-	// module-directory precedence rules and a diagnostic. What is fixed here is only the case where a
-	// candidate was never a candidate.
+	// declaration first, then one the reader may actually NAME, and only then anyone else's, over the
+	// generic-alias registry. The rule, the reason each tier is there and the roster of every copy of it live
+	// at `RangedAliasRegistry.lookup`.
 	//
 	// ⚠ **AN UNCONTESTED NAME COSTS ONE MISS ON AN EMPTY MAP AND ALLOCATES NOTHING** — in particular
-	// `readerFilePath.toString()` is built only after the contest probe HITS, which is never in the corpus.
-	// That is `RangedAliasRegistry.lookup`'s discipline and it matters for the same reason: this is asked at
-	// every generic-alias type reference and every `IntArray.create()` base.
+	// `readerFilePath.toString()` is built only after the contest probe HITS. That is
+	// `RangedAliasRegistry.lookup`'s discipline and it matters for the same reason: this is asked at every
+	// generic-alias type reference and every `IntArray.create()` base.
 	function scopedGenericAliasInstance(name ByteArray, readerFilePath FilePath) returns GenericInstanceId
 		if let byFile = try self.genericAliasClaimantsOf(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
@@ -25665,25 +25736,20 @@ export type ProgramSignatures
 		return self.arrayByteInstance
 	end 'bareArrayByteInstance'
 
-	// ⭐⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE — ABOUT A RANGE *OR* ABOUT AN
-	// INSTANCE? (N3 review)** The one bool `fileScopedInstance` and `rekeyScopedGenericAliases` both
-	// short-circuit on, and it is written ONCE because the two SPELLINGS of it had already cost this rung a
-	// wrong answer: `settleGenericAliasContest`'s ⛔ paragraph records `rekeyScopedGenericAliases` gated on
-	// the GENERIC half alone, which skipped N2's RANGE re-key and made
-	// `bytearray-element-size/a-byte-two-files-disagree-about-is-two-types` stop refusing — invisible to a
-	// filtered run, caught only by the full suite. Two spellings of one predicate is this project's signature
-	// bug, and here it had already fired once.
+	// ⭐⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE — ABOUT A RANGE, ABOUT AN INSTANCE
+	// *OR* ABOUT A TUPLE?** The one bool `fileScopedInstance` and `rekeyScopedGenericAliases` both
+	// short-circuit on, and it is written ONCE: two spellings of one predicate is this project's signature
+	// bug, and a door taught about a contest the other spelling does not know about is a wrong answer with no
+	// compile error at either.
 	//
 	// ⚠ **THE NEXT CONTEST GOES HERE AND NOWHERE ELSE.** A FUNCTION typealias has the identical whole-program
-	// defect (`Parser.readTypeAliasDeclaration` names it), so a third disjunct is expected; spelled twice,
-	// teaching one copy and not the other is a wrong answer at whichever door was missed, with no compile
-	// error at either.
+	// defect (`Parser.readTypeAliasDeclaration` names it), so a fourth disjunct is expected.
 	//
 	// ⚠ It is deliberately NOT the gate on `settleRangeScopedInstances`, whose own early return stays
 	// range-only: that pass mints RANGE variants and has nothing to do for a generic contest. Its gate
 	// answers a different question that happens to mention the same map.
 	function anythingContested() returns bool
-		return self.typeAliases.anyRangeContest() or self.anyGenericAliasNameContested()
+		return self.typeAliases.anyRangeContest() or self.anyGenericAliasNameContested() or self.anyTupleAliasNameContested()
 	end 'anythingContested'
 
 	// ⭐⭐ **THE SAME INSTANCE, WITH EVERY CONTESTED NAME IN IT SPELLED THE WAY `filePath` MEANS IT (N2 + N3)**
@@ -25691,17 +25757,12 @@ export type ProgramSignatures
 	// step of its own. `mangleGenericInstance` and `canonicalInstanceName` are structural over the args, so
 	// both inherit the qualified spelling for free and neither learns anything about contests.
 	//
-	// ⭐⭐ **ONE WALK FOR BOTH CONTESTS, AND IT WAS BRIEFLY TWO (N3 review).** N2 scopes a `named` leaf that
-	// names a range-contested ELEMENT; N3 scopes one that names an instance-contested GENERIC ALIAS. Written
-	// as two triples they shared everything that matters — which tags recurse, which pass through, the
-	// re-intern, the "return `id` untouched" contract — and differed only in the leaf. Two copies of a
-	// RECURSION 240 lines apart is the shape where, the day a tag other than `genericInstance` starts carrying
-	// a nested instance, whoever teaches one walk about it has no reason to look at the other — and the
-	// failure is a wrong instance rather than a compile error.
-	//
-	// ⭐ **A PROGRAM WITH NEITHER CONTEST RETURNS ON THE FIRST LINE — no walk, no `MaxonTypeArray`, no
-	// intern.** That is the whole existing corpus and the compiler's own source, which is why not one interned
-	// instance, mangled symbol or committed golden moves.
+	// ⭐⭐ **ONE WALK FOR ALL THREE CONTESTS.** The leaves differ — a range-contested ELEMENT, an
+	// instance-contested GENERIC ALIAS, a TUPLE alias — and everything else is shared: which tags recurse,
+	// which pass through, the re-intern, the "return `id` untouched" contract. Two copies of a RECURSION is
+	// the shape where, the day a tag other than `genericInstance` starts carrying a nested instance, whoever
+	// teaches one walk about it has no reason to look at the other — and the failure is a wrong instance
+	// rather than a compile error.
 	//
 	// ⚠ **IT IS A PURE READ BY THE TIME A PARSE ASKS IT**, and that is a property `settleRangeScopedInstances`
 	// and `settleGenericAliasContest` buy rather than one this function has: `intern` returns an existing id
@@ -25749,10 +25810,11 @@ export type ProgramSignatures
 	// can name an alias at all (a struct, a tuple and an opaque type parameter carry no range and no instance,
 	// and a primitive carries no name).
 	//
-	// **THE TWO LEAF RULES ARE DISJOINT, WHICH IS WHY ASKING BOTH IS NOT A PRECEDENCE DECISION.** A name is a
-	// RANGED alias or a GENERIC-INSTANCE alias and never both — `readTypeAliasDeclaration` reads one form per
-	// declaration, and a name two declarations claim in different forms is a duplicate the type-name registry
-	// refuses — so whichever of the two answers, the other would have handed the argument back unchanged.
+	// **THE THREE LEAF RULES ARE DISJOINT, WHICH IS WHY ASKING ALL THREE IS NOT A PRECEDENCE DECISION.** A
+	// name is a RANGED alias, a GENERIC-INSTANCE alias or a TUPLE alias and never two of them —
+	// `readTypeAliasDeclaration` reads one form per declaration, and a name two declarations claim in
+	// different forms is a duplicate the type-name registry refuses — so whichever one answers, the others
+	// would have handed the argument back unchanged.
 	function fileScopedArg(arg MaxonType, filePath FilePath) returns MaxonType
 		let tag = maxonTypeTag(arg)
 
@@ -25769,6 +25831,14 @@ export type ProgramSignatures
 		end 'namesAContestedGenericAlias'
 
 		let name = self.nameOfId(typeNameIdOf(arg))
+
+		// ⭐ A TUPLE alias is resolved HERE rather than left as a `named` for a read door to repair: a generic
+		// instance's type argument is interned ONCE and no later pass re-tags it, so two files that each write
+		// `typealias XBox = Box with Pair` above their own `typealias Pair` would intern ONE instance carrying
+		// a spelling that denotes neither file's tuple, and both files would be refused.
+		if self.isTupleAliasFor(name, readerFilePath: filePath) 'namesATupleAlias'
+			return MaxonType.structRef(self.typeNames.intern(self.tupleAliasTargetFrom(name, readerFilePath: filePath)))
+		end 'namesATupleAlias'
 
 		// ⚠ **A CROSS-KIND CONTESTED NAME IS SCOPED ONLY FOR A READER THAT MEANS THE ALIAS BY IT.** The
 		// scoped spelling names one ranged DECLARATION, so handing it to a file whose own `type ParsedInt`
@@ -26337,11 +26407,12 @@ export type ProgramSignatures
 
 		let written = self.nameOfId(typeNameIdOf(declared))
 
-		// `denotedAggregateName` resolves a tuple TYPEALIAS to the tuple's own name; `canonicalNameOfStruct`
-		// then settles which SPELLING of that tuple everything downstream uses. Both are the doors the drop
-		// router and every managed classifier already ask, so what this re-tags and what those route are one
-		// set by construction.
-		let denoted = self.canonicalNameOfStruct(self.denotedAggregateName(written))
+		// `denotedAggregateNameFrom` resolves a tuple TYPEALIAS as `readerFilePath` means it;
+		// `canonicalNameOfStruct` then settles which SPELLING of that tuple everything downstream uses. The
+		// drop router and every managed classifier reach the same tuple through the project layout
+		// `declaredSlotType` built, which is the door the type check reads too — so a tuple this re-tag and
+		// those routes could disagree about is one the type check has already refused.
+		let denoted = self.canonicalNameOfStruct(self.denotedAggregateNameFrom(written, readerFilePath: readerFilePath))
 
 		// ⚠ **AND NOT WHERE AN ALIAS ANSWERS FOR THE DECLARING FILE.** `containsStruct` is bare and
 		// whole-program, so once a `type Box` and a `typealias Box` in two files may both stand this re-tag
@@ -30836,7 +30907,7 @@ export type ProgramSignatures
 			// program the other walk order compiled and ran. It is also what retired
 			// `classifyUnionPayload`'s own `denotedAggregateName` step: a tuple-alias payload is answered by
 			// THIS arm, so the payload door does not pre-resolve a name the shared cascade resolves.
-			tupleAlias then return MaxonType.structRef(into.intern(self.tupleAliasTargetInAnyFile(name)))
+			tupleAlias then return MaxonType.structRef(into.intern(self.tupleAliasTargetFrom(name, readerFilePath: slotScopeFilePath)))
 		end 'form'
 	end 'denotedSlotType'
 
@@ -33668,6 +33739,17 @@ export type ProgramSignatures
 		end 'eachWriteFromTheEnd'
 	end 'restoreCanonicalIndex'
 
+	function restoreTupleAliasClaimant(name ByteArray, declPath String, prior PriorTupleAlias)
+		var byFile = try self.multiplyDeclaredTupleAliases.get(name) otherwise panic("ProgramSignatures.restoreTupleAliasClaimant: the journal holds a claimant column for tuple alias `{String.from(name)}` and the roster does not hold the name — a `fileEntry` column is written only where the roster already held it, and no write between that column and this restore removes a name")
+
+		match prior 'prior'
+			absent then _ = byFile.remove(declPath)
+			held(alias) then byFile.upsert(declPath, value: alias)
+		end 'prior'
+
+		self.multiplyDeclaredTupleAliases.upsert(name, value: byFile)
+	end 'restoreTupleAliasClaimant'
+
 	// In reverse, for `restoreCanonicalIndex`'s reason.
 	function restoreTupleAliases()
 		var position = self.journal.tupleAliasWrites.count()
@@ -33680,6 +33762,16 @@ export type ProgramSignatures
 				absent then _ = self.tupleAliases.remove(write.name)
 				held(alias) then self.tupleAliases.upsert(write.name, value: alias)
 			end 'prior'
+
+			match write.priorClaimants 'priorClaimants'
+				nameAbsent then _ = self.multiplyDeclaredTupleAliases.remove(write.name)
+				fileEntry(declPath, prior) then self.restoreTupleAliasClaimant(write.name, declPath: declPath, prior: prior)
+			end 'priorClaimants'
+
+			match write.priorNameable 'priorNameable'
+				absent then _ = self.nameableTupleAliases.remove(write.name)
+				held(alias) then self.nameableTupleAliases.upsert(write.name, value: alias)
+			end 'priorNameable'
 		end 'eachWriteFromTheEnd'
 	end 'restoreTupleAliases'
 
@@ -33844,6 +33936,8 @@ export type ProgramSignatures
 		fingerprint.note("tupleElementTokenOwners", value: self.tupleElementTokenOwners.count())
 		fingerprint.note("typeParamOwners", value: self.typeParamOwners.count())
 		fingerprint.note("tupleAliases", value: self.tupleAliases.count())
+		fingerprint.note("multiplyDeclaredTupleAliases", value: self.multiplyDeclaredTupleAliases.count())
+		fingerprint.note("nameableTupleAliases", value: self.nameableTupleAliases.count())
 		fingerprint.note("crossKindContests", value: crossKindContestCount(self.crossKindContests))
 		fingerprint.noteFlag("sawAggregateArrayLiteral", flag: self.sawAggregateArrayLiteral)
 		fingerprint.noteFlag("sawListFromConstruction", flag: self.sawListFromConstruction)
@@ -34058,6 +34152,11 @@ union PriorTupleAlias
 	held(alias DeclaredTupleAlias)
 end 'PriorTupleAlias'
 
+union PriorTupleAliasClaimants
+	nameAbsent
+	fileEntry(declPath String, prior PriorTupleAlias)
+end 'PriorTupleAliasClaimants'
+
 type CanonicalIndexWrite
 	export let name as ByteArray
 	export let prior as PriorInstance
@@ -34072,9 +34171,11 @@ typealias CanonicalIndexWriteArray = Array with CanonicalIndexWrite
 type TupleAliasWrite
 	export let name as ByteArray
 	export let prior as PriorTupleAlias
+	export let priorClaimants as PriorTupleAliasClaimants
+	export let priorNameable as PriorTupleAlias
 
-	static function create(name ByteArray, prior PriorTupleAlias) returns TupleAliasWrite
-		return Self{name: name, prior: prior}
+	static function create(name ByteArray, prior PriorTupleAlias, priorClaimants PriorTupleAliasClaimants, priorNameable PriorTupleAlias) returns TupleAliasWrite
+		return Self{name: name, prior: prior, priorClaimants: priorClaimants, priorNameable: priorNameable}
 	end 'create'
 end 'TupleAliasWrite'
 
@@ -34096,8 +34197,18 @@ function priorTupleAliasAt(aliases DeclaredTupleAliasMap, name ByteArray) return
 	return PriorTupleAlias.absent
 end 'priorTupleAliasAt'
 
-// Every keyed write since the settle that a count cannot undo: the keys a write ADDED, and for the two maps
-// a write can OVERWRITE, the value it replaced.
+function priorTupleAliasClaimantsAt(claimants MultiplyDeclaredTupleAliasMap, name ByteArray, declPath String) returns PriorTupleAliasClaimants
+	let byFile = try claimants.get(name) otherwise return PriorTupleAliasClaimants.nameAbsent
+
+	if let held = try byFile.get(declPath) 'thisFileHadAnEntry'
+		return PriorTupleAliasClaimants.fileEntry(declPath, prior: PriorTupleAlias.held(held))
+	end 'thisFileHadAnEntry'
+
+	return PriorTupleAliasClaimants.fileEntry(declPath, prior: PriorTupleAlias.absent)
+end 'priorTupleAliasClaimantsAt'
+
+// Every keyed write since the settle that a count cannot undo: the keys a write ADDED, and for each map a
+// write can OVERWRITE, the value it replaced.
 type IndexJournal
 	export var tupleNames as ByteArrayArray
 	export var separatorBearingTokens as ByteArrayArray
@@ -34142,8 +34253,8 @@ type IndexJournal
 		self.originIds.push(instance)
 	end 'noteOrigin'
 
-	function noteTupleAliasWrite(name ByteArray, prior PriorTupleAlias)
-		self.tupleAliasWrites.push(TupleAliasWrite.create(name, prior: prior))
+	function noteTupleAliasWrite(name ByteArray, prior PriorTupleAlias, priorClaimants PriorTupleAliasClaimants, priorNameable PriorTupleAlias)
+		self.tupleAliasWrites.push(TupleAliasWrite.create(name, prior: prior, priorClaimants: priorClaimants, priorNameable: priorNameable))
 	end 'noteTupleAliasWrite'
 
 	function noteCascadeAnswer(name ByteArray, purpose GraphCascadePurpose)

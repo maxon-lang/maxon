@@ -27442,6 +27442,7 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
+
 		// ⚠ **THE REAL PARSE READS THE CLAUSE THROUGH `readImplementsList`, NEVER THROUGH THE SWEEP'S
 		// `readOptionalImplementsClause`.** That reader stops at an unparenthesized `with` whose interface
 		// arity is not yet knowable, because the sweep is what builds the arity index; here the index is
@@ -32028,12 +32029,11 @@ export type Parser
 				end 'genericInnerAlias'
 
 				// A TUPLE inner alias (W43) — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
-				// THROUGH to the interned tuple's own `structRef`, exactly as the file-scope tuple-alias arm far
-				// below does, which is what makes an `Entry`-typed slot and a `(Key, Value)`-typed one one type.
-				// UNGATED by `allFilesFolded` for that arm's stated reason: `recordTupleAlias` writes DURING the
-				// walk, so the resolved answer is the common case here and the bare `named` the rare one.
+				// THROUGH to the interned tuple's own `structRef`, which is what makes an `Entry`-typed slot and a
+				// `(Key, Value)`-typed one one type. UNGATED by `allFilesFolded` because `recordTupleAlias` writes
+				// DURING the walk: the resolved answer is the common case here and the bare `named` the rare one.
 				if self.signatures.isTupleAliasInAnyFile(qualifiedInner) 'tupleInnerAlias'
-					return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetInAnyFile(qualifiedInner)))
+					return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetFrom(qualifiedInner, readerFilePath: self.filePath)))
 				end 'tupleInnerAlias'
 
 				return MaxonType.named(self.artifact.typeNames.intern(qualifiedInner))
@@ -32169,9 +32169,8 @@ export type Parser
 			// THROUGH to the tuple's own `structRef`, minting no identity of its own, which is what makes a
 			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. `tupleAliasTarget` canonicalizes,
 			// so a target the SWEEP registered under the source spelling answers under the canonical one.
-			// Ungated, for the reason the block above states.
-			if self.signatures.isTupleAliasFor(name, readerFilePath: self.filePath) 'tupleAlias'
-				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetInAnyFile(name)))
+			if self.signatures.isTupleAliasFor(name, readerFilePath: self.filePath) and self.tupleAliasMeaningIsSettled(name) 'tupleAlias'
+				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetFrom(name, readerFilePath: self.filePath)))
 			end 'tupleAlias'
 
 			// ⭐⭐ **A BARE GENERIC TYPE NAME INSIDE A TYPE-PARAMETER SCOPE IS THAT TYPE AT THIS SCOPE'S
@@ -32728,7 +32727,7 @@ export type Parser
 		// ⚠ MEASURED, A3e: without it the very same program was `E3011 Unknown type 'Pair'` whenever the walk
 		// reached the alias's file after the caller's, and ran when it reached it first.
 		if self.signatures.isTupleAliasFor(name, readerFilePath: scopeFilePath) 'tupleAlias'
-			return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetInAnyFile(name)))
+			return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetFrom(name, readerFilePath: scopeFilePath)))
 		end 'tupleAlias'
 
 		return t
@@ -32751,6 +32750,15 @@ export type Parser
 	function genericAliasDenotedType(name ByteArray, readerFilePath FilePath) returns MaxonType
 		return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: readerFilePath), into: self.artifact.typeNames)
 	end 'genericAliasDenotedType'
+
+	// During the SWEEP only one answer about a tuple alias is knowable: a declaration already read in the
+	// reader's own file is FINAL, because a second same-file declaration of the name is E3061. Any other
+	// answer is provisional — a later file may declare the name too — so the arm leaves a bare `named` for the
+	// read doors to repair rather than pinning whichever declaration the walk had reached. The blunt
+	// `allFilesFolded` gate its neighbours take would refuse the knowable answer along with the rest.
+	function tupleAliasMeaningIsSettled(name ByteArray) returns bool
+		return self.signatures.allFilesFolded or self.signatures.tupleAliasIsDeclaredIn(name, readerFilePath: self.filePath)
+	end 'tupleAliasMeaningIsSettled'
 
 	// `resolveNamedStruct` folded over a parameter-type list — the whole struct-`named` → `structRef`
 	// rewrite for one function's parameters, done ONCE after they are parsed so every downstream reader

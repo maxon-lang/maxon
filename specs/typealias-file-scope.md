@@ -1303,6 +1303,691 @@ typealias Integer = int(i64.min to i64.max)
 72
 ```
 
+<!-- test: sibling-files-tuple-alias-of-one-name-resolves-in-its-own-file -->
+⛔⛔ **A FILE-PRIVATE TUPLE `typealias` MUST MEAN WHAT ITS OWN FILE MEANS BY IT, AND THE REGISTRY THAT
+ANSWERS FOR IT HOLDS ONE ROW PER BARE NAME.** `ProgramSignatures.tupleAliases` is a
+`Map with (ByteArray, DeclaredTupleAlias)` keyed on the BARE NAME, and `writeTupleAlias` `upsert`s into
+it — one row per name, LAST-WINS — so the declaration the fold reached last owns the name for the whole
+program. `tupleAliasTargetInAnyFile` then reads that single row and is handed NO READING FILE at all, so
+a reference from the other declaring file is answered with a stranger's tuple.
+
+Two files each declaring a file-private `Pair` over a DIFFERENT tuple is legal —
+`Project.typeNamePairMayCoexist` returns true at its `twoAliases` arm, and
+`tuple-alias-over-a-contested-generic-alias-either-order` above is a committed case of exactly that
+shape — so what the bare row costs is the LOSER's own legal program, the same trade every contest case
+in this file refuses.
+
+This one drives the SWEEP-REPAIR door: each `Pair` is declared BELOW its own use, so the declaration
+sweep records a bare `named` and `resolveNamedAlias` is what resolves it afterwards. `useGamma()` is
+called first, so the right answer prints `gamma x y` before `alpha 7`.
+
+⛔ MEASURED on this tree (Windows, where `z-gamma.maxon` folds last): `error E3005:
+a-main.maxon:5:20: operator '-' is not defined for type 'String'` together with `error E3005:
+m-alpha.maxon:2:2: Cannot return '__Tuple2.int.int' from function declared to return
+'__Tuple2.String.String'` — `a` is typed with the other file's tuple. WHICH file is blamed comes off
+the fold order, which is why nothing here asserts that text.
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	useGamma()
+
+	let a = relayA()
+	print("alpha {a.0 - a.1}\n")
+
+	return 0
+end 'main'
+
+// --- file: m-alpha.maxon
+export function relayA() returns Pair
+	return (9, 2)
+end 'relayA'
+
+typealias Pair = (int, int)
+
+// --- file: z-gamma.maxon
+typealias Pair = (String, String)
+
+export function useGamma()
+	let g = makeGamma()
+	print("gamma {g.0} {g.1}\n")
+end 'useGamma'
+
+function makeGamma() returns Pair
+	return ("x", "y")
+end 'makeGamma'
+```
+```exitcode
+0
+```
+```stdout
+gamma x y
+alpha 7
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-crosses-as-a-parameter -->
+⭐ **THE SAME ONE-ROW REGISTRY ANSWERS A PARAMETER TYPE, AND A READER THAT DECLARES NO `Pair` AT ALL
+HAS TO GET THE CALLEE'S.** `parseTypeReference` is the second door onto `tupleAliasTargetInAnyFile`,
+and it asks the same fileless question, so `relayA`'s own parameter `p Pair` is typed by whichever
+file folded last rather than by `m-alpha.maxon`, which declares it. `a-main.maxon` declares no `Pair`
+and only passes one across — it is the innocent third file, and it cannot be the one that decides.
+
+The literal `(4, 1)` is what discriminates: `p.0 - p.1` is arithmetic only if `Pair` meant
+`m-alpha.maxon`'s `(int, int)`, and the difference reaches the exit code.
+
+⛔ MEASURED on this tree: `error E3005: m-alpha.maxon:2:14: operator '-' is not defined for type
+'String'` — the declaring file cannot do arithmetic on its own tuple.
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	useGamma()
+
+	return relayA((4, 1))
+end 'main'
+
+// --- file: m-alpha.maxon
+export function relayA(p Pair) returns ExitCode
+	return (p.0 - p.1) as ExitCode
+end 'relayA'
+
+typealias Pair = (int, int)
+
+// --- file: z-gamma.maxon
+typealias Pair = (String, String)
+
+export function useGamma()
+	let g = makeGamma()
+	print("gamma {g.0} {g.1}\n")
+end 'useGamma'
+
+function makeGamma() returns Pair
+	return ("x", "y")
+end 'makeGamma'
+```
+```exitcode
+3
+```
+```stdout
+gamma x y
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-resolves-in-its-own-file-either-order -->
+⭐⭐ **A FILE-PRIVATE TUPLE ALIAS IS A STATEMENT ABOUT THE PROGRAM, NOT ABOUT THE FILESYSTEM, AND THIS
+IS THE CASE THAT SAYS SO.** The fold walks `Directory.list` order — NTFS index order on Windows, APFS
+hash order on macOS (defect-board row `A5a`) — so a one-row last-wins registry hands a different file
+the name on a different host, and a cure that only happened to pick the right row would be the same
+wrong answer wearing a different hat. This is the program above with the two ALIAS-DECLARING files'
+sort prefixes swapped, so the `(int, int)` file is now the one sorting last; the answer must not move.
+
+⚠ The `a-`/`m-`/`z-` prefixes are load-bearing in all three of these programs. Renaming a file
+changes which declaration currently wins and is what this pair exists to hold fixed.
+
+⛔ MEASURED on this tree: red in BOTH orders, and NOT symmetrically — this order reports only `error
+E3005: a-main.maxon:5:20: operator '-' is not defined for type 'String'`, one error where the other
+order reports two, because `z-alpha.maxon`'s own return type survives while the caller's `let` does
+not. One bare row cannot be wrong in the same way twice.
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	useGamma()
+
+	let a = relayA()
+	print("alpha {a.0 - a.1}\n")
+
+	return 0
+end 'main'
+
+// --- file: m-gamma.maxon
+typealias Pair = (String, String)
+
+export function useGamma()
+	let g = makeGamma()
+	print("gamma {g.0} {g.1}\n")
+end 'useGamma'
+
+function makeGamma() returns Pair
+	return ("x", "y")
+end 'makeGamma'
+
+// --- file: z-alpha.maxon
+export function relayA() returns Pair
+	return (9, 2)
+end 'relayA'
+
+typealias Pair = (int, int)
+```
+```exitcode
+0
+```
+```stdout
+gamma x y
+alpha 7
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-owns-heap-in-every-declared-position -->
+⭐⭐ **ADMITTING THE PROGRAM ABOVE PUTS A CONTESTED TUPLE ALIAS IN FRONT OF THE MEMORY
+CLASSIFIERS FOR THE FIRST TIME, AND THIS IS THE CASE THAT SAYS WHAT THEY MUST ANSWER.** The three cases
+above resolve a contested `Pair` in a RETURN type and a PARAMETER — positions where a wrong answer is a
+diagnostic. Every other position a tuple alias can hold reaches OWNERSHIP instead: a struct FIELD's drop
+cascade, an `Array` ELEMENT's `element_destroy` stamp, a union PAYLOAD's release, and a generic type's
+opaque `T` field, whose drop is gated on `ProgramSignatures.typeArgIsOwned` over the instances of its base.
+There a wrong tuple is a LEAK or a DOUBLE FREE and not a message — `(int, int)` owns no heap and
+`(String, String)` owns two records — so the answer is unobservable in the output and the suite stays
+green either way. **The leak gate is what makes it observable: a missed release is exit 101, and this case
+pins `0`.**
+
+⚠ **THE TWO FILES DISAGREE ABOUT WHETHER `Pair` OWNS HEAP AT ALL, WHICH IS WHAT MAKES ONE ANSWER
+REACHABLE PER ORDER.** Whichever declaration the fold reaches last owns the bare row, so one of the two
+files is always the one a whole-program reading would answer wrongly — the scalar file's tuple released
+through the String tuple's destructor (two integers decref'd as pointers), or the String file's released
+through the scalar's (`__mm_decref` alone, and both records stranded). Neither is what this asserts.
+
+⭐ **`Pair` IS DECLARED BELOW THE DECLARATIONS THAT NAME IT, DELIBERATELY — AND ITS CONTAINER ALIASES ARE
+NOT.** A `typealias` the sweep has already read in the reader's own file is resolved at the declaration
+sweep; one it has not is recorded as a bare `named` and repaired by the read doors, and only that second
+shape reaches a classifier as an unresolved alias spelling. `type HolderA`, `union SlotA` and
+`alphaSide` all sit ABOVE `typealias Pair`, so the FIELD, the PAYLOAD and the values are swept bare and
+are what this case exercises.
+
+⚠ **`PairsA` AND `BoxA` SIT *BELOW* `Pair`, SO THE GENERIC TYPE ARGUMENT HERE IS ALREADY RESOLVED WHEN
+IT IS INTERNED — THIS CASE DOES NOT REACH THAT DOOR.** `Array with Pair` and `Box with Pair` are read
+after `Pair` is in the reader's own file, so the instance is interned over the tuple's own `structRef`
+and never over the alias spelling. The door where a type ARGUMENT arrives as an unresolved `named` is
+`sibling-files-tuple-alias-of-one-name-as-a-generic-type-argument` below, which orders those two
+declarations the other way round for exactly that reason. Read the pair together: this case owns the
+field, the payload and the element VALUES; that one owns the interned type ARGUMENT.
+
+⚠ **MEASURED on this tree:** the pre-change compiler REFUSES this program outright — `error E3005:
+m-alpha.maxon:5:15: cannot assign a value of type '__Tuple2.int.int' to field 'p' of 'HolderA', which
+holds '__Tuple2.String.String'`, and its mirror at `z-gamma.maxon:5:15` — so there is no earlier answer
+here to preserve, right or wrong. Compiled against the whole-program tuple-alias row, the field assignment
+is refused before ownership is ever asked; resolved per file, the program compiles and the contested
+program's binary is **byte-identical** to the control with one alias renamed. That identity is the
+property, and it is the reason a wrong answer cannot hide: the type check and the drop cascade read the
+SAME resolution (`declaredSlotType`), so a tuple wrong enough to leak is refused instead.
+
+⚠ **THE CLONE SIDE IS HERE BECAUSE THE DROP SIDE IS.** `managedNameDropCallee` and
+`managedNameCascadeStrategy` are duals by contract — a value one routes must be a value the other can
+route — so a case that released a contested tuple without also COPYING one would pin half of a pair
+whose halves are required to agree. `xs.clone()` and `h.clone()` are that half: the array's
+per-element copy and the struct's field copy, each of which must build a fresh record for the String
+tuple and a plain word copy for the scalar one.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	gammaSide()
+	alphaSide()
+
+	return 0
+end 'main'
+
+// --- file: b-box.maxon
+export type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Box
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+// --- file: m-alpha.maxon
+type HolderA
+	export var p as Pair
+
+	export static function create() returns HolderA
+		return Self{p: (9, 2)}
+	end 'create'
+end 'HolderA'
+
+union SlotA
+	empty
+	some(v Pair)
+end 'SlotA'
+
+export function alphaSide()
+	let h = HolderA.create()
+	var xs = PairsA.create()
+	xs.push((4, 1))
+	let e = try xs.get(0) otherwise return
+	let b = BoxA.create((6, 3))
+	let s = SlotA.some((8, 5))
+	let ys = xs.clone()
+	let e2 = try ys.get(0) otherwise return
+	let h2 = h.clone()
+
+	let sv = match s 'm'
+		empty gives 0
+		some(v) gives v.0 - v.1
+	end 'm'
+
+	print("alpha {h.p.0 - h.p.1} {e.0 - e.1} {b.item.0 - b.item.1} {sv} {e2.0 - e2.1} {h2.p.0 - h2.p.1}\n")
+end 'alphaSide'
+
+typealias Pair = (int, int)
+typealias PairsA = Array with Pair
+typealias BoxA = Box with Pair
+
+// --- file: z-gamma.maxon
+type HolderG
+	export var p as Pair
+
+	export static function create() returns HolderG
+		return Self{p: ("a", "b")}
+	end 'create'
+end 'HolderG'
+
+union SlotG
+	empty
+	some(v Pair)
+end 'SlotG'
+
+export function gammaSide()
+	let h = HolderG.create()
+	var xs = PairsG.create()
+	xs.push(("c", "d"))
+	let e = try xs.get(0) otherwise return
+	let b = BoxG.create(("e", "f"))
+	let s = SlotG.some(("g", "h"))
+	let ys = xs.clone()
+	let e2 = try ys.get(0) otherwise return
+	let h2 = h.clone()
+
+	let sv = match s 'm'
+		empty gives ""
+		some(v) gives v.0
+	end 'm'
+
+	print("gamma {h.p.0}{h.p.1} {e.0}{e.1} {b.item.0}{b.item.1} {sv} {e2.0}{e2.1} {h2.p.0}{h2.p.1}\n")
+end 'gammaSide'
+
+typealias Pair = (String, String)
+typealias PairsG = Array with Pair
+typealias BoxG = Box with Pair
+```
+```exitcode
+0
+```
+```stdout
+gamma ab cd ef g cd ab
+alpha 7 3 3 3 3 7
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-owns-heap-in-every-declared-position-either-order -->
+⭐ **THE SAME PROGRAM WITH THE TWO ALIAS-DECLARING FILES' SORT PREFIXES SWAPPED**, so the file whose
+`Pair` owns NO heap is the one sorting last and holding the bare row. The pair exists for the reason every
+other either-order pair in this file does: the fold walks `Directory.list` order, so half a pair measures
+the ticket that happened to win rather than the rule. Here it also swaps WHICH DIRECTION a whole-program
+reading fails in — one order strands two String records, the other releases two integers as pointers —
+and the answer must not move.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	gammaSide()
+	alphaSide()
+
+	return 0
+end 'main'
+
+// --- file: b-box.maxon
+export type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Box
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+// --- file: m-gamma.maxon
+type HolderG
+	export var p as Pair
+
+	export static function create() returns HolderG
+		return Self{p: ("a", "b")}
+	end 'create'
+end 'HolderG'
+
+union SlotG
+	empty
+	some(v Pair)
+end 'SlotG'
+
+export function gammaSide()
+	let h = HolderG.create()
+	var xs = PairsG.create()
+	xs.push(("c", "d"))
+	let e = try xs.get(0) otherwise return
+	let b = BoxG.create(("e", "f"))
+	let s = SlotG.some(("g", "h"))
+	let ys = xs.clone()
+	let e2 = try ys.get(0) otherwise return
+	let h2 = h.clone()
+
+	let sv = match s 'm'
+		empty gives ""
+		some(v) gives v.0
+	end 'm'
+
+	print("gamma {h.p.0}{h.p.1} {e.0}{e.1} {b.item.0}{b.item.1} {sv} {e2.0}{e2.1} {h2.p.0}{h2.p.1}\n")
+end 'gammaSide'
+
+typealias Pair = (String, String)
+typealias PairsG = Array with Pair
+typealias BoxG = Box with Pair
+
+// --- file: z-alpha.maxon
+type HolderA
+	export var p as Pair
+
+	export static function create() returns HolderA
+		return Self{p: (9, 2)}
+	end 'create'
+end 'HolderA'
+
+union SlotA
+	empty
+	some(v Pair)
+end 'SlotA'
+
+export function alphaSide()
+	let h = HolderA.create()
+	var xs = PairsA.create()
+	xs.push((4, 1))
+	let e = try xs.get(0) otherwise return
+	let b = BoxA.create((6, 3))
+	let s = SlotA.some((8, 5))
+	let ys = xs.clone()
+	let e2 = try ys.get(0) otherwise return
+	let h2 = h.clone()
+
+	let sv = match s 'm'
+		empty gives 0
+		some(v) gives v.0 - v.1
+	end 'm'
+
+	print("alpha {h.p.0 - h.p.1} {e.0 - e.1} {b.item.0 - b.item.1} {sv} {e2.0 - e2.1} {h2.p.0 - h2.p.1}\n")
+end 'alphaSide'
+
+typealias Pair = (int, int)
+typealias PairsA = Array with Pair
+typealias BoxA = Box with Pair
+```
+```exitcode
+0
+```
+```stdout
+gamma ab cd ef g cd ab
+alpha 7 3 3 3 3 7
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-as-a-generic-type-argument -->
+⭐⭐ **A TUPLE ALIAS NAMED AS A GENERIC TYPE ARGUMENT IS INTERNED INTO THE INSTANCE, AND AN INSTANCE HAS NO
+READER TO ASK.** Every other position a contested `Pair` can hold is resolved at a door that takes the
+reading file — `declaredSlotType` for a field, an element and a payload, `parseTypeReference` for a
+parameter, `resolveNamedAlias` for a call result. A generic INSTANCE is not a position: it is a
+whole-program identity, keyed on `(baseId, args, fixedSize)`, and `Box with Pair` interned from a bare
+`named` is ONE row that both files then share. `ProgramSignatures.fileScopedArg` is the one walk that
+turns a contested name inside an interned instance into the spelling a particular file means, and it knew
+two leaf rules — a range-contested RANGED alias and an instance-contested GENERIC alias. A leaf naming a
+TUPLE alias fell through it untouched.
+
+⚠ **THE DECLARATION ORDER IS THE WHOLE CASE.** `typealias BoxA = Box with Pair` sits ABOVE
+`typealias Pair`, so when the sweep reads the instantiation its own file has not yet declared `Pair` and
+the argument is recorded as a bare `named`. Written the other way round the argument is resolved as it is
+interned and this door is never reached — which is exactly what
+`sibling-files-tuple-alias-of-one-name-owns-heap-in-every-declared-position` above does, and why that case
+covers the field and the payload and not this.
+
+⚠ **BOTH FILES ARE REFUSED, NOT ONE.** This is not the last-wins shape the other cases in this file
+measure: the shared row carries a name that denotes neither file's tuple, so neither file can construct
+its own value. ⛔ MEASURED on this tree — `error E3005: m-alpha.maxon:2:15: argument type mismatch for
+'item': expected 'Pair', got '__Tuple3.int.int.int'` together with `error E3005: z-gamma.maxon:2:15:
+argument type mismatch for 'item': expected 'Pair', got '__Tuple2.String.String'`. An unresolved alias
+spelling reaching a type comparison refuses both sides of the program that spells it.
+
+⭐ **`sizeof(T)` IS THE SECOND CHANNEL AND IT DISCRIMINATES.** The two tuples are deliberately different
+widths — three words against two pointers — so the shared body's `sizeof(T)` is **24** for one file and
+**16** for the other. One instance cannot answer both, and the answer is silent: a program taking the
+wrong one still compiles and runs. `6 - 3 + 1 + 24` is the exit code; `ef 16` is the other file's.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	gammaSide()
+
+	return alphaSide()
+end 'main'
+
+// --- file: b-box.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Box
+		return Self{item: item}
+	end 'create'
+
+	export function size() returns Integer
+		return sizeof(T)
+	end 'size'
+end 'Box'
+
+// --- file: m-alpha.maxon
+export function alphaSide() returns ExitCode
+	let b = BoxA.create((6, 3, 1))
+
+	return (b.item.0 - b.item.1 + b.item.2 + b.size()) as ExitCode
+end 'alphaSide'
+
+typealias BoxA = Box with Pair
+typealias Pair = (Integer, Integer, Integer)
+
+// --- file: z-gamma.maxon
+export function gammaSide()
+	let b = BoxG.create(("e", "f"))
+
+	print("{b.item.0}{b.item.1} {b.size()}\n")
+end 'gammaSide'
+
+typealias BoxG = Box with Pair
+typealias Pair = (String, String)
+```
+```exitcode
+28
+```
+```stdout
+ef 16
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-as-a-generic-type-argument-either-order -->
+⭐ **THE SAME PROGRAM WITH THE TWO ALIAS-DECLARING FILES' SORT PREFIXES SWAPPED.** The refusal above is
+SYMMETRIC — both files are refused in both orders, because the shared row denotes neither of them — so
+unlike the other either-order pairs in this file this twin does not measure a different failure. It is
+here for the direction a REPAIR can fail in: a fix that scoped the interned argument for whichever file
+the fold reached last would green one order and leave the other red, and nothing else in the suite would
+notice.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	gammaSide()
+
+	return alphaSide()
+end 'main'
+
+// --- file: b-box.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export type Box uses T
+	export var item as T
+
+	export static function create(item T) returns Box
+		return Self{item: item}
+	end 'create'
+
+	export function size() returns Integer
+		return sizeof(T)
+	end 'size'
+end 'Box'
+
+// --- file: m-gamma.maxon
+export function gammaSide()
+	let b = BoxG.create(("e", "f"))
+
+	print("{b.item.0}{b.item.1} {b.size()}\n")
+end 'gammaSide'
+
+typealias BoxG = Box with Pair
+typealias Pair = (String, String)
+
+// --- file: z-alpha.maxon
+export function alphaSide() returns ExitCode
+	let b = BoxA.create((6, 3, 1))
+
+	return (b.item.0 - b.item.1 + b.item.2 + b.size()) as ExitCode
+end 'alphaSide'
+
+typealias BoxA = Box with Pair
+typealias Pair = (Integer, Integer, Integer)
+```
+```exitcode
+28
+```
+```stdout
+ef 16
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-beside-a-nominal-declaration -->
+⭐⭐ **THE CROSS-KIND CONTEST RANKS A SET OF CLAIMS, AND THE TUPLE FORM WAS CONTRIBUTING ONE CLAIM WHERE IT
+NOW HAS TWO.** `ProgramSignatures.typeNameClaimsOf` assembles every declaration a type name holds so
+`contestedTypeNameKindFor` can answer what a given file means by it. Its RANGED arm walks
+`contestedDeclarations` and pushes a claim per declaring file; its TUPLE arm read the bare last-wins row
+and pushed exactly one. That was complete while one row was all a tuple alias could have. Two files may
+now legally declare one tuple alias, so the arm dropped a real declaration — and a dropped claim is not a
+missing diagnostic, it is a file being told it means somebody else's KIND.
+
+⚠ **IT TAKES A THIRD FILE DECLARING THE NAME NOMINALLY TO OBSERVE IT.** With only the two aliases the
+name is not cross-kind contested at all and the ranking never runs; `type Pair` is what makes the name
+contested across kinds and sends every reader through the claim set. The file whose tuple claim was
+dropped then ranks as meaning the STRUCT, and cannot return its own tuple from its own function.
+
+⛔ MEASURED on this tree: `error E3005: m-alpha.maxon:8:2: Cannot return '__Tuple2.int.int' from
+function declared to return 'Pair'` — the declaring file refused its own declaration, while the file whose
+claim happened to be the surviving row compiled fine. **WHICH file is refused comes off the fold order,
+which is why the twin below exists and why nothing here asserts that text.**
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	useGamma()
+
+	return alphaSide()
+end 'main'
+
+// --- file: m-alpha.maxon
+export function alphaSide() returns ExitCode
+	let p = makeA()
+
+	return (p.0 - p.1) as ExitCode
+end 'alphaSide'
+
+function makeA() returns Pair
+	return (9, 2)
+end 'makeA'
+
+typealias Pair = (int, int)
+
+// --- file: n-nominal.maxon
+export type Pair
+	export var q as Slot
+
+	export static function create() returns Pair
+		return Self{q: 5}
+	end 'create'
+end 'Pair'
+
+typealias Slot = int(0 to 100)
+
+// --- file: z-gamma.maxon
+export function useGamma()
+	let g = makeG()
+
+	print("{g.0}{g.1}\n")
+end 'useGamma'
+
+function makeG() returns Pair
+	return ("x", "y")
+end 'makeG'
+
+typealias Pair = (String, String)
+```
+```exitcode
+7
+```
+```stdout
+xy
+```
+
+<!-- test: sibling-files-tuple-alias-of-one-name-beside-a-nominal-declaration-either-order -->
+⭐ **THE SAME PROGRAM WITH THE TWO ALIAS-DECLARING FILES' SORT PREFIXES SWAPPED, AND THE REFUSAL MOVES
+WITH THEM.** The surviving claim is the bare row's, so the file that loses its claim is whichever the fold
+reached first — `error E3005: m-gamma.maxon:8:2: Cannot return '__Tuple2.String.String' from function
+declared to return 'Pair'` in this order against `m-alpha.maxon:8:2` in the other. One row short, and the
+program's meaning is a property of the directory walk.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	useGamma()
+
+	return alphaSide()
+end 'main'
+
+// --- file: m-gamma.maxon
+export function useGamma()
+	let g = makeG()
+
+	print("{g.0}{g.1}\n")
+end 'useGamma'
+
+function makeG() returns Pair
+	return ("x", "y")
+end 'makeG'
+
+typealias Pair = (String, String)
+
+// --- file: n-nominal.maxon
+export type Pair
+	export var q as Slot
+
+	export static function create() returns Pair
+		return Self{q: 5}
+	end 'create'
+end 'Pair'
+
+typealias Slot = int(0 to 100)
+
+// --- file: z-alpha.maxon
+export function alphaSide() returns ExitCode
+	let p = makeA()
+
+	return (p.0 - p.1) as ExitCode
+end 'alphaSide'
+
+function makeA() returns Pair
+	return (9, 2)
+end 'makeA'
+
+typealias Pair = (int, int)
+```
+```exitcode
+7
+```
+```stdout
+xy
+```
+
 
 <!-- test: a-sized-vector-keeps-its-element-count-when-its-element-is-contested -->
 ⭐ **A `Vector`'s SIZE is part of its type, and the per-file rescoping a contest causes must carry it.**
