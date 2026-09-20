@@ -193,6 +193,10 @@ unsigned width that holds it wherever values are packed: array elements and modu
 fields and local variables use 8 bytes. `sizeof(T)` reports a type's size in bytes (see
 [Expressions](/docs/language/expressions/#sizeof-and-countof)).
 
+A `type` whose fields are all `let` and all of packable types, summing to 64 bits or fewer, is itself one
+8-byte word rather than a heap record: `sizeof` is 8, and `Array with T` is a dense 8-byte element. See
+[Inline Packed Records](/docs/language/composite-types/#inline-packed-records).
+
 ## Primitive Conformances
 
 The primitives implement the standard interfaces directly: `int` and `float` are `Hashable`, `Equatable`,

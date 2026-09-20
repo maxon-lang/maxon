@@ -1,0 +1,154 @@
+// Test: inline-records.passed-and-returned-through-functions
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+function bumped(p Pair) returns Pair
+	return Pair.create(p.lo + 1, hi: p.hi + 1)
+end 'bumped'
+
+function main() returns ExitCode
+	let a = Pair.create(1, hi: 10)
+
+	let before = __Builtins.mmAllocLive()
+	let b = bumped(a)
+	let c = bumped(b)
+	let after = __Builtins.mmAllocLive()
+
+	if c.lo != 3 'lo'
+		return 1
+	end 'lo'
+
+	if c.hi != 12 'hi'
+		return 1
+	end 'hi'
+
+	if after != before 'alloc'
+		return 2
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @bumped {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rdx, rcx
+    x64.andRegReg rdx, rcx, rax
+    x64.leaRegRegImm32 rax, rdx, 1
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.leaRegRegImm32 rcx, rcx, 1
+  __rc_chk#5:
+    x64.movRegImm32 rdx, 4294967295
+    x64.cmpRegReg rax, rdx
+    x64.jcc greater, __rc_panic#4
+  __rc_chk#8:
+    x64.movRegImm32 rdx, 4294967295
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greater, __rc_panic#7
+  __rc_ok:
+    x64.shlRegImm8 rcx, rcx, 32
+    x64.movRegReg r8, rcx
+    x64.orRegReg r8, rcx, rax
+  __il_cont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at inline-records.passed-and-returned-through-functions.test:8: Range check failed: value outside typealias 'Half'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#7:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at inline-records.passed-and-returned-through-functions.test:8: Range check failed: value outside typealias 'Half'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+  __rc_ok:
+    x64.movRegImm rbx, 42949672961
+  __il_cont:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect bumped
+    x64.movRegReg rcx, r8
+    x64.callDirect bumped
+    x64.movRegReg rbx, r8
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rcx, rbx
+    x64.andRegReg rcx, rbx, rax
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc equal, ifcont#2
+  lo:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.shrRegImm8 rbx, rbx, 32
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg rbx, rbx, rax
+    x64.cmpRegImm32 rbx, 12
+    x64.jcc equal, ifcont#4
+  hi:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.cmpRegReg r8, r12
+    x64.jcc equal, ifcont#6
+  alloc:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

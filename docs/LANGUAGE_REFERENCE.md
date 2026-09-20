@@ -523,6 +523,10 @@ unsigned width that holds it wherever values are packed: array elements and modu
 fields and local variables use 8 bytes. `sizeof(T)` reports a type's size in bytes (see
 [Expressions](#sizeof-and-countof)).
 
+A `type` whose fields are all `let` and all of packable types, summing to 64 bits or fewer, is itself one
+8-byte word rather than a heap record: `sizeof` is 8, and `Array with T` is a dense 8-byte element. See
+[Inline Packed Records](#inline-packed-records).
+
 ### Primitive Conformances
 
 The primitives implement the standard interfaces directly: `int` and `float` are `Hashable`, `Equatable`,
@@ -865,8 +869,9 @@ accepted by both.
 
 ## Composite Types
 
-A `type` declares a record with named fields and methods. Every value of a type is a reference to a
-heap record (see [Memory Model](#memory-model)).
+A `type` declares a record with named fields and methods. A value of a type is a reference to a heap
+record (see [Memory Model](#memory-model)), unless the type's whole shape fits one machine word — see
+[Inline Packed Records](#inline-packed-records).
 
 ### Declaration
 
@@ -1041,6 +1046,63 @@ end 'main'
   (see [Reference Identity](#reference-identity-operators)).
 - A type whose fields are all cloneable gets `clone()` automatically, producing an independent deep copy
   (see [Memory Model](#explicit-cloning)).
+
+### Inline Packed Records
+
+A `type` whose whole shape fits one machine word is not a heap record: its value **is** the word. The
+qualification is inferred — there is no syntax and no annotation for it. A type qualifies when:
+
+- **every** field is `let`;
+- **every** field's declared type is an unsigned zero-based ranged alias (`int(0 to N)`), a `bits(n)`
+  alias, or `bool` — resolved as the file declaring the `type` sees the name;
+- it takes no type parameters and carries no `where` clause;
+- it has at least one field;
+- the fields' storage widths sum to **64 bits or fewer**.
+
+A field's storage width is the array-element ladder under [Storage](#storage): `bool` and `int(0 to 1)`
+take 1 bit, `int(0 to 3)` 2, `int(0 to 15)` 4, `int(0 to u8.max)` 8, `int(0 to u16.max)` 16,
+`int(0 to u32.max)` 32, anything wider 64, and `bits(n)` takes its own `n`.
+
+The word is laid out **first field in the low bits**: the first field occupies bits `0 .. w0-1`, the
+second `w0 .. w0+w1-1`, and so on. A `Self{…}` shifts each field into its place, range-checked at its
+door exactly as a heap record's field is, and a field read extracts it with a shift and a mask.
+
+```maxon
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Pair
+		return Pair{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, hi: 9)
+	print("{p.lo} {p.hi} {sizeof(Pair)}\n")    // 7 9 8
+	return 0
+end 'main'
+```
+
+Because the value is a word and not a box:
+
+- `sizeof(T)` is **8**, whatever the fields sum to.
+- A local, a parameter and a return are the word itself. A field of a heap record is one 8-byte slot,
+  and `Array with T` is a dense 8-byte element.
+- Nothing is allocated, retained, released or destroyed. A module-level `let` or `var` of one always
+  holds a scalar word: an initializer the compiler folds is baked in and nothing runs before `main`,
+  while one it cannot fold runs its factory before `main` and stores the word into that slot.
+- `clone()` is the **identity** — the copy is the same word.
+- `is` and `is not` are refused with **E3068**, the diagnostic every value gets: there is no record for
+  two names to share (see [Reference Identity](#reference-identity-operators)).
+- `==` is unchanged — it calls the type's own `equals`, and a type without one is **E3005**. `Hashable`
+  and `Equatable` conformance is unchanged, so an inline record is a `Map` key like any other.
+
+**An enum field is not admitted.** A type with one stays a heap record, as does every type that fails any
+part of the rule above — a `var` field, a signed or non-zero-based range, a type parameter, or fields
+summing past 64 bits. Nothing about those types changes.
 
 ### Interfaces
 
@@ -2747,7 +2809,8 @@ and `!=`. Comparing two records with `==` calls the type's `equals` method (see
 ### Reference Identity Operators
 
 `a is b` is `true` when two names refer to the **same** record; `a is not b` is its negation. They apply only
-to records — on numbers or `bool` they are **E3068**.
+to heap records — on numbers, on `bool`, and on an
+[inline packed record](#inline-packed-records) (whose value is a word, not a record) they are **E3068**.
 
 ```maxon
 function sameRecord(a Point, b Point) returns bool
@@ -2827,7 +2890,8 @@ iterated (see [For Loop](#for-loop)).
 Both take a **type** and produce a compile-time integer.
 
 - `sizeof(T)` is the size of a value of type `T` in bytes: `sizeof(int)` and `sizeof(float)` are `8`,
-  `sizeof(bool)` is `1`, and a record type is the size of its fields.
+  `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
+  [inline packed record](#inline-packed-records), which is `8` whatever its fields sum to.
 - `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
   is `3`. Inside such a container's own body, `countof(Self)` is the receiver's count. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
@@ -4386,8 +4450,8 @@ time that no reference is used after that.
 
 ### Values and Records
 
-- **Scalars** — integers, floats, `bool`, payload-free enum values — are plain values. Assigning one copies
-  it.
+- **Scalars** — integers, floats, `bool`, payload-free enum values, and an
+  [inline packed record](#inline-packed-records) — are plain values. Assigning one copies it.
 - **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
   live on the heap. A variable holds a **reference** to its record.
 

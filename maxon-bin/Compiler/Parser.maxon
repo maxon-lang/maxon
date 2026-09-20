@@ -5655,6 +5655,10 @@ function constantValueType(tag ValueTypeTag, typeNameId TypeNameId) returns Maxo
 		return MaxonType.named(typeNameId)
 	end 'anEnumCase'
 
+	if tagNamesADeclaredType(tag) 'anInlinePackedWord'
+		return MaxonType.structRef(typeNameId)
+	end 'anInlinePackedWord'
+
 	if tag == ValueTypeTag.boolean 'bool'
 		return MaxonType.boolean
 	end 'bool'
@@ -5673,11 +5677,12 @@ end 'constantValueType'
 // ⭐ **THE `MaxonType` A FOLDED CONSTANT DENOTES, MINTED IN THE TABLE `into` NAMES.** A folded enum or
 // union case carries its type's BYTES rather than an id precisely so that the party holding the reader can
 // choose the table — a `named` id minted in `ProgramSignatures`' table is meaningless in a file's parse and
-// panics the first door that resolves it (`slotStorageType`, `foreignNameOf`). Only a `named` tag has a name
-// to intern, so every other constant read pays nothing, which matters because this is on the path of every
-// top-level constant reference in the program.
+// panics the first door that resolves it (`slotStorageType`, `foreignNameOf`). Only the two tags that carry
+// a name — a `named` enum case and an inline packed record's `structRef` — intern anything, so every other
+// constant read pays nothing, which matters because this is on the path of every top-level constant
+// reference in the program.
 export function constantValueTypeIn(tag ValueTypeTag, typeName ByteArray, into TypeNameInterner) returns MaxonType
-	if tag != ValueTypeTag.named 'namesNoType'
+	if tag != ValueTypeTag.named and not tagNamesADeclaredType(tag) 'namesNoType'
 		return constantValueType(tag, typeNameId: 0)
 	end 'namesNoType'
 
@@ -10836,6 +10841,8 @@ end 'CaptureScopeResult'
 // measured +3,465 allocations on rung 5 of a corpus that declares no managed binding at all, doubling with
 // the program. The narrow answer is not the cheap one here; the narrow QUESTION is.
 union ManagedReceiverBinding
+	inlineWord(payload ParsedInt, typeName ByteArray)
+
 	// A managed `let` (P1.7a) — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
 	constant(bytes ByteArray, kind ManagedConstKind)
 
@@ -31579,8 +31586,20 @@ export type Parser
 		// pointer to a refcounted record with a baked destructor. It carries the SAME managed-aggregate
 		// obligations — owned, dropped once at scope exit, never handed off borrowed-as-owned — so it joins
 		// the boundary here rather than being read as a trivial scalar and leaked.
-		return tagIsStructRef(tag) or self.instanceValueIsAManagedRecord(tag, value: value) or tag == ValueTypeTag.interfaceRef or self.valueIsBoxedUnion(value)
+		return self.valueIsAHeapRecord(value) or self.instanceValueIsAManagedRecord(tag, value: value) or tag == ValueTypeTag.interfaceRef or self.valueIsBoxedUnion(value)
 	end 'valueIsNonTextAggregate'
+
+	// ⚠ The split every REPRESENTATIONAL door asks, and `valueIsNonTextAggregate` above is why it has to
+	// exist: an inline record's value is a WORD, so enrolling one as an aggregate puts it under ownership,
+	// retain, drop and move — an `__mm_incref` of a bit pattern, with no diagnostic anywhere. The tag alone
+	// cannot tell the two apart; only the named type's layout can (`tagNamesADeclaredType`).
+	function valueIsAnInlineRecord(value ValueId) returns bool
+		return tagNamesADeclaredType(self.tagOf(value)) and self.signatures.nameIsInlineRecord(self.valueTypeName(value))
+	end 'valueIsAnInlineRecord'
+
+	function valueIsAHeapRecord(value ValueId) returns bool
+		return tagNamesADeclaredType(self.tagOf(value)) and not self.signatures.nameIsInlineRecord(self.valueTypeName(value))
+	end 'valueIsAHeapRecord'
 
 	// ⭐⭐ **THE ONE EXCEPTION TO "A GENERIC INSTANCE IS A REFCOUNTED BOX": A PROMISE.** `Promise with T` is a
 	// generic instance like any other to the type system, and is NOT a `__mm_alloc` record at run time — its
@@ -32498,7 +32517,7 @@ export type Parser
 	function promoteBareGenericResultToCalleeScope(result ValueId, receiver ValueId)
 		let resultTag = self.tagOf(result)
 
-		if resultTag != ValueTypeTag.named and not tagIsStructRef(resultTag) 'namesNoDeclaredType'
+		if resultTag != ValueTypeTag.named and not tagNamesADeclaredType(resultTag) 'namesNoDeclaredType'
 			return
 		end 'namesNoDeclaredType'
 
@@ -33388,7 +33407,7 @@ export type Parser
 	end 'recordNeverMeetsADoor'
 
 	function valueIsAnImmutableRecord(value ValueId) returns bool
-		return tagIsStructRef(self.tagOf(value)) and self.signatures.recordTypeIsImmutable(self.internedName(self.valueNameId(value)))
+		return tagNamesADeclaredType(self.tagOf(value)) and self.signatures.recordTypeIsImmutable(self.valueTypeName(value))
 	end 'valueIsAnImmutableRecord'
 
 	// ⭐ **DOES A BINDING OF `value` BORROW THE RECORD RATHER THAN OWN IT?** A read that takes no reference — a
@@ -34430,7 +34449,7 @@ export type Parser
 	// two committed codes, so the split is where they actually differ and nowhere else — the non-tuple
 	// refusal stays one sentence assembled from the caller's nouns.
 	function requireTupleLayout(value ValueId, keywordTok Token, patternSubject String, sourceNoun String, needsClause String) returns StructLayout throws ParseError
-		if not tagIsStructRef(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
+		if not tagNamesADeclaredType(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
 			throw ParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
 		end 'notATuple'
 
@@ -34450,7 +34469,7 @@ export type Parser
 	// The managed probe is asked through `structHasManagedField`, the SAME predicate the destructor synthesis
 	// gates on, so "this tuple needs no deep clone" and "this tuple needs no drop cascade" are one answer.
 	function valueIsCopyableTuple(value ValueId) returns bool
-		if not tagIsStructRef(self.tagOf(value)) 'notAStruct'
+		if not tagNamesADeclaredType(self.tagOf(value)) 'notAStruct'
 			return false
 		end 'notAStruct'
 
@@ -36051,7 +36070,7 @@ export type Parser
 		// `checkDeclaredType(named, float)` answers `ok` and hands the conversion straight through. The next
 		// rung to mint a float-alias value gets a named site instead of a number.
 		if self.tagOf(value) == ValueTypeTag.named and self.namedIsFloatAlias(self.valueNameId(value)) 'unliftedFloatAlias'
-			panic("Parser.coerceToDeclared: value v{value} is tagged `named` for the ranged FLOAT alias '{String.from(self.internedName(self.valueNameId(value)))}' and reached the int->float widening — every producer of a float-alias value must lift its tag through `resolveFloatAliasType` or `ProgramSignatures.fieldTypeOf` first, or this emits a `cvtsi2sd` over an f64 bit pattern")
+			panic("Parser.coerceToDeclared: value v{value} is tagged `named` for the ranged FLOAT alias '{String.from(self.valueTypeName(value))}' and reached the int->float widening — every producer of a float-alias value must lift its tag through `resolveFloatAliasType` or `ProgramSignatures.fieldTypeOf` first, or this emits a `cvtsi2sd` over an f64 bit pattern")
 		end 'unliftedFloatAlias'
 
 		return self.promoteToFloat(value, opTok: anchor)
@@ -36849,7 +36868,7 @@ export type Parser
 			return EmptySourceText
 		end 'carriesNoName'
 
-		return self.signatures.rangedAliasIdentityOf(self.internedName(self.valueNameId(value)), readerFilePath: self.filePath)
+		return self.signatures.rangedAliasIdentityOf(self.valueTypeName(value), readerFilePath: self.filePath)
 	end 'operandAliasName'
 
 	// The half of `operandAliasName` a NEGATION may keep: an alias whose own range admits a negative. An
@@ -41925,7 +41944,7 @@ export type Parser
 		// A struct box: `managedFieldDropCallee` returns `__destruct_<Struct>` for one that owns a managed
 		// field and the trivial `__mm_decref` otherwise, reading only allocation-free `Map.contains` /
 		// per-field checks (no throwaway box), so it needs no hot-path guard of its own.
-		if tagIsStructRef(tag) 'struct'
+		if self.valueIsAHeapRecord(value) 'struct'
 			return self.structBoxDropCallee(value)
 		end 'struct'
 
@@ -42195,7 +42214,7 @@ export type Parser
 			return plainBoxRetainCallee(result)
 		end 'notNominal'
 
-		return managedNameRetainCallee(self.signatures, declaredName: self.internedName(self.valueNameId(value)), result: result)
+		return managedNameRetainCallee(self.signatures, declaredName: self.valueTypeName(value), result: result)
 	end 'retainCalleeForValue'
 
 	// ⭐ **EMIT A VOID `__mm_incref` OF `value`** — the one spelling of "take a second owner of this box,
@@ -43718,7 +43737,7 @@ export type Parser
 			return self.emitOwnDeepBoxCopy(value, range: range)
 		end 'aBoxWithPointerSlots'
 
-		if tagIsStructRef(self.tagOf(value)) 'plainStructBox'
+		if self.valueIsAHeapRecord(value) 'plainStructBox'
 			return self.emitOwnBoxForSink(value, range: range)
 		end 'plainStructBox'
 
@@ -43746,7 +43765,7 @@ export type Parser
 			return self.signatures.declaredContainerBoxIsImageData(self.valueInstanceId(value))
 		end 'aDeclaredContainersBox'
 
-		return tagIsStructRef(self.tagOf(value)) and self.signatures.structBoxIsImageableWithSlots(self.internedName(self.valueNameId(value)))
+		return self.valueIsAHeapRecord(value) and self.signatures.structBoxIsImageableWithSlots(self.valueTypeName(value))
 	end 'valueIsAnImageableDeepBox'
 
 	// ⭐⭐ **IS THIS VALUE A SERVICE HANDLE? — THE VALUE TIER'S ONE SPELLING, over both tags a handle can
@@ -43763,7 +43782,7 @@ export type Parser
 			return self.signatures.instanceBaseIsServiceHandle(self.valueInstanceId(value))
 		end 'aGenericServicesHandle'
 
-		return tagIsStructRef(self.tagOf(value)) and self.signatures.isServiceHandle(self.internedName(self.valueNameId(value)))
+		return self.valueIsAHeapRecord(value) and self.signatures.isServiceHandle(self.valueTypeName(value))
 	end 'valueIsAServiceHandle'
 
 	// ⭐⭐ **THE RETURNING `__mm_own` A STRUCT BOX OWES A DURABLE SINK — and the callee is chosen HERE rather
@@ -43810,7 +43829,7 @@ export type Parser
 			return self.signatures.genericInstanceBoxCloneCallee(self.valueInstanceId(value))
 		end 'aDeclaredContainersBox'
 
-		return self.signatures.structBoxCloneCallee(self.internedName(self.valueNameId(value)))
+		return self.signatures.structBoxCloneCallee(self.valueTypeName(value))
 	end 'deepBoxCloneCallee'
 
 	// ⭐⭐ **THE REFERENCE A REBIND FROM AN IMMUTABLE SOURCE OWES — the assignment door's half of the
@@ -46426,7 +46445,7 @@ export type Parser
 		end 'cursorAdvanceStep' else 'builtinSourceStep'
 			if not src.isString 'ordinalStep'
 				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-				nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+				nextIndex = self.emitMachineWordBinOp(indexPhi, rhs: one, op: MaxonBinOp.add, resultType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			end 'ordinalStep'
 		end 'builtinSourceStep'
 
@@ -56429,7 +56448,7 @@ export type Parser
 			return true
 		end 'stampTarget'
 
-		return self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value)), readerFilePath: self.filePath)
+		return self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.valueTypeName(value), readerFilePath: self.filePath)
 	end 'castConvertsPerInstance'
 
 	// ⭐ **DOES THIS int→int `as` CHANGE HOW A RIGHT SHIFT OF THE VALUE FILLS?** The shift rule reads
@@ -56761,7 +56780,16 @@ export type Parser
 
 		let result = self.mintValueOfType(targetType)
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: range)
+		let sourceIsNarrowerThanAWord = self.tagOf(value) == ValueTypeTag.boolean
+
+		// ⚠ The WIDE operand has to be on the LEFT: `LowerMaxonToStd.appendStdBinOp` takes the op's operand
+		// type from its left operand alone, so an i1 lhs declares the whole `add` i1 and wasm then truncates
+		// the widened value back to one bit. The i64 literal on the left declares it i64.
+		if sourceIsNarrowerThanAWord 'widenFromTheLiteralsWidth'
+			self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: zero, rhs: value, op: MaxonBinOp.add), range: range)
+		end 'widenFromTheLiteralsWidth' else 'sameWidth'
+			self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: range)
+		end 'sameWidth'
 
 		if self.constIsKnown(value) 'constantSource'
 			self.recordConst(result, folded: self.constOf(value))
@@ -57498,7 +57526,7 @@ export type Parser
 			return false
 		end 'notNamed'
 
-		return self.signatures.enumIsFloatBacked(self.internedName(self.valueNameId(value)))
+		return self.signatures.enumIsFloatBacked(self.valueTypeName(value))
 	end 'valueIsFloatBackedEnum'
 
 	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The source
@@ -57888,7 +57916,7 @@ export type Parser
 
 		// Asked of BOTH operands and BEFORE the agreement test below, because a pair of `int`s AGREES and the
 		// thing wrong with `a is b` there is not that the types differ — it is that neither value is an object.
-		if not tagHasReferenceIdentity(leftTag) or not tagHasReferenceIdentity(rightTag) 'notAReference'
+		if not self.valueHasReferenceIdentity(lhs, tag: leftTag) or not self.valueHasReferenceIdentity(rhs, tag: rightTag) 'notAReference'
 			throw ParseError.refIdentityOnPrimitive(op, line: opTok.line, column: opTok.column)
 		end 'notAReference'
 
@@ -57903,6 +57931,10 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: MaxonCmpOp.ne if negate else MaxonCmpOp.eq, signedness: IntegerSignedness.signed), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitReferenceIdentity'
+
+	function valueHasReferenceIdentity(value ValueId, tag ValueTypeTag) returns bool
+		return tagHasReferenceIdentity(tag) and not self.valueIsAnInlineRecord(value)
+	end 'valueHasReferenceIdentity'
 
 	// ⭐⭐ **DO THESE TWO VALUES NAME ONE TYPE? — THE ONE HOME for a question three operator gates ask**, and it
 	// had three spellings before it had one. `structEqualityOperands`, `arrayEqualityOperands` and the `is`
@@ -60545,14 +60577,14 @@ export type Parser
 		let totalLen = self.sumPartLengths(partLens, range: range)
 
 		let overhead = self.emitLiteral(StringInterpOverheadBytes, valueType: MaxonType.integer, range: range)
-		let allocSize = self.emitMachineWordAdd(totalLen, rhs: overhead, range: range)
+		let allocSize = self.emitMachineWordBinOp(totalLen, rhs: overhead, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
 		let result = self.emitBoxAlloc(allocSize, resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 
 		// The inline byte region begins right after the record. Copy each part in at a cursor that advances
 		// by the part's length; the NUL at `buffer[totalLen]` is already zero (the slab zeroes the payload).
 		let recordBytes = self.emitLiteral(StringRecordBytes as ParsedInt, valueType: MaxonType.integer, range: range)
-		let inlineBuf = self.emitMachineWordAdd(result, rhs: recordBytes, range: range)
+		let inlineBuf = self.emitMachineWordBinOp(result, rhs: recordBytes, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
 		var cursor = inlineBuf
 
 		for i in 0 upto partBufs.count() 'copyParts'
@@ -60563,7 +60595,7 @@ export type Parser
 			copyArgs.push(buf)
 			copyArgs.push(length)
 			_ = self.emitRuntimeCall(StrCopyName, args: copyArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			cursor = self.emitMachineWordAdd(cursor, rhs: length, range: range)
+			cursor = self.emitMachineWordBinOp(cursor, rhs: length, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
 		end 'copyParts'
 
 		self.emitStoreStringField(result, offset: StringBufferOffset, value: inlineBuf, range: range)
@@ -60605,23 +60637,23 @@ export type Parser
 
 		for i in 1 upto partLens.count() 'sum'
 			let length = try partLens.get(i) otherwise panic("sumPartLengths: partLens.get OOB at {i}")
-			total = self.emitMachineWordAdd(total, rhs: length, range: range)
+			total = self.emitMachineWordBinOp(total, rhs: length, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
 		end 'sum'
 
 		return total
 	end 'sumPartLengths'
 
-	// `lhs + rhs` as raw i64 MACHINE-WORD arithmetic — the interpolation's cursor advance, buffer offset
-	// and size math, and a `for` loop's index step. It emits `MaxonOp.binOp(add)` DIRECTLY, bypassing
-	// `emitBinOp`'s operand type rules, because the operands are compiler-owned words (a String pointer
-	// `result + StringRecordBytes`, a byte length, a loop counter) rather than a source-level `a + b`
-	// whose two sides must be shown to agree. The result is integer-tagged; the Std tier reads a String
-	// lhs as its i64 pointer (`valueTagToStdType`), so the `add` is a clean i64 add either way.
-	function emitMachineWordAdd(lhs ValueId, rhs ValueId, range SourceRange) returns ValueId
-		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: MaxonBinOp.add), range: range)
+	// A raw MACHINE-WORD `binOp` — the interpolation's cursor advance, buffer offset and size math, a `for`
+	// loop's index step, and an inline record's shift/or/mask assembly. It emits `MaxonOp.binOp` DIRECTLY,
+	// bypassing `emitBinOp`'s operand type rules, because the operands are compiler-owned words (a String
+	// pointer `result + StringRecordBytes`, a byte length, a loop counter, a packed field) rather than a
+	// source-level `a + b` whose two sides must be shown to agree. The Std tier reads a String lhs as its
+	// i64 pointer (`valueTagToStdType`), so the op is a clean i64 one either way.
+	function emitMachineWordBinOp(lhs ValueId, rhs ValueId, op MaxonBinOp, resultType MaxonType, range SourceRange) returns ValueId
+		let result = self.mintValueOfType(resultType)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: range)
 		return result
-	end 'emitMachineWordAdd'
+	end 'emitMachineWordBinOp'
 
 	// Load an 8-byte field of a String record — `buffer@0`, `length@8`. Integer-tagged: the values are a raw
 	// pointer and a byte count. The `rec` addr is a String pointer, read by the Std tier as an i64.
@@ -61790,6 +61822,10 @@ export type Parser
 			return try self.emitFusedWrapperLiteral(layout, fieldValues: fieldValues, anchor: anchor, range: range)
 		end 'fusedWrapper'
 
+		if self.signatures.layoutPacksInlineIntoAWord(layout) 'inlinePacked'
+			return self.emitInlinePackedLiteral(layout, fieldValues: fieldValues, range: range)
+		end 'inlinePacked'
+
 		let box = self.emitOwnedStructBox(layout, range: range)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
@@ -62112,6 +62148,65 @@ export type Parser
 
 		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. The compiler mints that record only for the two names it owns the record FOR — `{String.from(StringConformerName)}` and `{String.from(CharacterConformerName)}` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end", line: anchor.line, column: anchor.column)
 	end 'requireFusedWrapperTag'
+
+	function emitInlinePackedLiteral(layout StructLayout, fieldValues ValueIdArray, range SourceRange) returns ValueId
+		let recordType = MaxonType.structRef(self.artifact.typeNames.intern(layout.name))
+		let last = layout.fieldCount() - 1
+		var word = self.emitInlinePackedTerm(layout, fieldValues: fieldValues, index: 0, range: range)
+
+		if last == 0 'aSoleField'
+			return self.emitRetaggedCastValue(word, targetType: recordType, range: range)
+		end 'aSoleField'
+
+		for i in 1 upto layout.fieldCount() 'eachFurtherField'
+			word = self.emitMachineWordBinOp(word, rhs: self.emitInlinePackedTerm(layout, fieldValues: fieldValues, index: i, range: range), op: MaxonBinOp.bitOr, resultType: recordType if i == last else MaxonType.integer, range: range)
+		end 'eachFurtherField'
+
+		return word
+	end 'emitInlinePackedLiteral'
+
+	function emitInlinePackedTerm(layout StructLayout, fieldValues ValueIdArray, index FieldIndex, range SourceRange) returns ValueId
+		let value = try fieldValues.get(index) otherwise panic("emitInlinePackedTerm: fieldValues.get OOB at {index} — the column is sized to the layout's field count")
+		let widened = self.emitInlineFieldAsAWord(value, range: range)
+		let offset = layout.fieldBitOffset(index)
+
+		if offset == 0 'alreadyInTheLowBits'
+			return widened
+		end 'alreadyInTheLowBits'
+
+		return self.emitMachineWordBinOp(widened, rhs: self.emitLiteral(offset as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonBinOp.shl, resultType: MaxonType.integer, range: range)
+	end 'emitInlinePackedTerm'
+
+	function emitInlineFieldAsAWord(value ValueId, range SourceRange) returns ValueId
+		if self.tagOf(value) != ValueTypeTag.boolean 'alreadyAMachineWord'
+			return value
+		end 'alreadyAMachineWord'
+
+		return self.emitRetaggedCastValue(value, targetType: MaxonType.integer, range: range)
+	end 'emitInlineFieldAsAWord'
+
+	function emitInlinePackedFieldRead(box ValueId, layout StructLayout, index FieldIndex, declared MaxonType, range SourceRange) returns ValueId
+		let offset = layout.fieldBitOffset(index)
+		let width = layout.fieldBitWidth(index)
+		let isBool = maxonTypeTag(declared) == ValueTypeTag.boolean
+		var extracted = box
+
+		if offset != 0 'aboveTheLowBits'
+			extracted = self.emitMachineWordBinOp(box, rhs: self.emitLiteral(offset as ParsedInt, valueType: MaxonType.integer, range: range), op: MaxonBinOp.shrLogical, resultType: MaxonType.integer, range: range)
+		end 'aboveTheLowBits'
+
+		if width != InlineRecordWordBits 'narrowerThanTheWord'
+			extracted = self.emitMachineWordBinOp(extracted, rhs: self.emitLiteral(inlineFieldMask(width), valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitAnd, resultType: MaxonType.integer if isBool else declared, range: range)
+		end 'narrowerThanTheWord'
+
+		if not isBool 'aNumericField'
+			return self.emitRetaggedCastValue(extracted, targetType: declared, range: range) if extracted == box else extracted
+		end 'aNumericField'
+
+		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: extracted, rhs: self.emitLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.ne, signedness: IntegerSignedness.signed), range: range)
+		return result
+	end 'emitInlinePackedFieldRead'
 
 	function emitOwnedStructBox(layout StructLayout, range SourceRange) returns ValueId
 		let size = self.emitLiteral(layout.sizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range)
@@ -62970,7 +63065,7 @@ export type Parser
 			return false
 		end 'notANamedValue'
 
-		return self.atEnumAccessorHopOfType(self.internedName(self.valueNameId(value)))
+		return self.atEnumAccessorHopOfType(self.valueTypeName(value))
 	end 'atEnumAccessorHopOn'
 
 	// ⭐ **THE TAIL BOTH DOORS SHARE — is the cursor on an accessor hop readable off a value whose TYPE is
@@ -65179,11 +65274,11 @@ export type Parser
 		let declared = self.valueMaxonType(value)
 		let tag = maxonTypeTag(declared)
 
-		if tag != ValueTypeTag.named and not tagIsStructRef(tag) 'carriesNoName'
+		if tag != ValueTypeTag.named and not tagNamesADeclaredType(tag) 'carriesNoName'
 			return declared
 		end 'carriesNoName'
 
-		return self.signatures.canonicalInstanceArg(maxonTypeOfTag(tag, nameId: self.signatures.indexTypeNames().intern(self.internedName(self.valueNameId(value)))))
+		return self.signatures.canonicalInstanceArg(maxonTypeOfTag(tag, nameId: self.signatures.indexTypeNames().intern(self.valueTypeName(value))))
 	end 'spawnTypeArgumentOfValue'
 
 	// ⭐ **A GENERIC CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct (P1.6-B1).**
@@ -65397,6 +65492,7 @@ export type Parser
 	// nothing.
 	function dispatchOnManagedTopLevelReceiver(func IrFunction, tok Token, resultUsed bool) returns ManagedTopLevelDispatch throws ParseError
 		match self.managedReceiverBindingOf(tok) 'binding'
+			inlineWord(payload, typeName) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(tok)), varType: self.inlineRecordWordType(typeName), mutable: false, resultUsed: resultUsed))
 			constant(bytes, kind) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed))
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok), reader: self.moduleSlotReaderOf(tok, mutable: mutable)), varType: valueType, mutable: mutable, resultUsed: resultUsed))
 			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: image.valueType, mutable: false, resultUsed: resultUsed))
@@ -66275,7 +66371,7 @@ export type Parser
 	// read the same resolution and cannot disagree" true by construction rather than an assertion.
 	function managedReceiverBindingOf(tok Token) returns ManagedReceiverBinding
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
-			found then break 'constant'
+			found(payload, tag, typeName) then return ManagedReceiverBinding.inlineWord(payload, typeName: typeName) if tagNamesADeclaredType(tag) else ManagedReceiverBinding.none
 			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
 			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
 			foundImageBox(nodes, root, typeName, tag) then return ManagedReceiverBinding.imageBox(nodes, root: root, typeName: typeName, tag: tag)
@@ -66872,11 +66968,13 @@ export type Parser
 
 	// `p.clone()` as the direct `__clone_<T>(box)` call it is. The result is a FRESH, SOLELY-owned box — the
 	// cloner's first act is an `__mm_alloc` — so it is enrolled as an owned temporary exactly as a struct
-	// literal's box is, and a binding adopts it or the statement drops it.
+	// literal's box is, and a binding adopts it or the statement drops it. An INLINE PACKED record has no
+	// box and nothing to own — the copy IS the word — so it is retagged instead, which is what gives the
+	// result a value of its own rather than a second name for the receiver's.
 	//
 	// The result is stamped `structRef` + the receiver's own layout name, which is the same pair
-	// `emitStructLiteral` mints: a clone of a `Point` IS a `Point`, so `b.x`, `b.equals(a)` and `a is b` all
-	// resolve against the one nominal identity.
+	// `emitStructLiteral` mints: a clone of a `Point` IS a `Point`, so `b.x` and `b.equals(a)` resolve
+	// against the one nominal identity.
 	//
 	// ⚠ The cloneability refusal comes BEFORE the tokens are consumed and before anything is emitted — a
 	// rejected program must leave no ops behind (`emitShift`'s rule).
@@ -66885,7 +66983,13 @@ export type Parser
 		self.advance()
 		try self.consumeEmptyArgList()
 
-		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: SourceRange.between(baseTok, last: memberTok))
+		let range = SourceRange.between(baseTok, last: memberTok)
+
+		if self.signatures.layoutPacksInlineIntoAWord(base.layout) 'theCopyISTheWord'
+			return self.emitRetaggedCastValue(base.box, targetType: MaxonType.structRef(self.artifact.typeNames.intern(base.layout.name)), range: range)
+		end 'theCopyISTheWord'
+
+		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: range)
 	end 'emitSynthesizedStructClone'
 
 	// ⭐ **WHICH DECLARED UNION `<receiver>.clone()` CLONES, or `undeclared` for every other member and every
@@ -67319,7 +67423,7 @@ export type Parser
 			return true
 		end 'nestedOrOpaque'
 
-		return tagIsStructRef(tag) and isTupleTypeName(self.internedName(self.valueNameId(value)))
+		return tagNamesADeclaredType(tag) and isTupleTypeName(self.valueTypeName(value))
 	end 'carriesDeclarationView'
 
 	// ⚠ **A LAYOUT DESCRIPTOR IS FORWARDED FROM THE CALLER'S OWN SLOT, SO THE CALLER MUST HOLD ONE** (P1.6-B1).
@@ -69849,7 +69953,7 @@ export type Parser
 		end 'string'
 
 		if self.signatures.tagMayNameAggregate(tag) 'aggregate'
-			return self.signatures.namedElementType(self.internedName(self.valueNameId(value)))
+			return self.signatures.namedElementType(self.valueTypeName(value))
 		end 'aggregate'
 
 		// ⭐⭐ **A CONTAINER VALUE — A GENERIC INSTANCE, WHOSE COLUMN TYPE IS THE INSTANCE ITSELF.** `[list1, list2]`
@@ -69904,7 +70008,7 @@ export type Parser
 		// arguments are ids in the SIGNATURE index's interner, and the parser's `valueNameId` is an id in this
 		// FILE's. Handing the raw id over compiled, parsed and then panicked at the call.
 		if tag == ValueTypeTag.function 'functionValue'
-			return self.signatures.functionElementType(self.internedName(self.valueNameId(value)))
+			return self.signatures.functionElementType(self.valueTypeName(value))
 		end 'functionValue'
 
 		// ⛔⛔ **THE ROSTER BELOW IS HAND-WRITTEN AND IT NO LONGER LISTS EVERY ARM ABOVE IT — MEASURED, NOT
@@ -73384,7 +73488,7 @@ export type Parser
 	function mintHeldAssociatedWitnessResult(target WitnessDispatchTarget, held HeldAssociatedReturn, receiver ValueId, methodTok Token) returns ValueId throws ParseError
 		let range = SourceRange.ofToken(methodTok)
 		let distance = self.emitIndirectLoad(MaxonType.integer, box: target.witnessValue, offset: held.slotOffset, storageType: MaxonType.integer, range: range)
-		let nested = self.emitMachineWordAdd(target.witnessValue, rhs: distance, range: range)
+		let nested = self.emitMachineWordBinOp(target.witnessValue, rhs: distance, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
 		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.artifact.typeNames.intern(held.heldAt)), scopeFilePath: CompilerOwnedDeclFilePath)
 		self.pairInterfaceWitness(result, witness: nested)
 
@@ -74571,7 +74675,7 @@ export type Parser
 			let window = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCharPosParamName, secondParam: ManagedMemoryCharLenParamName, methodTok: methodTok)
 			let startPos = try window.get(0) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
 			let byteLen = try window.get(1) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
-			return self.emitOwnedRuntimeResult(CharAtName, args: tripleArgs(arr, second: startPos, third: self.emitMachineWordAdd(startPos, rhs: byteLen, range: range)), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
+			return self.emitOwnedRuntimeResult(CharAtName, args: tripleArgs(arr, second: startPos, third: self.emitMachineWordBinOp(startPos, rhs: byteLen, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
 		end 'makeCharFromBytes'
 
 		// ⭐ **ONE OF THE TWO DOORS THAT MINT A `cstring`** — the other is `String.cstr()`, whose whole body is
@@ -75604,7 +75708,7 @@ export type Parser
 
 		if args.count() > OneArgumentIsJustTheContainer 'readsAhead'
 			let ahead = try args.get(1) otherwise panic("emitArrayCursorSlot: args.get OOB at 1 — the count was just tested")
-			return PromiseSlot.create(buffer, index: self.emitMachineWordAdd(position, rhs: ahead, range: range))
+			return PromiseSlot.create(buffer, index: self.emitMachineWordBinOp(position, rhs: ahead, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range))
 		end 'readsAhead'
 
 		return PromiseSlot.create(buffer, index: position)
@@ -77460,6 +77564,8 @@ export type Parser
 			let nameTok = self.staticMemberNameToken(baseTok, memberTok: try self.consumeMemberNameToken())
 
 			match self.managedReceiverBindingOf(nameTok) 'binding'
+				inlineWord(payload, typeName) then return try self.resolveValueFieldChain(nameTok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(nameTok)), valueType: self.inlineRecordWordType(typeName), mutable: false)
+
 				// A managed CONSTANT (a `String`, a `b"…"`) and an INLINED scalar have no field to chain
 				// through, so both take the `undefinedVariable` an unknown base does — the arm below's own
 				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
@@ -77484,6 +77590,8 @@ export type Parser
 		// needs no ownership bookkeeping it did not already have.
 		if self.managedTopLevelBaseAt(baseIndex) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
+				inlineWord(payload, typeName) then return try self.resolveValueFieldChain(baseTok, value: self.emitInlineRecordWord(payload, typeName: typeName, range: SourceRange.ofToken(baseTok)), valueType: self.inlineRecordWordType(typeName), mutable: false)
+
 				// A managed CONSTANT is a `String` or a `b"…"`, which has no field, so it takes the same
 				// `undefinedVariable` an unknown base does rather than an arm that could only refuse. An
 				// IMAGED record MAY have fields — see `ManagedReceiverBinding.imageRecord` — so it chains
@@ -77723,7 +77831,7 @@ export type Parser
 
 		let declared = self.slotTypeThroughReceiver(box, declared: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
 		let offset = self.emitLiteral(layout.offsetOfField(index) as ParsedInt, valueType: MaxonType.integer, range: range)
-		let addr = self.emitMachineWordAdd(box, rhs: offset, range: range)
+		let addr = self.emitMachineWordBinOp(box, rhs: offset, op: MaxonBinOp.add, resultType: MaxonType.integer, range: range)
 
 		self.retypeValue(addr, valueType: self.resolveFloatAliasType(declared, scopeFilePath: self.filePath))
 		return addr
@@ -79497,6 +79605,10 @@ export type Parser
 		// the `function` tag so `h.op(21)` reaches an indirect call (P1.5-A1).
 		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 
+		if self.signatures.layoutPacksInlineIntoAWord(layout) 'inlinePacked'
+			return self.emitInlinePackedFieldRead(box, layout: layout, index: index, declared: declared, range: range)
+		end 'inlinePacked'
+
 		// ⭐⭐ **READING A PROMISE'S `inner` IS NOT A LOAD EITHER — THE HANDLE *IS* THE VALUE (G17).** The
 		// same shape as the fused-wrapper arm above and settled the same way: The compiler does not box a promise
 		// (`PromiseType.maxon` carries the argument), so a `Promise with T` value IS the green-thread
@@ -79698,7 +79810,7 @@ export type Parser
 		// reached this line can only be a moved tuple — every other `structRef` leaves through the
 		// denotes-same return one line up — whereas a `structRef` ANSWER is also what a `typeParameter` whose
 		// argument is a struct substitutes to, and that one still needs resolving.
-		return substituted if tagIsStructRef(maxonTypeTag(declared)) else self.resolvedSlotType(substituted)
+		return substituted if tagNamesADeclaredType(maxonTypeTag(declared)) else self.resolvedSlotType(substituted)
 	end 'slotTypeThroughReceiver'
 
 	// ⭐⭐ **WHAT SURFACE A SLOT DECLARED IN A SHARED GENERIC BODY WEARS WHEN IT IS READ THROUGH A CONCRETE
@@ -80350,12 +80462,26 @@ export type Parser
 	// `constantValueType` is what keeps the two spellings of `Reg.rdx` — in a body and out of a top-level
 	// `let` — one mechanism.
 	function emitFoldedConstant(payload ParsedInt, tag ValueTypeTag, typeName ByteArray, range SourceRange) returns ValueId
+		if tagNamesADeclaredType(tag) 'anInlinePackedWord'
+			return self.emitInlineRecordWord(payload, typeName: typeName, range: range)
+		end 'anInlinePackedWord'
+
 		if tag != ValueTypeTag.named 'aPlainScalar'
 			return self.emitLiteral(payload, valueType: constantValueType(tag, typeNameId: 0), range: range)
 		end 'aPlainScalar'
 
 		return self.emitEnumTagLiteral(typeName, tag: payload, range: range)
 	end 'emitFoldedConstant'
+
+	function emitInlineRecordWord(payload ParsedInt, typeName ByteArray, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.structRef, nameId: self.artifact.typeNames.intern(typeName))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.literal(result, value: payload, valueType: MaxonType.integer), range: range)
+		return result
+	end 'emitInlineRecordWord'
+
+	function inlineRecordWordType(typeName ByteArray) returns MaxonType
+		return MaxonType.structRef(self.artifact.typeNames.intern(typeName))
+	end 'inlineRecordWordType'
 
 	function recordImmutableConstantRead(tok Token, value ValueId) returns ValueId
 		self.publishBareBindingName(tok, immutable: true)
@@ -84134,8 +84260,9 @@ export type Parser
 			// drift again about which tokens the shared table admits.
 			//
 			// The sentence is the emitting path's own E3068, which is exact rather than convenient: a top-level
-			// constant folds integers, bools and floats and nothing else (`constantValueType`), so EVERY operand
-			// that can reach here is a value with no object identity — precisely what that diagnostic says. The
+			// constant folds integers, bools, floats and inline packed words and nothing else
+			// (`constantValueType`), so EVERY operand that can reach here is a value with no object identity
+			// — precisely what that diagnostic says. The
 			// `not` is PEEKED rather than consumed, only so the message names the form the author wrote.
 			if identityOperator(opTok.kind) 'referenceIdentity'
 				throw ConstEvalError.defective(ParseError.refIdentityOnPrimitive(referenceIdentityOpSpelling(self.peekKind() == TokenKind.not), line: opTok.line, column: opTok.column))
@@ -88394,7 +88521,7 @@ export type Parser
 			return
 		end 'theLoopDestructuresThePair'
 
-		let cure = PromisePairReadCure if tagIsStructRef(maxonTypeTag(handedBack)) else PromiseSlotReadCure
+		let cure = PromisePairReadCure if tagNamesADeclaredType(maxonTypeTag(handedBack)) else PromiseSlotReadCure
 		throw ParseError.promiseCannotBeBorrowed(String.from(unqualifiedMemberName(callee)), cure: cure, line: anchor.line, column: anchor.column)
 	end 'settleCorpusPromiseRead'
 
@@ -88412,7 +88539,7 @@ export type Parser
 
 		let tag = maxonTypeTag(t)
 
-		if tagIsStructRef(tag) 'aStructRef'
+		if tagNamesADeclaredType(tag) 'aStructRef'
 			let name = self.internedName(typeNameIdOf(t))
 			return isTupleTypeName(name) and self.signatures.tupleCarriesAGreenThreadHandle(self.signatures.canonicalTupleName(name))
 		end 'aStructRef'
@@ -89844,7 +89971,7 @@ export type Parser
 	// here, the merged module's type names there — and the tag test is what guards that read, a struct reference
 	// being the only value whose name denotes an aggregate.
 	function valueHoldsNothingWritable(value ValueId) returns bool
-		return tagIsStructRef(self.tagOf(value)) and self.signatures.aggregateGraphIsWriteFree(self.internedName(self.valueNameId(value)))
+		return tagNamesADeclaredType(self.tagOf(value)) and self.signatures.aggregateGraphIsWriteFree(self.valueTypeName(value))
 	end 'valueHoldsNothingWritable'
 
 	// ⭐⭐ **WALK THE GRAPH, OR REFUSE IT** — shared by the send and lend doors so the two cannot walk one graph
@@ -92618,7 +92745,8 @@ export type Parser
 			constant or
 				global gives true
 			none gives false
-			imageRecord or
+			inlineWord or
+				imageRecord or
 				imageBox gives true
 		end 'managed'
 	end 'methodCallsAt'

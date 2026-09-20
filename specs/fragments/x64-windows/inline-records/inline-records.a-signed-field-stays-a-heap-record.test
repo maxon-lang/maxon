@@ -1,0 +1,33 @@
+// Test: inline-records.a-signed-field-stays-a-heap-record
+typealias Signed = int(i64.min to i64.max)
+
+type Span
+	export let low as Signed
+	export let high as Signed
+
+	export static function create(low Signed, high Signed) returns Self
+		return Self{low: low, high: high}
+	end 'create'
+end 'Span'
+
+function main() returns ExitCode
+	return sizeof(Span)
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 16
+    x64.popReg rbp
+    x64.ret
+}

@@ -3818,7 +3818,7 @@ module type ProvenanceTracer
 	// there, the merged module's type names here — and the tag test is what guards that read, a struct reference
 	// being the only value whose name denotes an aggregate.
 	function valueHoldsNothingWritable(func IrFunction, value ValueId) returns bool
-		if not tagIsStructRef(valueTagOf(func, value: value)) 'notAStruct'
+		if not tagNamesADeclaredType(valueTagOf(func, value: value)) 'notAStruct'
 			return false
 		end 'notAStruct'
 
@@ -5820,16 +5820,16 @@ module type ProvenanceTracer
 	function typeCarriesProvenance(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 
-		if tag == ValueTypeTag.named 'namedType'
+		if tag == ValueTypeTag.named or tagNamesADeclaredType(tag) 'namesADeclaration'
 			return self.signatures.typeIsManaged(t, from: self.project.typeNames)
-		end 'namedType'
+		end 'namesADeclaration'
 
 		return tagCarriesProvenance(tag)
 	end 'typeCarriesProvenance'
 
 	// A record nothing writes (`ProgramSignatures.recordTypeIsImmutable`).
 	function valueIsAnImmutableRecord(func IrFunction, value ValueId) returns bool
-		if not tagIsStructRef(valueTagOf(func, value: value)) 'notAStruct'
+		if not tagNamesADeclaredType(valueTagOf(func, value: value)) 'notAStruct'
 			return false
 		end 'notAStruct'
 
@@ -5839,7 +5839,7 @@ module type ProvenanceTracer
 	function valueTagCarriesProvenance(func IrFunction, value ValueId) returns bool
 		let tag = valueTagOf(func, value: value)
 
-		if tag == ValueTypeTag.named 'namedType'
+		if tag == ValueTypeTag.named or tagNamesADeclaredType(tag) 'namesADeclaration'
 			let nameId = self.nameIdOf(func, value: value)
 
 			if self.namedTypeHoldsARecord.contains(nameId) 'asked'
@@ -5849,7 +5849,7 @@ module type ProvenanceTracer
 			let holdsARecord = self.typeCarriesProvenance(maxonTypeOfTag(tag, nameId: nameId))
 			self.namedTypeHoldsARecord.upsert(nameId, value: holdsARecord)
 			return holdsARecord
-		end 'namedType'
+		end 'namesADeclaration'
 
 		return tagCarriesProvenance(tag)
 	end 'valueTagCarriesProvenance'
@@ -6045,7 +6045,7 @@ end 'shapeStoresOperand'
 
 // Every tag but `named`, which `ProvenanceTracer.typeCarriesProvenance` asks the declaration about.
 function tagCarriesProvenance(tag ValueTypeTag) returns bool
-	return tagIsByteRecord(tag) or tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.function
+	return tagIsByteRecord(tag) or tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.function
 end 'tagCarriesProvenance'
 
 // Can a value of one tag be the very record a value of the other is? Only a record of one representation

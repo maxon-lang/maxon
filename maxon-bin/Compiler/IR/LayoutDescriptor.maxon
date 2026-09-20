@@ -309,6 +309,32 @@ export function rangedAliasPackedBits(low ParsedInt, high ParsedInt) returns Pac
 	return NotSubBytePacked
 end 'rangedAliasPackedBits'
 
+export typealias InlineRecordBitOffset = int(0 to 63)
+
+export let InlineRecordWordBits = 64 as BitWidth
+
+export let NotAnInlinePackableField = 0 as BitWidth
+
+export function inlineFieldMask(width BitWidth) returns ParsedInt
+	if width == 0 or width >= InlineRecordWordBits 'notANarrowField'
+		panic("inlineFieldMask: a {width}-bit field has no narrowing mask — a whole-word field is read unmasked and a zero width is `NotAnInlinePackableField`, which never reaches a packed layout")
+	end 'notANarrowField'
+
+	return (1 shl (width as ParsedInt)) - 1
+end 'inlineFieldMask'
+
+export function inlineFieldBits(packedBits PackedBitWidth, storageBytes ByteOffset) returns BitWidth
+	if packedBits != NotSubBytePacked 'subBytePacked'
+		return packedBits as BitWidth
+	end 'subBytePacked'
+
+	if storageBytes > MachineWordBytes 'widerThanAWord'
+		panic("inlineFieldBits: a storage width of {storageBytes} bytes is wider than the {MachineWordBytes}-byte machine word — `rangedAliasStorageBytes` hands out 1, 2, 4 and 8 and nothing else")
+	end 'widerThanAWord'
+
+	return ((storageBytes as ParsedInt) * BitsPerByte) as BitWidth
+end 'inlineFieldBits'
+
 // ⭐⭐ **`element_size@24`, AND WHY ONE FIELD CARRIES TWO LADDERS.** The record has ONE stride slot and the
 // runtime helpers read it once, so the two ladders above have to arrive as one number: a POSITIVE value is a
 // byte stride, a NEGATIVE one is `-(bits per element)`. `0` is unset (`__managed_create` diverges on it), which

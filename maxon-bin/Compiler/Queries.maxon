@@ -22,6 +22,19 @@ module union LexSource
 	pooled(outcome LexOutcome)
 end 'LexSource'
 
+// `project.structTypes` holds COMMITTED CLONES of the index's layouts, and `MmRuntime.installStructRuntimeEntries`
+// stamps the runtime's entries off that registry — so both copies are settled from the one set of widths.
+// Left unsettled, the clone answers a box's `sizeBytes()` for a type whose value is a word.
+function settleProjectInlineRecordGeometry(project Project, signatures ProgramSignatures)
+	for (name, layout) in project.structTypes 'eachCommittedLayout'
+		if not signatures.nameIsInlineRecord(name) 'aHeapRecord'
+			continue
+		end 'aHeapRecord'
+
+		layout.settleInlinePacking(signatures.inlineBitWidthsOf(name))
+	end 'eachCommittedLayout'
+end 'settleProjectInlineRecordGeometry'
+
 // Tokenizing reads ONE input — the file — so the memo's key is that file's content hash and nothing
 // else. Contrast `queryParseOps`, whose key mixes in the signature index.
 function queryTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
@@ -344,6 +357,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// factory's declared return type into the declaration's outcome and a re-tag after this line
 	// cannot reach the copy.
 	signatures.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredStruct)
+
+	// Strictly before the fold below: a folded initializer of an inline record IS the packed word, so a
+	// fold that ran first would lay down a box for a type this settle is about to make a value. It cannot
+	// run at `StructLayout.addField` either — a field's ranged alias is not resolvable until every file
+	// has been swept.
+	signatures.settleInlineRecordGeometry()
+	settleProjectInlineRecordGeometry(project, signatures: signatures)
 
 	// ⚠ The initializer DFS has no depth bound: a deep enough forward-reference chain exhausts the
 	// stack and the compiler dies with SIGSEGV and no diagnostic. Depth is what matters, not the number

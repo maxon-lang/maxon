@@ -1223,3 +1223,24 @@ slabWalkSpans(...)`: a discarded DECLARED call anywhere in a program makes `chec
 the whole-program effect-free summary, and tier source ships in every program. Consuming the value cured
 it. A demand-driven summary (walk only the asking callees' cones) is the follow-up that would relieve
 every user program writing `_ = f()`.
+
+### Result — 2026-09-20, inline packed records, and what the settle costs
+
+A `type` whose fields are all `let` unsigned zero-based ranged aliases, `bits(n)` or `bool`, totalling
+at most 64 bits, is laid out as one machine word: no box, no refcount, `sizeof` 8, a dense 8-byte array
+element. The fact is settled once per signature index (`settleInlineRecordGeometry`, one walk over the
+declared types, one alias probe per field in the declaring file) and memoized per `TypeNameId`, so the
+per-value questions (`typeIsManaged`, `valueIsAHeapRecord`) stay one array read.
+
+**Ladder against the census tree (`temp/semcheck/after.json`), same path, same session:** total
+allocations +13,901 at rung 0 rising to +58,325 at rung 5 — 0.06% at rung 5, in `frontEndPool` (+49,126),
+`parse` (+14,930) and `signatures` (+7,279); ratios 1.34 1.54 1.70 1.84 1.92 per doubling, unchanged. The
+front-end term is the settle's per-type work and the new index columns each pool worker's index clone
+carries. Nothing moved past `signatures`; the emitted code of a program with no qualifying type is
+unchanged.
+
+⚠ Two of the compiler's own types qualify the moment it recompiles (`EntryStubCalls`, `ImportGates`),
+which is how two defects a spec set cannot see were found: a word-valued field store still classified as a
+managed payload (`__mm_incref` on 0 in `Project.create`), and a module-level inline-record `let` reaching
+`mixValueTag`'s "unreachable" arm. Both appear only in the compiler the featured compiler builds, so every
+verdict here is from a second-generation binary.

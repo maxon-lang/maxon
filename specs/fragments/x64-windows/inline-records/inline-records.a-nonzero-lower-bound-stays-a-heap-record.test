@@ -1,0 +1,33 @@
+// Test: inline-records.a-nonzero-lower-bound-stays-a-heap-record
+typealias Tri = int(1 to 3)
+
+type Duo
+	export let a as Tri
+	export let b as Tri
+
+	export static function create(a Tri, b Tri) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Duo'
+
+function main() returns ExitCode
+	return sizeof(Duo)
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 16
+    x64.popReg rbp
+    x64.ret
+}

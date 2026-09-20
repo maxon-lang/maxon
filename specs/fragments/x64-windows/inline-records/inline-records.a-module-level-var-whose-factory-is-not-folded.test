@@ -1,0 +1,140 @@
+// Test: inline-records.a-module-level-var-whose-factory-is-not-folded
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export static function scaled(lo Half, by Half = 3) returns Self
+		return Self{lo: lo * by, hi: lo + by}
+	end 'scaled'
+end 'Pair'
+
+var built = Pair.scaled(5)
+
+function main() returns ExitCode
+	let before = __Builtins.mmAllocLive()
+
+	if built.lo != 15 'initialLo'
+		return 1
+	end 'initialLo'
+
+	if built.hi != 8 'initialHi'
+		return 2
+	end 'initialHi'
+
+	built = Pair.create(20, hi: 21)
+
+	if built.lo != 20 'secondLo'
+		return 3
+	end 'secondLo'
+
+	if built.hi != 21 'secondHi'
+		return 4
+	end 'secondHi'
+
+	let after = __Builtins.mmAllocLive()
+
+	if after != before 'alloc'
+		return 5
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_built@0 = i64 0
+  __slab_state@8 = i64 0
+  __mrt_console_probe_stdin@16 = i8 0
+  __mrt_console_probe_stdout@17 = i8 0
+  __mrt_console_probe_stderr@18 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg rbx, r8
+    x64.leaRegGlobal rax, __data_built
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 15
+    x64.jcc equal, ifcont#2
+  initialLo:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.leaRegGlobal rax, __data_built
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.shrRegImm8 rax, rax, 32
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 8
+    x64.jcc equal, __rc_ok
+  initialHi:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegImm rax, 90194313236
+  __il_cont:
+    x64.leaRegGlobal rcx, __data_built
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_built
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 20
+    x64.jcc equal, ifcont#6
+  secondLo:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.leaRegGlobal rax, __data_built
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.shrRegImm8 rax, rax, 32
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 21
+    x64.jcc equal, ifcont#8
+  secondHi:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.callDirect __mm_counter_alloc_live
+    x64.cmpRegReg r8, rbx
+    x64.jcc equal, ifcont#10
+  alloc:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

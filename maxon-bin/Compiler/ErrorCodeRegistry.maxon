@@ -648,11 +648,13 @@ export enum ErrorCode
 	// code rather than "cannot assign to immutable variable" or undefined-variable.
 	semanticSelfAssignment = "E3067"
 
-	// The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.
+	// The 'is'/'is not' reference-identity operator is applied to a value, which has no object identity.
 	// the `is` / `is not` reference-identity operator was applied to a
-	// primitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has
-	// meaning for reference types (structs are heap pointers); primitives are
-	// values with no object identity.
+	// primitive value (`int`, `float`, `bool`, `byte`, ...), or to an INLINE
+	// PACKED record — a `type` whose fields are all `let` and pack into one
+	// machine word, so its value IS that word and no two names can share a
+	// record. Identity only has meaning for reference types (a heap record is
+	// a pointer); values have no object identity.
 	// It is raised in the PARSER (`Parser.emitReferenceIdentity`), where the
 	// operand tags are already known -- the same tier every other operand rule is
 	// stated at -- rather than in a later type pass. It refuses a wider
@@ -667,7 +669,8 @@ export enum ErrorCode
 	// would silently ignore its witness half. Widening the admitted set
 	// yields a POINTER COMPARE, never a type error, so a tag added without a
 	// reading is a wrong answer rather than a missing one. See
-	// `TypeRules.tagHasReferenceIdentity`.
+	// `TypeRules.tagHasReferenceIdentity` for the tag half and
+	// `Parser.valueHasReferenceIdentity` for the layout half.
 	refIdentityOnPrimitive = "E3068"
 
 	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)

@@ -1261,6 +1261,10 @@ export enum ManagedConstKind
 	character
 end 'ManagedConstKind'
 
+// The `dropCallee` of a slot that owes no drop. It is never emitted — `buildGlobalCleanup` skips such a
+// global on `owesCleanupDrop` — so an empty name can never reach a `call`.
+let TrivialGlobalDropCallee = b""
+
 // ⭐ **ONE MANAGED TOP-LEVEL BINDING — its `.data` label, the bytes its initializer folded to, and the
 // type it denotes** (P1.7 slice 2a). What `managedGlobals` hands the module-init/cleanup synthesis, so the
 // slot the layout reserves, the record the init builds and the drop the cleanup emits all read ONE
@@ -1282,7 +1286,12 @@ module type ManagedGlobal
 	// the arena walk, because the routing (`managedFieldDropCallee`) has to resolve the type's ids against
 	// the SIGNATURES interner and only this side holds it. Carrying the answer is what lets the synthesis
 	// take no `ProgramSignatures` at all, so there is no second place a drop callee could be derived from.
+	//
+	// A slot that owes no drop — an inline packed record's, whose bytes are the VALUE — carries
+	// `TrivialGlobalDropCallee` and `owesCleanupDrop` false. The bit is what the cleanup routes on, because
+	// an empty callee name is not something a call site can be asked to refuse.
 	export let dropCallee as ByteArray
+	export let owesCleanupDrop as bool
 	export let range as SourceRange
 
 	// ⭐ **THE DECLARATION'S OWN NAME AND ANCHOR**, carried because the ONE diagnostic reachable from the
@@ -1305,8 +1314,8 @@ module type ManagedGlobal
 	// Carried for `dropCallee`'s reason: the walk is routed off the signatures interner.
 	export let threadReach as GlobalThreadReach
 
-	export static function create(label ByteArray, initializer ManagedGlobalInitializer, valueType MaxonType, dropCallee ByteArray, range SourceRange, declName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, declFilePath FilePath, initCallees ByteArrayArray, threadReach GlobalThreadReach) returns ManagedGlobal
-		return Self{label: label, initializer: initializer, valueType: valueType, dropCallee: dropCallee, range: range, declName: declName, nameLine: nameLine, nameColumn: nameColumn, declFilePath: declFilePath, initCallees: initCallees, threadReach: threadReach}
+	export static function create(label ByteArray, initializer ManagedGlobalInitializer, valueType MaxonType, dropCallee ByteArray, owesCleanupDrop bool, range SourceRange, declName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, declFilePath FilePath, initCallees ByteArrayArray, threadReach GlobalThreadReach) returns ManagedGlobal
+		return Self{label: label, initializer: initializer, valueType: valueType, dropCallee: dropCallee, owesCleanupDrop: owesCleanupDrop, range: range, declName: declName, nameLine: nameLine, nameColumn: nameColumn, declFilePath: declFilePath, initCallees: initCallees, threadReach: threadReach}
 	end 'create'
 
 	// `globalThreadReach` answers `mainOnly` for exactly the `var`s.
@@ -2623,17 +2632,19 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 			unresolved or
 			void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools, floats and payload-free enum or union cases only")
 
-		// ⭐ THE THREE RECORD TAGS. A struct (`var db = Database.create(…)`), a `String` or `b"…"` literal,
-		// and an array/container instance are all globals whose `.data` bytes are a POINTER rather than a
-		// value, so their width is `recordPointerSlotType`'s to answer and not this door's. Letting them
-		// break through here is what applies this guard's `named` arm to a factory return type it is not
-		// written about — see this function's header.
+		// A `structRef` global IS its value — a declared type that packs inline into one word. Sound only
+		// because `foldedGlobalStdType` has already refused a declared type that does NOT pack: this tier
+		// holds no name to ask.
+		structRef then return valueTagToStdType(tag)
+
+		// ⭐ THE TWO RECORD TAGS. A `String` or `b"…"` literal and an array/container instance are globals
+		// whose `.data` bytes are a POINTER rather than a value, so their width is `recordPointerSlotType`'s
+		// to answer and not this door's. Letting them break through here is what applies this guard's `named`
+		// arm to a factory return type it is not written about — see this function's header.
 		//
-		// ⚠ ONE SENTENCE, not one per tag: the three differ by nothing the message does not already carry,
-		// because `typeTagName(tag)` names which of them arrived. Three spellings of it were three chances
-		// for one to drift from the door it points at.
-		structRef or
-			string then panic("{recordSlotGlobalPanic(name, tag: tag)}")
+		// ⚠ ONE SENTENCE, not one per tag: the two differ by nothing the message does not already carry,
+		// because `typeTagName(tag)` names which of them arrived.
+		string then panic("{recordSlotGlobalPanic(name, tag: tag)}")
 		genericInstance then panic("{recordSlotGlobalPanic(name, tag: tag)}")
 
 		// A FUNCTION global is unreachable (P1.5-A1): a global takes no type annotation and a function
@@ -3112,10 +3123,11 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		float then return PayloadClass.floatPayload
 
 		// A String / struct reference is a managed heap pointer whose move-in and drop are this rung's
-		// work. A payload field of a struct's own name resolves to `structRef` (`Self` and the enclosing
+		// work — unless the named type packs inline into a word, which owns no heap and moves as a scalar.
+		// A payload field of a struct's own name resolves to `structRef` (`Self` and the enclosing
 		// type); a reference to ANOTHER struct arrives as `named` and is resolved below.
 		string then return PayloadClass.managed(fieldType, isString: true)
-		structRef then return PayloadClass.managed(fieldType, isString: false)
+		structRef then return PayloadClass.scalar(fieldType) if signatures.nameIsInlineRecord(foreignNameOf(typeNames, id: typeNameIdOf(fieldType))) else PayloadClass.managed(fieldType, isString: false)
 		unresolved then panic("classifyUnionPayload: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
 
 		// A FUNCTION-typed payload (P1.5-A1) is a SCALAR: a code pointer is an i64 stored inline, owns no
@@ -5205,7 +5217,7 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 		panic("managedFieldDropCallee: a field declared at an interface type has no statically named drop callee — an existential is released through `__drop_existential(witness, value)` off the witness table's `destroyFunc@8`, so its drop site must route on `FieldDropKind` rather than ask this")
 	end 'existential'
 
-	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
+	if not (tagNamesADeclaredType(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldDropCallee: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
 
@@ -5606,7 +5618,7 @@ module function transferSubjectOf(tag ValueTypeTag, nameId TypeNameId, typeNames
 		return TransferSubject.opaqueParameter
 	end 'opaque'
 
-	if not tagIsStructRef(tag) and tag != ValueTypeTag.named 'namesNoRecord'
+	if not tagNamesADeclaredType(tag) and tag != ValueTypeTag.named 'namesNoRecord'
 		return TransferSubject.nameless
 	end 'namesNoRecord'
 
@@ -5682,7 +5694,7 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 		return existentialFieldCascadeStrategy(action)
 	end 'existential'
 
-	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
+	if not (tagNamesADeclaredType(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldCascadeStrategy: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
 
@@ -6498,6 +6510,19 @@ module let ManagedArrayElementBytes = 8 as ByteOffset
 // `arrayElementPackedBits` because a bare 1 there sits beside the `2` and `4` that ladder hands back and
 // reads as one of that ladder's rungs, which it is not: those are derived from bounds, this is definitional.
 let BooleanPackedBits = 1 as PackedBitWidth
+
+union InlineRecordShape
+	notInline
+	packed(bitWidths BitWidthArray)
+end 'InlineRecordShape'
+
+function inlineRangedAliasBits(alias RangedTypeAlias) returns BitWidth
+	if maxonTypeTag(alias.underlying) != ValueTypeTag.integer or alias.low != 0 'onlyAZeroBasedIntegerMapsOntoItsBits'
+		return NotAnInlinePackableField
+	end 'onlyAZeroBasedIntegerMapsOntoItsBits'
+
+	return inlineFieldBits(rangedAliasPackedBits(alias.low, high: alias.high), storageBytes: rangedAliasStorageBytes(alias.low, high: alias.high))
+end 'inlineRangedAliasBits'
 
 // ⭐⭐ **THE SLOT A PAYLOAD-FREE ENUM'S VALUE OCCUPIES — the narrowest width holding every declared TAG
 // (`specs/enum-narrow-storage.md`).** A payload-free enum's value IS its tag (`Parser.emitEnumTagOf`), so
@@ -11372,6 +11397,10 @@ export type ProgramSignatures
 	// index knows which side of the fold each of them is on. A flag threaded through `Parser.create`
 	// would be the same fact written down at three call sites, free to be passed wrongly at any of them.
 	export var allFilesFolded as bool
+
+	export var inlineGeometrySettled = false
+
+	var inlineRecordByTypeNameId as BoolArray = BoolArray.create()
 
 	// ⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/` (BATCH2 slice 1)?** A per-COMPILE fact, probed once by
 	// `Queries.queryProgramSignatures` and read at every `Parser.create` to derive that parser's
@@ -16323,9 +16352,80 @@ export type ProgramSignatures
 			// because it must live in THIS index's interner: the drop callee the cleanup emits is routed
 			// against `self.typeNames`, and a type adopted into a file's artifact interner would name an id
 			// this side cannot resolve.
-			factoryCall(calls, root) then return self.settleRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.constFactoryCallResultType(factoryCallAt(calls, id: root), name: decl.name)))
+			factoryCall(calls, root) then return self.settleConstFactoryCall(decl, calls: calls, root: root)
 		end 'kind'
 	end 'walkConstInitializer'
+
+	function settleConstFactoryCall(decl TopLevelDecl, calls ConstFactoryCallArray, root InitializerCallId) returns ConstEvalOutcome
+		let node = factoryCallAt(calls, id: root)
+
+		if self.constNodeFoldsToAnInlineWord(node) 'aPackedWord'
+			return self.settleFoldedValue(decl, value: ConstFoldedValue.scalar(ConstValue.create(self.inlineRecordWordOfNode(node, declName: decl.name), tag: ValueTypeTag.structRef, typeName: self.constNodeStructName(node))))
+		end 'aPackedWord'
+
+		return self.settleRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.constFactoryCallResultType(node, name: decl.name)))
+	end 'settleConstFactoryCall'
+
+	function constNodeStructName(node ConstFactoryCall) returns ByteArray
+		match node 'node'
+			construct(typeName, _) then return typeName
+			call or
+				mapLiteral or
+				unionCase or
+				arrayLiteral then panic("ProgramSignatures.constNodeStructName: asked for the constructed type of a node that is not a struct construction — `constNodeFoldsToAnInlineWord` answers `true` only for `construct`")
+		end 'node'
+	end 'constNodeStructName'
+
+	function constNodeFoldsToAnInlineWord(node ConstFactoryCall) returns bool
+		return match node 'node'
+			construct(typeName, _) gives self.nameIsInlineRecord(typeName)
+			call or
+				mapLiteral or
+				unionCase or
+				arrayLiteral gives false
+		end 'node'
+	end 'constNodeFoldsToAnInlineWord'
+
+	function inlineRecordWordOfNode(node ConstFactoryCall, declName ByteArray) returns ParsedInt
+		match node 'node'
+			construct(typeName, fields) then return self.inlineRecordWordOf(typeName, fields: fields, declName: declName)
+			call or
+				mapLiteral or
+				unionCase or
+				arrayLiteral then panic("ProgramSignatures.inlineRecordWordOfNode: '{String.from(declName)}' reached the inline-record fold through a node that is not a struct construction — `constNodeFoldsToAnInlineWord` answers `true` only for `construct`")
+		end 'node'
+	end 'inlineRecordWordOfNode'
+
+	function inlineRecordWordOf(typeName ByteArray, fields ConstFactoryArgumentValueArray, declName ByteArray) returns ParsedInt
+		let layout = self.constStructLayoutOf(typeName, declName: declName)
+		var word = 0 as ParsedInt
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let width = layout.fieldBitWidth(i)
+			let payload = self.constInlineFieldPayload(try fields.get(i) otherwise panic("ProgramSignatures.inlineRecordWordOf: fields.get OOB at {i} for `{String.from(typeName)}` in '{String.from(declName)}' — the fold tier fills one entry per declared field"), index: i, typeName: typeName, declName: declName)
+			let masked = payload if width == InlineRecordWordBits else (payload and inlineFieldMask(width))
+			word = word or (masked shl (layout.fieldBitOffset(i) as ParsedInt))
+		end 'eachField'
+
+		return word
+	end 'inlineRecordWordOf'
+
+	function constInlineFieldPayload(field ConstFactoryArgumentValue, index FieldIndex, typeName ByteArray, declName ByteArray) returns ParsedInt
+		match field 'value'
+			folded(value) then return self.foldedInlineFieldPayload(value, index: index, typeName: typeName, declName: declName)
+			call then panic("ProgramSignatures.constInlineFieldPayload: field {index} of `{String.from(typeName)}` in '{String.from(declName)}' is another factory call, and every field of an inline packed record is declared at a ranged integer alias or `bool` — neither of which a factory can build")
+		end 'value'
+	end 'constInlineFieldPayload'
+
+	function foldedInlineFieldPayload(value ConstFoldedValue, index FieldIndex, typeName ByteArray, declName ByteArray) returns ParsedInt
+		match value 'folded'
+			scalar(constant) then return constant.payload
+			managed or
+				arrayLiteral or
+				containerCreate or
+				boxedUnionCase then panic("ProgramSignatures.foldedInlineFieldPayload: field {index} of `{String.from(typeName)}` in '{String.from(declName)}' folded to a managed value, and every field of an inline packed record is declared at a ranged integer alias or `bool`")
+		end 'folded'
+	end 'foldedInlineFieldPayload'
 
 	// ⭐ **THE TYPE ONE ARENA NODE PRODUCES, IN THIS INDEX'S OWN INTERNER (W116)** — the ONE derivation, read
 	// by the ROOT (which types the global's `.data` slot and routes its drop) and by a NESTED node (which
@@ -16405,6 +16505,13 @@ export type ProgramSignatures
 
 	// Settle a decl whose initializer folded to a NUMBER — the arm this arena has always had.
 	function settleScalarValue(decl TopLevelDecl, value ConstValue) returns ConstEvalOutcome
+		// An inline record's value is a scalar, but the NAME still joins the managed roster: that set is what
+		// `Parser.managedTopLevelBaseAt` reads to see that a receiver position has a record to chain through,
+		// and a `let` of one reached bare would otherwise be an undefined variable at its first `.field`.
+		if tagNamesADeclaredType(value.tag) 'anInlinePackedWord'
+			self.managedTopLevelNames.insert(decl.name)
+		end 'anInlinePackedWord'
+
 		decl.outcome = TopLevelConstant.value(value.payload, tag: value.tag, typeName: value.typeName)
 		return ConstEvalOutcome.value(value.payload, tag: value.tag, typeName: value.typeName)
 	end 'settleScalarValue'
@@ -16520,6 +16627,10 @@ export type ProgramSignatures
 	// the same bound stated at the two moments: the evaluator asks before its node exists, so every node its
 	// fields appended is below the slot it will take; the verdict asks after, so they are below the root.
 	export function constConstructionIsImageData(typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, below InitializerCallId, declName ByteArray, elementFilePath FilePath) returns bool
+		if self.nameIsInlineRecord(typeName) 'theValueISTheWord'
+			return true
+		end 'theValueISTheWord'
+
 		var scratch = ImmortalBoxNodeArray.create()
 		return imageBoxWasDescribed(self.describeConstStructBox(typeName, fields: fields, calls: calls, below: below, declName: declName, elementFilePath: elementFilePath, nodes: scratch))
 	end 'constConstructionIsImageData'
@@ -16674,6 +16785,10 @@ export type ProgramSignatures
 		if id >= below 'notBelowItsNamer'
 			return ConstFieldImageSlot.notImageable
 		end 'notBelowItsNamer'
+
+		if self.constNodeFoldsToAnInlineWord(factoryCallAt(calls, id: id)) 'aPackedWord'
+			return ConstFieldImageSlot.scalar
+		end 'aPackedWord'
 
 		match factoryCallAt(calls, id: id) 'node'
 			construct then return self.nestedConstStructFieldSlot(id, calls: calls, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
@@ -16881,7 +16996,7 @@ export type ProgramSignatures
 		// A declared struct or boxed union is a nested BOX, which `nestedConstStructFieldSlot` and
 		// `boxedUnionCaseFieldSlot` do lay down. Nothing else can be: a byte record carries a payload blob
 		// no slot description names, and an existential is a pair the image has no shape for.
-		if tagIsStructRef(tag) or tag == ValueTypeTag.named 'aNestedBox'
+		if tagNamesADeclaredType(tag) or tag == ValueTypeTag.named 'aNestedBox'
 			return StructImageSlotKind.pointer
 		end 'aNestedBox'
 
@@ -17863,7 +17978,7 @@ export type ProgramSignatures
 			end 'noReachableSlot'
 
 			match decl.outcome 'state'
-				value(payload, tag, _) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload, reach: DataReach.declared))
+				value(payload, tag, typeName) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.foldedGlobalStdType(tag, typeName: typeName, name: decl.name), value: payload, reach: DataReach.declared))
 				failed or
 					poisoned then continue
 
@@ -17895,8 +18010,9 @@ export type ProgramSignatures
 	end 'declaredGlobals'
 
 	// The `.data` entry every RECORD-valued global reserves: one machine word of zero, holding the POINTER
-	// `__module_init` writes before `main`. One function rather than one spelling per outcome arm, because
-	// the bytes are the same zero in every case.
+	// `__module_init` writes before `main` — or, for an inline packed record, the VALUE it writes there.
+	// One function rather than one spelling per outcome arm, because the bytes are the same zero in every
+	// case.
 	function nullPointerSlot(decl TopLevelDecl, valueType MaxonType) returns DataSectionEntry
 		return DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.recordPointerSlotType(valueType, name: decl.name), value: ManagedGlobalInitialSlot, reach: DataReach.declared)
 	end 'nullPointerSlot'
@@ -17950,6 +18066,14 @@ export type ProgramSignatures
 		if tag == ValueTypeTag.named and not self.namedTypeIsBoxedUnion(valueType) 'noConcreteSlotAccess'
 			panic("recordPointerSlotType: top-level var '{String.from(name)}' is built by a factory whose return type is still the bare name '{maxonTypeName(valueType, typeNames: self.typeNames)}' — `Parser.requireFactoryReturnsARecord` refuses that at the declaration, so reaching here means a record was admitted without a concrete slot type")
 		end 'noConcreteSlotAccess'
+
+		// An inline packed record's slot holds its VALUE, not a pointer to it — one machine word, whose
+		// initial zero `__module_init` overwrites with the word the factory computes. It answers ABOVE the
+		// managed guard below, which would otherwise panic: such a value owns no heap, which is the whole
+		// point of it.
+		if tagNamesADeclaredType(tag) and self.nameIsInlineRecord(self.nameOfId(typeNameIdOf(valueType))) 'theSlotHoldsTheValue'
+			return valueTagToStdType(tag)
+		end 'theSlotHoldsTheValue'
 
 		// Asked through the very predicate that ADMITTED the declaration, so the slot cannot be typed for a
 		// shape the admission did not pass. A scalar reaching here is a classification drift, not a program.
@@ -18040,7 +18164,8 @@ export type ProgramSignatures
 	// the TYPE its arm already built rather than re-deriving one: the drop callee is routed off that same
 	// type, so the record the init builds and the drop the cleanup emits cannot name two different types.
 	function managedGlobalEntry(decl TopLevelDecl, initializer ManagedGlobalInitializer, valueType MaxonType) returns ManagedGlobal
-		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: decl.initRange, declName: decl.name, nameLine: decl.nameLine, nameColumn: decl.nameColumn, declFilePath: decl.declFilePath, initCallees: self.declInitializerCallees(decl), threadReach: self.globalThreadReach(decl, valueType: valueType))
+		let owesDrop = self.typeOwesDrop(valueType, from: self.typeNames)
+		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType) if owesDrop else TrivialGlobalDropCallee, owesCleanupDrop: owesDrop, range: decl.initRange, declName: decl.name, nameLine: decl.nameLine, nameColumn: decl.nameColumn, declFilePath: decl.declFilePath, initCallees: self.declInitializerCallees(decl), threadReach: self.globalThreadReach(decl, valueType: valueType))
 	end 'managedGlobalEntry'
 
 	// A `let` is walked the way a lent message argument is, through the same door.
@@ -18154,10 +18279,18 @@ export type ProgramSignatures
 	// tier down.
 	function globalInitValue(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitValueAndType
 		return match value 'value'
-			call(id) gives GlobalInitValueAndType.create(GlobalInitArgumentValue.call(id), valueType: self.constFactoryCallResultType(factoryCallAt(calls, id: id), name: declName))
+			call(id) gives self.globalInitCallValue(factoryCallAt(calls, id: id), id: id, declName: declName)
 			folded(folded) gives self.foldedInitValue(folded, elementFilePath: elementFilePath)
 		end 'value'
 	end 'globalInitValue'
+
+	function globalInitCallValue(node ConstFactoryCall, id InitializerCallId, declName ByteArray) returns GlobalInitValueAndType
+		if self.constNodeFoldsToAnInlineWord(node) 'aPackedWord'
+			return GlobalInitValueAndType.create(GlobalInitArgumentValue.scalar(self.inlineRecordWordOfNode(node, declName: declName)), valueType: self.constFactoryCallResultType(node, name: declName))
+		end 'aPackedWord'
+
+		return GlobalInitValueAndType.create(GlobalInitArgumentValue.call(id), valueType: self.constFactoryCallResultType(node, name: declName))
+	end 'globalInitCallValue'
 
 	// The scalar/record fork over a value the compiler MATERIALIZES — the walk this side has always had,
 	// reached through one arm of the union above so each union is matched exactly once. A SCALAR's type is
@@ -19529,13 +19662,12 @@ export type ProgramSignatures
 				unresolved or
 				void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 
-			// A struct is unreachable here for `globalStdType`'s reason and one more: the only way to
-			// build one is `T.create(…)`, and a CALL in a top-level initializer is E2045 in every
-			// compiler in the tree. It stays out of the hash rather than being given a key "just in
-			// case" — inventing one for a value that cannot exist is what `mixValueTag` has refused to
-			// do since it was written, and the day a struct constant is legal the question is which of
-			// its FIELDS a reader copies, which is a decision, not a default.
-			structRef then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a struct constant would have to be folded from a `T.create(…)` call, and a call in a constant initializer is E2045")
+			// Only an INLINE PACKED record reaches this arm: `settleConstFactoryCall` folds a heap record to
+			// a `factoryValue`, never to a scalar, so what is hashed here is the type's own word and never a
+			// box address. The bytes ride with the shape for the `named` arm's reason — two inline records
+			// of identical widths are different types, and a file edited from one to the other must not be
+			// answered from the other's parse.
+			structRef then return mixBytes(Hasher.combined(state, value: TypeShapeStructRef), bytes: typeName)
 
 			// A String top-level binding never reaches here, and P1.7's two managed slices did not change
 			// that: a managed literal folds to `TopLevelConstant.managedValue`, whose hash is
@@ -22488,7 +22620,7 @@ export type ProgramSignatures
 	function tupleElementCitationOf(element MaxonType) returns TupleElementCitation
 		let tag = maxonTypeTag(element)
 
-		if tagIsStructRef(tag) 'aStructRef'
+		if tagNamesADeclaredType(tag) 'aStructRef'
 			let name = self.nameOfId(typeNameIdOf(element))
 
 			if isTupleTypeName(name) 'nestedTuple'
@@ -22572,7 +22704,7 @@ export type ProgramSignatures
 	// Both ask the same question about the same tag, and the `allFilesFolded` gate that says whether a
 	// canonical form exists yet lives once, in `canonicalNameOfStruct`, rather than at each asker.
 	function canonicalTupleStructRef(element MaxonType) returns MaxonType
-		if not tagIsStructRef(maxonTypeTag(element)) 'notStruct'
+		if not tagNamesADeclaredType(maxonTypeTag(element)) 'notStruct'
 			return element
 		end 'notStruct'
 
@@ -22708,17 +22840,17 @@ export type ProgramSignatures
 	// declaration SWEEP records, having run before anything could say what the name denoted). Every other tag
 	// names no struct, union or tuple, so the resolution below has nothing to look up.
 	//
-	// ⭐ **WRITTEN ONCE BECAUSE FOUR DOORS ASK IT AND HAD COME TO SPELL IT FOUR WAYS** — `tagIsStructRef(tag)
+	// ⭐ **WRITTEN ONCE BECAUSE FOUR DOORS ASK IT AND HAD COME TO SPELL IT FOUR WAYS** — `tagNamesADeclaredType(tag)
 	// or tag == ValueTypeTag.named`, each of its two De Morgan negations, and `tag == ValueTypeTag.named or
 	// tag == ValueTypeTag.structRef`. `Parser.tagCarriesStructLayout` is the same shape for the same reason and
 	// its header states the cost of the alternative: a third tag taught to one spelling and not the others is
 	// a wrong answer at whichever door was not updated, with no compile error at either.
 	//
-	// ⚠ `typeIsManaged` deliberately does NOT ask it. Its `structRef` arm has already returned `true` (fused
-	// with `tagIsByteRecord`/`genericInstance`) by the time it tests `named`, so its remaining test is
-	// "is this the ONE tag still undecided?" — a different question that happens to mention the same tags.
+	// ⚠ `typeIsManaged` deliberately does NOT ask it. Its `structRef` arm has already answered by the time
+	// it tests `named`, so its remaining test is "is this the ONE tag still undecided?" — a different
+	// question that happens to mention the same tags.
 	export function tagMayNameAggregate(tag ValueTypeTag) returns bool
-		return tagIsStructRef(tag) or tag == ValueTypeTag.named
+		return tagNamesADeclaredType(tag) or tag == ValueTypeTag.named
 	end 'tagMayNameAggregate'
 
 	// **THE DECLARED NAME A RAW SLOT TYPE DENOTES, over THIS index's own interner** — a tuple typealias
@@ -25138,9 +25270,10 @@ export type ProgramSignatures
 	// (`RangedAliasRegistry.storageBytesInEveryFile`), and every other trivial tag is its
 	// `primitiveTypeByteSize` (`integer`/`float` 8, `boolean` 1, `ExitCode` 4).
 	//
-	// A trivial element is never a struct or a generic instance — every aggregate is a managed box, caught
-	// by the `containerElementIsManaged` arm above — so this has no aggregate arms to carry and needs no
-	// interner walk past the element's own name.
+	// A trivial element is never a generic instance — every container is a managed box, caught by the
+	// `containerElementIsManaged` arm above — so this needs no interner walk past the element's own name.
+	// The ONE aggregate it does carry is a declared type that packs inline: its value is the machine word
+	// itself, which is exactly what makes `Array with T` a dense 8-byte element column.
 	//
 	// ⚠ A `named` element that the registry MISSES is not one case but three, and they do not share an answer
 	// — `undeclaredNamedElementSlot` is where that split is written down. A payload-free enum takes the slot
@@ -25154,6 +25287,10 @@ export type ProgramSignatures
 	// readers (`arrayElementSize` for the stamp, `narrowSignedSlotOf` for the read) come through this.
 	function trivialElementSlot(t MaxonType) returns StorageSlot
 		let tag = maxonTypeTag(t)
+
+		if tagNamesADeclaredType(tag) 'anInlinePackedRecord'
+			return StorageSlot.machineWord()
+		end 'anInlinePackedRecord'
 
 		if tag != ValueTypeTag.named 'notAName'
 			// Every non-`named` trivial tag is an UNSIGNED-or-full-word slot: `bool` (1), `ExitCode` (4, whose
@@ -25521,6 +25658,14 @@ export type ProgramSignatures
 	// The classification of a factory's declared VALUE return type — split out so the `void` arm above stays
 	// one line and this one holds the whole managed/scalar question, which is `slotTypeIsManaged`'s.
 	function globalFactoryValueReturn(valueType MaxonType) returns GlobalFactoryReturn
+		let tag = maxonTypeTag(valueType)
+
+		// Above the managed test, which answers `false` for an inline record: a declared type's global takes
+		// a record slot however its value is represented.
+		if tagNamesADeclaredType(tag) 'aDeclaredType'
+			return GlobalFactoryReturn.record
+		end 'aDeclaredType'
+
 		if not self.slotTypeIsManaged(valueType) 'scalar'
 			return GlobalFactoryReturn.scalar(maxonTypeName(valueType, typeNames: self.typeNames))
 		end 'scalar'
@@ -25530,7 +25675,7 @@ export type ProgramSignatures
 		// `string`, a `character`, a `genericInstance` — is one the synthesized init and cleanup can access
 		// its slot through. One still spelling a bare `named` is not, and the honest answer is a refusal
 		// rather than a width. See `unbridgedRecord`.
-		if maxonTypeTag(valueType) == ValueTypeTag.named 'noConcreteSlotAccess'
+		if tag == ValueTypeTag.named 'noConcreteSlotAccess'
 			return GlobalFactoryReturn.unbridgedRecord(maxonTypeName(valueType, typeNames: self.typeNames))
 		end 'noConcreteSlotAccess'
 
@@ -26424,7 +26569,7 @@ export type ProgramSignatures
 			throw MapError.keyNotFound
 		end 'namesNoStructBox'
 
-		if tagIsStructRef(tag) and denoted.equals(written) 'alreadyTheSpellingEveryoneUses'
+		if tagNamesADeclaredType(tag) and denoted.equals(written) 'alreadyTheSpellingEveryoneUses'
 			throw MapError.keyNotFound
 		end 'alreadyTheSpellingEveryoneUses'
 
@@ -26473,6 +26618,135 @@ export type ProgramSignatures
 		// `rewriteRecordedReturnTypes` states once for all three rules.
 		self.rewriteRecordedReturnTypes(RecordedReturnTypeRule.declaredInterface)
 	end 'normalizeSweptInterfaceTypes'
+
+	export function settleInlineRecordGeometry()
+		for (_, layout) in self.structTypes 'eachDeclaredType'
+			match self.inlineRecordShapeOf(layout) 'shape'
+				notInline then continue
+				packed(bitWidths) then layout.settleInlinePacking(bitWidths)
+			end 'shape'
+		end 'eachDeclaredType'
+
+		self.inlineGeometrySettled = true
+
+		var byId = BoolArray.create()
+		byId.reserve(self.typeNames.count() as ElementIndex)
+
+		for id in 0 upto self.typeNames.count() 'eachInternedTypeName'
+			byId.push(self.nameIsInlineRecord(self.nameOfId(id)))
+		end 'eachInternedTypeName'
+
+		self.inlineRecordByTypeNameId = byId
+	end 'settleInlineRecordGeometry'
+
+	function requireInlineRecordMemoIsWithinTheBaseline()
+		if self.inlineRecordByTypeNameId.count() > self.typeNames.baselineNameCount() 'memoPastTheBaseline'
+			panic("ProgramSignatures.requireInlineRecordMemoIsWithinTheBaseline: the inline-record memo holds {self.inlineRecordByTypeNameId.count()} row(s) against an interner baseline of {self.typeNames.baselineNameCount()} — `TypeNameInterner.restoreBaseline` recycles every id above the baseline after each parse, so a memoized row above it would answer about a name the id no longer denotes")
+		end 'memoPastTheBaseline'
+	end 'requireInlineRecordMemoIsWithinTheBaseline'
+
+	// The memo is filled at the settle and ids keep being minted after it, so a row past its end is not an
+	// error — the name probe answers those.
+	function typeNameIdIsInlineRecord(id TypeNameId, from TypeNameInterner) returns bool
+		if not (from is self.typeNames) 'aForeignInterner'
+			return self.nameIsInlineRecord(foreignNameOf(from, id: id))
+		end 'aForeignInterner'
+
+		return try self.inlineRecordByTypeNameId.get(id) otherwise self.nameIsInlineRecord(self.nameOfId(id))
+	end 'typeNameIdIsInlineRecord'
+
+	function inlineRecordShapeOf(layout StructLayout) returns InlineRecordShape
+		if layout.fieldCount() == 0 or layout.typeParamCount() != 0 or layout.whereConstraintCount() != 0 'shapeIsNotAPlainRecord'
+			return InlineRecordShape.notInline
+		end 'shapeIsNotAPlainRecord'
+
+		if layout.conformsToBuiltinManagedWrapper() 'aFusedWrapper'
+			return InlineRecordShape.notInline
+		end 'aFusedWrapper'
+
+		var total = 0 as ParsedInt
+
+		for index in 0 upto layout.fieldCount() 'eachField'
+			if layout.fieldIsMutable(index) 'aWritableField'
+				return InlineRecordShape.notInline
+			end 'aWritableField'
+
+			let bits = self.inlineRecordFieldBits(layout, index: index)
+
+			if bits == NotAnInlinePackableField 'noStorageWidthOnTheLadder'
+				return InlineRecordShape.notInline
+			end 'noStorageWidthOnTheLadder'
+
+			total = total + (bits as ParsedInt)
+		end 'eachField'
+
+		if total > (InlineRecordWordBits as ParsedInt) 'pastTheWord'
+			return InlineRecordShape.notInline
+		end 'pastTheWord'
+
+		var bitWidths = BitWidthArray.create()
+		bitWidths.reserve(layout.fieldCount() as ElementIndex)
+
+		for index in 0 upto layout.fieldCount() 'eachAcceptedField'
+			bitWidths.push(self.inlineRecordFieldBits(layout, index: index))
+		end 'eachAcceptedField'
+
+		return InlineRecordShape.packed(bitWidths)
+	end 'inlineRecordShapeOf'
+
+	function inlineRecordFieldBits(layout StructLayout, index FieldIndex) returns BitWidth
+		return self.inlineFieldBitsOf(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.inlineRecordFieldBits: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}` below its own count"), declFilePath: layout.declFilePath)
+	end 'inlineRecordFieldBits'
+
+	// ⚠ The alias is resolved AS THE DECLARING FILE SEES IT — the same door the field's own range check
+	// uses. The file-less `*InEveryFile` doors fold the widest declaration of a name over the whole
+	// program, so a user's `bits(32)` spelled `Word32` would be sized by `stdlib/Sha256.maxon`'s signed
+	// `Word32` instead: a silently wrong width, and a type that qualifies or not by what another file
+	// happens to declare.
+	//
+	// An ENUM field reaches the `undeclared` arm and so is never admitted, which
+	// `specs/ranged-int-bit-packing.md` requires: enums are not packed (`specs/enum-narrow-storage.md`
+	// owns their slot).
+	function inlineFieldBitsOf(declared MaxonType, declFilePath FilePath) returns BitWidth
+		let tag = maxonTypeTag(declared)
+
+		if tag == ValueTypeTag.boolean 'theOneBitCase'
+			return BooleanPackedBits as BitWidth
+		end 'theOneBitCase'
+
+		if tag != ValueTypeTag.named 'namesNoRangedAlias'
+			return NotAnInlinePackableField
+		end 'namesNoRangedAlias'
+
+		match self.typeAliases.lookup(self.nameOfId(typeNameIdOf(declared)), readerFilePath: declFilePath) 'resolved'
+			undeclared then return NotAnInlinePackableField
+			declared(alias) then return inlineRangedAliasBits(alias)
+		end 'resolved'
+	end 'inlineFieldBitsOf'
+
+	function foldedGlobalStdType(tag ValueTypeTag, typeName ByteArray, name ByteArray) returns StdType
+		if tagNamesADeclaredType(tag) and not self.nameIsInlineRecord(typeName) 'aHeapRecordInAScalarSlot'
+			panic("ProgramSignatures.foldedGlobalStdType: top-level binding '{String.from(name)}' folded to a `{String.from(typeName)}` constant, and that type does NOT pack inline into a word — a heap record's slot holds a POINTER `__module_init` fills, so a folded payload here would lay a box address down as image bytes")
+		end 'aHeapRecordInAScalarSlot'
+
+		return globalStdType(tag, name: name)
+	end 'foldedGlobalStdType'
+
+	export function inlineBitWidthsOf(name ByteArray) returns BitWidthArray
+		return (try self.structTypes.get(name) otherwise panic("ProgramSignatures.inlineBitWidthsOf: `{String.from(name)}` is not a declared type — every caller asks `nameIsInlineRecord` first")).fieldBitWidths.clone()
+	end 'inlineBitWidthsOf'
+
+	export function nameIsInlineRecord(name ByteArray) returns bool
+		return self.layoutPacksInlineIntoAWord(try self.structTypes.get(name) otherwise return false)
+	end 'nameIsInlineRecord'
+
+	export function layoutPacksInlineIntoAWord(layout StructLayout) returns bool
+		if not self.inlineGeometrySettled 'askedBeforeTheSettle'
+			panic("ProgramSignatures.layoutPacksInlineIntoAWord: asked whether `type {String.from(layout.name)}` packs inline into a word before `settleInlineRecordGeometry` ran — every layout answers `false` until the whole program is folded, so an answer read here would be a representation decision taken on an unsettled fact")
+		end 'askedBeforeTheSettle'
+
+		return layout.packsInlineIntoAWord
+	end 'layoutPacksInlineIntoAWord'
 
 	// The `interfaceRef` a swept `named` denotes; `MapError.keyNotFound` when the name is not an interface —
 	// the single test `normalizeSweptInterfaceTypes` applies to a field type and to a return type, so the two
@@ -26826,7 +27100,7 @@ export type ProgramSignatures
 	// name for both tags (`tagMayNameAggregate`), so this re-tagging cannot rename a symbol, a descriptor or
 	// a golden — it only stops one type being interned twice.
 	function promiseAggregateArgAsName(inner MaxonType) returns MaxonType
-		if not tagIsStructRef(maxonTypeTag(inner)) 'namesNoDeclaredType'
+		if not tagNamesADeclaredType(maxonTypeTag(inner)) 'namesNoDeclaredType'
 			return inner
 		end 'namesNoDeclaredType'
 
@@ -29174,7 +29448,7 @@ export type ProgramSignatures
 	// same object — when the instance fixes nothing, which is the early-return contract both substitutions above
 	// keep and which lets a caller tell "no instance view" from the answer itself.
 	export function substituteThroughInstanceInterned(t MaxonType, id GenericInstanceId, interner TypeNameInterner) returns MaxonType
-		if not tagIsStructRef(maxonTypeTag(t)) 'notATuple'
+		if not tagNamesADeclaredType(maxonTypeTag(t)) 'notATuple'
 			return self.substituteThroughInstance(t, id: id)
 		end 'notATuple'
 
@@ -30535,6 +30809,10 @@ export type ProgramSignatures
 			return TypeDeclKind.structType
 		end 'structType'
 
+		return try self.declaredFormPastStructTypes(name)
+	end 'declaredFormInAnyFile'
+
+	function declaredFormPastStructTypes(name ByteArray) returns TypeDeclKind throws MapError
 		if let enumLayout = try self.enumTypes.get(name) 'enumOrUnion'
 			return TypeDeclKind.unionType if enumLayout.isUnion else TypeDeclKind.enumType
 		end 'enumOrUnion'
@@ -30560,7 +30838,7 @@ export type ProgramSignatures
 		end 'functionAlias'
 
 		throw MapError.keyNotFound
-	end 'declaredFormInAnyFile'
+	end 'declaredFormPastStructTypes'
 
 	// Is `name` a declared enum/union — the `bool` half of `enumOf`, and a HOT-PATH allocation guard.
 	// `enumOf` returns a `DeclaredEnum`, a Maxon union VALUE that allocates a heap box on its
@@ -31302,7 +31580,7 @@ export type ProgramSignatures
 	function declaredTypeNamesAServiceHandle(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 
-		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'namesNoDeclaration'
+		if not (tagNamesADeclaredType(tag) or tag == ValueTypeTag.named) 'namesNoDeclaration'
 			return false
 		end 'namesNoDeclaration'
 
@@ -31829,9 +32107,13 @@ export type ProgramSignatures
 		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character
 		// owns exactly the record a String does. This is the root every other managed classifier delegates
 		// to, so answering "no" here would leak a Character field, element and payload at once.
-		if tagIsByteRecord(tag) or tagIsStructRef(tag) 'byteRecordOrStruct'
+		if tagIsByteRecord(tag) 'aByteRecord'
 			return true
-		end 'byteRecordOrStruct'
+		end 'aByteRecord'
+
+		if tagNamesADeclaredType(tag) 'aDeclaredType'
+			return not self.typeNameIdIsInlineRecord(typeNameIdOf(fieldType), from: from)
+		end 'aDeclaredType'
 
 		// ⭐ **EVERY GENERIC INSTANCE IS A BASE-STRUCT BOX — EXCEPT THE ONE THAT IS A GREEN-THREAD HANDLE**
 		// (P1.5-B2c). `Promise with T` / `Promise with (T, E)` names a pointer into the scheduler's own slab,
@@ -31926,7 +32208,7 @@ export type ProgramSignatures
 				return true
 			end 'aPromise'
 
-			if tagIsStructRef(maxonTypeTag(element)) and isTupleTypeName(self.nameOfId(typeNameIdOf(element))) and self.tupleCarriesAGreenThreadHandle(self.nameOfId(typeNameIdOf(element))) 'aNestedTupleCarriesOne'
+			if tagNamesADeclaredType(maxonTypeTag(element)) and isTupleTypeName(self.nameOfId(typeNameIdOf(element))) and self.tupleCarriesAGreenThreadHandle(self.nameOfId(typeNameIdOf(element))) 'aNestedTupleCarriesOne'
 				return true
 			end 'aNestedTupleCarriesOne'
 		end 'eachElement'
@@ -32087,10 +32369,14 @@ export type ProgramSignatures
 			return not self.renderedNameIsPromiseHandle(name)
 		end 'aRenderedInstance'
 
-		let form = try self.declaredFormInAnyFile(name) otherwise return false
+		if let layout = try self.structTypes.get(name) 'aDeclaredType'
+			return not self.layoutPacksInlineIntoAWord(layout)
+		end 'aDeclaredType'
+
+		let form = try self.declaredFormPastStructTypes(name) otherwise return false
 
 		match form 'form'
-			structType then return true
+			structType then panic("ProgramSignatures.declaredNameIsManaged: `declaredFormPastStructTypes('{String.from(name)}')` answered `structType` — that door starts BELOW the struct registry, which the probe above already read")
 
 			// A payload-free enum's value IS its i64 tag — a scalar; a boxed one's is a heap box. `isBoxed`
 			// is the same bit `unionBoxDropCallee` routes on, so what is called managed here is exactly what
@@ -33540,6 +33826,7 @@ export type ProgramSignatures
 
 		self.genericInstances.settleBaseline()
 		self.typeNames.settleBaseline()
+		self.requireInlineRecordMemoIsWithinTheBaseline()
 		self.journal = IndexJournal.create()
 		self.baseline = IndexBaseline.create(self.crossFileConstantReads.count(), canonicalNamesIndexedThrough: self.canonicalNamesIndexedThrough, arrayByteInstance: self.arrayByteInstance, arrayByteInstanceComputed: self.arrayByteInstanceComputed, deepCloneWalkReadInstances: self.deepCloneWalkReadInstances, fingerprint: self.fingerprint(FingerprintDetail.valuesOnly))
 	end 'settleBaseline'

@@ -2916,15 +2916,18 @@ export function operandsAreFloat(left ValueTypeTag, right ValueTypeTag) returns 
 	return tagIsFloat(left) or tagIsFloat(right)
 end 'operandsAreFloat'
 
-// True for the tag of a declared struct type, and ONLY for it — the same DEFINITELY question
-// `tagIsBool` / `tagIsInteger` / `tagIsFloat` ask, for the type that is a POINTER rather than a
-// number.
-export function tagIsStructRef(tag ValueTypeTag) returns bool
+// True for the tag of a declared type, and ONLY for it — the same DEFINITELY question `tagIsBool` /
+// `tagIsInteger` / `tagIsFloat` ask, for the type whose identity is NOMINAL rather than a width.
+//
+// ⚠ It says nothing about the REPRESENTATION. A declared type whose fields pack into one word is a
+// value and not a pointer, and only that type's `StructLayout` knows which — so a door choosing between
+// a box and a scalar asks `ProgramSignatures.layoutPacksInlineIntoAWord`, never this.
+export function tagNamesADeclaredType(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.structRef
-end 'tagIsStructRef'
+end 'tagNamesADeclaredType'
 
 // True for the tag of a `String`, and ONLY for it — the same DEFINITELY question `tagIsBool` /
-// `tagIsInteger` / `tagIsStructRef` ask, for the builtin that is a POINTER to a byte record and whose
+// `tagIsInteger` / `tagNamesADeclaredType` ask, for the builtin that is a POINTER to a byte record and whose
 // only comparison is a runtime byte `==`.
 export function tagIsText(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.string
@@ -2990,7 +2993,7 @@ end 'tagHasReferenceIdentity'
 // there is exactly one `String` type and exactly one `Character` type, so for them a matching tag IS a
 // matching type — the same reason `emitCompare`'s byte-record arm asks nothing beyond `leftTag == rightTag`.
 export function tagIdentityIsNominal(tag ValueTypeTag) returns bool
-	return tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance
+	return tagNamesADeclaredType(tag) or tag == ValueTypeTag.genericInstance
 end 'tagIdentityIsNominal'
 
 // **DOES EITHER OPERAND NAME A `String`?** `operandsAreStructRef`'s twin, and it exists for the same
@@ -3014,10 +3017,10 @@ end 'operandsAreText'
 // reason: the operators that have no reading for one of them have no reading for the other, and
 // both `integralOperandsFor` and `comparableOperands` have to ask.
 function operandsAreStructRef(left ValueTypeTag, right ValueTypeTag) returns bool
-	return tagIsStructRef(left) or tagIsStructRef(right)
+	return tagNamesADeclaredType(left) or tagNamesADeclaredType(right)
 end 'operandsAreStructRef'
 
-// True for the tag of a value held at an INTERFACE type — the same DEFINITELY question `tagIsStructRef`
+// True for the tag of a value held at an INTERFACE type — the same DEFINITELY question `tagNamesADeclaredType`
 // asks, for the type that is a FAT POINTER rather than a plain one.
 function tagIsInterfaceRef(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.interfaceRef
@@ -3244,7 +3247,7 @@ end 'integralOperandsFor'
 // everything by deferral, so `x and undeclaredCall()` — already reported as E3004 at its call
 // site — would collect a second, invented diagnostic naming a type nobody pinned.
 function lacksIntegralReading(tag ValueTypeTag) returns bool
-	return tagIsFloat(tag) or tagIsStructRef(tag) or tagIsByteRecord(tag)
+	return tagIsFloat(tag) or tagNamesADeclaredType(tag) or tagIsByteRecord(tag)
 end 'lacksIntegralReading'
 
 // **WHICH OPERAND THE `nonIntegralOperands` DIAGNOSTIC MUST NAME** — the first one with no

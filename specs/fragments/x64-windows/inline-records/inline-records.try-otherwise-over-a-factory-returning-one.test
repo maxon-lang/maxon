@@ -1,0 +1,207 @@
+// Test: inline-records.try-otherwise-over-a-factory-returning-one
+typealias Half = int(0 to u32.max)
+
+enum MakeError implements Error
+	tooBig
+end 'MakeError'
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export static function make(n Half) returns Self throws MakeError
+		if n > 2 'refuse'
+			throw MakeError.tooBig
+		end 'refuse'
+		return Self{lo: n, hi: n + 1}
+	end 'make'
+end 'Pair'
+
+function main() returns ExitCode
+	let before = __Builtins.mmAllocLive()
+	let good = try Pair.make(1) otherwise Pair.create(0, hi: 0)
+	let bad = try Pair.make(3) otherwise Pair.create(0, hi: 0)
+	let after = __Builtins.mmAllocLive()
+
+	if good.lo != 1 'goodLo'
+		return 1
+	end 'goodLo'
+
+	if good.hi != 2 'goodHi'
+		return 1
+	end 'goodHi'
+
+	if bad.lo != 0 'badLo'
+		return 1
+	end 'badLo'
+
+	if bad.hi != 0 'badHi'
+		return 1
+	end 'badHi'
+
+	if after != before 'alloc'
+		return 2
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @Pair.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rcx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#3:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc lessEqual, ifcont
+  refuse:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rax, rcx, 1
+  __rc_ok#6:
+    x64.shlRegImm8 rax, rax, 32
+    x64.movRegReg r8, rax
+    x64.orRegReg r8, rax, rcx
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at inline-records.try-otherwise-over-a-factory-returning-one.test:16: Range check failed: value outside typealias 'Half'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect Pair.make
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#1
+  __rc_ok#22:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont#3
+  tryok#1:
+    x64.movRegReg r12, r8
+  trycont#3:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect Pair.make
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#4
+  __rc_ok#30:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont#6
+  tryok#4:
+    x64.movRegReg r13, r8
+  trycont#6:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rcx, r12
+    x64.andRegReg rcx, r12, rax
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, ifcont#8
+  goodLo:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.shrRegImm8 r12, r12, 32
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg r12, r12, rax
+    x64.cmpRegImm32 r12, 2
+    x64.jcc equal, ifcont#10
+  goodHi:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rcx, r13
+    x64.andRegReg rcx, r13, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont#12
+  badLo:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#12:
+    x64.shrRegImm8 r13, r13, 32
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg r13, r13, rax
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, ifcont#14
+  badHi:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.cmpRegReg r8, rbx
+    x64.jcc equal, ifcont#16
+  alloc:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

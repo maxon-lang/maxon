@@ -1,0 +1,62 @@
+// Test: inline-records.module-level-let-is-image-data
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+let origin = Pair.create(1, hi: 2)
+
+function main() returns ExitCode
+	let live = __Builtins.mmAllocLive()
+
+	if origin.lo != 1 'lo'
+		return 90
+	end 'lo'
+
+	if origin.hi != 2 'hi'
+		return 91
+	end 'hi'
+
+	return live as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_state@0 = i64 0
+  __mrt_console_probe_stdin@8 = i8 0
+  __mrt_console_probe_stdout@9 = i8 0
+  __mrt_console_probe_stderr@10 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __mm_counter_alloc_live
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at inline-records.module-level-let-is-image-data.test:26: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

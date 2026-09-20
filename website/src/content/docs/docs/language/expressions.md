@@ -105,7 +105,8 @@ and `!=`. Comparing two records with `==` calls the type's `equals` method (see
 ## Reference Identity Operators
 
 `a is b` is `true` when two names refer to the **same** record; `a is not b` is its negation. They apply only
-to records — on numbers or `bool` they are **E3068**.
+to heap records — on numbers, on `bool`, and on an
+[inline packed record](/docs/language/composite-types/#inline-packed-records) (whose value is a word, not a record) they are **E3068**.
 
 ```maxon
 function sameRecord(a Point, b Point) returns bool
@@ -185,7 +186,8 @@ iterated (see [For Loop](/docs/language/statements/#for-loop)).
 Both take a **type** and produce a compile-time integer.
 
 - `sizeof(T)` is the size of a value of type `T` in bytes: `sizeof(int)` and `sizeof(float)` are `8`,
-  `sizeof(bool)` is `1`, and a record type is the size of its fields.
+  `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
+  [inline packed record](/docs/language/composite-types/#inline-packed-records), which is `8` whatever its fields sum to.
 - `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
   is `3`. Inside such a container's own body, `countof(Self)` is the receiver's count. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its

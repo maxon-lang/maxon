@@ -13,8 +13,8 @@ time that no reference is used after that.
 
 ### Values and Records
 
-- **Scalars** — integers, floats, `bool`, payload-free enum values — are plain values. Assigning one copies
-  it.
+- **Scalars** — integers, floats, `bool`, payload-free enum values, and an
+  [inline packed record](/docs/language/composite-types/#inline-packed-records) — are plain values. Assigning one copies it.
 - **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
   live on the heap. A variable holds a **reference** to its record.
 

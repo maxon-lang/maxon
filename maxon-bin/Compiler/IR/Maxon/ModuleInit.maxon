@@ -53,7 +53,7 @@
 // a name id (there is exactly ONE `GenericInstanceRegistry` in the compiler), so neither needs a crossing;
 // these four are the tags whose id is an index into a TYPE-NAME table, and therefore table-relative.
 function tagNamesAnIndexInternedType(tag ValueTypeTag) returns bool
-	return tag == ValueTypeTag.named or tagIsStructRef(tag) or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function
+	return tag == ValueTypeTag.named or tagNamesADeclaredType(tag) or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function
 end 'tagNamesAnIndexInternedType'
 
 // The two synthesized names. `__`-prefixed, so `isCompilerInternalCallee` treats them as the compiler's
@@ -611,7 +611,9 @@ function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, rang
 	end 'element'
 end 'elementRecordOf'
 
-// `__maxon_global_cleanup(exitCode) returns exitCode` — one decref per managed global, after `main`.
+// `__maxon_global_cleanup(exitCode) returns exitCode` — one decref per managed global that OWES a drop,
+// after `main`. A global whose slot holds a VALUE rather than a pointer owes none and is skipped; it stays
+// in the list because `__module_init` builds from the same list and does still have to fill its slot.
 //
 // ⭐ **IT TAKES AND RETURNS `main`'s EXIT CODE, AND THAT IS WHY IT IS SHAPED LIKE `__mm_leak_check`.** The
 // call sits on the entry stub's exit path, between `main` and the leak gate, where the ONE live value is
@@ -628,6 +630,10 @@ function buildGlobalCleanup(module MaxonModule, project Project, globals Managed
 	var fn = SynthesizedFunction.open(module, project: project, name: GlobalCleanupName, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
 
 	for global in globals 'eachGlobal'
+		if not global.owesCleanupDrop 'theSlotHoldsAValue'
+			continue
+		end 'theSlotHoldsAValue'
+
 		let record = fn.mintOfType(global.valueType)
 		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), range: global.range)
 		fn.emitPositionalCallDiscarding(global.dropCallee, args: singletonArgs(record), range: global.range)

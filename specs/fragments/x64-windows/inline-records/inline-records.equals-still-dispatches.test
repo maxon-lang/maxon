@@ -1,0 +1,77 @@
+// Test: inline-records.equals-still-dispatches
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export function equals(other Self) returns bool
+		return lo == other.lo and hi == other.hi
+	end 'equals'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, hi: 8)
+	let q = Pair.create(7, hi: 8)
+
+	if p == q 'same'
+		return 0
+	end 'same'
+
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __rc_ok#13:
+    x64.movRegImm rax, 34359738375
+  __rc_ok#20:
+    x64.movRegImm rcx, 34359738375
+  __il_body:
+    x64.movRegImm32 rdx, 4294967295
+    x64.movRegReg rsi, rax
+    x64.andRegReg rsi, rax, rdx
+    x64.movRegImm32 rdx, 4294967295
+    x64.movRegReg rdi, rcx
+    x64.andRegReg rdi, rcx, rdx
+    x64.cmpRegReg rsi, rdi
+    x64.movRegImm32 rdx, 0
+    x64.jcc notEqual, critsplit
+  andrhs:
+    x64.shrRegImm8 rax, rax, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rax, rax, rdx
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, rax
+    x64.jmp __il_cont
+  critsplit:
+    x64.movRegReg rax, rdx
+  __il_cont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, ifcont
+  same:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

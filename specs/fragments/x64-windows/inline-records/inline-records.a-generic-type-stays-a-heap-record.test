@@ -1,0 +1,141 @@
+// Test: inline-records.a-generic-type-stays-a-heap-record
+typealias Half = int(0 to u32.max)
+
+type Box uses T
+	export let a as T
+	export let b as T
+
+	export static function create(a T, b T) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Box'
+
+typealias HalfBox = Box with Half
+typealias HalfBoxArray = Array with HalfBox
+
+function main() returns ExitCode
+	var holder = HalfBoxArray.create()
+	holder.reserve(4)
+
+	let before = __Builtins.mmAllocLive()
+	holder.push(HalfBox.create(1, b: 2))
+	let after = __Builtins.mmAllocLive()
+
+	if holder.count() != 1 'held'
+		return 1
+	end 'held'
+
+	if (after - before) != 1 'alloc'
+		return 2
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 4
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 4
+    x64.jcc greaterEqual, __il_cont#6
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#6
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#6:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 1
+    x64.movRegImm32 r14, 2
+  __il_body:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.storeBaseDispReg.word64 [r8 + 8], r14
+  __il_cont#5:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.callDirect __mm_counter_alloc_live
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, ifcont#2
+  held:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.subRegReg r8, r8, r12
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, ifcont#4
+  alloc:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

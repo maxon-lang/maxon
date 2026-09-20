@@ -4146,6 +4146,10 @@ let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 // a per-type array here would be one allocation per declared `type` to hold a list only a service has.
 let sharedEmptyMessageMethods = ByteArrayArray.create()
 
+export typealias BitWidthArray = Array with BitWidth
+
+let sharedEmptyInlineBitWidths = BitWidthArray.create()
+
 export type StructLayout
 	export var name as ByteArray
 
@@ -4217,6 +4221,15 @@ export type StructLayout
 	// writer now goes through `replaceFieldTypes` below, so the sentence is structural instead of hopeful:
 	// `addField` appends one term, `retypeField` and `replaceFieldTypes` rebuild, and there is no fourth door.
 	export var fieldOffsets as ByteOffsetArray
+
+	// The word geometry of a type that packs inline (`specs/inline-records.md`), settled together and only
+	// by `ProgramSignatures.settleInlineRecordGeometry`, once the whole program is folded. Every layout
+	// answers `false` until then, so a representation decision taken off this column earlier reads a heap
+	// record where a value belongs — `ProgramSignatures.layoutPacksInlineIntoAWord` is the door that
+	// refuses to be asked that early.
+	export var packsInlineIntoAWord = false
+	export var fieldBitWidths as BitWidthArray
+	export var fieldBitOffsets as BitWidthArray
 
 	// The total the prefix sum ends at — the box's payload bytes for a type with at least one field. NOT
 	// `sizeBytes()`, which floors an EMPTY struct at one slot; see there for why that floor exists.
@@ -4318,7 +4331,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: ByteArrayArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: ByteArrayArray.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: sharedEmptyInlineBitWidths, fieldBitOffsets: sharedEmptyInlineBitWidths, slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -4577,6 +4590,24 @@ export type StructLayout
 		self.rebuildSlotGeometry()
 	end 'retypeField'
 
+	export function settleInlinePacking(bitWidths BitWidthArray)
+		if bitWidths.count() != self.fieldTypes.count() 'notOneWidthPerField'
+			panic("StructLayout.settleInlinePacking: `type {String.from(self.name)}` declares {self.fieldCount()} field(s) and the width column holds a different number — the two are read by one `FieldIndex`, so a short column answers with a neighbour's width")
+		end 'notOneWidthPerField'
+
+		self.packsInlineIntoAWord = true
+		self.fieldBitWidths = bitWidths
+		self.rebuildSlotGeometry()
+	end 'settleInlinePacking'
+
+	export function fieldBitWidth(index FieldIndex) returns BitWidth
+		return try self.fieldBitWidths.get(index) otherwise panic("StructLayout.fieldBitWidth: fieldBitWidths.get OOB at {index} for `type {String.from(self.name)}`, which packs {self.fieldBitWidths.count()} field(s) into a word")
+	end 'fieldBitWidth'
+
+	export function fieldBitOffset(index FieldIndex) returns InlineRecordBitOffset
+		return (try self.fieldBitOffsets.get(index) otherwise panic("StructLayout.fieldBitOffset: fieldBitOffsets.get OOB at {index} for `type {String.from(self.name)}`, which packs {self.fieldBitOffsets.count()} field(s) into a word")) as InlineRecordBitOffset
+	end 'fieldBitOffset'
+
 	// ⭐ **REPLACE THE WHOLE DECLARED-TYPE COLUMN — the merge's door, and the reason it is a METHOD.**
 	// `TypeNameInterner.remapStructLayoutFieldTypes` rewrites every field type through an id remap when a
 	// file's layouts are folded into a bigger table, and assigning `layout.fieldTypes` from
@@ -4587,6 +4618,10 @@ export type StructLayout
 	// The length is a precondition, not a case: a remap rewrites one column in place and pushes exactly what
 	// it read, so a short one is a broken remap rather than a program this could report on.
 	export function replaceFieldTypes(types MaxonTypeArray)
+		if self.packsInlineIntoAWord 'alreadySettledInline'
+			panic("StructLayout.replaceFieldTypes: `type {String.from(self.name)}` packs inline into one word, and its bit geometry was settled from the field types being replaced — a remap after the settle would leave the widths describing types the layout no longer declares")
+		end 'alreadySettledInline'
+
 		if types.count() != self.fieldTypes.count() 'lengthChanged'
 			panic("StructLayout.replaceFieldTypes: `type {String.from(self.name)}` declares {self.fieldCount()} field(s) and the replacement column holds a different number — a remap rewrites one column in place and cannot change its length")
 		end 'lengthChanged'
@@ -4609,6 +4644,20 @@ export type StructLayout
 
 		self.fieldOffsets = offsets
 		self.slotBytes = total
+
+		if not self.packsInlineIntoAWord 'noBitGeometry'
+			return
+		end 'noBitGeometry'
+
+		var bitOffsets = BitWidthArray.create()
+		var bits = 0 as BitWidth
+
+		for i in 0 upto self.fieldBitWidths.count() 'eachPackedField'
+			bitOffsets.push(bits)
+			bits = bits + (try self.fieldBitWidths.get(i) otherwise panic("StructLayout.rebuildSlotGeometry: fieldBitWidths.get OOB at {i} for `type {String.from(self.name)}` below its own count"))
+		end 'eachPackedField'
+
+		self.fieldBitOffsets = bitOffsets
 	end 'rebuildSlotGeometry'
 
 	// ⚠ **THE OOB PANIC SENTENCE BELOW IS REPEATED PER COLUMN, AND THE COPY IS FORCED BY THE
@@ -4694,6 +4743,10 @@ export type StructLayout
 	// The payload bytes `__mm_alloc` must be asked for. THE one place the size is computed, so the
 	// allocation and the field stores that fill it cannot come to disagree about how big the box is.
 	export function sizeBytes() returns ByteOffset
+		if self.packsInlineIntoAWord 'theValueISTheWord'
+			return MachineWordBytes
+		end 'theValueISTheWord'
+
 		if self.fieldNames.count() == 0 'empty'
 			return EmptyStructBytes
 		end 'empty'

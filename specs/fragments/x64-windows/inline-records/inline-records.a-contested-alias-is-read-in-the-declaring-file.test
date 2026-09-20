@@ -1,0 +1,84 @@
+// Test: inline-records.a-contested-alias-is-read-in-the-declaring-file
+// --- file: wide.maxon
+typealias Wide = int(i64.min to i64.max)
+
+export function widest(v Wide) returns Wide
+	return v - 1
+end 'widest'
+
+// --- file: packed.maxon
+typealias Wide = int(0 to u32.max)
+
+export type Packed
+	export let lo as Wide
+	export let hi as Wide
+
+	export static function create(lo Wide, hi Wide) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Packed'
+
+export function packedSize() returns Wide
+	return sizeof(Packed) as Wide
+end 'packedSize'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let p = Packed.create(4294967295, hi: 7)
+
+	if p.lo != 4294967295 'lo'
+		return 1
+	end 'lo'
+
+	if p.hi != 7 'hi'
+		return 2
+	end 'hi'
+
+	if widest(100) != 99 'wide'
+		return 3
+	end 'wide'
+
+	return packedSize() as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+  __rc_ok:
+    x64.movRegImm rax, 34359738367
+  __il_cont#7:
+    x64.movRegImm32 rcx, 4294967295
+    x64.movRegReg rdx, rax
+    x64.andRegReg rdx, rax, rcx
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rdx, rcx
+    x64.jcc equal, ifcont
+  lo:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.shrRegImm8 rax, rax, 32
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 7
+    x64.jcc equal, __il_body
+  hi:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  __il_body:
+    x64.movRegImm32 r8, 8
+  __il_cont#17:
+    x64.popReg rbp
+    x64.ret
+}

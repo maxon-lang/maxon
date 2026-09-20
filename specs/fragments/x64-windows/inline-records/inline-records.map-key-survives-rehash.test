@@ -1,0 +1,410 @@
+// Test: inline-records.map-key-survives-rehash
+typealias Coord = int(0 to u16.max)
+
+type Point implements Hashable, Equatable
+	export let x as Coord
+	export let y as Coord
+
+	export static function create(x Coord, y Coord) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+
+	export function hash() returns HashValue
+		return x * 31 + y
+	end 'hash'
+
+	export function equals(other Self) returns bool
+		return x == other.x and y == other.y
+	end 'equals'
+end 'Point'
+
+typealias PointArray = Array with Point
+typealias PointMap = Map with (Point, Coord)
+
+function main() returns ExitCode
+	var keys = PointArray.create()
+	keys.reserve(500)
+
+	let before = __Builtins.mmAllocLive()
+	for i in 0 upto 500 'build'
+		keys.push(Point.create(i, y: i + 1))
+	end 'build'
+	let after = __Builtins.mmAllocLive()
+
+	var m = PointMap.create()
+	for k in keys 'insert'
+		m.upsert(k, value: k.x)
+	end 'insert'
+
+	var found = 0
+	for k in keys 'lookup'
+		if m.contains(k) 'hit'
+			found = found + 1
+		end 'hit'
+	end 'lookup'
+
+	if found != 500 'missing'
+		return 1
+	end 'missing'
+
+	if after != before 'alloc'
+		return 2
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @Point.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.andRegImm32 rax, rcx, 65535
+    x64.imulRegRegImm32 rax, rax, 31
+    x64.shrRegImm8 rcx, rcx, 16
+    x64.andRegImm32 rcx, rcx, 65535
+    x64.leaRegRegReg r8, rax, rcx
+  __rc_ok:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Point.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.andRegImm32 rax, rcx, 65535
+    x64.movRegReg rsi, rdx
+    x64.andRegImm32 rsi, rdx, 65535
+    x64.cmpRegReg rax, rsi
+    x64.movRegImm32 r8, 0
+    x64.jcc notEqual, scmerge
+  andrhs:
+    x64.shrRegImm8 rcx, rcx, 16
+    x64.andRegImm32 rcx, rcx, 65535
+    x64.shrRegImm8 rdx, rdx, 16
+    x64.andRegImm32 rdx, rdx, 65535
+    x64.cmpRegReg rcx, rdx
+    x64.setccReg equal, r8
+  scmerge:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot5, rbx
+    x64.movRegImm32 r12, 500
+  __rc_ok#27:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 500
+    x64.jcc greaterEqual, __il_cont#21
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#21
+  tryerr#25:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#21:
+    x64.callDirect __mm_counter_alloc_live
+    x64.storeSlotReg slot0, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr#1
+  build:
+    x64.leaRegRegImm32 rax, r12, 1
+  __rc_ok#31:
+    x64.shlRegImm8 rax, rax, 16
+    x64.movRegReg rdx, rax
+    x64.orRegReg rdx, rax, r12
+  __il_cont#29:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r12, r12, 1
+  forhdr#1:
+    x64.cmpRegImm32 r12, 500
+    x64.jcc less, build
+  forexit#4:
+    x64.callDirect __mm_counter_alloc_live
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRdata rbx, [rip + __layout_Map_Point_Coord]
+    x64.leaRegRdata rax, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Point.Equatable]
+  __il_body#40:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 40]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+  __il_body#41:
+    x64.movRegImm32 rcx, 8
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 112]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+  __il_body#42:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+  __il_body#43:
+    x64.movRegImm32 rcx, 4
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+  __il_cont#36:
+    x64.movRegImm32 rcx, 56
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r12
+    x64.storeBaseDispReg.word64 [r15 + 8], rbx
+    x64.storeBaseDispReg.word64 [r15 + 16], r13
+    x64.storeBaseDispReg.word64 [r15 + 24], r14
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 32], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 40], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r15 + 48], rax
+  __il_cont#34:
+    x64.movRegImm32 rbx, 0
+    x64.jmp forhdr#5
+  insert:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rdx, [rax + rbx*8 + 0]
+  __im_cont#19:
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, 65535
+    x64.leaRegRdata r9, [rip + __layout_Map_Point_Coord]
+    x64.leaRegRdata rsi, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_Point.Equatable]
+    x64.movRegReg rcx, r15
+    x64.callDirect Map.upsert
+  forstep#7:
+    x64.leaRegRegImm32 rbx, rbx, 1
+  forhdr#5:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg rbx, rax
+    x64.jcc less, insert
+  forexit#8:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.jmp forhdr#9
+  lookup:
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseIndexScale.word64 rbx, [rax + rcx*8 + 0]
+  __im_cont#20:
+    x64.leaRegRdata r12, [rip + __layout_Map_Point_Coord]
+    x64.leaRegRdata r13, [rip + __witness_Point.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_Point.Equatable]
+    x64.storeSlotReg slot4, rax
+  __il_body#45:
+    x64.movRegReg rcx, rbx
+    x64.callMem [r13 + 40]
+    x64.loadRegSlot rdi, slot4
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r8
+    x64.movRegReg r9, r12
+    x64.movRegReg rsi, r13
+    x64.callDirect Map.findSlot
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#49
+  tryerr#47:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#44
+  __il_body#49:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm rax, 4611686018427387904
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok#52:
+    x64.loadRegBaseDisp.word64 rcx, [r15 + 16]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 24]
+    x64.cmpRegImm32 rax, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg r8, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#61:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + r8*8 + 0]
+    x64.jmp __il_body#64
+  __im_stride:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.cmpRegReg r8, rax
+    x64.jcc aboveEqual, __im_slow
+  __im_load#62:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegReg rax, rax, r8
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __il_body#64
+  __im_slow:
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#51
+  critsplit#73:
+    x64.movRegReg rax, r8
+  __il_body#64:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext#69
+  matcharm#66:
+    x64.movRegImm32 rax, 0
+    x64.jmp __il_cont#44
+  matchnext#69:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchnext#70
+  matcharm#65:
+    x64.movRegImm32 rax, 1
+    x64.jmp __il_cont#44
+  matchnext#70:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc notEqual, matchdead
+  matcharm#67:
+    x64.movRegImm32 rax, 0
+  __il_cont#44:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, critsplit#72
+  hit:
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forstep#11
+  critsplit#72:
+    x64.loadRegSlot rax, slot3
+  forstep#11:
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr#9:
+    x64.storeSlotReg slot3, rax
+    x64.storeSlotReg slot2, rcx
+    x64.loadRegSlot rax, slot5
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegReg rcx, rax
+    x64.jcc less, lookup
+    x64.jmp forexit#12
+  matchdead:
+  forexit#12:
+    x64.loadRegSlot rax, slot3
+    x64.cmpRegImm32 rax, 500
+    x64.jcc equal, ifcont#16
+  missing:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Map_Point_Coord
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#16:
+    x64.loadRegSlot rax, slot0
+    x64.loadRegSlot rcx, slot1
+    x64.cmpRegReg rcx, rax
+    x64.jcc equal, ifcont#18
+  alloc:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Map_Point_Coord
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#18:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Map_Point_Coord
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_49]  ; "panic at Map.maxon:340: Range check failed: value outside typealias 'TableSlotIndex'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#51:
+    x64.leaRegRdata rcx, [rip + __str_blob_18]  ; "panic at Map.maxon:341: Map.slotHoldsKey: states.get OOB \xe2\x80\x94 slot from findSlot is always in-bounds\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
