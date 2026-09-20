@@ -1,0 +1,36 @@
+// Test: error.crossfile-generic-and-ranged-alias-the-unused-ranged-one-is-reported
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function fromA() returns ExitCode
+	let b = Thing.create(7)
+	return b.get()
+end 'fromA'
+
+// --- file: b.maxon
+typealias Thing = int(0 to 10)
+
+export function fromB() returns ExitCode
+	return 2
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+---
+CompilerError:
+error E3062: <fragment>:24:11: unused typealias: 'Thing'

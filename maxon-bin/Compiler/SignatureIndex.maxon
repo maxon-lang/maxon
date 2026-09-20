@@ -11172,14 +11172,11 @@ export type ProgramSignatures
 	// ⭐⭐ **WHICH FILE DECLARED EACH FUNCTION WHOSE RECORDED RETURN TYPE IS STILL A BARE `named` — the
 	// column that makes a return type answer to ITS OWN file rather than to its READER'S.**
 	//
-	// ⛔ **WITHOUT IT A CROSS-FILE RETURN OF A CONTESTED GENERIC ALIAS WAS A SILENT WRONG ANSWER, MEASURED.**
-	// Two files each declaring `typealias Bytes = Array with Byte` over a DIFFERENT `Byte` range: one file's
-	// `returns Bytes` function feeding the other's `Bytes` parameter COMPILED, and the callee read a
-	// two-byte-stride record at one-byte stride — `300` came back as **44** (exit 44 on a program the type
-	// system exists to refuse). The sweep records `returns Bytes` before any generic alias is interned, so it
-	// stores a bare `named("Bytes")`; `Parser.resolveNamedAlias` then resolves that name in the CALLING file
-	// (`genericAliasInstanceFrom(name, readerFilePath: self.filePath)`), so the callee's array silently
-	// became the caller's homonym and the two instances compared equal.
+	// ⛔ **WITHOUT IT A CROSS-FILE RETURN OF A CONTESTED GENERIC ALIAS IS A SILENT WRONG ANSWER.** The sweep
+	// records `returns Bytes` before any generic alias is interned, so it stores a bare `named("Bytes")`.
+	// Two files each declaring `typealias Bytes = Array with Byte` over a DIFFERENT `Byte` range then hold
+	// one name for two element widths, and a return resolved anywhere but its own declaring file hands the
+	// caller its OWN homonym — two instances that compare equal over records of different stride.
 	//
 	// `resolveRecordedGenericAliasTypes` is what spends it, rewriting such a return type to the minted
 	// spelling its declaring file means — the same repair that pass already makes for a struct FIELD and a
@@ -22840,14 +22837,22 @@ export type ProgramSignatures
 		return self.isGenericAliasInAnyFile(name) and not self.genericAliasSpellingIsSuperseded(name)
 	end 'namesALiveGenericAlias'
 
-	// ⚠ A bare NAME is safe to credit across files only while ONE file declares it, and the second
-	// conjunct is that guard. Two files declaring the same alias over the SAME instance file no
-	// contest (`settleGenericAliasContestRound` needs the declarations to denote DIFFERENT
-	// instances), so without it each would credit the other and a genuine E3062 would be dropped.
-	// It is not redundant of the first.
+	// ⚠ The second conjunct is not redundant of the first. `aliasNameIsDisagreedWith` holds every name
+	// more than one DECLARATION mentions and compares no instances, so it catches two declarations that
+	// denote the same one — without it each would credit the other and a true E3062 would be dropped.
+	// This is one of three conditions on a cross-file credit; `fileMeansTheSoleGenericAliasDeclaration`
+	// is the whole of it.
 	export function namesTheSoleGenericAliasDeclaration(name ByteArray) returns bool
 		return self.namesALiveGenericAlias(name) and not self.aliasNameIsDisagreedWith(name)
 	end 'namesTheSoleGenericAliasDeclaration'
+
+	// The whole condition on crediting E3062 across a file boundary, asked of the SPELLING file where a
+	// name is recorded and of the DECLARING file at the drain — both ends must mean the generic form or
+	// the credit does not stand. Drop the `readerMeansKind` half and a spelling that means another form
+	// of the name silences a never-spelled generic alias elsewhere.
+	export function fileMeansTheSoleGenericAliasDeclaration(name ByteArray, readerFilePath FilePath) returns bool
+		return self.namesTheSoleGenericAliasDeclaration(name) and self.readerMeansKind(name, readerFilePath: readerFilePath, kind: TypeDeclKind.genericAlias)
+	end 'fileMeansTheSoleGenericAliasDeclaration'
 
 	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME (A3k review)** — for the one classifier door
 	// that has no `name` in hand because it is a COMPOSITION of two others, `typeArgIsCoOwnedTrivial`. It is

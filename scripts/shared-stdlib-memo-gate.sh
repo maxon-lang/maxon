@@ -145,11 +145,14 @@
 #
 # Usage:  scripts/shared-stdlib-memo-gate.sh [--filter=PATTERN]
 # Exit:   0 = all checks pass · 1 = a check failed · 2 = the gate could not run (setup failure)
+#         A nonzero exit keeps the work directory and names it on stderr — the printed evidence is a
+#         head-truncated grep, and the full spec-test and warm-rebuild logs are in there.
 
 set -u
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 2
+. "$REPO_ROOT/scripts/lib/scratch-dir.sh" || { echo "gate: cannot source scripts/lib/scratch-dir.sh" >&2; exit 2; }
 
 FILTER="string"
 for arg in "$@"; do
@@ -167,7 +170,7 @@ if [ ! -x "$MAXON" ]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'scratch_dir_on_exit $? "$WORK" "shared-stdlib-memo-gate" 0' EXIT
 
 failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }

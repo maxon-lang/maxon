@@ -354,7 +354,7 @@ module function resolveTypes(project Project, module MaxonModule)
 	// FIRST in the first pass — before a single name is erased. Two of them name a TYPEALIAS, and
 	// `resolveTypes` is what turns `Score` into `int`, so a drain that ran after it would have nothing
 	// left to name.
-	reportDeferredNameDiagnostics(project)
+	reportDeferredNameDiagnostics(project, signatures: signatures)
 
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
@@ -399,7 +399,7 @@ end 'resolveTypes'
 // ⚠ It runs in a pass, and the pipeline's gate fires only BETWEEN passes, so both lists are drained
 // before anything stops the build — which is the second half of the same requirement: two diagnostics
 // in one program, in one order.
-function reportDeferredNameDiagnostics(project Project)
+function reportDeferredNameDiagnostics(project Project, signatures ProgramSignatures)
 	// ⚠ Captured BEFORE the loop, because the loop APPENDS to the very array `declarationAlreadyReported`
 	// scans: without the bound, each E3062 emitted here would be a row every later candidate compares
 	// against — turning k unused aliases into O(k²) comparisons, and (worse) letting one unused alias
@@ -432,7 +432,11 @@ function reportDeferredNameDiagnostics(project Project)
 			continue
 		end 'alreadyExplained'
 
-		if project.genericAliasNamesWrittenByAFile.contains(entry.name) 'namedAcrossTheFileBoundary'
+		// ⚠ Only the `readerMeansKind` half of the second call can fail here — nothing enters
+		// `genericAliasNamesWrittenByAFile` except through `ParseStaging.noteWrittenGenericAliasNames`,
+		// which asks the same door of the spelling file. The whole door is asked anyway because that
+		// agreement is cross-file and unenforced: a second insert site leaves this the only check of it.
+		if project.genericAliasNamesWrittenByAFile.contains(entry.name) and signatures.fileMeansTheSoleGenericAliasDeclaration(entry.name, readerFilePath: entry.filePath) 'namedAcrossTheFileBoundary'
 			continue
 		end 'namedAcrossTheFileBoundary'
 

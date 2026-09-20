@@ -17,6 +17,11 @@
 # from the output filename, so `-o stage2` and `-o stage3` differ in exactly one byte for that reason
 # alone — a difference that reads as a miscompile and is not one. Same name, different directories.
 #
+# A failing stage's own output goes to stderr where it fails, named, and its exit status is carried out
+# of the script: a compiler's status is a diagnosis here, so flattening it to 1 throws away the first
+# fact a reader wants. Any nonzero exit KEEPS temp/fixpoint and says so, so the two stage binaries and
+# both logs outlive the run that proved they matter. `--keep` holds them when the fixpoint holds too.
+#
 # Usage:  scripts/fixpoint.sh [--keep]
 
 set -euo pipefail
@@ -24,12 +29,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
+. scripts/lib/scratch-dir.sh
 
 keep=0
 for arg in "$@"; do
 	case "$arg" in
 		--keep)    keep=1 ;;
-		-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "fixpoint.sh: unknown arg: $arg" >&2; exit 2 ;;
 	esac
 done
@@ -40,16 +46,65 @@ start_bin="$(maxon_compiler_path .)"
 out="temp/fixpoint"
 rm -rf "$out"
 mkdir -p "$out/a" "$out/b"
-[ "$keep" -eq 1 ] || trap 'rm -rf "$out"' EXIT
+
+trap 'scratch_dir_on_exit $? "$out" "fixpoint.sh" "$keep"' EXIT
+
+run_stage() {
+	stage="$1"
+	stage_log="$2"
+	shift 2
+
+	stage_status=0
+	"$@" > "$stage_log" 2>&1 || stage_status=$?
+
+	if [ "$stage_status" -ne 0 ]; then
+		printf 'fixpoint.sh: %s exited %s — its output follows\n' "$stage" "$stage_status" >&2
+		cat "$stage_log" >&2
+		exit "$stage_status"
+	fi
+}
+
+# A stage can exit 0 and write no `-o` file at all, and nothing downstream notices: `wc -c` and `cmp` are
+# the comparison's only readers, and a failure of either inside a command substitution leaves the
+# enclosing `printf` returning 0, so `set -e` never fires — two empty files report FIXPOINT HOLDS on a
+# fixpoint nothing tested. The requirement is per stage because stage 2's binary is EXECUTED by stage 3
+# while stage 3's is only read.
+require_stage_binary() {
+	stage="$1"
+	binary="$2"
+	needs="$3"
+
+	fault=""
+
+	case "$needs" in
+		executable) [ -x "$binary" ] || fault="no executable binary" ;;
+		readable)   [ -r "$binary" ] || fault="no readable binary" ;;
+		*) echo "fixpoint.sh: require_stage_binary: unknown requirement '$needs'" >&2; exit 2 ;;
+	esac
+
+	if [ -z "$fault" ] && [ ! -s "$binary" ]; then
+		fault="an empty binary"
+	fi
+
+	if [ -n "$fault" ]; then
+		printf 'fixpoint.sh: %s exited 0 but left %s at %s\n' "$stage" "$fault" "$binary" >&2
+		exit 1
+	fi
+}
 
 echo "=== stage 2: $start_bin builds the compiler"
-"$start_bin" build maxon-bin -o "$out/a/maxon" > "$out/a.log" 2>&1
+run_stage "stage 2" "$out/a.log" "$start_bin" build maxon-bin -o "$out/a/maxon"
+a="$out/a/maxon$MAXON_EXE_EXT"
+
+# Between the stages, never after both: a missing or non-executable stage 2 otherwise surfaces from the
+# stage-3 line as exit 127/126 and is reported against stage 3.
+require_stage_binary "stage 2" "$a" executable
 
 echo "=== stage 3: that binary builds it again"
-"$out/a/maxon$MAXON_EXE_EXT" build maxon-bin -o "$out/b/maxon" > "$out/b.log" 2>&1
-
-a="$out/a/maxon$MAXON_EXE_EXT"
+run_stage "stage 3" "$out/b.log" "$a" build maxon-bin -o "$out/b/maxon"
 b="$out/b/maxon$MAXON_EXE_EXT"
+require_stage_binary "stage 3" "$b" readable
+
 printf 'stage 2  %s bytes\nstage 3  %s bytes\n' "$(wc -c < "$a" | tr -d ' ')" "$(wc -c < "$b" | tr -d ' ')"
 
 if cmp -s "$a" "$b"; then

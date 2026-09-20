@@ -1079,19 +1079,20 @@ function commitDeferredParseErrors(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitDeferredParseErrors'
 
-// The cross-file half of E3062: a generic-instance alias may be written only in files other than
-// the one declaring it, which the per-file check cannot see.
-// `ProgramSignatures.namesTheSoleGenericAliasDeclaration` owns when a bare name may be credited.
+// The cross-file half of E3062: a generic-instance alias may be written only in files other than the
+// one declaring it, which the per-file check cannot see.
+// `ProgramSignatures.fileMeansTheSoleGenericAliasDeclaration` owns when a spelling credits a
+// declaration.
 function commitWrittenGenericAliasNames(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	match artifact.usedTypeNames 'written'
 		unwritten then break 'written'
-		entries(names) then noteWrittenGenericAliasNames(project, names: names, signatures: signatures)
+		entries(names) then noteWrittenGenericAliasNames(project, names: names, signatures: signatures, spellingFilePath: artifact.filePath)
 	end 'written'
 end 'commitWrittenGenericAliasNames'
 
-function noteWrittenGenericAliasNames(project Project, names UsedTypeNameSet, signatures ProgramSignatures)
+function noteWrittenGenericAliasNames(project Project, names UsedTypeNameSet, signatures ProgramSignatures, spellingFilePath FilePath)
 	for name in names 'eachName'
-		if not signatures.namesTheSoleGenericAliasDeclaration(name) 'creditsNoOneDeclaration'
+		if not signatures.fileMeansTheSoleGenericAliasDeclaration(name, readerFilePath: spellingFilePath) 'creditsNoOneDeclaration'
 			continue
 		end 'creditsNoOneDeclaration'
 

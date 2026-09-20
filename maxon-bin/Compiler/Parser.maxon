@@ -32024,7 +32024,7 @@ export type Parser
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
 
 				if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualifiedInner) 'genericInnerAlias'
-					return self.genericAliasDenotedType(qualifiedInner)
+					return self.genericAliasDenotedType(qualifiedInner, readerFilePath: self.filePath)
 				end 'genericInnerAlias'
 
 				// A TUPLE inner alias (W43) — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
@@ -32135,7 +32135,7 @@ export type Parser
 				// omission — a nominal type name is an identifier and holds no `.`, so `Wrapper.Idx` can be
 				// claimed by no second kind and can never be contested.
 				if self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'genericAlias'
-					return self.genericAliasDenotedType(name)
+					return self.genericAliasDenotedType(name, readerFilePath: self.filePath)
 				end 'genericAlias'
 
 				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
@@ -32720,7 +32720,7 @@ export type Parser
 		end 'fa'
 
 		if self.signatures.isGenericAliasFor(name, readerFilePath: scopeFilePath) 'genericAlias'
-			return self.genericAliasDenotedType(name)
+			return self.genericAliasDenotedType(name, readerFilePath: scopeFilePath)
 		end 'genericAlias'
 
 		// ⭐ A TUPLE-ALIAS return (`returns Pair`) — the `named` the sweep recorded resolved to the tuple's own
@@ -32745,8 +32745,11 @@ export type Parser
 	// door answering "or nothing" would return a union, and a union return is heap-boxed even for its miss
 	// case — the same +24,396 allocations at rung 5 that `isInterfaceName` is spelled the narrow way for, one
 	// arm above. The gate is a bool and costs nothing; only the JOIN is shared.
-	function genericAliasDenotedType(name ByteArray) returns MaxonType
-		return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath), into: self.artifact.typeNames)
+	//
+	// ⚠ `readerFilePath` is the file whose gate admitted the name. Resolving in a different file than the
+	// gate asked about hands back a homonym's instance on a legal program.
+	function genericAliasDenotedType(name ByteArray, readerFilePath FilePath) returns MaxonType
+		return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: readerFilePath), into: self.artifact.typeNames)
 	end 'genericAliasDenotedType'
 
 	// `resolveNamedStruct` folded over a parameter-type list — the whole struct-`named` → `structRef`
@@ -89995,6 +89998,10 @@ export type Parser
 	// is the TOLERANT one — a struct, a float alias and a generic alias all arrive as a bare `named`
 	// (`parseTypeReference`'s `allFilesFolded` argument). Compared raw, a `ByteArray` parameter is a `named` while
 	// its argument is a generic instance, and every candidate scores incompatible.
+	//
+	// ⚠ It is the only repair a recorded PARAMETER type gets. A recorded return type and a struct field are
+	// also normalized at the source by `contestScopedAlias`, for readers that reach no scoped repair; a
+	// parameter type has no such reader, so the scope file handed in here is the whole of the rule for it.
 	function sweptParamType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
 		return self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: scopeFilePath)
 	end 'sweptParamType'

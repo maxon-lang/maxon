@@ -90,8 +90,10 @@ cond ? a : b                   a if cond else b
   (`export var value = 0`) or is proven definitely assigned before a `Self{}` in a static factory.
 - **All variables must be used** (E3012). Use `_` to discard.
 - **A typealias declared and never used is an error** (E3062) — "used" means the NAME appears in a type
-  position in its OWN file; `export` and `module` both exempt it (the check only asks about aliases
-  nothing outside the file can see), and inference from a bare `[...]` literal is not a use.
+  position in its OWN file, except a generic-instance alias, which another file's spelling also credits
+  while one declaration in the program holds the name and both files mean the generic form by it;
+  `export` and `module` both exempt it (the check only asks about aliases nothing outside the file can
+  see), and inference from a bare `[...]` literal is not a use.
 - **`var` that is never reassigned is an error** (E3077) — use `let`.
 - **Cannot assign immutable `let` ref-type to `var`** (E3078) — use `let` or `.clone()`.
 - **Self-assignment is an error** (E3067): `x = x`, `p.x = p.x`.

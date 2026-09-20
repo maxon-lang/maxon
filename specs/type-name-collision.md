@@ -603,6 +603,356 @@ end 'main'
 ```
 
 
+<!-- test: crossfile-generic-alias-same-name-with-an-overloaded-parameter -->
+The legal pair above with ONE thing added — the callee is OVERLOADED — and that addition was a FALSE
+REFUSAL of a program nothing is wrong with. `a.maxon` and `b.maxon` each declare a generic-instance
+alias `Thing` denoting a different instance, which the case above establishes is allowed; `b.maxon`
+holds a value `a.maxon` made and hands it to `a.maxon`'s `take`, whose parameter is declared with
+`a.maxon`'s `Thing`. An overload candidate's parameter type is the whole-program sweep's, repaired at
+the call — and the repair GATED on the candidate's declaring file while RESOLVING the instance in the
+CALLING file. One name, one door, two files: `take`'s `Bx with Small` parameter was scored as
+`b.maxon`'s `Bx with String`, so no candidate fitted, the overload went unsettled, and the call's
+result was typed from the single return type the index keeps per NAME — the OTHER overload's. It was
+**`E3005: Cannot return 'String' from function declared to return 'int'`**, naming a type this call
+never meant.
+```maxon
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function makeA() returns Thing
+	return Thing.create(7)
+end 'makeA'
+
+export function take(t Thing) returns ExitCode
+	return t.get()
+end 'take'
+
+// --- file: d.maxon
+typealias Tag = int(0 to 50)
+
+export function take(n Tag) returns String
+	return "n{n}"
+end 'take'
+
+// --- file: b.maxon
+typealias Thing = Bx with String
+
+export function fromB() returns ExitCode
+	let own = Thing.create("ab")
+	print("{own.get()}\n")
+
+	let t = makeA()
+
+	return take(t)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{take(3)}\n")
+
+	return fromB()
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+n3
+ab
+```
+
+
+<!-- test: crossfile-generic-alias-same-name-with-an-overloaded-parameter-on-an-int-argument -->
+The same defect with an `int` type argument on both sides, because resolving an instance in the wrong
+file is not a managed-type effect and a case that only ever showed it through a `String` would let a
+repair that special-cases one look complete. Nothing here is a `String`: `a.maxon` means
+`Bx with Small` and `b.maxon` means `Bx with Wide`, two ranged aliases over the same primitive. The
+parameter was still scored in the calling file's scope, still fitted nothing, and the same borrowed
+return type came back.
+```maxon
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function makeA() returns Thing
+	return Thing.create(7)
+end 'makeA'
+
+export function take(t Thing) returns ExitCode
+	return t.get()
+end 'take'
+
+// --- file: d.maxon
+typealias Tag = int(0 to 50)
+
+export function take(n Tag) returns String
+	return "n{n}"
+end 'take'
+
+// --- file: b.maxon
+typealias Wide = int(0 to 1000)
+typealias Thing = Bx with Wide
+
+export function fromB() returns ExitCode
+	let own = Thing.create(4)
+	print("{own.get()}\n")
+
+	let t = makeA()
+
+	return take(t)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{take(3)}\n")
+
+	return fromB()
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+n3
+4
+```
+
+
+<!-- test: crossfile-generic-alias-same-name-with-an-unoverloaded-parameter -->
+The BOUND on that repair, and the condition it isolates. This is the same disagreement — two files,
+one alias name, two different instances, a value crossing from the file that made it into the file
+that means the other one — with the overload and nothing else removed. A callee's recorded RETURN type
+is re-scoped into its DECLARING file before any file is parsed, so a crossing that goes through a
+declared signature was never wrong here and may not become wrong: `take` is resolved by name, its
+parameter is checked against the signature it actually has, and 7 comes back. What the overload set
+adds is a SWEPT parameter type read at the call site, in front of a repair that has to name one file
+throughout; a repair that reached further than that would turn this case red.
+```maxon
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function makeA() returns Thing
+	return Thing.create(7)
+end 'makeA'
+
+export function take(t Thing) returns ExitCode
+	return t.get()
+end 'take'
+
+// --- file: b.maxon
+typealias Thing = Bx with String
+
+export function fromB() returns ExitCode
+	let own = Thing.create("ab")
+	print("{own.get()}\n")
+
+	let t = makeA()
+
+	return take(t)
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromB()
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+ab
+```
+
+
+<!-- test: error.crossfile-generic-and-ranged-alias-the-unused-ranged-one-is-reported -->
+One name, two alias FORMS in two files, and only one of them is spelled. `a.maxon` names its own
+generic-instance `Thing`; `b.maxon`'s ranged `Thing` is written nowhere, so E3062 is what that
+declaration has earned. The cross-file credit a generic-instance alias gets is keyed on the bare
+NAME, and a ranged alias sharing that name is a different declaration in a different file that the
+spelling never reached.
+```maxon
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function fromA() returns ExitCode
+	let b = Thing.create(7)
+	return b.get()
+end 'fromA'
+
+// --- file: b.maxon
+typealias Thing = int(0 to 10)
+
+export function fromB() returns ExitCode
+	return 2
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+```
+```maxoncstderr
+error E3062: <fragment>:24:11: unused typealias: 'Thing'
+```
+
+
+<!-- test: error.crossfile-generic-and-ranged-alias-the-unused-generic-one-is-reported -->
+The same pair the other way round, and it fails the same way. `b.maxon` spells `Thing` meaning its
+OWN ranged alias; `a.maxon`'s generic-instance `Thing` is written nowhere. A spelling credits the
+declaration it resolves to and no other, so the file that wrote the name decides what the name meant
+there — the generic declaration it never referred to is unused.
+```maxon
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function fromA() returns ExitCode
+	return 7
+end 'fromA'
+
+// --- file: b.maxon
+typealias Thing = int(0 to 10)
+typealias Held = Bx with Thing
+
+export function fromB() returns ExitCode
+	let b = Held.create(2)
+	return b.get()
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+```
+```maxoncstderr
+error E3062: <fragment>:16:11: unused typealias: 'Thing'
+```
+
+
+<!-- test: error.crossfile-generic-and-ranged-alias-a-third-file-spells-it -->
+The case that actually reaches the tie-break. In both pairs above the file that spells `Thing` also
+declares one of the two forms, so the contest is settled in the reader's own file and the ranking is
+never consulted. Here `c.maxon` declares neither: both claims are file-private and invisible to it,
+both arrive at the hidden fallback tier, and which declaration a stranger means falls out of the
+order the claims were pushed. `c.maxon` must mean `a.maxon`'s generic instance — `Thing.create`
+resolves through it to `Bx with Small` — and the credit that spelling earns must land on the same
+declaration the call resolved to, leaving `b.maxon`'s ranged `Thing` the only unused one. Change the
+order the alias kinds are pushed in and the credit moves to the other declaration, turning a true
+E3062 into a dropped one and an honest declaration into a false one, with nothing else in the suite
+noticing.
+```maxon
+// --- file: base.maxon
+
+export type Bx uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias Thing = Bx with Small
+
+export function fromA() returns ExitCode
+	return 1
+end 'fromA'
+
+// --- file: b.maxon
+typealias Thing = int(0 to 10)
+
+export function fromB() returns ExitCode
+	return 2
+end 'fromB'
+
+// --- file: c.maxon
+export function fromC() returns ExitCode
+	let t = Thing.create(4)
+	return t.get()
+end 'fromC'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB() + fromC()
+end 'main'
+```
+```maxoncstderr
+error E3062: <fragment>:23:11: unused typealias: 'Thing'
+```
+
+
 <!-- test: instantiation-compiles-onto-declared-type -->
 The LEAK, now legal. `Box with String` would compile to `Box_String`, and so does the `type Box_String`
 below — `installGenericInstanceDestructors` and `installStructDestructors` each emitted a
