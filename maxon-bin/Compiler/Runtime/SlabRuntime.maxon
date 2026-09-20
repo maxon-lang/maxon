@@ -469,14 +469,30 @@ export let SlabCachedFreeBytesName = b"__slab_cached_free_bytes"
 export let SlabParkedBytesName = b"__slab_parked_bytes"
 export let SlabCommittedBytesName = b"__slab_committed_bytes"
 
+export let SlabCensusTallyName = b"__slab_census_tally"
+export let SlabCensusBucketCountName = b"__slab_census_count"
+export let SlabCensusBucketBytesName = b"__slab_census_bytes"
+
 // `runtime/SlabRuntime.maxon` holds the other copy of every kind below. A drift swaps two figures over,
 // which no run would notice.
 let SlabCensusName = b"__slab_census"
+// A locked entry point and the tier body it calls are named separately. The tier file is INPUT to the
+// build running now, so `callee` must name a body that file already carries — a tier body and the
+// emitter constant naming it cannot be respelled by one build.
+let SlabCensusTallyWalkName = b"__slab_census_tally_walk"
+let SlabCensusBucketCountWalkName = b"__slab_census_bucket_count"
+let SlabCensusBucketBytesWalkName = b"__slab_census_bucket_bytes"
+
+let SlabRuntimeCallPrefix = b"__slab_"
 
 // One membership, so `RuntimeUsage.recordCallUsage` reads a roster this file owns rather than keeping a
 // second list free to drift from it.
 export function isSlabCensusCallee(callee ByteArray) returns bool
-	return callee.equals(SlabLiveBytesName) or callee.equals(SlabFreeBytesName) or callee.equals(SlabCachedFreeBytesName) or callee.equals(SlabParkedBytesName) or callee.equals(SlabCommittedBytesName)
+	if not bytesStartWith(callee, prefix: SlabRuntimeCallPrefix) 'notTheAllocatorsBand'
+		return false
+	end 'notTheAllocatorsBand'
+
+	return callee.equals(SlabLiveBytesName) or callee.equals(SlabFreeBytesName) or callee.equals(SlabCachedFreeBytesName) or callee.equals(SlabParkedBytesName) or callee.equals(SlabCommittedBytesName) or callee.equals(SlabCensusTallyName) or callee.equals(SlabCensusBucketCountName) or callee.equals(SlabCensusBucketBytesName)
 end 'isSlabCensusCallee'
 
 let SlabCensusLiveBytes = 0
@@ -484,6 +500,17 @@ let SlabCensusFreeBytes = 1
 let SlabCensusParkedBytes = 2
 let SlabCensusCachedFreeBytes = 3
 let SlabCensusCommittedBytes = 4
+
+export let SlabCensusTagMode = 0
+export let SlabCensusClassMode = 1
+
+export let SlabCensusTagBuckets = 2048
+let SlabCensusBucketWords = 2
+let SlabCensusSlotAlignBytes = 8
+let SlabCensusSlotAlignShift = 3
+let SlabCensusSpanMarkBytes = 10240
+export let SlabCensusImplausibleBucket = SlabCensusTagBuckets - 2
+export let SlabCensusOverflowBucket = SlabCensusTagBuckets - 1
 
 // --- The OS-direct tier ---
 //
@@ -551,11 +578,14 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabFreeToSpan(module)
 	buildSlabFree(module, model: model)
 
-	buildSlabCensusEntry(module, name: SlabLiveBytesName, kind: SlabCensusLiveBytes, model: model)
-	buildSlabCensusEntry(module, name: SlabFreeBytesName, kind: SlabCensusFreeBytes, model: model)
-	buildSlabCensusEntry(module, name: SlabCachedFreeBytesName, kind: SlabCensusCachedFreeBytes, model: model)
-	buildSlabCensusEntry(module, name: SlabParkedBytesName, kind: SlabCensusParkedBytes, model: model)
-	buildSlabCensusEntry(module, name: SlabCommittedBytesName, kind: SlabCensusCommittedBytes, model: model)
+	buildSlabCensusEntry(module, name: SlabLiveBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusLiveBytes), model: model)
+	buildSlabCensusEntry(module, name: SlabFreeBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusFreeBytes), model: model)
+	buildSlabCensusEntry(module, name: SlabCachedFreeBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusCachedFreeBytes), model: model)
+	buildSlabCensusEntry(module, name: SlabParkedBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusParkedBytes), model: model)
+	buildSlabCensusEntry(module, name: SlabCommittedBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusCommittedBytes), model: model)
+	buildSlabCensusEntry(module, name: SlabCensusTallyName, callee: SlabCensusTallyWalkName, argument: SlabCensusArgument.forwarded, model: model)
+	buildSlabCensusEntry(module, name: SlabCensusBucketCountName, callee: SlabCensusBucketCountWalkName, argument: SlabCensusArgument.forwarded, model: model)
+	buildSlabCensusEntry(module, name: SlabCensusBucketBytesName, callee: SlabCensusBucketBytesWalkName, argument: SlabCensusArgument.forwarded, model: model)
 end 'installSlabRuntime'
 
 // The one `.data` slot the object layer owns. `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only
@@ -618,6 +648,10 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 		panic("slab runtime: {slabStateBytes()} bytes of allocator state do not fit {slabStateChunks()} chunk(s) of {SlabPageBytes}")
 	end 'stateOverflowsChunks'
 
+	let widestSpanChunks = slabWidestSpanChunks()
+
+	requireMarkTableCoversTheWidestSpan(widestSpanChunks)
+
 	requireTierGeometryAgrees(slabTierPins(), signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Runtime/SlabRuntime.maxon", layer: "slab runtime")
 
 	// ⭐⭐ **AND THE TWO REQUESTS THIS FILE MAKES OF THE PAGE LAYER MUST BE SATISFIABLE ON BOTH LANES.**
@@ -632,8 +666,21 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 	// The other request is a SPAN's chunk run, whose largest is the widest class's page count — Go's table
 	// tops out at 10. `__slab_refill` computes it as `ceil(slotSize · totalSlots / SlabPageBytes)` at run
 	// time; the bound is what says every value that formula can produce is one the arena will serve.
-	requireArenaCanServe("the widest class's span", chunks: slabWidestSpanChunks())
+	requireArenaCanServe("the widest class's span", chunks: widestSpanChunks)
 end 'checkSlabRuntimeGeometry'
+
+function requireMarkTableCoversTheWidestSpan(widestSpanChunks ParsedInt)
+	if (1 shl SlabCensusSlotAlignShift) != SlabCensusSlotAlignBytes 'alignShiftDisagrees'
+		panic("slab runtime: 1 shl {SlabCensusSlotAlignShift} is {1 shl SlabCensusSlotAlignShift}, not the slot alignment {SlabCensusSlotAlignBytes}")
+	end 'alignShiftDisagrees'
+
+	let widestSpanBytes = widestSpanChunks * SlabPageBytes
+	let needed = widestSpanBytes / SlabCensusSlotAlignBytes
+
+	if needed > SlabCensusSpanMarkBytes 'markTableTooNarrow'
+		panic("slab runtime: the widest class's span is {widestSpanBytes} bytes, which needs {needed} mark byte(s) at one per {SlabCensusSlotAlignBytes} bytes of span, and the tally's per-span mark table is {SlabCensusSpanMarkBytes}")
+	end 'markTableTooNarrow'
+end 'requireMarkTableCoversTheWidestSpan'
 
 function slabTierPins() returns TierGeometryPinArray
 	var out = TierGeometryPinArray.create()
@@ -664,6 +711,8 @@ function slabTierPins() returns TierGeometryPinArray
 
 	out.push(TierGeometryPin.create("an mspan's metadata slot", here: MspanSlotBytes, named: "MspanSlotBytes"))
 	out.push(TierGeometryPin.create("an mspan's base address", here: MspanBaseAddrOffset as ParsedInt, named: "MspanBaseAddrOffset"))
+	out.push(TierGeometryPin.create("an mspan's free list", here: MspanFreeListOffset as ParsedInt, named: "MspanFreeListOffset"))
+	out.push(TierGeometryPin.create("an mspan's bump cursor", here: MspanBumpNextOffset as ParsedInt, named: "MspanBumpNextOffset"))
 	out.push(TierGeometryPin.create("an mspan's free count", here: MspanFreeCountOffset as ParsedInt, named: "MspanFreeCountOffset"))
 	out.push(TierGeometryPin.create("an mspan's class index", here: MspanClassIdxOffset as ParsedInt, named: "MspanClassIdxOffset"))
 	out.push(TierGeometryPin.create("an mspan's owner", here: MspanOwningPOffset as ParsedInt, named: "MspanOwningPOffset"))
@@ -680,6 +729,21 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the census kind for parked bytes", here: SlabCensusParkedBytes, named: "SlabCensusParkedBytes"))
 	out.push(TierGeometryPin.create("the census kind for cached free bytes", here: SlabCensusCachedFreeBytes, named: "SlabCensusCachedFreeBytes"))
 	out.push(TierGeometryPin.create("the census kind for committed bytes", here: SlabCensusCommittedBytes, named: "SlabCensusCommittedBytes"))
+
+	out.push(TierGeometryPin.create("the tally mode that attributes by tag", here: SlabCensusTagMode, named: "SlabCensusTagMode"))
+	out.push(TierGeometryPin.create("the tally mode that attributes by size class", here: SlabCensusClassMode, named: "SlabCensusClassMode"))
+	out.push(TierGeometryPin.create("the tally's bucket count", here: SlabCensusTagBuckets, named: "SlabCensusTagBuckets"))
+	out.push(TierGeometryPin.create("a tally bucket's words", here: SlabCensusBucketWords, named: "SlabCensusBucketWords"))
+	out.push(TierGeometryPin.create("the bucket a slot no packed id explains lands in", here: SlabCensusImplausibleBucket, named: "SlabCensusImplausibleBucket"))
+	out.push(TierGeometryPin.create("the bucket a tag past the table lands in", here: SlabCensusOverflowBucket, named: "SlabCensusOverflowBucket"))
+	out.push(TierGeometryPin.create("a packed id's tag shift", here: DsMmPackedIdShift, named: "SlabCensusTagShift"))
+	out.push(TierGeometryPin.create("a packed id's tag mask", here: DsMmTagIndexMask, named: "SlabCensusTagMask"))
+	out.push(TierGeometryPin.create("a slot boundary's alignment", here: SlabCensusSlotAlignBytes, named: "SlabCensusSlotAlignBytes"))
+	out.push(TierGeometryPin.create("the shift that divides by it", here: SlabCensusSlotAlignShift, named: "SlabCensusSlotAlignShift"))
+	out.push(TierGeometryPin.create("the per-span free-set mark table", here: SlabCensusSpanMarkBytes, named: "SlabCensusSpanMarkBytes"))
+	out.push(TierGeometryPin.create("the tally's histogram", here: slabStateCensusTableOffset(), named: "SlabStateCensusTableOffset"))
+	out.push(TierGeometryPin.create("the per-span free-set mark table's place", here: slabStateCensusMarksOffset(), named: "SlabStateCensusMarksOffset"))
+	out.push(TierGeometryPin.create("the exit code for a tally that cannot be taken soundly", here: RuntimeAbort.slabCensusTallyUnsound.rawValue as ParsedInt, named: "SlabCensusTallyUnsoundExit"))
 
 	return out
 end 'slabTierPins'
@@ -737,8 +801,23 @@ function slabStateOsDirectBytesOffset() returns ParsedInt
 	return slabStateTrafficOffset() + SlabMaxShards * slabTrafficRowBytes()
 end 'slabStateOsDirectBytesOffset'
 
-function slabStateBytes() returns ParsedInt
+function slabCensusBucketStride() returns ParsedInt
+	return SlabCensusBucketWords * WordBytes
+end 'slabCensusBucketStride'
+
+function slabStateCensusTableOffset() returns ParsedInt
 	return slabStateOsDirectBytesOffset() + WordBytes
+end 'slabStateCensusTableOffset'
+
+function slabStateCensusMarksOffset() returns ParsedInt
+	return slabStateCensusTableOffset() + SlabCensusTagBuckets * slabCensusBucketStride()
+end 'slabStateCensusMarksOffset'
+
+// Moving the state region's size takes a STAGED build: `slabTierPins` compares these figures with the
+// tier file's restated copies, so the building compiler refuses a tree where the two disagree and no
+// single build can change both. `maxon-bin/CLAUDE.md` owns the sequence.
+function slabStateBytes() returns ParsedInt
+	return slabStateCensusMarksOffset() + SlabCensusSpanMarkBytes
 end 'slabStateBytes'
 
 function slabStateChunks() returns ParsedInt
@@ -2377,11 +2456,29 @@ end 'buildSlabScavenge'
 // The walk is tier source and only the lock is built here, because `emitSlabLockDepthAddr` forks on the
 // machine model and a tier body has no knob for that. `__slab_census` carries why a read-only walk still
 // needs the lock.
-function buildSlabCensusEntry(module StdModule, name ByteArray, kind ParsedInt, model MachineModel)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
-	var ids = ValueMinter.create(0)
+union SlabCensusArgument
+	constant(kind ParsedInt)
+	forwarded
+end 'SlabCensusArgument'
+
+let SlabCensusForwardedParamPosition = 0 as ParamCount
+
+function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray, argument SlabCensusArgument, model MachineModel)
+	let paramCount = match argument 'arity'
+		constant gives 0 as ParamCount
+		forwarded gives 1 as ParamCount
+	end 'arity'
+
+	let paramTypes = match argument 'paramTypes'
+		constant gives StdTypeArray.create()
+		forwarded gives oneI64Param()
+	end 'paramTypes'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: paramCount)
 
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
@@ -2390,9 +2487,13 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, kind ParsedInt, 
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 
-	let kindValue = emitConst(module, block: locked, value: kind, ids: ids)
+	let calleeArg = match argument 'argument'
+		constant(kind) gives emitConst(module, block: locked, value: kind, ids: ids)
+		forwarded gives valueIdAtParamPosition(SlabCensusForwardedParamPosition)
+	end 'argument'
+
 	let answer = ids.mint()
-	module.appendOp(locked, op: StdOp.call(answer, callee: SlabCensusName, args: argsOf(kindValue)))
+	module.appendOp(locked, op: StdOp.call(answer, callee: callee, args: argsOf(calleeArg)))
 
 	emitSlabLockLeave(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 	module.setTerminator(locked, op: StdOp.ret(answer))

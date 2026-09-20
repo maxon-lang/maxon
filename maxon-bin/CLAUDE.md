@@ -280,6 +280,15 @@ Four doors are still standing open rather than shut:
   file is a pin against itself, and a stale tier file changes nothing it can see. Without it a regenerated
   ladder is a request one chunk too small — an mcache running off the end of its run, silently.
   **A RESTATED DERIVATION OWES A PIN.**
+  ⚠ **AND CHANGING A PINNED FIGURE TAKES A STAGED BUILD — NO SINGLE BUILD CAN MOVE ONE.** The pin compares
+  the BUILDING compiler's emitter constant with the tier file on disk, so a tree where the two differ is
+  refused by the compiler you would use to build it. Set the tier file back to the current emitter's
+  values → build C1 → restore the tier file → build C2 with C1. Growing the state region (adding a table,
+  widening one) is this, every time.
+  ⛔ **TIER SOURCE MUST NOT DISCARD A DECLARED CALLEE'S RESULT.** A `_ = f(…)` on a callee the tier
+  DECLARES makes every compile of every program build the whole-program effect-free summary, to decide
+  whether the discard is legal. Consume the value — fold it into the figure being returned, or test it —
+  rather than throwing it away.
   ⛔ **THE REVERSE MAP'S READ SIDE IS NOT AN ENTRY POINT AT ALL, AND THAT IS NOT DEBT**: `__slab_free`
   splices the walk INLINE (`SlabArena.emitSlabArenaMapGet`), because a frame around four loads and three
   tests is overhead on the path of every free in the language. It had a behind-a-frame twin for as long as

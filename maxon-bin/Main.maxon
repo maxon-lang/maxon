@@ -171,11 +171,8 @@ let EmitIrFlag = "--emit-ir"
 // run time (see `GtRuntime.GtTraceEmitName`).
 let AsyncTraceFlag = "--async-trace"
 
-// Opt-in per build, and that is a correctness property: with the flag off not one instruction
-// changes — the box header does not grow, `__mm_alloc`'s arity does not change, no event site is
-// branched over — and the committed `.test` goldens depend on it. See `DebugStreamRuntime`'s header
-// for the two-level gating rule.
-let DebugStreamFlag = "--debugstream"
+let CensusByTagFlag = "--census-by-tag"
+let CensusByTagFlagPrefix = "--census-by-tag="
 
 // An opt-out because the default is on: a binary built without debug info cannot be debugged after
 // the fact. On by default is safe because the sidecar is metadata and the executable is
@@ -965,7 +962,7 @@ end 'acquireBuildTreeLock'
 
 // Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
 function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, productVersion: productVersion, defines: defines) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -1701,6 +1698,7 @@ enum HelpOption
 	coverageInstrumentation
 	asyncTrace
 	debugStream
+	censusByTag
 	define
 	metrics
 	specFilter
@@ -1748,6 +1746,7 @@ function optionReference(option HelpOption) returns OptionReference
 		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build])
 		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build])
 		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build])
+		censusByTag gives OptionReference.create("{CensusByTagFlag}, {CensusByTagFlagPrefix}<phase>", description: "Census the LIVE heap by allocation tag at every compile phase boundary, and report it beside the residency table (it implies `--log=compiler:debug`'s sampling) and as `tag` rows in {MetricsFlagPrefix}'s TSV. Naming a phase censuses that phase alone, which is what a large compile can afford. A compiler built without {DebugStreamFlag} carries no tags, so the census is by SIZE CLASS instead and says so.", commands: [MaxonCommand.build])
 		define gives OptionReference.create("{DefineFlagPrefix}<name>{DefineNameValueSeparator}<value>", description: "Replace a top-level `String` constant's written-out default. The VALUE may contain `{DefineNameValueSeparator}` and the name may not, so the split is at the first one.", commands: [MaxonCommand.build, MaxonCommand.verifyRecheck])
 		metrics gives OptionReference.create("{MetricsFlagPrefix}<path>", description: "Write this compile's per-phase time + memory attribution to <path> as TSV. `--log=compiler:debug` prints the same numbers as a human-readable table.", commands: [MaxonCommand.build])
 		specFilter gives OptionReference.create("{FilterFlagPrefix}<pattern>", description: "Run only tests whose `<spec>/<test>` label contains <pattern>. A bare spec name selects that whole spec.", commands: [MaxonCommand.specTest])
@@ -2049,6 +2048,10 @@ module type MaxonArgs
 
 	export var debugStream as bool
 
+	export var censusByTag as bool
+
+	export var censusPhase as TagCensusPhases
+
 	// Read only by `build`; see `NoDebugInfoFlag` for why it defaults to true.
 	export var debugInfo as bool
 
@@ -2143,7 +2146,7 @@ module type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
 	end 'create'
 
 	// A command that takes no options refuses by this.
@@ -2259,7 +2262,18 @@ module type MaxonArgs
 				parsed.asyncTrace = true
 			end 'asyncTraceFlag' else if arg == DebugStreamFlag 'debugStreamFlag'
 				parsed.debugStream = true
-			end 'debugStreamFlag' else if arg == NoDebugInfoFlag 'noDebugInfoFlag'
+			end 'debugStreamFlag' else if arg == CensusByTagFlag 'censusByTagFlag'
+				parsed.censusByTag = true
+			end 'censusByTagFlag' else if arg.startsWith(CensusByTagFlagPrefix) 'censusByTagPhaseFlag'
+				let wanted = try CommandLine.optionValue(arg) otherwise ""
+
+				if let phase = try CompilePhase.fromName(wanted) 'namesAPhase'
+					parsed.censusByTag = true
+					parsed.censusPhase = TagCensusPhases.only(phase)
+				end 'namesAPhase' else 'namesNoPhase'
+					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
+				end 'namesNoPhase'
+			end 'censusByTagPhaseFlag' else if arg == NoDebugInfoFlag 'noDebugInfoFlag'
 				parsed.debugInfo = false
 			end 'noDebugInfoFlag' else if arg == CoverageFlag 'coverageFlag'
 				parsed.coverage = true

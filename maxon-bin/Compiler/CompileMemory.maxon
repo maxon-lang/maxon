@@ -133,6 +133,9 @@ end 'deltaSum'
 // a couple of dozen arms.
 typealias PhaseIndex = int(0 to 1024)
 
+typealias ColumnCell = int(0 to u64.max)
+typealias PhaseColumnArray = Array with ColumnCell
+
 // The allocator's own sub-phase memory, nested under the `regalloc` phase exactly as
 // RegAllocStats' timers nest under it. A breakdown OF that phase's allocations, never
 // six additional phases — adding them to the phase they live inside is the double-count
@@ -204,52 +207,223 @@ end 'PhaseResidency'
 // ⚠ A phase that ran twice keeps its highest reading, not its last. These are levels rather than deltas,
 // so they cannot be summed.
 export type PhaseResidencyColumns
-	export var live as ByteCountArray
-	export var free as ByteCountArray
-	export var cachedFree as ByteCountArray
-	export var parked as ByteCountArray
-	export var committed as ByteCountArray
+	export var live as PhaseColumnArray
+	export var free as PhaseColumnArray
+	export var cachedFree as PhaseColumnArray
+	export var parked as PhaseColumnArray
+	export var committed as PhaseColumnArray
 
 	export static function create(phaseCount PhaseIndex) returns PhaseResidencyColumns
 		return Self{
-			live: residencyColumn(phaseCount),
-			free: residencyColumn(phaseCount),
-			cachedFree: residencyColumn(phaseCount),
-			parked: residencyColumn(phaseCount),
-			committed: residencyColumn(phaseCount)
+			live: phaseColumn(phaseCount as ColumnLength),
+			free: phaseColumn(phaseCount as ColumnLength),
+			cachedFree: phaseColumn(phaseCount as ColumnLength),
+			parked: phaseColumn(phaseCount as ColumnLength),
+			committed: phaseColumn(phaseCount as ColumnLength)
 		}
 	end 'create'
 
 	export function raiseTo(index PhaseIndex, reading PhaseResidency)
-		raiseColumn(self.live, index: index, value: reading.liveBytes)
-		raiseColumn(self.free, index: index, value: reading.freeBytes)
-		raiseColumn(self.cachedFree, index: index, value: reading.cachedFreeBytes)
-		raiseColumn(self.parked, index: index, value: reading.parkedBytes)
-		raiseColumn(self.committed, index: index, value: reading.committedBytes)
+		let slot = index as ColumnSlot
+
+		raiseColumn(self.live, index: slot, value: reading.liveBytes as ColumnCell)
+		raiseColumn(self.free, index: slot, value: reading.freeBytes as ColumnCell)
+		raiseColumn(self.cachedFree, index: slot, value: reading.cachedFreeBytes as ColumnCell)
+		raiseColumn(self.parked, index: slot, value: reading.parkedBytes as ColumnCell)
+		raiseColumn(self.committed, index: slot, value: reading.committedBytes as ColumnCell)
 	end 'raiseTo'
 
 	export function at(index PhaseIndex) returns PhaseResidency
-		return PhaseResidency.create(readColumn(self.live, index: index), freeBytes: readColumn(self.free, index: index), cachedFreeBytes: readColumn(self.cachedFree, index: index), parkedBytes: readColumn(self.parked, index: index), committedBytes: readColumn(self.committed, index: index))
+		let slot = index as ColumnSlot
+
+		return PhaseResidency.create(readColumn(self.live, index: slot) as HeapByteCount, freeBytes: readColumn(self.free, index: slot) as HeapByteCount, cachedFreeBytes: readColumn(self.cachedFree, index: slot) as HeapByteCount, parkedBytes: readColumn(self.parked, index: slot) as HeapByteCount, committedBytes: readColumn(self.committed, index: slot) as HeapByteCount)
 	end 'at'
 end 'PhaseResidencyColumns'
 
-function residencyColumn(phaseCount PhaseIndex) returns ByteCountArray
-	var column = ByteCountArray.create()
-	column.resize(phaseCount)
+function phaseColumn(cells ColumnLength) returns PhaseColumnArray
+	var column = PhaseColumnArray.create()
+	column.resize(cells)
 	return column
-end 'residencyColumn'
+end 'phaseColumn'
 
-function raiseColumn(column ByteCountArray, index PhaseIndex, value HeapByteCount)
-	let current = try column.get(index) otherwise panic("PhaseResidencyColumns.raiseTo: phase index {index} OOB — the columns hold {column.count()}, so they were not sized to their phase enum")
-
-	if value > current 'higher'
-		try column.set(index, value: value) otherwise panic("PhaseResidencyColumns.raiseTo: set({index}) failed at an index get just accepted")
+function raiseColumn(column PhaseColumnArray, index ColumnSlot, value ColumnCell)
+	if value > readColumn(column, index: index) 'higher'
+		writeColumn(column, index: index, value: value)
 	end 'higher'
 end 'raiseColumn'
 
-function readColumn(column ByteCountArray, index PhaseIndex) returns HeapByteCount
-	return try column.get(index) otherwise panic("PhaseResidencyColumns.at: phase index {index} OOB — the columns hold {column.count()}, so they were not sized to their phase enum")
+function readColumn(column PhaseColumnArray, index ColumnSlot) returns ColumnCell
+	return try column.get(index) otherwise panic("a per-phase column was read at slot {index} and holds {column.count()} — it was not sized to its phase enum")
 end 'readColumn'
+
+function writeColumn(column PhaseColumnArray, index ColumnSlot, value ColumnCell)
+	try column.set(index, value: value) otherwise panic("a per-phase column was written at slot {index} and holds {column.count()} — it was not sized to its phase enum")
+end 'writeColumn'
+
+let TagCensusTopRows = 5
+let TagCensusTopSeparator = ", "
+let TagCensusUnattributableLabel = "(unattributable)"
+let TagCensusOverflowLabel = "(overflow)"
+
+let TagLabelWidth = 34 as ColumnWidth
+let TagCensusRuleWidth = (TagLabelWidth + MemAllocsWidth + MemBytesWidth) as ColumnWidth
+
+typealias TagBucketIndex = int(0 to 2047)
+typealias TagCensusMode = int(0 to 1)
+typealias TagRowCount = int(0 to 5)
+typealias ColumnSlot = int(0 to 2099199)
+typealias ColumnLength = int(0 to 2099200)
+
+let TagBucketIndexCeiling = 2048
+let TagRowCountCeiling = 5
+let ColumnSlotCeiling = 2099200
+
+// A typealias bound may not name a constant (E2010), so the ranges above are written out and checked
+// here instead. Without this a bucket count the tier raised would be a range panic at the first sampling
+// rather than a refusal.
+function requireTagCensusRangesCoverTheTable(phaseCount PhaseIndex)
+	if TagBucketIndexCeiling != SlabCensusTagBuckets 'bucketRangeDrifted'
+		panic("CompileMemory: `TagBucketIndex` is `int(0 to {TagBucketIndexCeiling - 1})` and the tier's bucket count is {SlabCensusTagBuckets} — the typealias no longer covers a bucket")
+	end 'bucketRangeDrifted'
+
+	if TagRowCountCeiling != TagCensusTopRows 'topRowRangeDrifted'
+		panic("CompileMemory: `TagRowCount` is `int(0 to {TagRowCountCeiling})` and the line shows {TagCensusTopRows} rows — the typealias no longer covers what `tagCensusTopLine` counts")
+	end 'topRowRangeDrifted'
+
+	if (phaseCount as ColumnLength) * (SlabCensusTagBuckets as ColumnLength) > ColumnSlotCeiling 'slotRangeDrifted'
+		panic("CompileMemory: `ColumnLength` is `int(0 to {ColumnSlotCeiling})` and {phaseCount} phases of {SlabCensusTagBuckets} buckets need {phaseCount * SlabCensusTagBuckets} cells")
+	end 'slotRangeDrifted'
+end 'requireTagCensusRangesCoverTheTable'
+
+function tagCensusSlotOf(index PhaseIndex, bucket TagBucketIndex) returns ColumnSlot
+	return ((index as ColumnSlot) * (SlabCensusTagBuckets as ColumnSlot) + (bucket as ColumnSlot)) as ColumnSlot
+end 'tagCensusSlotOf'
+
+export union TagCensusPhases
+	everyPhase
+	only(phase CompilePhase)
+end 'TagCensusPhases'
+
+function tagCensusModeForThisBuild() returns TagCensusMode
+	#if debugstream(true)
+		return SlabCensusTagMode
+	#else
+		return SlabCensusClassMode
+	#endif
+end 'tagCensusModeForThisBuild'
+
+export type PhaseTagCensus
+	export var counts as PhaseColumnArray
+	export var bytes as PhaseColumnArray
+	export var tallyBytes as HeapByteCount
+	export var liveBytes as HeapByteCount
+	export var rawLiveSlots as AllocCount
+
+	export static function empty() returns PhaseTagCensus
+		return Self{counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
+	end 'empty'
+
+	export static function sized() returns PhaseTagCensus
+		return Self{counts: phaseColumn(SlabCensusTagBuckets), bytes: phaseColumn(SlabCensusTagBuckets), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
+	end 'sized'
+
+	// Allocates nothing — `sized()` gave the columns their full width — because a sampling that grew an
+	// array would enter the very heap it is reading. The level is taken on the statement after the tally
+	// so the self-check compares two derivations of ONE instant.
+	export function take()
+		self.tallyBytes = __Builtins.slabCensusTally(tagCensusModeForThisBuild()) as HeapByteCount
+		self.liveBytes = __Builtins.slabLiveBytes() as HeapByteCount
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			writeColumn(self.counts, index: bucket as ColumnSlot, value: __Builtins.slabCensusBucketCount(bucket) as ColumnCell)
+			writeColumn(self.bytes, index: bucket as ColumnSlot, value: __Builtins.slabCensusBucketBytes(bucket) as ColumnCell)
+		end 'eachBucket'
+
+		self.rawLiveSlots = __Builtins.mmRawAllocLive() as AllocCount
+	end 'take'
+end 'PhaseTagCensus'
+
+export type PhaseTagCensusColumns
+	export var enabled as bool
+	export var mode as TagCensusMode
+	export var counts as PhaseColumnArray
+	export var bytes as PhaseColumnArray
+	export var liveBytes as PhaseColumnArray
+	export var rawLiveSlots as PhaseColumnArray
+	export var tallyBytes as PhaseColumnArray
+	export var sampled as BoolArray
+	export var scratch as PhaseTagCensus
+	export var names as StringArray
+
+	export static function off() returns PhaseTagCensusColumns
+		return Self{enabled: false, mode: SlabCensusClassMode, counts: PhaseColumnArray.create(), bytes: PhaseColumnArray.create(), liveBytes: PhaseColumnArray.create(), rawLiveSlots: PhaseColumnArray.create(), tallyBytes: PhaseColumnArray.create(), sampled: BoolArray.create(), scratch: PhaseTagCensus.empty(), names: StringArray.create()}
+	end 'off'
+
+	export function enable(phaseCount PhaseIndex, tallyMode TagCensusMode)
+		requireTagCensusRangesCoverTheTable(phaseCount)
+
+		self.enabled = true
+		self.mode = tallyMode
+		self.counts = phaseColumn((phaseCount * SlabCensusTagBuckets) as ColumnLength)
+		self.bytes = phaseColumn((phaseCount * SlabCensusTagBuckets) as ColumnLength)
+		self.liveBytes = phaseColumn(phaseCount as ColumnLength)
+		self.rawLiveSlots = phaseColumn(phaseCount as ColumnLength)
+		self.tallyBytes = phaseColumn(phaseCount as ColumnLength)
+		self.sampled.resize(phaseCount)
+		self.scratch = PhaseTagCensus.sized()
+		self.names = tagCensusNames(tallyMode)
+	end 'enable'
+
+	export function takeAt(index PhaseIndex)
+		self.scratch.take()
+		self.keepIfHighest(index, reading: self.scratch)
+	end 'takeAt'
+
+	// ⚠ A phase that ran twice keeps ONE whole sampling — the one with the highest live level — and never
+	// a per-bucket maximum. Maxima taken bucket by bucket come from different samplings and sum to a
+	// figure no instant of the heap ever held, which the report's own self-check would then report as a
+	// disagreement it cannot explain.
+	function keepIfHighest(index PhaseIndex, reading PhaseTagCensus)
+		if self.sampledAt(index) and reading.liveBytes <= self.liveBytesAt(index) 'notTheHighest'
+			return
+		end 'notTheHighest'
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			let slot = tagCensusSlotOf(index, bucket: bucket)
+			writeColumn(self.bytes, index: slot, value: readColumn(reading.bytes, index: bucket as ColumnSlot))
+			writeColumn(self.counts, index: slot, value: readColumn(reading.counts, index: bucket as ColumnSlot))
+		end 'eachBucket'
+
+		writeColumn(self.liveBytes, index: index as ColumnSlot, value: reading.liveBytes as ColumnCell)
+		writeColumn(self.rawLiveSlots, index: index as ColumnSlot, value: reading.rawLiveSlots as ColumnCell)
+		writeColumn(self.tallyBytes, index: index as ColumnSlot, value: reading.tallyBytes as ColumnCell)
+		try self.sampled.set(index, value: true) otherwise panic("PhaseTagCensusColumns.keepIfHighest: the sampled column holds {self.sampled.count()} flags, so it was not sized to its phase enum")
+	end 'keepIfHighest'
+
+	export function countAt(index PhaseIndex, bucket TagBucketIndex) returns AllocCount
+		return readColumn(self.counts, index: tagCensusSlotOf(index, bucket: bucket)) as AllocCount
+	end 'countAt'
+
+	export function bytesAt(index PhaseIndex, bucket TagBucketIndex) returns HeapByteCount
+		return readColumn(self.bytes, index: tagCensusSlotOf(index, bucket: bucket)) as HeapByteCount
+	end 'bytesAt'
+
+	export function liveBytesAt(index PhaseIndex) returns HeapByteCount
+		return readColumn(self.liveBytes, index: index as ColumnSlot) as HeapByteCount
+	end 'liveBytesAt'
+
+	export function rawLiveSlotsAt(index PhaseIndex) returns AllocCount
+		return readColumn(self.rawLiveSlots, index: index as ColumnSlot) as AllocCount
+	end 'rawLiveSlotsAt'
+
+	export function tallyBytesAt(index PhaseIndex) returns HeapByteCount
+		return readColumn(self.tallyBytes, index: index as ColumnSlot) as HeapByteCount
+	end 'tallyBytesAt'
+
+	export function sampledAt(index PhaseIndex) returns bool
+		return try self.sampled.get(index) otherwise panic("PhaseTagCensusColumns.sampledAt: phase index {index} OOB — the column holds {self.sampled.count()}")
+	end 'sampledAt'
+end 'PhaseTagCensusColumns'
 
 // Per-compile memory attribution, owned by `Project` beside `timings` — for the same
 // reason: Project is already threaded through every phase, so no pass needs a new
@@ -260,6 +434,8 @@ export type CompileMemory
 
 	// Zero unless `Project.samplesResidency`.
 	export var residency as PhaseResidencyColumns
+
+	export var tagCensus as PhaseTagCensusColumns
 
 	// The whole compile's memory, stamped once by `compile` — the denominator every
 	// phase's share is taken against, and the total the phases must reconcile to. Zero
@@ -272,6 +448,7 @@ export type CompileMemory
 		return Self{
 			columns: PhaseMemoryColumns.create(CompilePhase.allCases.count()),
 			residency: PhaseResidencyColumns.create(CompilePhase.allCases.count()),
+			tagCensus: PhaseTagCensusColumns.off(),
 			total: PhaseDelta.zero(),
 			regAlloc: RegAllocMemory.create()
 		}
@@ -288,6 +465,14 @@ export type CompileMemory
 	export function residencyOf(phase CompilePhase) returns PhaseResidency
 		return self.residency.at(phase.ordinal)
 	end 'residencyOf'
+
+	export function enableTagCensus()
+		self.tagCensus.enable(CompilePhase.allCases.count(), tallyMode: tagCensusModeForThisBuild())
+	end 'enableTagCensus'
+
+	export function recordTagCensus(phase CompilePhase)
+		self.tagCensus.takeAt(phase.ordinal)
+	end 'recordTagCensus'
 
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
 		let allocs = self.columns.allocsAt(phase.ordinal)
@@ -400,8 +585,7 @@ end 'compileMemoryReport'
 function compileResidencyReport(memory CompileMemory) returns String
 	var peak = PhaseResidency.zero()
 	var peakCommittedPhase = ""
-	var peakLive = 0 as HeapByteCount
-	var peakLivePhase = ""
+	var peakLivePhase = CompilePhase.load
 	var msg = StringBuilder.create()
 
 	msg.append("\ncompile residency — the heap's LEVEL at each phase boundary, in bytes\n")
@@ -420,9 +604,8 @@ function compileResidencyReport(memory CompileMemory) returns String
 			peakCommittedPhase = phase.name
 		end 'highestCommitted'
 
-		if live > peakLive 'highestLive'
-			peakLive = live
-			peakLivePhase = phase.name
+		if live > memory.residencyOf(peakLivePhase).liveBytes 'highestLive'
+			peakLivePhase = phase
 		end 'highestLive'
 	end 'eachPhase'
 
@@ -432,9 +615,259 @@ function compileResidencyReport(memory CompileMemory) returns String
 
 	msg.append(horizontalRule(ResidencyRuleWidth))
 	msg.append(residencyRow("{MemRowIndent}PEAK committed", reading: peak))
-	msg.append("{MemRowIndent}peak committed {peak.committedBytes} at {peakCommittedPhase}; peak live {peakLive} at {peakLivePhase}; held-not-live {peak.committedBytes - peak.liveBytes}\n")
+	msg.append("{MemRowIndent}peak committed {peak.committedBytes} at {peakCommittedPhase}; peak live {memory.residencyOf(peakLivePhase).liveBytes} at {peakLivePhase.name}; held-not-live {peak.committedBytes - peak.liveBytes}\n")
+	msg.append(tagCensusReport(memory, peakLivePhase: peakLivePhase))
 	return msg.build()
 end 'compileResidencyReport'
+
+type TagCensusRow
+	export var bucket as TagBucketIndex
+	export var count as AllocCount
+	export var bytes as HeapByteCount
+
+	export static function create(bucket TagBucketIndex, count AllocCount, bytes HeapByteCount) returns TagCensusRow
+		return Self{bucket: bucket, count: count, bytes: bytes}
+	end 'create'
+end 'TagCensusRow'
+
+typealias TagCensusRowArray = Array with TagCensusRow
+
+function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) returns String
+	let census = memory.tagCensus
+
+	if not census.enabled 'notRequested'
+		return ""
+	end 'notRequested'
+
+	let names = census.names
+	var msg = StringBuilder.create()
+
+	msg.append("\n{tagCensusHeadline(census.mode)}\n")
+
+	if census.mode == SlabCensusTagMode and names.count() == 0 'noNameTable'
+		msg.append("{MemRowIndent}this binary carries no interned-name table, so every bucket is shown as `tag=<n>` — the same table `maxon monitor` reads to name a traced allocation\n")
+	end 'noNameTable'
+
+	let peakSampled = census.sampledAt(peakLivePhase.ordinal)
+	var peakRows = TagCensusRowArray.create()
+
+	if peakSampled 'rankThePeakOnce'
+		peakRows = tagCensusRanked(census, index: peakLivePhase.ordinal, wholeTable: true)
+	end 'rankThePeakOnce'
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		if not census.sampledAt(phase.ordinal) 'neverSampled'
+			continue
+		end 'neverSampled'
+
+		var line = ""
+
+		if phase == peakLivePhase and peakSampled 'thePeakIsAlreadyRanked'
+			line = tagCensusTopLine(peakRows, mode: census.mode, names: names)
+		end 'thePeakIsAlreadyRanked' else 'rankedForTheLineAlone'
+			line = tagCensusTopLine(tagCensusRanked(census, index: phase.ordinal, wholeTable: false), mode: census.mode, names: names)
+		end 'rankedForTheLineAlone'
+
+		msg.append("{MemRowIndent}{phase.name}: {line}\n")
+	end 'eachPhase'
+
+	if not peakSampled 'peakNeverSampled'
+		msg.append("{MemRowIndent}the peak-live phase {peakLivePhase.name} was not censused, so there is no table to print for it\n")
+		return msg.build()
+	end 'peakNeverSampled'
+
+	msg.append("{MemRowIndent}the whole table at {peakLivePhase.name}, the peak-LIVE phase\n")
+	msg.append("{padRight("{MemRowIndent}{tagCensusColumnTitle(census.mode)}", width: TagLabelWidth)}{padLeft("live", width: MemAllocsWidth)}{padLeft("bytes", width: MemBytesWidth)}\n")
+	msg.append(horizontalRule(TagCensusRuleWidth))
+
+	for row in peakRows 'eachRow'
+		msg.append(tagCensusRowText(row, mode: census.mode, names: names))
+	end 'eachRow'
+
+	msg.append(tagCensusRowText(tagCensusRowAt(census, index: peakLivePhase.ordinal, bucket: SlabCensusImplausibleBucket), mode: census.mode, names: names))
+	msg.append(tagCensusRowText(tagCensusRowAt(census, index: peakLivePhase.ordinal, bucket: SlabCensusOverflowBucket), mode: census.mode, names: names))
+	msg.append(horizontalRule(TagCensusRuleWidth))
+
+	let committed = memory.residencyOf(peakLivePhase).committedBytes
+	msg.append("{MemRowIndent}os-direct: no row above counts a mapping the slab did not serve — committed {committed} bytes at this phase INCLUDES the OS-direct road's live mappings and the allocator's own overhead\n")
+	msg.append("{MemRowIndent}{census.rawLiveSlotsAt(peakLivePhase.ordinal)} live slots carry no box header — the rows above attribute each of them by whatever its first word holds, so they land in {TagCensusUnattributableLabel} or in a tag bucket that is not theirs\n")
+	msg.append("{MemRowIndent}{tagCensusSelfCheck(tagCensusTotalBytes(census, index: peakLivePhase.ordinal), tallyBytes: census.tallyBytesAt(peakLivePhase.ordinal), liveBytes: census.liveBytesAt(peakLivePhase.ordinal))}\n")
+	return msg.build()
+end 'tagCensusReport'
+
+function tagCensusHeadline(mode TagCensusMode) returns String
+	if mode == SlabCensusTagMode 'byTag'
+		return "census by tag — the live heap by ALLOCATION TAG at each phase boundary, in bytes"
+	end 'byTag'
+
+	return "census by size class — this compiler carries no {DebugStreamFlag}, so no allocation has a tag and the tally attributes each live slot by SIZE CLASS instead"
+end 'tagCensusHeadline'
+
+function tagCensusColumnTitle(mode TagCensusMode) returns String
+	if mode == SlabCensusTagMode 'byTag'
+		return "tag"
+	end 'byTag'
+
+	return "size class"
+end 'tagCensusColumnTitle'
+
+export function tagCensusLabel(mode TagCensusMode, bucket TagBucketIndex, names StringArray, count AllocCount, bytes HeapByteCount) returns String
+	if bucket == SlabCensusImplausibleBucket 'noPackedIdExplainsIt'
+		return TagCensusUnattributableLabel
+	end 'noPackedIdExplainsIt'
+
+	if bucket == SlabCensusOverflowBucket 'pastTheTable'
+		return TagCensusOverflowLabel
+	end 'pastTheTable'
+
+	if mode == SlabCensusTagMode 'byTag'
+		let named = try names.get(bucket) otherwise ""
+
+		if named.isEmpty() 'unnamed'
+			return "tag={bucket}"
+		end 'unnamed'
+
+		return named
+	end 'byTag'
+
+	if count == 0 'noSlotToDivideBy'
+		return "class {bucket}"
+	end 'noSlotToDivideBy'
+
+	let slotBytes = try (bytes / (count as HeapByteCount)) otherwise panic("tagCensusLabel: bucket {bucket} holds {count} slots and {bytes} bytes, and the zero-count arm above did not answer")
+
+	return "class {bucket} ({slotBytes} bytes)"
+end 'tagCensusLabel'
+
+function tagCensusRowAt(census PhaseTagCensusColumns, index PhaseIndex, bucket TagBucketIndex) returns TagCensusRow
+	return TagCensusRow.create(bucket, count: census.countAt(index, bucket: bucket), bytes: census.bytesAt(index, bucket: bucket))
+end 'tagCensusRowAt'
+
+function tagCensusRanked(census PhaseTagCensusColumns, index PhaseIndex, wholeTable bool) returns TagCensusRowArray
+	var rows = TagCensusRowArray.create()
+
+	for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+		if bucket == SlabCensusImplausibleBucket or bucket == SlabCensusOverflowBucket 'itsOwnRow'
+			continue
+		end 'itsOwnRow'
+
+		let row = tagCensusRowAt(census, index: index, bucket: bucket)
+
+		if row.bytes == 0 and row.count == 0 'empty'
+			continue
+		end 'empty'
+
+		if wholeTable 'everyLiveBucket'
+			rows.push(row)
+		end 'everyLiveBucket' else 'theTopRowsAlone'
+			keepTagCensusTopRow(rows, row: row)
+		end 'theTopRowsAlone'
+	end 'eachBucket'
+
+	if wholeTable 'sortWhatWasPushed'
+		rows.sort(function(left TagCensusRow, right TagCensusRow) gives tagCensusRank(left, against: right))
+	end 'sortWhatWasPushed'
+
+	return rows
+end 'tagCensusRanked'
+
+function tagCensusRank(row TagCensusRow, against TagCensusRow) returns Ordering
+	if row.bytes != against.bytes 'byBytes'
+		return against.bytes.compare(row.bytes)
+	end 'byBytes'
+
+	return row.bucket.compare(against.bucket)
+end 'tagCensusRank'
+
+function keepTagCensusTopRow(top TagCensusRowArray, row TagCensusRow)
+	var at = top.count()
+
+	while at > 0 'findItsPlace'
+		let ahead = try top.get(at - 1) otherwise panic("keepTagCensusTopRow: slot {at - 1} of {top.count()} is not readable")
+
+		if tagCensusRank(ahead, against: row) == Ordering.lessThan 'inPlace'
+			break
+		end 'inPlace'
+
+		at = at - 1
+	end 'findItsPlace'
+
+	if at >= TagCensusTopRows 'belowEveryRowKept'
+		return
+	end 'belowEveryRowKept'
+
+	top.insert(at, value: row)
+
+	if top.count() > TagCensusTopRows 'oneTooMany'
+		_ = try top.pop() otherwise panic("keepTagCensusTopRow: {top.count()} rows are held and none can be dropped")
+	end 'oneTooMany'
+end 'keepTagCensusTopRow'
+
+function tagCensusRowText(row TagCensusRow, mode TagCensusMode, names StringArray) returns String
+	return "{padRight("{MemRowIndent}{tagCensusLabel(mode, bucket: row.bucket, names: names, count: row.count, bytes: row.bytes)}", width: TagLabelWidth)}{padLeft("{row.count}", width: MemAllocsWidth)}{padLeft("{row.bytes}", width: MemBytesWidth)}\n"
+end 'tagCensusRowText'
+
+function tagCensusTopLine(rows TagCensusRowArray, mode TagCensusMode, names StringArray) returns String
+	if rows.count() == 0 'nothingLive'
+		return "nothing live"
+	end 'nothingLive'
+
+	var shown = 0 as TagRowCount
+	var line = ""
+
+	for row in rows 'eachRow'
+		if shown == TagCensusTopRows 'enough'
+			break
+		end 'enough'
+
+		line.append("{TagCensusTopSeparator if shown > 0 else ""}{tagCensusLabel(mode, bucket: row.bucket, names: names, count: row.count, bytes: row.bytes)} {row.bytes}B/{row.count}")
+		shown = shown + 1
+	end 'eachRow'
+
+	return line
+end 'tagCensusTopLine'
+
+function tagCensusTotalBytes(census PhaseTagCensusColumns, index PhaseIndex) returns HeapByteCount
+	var total = 0 as HeapByteCount
+
+	for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+		total = total + census.bytesAt(index, bucket: bucket)
+	end 'eachBucket'
+
+	return total
+end 'tagCensusTotalBytes'
+
+function tagCensusSelfCheck(totalBytes HeapByteCount, tallyBytes HeapByteCount, liveBytes HeapByteCount) returns String
+	return "Σ bytes = {totalBytes}, the tally walked {tallyBytes}, slabLiveBytes = {liveBytes}{tagCensusAgainstTheLevel("Σ bytes", figure: totalBytes, liveBytes: liveBytes)}{tagCensusAgainstTheLevel("the tally's own walk", figure: tallyBytes, liveBytes: liveBytes)}"
+end 'tagCensusSelfCheck'
+
+function tagCensusAgainstTheLevel(what String, figure HeapByteCount, liveBytes HeapByteCount) returns String
+	if figure == liveBytes 'agrees'
+		return ""
+	end 'agrees'
+
+	if figure > liveBytes 'higher'
+		return " — {what} is {figure - liveBytes} bytes HIGHER than the level it decomposes, which no correct pair of walks can be"
+	end 'higher'
+
+	return " — {what} is {liveBytes - figure} bytes SHORT of the live level it decomposes"
+end 'tagCensusAgainstTheLevel'
+
+function tagCensusNames(mode TagCensusMode) returns StringArray
+	if mode != SlabCensusTagMode 'sizeClassesAreNotNamed'
+		return StringArray.create()
+	end 'sizeClassesAreNotNamed'
+
+	let exe = try Process.executablePath() otherwise 'noIntrospection'
+		return StringArray.create()
+	end 'noIntrospection'
+
+	let symdata = try readLinkedSection(exe, target: detectHostTarget(), section: LinkedSectionKind.internedNames) otherwise 'noSection'
+		return StringArray.create()
+	end 'noSection'
+
+	return nameBlobIn(symdata, magic: DsTagBlobMagic)
+end 'tagCensusNames'
 
 function residencyRow(label String, reading PhaseResidency) returns String
 	return "{padRight(label, width: MemPhaseNameWidth)}{padLeft("{reading.liveBytes}", width: MemBytesWidth)}{padLeft("{reading.freeBytes}", width: MemBytesWidth)}{padLeft("{reading.cachedFreeBytes}", width: MemBytesWidth)}{padLeft("{reading.parkedBytes}", width: MemBytesWidth)}{padLeft("{reading.committedBytes}", width: MemBytesWidth)}\n"

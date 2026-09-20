@@ -3932,13 +3932,22 @@ type MaxonToStdLowering
 			return mmTagIndex(MmTag.StringRecord)
 		end 'stringRecord'
 
+		if not self.debugStream 'untracedBuild'
+			return mmTagIndex(MmTag.Untagged)
+		end 'untracedBuild'
+
+		if self.valueTagOf(result) == ValueTypeTag.genericInstance 'aGenericInstance'
+			let gid = try self.valueNameIds.get(result) otherwise return mmTagIndex(MmTag.Untagged)
+			return userTagIndex(self.globalData, name: self.signatures.mangleGenericInstance(gid as GenericInstanceId), debugStream: self.debugStream)
+		end 'aGenericInstance'
+
 		if self.valueTagOf(result) != ValueTypeTag.named and self.valueTagOf(result) != ValueTypeTag.structRef 'noTypeNameToRead'
 			return mmTagIndex(MmTag.Untagged)
 		end 'noTypeNameToRead'
 
 		let nameId = try self.valueNameIds.get(result) otherwise return mmTagIndex(MmTag.Untagged)
 		let name = try self.typeNames.nameOf(nameId) otherwise return mmTagIndex(MmTag.Untagged)
-		return userTagIndex(self.globalData, name: String.from(name), debugStream: self.debugStream)
+		return userTagIndex(self.globalData, name: name, debugStream: self.debugStream)
 	end 'allocTagFromResultType'
 
 	// ⭐⭐ **A DIRECT CALL WHOSE CALLEE RETURNS AN INTERFACE DEFINES TWO VALUES, SO IT IS A `tryCall`

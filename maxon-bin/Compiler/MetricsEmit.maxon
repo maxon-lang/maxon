@@ -100,6 +100,9 @@ export let MetricsKindPhase = "phase"
 export let MetricsKindRegAlloc = "regalloc"
 export let MetricsKindUnattributed = "unattributed"
 export let MetricsKindCode = "code"
+export let MetricsKindTag = "tag"
+
+let MetricsTagNameSeparator = "/"
 
 // The `name` column for a row that names no phase (`total`, `code`). A literal `-` rather than an
 // empty field, so a row never contains two adjacent tabs and a naive split never yields a
@@ -165,8 +168,42 @@ function metricsText(project Project, codeBytes CodeByteCount) returns String
 	out.append(metricsRow(MetricsKindUnattributed, name: MetricsNoName, cost: timings.unattributedCost(), delta: memory.unattributed(timings.poolRowMask()), residency: PhaseResidency.zero()))
 
 	out.append(metricsRow(MetricsKindCode, name: MetricsNoName, cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: 0, frees: 0, bytes: codeBytes as HeapByteCount), residency: PhaseResidency.zero()))
+	out.append(tagCensusMetricsRows(memory))
 	return out.build()
 end 'metricsText'
+
+// ⚠ A `tag` row's `allocs` and `livebytes` are LEVELS, not the cumulative figures those columns carry on
+// every other kind: the count of slots live at that boundary and their bytes. Summing them across phases
+// counts one live slot once per boundary it survived.
+function tagCensusMetricsRows(memory CompileMemory) returns String
+	let census = memory.tagCensus
+
+	if not census.enabled 'notRequested'
+		return ""
+	end 'notRequested'
+
+	let names = census.names
+	var out = StringBuilder.create()
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		if not census.sampledAt(phase.ordinal) 'neverSampled'
+			continue
+		end 'neverSampled'
+
+		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
+			let count = census.countAt(phase.ordinal, bucket: bucket)
+			let bytes = census.bytesAt(phase.ordinal, bucket: bucket)
+
+			if count == 0 and bytes == 0 'empty'
+				continue
+			end 'empty'
+
+			out.append(metricsRow(MetricsKindTag, name: "{phase.name}{MetricsTagNameSeparator}{tagCensusLabel(census.mode, bucket: bucket, names: names, count: count, bytes: bytes)}", cost: PhaseCost.zero(), delta: PhaseDelta.create(0, cpuTicks: 0, allocs: count, frees: 0, bytes: 0), residency: PhaseResidency.create(bytes, freeBytes: 0, cachedFreeBytes: 0, parkedBytes: 0, committedBytes: 0)))
+		end 'eachBucket'
+	end 'eachPhase'
+
+	return out.build()
+end 'tagCensusMetricsRows'
 
 // One interpolation rather than a build-by-append: the compiler measures every part of an
 // interpolated string and allocates the row exactly once.

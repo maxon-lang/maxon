@@ -166,7 +166,25 @@ let SlabStateMcacheOffset = SlabStateMcentralOffset + SlabClassCount * SlabWordB
 // ⚠ The step is atomic because neither OS-direct door takes `__slab_lock`; they call the OS and return.
 let SlabStateOsDirectBytesOffset = SlabStateMcacheOffset + SlabMaxShards * SlabClassCount * SlabWordBytes + SlabMaxShards * SlabTrafficColumns * SlabWordBytes
 
-let SlabStateBytes = SlabStateOsDirectBytesOffset + SlabWordBytes
+let SlabCensusTagBuckets = 2048
+let SlabCensusBucketWords = 2
+let SlabCensusSlotAlignBytes = 8
+
+// A mark index is taken by this constant SHIFT and never by a division or a variable shift: either of
+// those lowers to a check against `mrt_panic`, which would put that panic and its `.rdata` string into
+// every program this compiler builds. `requireMarkTableCoversTheWidestSpan` pins the two together.
+let SlabCensusSlotAlignShift = 3
+let SlabCensusSpanMarkBytes = 10240
+
+let SlabCensusBucketStride = SlabCensusBucketWords * SlabWordBytes
+let SlabCensusBucketCountWord = 0
+let SlabCensusBucketBytesWord = SlabWordBytes
+let SlabCensusTableBytes = SlabCensusTagBuckets * SlabCensusBucketStride
+
+let SlabStateCensusTableOffset = SlabStateOsDirectBytesOffset + SlabWordBytes
+let SlabStateCensusMarksOffset = SlabStateCensusTableOffset + SlabCensusTableBytes
+
+let SlabStateBytes = SlabStateCensusMarksOffset + SlabCensusSpanMarkBytes
 let SlabStateChunks = (SlabStateBytes + SlabPageMask) / SlabPageBytes
 
 // ⭐ **ZERO IS THE STATE THE `.data` IMAGE ALREADY EXPRESSES, so there is nothing to initialise and nothing
@@ -187,8 +205,10 @@ let MspanBaseAddrOffset = 0
 // `SlabRuntime.MspanFreeCountOffset`, `MspanClassIdxOffset` and `MspanOwningPOffset` are the other copies,
 // pinned at `checkSlabRuntimeGeometry`. A field that moves on one side only reads a class index as a free
 // count, with nothing at run time to notice.
+let MspanFreeListOffset = 8
 let MspanFreeCountOffset = 16
 let MspanClassIdxOffset = 32
+let MspanBumpNextOffset = 40
 let MspanOwningPOffset = 48
 let MspanRemoteHeadOffset = 56
 let MspanRemoteCountOffset = 64
@@ -352,6 +372,24 @@ let SlabCensusParkedBytes = 2
 let SlabCensusCachedFreeBytes = 3
 let SlabCensusCommittedBytes = 4
 
+let SlabCensusTagMode = 0
+let SlabCensusClassMode = 1
+
+let SlabWalkTallyBase = SlabCensusCommittedBytes + 1
+let SlabWalkTallyByTag = SlabWalkTallyBase + SlabCensusTagMode
+let SlabWalkTallyByClass = SlabWalkTallyBase + SlabCensusClassMode
+
+let SlabCensusImplausibleBucket = SlabCensusTagBuckets - 2
+let SlabCensusOverflowBucket = SlabCensusTagBuckets - 1
+
+let SlabCensusTagShift = 16
+let SlabCensusTagMask = 0xFFFF
+
+let SlabCensusSlotUnmarked = 0
+let SlabCensusSlotMarked = 1
+
+let SlabCensusTallyUnsoundExit = 119 as MachineWord
+
 // Precondition: the caller holds `__slab_lock`. The metadata slab, the mcache rows and the arena bitmaps
 // are all written by a P inside it, so an unlocked walk reads a span header between `__slab_meta_alloc` and
 // the refill that fills it in. `SlabRuntime.buildSlabCensusEntry` is the caller that takes it.
@@ -364,12 +402,12 @@ module function __slab_census(kind MachineWord) returns MachineWord
 		return slabCensusMcache() as MachineWord
 	end 'cached'
 
-	return slabCensusSpans(kind as SlabWord) as MachineWord
+	return slabWalkSpans(kind as SlabWord) as MachineWord
 end '__slab_census'
 
 // The first chunk stops at the bump cursor and every other one at its end: the chunk the limit word
 // describes is the one being filled, and every chunk behind it on the link is full.
-function slabCensusSpans(kind SlabWord) returns SlabWord
+function slabWalkSpans(what SlabWord) returns SlabWord
 	let state = __slab_state_base()
 	var chunk = slabMetaChunkOf(__Raw.loadWord(state, offset: SlabStateMetaEndOffset) as SlabWord)
 	var limit = __Raw.loadWord(state, offset: SlabStateMetaBumpOffset) as SlabWord
@@ -381,7 +419,7 @@ function slabCensusSpans(kind SlabWord) returns SlabWord
 		// The slot's END must fit, which is the bound `__slab_meta_alloc` bumps against. A slot size that
 		// does not divide the chunk leaves a tail too short for a header, and `slot < limit` walks into it.
 		while (slot + MspanSlotBytes) <= limit 'slots'
-			total = total + slabCensusSpan(slot, kind: kind)
+			total = total + slabVisitSpan(slot, what: what)
 			slot = slot + MspanSlotBytes
 		end 'slots'
 
@@ -390,7 +428,50 @@ function slabCensusSpans(kind SlabWord) returns SlabWord
 	end 'chunks'
 
 	return total
-end 'slabCensusSpans'
+end 'slabWalkSpans'
+
+function slabVisitSpan(span SlabWord, what SlabWord) returns SlabWord
+	let owner = __Raw.loadWord(span as MachineWord, offset: MspanOwningPOffset) as SlabWord
+
+	if owner == MspanOwningPFreed 'destroyed'
+		return 0
+	end 'destroyed'
+
+	let geom = slabSpanGeom(span)
+	let slotSize = geom and SlabClassGeomSlotMask
+	let totalSlots = geom shr SlabClassGeomSlotShift
+
+	// A queued slot is on no free list and is not handed out either, so it is counted with the free ones.
+	// Reading it here rather than walking the chain keeps the census proportional to SPANS.
+	let freeCount = slabSpanFreeSlots(span)
+	let liveSlots = totalSlots - freeCount
+
+	if what == SlabCensusFreeBytes 'free'
+		return freeCount * slotSize
+	end 'free'
+
+	if what == SlabCensusParkedBytes 'parked'
+		if freeCount != totalSlots 'stillHoldsLiveSlots'
+			return 0
+		end 'stillHoldsLiveSlots'
+
+		if owner == MspanStatePartial 'idleOnThePartialList'
+			return totalSlots * slotSize
+		end 'idleOnThePartialList'
+
+		return 0
+	end 'parked'
+
+	if what == SlabWalkTallyByTag 'tallyByTag'
+		slabCensusTallyByTag(span, slotSize: slotSize, totalSlots: totalSlots, liveSlots: liveSlots)
+	end 'tallyByTag' else if what == SlabWalkTallyByClass 'tallyByClass'
+		slabCensusBucketAdd(__Raw.loadWord(span as MachineWord, offset: MspanClassIdxOffset) as SlabWord, slots: liveSlots, bytes: liveSlots * slotSize)
+	end 'tallyByClass' else 'theLevelItself'
+		slabCensusRequire(what == SlabCensusLiveBytes)
+	end 'theLevelItself'
+
+	return liveSlots * slotSize
+end 'slabVisitSpan'
 
 // Walked from the rows rather than from the spans, which is why it is a second walk: asking a span whether
 // any row points at it is 17,408 words per span, where asking each row is 17,408 words for the whole heap.
@@ -404,7 +485,7 @@ function slabCensusMcache() returns SlabWord
 		let span = __Raw.loadWord((base + entry * SlabWordBytes) as MachineWord, offset: 0) as SlabWord
 
 		if span != 0 'cached'
-			total = total + slabCensusSpan(span, kind: SlabCensusFreeBytes)
+			total = total + slabVisitSpan(span, what: SlabCensusFreeBytes)
 		end 'cached'
 
 		entry = entry + 1
@@ -413,37 +494,148 @@ function slabCensusMcache() returns SlabWord
 	return total
 end 'slabCensusMcache'
 
-// A destroyed slot contributes nothing; every other field it holds is stale.
-function slabCensusSpan(span SlabWord, kind SlabWord) returns SlabWord
-	let owner = __Raw.loadWord(span as MachineWord, offset: MspanOwningPOffset) as SlabWord
+function slabSpanGeom(span SlabWord) returns SlabWord
+	return __Raw.loadWord((__Raw.slabClassGeomAddr() as SlabWord + (__Raw.loadWord(span as MachineWord, offset: MspanClassIdxOffset) as SlabWord) * SlabWordBytes) as MachineWord, offset: 0) as SlabWord
+end 'slabSpanGeom'
 
-	if owner == MspanOwningPFreed 'destroyed'
-		return 0
-	end 'destroyed'
+// The level and the tally both read the free set here, so a break in it moves both figures together and
+// their equality survives. A tally that re-spelled it as `free_count` alone would agree on every
+// single-processor heap and diverge the moment another processor frees into a span it does not hold
+// cached — `specs/slab-census.md`'s `the-tally-totals-the-live-heap-on-several-processors` is the gate.
+function slabSpanFreeSlots(span SlabWord) returns SlabWord
+	return (__Raw.loadWord(span as MachineWord, offset: MspanFreeCountOffset) as SlabWord) + (__Raw.loadWord(span as MachineWord, offset: MspanRemoteCountOffset) as SlabWord)
+end 'slabSpanFreeSlots'
 
-	let geom = __Raw.loadWord((__Raw.slabClassGeomAddr() as SlabWord + (__Raw.loadWord(span as MachineWord, offset: MspanClassIdxOffset) as SlabWord) * SlabWordBytes) as MachineWord, offset: 0) as SlabWord
-	let slotSize = geom and SlabClassGeomSlotMask
-	let totalSlots = geom shr SlabClassGeomSlotShift
+module function __slab_census_tally_walk(mode MachineWord) returns MachineWord
+	__Raw.memFill(slabCensusTableBase() as MachineWord, byteCount: SlabCensusTableBytes as MachineWord, value: 0)
 
-	// A queued slot is on no free list and is not handed out either, so it is counted with the free ones.
-	// Reading it here rather than walking the chain keeps the census proportional to SPANS.
-	let freeCount = (__Raw.loadWord(span as MachineWord, offset: MspanFreeCountOffset) as SlabWord) + (__Raw.loadWord(span as MachineWord, offset: MspanRemoteCountOffset) as SlabWord)
+	return slabWalkSpans(slabCensusWalkOfMode(mode as SlabWord)) as MachineWord
+end '__slab_census_tally_walk'
 
-	if kind == SlabCensusFreeBytes 'free'
-		return freeCount * slotSize
-	end 'free'
+module function __slab_census_bucket_count(index MachineWord) returns MachineWord
+	return slabCensusBucketWord(index as SlabWord, word: SlabCensusBucketCountWord)
+end '__slab_census_bucket_count'
 
-	if kind == SlabCensusParkedBytes 'parked'
-		if freeCount != totalSlots 'stillHoldsLiveSlots'
-			return 0
-		end 'stillHoldsLiveSlots'
+module function __slab_census_bucket_bytes(index MachineWord) returns MachineWord
+	return slabCensusBucketWord(index as SlabWord, word: SlabCensusBucketBytesWord)
+end '__slab_census_bucket_bytes'
 
-		if owner == MspanStatePartial 'idleOnThePartialList'
-			return totalSlots * slotSize
-		end 'idleOnThePartialList'
+function slabCensusBucketWord(index SlabWord, word SlabWord) returns MachineWord
+	if not slabCensusBucketIsInTable(index) 'outsideTheTable'
+		return 0 as MachineWord
+	end 'outsideTheTable'
 
-		return 0
-	end 'parked'
+	return __Raw.loadWord((slabCensusBucketEntry(index) + word) as MachineWord, offset: 0)
+end 'slabCensusBucketWord'
 
-	return (totalSlots - freeCount) * slotSize
-end 'slabCensusSpan'
+function slabCensusWalkOfMode(mode SlabWord) returns SlabWord
+	if mode != SlabCensusTagMode and mode != SlabCensusClassMode 'noSuchMode'
+		__Raw.osExit(SlabCensusTallyUnsoundExit)
+	end 'noSuchMode'
+
+	return SlabWalkTallyBase + mode
+end 'slabCensusWalkOfMode'
+
+function slabCensusBucketIsInTable(index SlabWord) returns bool
+	return index >= 0 and index < SlabCensusTagBuckets
+end 'slabCensusBucketIsInTable'
+
+function slabCensusBucketEntry(index SlabWord) returns SlabWord
+	return slabCensusTableBase() + index * SlabCensusBucketStride
+end 'slabCensusBucketEntry'
+
+function slabCensusTableBase() returns SlabWord
+	return (__slab_state_base() as SlabWord) + SlabStateCensusTableOffset
+end 'slabCensusTableBase'
+
+function slabCensusMarksBase() returns SlabWord
+	return (__slab_state_base() as SlabWord) + SlabStateCensusMarksOffset
+end 'slabCensusMarksBase'
+
+function slabCensusBucketAdd(bucket SlabWord, slots SlabWord, bytes SlabWord)
+	slabCensusRequire(slabCensusBucketIsInTable(bucket))
+
+	let entry = slabCensusBucketEntry(bucket) as MachineWord
+
+	__Raw.storeWord(entry, offset: SlabCensusBucketCountWord, value: ((__Raw.loadWord(entry, offset: SlabCensusBucketCountWord) as SlabWord) + slots) as MachineWord)
+	__Raw.storeWord(entry, offset: SlabCensusBucketBytesWord, value: ((__Raw.loadWord(entry, offset: SlabCensusBucketBytesWord) as SlabWord) + bytes) as MachineWord)
+end 'slabCensusBucketAdd'
+
+function slabCensusTallyByTag(span SlabWord, slotSize SlabWord, totalSlots SlabWord, liveSlots SlabWord)
+	let marks = slabCensusMarksBase()
+	let base = __Raw.loadWord(span as MachineWord, offset: MspanBaseAddrOffset) as SlabWord
+	let bumpNext = __Raw.loadWord(span as MachineWord, offset: MspanBumpNextOffset) as SlabWord
+
+	slabCensusRequire(slotSize >= SlabCensusSlotAlignBytes)
+	slabCensusRequire(bumpNext >= base and bumpNext <= (base + totalSlots * slotSize))
+
+	__Raw.memFill(marks as MachineWord, byteCount: ((bumpNext - base) shr SlabCensusSlotAlignShift) as MachineWord, value: SlabCensusSlotUnmarked)
+
+	slabCensusMarkChain(__Raw.loadWord(span as MachineWord, offset: MspanFreeListOffset) as SlabWord, base: base, bumpNext: bumpNext, marks: marks)
+	slabCensusMarkChain(__Raw.loadWord(span as MachineWord, offset: MspanRemoteHeadOffset) as SlabWord, base: base, bumpNext: bumpNext, marks: marks)
+
+	var slot = base
+	var live = 0 as SlabWord
+
+	while slot < bumpNext 'slots'
+		if not slabCensusSlotIsMarked(marks, slot: slot, base: base) 'stillHandedOut'
+			live = live + 1
+			slabCensusBucketAdd(slabCensusTagBucketOf(__Raw.loadWord(slot as MachineWord, offset: 0) as SlabWord), slots: 1, bytes: slotSize)
+		end 'stillHandedOut'
+
+		slot = slot + slotSize
+	end 'slots'
+
+	slabCensusRequire(live == liveSlots)
+end 'slabCensusTallyByTag'
+
+function slabCensusMarkChain(head SlabWord, base SlabWord, bumpNext SlabWord, marks SlabWord)
+	var slot = head
+
+	while slot != 0 'chain'
+		slabCensusRequire(slot >= base and slot < bumpNext)
+		slabCensusRequire(not slabCensusSlotIsMarked(marks, slot: slot, base: base))
+		slabCensusMarkSlot(marks, slot: slot, base: base)
+
+		slot = __Raw.loadWord(slot as MachineWord, offset: 0) as SlabWord
+	end 'chain'
+end 'slabCensusMarkChain'
+
+// An unsound reading ends the process rather than panicking. The walk holds `__slab_lock` and `mrt_panic`
+// allocates, so a panic raised here would deadlock inside the allocator instead of reporting.
+function slabCensusRequire(holds bool)
+	if holds 'sound'
+		return
+	end 'sound'
+
+	__Raw.osExit(SlabCensusTallyUnsoundExit)
+end 'slabCensusRequire'
+
+// A header-less slot — a string's bytes, an element buffer, a green thread's stack — is a slab slot too,
+// and its first word is not a packed id. A word whose id half is zero is therefore attributed to no tag
+// rather than to whatever tag its bytes happen to spell.
+function slabCensusTagBucketOf(word SlabWord) returns SlabWord
+	if (word shr SlabCensusTagShift) == 0 'noAllocationId'
+		return SlabCensusImplausibleBucket
+	end 'noAllocationId'
+
+	let tag = word and SlabCensusTagMask
+
+	if tag >= SlabCensusImplausibleBucket 'pastTheTable'
+		return SlabCensusOverflowBucket
+	end 'pastTheTable'
+
+	return tag
+end 'slabCensusTagBucketOf'
+
+function slabCensusMarkAddr(marks SlabWord, slot SlabWord, base SlabWord) returns MachineWord
+	return (marks + ((slot - base) shr SlabCensusSlotAlignShift)) as MachineWord
+end 'slabCensusMarkAddr'
+
+function slabCensusSlotIsMarked(marks SlabWord, slot SlabWord, base SlabWord) returns bool
+	return (__Raw.loadByte(slabCensusMarkAddr(marks, slot: slot, base: base), offset: 0) as SlabWord) != SlabCensusSlotUnmarked
+end 'slabCensusSlotIsMarked'
+
+function slabCensusMarkSlot(marks SlabWord, slot SlabWord, base SlabWord)
+	__Raw.storeByte(slabCensusMarkAddr(marks, slot: slot, base: base), offset: 0, value: SlabCensusSlotMarked as MachineWord)
+end 'slabCensusMarkSlot'

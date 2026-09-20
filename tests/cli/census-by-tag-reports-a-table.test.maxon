@@ -1,0 +1,39 @@
+let CaseDirName = "census-by-tag"
+let AppDirName = "app"
+let MainSourceStem = "main"
+let SourceExtension = ".maxon"
+let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+let DebugLogFlag = "--log=compiler:debug"
+let CensusByTagFlag = "--census-by-tag"
+
+let ResidencyHeadline = "compile residency"
+let CensusHeadline = "census by size class"
+let CensusColumnTitle = "size class"
+let CensusSelfCheck = "slabLiveBytes ="
+let CensusRawSlots = "live slots carry no box header"
+
+test 'the tag census is printed only when it is asked for'
+	let dir = freshOutsideCheckoutDir(CaseDirName)
+	let app = dir.join(AppDirName)
+
+	if not Directory.create(app) and not Directory.isDirectory(app) 'couldNotCreate'
+		panic("census-by-tag: the gate could not run - could not create {app.toString()}")
+	end 'couldNotCreate'
+
+	try File.writeText(app.join("{MainSourceStem}{SourceExtension}"), content: MainSource) otherwise panic("census-by-tag: the gate could not run - could not write the fixture source")
+
+	let plain = runDriver([BuildCommandWord, AppDirName, DebugLogFlag], workingDirectory: dir)
+	let plainSaid = "It wrote to stderr: {plain.stderr}"
+	try Expect.equal(plain.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {DebugLogFlag}. {plainSaid}")
+	try Expect.isTrue(plain.stderr.contains(ResidencyHeadline), message: "{DebugLogFlag} printed no residency table, so this case cannot tell the census apart from it. {plainSaid}")
+	try Expect.isFalse(plain.stderr.contains(CensusHeadline), message: "a build without {CensusByTagFlag} printed the census anyway. {plainSaid}")
+
+	let censused = runDriver([BuildCommandWord, AppDirName, DebugLogFlag, CensusByTagFlag], workingDirectory: dir)
+	let said = "It wrote to stderr: {censused.stderr}"
+	try Expect.equal(censused.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {CensusByTagFlag}. {said}")
+	try Expect.isTrue(censused.stderr.contains(CensusHeadline), message: "{CensusByTagFlag} printed no census headline. {said}")
+	try Expect.isTrue(censused.stderr.contains(CensusColumnTitle), message: "{CensusByTagFlag} printed no census table. {said}")
+	try Expect.isTrue(censused.stderr.contains(CensusRawSlots), message: "{CensusByTagFlag} printed no raw-slot bound. {said}")
+	try Expect.isTrue(censused.stderr.contains(CensusSelfCheck), message: "{CensusByTagFlag} printed no self-check line. {said}")
+end 'the tag census is printed only when it is asked for'

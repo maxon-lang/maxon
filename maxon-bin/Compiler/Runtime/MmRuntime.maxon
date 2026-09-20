@@ -4380,7 +4380,7 @@ typealias ManagedFieldCascadeArray = Array with ManagedFieldCascade
 // per-field null-guard (`emitManagedFieldCascade`) skips a moved-out (null) slot exactly as the destructor
 // cascade's null-guard does. `emitFieldCascadeDestructor`'s dual, minus the refcount check: a clone never
 // frees, it always allocates.
-function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName String, clones ManagedFieldCascadeArray, project Project)
+function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName ByteArray, clones ManagedFieldCascadeArray, project Project)
 	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
 
@@ -4444,7 +4444,7 @@ function synthesizeStructCascade(module StdModule, layout StructLayout, typeName
 	let specs = structManagedFieldCascades(layout, typeNames: typeNames, signatures: signatures, action: action)
 
 	match action 'action'
-		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: specs, project: project)
+		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: layout.name, clones: specs, project: project)
 		soleWalk or
 			shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action)
 	end 'action'
@@ -4493,7 +4493,7 @@ function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId
 	let mangled = signatures.mangleGenericInstance(id)
 
 	match action 'action'
-		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: String.from(mangled), clones: specs, project: project)
+		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: mangled, clones: specs, project: project)
 		soleWalk or
 			shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action)
 	end 'action'
@@ -4516,7 +4516,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let newBox = ids.mint()
-	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
+	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 	let start = CascadeCursor.create(copied, carried: ValueIdArray.create())
 	let finish = start.at(done)

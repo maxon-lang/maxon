@@ -329,6 +329,10 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	// which inside the bracket is billed to the phase it is measuring.
 	if project.samplesResidency 'census'
 		project.memory.recordResidency(phase, reading: PhaseResidency.sample())
+
+		if project.censusByTag and tagCensusCovers(project.censusPhase, phase: phase) 'byTag'
+			project.memory.recordTagCensus(phase)
+		end 'byTag'
 	end 'census'
 
 	closePhaseSpan(compilePhaseName(phase), unit: project.traceUnit)
@@ -342,6 +346,13 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	// twelve times finer than the window it feeds.
 	touchTreeLock()
 end 'recordPhaseDelta'
+
+function tagCensusCovers(wanted TagCensusPhases, phase CompilePhase) returns bool
+	return match wanted 'wanted'
+		everyPhase gives true
+		only(named) gives named == phase
+	end 'wanted'
+end 'tagCensusCovers'
 
 // Close the innermost open span, which must be `name`. ONE door for both writers above, so the stack and
 // the trace cannot be updated by two statements that could drift.

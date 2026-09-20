@@ -24,23 +24,29 @@ The memory manager provides four core operations:
 
 ## Header Layout
 
-Every managed heap object has a **24-byte inline header** immediately before the user-visible pointer. The header stores the type tag, destructor function pointer, and reference count.
+Every managed heap object has a **24-byte inline header** immediately before the user-visible pointer. The header stores the destructor function pointer, the payload size, and the reference count.
 
 ```
                        +--- user_ptr (what Maxon code sees)
                        |
-     +---------+-----------+---------+-------------------------+
-     |  tag    | destructor| refcount|  user data (size bytes) |
-     +---------+-----------+---------+-------------------------+
-     [ptr-24]   [ptr-16]    [ptr-8]   [ptr]
+     +-----------+---------+---------+-------------------------+
+     | destructor|  size   | refcount|  user data (size bytes) |
+     +-----------+---------+---------+-------------------------+
+     [ptr-24]     [ptr-16]  [ptr-8]   [ptr]
 ```
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
-| `ptr - 24` | `packed_id` | `u64` | `(alloc_id << 16) \| tag_index` — alloc ID and type tag packed for trace |
-| `ptr - 16` | `destructor` | `fn_ptr` | Generated destructor function (or NULL for no managed fields) |
+| `ptr - 24` | `destructor` | `fn_ptr` | Generated destructor function (or NULL for no managed fields) |
+| `ptr - 16` | `size` | `u64` | The payload's byte count |
 | `ptr - 8` | `refcount` | `u64` | Reference count |
 | `ptr` | user data | varies | The object's fields |
+
+**There is no type tag in the header.** A build passed `--debugstream` prepends one more word *below* the
+header, at `ptr - 32`, holding `(alloc_id << 16) | tag_index` — the allocation's id and the interned index
+of its type's name, which is what a trace event carries. It is present only under that flag: eight bytes on
+every allocation in the language is not a price a debug instrument may charge a program that is not being
+traced, so a normal build's box is 24 bytes of header exactly.
 
 ## API
 
@@ -48,8 +54,8 @@ Every managed heap object has a **24-byte inline header** immediately before the
 
 Allocates a new heap object:
 
-1. Calls `HeapAlloc` to allocate `size + 24` bytes (24 for the inline header).
-2. Initializes the header: `refcount = 0`, `destructor = destructor`, `tag = tag`.
+1. Asks the slab allocator for `size + 24` bytes (24 for the inline header), or `size + 32` under `--debugstream`.
+2. Initializes the header: `destructor = destructor`, `size = size`, `refcount = 0`. Under `--debugstream` it also writes the packed id below the header; `tag` is read nowhere else.
 3. Increments the global `__mm_alloc_count`.
 4. Returns the pointer to user data (past the header).
 
@@ -379,46 +385,49 @@ This eliminates the need for cycle-breaking mechanisms like weak references or t
 
 ## Debug Modes
 
-### `--mm-trace`
+### The memory trace
 
-Emits trace output to stderr for every memory operation:
+Every memory operation can be traced, but not by a flag that prints to stderr. A build passed
+`--debugstream` writes its events into a shared-memory ring, and `maxon monitor --filter=mm <exe>` runs the
+program and decodes them:
 
+```text
+mm_alloc String #1 size=16
+mm_incref String #1 rc=1
+mm_decref String #1 rc=0
+mm_free String #1
 ```
-alloc Point #1 rc=1 [module.function]
-incref Point #1 rc=2 [module.function]
-decref Point #1 rc=1 [module.function]
-decref Point #1 rc=0 [module.function]
-  destruct Point #1
-  free Point #1
-```
 
-Trace output is scope-aware: destructor operations are indented to show nesting. Each allocation has a unique `#id` for correlation.
+The type name comes from the interned-name table the compiler embedded in the executable, reached through
+the packed id below each box's header; the `#id` correlates the events of one allocation. That is also what
+a spec's ` ```mm-trace ` block asserts — see `docs/SPECS.md`. The ring is one shared buffer with no thread
+id, so with more than one green thread producing events the decoded order is the order they took the lock.
 
-### `--mm-debug`
+### Corruption detection is always on
 
-Enables runtime corruption detection:
-
-- **Canary value** written after each allocation's payload. Checked on free to detect buffer overruns.
-- **Double-free detection**: header is cleared on free; freeing a cleared header panics.
-- **NULL return check**: panics if `HeapAlloc` or `HeapReAlloc` return NULL.
-- **Per-tag leak breakdown** at exit: `mm_leak_check` prints a per-type tally of live allocations in addition to the total, so leaks can be attributed to a specific type without re-running under `--mm-trace`.
+There is no opt-in debug allocator. `__mm_free` overwrites every freed payload with the poison byte `0x3F`
+on every build: read back as a small integer it is a conspicuous 63 rather than the 0 a freshly zeroed slot
+would hold, and a word of it is the non-canonical address `0x3F3F3F3F3F3F3F3F`, so dereferencing a poisoned
+pointer faults instead of quietly reading. Either way a use-after-free becomes loud at the read.
 
 ### Leak Check
 
-At program exit, the runtime checks `__mm_alloc_count`. If it is non-zero, it prints a leak diagnostic to stderr.
+At program exit the runtime checks the allocator's live count of tracked (header-carrying) allocations. The
+test is `!= 0` rather than `> 0`: an over-release drives the count negative, and a gate that caught only
+under-release would call a clean run for a compiler emitting too many drops — the more dangerous of the two.
+A non-zero count makes the program's exit code **101**; nothing is printed. A program using green threads is
+gated a second, independent time on its live green-thread count, which exits **75**.
 
-Under `--mm-debug`, the runtime also maintains `__mm_alloc_count_by_tag`, an array indexed by tag_index. `mm_alloc` atomically bumps the slot for its tag; `mm_free` reads the tag back out of the packed_id header and atomically decrements it. The leak check walks this array and prints one line per non-zero slot:
+The exit code says that something leaked, not what. **To attribute it, census the live heap by tag** —
+`__Builtins.slabCensusTally` and its two bucket readers, described under
+[Memory Management](LANGUAGE_REFERENCE.md#attributing-the-live-heap) — which walks every live slot and
+buckets it by the tag in its packed id. The compiler runs exactly this on itself through
+[`maxon build --census-by-tag`](CLI_REFERENCE.md#logging).
 
-```text
-MM leak: 8 allocation(s) remain
-  3 String
-  3 __ManagedMemory
-  1 __ManagedMemory_Integer
-  1 IntArray
-  5 (raw)
-```
-
-Untagged raw allocations (green-thread stacks, pipe buffers, etc.) are grouped under a trailing `(raw)` line sourced from `__mm_raw_alloc_count`. Per-tag tracking is only compiled in when `--mm-debug` is passed; release builds skip the extra atomics.
+A slot that carries no box header — a string's bytes, an element buffer, a green thread's stack — has no tag
+to be attributed by, and lands in the census's `(unattributable)` bucket.
+`__Builtins.mmRawAllocLive()` is how many such slots are live, which bounds how much of a table can be wrong
+for that reason.
 
 ## Copy-on-Write (COW)
 

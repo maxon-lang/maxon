@@ -1173,3 +1173,53 @@ attributable: the previous row was minted from a different corpus on another pat
 **Correctness, since this is allocator work:** 900 swept stress runs across 1/2/4/7/16 processors with
 no allocator abort, three generation-2 self-compiles, a byte-identical two-generation fixpoint, and
 29 of 29 `slab-*` spec cases.
+
+### Result — 2026-09-20, the live heap attributed by allocation tag, and what the instrument costs
+
+`--census-by-tag[=<phase>]` walks every live slab slot at a phase boundary into a 2048-bucket histogram
+in the allocator's state region (`__slab_census_tally`), attributes each by the `--debugstream` tag word
+when the build carries one and by size class otherwise, and prints the peak-live phase's table beside the
+residency levels. The census's own self-check reads `slabLiveBytes()` on the statement after the tally and
+the two agree exactly on every run below.
+
+**A `--debugstream` self-compile of the tree (AMD Ryzen 7 5800X, 16 logical processors, x64-windows,
+uncommitted tree on `6d3ab4cdc5`), peak-live phase `merge`, live 2,491,060,240 B:**
+
+| tag | live slots | bytes | share |
+| --- | ---: | ---: | ---: |
+| ArrayRecord | 12,299,021 | 983,921,680 | 39.5% |
+| ElementBuffer | 10,383,172 | 638,874,928 | 25.6% |
+| MaxonOp | 2,007,854 | 224,879,648 | 9.0% |
+| Token | 2,286,270 | 182,901,600 | 7.3% |
+| StringRecord | 749,096 | 101,277,616 | 4.1% |
+| MaxonType | 1,608,876 | 77,226,048 | 3.1% |
+| SourceRange | 861,130 | 55,112,320 | 2.2% |
+| IrBlock | 205,934 | 23,064,608 | |
+| FilePath | 480,109 | 23,045,232 | |
+| ForwardCall | 250,152 | 16,009,728 | |
+| IrFunction | 31,360 | 13,045,760 | |
+| MaxonReturnType | 266,391 | 12,786,768 | |
+| OverloadedDecl | 124,816 | 9,985,280 | |
+| Terminator | 205,934 | 9,884,832 | |
+| CondBranch | 205,934 | 9,884,832 | |
+
+253 tags in all; `(unattributable)` 37,952 B and `(overflow)` 8,352 B together 0.002%; 40 header-less raw
+slots. ⭐ **Two tags are 65% of the peak: the `Array` record and its element buffer.** Every view, every
+column and every container is one of each, so the peak is the count of arrays, not of names. `Token`
+(2.29M, 183 MB) and `MaxonOp` (2.0M, 225 MB) are the next two, and both are still live at `merge` — the
+peak-LIVE phase is `merge`, not `inlineLeaves`, on this tree.
+
+**The instrument's cost, measured on one tree in one sitting:** censusing every boundary 591 s wall vs
+43 s control (13.7×); `--census-by-tag=merge` alone buys back only ~8% because `merge` is entered once per
+compile unit; size-class mode on an untraced build +6 s. The tag walk visits every live slot at every
+boundary, so it is a CPU instrument for a run by hand, never a default. The debugstream build's own heap is
+4.3% bigger at the same phase (+103.7 MB of tag words), so a figure read off it is not a shipping build's.
+
+**Ladder, interleaved against a control built through the identical seed chain:** total allocations
++76,360 at rung 0 falling to +63,704 at rung 5 — a flat constant (the tier source the ladder programs
+lex/parse/merge), no slope; `phase:semanticCheck` +750 at every rung. ⚠ The first cut carried a
+`21,057 + 13,287·2^rung` slope in `semanticCheck` from ONE statement in the new tier code, `_ =
+slabWalkSpans(...)`: a discarded DECLARED call anywhere in a program makes `checkDiscardedResults` build
+the whole-program effect-free summary, and tier source ships in every program. Consuming the value cured
+it. A demand-driven summary (walk only the asking callees' cones) is the follow-up that would relieve
+every user program writing `_ = f()`.

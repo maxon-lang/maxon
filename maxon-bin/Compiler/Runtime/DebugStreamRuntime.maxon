@@ -567,15 +567,18 @@ function debugStreamNameBlob(magic ByteArray, names StringArray) returns ByteArr
 	return blob
 end 'debugStreamNameBlob'
 
-// ⭐ The tag index for a USER type's box. `Untagged` when this build carries no producer, so an untraced
-// build never grows a table it will not render — and the ONE door a dynamic name comes through, so
-// "which spelling does a type get in the trace" is answered in a single place.
-export function userTagIndex(globalData GlobalDataTable, name String, debugStream bool) returns ParsedInt
+// The one door a dynamic name comes through, so "which spelling does a type get in the trace" is answered
+// in a single place. `Untagged` when this build carries no producer, so an untraced build never grows a
+// table it will not render.
+//
+// The name arrives as bytes because that is the form every caller already holds and an untraced build
+// discards it unread: a `String` parameter would materialise one per allocation site for nothing.
+export function userTagIndex(globalData GlobalDataTable, name ByteArray, debugStream bool) returns ParsedInt
 	if not debugStream 'untracedBuild'
 		return mmTagIndex(MmTag.Untagged)
 	end 'untracedBuild'
 
-	return globalData.debugStreamTags.intern(name)
+	return globalData.debugStreamTags.intern(String.from(name))
 end 'userTagIndex'
 
 // One blob field. BOTH fields in the format — the table's count and each name's length — are the same
@@ -728,6 +731,11 @@ end 'debugStreamRuntimeGlobals'
 // build — the trace would simply never appear.
 export let DsActivationEnvVar = "MAXON_DEBUGSTREAM"
 let DsEnvNameRdataPrefix = "__ds_env_"
+
+// Opt-in per build, and that is a correctness property: with the flag off not one instruction changes —
+// the box header does not grow, `__mm_alloc`'s arity does not change, no event site is branched over —
+// and the committed `.test` goldens depend on it.
+export let DebugStreamFlag = "--debugstream"
 
 // ⭐⭐ **DOES THIS BUILD CARRY THE PRODUCER? ONE ANSWER, FOR EVERY PART THAT MUST AGREE.** Four things ride
 // this decision and they are in three files: the six `.data` slots, this install, the module flag every

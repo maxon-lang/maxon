@@ -6174,6 +6174,12 @@ let BuiltinsSlabCommittedBytesName = b"__Builtins.slabCommittedBytes"
 // One constant for the five, for `MmCounterArity`'s reason: the shape is the fact.
 let SlabCensusArity = 0 as ParamCount
 
+let BuiltinsSlabCensusTallyName = b"__Builtins.slabCensusTally"
+let BuiltinsSlabCensusBucketCountName = b"__Builtins.slabCensusBucketCount"
+let BuiltinsSlabCensusBucketBytesName = b"__Builtins.slabCensusBucketBytes"
+
+let SlabCensusTallyArity = 1 as ParamCount
+
 // ⭐⭐ **`__Builtins.schedProcessorCount()` — THE FOURTH SCHEDULER QUERY, AND THE ONLY ONE WHOSE ANSWER IS
 // NOT AN OUTCOME.** It reports how many Ps `MAXON_MAX_PROCS` resolved to — `min(requested, cpuCount())`,
 // settled once in `__sched_init_procs` before any green thread runs. Its two SCHEDULER band-mates both
@@ -85672,6 +85678,18 @@ export type Parser
 			if callee.equals(BuiltinsSlabCommittedBytesName) 'slabCommittedBytes'
 				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsSlabCommittedBytesName, runtimeName: SlabCommittedBytesName, arity: SlabCensusArity, resultTag: ValueTypeTag.integer, calleeTok: anchor)
 			end 'slabCommittedBytes'
+
+			if callee.equals(BuiltinsSlabCensusTallyName) 'slabCensusTally'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SlabCensusTallyName, arity: SlabCensusTallyArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'slabCensusTally'
+
+			if callee.equals(BuiltinsSlabCensusBucketCountName) 'slabCensusBucketCount'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SlabCensusBucketCountName, arity: SlabCensusTallyArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'slabCensusBucketCount'
+
+			if callee.equals(BuiltinsSlabCensusBucketBytesName) 'slabCensusBucketBytes'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: SlabCensusBucketBytesName, arity: SlabCensusTallyArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+			end 'slabCensusBucketBytes'
 
 			// ⭐ **THE FOURTH SCHEDULER QUERY**, and the only one that asks about the SETTING rather than about
 			// the outcome: how many Ps `MAXON_MAX_PROCS` resolved to. Same door again — an `int` answer, no

@@ -43,10 +43,6 @@ typealias EventCode = int(0 to 255)
 // An index into one of the two interned-name tables. u16 on the wire, which is what bounds it.
 typealias NameIndex = int(0 to 65535)
 
-// A table's declared entry count — the same width as an index into it, and the reason a blob cannot
-// describe more names than an event can point at.
-typealias NameCount = int(0 to 65535)
-
 // An ABSOLUTE byte position in the ring's write sequence — not a position inside the 2 MB buffer, which
 // wraps. The producer's cursors are this, and the difference between two of them is what is pending.
 typealias RingPosition = int(0 to u64.max)
@@ -602,52 +598,6 @@ end 'familyChoiceList'
 // ============================================================================
 // The interned name tables
 // ============================================================================
-
-// ⭐ One packed name table out of already-read symdata: the magic, a u16 count, then each name behind its
-// own u16 byte length. BOTH blobs come out of ONE section and ONE parse, which is what keeps the two tables
-// from drifting apart on the format.
-//
-// A blob that is absent, truncated, or claims more than the section holds yields the names read so far
-// rather than throwing: an unresolvable index renders as `tag=<n>`, and a trace with one raw number in it
-// is still worth reading.
-function nameBlobIn(symdata ByteArray, magic ByteArray) returns StringArray
-	var names = StringArray.create()
-
-	var cursor = 0 as ByteOffset
-
-	match findByteRun(symdata, needle: magic, from: 0) 'located'
-		found(offset) then cursor = offset + magic.count()
-		absent then return names
-	end 'located'
-
-	let count = readBlobField(symdata, at: cursor) as NameCount
-	cursor = cursor + DsNameBlobFieldBytes
-
-	for _ in 0 upto count 'eachName'
-		let length = readBlobField(symdata, at: cursor)
-		cursor = cursor + DsNameBlobFieldBytes
-
-		if not imageRangeFits(symdata, start: cursor, count: length) 'runsPastTheSection'
-			break
-		end 'runsPastTheSection'
-
-		names.push(String.from(imageSlice(symdata, start: cursor, count: length)))
-		cursor = cursor + (length as ByteOffset)
-	end 'eachName'
-
-	return names
-end 'nameBlobIn'
-
-// One blob field — the table's count and each name's length are the same little-endian u16, so they are
-// read by the same call and cannot come to disagree about width. A field running past the section reads 0,
-// which ends the walk at the next bound check.
-function readBlobField(symdata ByteArray, at ByteOffset) returns BytePos
-	if not imageRangeFits(symdata, start: at, count: DsNameBlobFieldBytes) 'runsPastTheSection'
-		return 0
-	end 'runsPastTheSection'
-
-	return imageReadU16(symdata, at: at) as BytePos
-end 'readBlobField'
 
 // ⭐ An interned index back to the name the compiler embedded in the executable. Index 0 means "no name" in
 // both tables, and a name may legitimately be missing (an executable built by an older compiler), so an

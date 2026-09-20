@@ -1,0 +1,380 @@
+// Test: slab-census.dropping-the-population-returns-the-bucket
+typealias WidgetField = int(0 to 65536)
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+let Population = 1000
+let SizeClassMode = 1
+let BucketCount = 2048
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	export static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	var before = TallyArray.create()
+	before.reserve(BucketCount)
+	for _ in 0 upto BucketCount 'sizeTheSnapshot'
+		before.push(0)
+	end 'sizeTheSnapshot'
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theFirstTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theFirstTallysOwnWalkMissedTheLevel'
+
+	for i in 0 upto BucketCount 'snapshot'
+		try before.set(i, value: __Builtins.slabCensusBucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
+	end 'snapshot'
+
+	let liveHolding = __Builtins.slabLiveBytes()
+	let freeHolding = __Builtins.slabFreeBytes()
+
+	holder = Widgets.create()
+
+	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theSecondTallysOwnWalkMissedTheLevel'
+		return 1
+	end 'theSecondTallysOwnWalkMissedTheLevel'
+
+	var biggestFall = 0
+	for i in 0 upto BucketCount 'compare'
+		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
+		let now = __Builtins.slabCensusBucketCount(i)
+
+		if (was - now) > biggestFall 'fell'
+			biggestFall = was - now
+		end 'fell'
+	end 'compare'
+
+	if biggestFall != Population 'noBucketFellByThePopulation'
+		return 2
+	end 'noBucketFellByThePopulation'
+
+	if (__Builtins.slabLiveBytes() + __Builtins.slabFreeBytes()) > (liveHolding + freeHolding) 'slotsAppearedFromNowhere'
+		return 3
+	end 'slotsAppearedFromNowhere'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1000
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.reserve
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 2048
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.reserve
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#1
+  sizeTheSnapshot:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 2048
+    x64.jcc less, sizeTheSnapshot
+  forexit#4:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#5
+  buildWidgets:
+    x64.movRegReg rax, r13
+    x64.sarRegImm8 rax, r13, 63
+    x64.shrRegImm8 rax, rax, 48
+    x64.leaRegRegReg rax, r13, rax
+    x64.sarRegImm8 rax, rax, 16
+    x64.imulRegRegImm32 rax, rax, 65536
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+  __rc_ok#31:
+    x64.leaRegRegImm32 rax, r13, 1
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 48
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 16
+    x64.imulRegRegImm32 rcx, rcx, 65536
+    x64.movRegReg r15, rax
+    x64.subRegReg r15, rax, rcx
+  __rc_ok#53:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r14
+    x64.storeBaseDispReg.word64 [r8 + 8], r15
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#7:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#5:
+    x64.cmpRegImm32 r13, 1000
+    x64.jcc less, buildWidgets
+  forexit#8:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __slab_census_tally
+    x64.movRegReg r13, r8
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg r13, r8
+    x64.jcc equal, ifcont#10
+  theFirstTallysOwnWalkMissedTheLevel:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#10:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#11
+  snapshot:
+    x64.movRegReg rcx, r13
+    x64.callDirect __slab_census_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#37:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow#43
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow#43
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#43
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#43
+  __im_store:
+    x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r8
+  forstep#13:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#11:
+    x64.cmpRegImm32 r13, 2048
+    x64.jcc less, snapshot
+  forexit#14:
+    x64.callDirect __slab_live_bytes
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __slab_free_bytes
+    x64.storeSlotReg slot1, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __slab_census_tally
+    x64.movRegReg rbx, r8
+    x64.callDirect __slab_live_bytes
+    x64.cmpRegReg rbx, r8
+    x64.jcc equal, ifcont#18
+  theSecondTallysOwnWalkMissedTheLevel:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#18:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr#19
+  compare:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc aboveEqual, __im_slow#40
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 r15, [rax + r14*8 + 0]
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __slab_census_count
+    x64.subRegReg r15, r15, r8
+    x64.cmpRegReg r15, rbx
+    x64.jcc lessEqual, critsplit#56
+  fell:
+    x64.movRegReg rax, r15
+    x64.jmp forstep#21
+  critsplit#56:
+    x64.movRegReg rax, rbx
+  forstep#21:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg rbx, rax
+  forhdr#19:
+    x64.cmpRegImm32 r14, 2048
+    x64.jcc less, compare
+  forexit#22:
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc equal, ifcont#28
+  noBucketFellByThePopulation:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#28:
+    x64.callDirect __slab_live_bytes
+    x64.movRegReg rbx, r8
+    x64.callDirect __slab_free_bytes
+    x64.leaRegRegReg rax, rbx, r8
+    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rdx, slot1
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegReg rax, rcx
+    x64.jcc lessEqual, ifcont#30
+  slotsAppearedFromNowhere:
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#30:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at slab-census.dropping-the-population-returns-the-bucket.test:40: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#43:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#13
+  tryerr#16:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at slab-census.dropping-the-population-returns-the-bucket.test:40: the snapshot is sized to every bucket\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#40:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#57
+  tryerr#24:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at slab-census.dropping-the-population-returns-the-bucket.test:54: the snapshot is sized to every bucket\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  critsplit#57:
+    x64.movRegReg r15, r8
+    x64.jmp tryok
+}

@@ -260,8 +260,9 @@ with no `project.maxon` prints a usage line and exits 1.
 | `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes the counts to `<output>.mxcov` as it exits. This changes the emitted code, so it is a separate build from the one you ship. Read the counts with `maxon coverage`. Needs the debug-info sidecar, so `--no-debug-info` beside it is refused. |
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](/docs/cli/debugging/). |
+| `--census-by-tag`, `--census-by-tag=<phase>` | Census the *live* heap by allocation tag at every compile phase boundary — which types the bytes still held at that point belong to, rather than how many bytes the phase asked for. Naming a phase censuses that phase alone, which is what a large compile can afford. It samples residency whether or not `--log=compiler:debug` is given, and writes a `tag` row per non-empty bucket to `--metrics=<path>`, named `<phase>/<tag>`, whose `allocs` and `livebytes` are the slots live at that boundary and their bytes; `--log=compiler:debug` also prints the table. A compiler built without `--debugstream` carries no tags, so the census is by *size class* instead and says so in its headline. See [Logging](#logging). |
 | `--define=<name>=<value>` | Replace a top-level `String` constant's written-out default with `<value>`. Repeatable. See [Defines](#defines). |
-| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary, rather than what the phase asked for. The TSV's five residency columns are filled only when both are given; on their own they are zero. |
+| `--metrics=<path>` | Write this compile's per-phase time and memory to `<path>` as TSV. Each row's first field is its kind: `phase`, `regalloc`, `total`, `unattributed`, `code`, and `tag` when `--census-by-tag` is given. `--log=compiler:debug` prints the same numbers as a table, and adds a residency table — what the heap was *holding* at each phase boundary, rather than what the phase asked for. The TSV's five residency columns are filled only when it or `--census-by-tag` is given; on their own they are zero. |
 
 `--debugstream`, `--async-trace` and `--coverage` are opt-in **per build**. Without the flag, none of
 that machinery is emitted.
@@ -624,6 +625,22 @@ reported on stderr and otherwise ignored. `maxon test` lowers the level to `erro
 maxon build app.maxon --log=codegen:trace
 maxon build app.maxon --log=compiler:debug   # per-phase time and memory as a table
 maxon build app.maxon --log=error            # only errors
+```
+
+**The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
+live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
+top five buckets for every phase sampled, then the whole table for the phase whose *live* level was
+highest, and closes with three lines that bound what the table can be trusted to say — the OS-direct
+mappings and allocator overhead no row counts, how many live slots carry no box header (those are
+attributed by whatever their first word holds, so they land in `(unattributable)` or in a bucket that is
+not theirs), and a self-check comparing the buckets' sum and the tally's own walk against
+`slabLiveBytes`. A tag past the end of the table is `(overflow)`.
+
+Without `--log=compiler:debug` the flag still samples, but the numbers go only to `--metrics=<path>`.
+
+```bash
+maxon build app.maxon --log=compiler:debug --census-by-tag
+maxon build app.maxon --log=compiler:debug --census-by-tag=codegen   # one phase, on a large compile
 ```
 
 ## Exit Codes

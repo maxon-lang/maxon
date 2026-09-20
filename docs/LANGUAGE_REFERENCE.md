@@ -4610,6 +4610,27 @@ here is bytes the allocator asked it to drop rather than bytes observed to leave
 The five `__Builtins.slab*Bytes()` readings report what the heap holds at any moment, including how much of
 it is the backlog this call would return.
 
+### Attributing the Live Heap
+
+The five readings say how much is out; three more say what it is. `__Builtins.slabCensusTally(mode)` walks
+every live slot once and fills a table of 2048 buckets, which `__Builtins.slabCensusBucketCount(i)` and
+`__Builtins.slabCensusBucketBytes(i)` read back one bucket at a time.
+
+| `mode` | Bucket `i` holds |
+|--------|------------------|
+| `0` | the slots whose allocation tag is `i` — available only in a program built with `--debugstream`, which is what puts a tag on a box |
+| `1` | the slots of size class `i` |
+
+The tally returns the live bytes *it* walked, which is an independent cross-check: the buckets' sum travels
+through the table and the return travels through nothing, so the two figures beside `slabLiveBytes()` tell a
+table fault from a walk fault. Bucket 2046 is the slots whose first word is not a tag — a string's bytes, an
+element buffer, a green thread's stack — and bucket 2047 is a tag past the end of the table. A `mode` that is
+neither `0` nor `1`, or a heap the walk finds inconsistent, ends the program with exit code **119** rather
+than answering.
+
+The compiler's own build uses these through
+[`--census-by-tag`](CLI_REFERENCE.md#logging).
+
 ### The Leak Checker
 
 Every program that uses the heap checks, when `main` returns, that every allocation was released. If any
@@ -4956,6 +4977,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | an allocation never released | exit code **101** |
 | a green thread neither awaited nor dropped | exit code **75** |
 | a promise consumed through a second read of one container slot or struct field | exit code **118** |
+| `__Builtins.slabCensusTally` asked for a mode it does not implement, or walking a heap it cannot describe | exit code **119** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).
