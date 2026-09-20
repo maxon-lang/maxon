@@ -1,0 +1,199 @@
+// Test: allocations-by-tag.the-buckets-total-the-tracked-allocations
+typealias WidgetField = int(0 to 65536)
+
+let Population = 64
+let TallyBuckets = 2048
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	export static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	let totalBefore = __Builtins.mmAllocTotal()
+	var sumBefore = 0
+	for i in 0 upto TallyBuckets 'totalTheBucketsBefore'
+		sumBefore = sumBefore + __Builtins.mmAllocTotalByTag(i)
+	end 'totalTheBucketsBefore'
+
+	if sumBefore != totalBefore 'theBucketsMissedTheTotalBeforeTheBuild'
+		return 1
+	end 'theBucketsMissedTheTotalBeforeTheBuild'
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	let totalAfter = __Builtins.mmAllocTotal()
+	var sumAfter = 0
+	for i in 0 upto TallyBuckets 'totalTheBucketsAfter'
+		sumAfter = sumAfter + __Builtins.mmAllocTotalByTag(i)
+	end 'totalTheBucketsAfter'
+
+	if sumAfter != totalAfter 'theBucketsMissedTheTotalAfterTheBuild'
+		return 2
+	end 'theBucketsMissedTheTotalAfterTheBuild'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@32768 = i64 0
+  __slab_arena_map_l1@32776 = i64 0
+  __slab_state@32784 = i64 0
+  __ds_base@32792 = i64 0
+  __ds_buf_size@32800 = i64 0
+  __ds_buf_mask@32808 = i64 0
+  __ds_start_ts@32816 = i64 0
+  __ds_lock@32824 = i64 0
+  __mm_alloc_id@32832 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 64
+  __rc_ok#29:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_capacity
+    arm64.cmp x0, 64
+    arm64.b.ge __il_cont#23
+  grow:
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.bl __managed_mem_grow
+    arm64.cmp x9, 0
+    arm64.b.eq __il_cont#23
+  tryerr:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  __il_cont#23:
+    arm64.bl __mm_counter_alloc_total
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.movImm x22, 0
+    arm64.b forhdr#1
+  totalTheBucketsBefore:
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_counter_alloc_total_by_tag
+    arm64.add x21, x21, x0
+  forstep#3:
+    arm64.add x22, x22, 1
+  forhdr#1:
+    arm64.cmp x22, 2048
+    arm64.b.lt totalTheBucketsBefore
+  forexit#4:
+    arm64.cmp x21, x20
+    arm64.b.eq ifcont#6
+  theBucketsMissedTheTotalBeforeTheBuild:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#6:
+    arm64.movImm x20, 0
+    arm64.b forhdr#7
+  buildWidgets:
+    arm64.asr x0, x20, 63
+    arm64.lsr x0, x0, 48
+    arm64.add x0, x20, x0
+    arm64.asr x0, x0, 16
+    arm64.lsl x0, x0, 16
+    arm64.sub x21, x20, x0
+  __rc_ok#17:
+    arm64.add x0, x20, 1
+    arm64.asr x1, x0, 63
+    arm64.lsr x1, x1, 48
+    arm64.add x1, x0, x1
+    arm64.asr x1, x1, 16
+    arm64.lsl x1, x1, 16
+    arm64.sub x22, x0, x1
+  __rc_ok#36:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.movImm x2, 14
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x21
+    arm64.storeBaseDispReg.word64 [x1 + 8], x22
+  __il_cont#31:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+  forstep#9:
+    arm64.add x20, x20, 1
+  forhdr#7:
+    arm64.cmp x20, 64
+    arm64.b.lt buildWidgets
+  forexit#10:
+    arm64.bl __mm_counter_alloc_total
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 0
+    arm64.movImm x22, 0
+    arm64.b forhdr#11
+  totalTheBucketsAfter:
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_counter_alloc_total_by_tag
+    arm64.add x21, x21, x0
+  forstep#13:
+    arm64.add x22, x22, 1
+  forhdr#11:
+    arm64.cmp x22, 2048
+    arm64.b.lt totalTheBucketsAfter
+  forexit#14:
+    arm64.cmp x21, x20
+    arm64.b.eq ifcont#16
+  theBucketsMissedTheTotalAfterTheBuild:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#16:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

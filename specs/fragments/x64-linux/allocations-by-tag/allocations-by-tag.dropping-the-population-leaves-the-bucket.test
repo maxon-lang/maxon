@@ -1,0 +1,335 @@
+// Test: allocations-by-tag.dropping-the-population-leaves-the-bucket
+typealias WidgetField = int(0 to 65536)
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+let Population = 64
+let TallyBuckets = 2048
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	export static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	var beforeCounts = TallyArray.create()
+	beforeCounts.reserve(TallyBuckets)
+	for _ in 0 upto TallyBuckets 'sizeTheSnapshot'
+		beforeCounts.push(0)
+	end 'sizeTheSnapshot'
+
+	for i in 0 upto TallyBuckets 'snapshot'
+		try beforeCounts.set(i, value: __Builtins.mmAllocTotalByTag(i)) otherwise panic("the snapshot is sized to every bucket")
+	end 'snapshot'
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	var biggestRise = 0
+	var biggestIndex = 0
+	for i in 0 upto TallyBuckets 'compare'
+		let was = try beforeCounts.get(i) otherwise panic("the snapshot is sized to every bucket")
+		let now = __Builtins.mmAllocTotalByTag(i)
+
+		if (now - was) > biggestRise 'rose'
+			biggestRise = now - was
+			biggestIndex = i
+		end 'rose'
+	end 'compare'
+
+	let heldCount = __Builtins.mmAllocTotalByTag(biggestIndex)
+	let liveHolding = __Builtins.mmAllocLive()
+
+	holder = Widgets.create()
+
+	if __Builtins.mmAllocTotalByTag(biggestIndex) != heldCount 'theCumulativeBucketMoved'
+		return 1
+	end 'theCumulativeBucketMoved'
+
+	if __Builtins.mmAllocLive() >= liveHolding 'theDropFreedNothing'
+		return 2
+	end 'theDropFreedNothing'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __mrt_envp@32768 = i64 0
+  __slab_arena_list@32776 = i64 0
+  __slab_arena_map_l1@32784 = i64 0
+  __slab_state@32792 = i64 0
+  __ds_base@32800 = i64 0
+  __ds_buf_size@32808 = i64 0
+  __ds_buf_mask@32816 = i64 0
+  __ds_start_ts@32824 = i64 0
+  __ds_lock@32832 = i64 0
+  __mm_alloc_id@32840 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rdx, 64
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.reserve
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 2048
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.reserve
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#1
+  sizeTheSnapshot:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 2048
+    x64.jcc less, sizeTheSnapshot
+  forexit#4:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#5
+  snapshot:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_counter_alloc_total_by_tag
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_ok#27:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 16]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __im_slow#39
+  __im_bounds:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc aboveEqual, __im_slow#39
+  __im_buffer:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#39
+  __im_viewed:
+    x64.leaRegRegImm32 rcx, rax, -24
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, __im_slow#39
+  __im_store:
+    x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], r8
+  forstep#7:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#5:
+    x64.cmpRegImm32 r13, 2048
+    x64.jcc less, snapshot
+  forexit#8:
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#11
+  buildWidgets:
+    x64.movRegReg rax, r13
+    x64.sarRegImm8 rax, r13, 63
+    x64.shrRegImm8 rax, rax, 48
+    x64.leaRegRegReg rax, r13, rax
+    x64.sarRegImm8 rax, rax, 16
+    x64.imulRegRegImm32 rax, rax, 65536
+    x64.movRegReg r14, r13
+    x64.subRegReg r14, r13, rax
+  __rc_ok#29:
+    x64.leaRegRegImm32 rax, r13, 1
+    x64.movRegReg rcx, rax
+    x64.sarRegImm8 rcx, rax, 63
+    x64.shrRegImm8 rcx, rcx, 48
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.sarRegImm8 rcx, rcx, 16
+    x64.imulRegRegImm32 rcx, rcx, 65536
+    x64.movRegReg r15, rax
+    x64.subRegReg r15, rax, rcx
+  __rc_ok#49:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 14
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r14
+    x64.storeBaseDispReg.word64 [r8 + 8], r15
+  __il_cont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+  forstep#13:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#11:
+    x64.cmpRegImm32 r13, 64
+    x64.jcc less, buildWidgets
+  forexit#14:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr#15
+  compare:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegReg r14, rax
+    x64.jcc aboveEqual, __im_slow#36
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 r15, [rax + r14*8 + 0]
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_counter_alloc_total_by_tag
+    x64.subRegReg r8, r8, r15
+    x64.cmpRegReg r8, rbx
+    x64.jcc lessEqual, critsplit#52
+  rose:
+    x64.movRegReg rax, r14
+    x64.jmp forstep#17
+  critsplit#52:
+    x64.movRegReg r8, rbx
+    x64.movRegReg rax, r13
+  forstep#17:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg rbx, r8
+    x64.movRegReg r13, rax
+  forhdr#15:
+    x64.cmpRegImm32 r14, 2048
+    x64.jcc less, compare
+  forexit#18:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_counter_alloc_total_by_tag
+    x64.movRegReg rbx, r8
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r15, r8
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_counter_alloc_total_by_tag
+    x64.cmpRegReg r8, rbx
+    x64.jcc equal, ifcont#24
+  theCumulativeBucketMoved:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#24:
+    x64.callDirect __mm_counter_alloc_live
+    x64.cmpRegReg r8, r14
+    x64.jcc less, ifcont#26
+  theDropFreedNothing:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#26:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at allocations-by-tag.dropping-the-population-leaves-the-bucket.test:31: Range check failed: value outside typealias 'Tally'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#39:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#7
+  tryerr#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at allocations-by-tag.dropping-the-population-leaves-the-bucket.test:31: the snapshot is sized to every bucket\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#36:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit#53
+  tryerr#20:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at allocations-by-tag.dropping-the-population-leaves-the-bucket.test:41: the snapshot is sized to every bucket\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  critsplit#53:
+    x64.movRegReg r15, r8
+    x64.jmp tryok
+}
