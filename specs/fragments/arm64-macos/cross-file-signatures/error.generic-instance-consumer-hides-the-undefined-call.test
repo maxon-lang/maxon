@@ -1,0 +1,19 @@
+// Test: error.generic-instance-consumer-hides-the-undefined-call
+// --- file: probe.maxon
+union Hidden
+	broke(detail String)
+end 'Hidden'
+
+// --- file: main.maxon
+typealias HiddenArray = Array with Hidden
+
+function main() returns ExitCode
+	var b = Hidden.broke("x")
+	var xs = HiddenArray.create()
+	xs.push(b)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3004: <fragment>:11:17: call to undefined function 'Hidden.broke'
+error E3005: <fragment>:13:5: argument type mismatch for 'value': expected 'Hidden', got 'unknown'

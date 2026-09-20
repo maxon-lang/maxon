@@ -1,0 +1,19 @@
+// Test: error.generic-instance-consumer-a-second-file-declares-the-alias
+// --- file: probe.maxon
+export union Thing
+	made(detail String)
+end 'Thing'
+
+typealias ThingArray = Array with Thing
+
+// --- file: main.maxon
+typealias ThingArray = Array with Thing
+
+function main() returns ExitCode
+	var xs = ThingArray.create()
+	xs.push(Thing.made("x"))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3062: <fragment>:7:11: unused typealias: 'ThingArray'

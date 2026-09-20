@@ -1,0 +1,110 @@
+// Test: an-enum-conformer-is-stored-in-an-interface-field
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+enum Step implements Greeter
+	one
+	two
+
+	function greet() returns Integer
+		return match self 'which'
+			one gives 41
+			two gives 7
+		end 'which'
+	end 'greet'
+end 'Step'
+
+type Holder
+	let g as Greeter
+
+	static function create(s Step) returns Self
+		return Self{g: s}
+	end 'create'
+
+	function greetThrough() returns Integer
+		return self.g.greet()
+	end 'greetThrough'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Step.one)
+	return h.greetThrough()
+end 'main'
+---
+ExitCode: 41
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @Step.greet {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 41
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.movRegImm32 r8, 7
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+  __il_body#6:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __witness_Step.Greeter]
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+  __il_body#7:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.callMem [rax + 40]
+    x64.movRegReg rbx, r8
+  __il_cont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-enum-conformer-is-stored-in-an-interface-field.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

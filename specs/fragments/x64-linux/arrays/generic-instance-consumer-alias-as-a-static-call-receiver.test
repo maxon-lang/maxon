@@ -1,0 +1,59 @@
+// Test: generic-instance-consumer-alias-as-a-static-call-receiver
+// --- file: probe.maxon
+export union Thing
+	made(detail String)
+end 'Thing'
+
+typealias ThingArray = Array with Thing
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var xs = ThingArray.create()
+	xs.push(Thing.made("x"))
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Thing]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata r12, [rip + __str_rec_1]  ; "x"
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
