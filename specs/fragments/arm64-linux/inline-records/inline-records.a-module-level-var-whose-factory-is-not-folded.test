@@ -1,0 +1,129 @@
+// Test: inline-records.a-module-level-var-whose-factory-is-not-folded
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export static function scaled(lo Half, by Half = 3) returns Self
+		return Self{lo: lo * by, hi: lo + by}
+	end 'scaled'
+end 'Pair'
+
+var built = Pair.scaled(5)
+
+function main() returns ExitCode
+	let before = __Builtins.mmAllocLive()
+
+	if built.lo != 15 'initialLo'
+		return 1
+	end 'initialLo'
+
+	if built.hi != 8 'initialHi'
+		return 2
+	end 'initialHi'
+
+	built = Pair.create(20, hi: 21)
+
+	if built.lo != 20 'secondLo'
+		return 3
+	end 'secondLo'
+
+	if built.hi != 21 'secondHi'
+		return 4
+	end 'secondHi'
+
+	let after = __Builtins.mmAllocLive()
+
+	if after != before 'alloc'
+		return 5
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_built@0 = i64 0
+  __slab_state@8 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mm_counter_alloc_live
+    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __data_built
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 15
+    arm64.b.eq ifcont#2
+  initialLo:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#2:
+    arm64.leaGlobal x0, __data_built
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.lsr x0, x0, 32
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 8
+    arm64.b.eq __rc_ok
+  initialHi:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 90194313236
+  __il_cont:
+    arm64.leaGlobal x1, __data_built
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_built
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 20
+    arm64.b.eq ifcont#6
+  secondLo:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.leaGlobal x0, __data_built
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.lsr x0, x0, 32
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 21
+    arm64.b.eq ifcont#8
+  secondHi:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.bl __mm_counter_alloc_live
+    arm64.cmp x0, x19
+    arm64.b.eq ifcont#10
+  alloc:
+    arm64.movImm x0, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

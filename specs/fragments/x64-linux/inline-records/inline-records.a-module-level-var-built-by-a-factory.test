@@ -1,0 +1,54 @@
+// Test: inline-records.a-module-level-var-built-by-a-factory
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+var origin = Pair.create(4, hi: 5)
+
+function main() returns ExitCode
+	return (origin.lo + origin.hi) as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __data_origin@0 = i64 21474836484
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_origin
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.leaRegGlobal rcx, __data_origin
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.shrRegImm8 rcx, rcx, 32
+    x64.movRegImm32 rdx, 4294967295
+    x64.andRegReg rcx, rcx, rdx
+    x64.leaRegRegReg r8, rax, rcx
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at inline-records.a-module-level-var-built-by-a-factory.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

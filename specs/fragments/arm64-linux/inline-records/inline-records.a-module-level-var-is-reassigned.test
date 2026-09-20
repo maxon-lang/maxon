@@ -1,0 +1,108 @@
+// Test: inline-records.a-module-level-var-is-reassigned
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+var slot = Pair.create(1, hi: 2)
+
+function main() returns ExitCode
+	let before = __Builtins.mmAllocLive()
+
+	if slot.lo != 1 'firstLo'
+		return 1
+	end 'firstLo'
+
+	slot = Pair.create(7, hi: 9)
+
+	if slot.lo != 7 'secondLo'
+		return 2
+	end 'secondLo'
+
+	if slot.hi != 9 'secondHi'
+		return 3
+	end 'secondHi'
+
+	let after = __Builtins.mmAllocLive()
+
+	if after != before 'alloc'
+		return 4
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_slot@0 = i64 8589934593
+  __slab_state@8 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mm_counter_alloc_live
+    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __data_slot
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 1
+    arm64.b.eq __rc_ok
+  firstLo:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.movImm x0, 38654705671
+  __il_cont:
+    arm64.leaGlobal x1, __data_slot
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_slot
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 7
+    arm64.b.eq ifcont#4
+  secondLo:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#4:
+    arm64.leaGlobal x0, __data_slot
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.lsr x0, x0, 32
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.cmp x0, 9
+    arm64.b.eq ifcont#6
+  secondHi:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#6:
+    arm64.bl __mm_counter_alloc_live
+    arm64.cmp x0, x19
+    arm64.b.eq ifcont#8
+  alloc:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont#8:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

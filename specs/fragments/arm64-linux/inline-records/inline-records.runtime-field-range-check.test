@@ -1,0 +1,31 @@
+// Test: inline-records.runtime-field-range-check
+typealias Nib = int(0 to 15)
+
+type Duo
+	export let a as Nib
+	export let b as Nib
+
+	export static function create(a Nib, b Nib) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Duo'
+
+function main() returns ExitCode
+	var bad = 4
+	bad = bad * 5
+	let d = Duo.create(1, b: bad)
+	return d.a + d.b
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_0  ; "panic at inline-records.runtime-field-range-check.test:8: Range check failed: value outside typealias 'Nib'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

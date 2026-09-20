@@ -1,0 +1,86 @@
+// Test: inline-records.as-a-union-payload
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+union Slot
+	empty
+	filled(p Pair)
+end 'Slot'
+
+function main() returns ExitCode
+	let s = Slot.filled(Pair.create(7, hi: 3))
+
+	match s 'slot'
+		empty then return 1
+		filled(p) then return (p.lo + p.hi) as ExitCode
+	end 'slot'
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+  __rc_ok#14:
+    arm64.movImm x19, 12884901895
+  __il_cont:
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movImm x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.storeBaseDispReg.word64 [x0 + 8], x19
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.b.ne matchnext
+  matcharm#1:
+    arm64.movImm x19, 1
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.b.ne matchdead
+  matcharm#2:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.movImm x2, 4294967295
+    arm64.and x2, x1, x2
+    arm64.lsr x1, x1, 32
+    arm64.movImm x3, 4294967295
+    arm64.and x1, x1, x3
+    arm64.add x19, x2, x1
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#6:
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at inline-records.as-a-union-payload.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,21 @@
+// Test: inline-records.a-var-field-stays-a-heap-record
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export var lo as Half
+	export var hi as Half
+end 'Pair'
+
+function main() returns ExitCode
+	return sizeof(Pair)
+end 'main'
+---
+ExitCode: 16
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 16
+    arm64.epilogue 16
+    arm64.ret
+}

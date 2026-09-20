@@ -1,0 +1,96 @@
+// Test: inline-records.clone-is-the-identity
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(5, hi: 6)
+
+	let before = __Builtins.mmAllocLive()
+	let q = p.clone()
+	let after = __Builtins.mmAllocLive()
+
+	if q.lo != 5 'lo'
+		return 1
+	end 'lo'
+
+	if q.hi != 6 'hi'
+		return 1
+	end 'hi'
+
+	if after != before 'alloc'
+		return 2
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_state@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+  __rc_ok:
+    x64.movRegImm rbx, 25769803781
+  __il_cont:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r12, r8
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rcx, rbx
+    x64.andRegReg rcx, rbx, rax
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc equal, ifcont#2
+  lo:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.shrRegImm8 rbx, rbx, 32
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg rbx, rbx, rax
+    x64.cmpRegImm32 rbx, 6
+    x64.jcc equal, ifcont#4
+  hi:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.cmpRegReg r8, r12
+    x64.jcc equal, ifcont#6
+  alloc:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,94 @@
+// Test: inline-records.as-a-union-payload
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+union Slot
+	empty
+	filled(p Pair)
+end 'Slot'
+
+function main() returns ExitCode
+	let s = Slot.filled(Pair.create(7, hi: 3))
+
+	match s 'slot'
+		empty then return 1
+		filled(p) then return (p.lo + p.hi) as ExitCode
+	end 'slot'
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __rc_ok#14:
+    x64.movRegImm rbx, 12884901895
+  __il_cont:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchnext
+  matcharm#1:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc notEqual, matchdead
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.movRegImm32 rcx, 4294967295
+    x64.movRegReg rdx, rax
+    x64.andRegReg rdx, rax, rcx
+    x64.shrRegImm8 rax, rax, 32
+    x64.movRegImm32 rcx, 4294967295
+    x64.andRegReg rax, rax, rcx
+    x64.leaRegRegReg rbx, rdx, rax
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#6:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at inline-records.as-a-union-payload.test:23: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

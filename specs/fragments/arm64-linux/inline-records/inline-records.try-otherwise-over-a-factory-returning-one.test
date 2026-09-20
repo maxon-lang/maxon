@@ -1,0 +1,188 @@
+// Test: inline-records.try-otherwise-over-a-factory-returning-one
+typealias Half = int(0 to u32.max)
+
+enum MakeError implements Error
+	tooBig
+end 'MakeError'
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export static function make(n Half) returns Self throws MakeError
+		if n > 2 'refuse'
+			throw MakeError.tooBig
+		end 'refuse'
+		return Self{lo: n, hi: n + 1}
+	end 'make'
+end 'Pair'
+
+function main() returns ExitCode
+	let before = __Builtins.mmAllocLive()
+	let good = try Pair.make(1) otherwise Pair.create(0, hi: 0)
+	let bad = try Pair.make(3) otherwise Pair.create(0, hi: 0)
+	let after = __Builtins.mmAllocLive()
+
+	if good.lo != 1 'goodLo'
+		return 1
+	end 'goodLo'
+
+	if good.hi != 2 'goodHi'
+		return 1
+	end 'goodHi'
+
+	if bad.lo != 0 'badLo'
+		return 1
+	end 'badLo'
+
+	if bad.hi != 0 'badHi'
+		return 1
+	end 'badHi'
+
+	if after != before 'alloc'
+		return 2
+	end 'alloc'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_state@0 = i64 0
+}
+
+func @Pair.make {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.movImm x1, 4294967295
+    arm64.cmp x0, x1
+    arm64.b.gt __rc_panic
+  __rc_ok#3:
+    arm64.cmp x0, 2
+    arm64.b.le ifcont
+  refuse:
+    arm64.movImm x9, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.add x1, x0, 1
+  __rc_ok#6:
+    arm64.lsl x1, x1, 32
+    arm64.orr x0, x0, x1
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at inline-records.try-otherwise-over-a-factory-returning-one.test:16: Range check failed: value outside typealias 'Half'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl __mm_counter_alloc_live
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.bl Pair.make
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#1
+  __rc_ok#22:
+    arm64.movImm x20, 0
+    arm64.b trycont#3
+  tryok#1:
+    arm64.movRegReg x20, x0
+  trycont#3:
+    arm64.movImm x0, 3
+    arm64.bl Pair.make
+    arm64.cmp x9, 0
+    arm64.b.eq tryok#4
+  __rc_ok#30:
+    arm64.movImm x21, 0
+    arm64.b trycont#6
+  tryok#4:
+    arm64.movRegReg x21, x0
+  trycont#6:
+    arm64.bl __mm_counter_alloc_live
+    arm64.movImm x1, 4294967295
+    arm64.and x1, x20, x1
+    arm64.cmp x1, 1
+    arm64.b.eq ifcont#8
+  goodLo:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#8:
+    arm64.lsr x1, x20, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.cmp x1, 2
+    arm64.b.eq ifcont#10
+  goodHi:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#10:
+    arm64.movImm x1, 4294967295
+    arm64.and x1, x21, x1
+    arm64.cmp x1, 0
+    arm64.b.eq ifcont#12
+  badLo:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#12:
+    arm64.lsr x1, x21, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.cmp x1, 0
+    arm64.b.eq ifcont#14
+  badHi:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#14:
+    arm64.cmp x0, x19
+    arm64.b.eq ifcont#16
+  alloc:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  ifcont#16:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

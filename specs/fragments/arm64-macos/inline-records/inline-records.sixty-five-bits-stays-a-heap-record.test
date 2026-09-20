@@ -1,0 +1,29 @@
+// Test: inline-records.sixty-five-bits-stays-a-heap-record
+typealias Word = bits(64)
+
+type Flagged
+	export let w as Word
+	export let flag as bool
+
+	export static function create(w Word, flag bool) returns Self
+		return Self{w: w, flag: flag}
+	end 'create'
+end 'Flagged'
+
+function main() returns ExitCode
+	return sizeof(Flagged)
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __slab_state@0 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 16
+    arm64.epilogue 16
+    arm64.ret
+}

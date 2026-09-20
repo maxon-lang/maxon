@@ -1,0 +1,50 @@
+// Test: inline-records.a-module-level-var-built-by-a-factory
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+var origin = Pair.create(4, hi: 5)
+
+function main() returns ExitCode
+	return (origin.lo + origin.hi) as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __data_origin@0 = i64 21474836484
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_origin
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.leaGlobal x1, __data_origin
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.lsr x1, x1, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.add x0, x0, x1
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at inline-records.a-module-level-var-built-by-a-factory.test:16: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

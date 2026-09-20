@@ -1,0 +1,23 @@
+// Test: inline-records.no-equals-is-still-refused
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(1, hi: 2)
+	let q = Pair.create(1, hi: 2)
+	if p == q 'eq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:7: type mismatch: 'cannot compare struct with struct'

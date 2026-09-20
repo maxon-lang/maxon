@@ -1,0 +1,179 @@
+// Test: inline-records.array-of-inline-records-is-eight-byte-strided
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+typealias PairArray = Array with Pair
+
+function main() returns ExitCode
+	var arr = PairArray.create()
+	arr.reserve(500)
+
+	let before = __Builtins.mmAllocLive()
+	for i in 0 upto 500 'push'
+		arr.push(Pair.create(i, hi: i))
+	end 'push'
+	let after = __Builtins.mmAllocLive()
+
+	if arr.managed.elementSize() != 8 'stride'
+		return 2
+	end 'stride'
+
+	if after != before 'alloc'
+		return 3
+	end 'alloc'
+
+	var sum = 0
+	for p in arr 'read'
+		sum = sum + p.lo
+	end 'read'
+
+	if sum != 124750 'values'
+		return 4
+	end 'values'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 500
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 500
+    x64.jcc greaterEqual, __il_cont#16
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#16
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#16:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#1
+  __il_body:
+    x64.movRegReg rax, r13
+    x64.shlRegImm8 rax, r13, 32
+    x64.movRegReg rdx, rax
+    x64.orRegReg rdx, rax, r13
+  __il_cont#24:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 500
+    x64.jcc less, __il_body
+  forexit#4:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_element_size
+    x64.cmpRegImm32 r8, 8
+    x64.jcc equal, ifcont#6
+  stride:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.cmpRegReg r13, r12
+    x64.jcc equal, ifcont#8
+  alloc:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#8:
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.jmp forhdr#9
+  read:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont:
+    x64.movRegImm32 r8, 4294967295
+    x64.andRegReg rdi, rdi, r8
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#11:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr#9:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, read
+  forexit#12:
+    x64.cmpRegImm32 rax, 124750
+    x64.jcc equal, ifcont#14
+  values:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#14:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,67 @@
+// Test: inline-records.equals-still-dispatches
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+
+	export function equals(other Self) returns bool
+		return lo == other.lo and hi == other.hi
+	end 'equals'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(7, hi: 8)
+	let q = Pair.create(7, hi: 8)
+
+	if p == q 'same'
+		return 0
+	end 'same'
+
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+  __rc_ok#13:
+    arm64.movImm x0, 34359738375
+  __rc_ok#20:
+    arm64.movImm x1, 34359738375
+  __il_body:
+    arm64.movImm x2, 4294967295
+    arm64.and x2, x0, x2
+    arm64.movImm x3, 4294967295
+    arm64.and x3, x1, x3
+    arm64.cmp x2, x3
+    arm64.movImm x2, 0
+    arm64.b.ne critsplit
+  andrhs:
+    arm64.lsr x0, x0, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x0, x0, x2
+    arm64.lsr x1, x1, 32
+    arm64.movImm x2, 4294967295
+    arm64.and x1, x1, x2
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.b __il_cont
+  critsplit:
+    arm64.movRegReg x0, x2
+  __il_cont:
+    arm64.cbz x0, ifcont
+  same:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

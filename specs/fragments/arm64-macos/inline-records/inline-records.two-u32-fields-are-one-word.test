@@ -1,0 +1,25 @@
+// Test: inline-records.two-u32-fields-are-one-word
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	return sizeof(Pair)
+end 'main'
+---
+ExitCode: 8
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.epilogue 16
+    arm64.ret
+}

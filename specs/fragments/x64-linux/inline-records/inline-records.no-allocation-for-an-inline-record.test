@@ -1,0 +1,158 @@
+// Test: inline-records.no-allocation-for-an-inline-record
+typealias Half = int(0 to u32.max)
+
+type Pair
+	export let lo as Half
+	export let hi as Half
+
+	export static function create(lo Half, hi Half) returns Self
+		return Self{lo: lo, hi: hi}
+	end 'create'
+end 'Pair'
+
+typealias PairArray = Array with Pair
+
+function main() returns ExitCode
+	var holder = PairArray.create()
+	holder.reserve(100)
+
+	let before = __Builtins.mmAllocLive()
+	for i in 0 upto 100 'build'
+		holder.push(Pair.create(i, hi: i * 2))
+	end 'build'
+	let after = __Builtins.mmAllocLive()
+
+	var sum = 0
+	for p in holder 'read'
+		sum = sum + p.lo
+	end 'read'
+
+	if sum != 4950 'values'
+		return 1
+	end 'values'
+
+	return (after - before) as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 100
+  __rc_ok#21:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_capacity
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greaterEqual, __il_cont#15
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_cont#15
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at Array.maxon:325: Array.reserve: grow failed \xe2\x80\x94 minCapacity > cap guaranteed\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_cont#15:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#1
+  build:
+    x64.imulRegRegImm32 rax, r13, 2
+  __rc_ok#25:
+    x64.shlRegImm8 rax, rax, 32
+    x64.movRegReg rdx, rax
+    x64.orRegReg rdx, rax, r13
+  __il_cont#23:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+  forstep#3:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#1:
+    x64.cmpRegImm32 r13, 100
+    x64.jcc less, build
+  forexit#4:
+    x64.callDirect __mm_counter_alloc_live
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 0]
+    x64.jmp forhdr#5
+  read:
+    x64.loadRegBaseIndexScale.word64 rdi, [rsi + rcx*8 + 0]
+  __im_cont:
+    x64.movRegImm32 r9, 4294967295
+    x64.andRegReg rdi, rdi, r9
+    x64.leaRegRegReg rax, rax, rdi
+  forstep#7:
+    x64.leaRegRegImm32 rcx, rcx, 1
+  forhdr#5:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, read
+  forexit#8:
+    x64.cmpRegImm32 rax, 4950
+    x64.jcc equal, ifcont
+  values:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg r13, r8
+    x64.subRegReg r13, r8, r12
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok#11:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at inline-records.no-allocation-for-an-inline-record.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
