@@ -1763,6 +1763,9 @@ function resetMergeTargets(project Project)
 	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create()
 	project.hiddenTypeNameDiagnostics = DeferredNameDiagnosticArray.create()
 
+	project.deferredParseErrors = DeferredParseErrorArray.create()
+	project.genericAliasNamesWrittenByAFile = UsedTypeNameSet.create()
+
 	// The binding-hygiene list (E3012/E3077) is a push target of the same merge, and doubles the same
 	// way.
 	project.bindingHygieneDiagnostics = DiagnosticArray.create()
@@ -1928,7 +1931,7 @@ module function varShouldBeLetMessage(name String) returns String
 	return "variable '{name}' is never reassigned; use 'let' instead of 'var'"
 end 'varShouldBeLetMessage'
 
-function reportParseError(project Project, path FilePath, error ParseError)
+module function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
 		// ⚠ The `expected` half is NOT quoted here — `Lexer.expectationDisplayText` decides that, and it
 		// is the only place that does: a bare lexical CATEGORY (`identifier`) is written bare and

@@ -91,6 +91,8 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	let storageEdges = collectStorageReachEdges(mutationEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
 	let mutationSummary = buildParamMutationSummary(funcNames, funcSignatures: project.funcSignatures, edges: mutationEdges, byCallee: mutationEdgesByCallee, recordEdges: recordEdges, storageEdges: storageEdges, provenanceWrites: provenance.receiverWrites)
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary, provenance: provenance)
+	// After `checkCalls`: the E3004 explaining an undefined call precedes the refusal it caused.
+	reportDeferredParseErrors(project)
 
 	// The doors a value reaches a `let`'s storage through that the parser could not judge by name — E3019 at a
 	// receiver written through a `let`'s record, E3078 at a `var`, E3160 past the send that lent a graph — after
@@ -2988,6 +2990,14 @@ end 'pushSuccessorPair'
 function blameTargetErrorsIn(project Project, func IrFunction) returns bool
 	return not targetProvidesEveryFacility(project.target) and not isLibraryFunction(project, func: func)
 end 'blameTargetErrorsIn'
+
+// An INDEX loop whose reads are inline and bind nothing off the borrow — the ruling is at
+// `TypeResolution.reportDeferredNameDiagnostics`, which drains its own lists the same way.
+function reportDeferredParseErrors(project Project)
+	for entryIndex in 0 upto project.deferredParseErrors.count() 'eachEntry'
+		reportParseError(project, path: (try project.deferredParseErrors.get(entryIndex) otherwise panic("reportDeferredParseErrors: entryIndex {entryIndex} is below project.deferredParseErrors.count()")).filePath, error: (try project.deferredParseErrors.get(entryIndex) otherwise panic("reportDeferredParseErrors: entryIndex {entryIndex} is below project.deferredParseErrors.count()")).error)
+	end 'eachEntry'
+end 'reportDeferredParseErrors'
 
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
 	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass

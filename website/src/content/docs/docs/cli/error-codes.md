@@ -353,7 +353,7 @@ Two typealiases in scope declare the same name. Two `typealias` declarations of 
 
 ### E3062 — `semanticUnusedTypeAlias`
 
-A typealias is declared and never used. "Used" means the NAME appears in a type position in its OWN declaring file. An exported alias is exempt (one file cannot see another's uses), and being implicitly inferable from a bare `[...]` literal is not a use.
+A typealias is declared and never used. "Used" means the NAME appears in a type position. For a GENERIC-INSTANCE alias (`typealias Small = Array with Byte`) a spelling in ANY file counts, provided exactly one file in the program declares that name; every other alias form is answered from its OWN declaring file alone. An exported alias is exempt (one file cannot see another's uses), and being implicitly inferable from a bare `[...]` literal is not a use.
 
 ### E3063 — `semanticAmbiguousTypeAlias`
 

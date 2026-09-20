@@ -1897,6 +1897,19 @@ export union ParseError implements Error
 	lentGraphEscapes(explanation String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
+export typealias ParseErrorArray = Array with ParseError
+
+export type DeferredParseError
+	export let error as ParseError
+	export let filePath as FilePath
+
+	export static function create(error ParseError, filePath FilePath) returns DeferredParseError
+		return Self{error: error, filePath: filePath}
+	end 'create'
+end 'DeferredParseError'
+
+export typealias DeferredParseErrorArray = Array with DeferredParseError
+
 // Which refusal an `end` whose label does not repeat its header's is: a block's (E2008) or a match's (E2043).
 enum EndLabelRule
 	block
@@ -15548,8 +15561,8 @@ export type Parser
 	//
 	// It records NAMES and not just alias names, because the recording sites do not know (and must not
 	// have to ask) whether a written name is an alias, a struct or an interface — the filtering happens
-	// once, at `reportUnusedTypeAliases`, against the declarations. See `recordTypeNameUse` for the
-	// three sites and why they are the whole list.
+	// at `reportUnusedTypeAliases` against this file's declarations, and again at the merge against the
+	// program's. See `recordTypeNameUse` for the three sites and why they are the whole list.
 	// ⭐ **IS THE FILE BEING PARSED `stdlib/` SOURCE (P1.9)?** One bit, decided once per file by the
 	// query that builds this parser (`Queries`), because that is the only tier holding the project —
 	// and asked only of a `typealias` declaration (`typeAliasVisibility`). It is what makes a
@@ -16040,12 +16053,13 @@ export type Parser
 		self.reportUnusedTypeAliases()
 
 		// ⭐ **THE SAME SET, KEPT.** `reportUnusedTypeAliases` has just answered "did THIS file use its own
-		// alias?" from `usedTypeNames`; `checkUnusedExports` asks "did any OTHER file use this one?" and is
-		// answered from the identical fact one scope wider. Published rather than re-derived — a second walk
-		// looking for type references would be a second answer to what a written name denotes, and the
-		// column that looked like an alternative (`IrFunction.valueNameIds`) is filler-bearing and gave a
-		// measured wrong answer. It is the shared empty set unless this file wrote a type name, so a file
-		// that names none costs nothing.
+		// alias?" from `usedTypeNames`; `checkUnusedExports` asks "did any OTHER file use this one?", and
+		// `ParseStaging.commitWrittenGenericAliasNames` asks that of a generic-instance alias's own E3062.
+		// Both are answered from the identical fact one scope wider. Published rather than re-derived — a
+		// second walk looking for type references would be a second answer to what a written name denotes,
+		// and the column that looked like an alternative (`IrFunction.valueNameIds`) is filler-bearing and
+		// gave a measured wrong answer. It is the shared empty set unless this file wrote a type name, so a
+		// file that names none costs nothing.
 		self.artifact.usedTypeNames = self.usedTypeNames
 
 		// ⭐ **THE OTHER HALF OF THE SAME PUBLICATION** — the types this file's field accesses required to be
@@ -24281,7 +24295,8 @@ export type Parser
 	//
 	// It takes NAMES indiscriminately — a struct name, an interface name, a type parameter — because a
 	// recording site does not know what a written name denotes and must not have to ask. The filtering
-	// happens once, at `reportUnusedTypeAliases`, against this file's own declarations.
+	// happens at `reportUnusedTypeAliases`, against this file's own declarations, and again at the merge
+	// against the whole program's (`ParseStaging.commitWrittenGenericAliasNames`).
 	function recordTypeNameUse(name ByteArray)
 		if not self.isTheReportingWalk 'notTheReportingWalk'
 			return
@@ -24315,10 +24330,13 @@ export type Parser
 	//
 	// ⚠ An EXPORTED alias is exempt, and that is not leniency — it is the only sound answer a per-file
 	// check can give. Its uses may be in any other file, and this check sees one file, so reporting it
-	// could only ever be a false positive. (It is also why the pinned cross-file case reports TWICE: an
-	// alias that is non-exported AND used only from elsewhere is genuinely unused in its own file, and
-	// genuinely invisible at the use.) The exemption is applied at `recordTypeName`, so an exported
+	// could only ever be a false positive. The exemption is applied at `recordTypeName`, so an exported
 	// alias is never even a candidate.
+	//
+	// A non-exported alias used only from elsewhere is still a candidate here. A GENERIC-INSTANCE
+	// one is credited at the drain by whichever file wrote its name
+	// (`ParseStaging.commitWrittenGenericAliasNames`); every other form keeps the own-file rule, so
+	// it reports twice — unused here, invisible at the use.
 	function reportUnusedTypeAliases()
 		match self.declaredTypeAliases 'walk'
 			unwritten then return
@@ -61167,6 +61185,20 @@ export type Parser
 		try self.requireManagedValueMatches(payloadValueTypeOf(class, declared: declared), isString: payloadClassIsString(class), value: value, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, voice: voice, anchor: anchor)
 	end 'requireManagedSlotValueMatches'
 
+	// A refusal earned by a call NO file declares is recorded rather than thrown: `unresolved` is
+	// the deferral such a call mints, and a throw ends the file's parse, so
+	// `SemanticCheck.checkCalls` never reports the E3004 that explains it and the author is shown
+	// only this symptom, at a consumer line. Only the report is deferred — the entry is the finished
+	// `ParseError` — and `mintCallResult` owns the rule.
+	function deferredTheRefusal(error ParseError, argTag ValueTypeTag) returns bool
+		if argTag != ValueTypeTag.unresolved 'notADeferredCallResult'
+			return false
+		end 'notADeferredCallResult'
+
+		self.artifact.deferredParseErrors.push(error)
+		return true
+	end 'deferredTheRefusal'
+
 	// ⭐ **A MANAGED VALUE MUST BE THE MATCHING HEAP KIND** — the ONE check a struct FIELD and a union
 	// PAYLOAD share: a `String` slot takes a `string`; a `struct` slot takes a `structRef` of the SAME struct
 	// name (a pointer of the wrong struct would pass a tag-only check). The names are compared through this
@@ -61182,7 +61214,13 @@ export type Parser
 			// answers `got 'struct'` for the very struct the arm below answers `got 'Other'` for — one door,
 			// two sentences, sixty lines apart in `specs/arrays.md`. The sentence is `expected 'String', got
 			// 'Item'`.
-			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+
+			if self.deferredTheRefusal(mismatch, argTag: got) 'aDeferredCallResult'
+				return
+			end 'aDeferredCallResult'
+
+			throw mismatch
 		end 'tagMismatch'
 
 		if isString 'stringOk'
@@ -62927,7 +62965,11 @@ export type Parser
 		let expected = enumRawValueArgumentTag(layout.backing)
 
 		if not self.rawValueArgumentSuits(raw, expected: expected) 'wrongDomain'
-			throw ParseError.typeMismatchExpectedGot(typeTagName(expected), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
+			let mismatch = ParseError.typeMismatchExpectedGot(typeTagName(expected), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
+
+			if not self.deferredTheRefusal(mismatch, argTag: self.tagOf(raw)) 'notADeferredCallResult'
+				throw mismatch
+			end 'notADeferredCallResult'
 		end 'wrongDomain'
 
 		// ⭐⭐ **A LITERAL THAT NAMES NO CASE IS REFUSED HERE, NOT LEFT TO THE RUN-TIME THROW.** Both
@@ -63046,7 +63088,11 @@ export type Parser
 		// The argument's domain is `String`, whatever the declaration is — read through the shared
 		// renderer so this position and the literal one cannot come to word one rejection two ways.
 		if not tagIsText(self.tagOf(name)) 'notAString'
-			throw ParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(name), line: memberTok.line, column: memberTok.column)
+			let mismatch = ParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.string), got: self.valueDisplayTypeName(name), line: memberTok.line, column: memberTok.column)
+
+			if not self.deferredTheRefusal(mismatch, argTag: self.tagOf(name)) 'notADeferredCallResult'
+				throw mismatch
+			end 'notADeferredCallResult'
 		end 'notAString'
 
 		try self.consume(TokenKind.rightParen)
@@ -63792,6 +63838,10 @@ export type Parser
 	// this ruling they can express. Widening the rest of the way needs the descriptor-need seed
 	// `handleEscapingBorrowFeed` names, and that is a rung.
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, range SourceRange) returns ValueId throws ParseError
+		if self.tagOf(arg) == ValueTypeTag.unresolved 'aDeferredCallResult'
+			return arg
+		end 'aDeferredCallResult'
+
 		// ⚠⚠ **A MANAGED VALUE ENTERING DURABLE STORAGE WHOSE TYPE RESTS A SLOT AT THE ENCLOSING PARAMETER IS
 		// NOT REFUSED HERE.** A FIELD of the enclosing type is the arrival that reaches it —
 		// `Self\{one: EBox.create(x, …)\}` — and the enclosing instance is CONCRETE at every site that frees
@@ -76003,42 +76053,44 @@ export type Parser
 		return self.emitArrayVoidCall(ManagedAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 	end 'parseArrayAppend'
 
-	// ⭐⭐ **THE ARGUMENT RULE ALL THREE `append` SPELLINGS MAKE, AND THE TWO SENTENCES IT SPEAKS IT IN.** The
-	// whole VERDICT is `ProgramSignatures.arrayAppendArgAdmits` — one record, one operation, one precondition,
-	// stated where the element types live so no door may respell it. What lives here is which sentence a
-	// refusal gets, and that is a property of the SURFACE the author wrote rather than of the rule:
-	//   • the BUFFER's parameter is declared `__ManagedMemory`, so its mismatch names that type and its `other`
-	//     label (`builtin-type-checking.error-managed-memory-append-int` pins the wording);
-	//   • `Array.append`/`appendMemory` name the RECEIVER's own instance instead, and read the parameter name
-	//     off the spelling the author wrote (`appendArgParamName`), so `appendMemory` is never told to fix an
-	//     `other` it does not declare.
+	// The argument rule all three `append` spellings make. The whole VERDICT is
+	// `ProgramSignatures.arrayAppendArgAdmits` — one record, one operation, one precondition, stated
+	// where the element types live so no door may respell it; `appendArgMismatch` chooses only the
+	// sentence.
 	//
-	// ⚠ **IT REPORTS E3005 AND USED TO REPORT E2015, AND THE OLD CODE WAS A FALSE CLAIM** — A3r's argument,
-	// applied to a fourth site. E2015 reads *"a language construct this compiler does not implement yet"*, and
-	// `append` is implemented: the PROGRAM is wrong, exactly as it is at the declared parameter this argument
-	// position is the ninth sibling of. Reporting what the other eight report (`argTypeMismatchSentence`,
-	// naming both types) is also what lets the receiver's element be READ OFF the message — the three
-	// hand-written sentences it replaces named neither type, so `expected 'Array_Byte', got 'Array_Small'`
-	// could not be said at all.
-	//
-	// ⚠ **BOTH ANCHOR ON THE METHOD NAME, NOT ON THE ARGUMENT, AND THAT IS THE REFERENCE'S ANCHOR.**
-	// `specs/type-checking.md`'s `method-call-wrong-self-type` pins column 6 of `	arr.append("hello")` — the
-	// `append` token — and its `array-of-different-element-types` pins the `append` of `	ints.append(strings)`
-	// the same way. The compiler pointed at the argument on the `Array` side while pointing at the callee at every
-	// DECLARED call (`SemanticCheck.checkOneArgType` anchors on the call op) and at the method on the buffer
-	// side — one refusal, three anchors, decided by which door the value happened to enter. The two sides were
-	// still two functions with one body until the 2026-08-07 fold, which is how they could differ at all.
+	// ⚠ Both sentences anchor on the METHOD NAME, never on the argument, because that is what the
+	// reference pins: `specs/type-checking.md`'s `method-call-wrong-self-type` fixes the `append`
+	// token of `arr.append("hello")` and its `array-of-different-element-types` the `append` of
+	// `ints.append(strings)`. A DECLARED call anchors on the call op
+	// (`SemanticCheck.checkOneArgType`), so one refusal reachable through three doors would
+	// otherwise carry three anchors.
 	function requireAppendArg(other ValueId, arr ValueId, giid GenericInstanceId, methodTok Token, bufferSurface bool) throws ParseError
 		if self.signatures.arrayAppendArgAdmits(giid, argTag: self.tagOf(other), argNameId: self.valueNameId(other), readerFilePath: self.filePath) 'admitted'
 			return
 		end 'admitted'
 
+		let mismatch = self.appendArgMismatch(other, arr: arr, methodTok: methodTok, bufferSurface: bufferSurface)
+
+		if self.deferredTheRefusal(mismatch, argTag: self.tagOf(other)) 'aDeferredCallResult'
+			return
+		end 'aDeferredCallResult'
+
+		throw mismatch
+	end 'requireAppendArg'
+
+	// Which sentence a refusal gets is a property of the SURFACE the author wrote rather than of
+	// the rule: the buffer's parameter is declared `__ManagedMemory`, so its mismatch names that
+	// type and its `other` label (`builtin-type-checking.error-managed-memory-append-int` pins the
+	// wording), while `Array.append` and `appendMemory` name the RECEIVER's own instance and read
+	// the parameter name off the spelling the author wrote (`appendArgParamName`), so
+	// `appendMemory` is never told to fix an `other` it does not declare.
+	function appendArgMismatch(other ValueId, arr ValueId, methodTok Token, bufferSurface bool) returns ParseError
 		if bufferSurface 'bufferSentence'
-			throw ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+			return ParseError.builtinArgumentType(String.from(ManagedMemoryOtherParamName), expected: String.from(ManagedMemoryTypeName), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
 		end 'bufferSentence'
 
-		throw ParseError.builtinArgumentType(String.from(appendArgParamName(methodTok.value)), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
-	end 'requireAppendArg'
+		return ParseError.builtinArgumentType(String.from(appendArgParamName(methodTok.value)), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
+	end 'appendArgMismatch'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array.** A TRIVIAL element
 	// passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String / struct
@@ -90009,9 +90061,11 @@ export type Parser
 	// symptom at an unrelated line — and a sweep that had merely MISSED a declaration would refuse a correct
 	// program.
 	//
-	// ⚠ **THE ONE POSITION STILL MISSING: `for … in` over a deferred call result reports E2015.** Its
-	// refusal stands in front of a loop the parser must still emit, and deferring there needs a way to
-	// abandon a half-emitted construct that this parser has not got.
+	// ⚠ Two positions still refuse one. `for … in` over a deferred call result reports E2015: its
+	// refusal stands in front of a loop the parser must still emit, and deferring there needs a way
+	// to abandon a half-emitted construct that this parser has not got. The doors whose parameter
+	// type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`, `__ManagedSocket`,
+	// `__ManagedDirectory`) also still throw, which only a file allowed to spell those names reaches.
 	function deferredUnresolvedMemberResult() returns ValueId
 		self.skipDeferredMemberChain()
 
@@ -92709,7 +92763,7 @@ end 'Parser'
 
 // A roster keeps a view of its own: the name may be a record the signature index holds, and the roster rides the
 // artifact, which crosses back from a pool worker whose index is that index.
-function insertOwnedName(names UsedTypeNameSet, name ByteArray)
+module function insertOwnedName(names UsedTypeNameSet, name ByteArray)
 	if names.contains(name) 'alreadyListed'
 		return
 	end 'alreadyListed'

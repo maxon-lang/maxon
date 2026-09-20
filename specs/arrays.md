@@ -490,6 +490,109 @@ end 'main'
 error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unused typealias: 'IntArray'
 ```
 
+### A generic-instance typealias is USED by the file that spells it, across a file boundary
+
+`error.unused-array-typealias` above states what counts as a use of an `Array with T` alias, and
+`X.create()` is the first spelling it names. A call needs a receiver, so a program that writes
+`ThingArray.create()` has spelled the alias for the only reason the alias exists — there is no other
+way to mint the instance it names.
+
+The boundary does not change that answer, because a generic-instance alias is **reachable across
+it**. `specs/export-keyword.md`'s `error.non-exported-typealias-cross-file` is the shape where E3062
+is right: a RANGED alias named from another file is refused at BOTH ends — the declaration is unused
+and the use site is told `E2003: Expected type name after 'as'`, so the name genuinely reached
+nothing. A generic-instance alias is answered from the whole-program instance index instead, so the
+other file's `ThingArray.create()` and `returns ThingArray` both resolve and no diagnostic lands at
+the use site at all. One question therefore has two answers in one program: the use site is served
+and the declaration is called dead. Delete the declaration and the program stops compiling, which is
+the only thing E3062 asks.
+
+Either end may hold the rule — refuse the far use, as the ranged alias does, or count it — but the
+two ends must agree, and the pair below pins the direction the reachable name commits the compiler
+to.
+
+<!-- test: generic-instance-consumer-alias-as-a-static-call-receiver -->
+The alias appears exactly once at the use site, as the base of a static call, in a file that did not
+declare it. That is a use, so the program compiles and runs.
+```maxon
+// --- file: probe.maxon
+export union Thing
+	made(detail String)
+end 'Thing'
+
+typealias ThingArray = Array with Thing
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var xs = ThingArray.create()
+	xs.push(Thing.made("x"))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: generic-instance-consumer-alias-as-a-receiver-and-a-return-type -->
+⭐ Same two files, same alias, same declaration — the use site additionally names `ThingArray` in a
+TYPE position, as a return type, which is the spelling E3062's answer is read from
+(`specs/unused-export.md`'s `cross-file-alias-in-a-signature-is-a-reference`). It does not save the
+declaration either, so the receiver spelling is not what E3062 is failing to see: the file boundary
+is. Both spellings resolve from the other file and neither is counted, which is why the two ends
+disagreeing is the defect and not the receiver. A fix that teaches E3062 only about `X.create()`
+leaves this program refused.
+```maxon
+// --- file: probe.maxon
+export union Thing
+	made(detail String)
+end 'Thing'
+
+typealias ThingArray = Array with Thing
+
+// --- file: main.maxon
+function makeThings() returns ThingArray
+	return ThingArray.create()
+end 'makeThings'
+
+function main() returns ExitCode
+	var xs = makeThings()
+	xs.push(Thing.made("x"))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.generic-instance-consumer-a-second-file-declares-the-alias -->
+⛔ The CONTROL that bounds the two cases above, and the direction they may not be paid for. Both
+files declare `ThingArray` over the identical instance, and only `main.maxon` spells it. Deleting
+`probe.maxon`'s declaration changes nothing about this program — `main.maxon` resolves `ThingArray`
+to its OWN declaration, which is what every alias form does — so `probe.maxon`'s declaration is
+unused in exactly the sense E3062 names, and a spelling that never reached it may not credit it.
+Two declarations coexist here (`specs/export-keyword.md`'s duplicate rule refuses only one FILE
+declaring a name twice), so no collision diagnostic explains it either.
+```maxon
+// --- file: probe.maxon
+export union Thing
+	made(detail String)
+end 'Thing'
+
+typealias ThingArray = Array with Thing
+
+// --- file: main.maxon
+typealias ThingArray = Array with Thing
+
+function main() returns ExitCode
+	var xs = ThingArray.create()
+	xs.push(Thing.made("x"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3062: <fragment>:7:11: unused typealias: 'ThingArray'
+```
+
 ### String Array Literals
 
 <!-- test: string-array-literal-basic -->

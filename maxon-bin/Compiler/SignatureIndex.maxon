@@ -22811,24 +22811,38 @@ export type ProgramSignatures
 	end 'genericAliasSpellingIsSuperseded'
 
 	// ⭐⭐ **THE INSTANCE A GENERIC-ALIAS NAME DENOTES TO A READER THAT NAMES NO FILE — THE THREE-QUESTION
-	// SEQUENCE, ONCE.** Is the name an alias at all, has the CONTEST superseded this spelling, and only then
-	// the refusing door. Every reader-free classifier wants exactly that composition, and written out at each
-	// of them it is the ORDER that drifts: asking `genericAliasInstanceInAnyFile` before the superseded probe
-	// turns a whole-program walk over the append-only registry into a panic (the probe's own header records
-	// two such walks), and skipping the probe altogether makes a contested name a wrong TYPE rather than a
-	// compile error.
+	// SEQUENCE, ONCE.** Is the name an alias at all and has the CONTEST superseded this spelling —
+	// both `namesALiveGenericAlias` — and only then the refusing door. Every reader-free classifier
+	// wants exactly that composition, and written out at each of them it is the ORDER that drifts:
+	// asking `genericAliasInstanceInAnyFile` before the superseded probe turns a whole-program walk
+	// over the append-only registry into a panic (the probe's own header records two such walks),
+	// and skipping the probe altogether makes a contested name a wrong TYPE rather than a compile
+	// error.
 	//
 	// `throws` is `Map.get`'s own channel and carries BOTH negative answers, which is what every caller but
 	// one wants. `typeSupportsDeepClone` is the exception and keeps its own outer `isGenericAliasInAnyFile`,
 	// because it owes a THIRD answer: a name that is no alias falls through to the aggregate walk, while a
 	// superseded one is admitted (A3k).
 	export function liveGenericAliasInstance(name ByteArray) returns GenericInstanceId throws MapError
-		if not self.isGenericAliasInAnyFile(name) or self.genericAliasSpellingIsSuperseded(name) 'namesNoLiveInstance'
+		if not self.namesALiveGenericAlias(name) 'namesNoLiveInstance'
 			throw MapError.keyNotFound
 		end 'namesNoLiveInstance'
 
 		return self.genericAliasInstanceInAnyFile(name)
 	end 'liveGenericAliasInstance'
+
+	export function namesALiveGenericAlias(name ByteArray) returns bool
+		return self.isGenericAliasInAnyFile(name) and not self.genericAliasSpellingIsSuperseded(name)
+	end 'namesALiveGenericAlias'
+
+	// ⚠ A bare NAME is safe to credit across files only while ONE file declares it, and the second
+	// conjunct is that guard. Two files declaring the same alias over the SAME instance file no
+	// contest (`settleGenericAliasContestRound` needs the declarations to denote DIFFERENT
+	// instances), so without it each would credit the other and a genuine E3062 would be dropped.
+	// It is not redundant of the first.
+	export function namesTheSoleGenericAliasDeclaration(name ByteArray) returns bool
+		return self.namesALiveGenericAlias(name) and not self.aliasNameIsDisagreedWith(name)
+	end 'namesTheSoleGenericAliasDeclaration'
 
 	// ⭐⭐ **THE SAME QUESTION ASKED OF A TYPE RATHER THAN A NAME (A3k review)** — for the one classifier door
 	// that has no `name` in hand because it is a COMPOSITION of two others, `typeArgIsCoOwnedTrivial`. It is

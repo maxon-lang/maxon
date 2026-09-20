@@ -514,3 +514,97 @@ end 'main'
 ```exitcode
 8
 ```
+
+### A generic-instance receiver is a CONSUMER, and a consumer never swallows the undefined call
+
+A union that is not `export`ed is still nameable as a TYPE from another file, but its case
+constructor is not callable there — so `Hidden.broke(...)` across the boundary is a callee no file
+declares, which `A callee no file declares` above answers with E3004. The result is typed
+`unresolved` and deferred, and every consumer position that receives it names the CALL rather than
+the symptom one line below it: arithmetic, interpolation, a field read, a method call on the result,
+a closure capture and a closure body all do so in `specs/functions.md`.
+
+A method call whose RECEIVER is a generic instance (`Array with Hidden`, reached through its
+typealias) is one more such position, and it owes the same answer. The argument door is entitled to
+add its own E3005 — the free-function control below shows both diagnostics, E3004 first — but it may
+not stand in for E3004: the mismatch it reports is a consequence of the undefined callee, and a
+program told only about the consequence names a line that is correct and hides the line that is
+wrong.
+
+<!-- test: error.generic-instance-consumer-hides-the-undefined-call -->
+The undefined call feeds `push` on a `HiddenArray` receiver. Both diagnostics belong to this
+program, and E3004 — the cause — is reported first. The alias is declared in the file that spells
+it, so the only boundary this program crosses is the union's, and nothing here turns on where an
+alias may be declared.
+```maxon
+// --- file: probe.maxon
+union Hidden
+	broke(detail String)
+end 'Hidden'
+
+// --- file: main.maxon
+typealias HiddenArray = Array with Hidden
+
+function main() returns ExitCode
+	var b = Hidden.broke("x")
+	var xs = HiddenArray.create()
+	xs.push(b)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:17: call to undefined function 'Hidden.broke'
+error E3005: <fragment>:13:5: argument type mismatch for 'value': expected 'Hidden', got 'unknown'
+```
+
+<!-- test: error.generic-instance-consumer-control-free-function-names-the-undefined-call -->
+⭐ The control that makes the receiver the variable under test. Same union, same undefined
+constructor, same value — only the consumer changes, from a method on a generic instance to a free
+function. Nothing here depends on a generic receiver, so this is the answer the case above owes, and
+it is what proves a fix reached E3004 rather than silencing E3005 or suppressing the argument door.
+```maxon
+// --- file: probe.maxon
+union Hidden
+	broke(detail String)
+end 'Hidden'
+
+// --- file: main.maxon
+function takesIt(v Hidden)
+	print("x")
+end 'takesIt'
+
+function main() returns ExitCode
+	var b = Hidden.broke("x")
+	takesIt(b)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:13:17: call to undefined function 'Hidden.broke'
+error E3005: <fragment>:14:2: argument type mismatch for 'v': expected 'Hidden', got 'unknown'
+```
+
+<!-- test: error.generic-instance-consumer-append-names-the-undefined-call -->
+⭐ `Array.append` is the sibling door of the `push` above — one spelling away, with its own argument
+rule (`ProgramSignatures.arrayAppendArgAdmits`) and its own sentence — and it owes the same answer.
+Its rule opens by asking whether the argument is an array instance, which an `unresolved` is not, so
+without the deferral the refusal it throws ends the file's parse and E3004 is never reported at all.
+```maxon
+// --- file: probe.maxon
+union Hidden
+	broke(detail String)
+end 'Hidden'
+
+// --- file: main.maxon
+typealias HiddenArray = Array with Hidden
+
+function main() returns ExitCode
+	var xs = HiddenArray.create()
+	xs.append(Hidden.broke("x"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:12:19: call to undefined function 'Hidden.broke'
+error E3005: <fragment>:12:5: argument type mismatch for 'other': expected 'HiddenArray', got 'unknown'
+```

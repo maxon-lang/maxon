@@ -479,6 +479,11 @@ export type FileParseArtifact
 	export var unusedTypeAliases as DeferredNameDiagnosticRoster
 	export var hiddenTypeNames as DeferredNameDiagnosticRoster
 
+	// Refusals a door RECORDED instead of throwing, because a throw ends this file's parse and the
+	// check that would explain the cause never runs (`Parser.deferredTheRefusal`). Only the report
+	// is deferred: the entry is the finished `ParseError`, so each sentence keeps its one producer.
+	export var deferredParseErrors as ParseErrorArray
+
 	// ⭐ THE DECLARATION-HYGIENE DIAGNOSTICS this file's function bodies earned (E3012 unused, E3077
 	// var-should-be-let), kept OUT of `diagnostics` above so they cannot gate the pipeline ahead of the
 	// checks that could explain the body instead. `mergeArtifact` folds them into
@@ -537,6 +542,7 @@ export type FileParseArtifact
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredNameDiagnostics,
+			deferredParseErrors: ParseErrorArray.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			parseMints: ParseMints.none,
 			instanceIdsInUse: sharedNoInstanceIds
@@ -1027,6 +1033,8 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitInferredInstantiationSites(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
+	commitDeferredParseErrors(project, artifact: artifact)
+	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
 end 'mergeArtifact'
 
 // ⭐⭐ **COUNT AT MERGE, INDEX AT LOWERING** — the two halves of a coverage point's identity, split here
@@ -1062,6 +1070,34 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 		entries(recorded) then pushEachDeferredDiagnostic(project.hiddenTypeNameDiagnostics, recorded: recorded)
 	end 'hidden'
 end 'commitDeferredNameDiagnostics'
+
+function commitDeferredParseErrors(project Project, artifact FileParseArtifact)
+	var target = project.deferredParseErrors
+
+	for error in artifact.deferredParseErrors 'each'
+		target.push(DeferredParseError.create(error, filePath: artifact.filePath))
+	end 'each'
+end 'commitDeferredParseErrors'
+
+// The cross-file half of E3062: a generic-instance alias may be written only in files other than
+// the one declaring it, which the per-file check cannot see.
+// `ProgramSignatures.namesTheSoleGenericAliasDeclaration` owns when a bare name may be credited.
+function commitWrittenGenericAliasNames(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
+	match artifact.usedTypeNames 'written'
+		unwritten then break 'written'
+		entries(names) then noteWrittenGenericAliasNames(project, names: names, signatures: signatures)
+	end 'written'
+end 'commitWrittenGenericAliasNames'
+
+function noteWrittenGenericAliasNames(project Project, names UsedTypeNameSet, signatures ProgramSignatures)
+	for name in names 'eachName'
+		if not signatures.namesTheSoleGenericAliasDeclaration(name) 'creditsNoOneDeclaration'
+			continue
+		end 'creditsNoOneDeclaration'
+
+		insertOwnedName(project.genericAliasNamesWrittenByAFile, name: name)
+	end 'eachName'
+end 'noteWrittenGenericAliasNames'
 
 // Append one recorded list to a whole-program one — its own function because a `match` arm may not open a
 // `for`, and a walk that deferred nothing never reaches it.
