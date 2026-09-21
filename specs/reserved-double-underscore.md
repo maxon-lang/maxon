@@ -236,7 +236,7 @@ reachably wrong, and only wasm could see it:
 ```
 # append `export function __probeSub(a int, b int) returns int` + a `main` doing
 # `let f = __probeSub` / `return f(50, 8) as ExitCode` to stdlib/Builtins.maxon, then:
-maxon build stdlib/Builtins.maxon -o out --target=wasm32-wasi
+maxon build stdlib/Builtins.maxon --output=out --target=wasm32-wasi
 vendor/wasmtime/wasmtime run -S cli-exit-with-code=y out.wasm
 ```
 
@@ -263,7 +263,7 @@ real module, which is why it was first found by hand:
 ```
 # append `export function __print_string(value String)` (empty body) + a `main` that CALLS it
 # to stdlib/Builtins.maxon, then:
-maxon build stdlib/Builtins.maxon -o out
+maxon build stdlib/Builtins.maxon --output=out
 ```
 
 ⇒ **THE TRANSCRIPT IS NOW A CASE** — `error.stdlib-overlay-print-string-collides-at-the-std-tier`, and its
@@ -304,7 +304,7 @@ reachability set. Found by hand for the same reason as the three above, and now 
 ```
 # append `export function __mm_leak_check()` (empty body) to stdlib/Builtins.maxon, then compile
 # ANY program that carries no heap, e.g. `function main() returns ExitCode / return 0 / end 'main'`:
-maxon build main.maxon -o out
+maxon build main.maxon
 ```
 
 Before A1w: `panic at DeadFunctionElimination.maxon:109: requireUnreachableStdlibStayedDead:

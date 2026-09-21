@@ -263,8 +263,8 @@ The one-line installers do all of this for you — see https://maxon.dev/docs/ge
 By hand: extract the archive somewhere permanent and add that directory to your PATH. Then:
 
     maxon version
-    maxon build examples/basic.maxon --output=hello
-    ./hello
+    maxon build examples/basic.maxon
+    ./examples/basic
 
 EOF
 
