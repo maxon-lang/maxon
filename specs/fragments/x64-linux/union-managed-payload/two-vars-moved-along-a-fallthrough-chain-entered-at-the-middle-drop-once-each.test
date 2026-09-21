@@ -1,0 +1,73 @@
+// Test: two-vars-moved-along-a-fallthrough-chain-entered-at-the-middle-drop-once-each
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var u = "a third heap string long enough to be a real allocation".clone()
+	var w = "a fourth heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.b 'k'
+		a then t = s and fallthrough
+		b then w = u and fallthrough
+		c then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_4]  ; "a heap string long enough to be a real allocation"
+    x64.callDirect String.clone
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_5]  ; "a second heap string long enough to be a real allocation"
+    x64.callDirect String.clone
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_6]  ; "a third heap string long enough to be a real allocation"
+    x64.callDirect String.clone
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_7]  ; "a fourth heap string long enough to be a real allocation"
+    x64.callDirect String.clone
+    x64.movRegReg r14, r8
+  ftdispatch:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+  matcharm:
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+  __rc_ok:
+    x64.movRegImm32 rbx, 7
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

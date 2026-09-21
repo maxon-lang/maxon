@@ -1,0 +1,127 @@
+// Test: non-exported-same-name-function-alias-same-shape
+// --- file: a.maxon
+typealias Tally = int(0 to 1000)
+typealias Step = function(Tally, Tally) returns Tally
+
+export function foldA(start Tally, step Step) returns Tally
+	return step(start, 3)
+end 'foldA'
+
+// --- file: b.maxon
+typealias Tally = int(0 to 1000)
+typealias Step = function(Tally, Tally) returns Tally
+
+export function foldB(start Tally, step Step) returns Tally
+	return step(start, 5)
+end 'foldB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let a = foldA(1, step: function(acc, more) gives acc + more)
+	let b = foldB(1, step: function(acc, more) gives acc * more)
+	return a + b
+end 'main'
+---
+ExitCode: 9
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.leaFuncAddr x3, main$closure_0
+    arm64.movImm x2, 0
+  __rc_ok#7:
+    arm64.movImm x1, 3
+    arm64.blr x3
+    arm64.movRegReg x19, x0
+  __il_cont#5:
+    arm64.movImm x0, 1
+    arm64.leaFuncAddr x3, main$closure_1
+    arm64.movImm x2, 0
+  __rc_ok#11:
+    arm64.movImm x1, 5
+    arm64.blr x3
+  __il_cont#4:
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok#1:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at main.maxon:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x1, 1000
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at main.maxon:2: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_3  ; "panic at main.maxon:2: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main$closure_1 {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic#2
+  __rc_chk#3:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic#2
+  __rc_ok#1:
+    arm64.cmp x1, 0
+    arm64.b.lt __rc_panic#5
+  __rc_chk#6:
+    arm64.cmp x1, 1000
+    arm64.b.gt __rc_panic#5
+  __rc_ok#4:
+    arm64.mul x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#2:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at main.maxon:3: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic#5:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at main.maxon:3: Range check failed: value outside typealias 'Tally'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

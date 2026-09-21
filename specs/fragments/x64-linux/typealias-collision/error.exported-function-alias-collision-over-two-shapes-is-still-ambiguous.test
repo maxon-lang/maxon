@@ -1,0 +1,21 @@
+// Test: error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous
+// --- file: api/t.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Step = function(n Integer) returns Integer
+
+// --- file: legacy/t.maxon
+export typealias Step = function(s String) returns String
+
+// --- file: app/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function run(f Step) returns Integer
+	return f(1)
+end 'run'
+
+function main() returns ExitCode
+	return run(function(n Integer) gives n + 1) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3063: app/<fragment>:12:16: Ambiguous typealias 'Step': multiple visible definitions found. Qualify with a directory name. Candidates: api.Step, legacy.Step

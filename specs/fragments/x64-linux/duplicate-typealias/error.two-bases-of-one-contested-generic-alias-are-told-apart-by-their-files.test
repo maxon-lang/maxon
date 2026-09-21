@@ -1,0 +1,27 @@
+// Test: error.two-bases-of-one-contested-generic-alias-are-told-apart-by-their-files
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Tallies = Array with Integer
+
+export function countA(xs Tallies) returns Integer
+	return xs.count()
+end 'countA'
+
+// --- file: b.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Tallies = List with Integer
+
+export function goB() returns Integer
+	var xs = Tallies.create()
+	xs.append(3)
+	return countA(xs)
+end 'goB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{goB()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:9: argument type mismatch for 'xs': expected 'Tallies' (declared in a.maxon), got 'Tallies' (declared in b.maxon)

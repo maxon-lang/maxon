@@ -1,0 +1,371 @@
+// Test: clone-of-an-array-of-records-holding-an-interface-value-is-deep
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+
+	function grow()
+		self.side = self.side + 1
+	end 'grow'
+end 'Square'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+typealias Holders = Array with Holder
+
+function main() returns ExitCode
+	var a = Holders.create()
+	a.push(Holder.create(Square.create(2)))
+	var b = a.clone()
+	var grown = try b.get(0) otherwise panic("no holder")
+	grown.shape.grow()
+	let kept = try a.get(0) otherwise panic("no holder")
+	let reread = try b.get(0) otherwise panic("no holder")
+	print("{kept.shape.area()} {reread.shape.area()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @Square.area {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegReg r8, r8, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Square.grow {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.aluBaseDispImm32.add [rcx + 0], 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 120
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Holder]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 r12, 2
+  __il_body#22:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+  __il_cont#21:
+    x64.leaRegRdata r12, [rip + __witness_Square.Shape]
+  __il_body#23:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __retain_existential
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __drop_existential
+  __il_cont#20:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __managed_push
+    x64.leaRegRdata r9, [rip + __layout_Array_Holder]
+  __il_body#24:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_slice_opaque
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#25
+  tryerr#26:
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at Array.maxon:80: Array.clone: slice OOB \xe2\x80\x94 0..len is always valid\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#25:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+  __il_cont#19:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#8
+  __im_load#9:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rax + rdx*8 + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [r13 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#29
+  __im_empty#10:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#8
+  critsplit#30:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#7
+  critsplit#29:
+    x64.movRegReg r10, rax
+  __im_cont#7:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  tryok#1:
+    x64.callDirect __mm_retain
+    x64.storeSlotReg slot2, r8
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.callMem [rax + 56]
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#12
+  __im_load#13:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#31
+  __im_empty#14:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#12
+  critsplit#32:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#11
+  critsplit#31:
+    x64.movRegReg r8, rax
+    x64.movRegReg r10, rcx
+  __im_cont#11:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  tryok#3:
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#16
+  __im_load#17:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 40]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, critsplit#33
+  __im_empty#18:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, __im_slow#16
+  critsplit#34:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#15
+  critsplit#33:
+    x64.movRegReg r10, rax
+  __im_cont#15:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+  tryok#5:
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.callMem [rax + 48]
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot3, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_4]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot9, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.callMem [rax + 48]
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot8, r8
+    x64.leaRegRdata rax, [rip + __str_rec_5]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot7, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r12
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot8
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot6
+    x64.loadRegSlot rdx, slot7
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot6
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.loadRegSlot rcx, slot4
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body#28:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __write_stdout
+  __il_cont#27:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_Holder
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#8:
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont#7
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at clone-of-an-array-of-records-holding-an-interface-value-is-deep.test:38: no holder\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#12:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.jmp __im_cont#11
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at clone-of-an-array-of-records-holding-an-interface-value-is-deep.test:40: no holder\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow#16:
+    x64.storeSlotReg slot10, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.loadRegSlot r8, slot10
+    x64.jmp __im_cont#15
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_6]  ; "panic at clone-of-an-array-of-records-holding-an-interface-value-is-deep.test:41: no holder\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

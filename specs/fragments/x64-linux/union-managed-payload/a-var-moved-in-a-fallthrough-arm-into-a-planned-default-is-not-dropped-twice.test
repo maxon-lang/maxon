@@ -1,0 +1,48 @@
+// Test: a-var-moved-in-a-fallthrough-arm-into-a-planned-default-is-not-dropped-twice
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match 1 'k'
+		1 then t = s and fallthrough
+		default then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_2]  ; "a heap string long enough to be a real allocation"
+    x64.callDirect String.clone
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; "a second heap string long enough to be a real allocation"
+    x64.callDirect String.clone
+  matcharm:
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+  __rc_ok:
+    x64.movRegImm32 r12, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

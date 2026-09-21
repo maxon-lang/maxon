@@ -1,0 +1,58 @@
+// Test: error.a-conformer-that-holds-the-same-interface-is-a-type-cycle-and-the-clone-gate-terminates
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Dot implements Shape
+	var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function area() returns Integer
+		return self.v
+	end 'area'
+
+	function grow()
+		self.v = self.v + 1
+	end 'grow'
+end 'Dot'
+
+type Scaled implements Shape
+	var inner as Shape
+
+	static function create(inner Shape) returns Self
+		return Self{inner: inner}
+	end 'create'
+
+	function area() returns Integer
+		return self.inner.area() * 2
+	end 'area'
+
+	function grow()
+		self.inner.grow()
+	end 'grow'
+end 'Scaled'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Scaled.create(Dot.create(2)))
+	var b = a.clone()
+	b.shape.grow()
+	print("{a.shape.area()} {b.shape.area()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E4014: <fragment>:25:6: type 'Scaled' contains a reference cycle (via Scaled → inner: Shape → Scaled); recursive type references are not allowed

@@ -1,0 +1,26 @@
+// Test: error.a-generic-reply-that-is-the-services-own-state-is-refused-at-the-spawn
+typealias Flags = Array with bool
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	var flags = Flags.create()
+	flags.push(true)
+	let h = spawn Box.create(flags)
+	let got = try await h.peek() otherwise panic("the box is running")
+	print("{got.count()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:19:10: `Box.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Box` a service over a `Flags`, which is a value it would then share with the caller on another green thread. Return a `.clone()`, or return the scalars the caller needs

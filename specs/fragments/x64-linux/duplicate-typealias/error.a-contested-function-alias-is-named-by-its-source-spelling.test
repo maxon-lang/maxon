@@ -1,0 +1,34 @@
+// Test: error.a-contested-function-alias-is-named-by-its-source-spelling
+// --- file: a.maxon
+typealias Tally = int(0 to 1000)
+typealias Step = function(Tally, Tally) returns Tally
+typealias Other = function(Tally, Tally) returns Tally
+
+function pick() returns Step
+	return function(acc Tally, more Tally) gives acc + more
+end 'pick'
+
+export function runA(start Tally, f Other) returns Tally
+	return f(start, 3)
+end 'runA'
+
+export function goA() returns Tally
+	let s = pick()
+	return runA(1, f: s)
+end 'goA'
+
+// --- file: b.maxon
+typealias Step = function(String) returns String
+
+export function runB(label String, step Step) returns String
+	return step(label)
+end 'runB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{goA()} {runB("go", step: function(text) gives "{text}!")}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:17:9: argument type mismatch for 'f': expected 'Other', got 'Step'

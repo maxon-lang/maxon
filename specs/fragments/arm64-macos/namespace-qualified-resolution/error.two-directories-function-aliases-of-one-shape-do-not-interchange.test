@@ -1,0 +1,32 @@
+// Test: error.two-directories-function-aliases-of-one-shape-do-not-interchange
+// --- file: api/types.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+// --- file: legacy/types.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+// --- file: app/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function pickLegacy() returns legacy.Score
+	return addOne
+end 'pickLegacy'
+
+function runApi(f api.Score) returns Integer
+	return f(20)
+end 'runApi'
+
+function main() returns ExitCode
+	let h = pickLegacy()
+	print("{runApi(h)}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: app/<fragment>:27:10: argument type mismatch for 'f': expected 'api.Score', got 'legacy.Score'

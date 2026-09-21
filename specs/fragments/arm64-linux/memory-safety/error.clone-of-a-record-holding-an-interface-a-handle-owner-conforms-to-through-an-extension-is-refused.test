@@ -1,0 +1,45 @@
+// Test: error.clone-of-a-record-holding-an-interface-a-handle-owner-conforms-to-through-an-extension-is-refused
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+interface Drawable extends Shape
+	function draw() returns Integer
+end 'Drawable'
+
+type Tap
+	var f as __ManagedFile
+
+	static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Tap'
+
+extension Tap implements Drawable
+	function area() returns Integer
+		return 1
+	end 'area'
+
+	function draw() returns Integer
+		return 2
+	end 'draw'
+end 'Tap'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Tap.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+	let b = a.clone()
+	return b.shape.area() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:40:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedFile`) and cannot be duplicated

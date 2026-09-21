@@ -1,0 +1,22 @@
+// Test: error.an-inner-alias-of-the-type-parameter-is-refused-at-its-declaration
+type Box uses T
+	typealias Item = T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns Item
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create("a label long enough to be a heap string")
+	let s = try await h.peek() otherwise panic("the box is running")
+	return s.byteLength() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:3:19: Unsupported: a typealias over 'identifier' (only `int(low to high)`, `float(low to high)`, `bits(n)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)
