@@ -3683,32 +3683,25 @@ export function maxonTypeName(t MaxonType, typeNames TypeNameInterner) returns S
 	return typeTagName(tag)
 end 'maxonTypeName'
 
-// ⭐⭐ **HOW ONE POSITION OF A FUNCTION-TYPE DISPLAY IS SPELLED — `maxonTypeName` for every tag whose name
-// the INTERNER holds, and the whole-program instance name for the one it does not.**
+// How a type is spelled for a reader — `maxonTypeName` for every tag whose name the interner holds, and the
+// whole-program instance name for the one it does not. A `genericInstance` has no interned name and falls
+// through `maxonTypeName` to the bare tag word `struct`, so every instance of every base renders alike and a
+// refusal between two instantiations reads `expected 'fn(int) returns struct', got 'fn(int) returns struct'`.
 //
-// ⛔ **A `genericInstance` HAS NO INTERNED NAME, SO IT FELL THROUGH TO `typeTagName`'S BARE WORD `struct`**
-// — and every instance of every base printed that same word. A refusal between two different
-// instantiations therefore read `expected 'fn(int) returns struct', got 'fn(int) returns struct'`: a
-// diagnostic saying a type does not match itself, on the one refusal that most needs to be readable. It is
-// the identical defect `maxonTypeName`'s own ⚠ paragraph records having been fixed once for a nested
-// `function` type, one tag over.
-//
-// ⚠ **`instanceDisplayName`, NEVER A VALUE'S BRAND, AND THE STRING'S SECOND JOB IS WHY.**
-// `formatFnTypeDisplay`'s output is a COMPARISON KEY as well as a caption (see there), so it must be a pure
-// function of the type: a brand-scoped spelling would let one function type render two ways at two sites
-// and make a merge disagree about a type it agrees about. The site-free door is exactly that pure function
-// of the gid — and it is still the author's `typealias`, which is what a caption owes.
-//
-// ⚠ For the same reason a compiler mint reaching a slot here is NOT stripped to its source spelling. Two
-// mints of one contested name would then render alike, and a comparison this string decides would call two
-// different function types equal.
-function fnTypeSlotName(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
+// ⚠ `instanceDisplayName`, never a value's brand, and the string's second job is why.
+// `formatFnTypeDisplay`'s output is a comparison key as well as a caption (see there), so it must be a pure
+// function of the type: a brand-scoped spelling would let one function type render two ways at two sites and
+// make a merge disagree about a type it agrees about. The site-free door is exactly that pure function of the
+// gid — and it is still the author's `typealias`, which is what a caption owes. For the same reason a
+// compiler mint reaching a slot here is not stripped to its source spelling: two mints of one contested name
+// would render alike, and a comparison this string decides would call two different function types equal.
+module function maxonTypeDisplayName(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	if maxonTypeTag(t) == ValueTypeTag.genericInstance 'anInstantiationOfAGenericBase'
 		return String.from(signatures.instanceDisplayName(genericInstanceIdOf(t)))
 	end 'anInstantiationOfAGenericBase'
 
 	return maxonTypeName(t, typeNames: typeNames)
-end 'fnTypeSlotName'
+end 'maxonTypeDisplayName'
 
 // Render a function type as `fn(P1, P2, …) returns R` from its parameter and return types (P1.5 #81). A void
 // return carries no `returns` clause. The canonical signature STRING the merge check compares by name:
@@ -3721,13 +3714,13 @@ export function formatFnTypeDisplay(paramTypes MaxonTypeArray, returnType MaxonR
 			rendered = "{rendered}, "
 		end 'separator'
 
-		rendered = "{rendered}{fnTypeSlotName(try paramTypes.get(i) otherwise panic("formatFnTypeDisplay: paramTypes.get OOB at {i}"), typeNames: typeNames, signatures: signatures)}"
+		rendered = "{rendered}{maxonTypeDisplayName(try paramTypes.get(i) otherwise panic("formatFnTypeDisplay: paramTypes.get OOB at {i}"), typeNames: typeNames, signatures: signatures)}"
 	end 'eachParam'
 
 	rendered = "{rendered})"
 
 	match returnType 'return'
-		value(returnValue) then rendered = "{rendered} returns {fnTypeSlotName(returnValue, typeNames: typeNames, signatures: signatures)}"
+		value(returnValue) then rendered = "{rendered} returns {maxonTypeDisplayName(returnValue, typeNames: typeNames, signatures: signatures)}"
 		void then break 'return'
 	end 'return'
 

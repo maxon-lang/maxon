@@ -7944,11 +7944,10 @@ typealias Integer = int(i64.min to i64.max)
 42
 ```
 
-<!-- test: a-generic-service-over-a-managed-element-does-not-leak -->
-The `T` that crosses the mailbox is MANAGED. The send moves it and the reply moves it back, and neither end
-knows its layout statically — only the descriptor does, which is what the per-instance destructor cascade is
-already synthesized against. **The assertion is as much the exit code as the answer**: a reply that forgot to
-transfer its reference leaks, and a leak is exit 101.
+<!-- test: error.a-generic-reply-that-is-the-services-own-string-state-is-refused-at-the-spawn -->
+The reply IS the state, at a type the body cannot see: one body serves every instantiation, so the `spawn`
+that fixes `T` is where the reply is judged. With `T` a `String`, the caller and the service's own green
+thread would hold one string record between them.
 ```maxon
 type Box uses T
 	var item as T
@@ -7968,12 +7967,80 @@ function main() returns ExitCode
 	return s.byteLength() as ExitCode
 end 'main'
 ```
+```maxoncstderr
+error E3137: <fragment>:15:10: `Box.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Box` a service over a `String`, which is a value it would then share with the caller on another green thread. Return a `.clone()`, or return the scalars the caller needs
+```
+
+<!-- test: a-generic-reply-of-a-fresh-container-over-a-managed-record-crosses -->
+The control for the rule above: a container the handler MINTS is not the state, and its graph is walkable
+once `T` is an `Item`. The handler's `return` defers on a type an instantiation still fixes, and the `spawn`
+walks the substitution and accepts it.
+```maxon
+typealias Count = int(0 to 255)
+
+type Item
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+type Box uses T
+	typealias Items = List with T
+	var seen as Count
+
+	static function create(first T) returns Self
+		var held = Items.create()
+		held.append(first)
+		return Self{seen: held.count() as Count}
+	end 'create'
+
+	export function all() returns Items
+		self.seen = self.seen + 1
+		return Items.create()
+	end 'all'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create(Item.create("a label long enough to be a heap string"))
+	let items = try await h.all() otherwise panic("the box is running")
+	return items.count() as ExitCode
+end 'main'
+```
 ```exitcode
-2
+0
+```
+
+<!-- test: error.an-inner-alias-of-the-type-parameter-is-refused-at-its-declaration -->
+An alias of the type parameter is refused where it is WRITTEN, which is what lets the reply rule ask about a
+bare `T` and nothing else: no message can reach the state through a second spelling of `T`.
+```maxon
+type Box uses T
+	typealias Item = T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns Item
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create("a label long enough to be a heap string")
+	let s = try await h.peek() otherwise panic("the box is running")
+	return s.byteLength() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:19: Unsupported: a typealias over 'identifier' (only `int(low to high)`, `float(low to high)`, `bits(n)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)
 ```
 
 <!-- test: a-generic-service-handle-reaches-a-parameter-through-its-spelling -->
-`spawn` hands back a handle at the INSTANTIATION (`Box.handle with String`), and a `typealias` over that is
+`spawn` hands back a handle at the INSTANTIATION (`Box.handle with Small`), and a `typealias` over that is
 what carries it anywhere else — the companion is a generic instance like any other, so it is spelled the way
 `Array with Byte` is. ⚠ There is no INLINE spelling here or anywhere: `function f(xs Array with Whole)` is
 E2010 for every generic in the language, so the alias is not a service quirk.
@@ -7990,17 +8057,18 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
-typealias StringBoxHandle = Box.handle with String
+typealias SmallBoxHandle = Box.handle with Small
 
-function readIt(h StringBoxHandle) returns Whole
-	let s = try await h.peek() otherwise ""
-	return s.byteLength() as Whole
+function readIt(h SmallBoxHandle) returns Whole
+	let n = try await h.peek() otherwise 0
+	return n as Whole
 end 'readIt'
 
 function main() returns ExitCode
-	let h = spawn Box.create("wxyz")
+	let h = spawn Box.create(4 as Small)
 	return readIt(h) as ExitCode
 end 'main'
+typealias Small = int(0 to 100)
 typealias Whole = int(i64.min to i64.max)
 ```
 ```exitcode
@@ -8027,25 +8095,26 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
-typealias StringBoxHandle = Box.handle with String
+typealias SmallBoxHandle = Box.handle with Small
 
 type Holder
-	var h as StringBoxHandle
+	var h as SmallBoxHandle
 
-	static function create(h StringBoxHandle) returns Self
+	static function create(h SmallBoxHandle) returns Self
 		return Self{h: h}
 	end 'create'
 
 	function ask() returns Whole
-		let s = try await self.h.peek() otherwise ""
-		return s.byteLength() as Whole
+		let n = try await self.h.peek() otherwise 0
+		return n as Whole
 	end 'ask'
 end 'Holder'
 
 function main() returns ExitCode
-	let holder = Holder.create(spawn Box.create("abcde"))
+	let holder = Holder.create(spawn Box.create(5 as Small))
 	return holder.ask() as ExitCode
 end 'main'
+typealias Small = int(0 to 100)
 typealias Whole = int(i64.min to i64.max)
 ```
 ```exitcode
@@ -8054,7 +8123,7 @@ typealias Whole = int(i64.min to i64.max)
 
 <!-- test: a-generic-service-handle-lives-in-an-array -->
 The third road the spelling opens, and the one that proves the element type survives a container: `Array with
-StringBoxHandle` holds a real 8-byte handle box, and `get` hands back something a `T`-replying message can
+SmallBoxHandle` holds a real 8-byte handle box, and `get` hands back something a `T`-replying message can
 still be sent through.
 ```maxon
 type Box uses T
@@ -8069,16 +8138,17 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
-typealias StringBoxHandle = Box.handle with String
-typealias HandleArray = Array with StringBoxHandle
+typealias SmallBoxHandle = Box.handle with Small
+typealias HandleArray = Array with SmallBoxHandle
 
 function main() returns ExitCode
 	var hs = HandleArray.create()
-	hs.push(spawn Box.create("abcdef"))
+	hs.push(spawn Box.create(6 as Small))
 	let h = try hs.get(0) otherwise return 1 as ExitCode
-	let s = try await h.peek() otherwise ""
-	return s.byteLength() as ExitCode
+	let s = try await h.peek() otherwise 0
+	return s as ExitCode
 end 'main'
+typealias Small = int(0 to 100)
 ```
 ```exitcode
 6
@@ -8139,7 +8209,7 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
-typealias StringBoxHandle = Box.handle with String
+typealias SmallBoxHandle = Box.handle with Small
 
 type Cell uses E
 	var slot as E
@@ -8153,16 +8223,17 @@ type Cell uses E
 	end 'grab'
 end 'Cell'
 
-typealias HandleCell = Cell with StringBoxHandle
+typealias HandleCell = Cell with SmallBoxHandle
 
 function main() returns ExitCode
-	let c = HandleCell.create(spawn Box.create("abc"))
+	let c = HandleCell.create(spawn Box.create(3 as Small))
 	let first = c.grab()
-	let a = try await first.peek() otherwise ""
+	let a = try await first.peek() otherwise 0
 	let second = c.grab()
-	let b = try await second.peek() otherwise ""
-	return (a.byteLength() + b.byteLength()) as ExitCode
+	let b = try await second.peek() otherwise 0
+	return (a + b) as ExitCode
 end 'main'
+typealias Small = int(0 to 100)
 ```
 ```exitcode
 6
@@ -8170,8 +8241,8 @@ end 'main'
 
 <!-- test: a-monomorphic-handle-is-co-owned-in-a-struct-field -->
 ⚠ **NOT A GENERIC PROGRAM, AND THAT IS THE POINT.** `a-generic-service-handle-lives-in-a-struct-field`
-above looks like it pins co-ownership and does not: its `String` payload independently roots `__mm_incref`,
-so it stayed green while the thing it names was broken. `__mbox_handle_retain_box` increfs the handle box
+above pins the generic retain router; the monomorphic road into the same co-owning store is this case's.
+`__mbox_handle_retain_box` increfs the handle box
 inside its own Std body, which the Maxon-module usage scan cannot see, so a program whose ONLY incref comes
 from a handle retain died at `resolveCallFixups: call to unknown function '__mm_incref'`. Nothing here
 allocates but the handle, which is what makes the case discriminating.
@@ -9764,12 +9835,9 @@ end 'main'
 0
 ```
 
-<!-- test: services.a-generic-reply-that-is-the-services-own-state-aborts -->
-A `returns T` message is judged at its declaration, where `T` is opaque and no rule can ask whether `self.item`
-is the service's own state. The reply's graph is still walked at the publish, at the type the instantiation
-fixes: with `T` an `Array with bool`, the array is named by the state AND by the reply, so the walk finds its
-second owner and the program aborts with exit **96** on the service's green thread before the caller can
-read it.
+<!-- test: error.a-generic-reply-that-is-the-services-own-state-is-refused-at-the-spawn -->
+The same rule where the substitution is a container: `T` is an `Array with bool`, so the array the state
+names is the array the reply hands back. The `spawn` that fixes `T` refuses it, before the service runs.
 ```maxon
 typealias Flags = Array with bool
 
@@ -9794,8 +9862,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-96
+```maxoncstderr
+error E3137: <fragment>:19:10: `Box.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Box` a service over a `Flags`, which is a value it would then share with the caller on another green thread. Return a `.clone()`, or return the scalars the caller needs
 ```
 
 <!-- test: services.a-reply-of-records-holding-an-interface-field-crosses -->

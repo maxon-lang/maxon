@@ -37810,6 +37810,14 @@ export type Parser
 			throw self.serviceReplyAliasesStateError(typeName, methodName: methodName, anchor: anchor)
 		end 'mayAliasState'
 
+		// After the soleness question and before the walk: a reply this frame does not solely own is E3137
+		// here whatever `T` is, and only the GRAPH moves to the `spawn`, where the same walk runs over the
+		// type the instantiation substitutes. One body serves every instantiation, so nothing here can see
+		// what a `T` holds.
+		if typeIsFixedByAnInstantiation(self.signatures, t: self.valueMaxonType(value)) 'theSpawnJudgesTheSubstitution'
+			return
+		end 'theSpawnJudgesTheSubstitution'
+
 		match self.transferWalkOfValue(value, handOff: GreenThreadHandOff.move) 'graph'
 			closed or
 				walkedBy or
@@ -55915,6 +55923,11 @@ export type Parser
 			// A reply graph no walk can be built for is the refusal the handler's `return` raises (E3138), asked
 			// here of the type the instantiation substitutes.
 			messageReplyGraphIsNotWalkable then throw ParseError.serviceArgumentNotUnique(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column)
+
+			// The same E3137 the handler's `return` raises, anchored at the `spawn` and so carrying no note:
+			// the return door's note names a `spawn` that may be in another file, and this one would point at
+			// its own line.
+			messageReplyAliasesServiceState then throw ParseError.serviceReplyAliasesState(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 		end 'roster'
 	end 'requireServiceRosterIsDispatchable'
 

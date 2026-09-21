@@ -1585,9 +1585,15 @@ export enum ErrorCode
 	// scalar, which owns nothing at all.
 	// The cure is `.clone()`, and here the clone is RIGHT rather than a workaround: the caller genuinely
 	// asked for a copy, and a copy is the only thing that can cross.
-	// The diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --
+	// The rule has two doors, because a generic service's body cannot answer it. At a concrete return type
+	// the diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --
 	// whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
-	// different file from the method the rule fires on.
+	// different file from the method the rule fires on. A message declared `returns T` is DEFERRED there:
+	// one body serves every instantiation, so nothing in it can tell whether `T` is managed. It is judged
+	// instead at the `spawn` that fixes `T`, over the substituted type, and refused whenever that type is
+	// managed and the handler is not proven to mint what it hands back. A scalar `T` crosses. That door
+	// anchors the diagnostic at the `spawn` itself and so carries no note, and its sentence names the
+	// substituted type, which is what points at the instantiation refused.
 	semanticServiceReplyAliasesState = "E3137"
 
 	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
@@ -1624,6 +1630,8 @@ export enum ErrorCode
 	// at an interface type all cross. A value sent at its own type and widened at the send is refused here like
 	// any record; one already held at an interface type is walked through the conformer its witness names at
 	// run time, so a conformer no walk can be built for aborts the same way (exit 96) instead.
+	// A service reply whose type an instantiation still fixes is asked at the `spawn`, over the substituted
+	// type, rather than at the `return` -- so the diagnostic fires at the `spawn`.
 	semanticServiceArgumentNotUnique = "E3138"
 
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting

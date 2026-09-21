@@ -145,7 +145,7 @@ end 'serviceInstanceResolvedReturn'
 // ⭐ **DOES A CONCRETE INSTANTIATION STILL FIX ANYTHING IN THIS TYPE?** A bare `T`, and an instance whose
 // arguments still mention one (`Array with T`). Asked of a RESOLVED type: an inner alias is a `named` leaf
 // and answers for what it denotes rather than for itself.
-function typeIsFixedByAnInstantiation(signatures ProgramSignatures, t MaxonType) returns bool
+module function typeIsFixedByAnInstantiation(signatures ProgramSignatures, t MaxonType) returns bool
 	if maxonTypeTag(t) == ValueTypeTag.typeParameter 'opaqueFormal'
 		return true
 	end 'opaqueFormal'
@@ -193,6 +193,10 @@ module union ServiceRosterVerdict
 	// A reply whose graph, at the type an instantiation substitutes, reaches a type no per-type walk can be
 	// built for. E3138, the refusal the handler's `return` raises for a type its body declares.
 	messageReplyGraphIsNotWalkable(methodName ByteArray, noun String)
+
+	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
+	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
+	messageReplyAliasesServiceState(methodName ByteArray, replyTypeName String)
 end 'ServiceRosterVerdict'
 
 // ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
@@ -317,6 +321,12 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 			return ServiceRosterVerdict.messageReplyGraphIsNotWalkable(methodName, noun: graphNoun)
 		end 'replyGraphCannotBeWalked'
 
+		let aliasedReplyType = instantiatedOpaqueReplyAliasesState(signatures, messageKey: messageKey, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge)
+
+		if not aliasedReplyType.isEmpty() 'replyAliasesTheServicesOwnState'
+			return ServiceRosterVerdict.messageReplyAliasesServiceState(methodName, replyTypeName: aliasedReplyType)
+		end 'replyAliasesTheServicesOwnState'
+
 		for p in 0 upto decl.paramTypes.count() 'eachParam'
 			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
 			let noun = untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath)
@@ -382,10 +392,9 @@ end 'declaredReplyType'
 
 // ⭐⭐ **WHY THE REPLY'S GRAPH AT AN INSTANTIATION CANNOT BE WALKED, or `MapError` when it can or nothing is
 // known yet.** The loop walks the reply at the type the instantiation substitutes
-// (`ServiceLoop.publishReplyValue`), while the handler's `return` judges the type its generic body declares —
-// where a `returns Array with T` is walkable and `T` a record holding an existential makes the substitution
-// not. So the substituted graph is refused HERE, at the `spawn` that fixes it, or it reaches the loop with no
-// diagnostic behind it. A declaration alone has nothing substituted to ask about.
+// (`ServiceLoop.publishReplyValue`). So the substituted graph is refused HERE, at the `spawn` that fixes it,
+// or it reaches the loop with no diagnostic behind it. A declaration alone has nothing substituted to ask
+// about.
 function instantiatedReplyGraphRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns String throws MapError
 	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
 		throw MapError.keyNotFound
@@ -396,6 +405,40 @@ function instantiatedReplyGraphRefusal(signatures ProgramSignatures, returnType 
 		atInstance(instance) then return try replyGraphRefusalOfType(signatures, replyType: signatures.instanceResolvedSlotType(declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath), declFilePath: declFilePath, instance: instance), declFilePath: declFilePath)
 	end 'known'
 end 'instantiatedReplyGraphRefusal'
+
+function instantiatedOpaqueReplyAliasesState(signatures ProgramSignatures, messageKey ByteArray, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns String
+	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
+		return ""
+	end 'nothingComesBack'
+
+	match knowledge 'known'
+		declarationOnly then return ""
+		atInstance(instance) then return opaqueReplyAliasedStateType(signatures, messageKey: messageKey, returnType: returnType, declFilePath: declFilePath, instance: instance)
+	end 'known'
+end 'instantiatedOpaqueReplyAliasesState'
+
+// The freshness fact is the declaration SWEEP's (`signatures.returnsFreshValue`), never one the parser
+// records while it reads the body: a `spawn` in a file parsed before its handler would otherwise see nothing
+// and accept, which makes acceptance depend on file order. Unproven freshness refuses — the safe direction.
+function opaqueReplyAliasedStateType(signatures ProgramSignatures, messageKey ByteArray, returnType MaxonReturnType, declFilePath FilePath, instance ServiceStateInstance) returns String
+	let declared = declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath)
+
+	if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'theDeclarationAlreadyJudgedIt'
+		return ""
+	end 'theDeclarationAlreadyJudgedIt'
+
+	if signatures.returnsFreshValue(messageKey) 'theHandlerMintsWhatItHandsBack'
+		return ""
+	end 'theHandlerMintsWhatItHandsBack'
+
+	let resolved = signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance)
+
+	if not signatures.typeIsManaged(resolved, from: signatures.indexTypeNames()) 'aMachineWord'
+		return ""
+	end 'aMachineWord'
+
+	return maxonTypeDisplayName(resolved, typeNames: signatures.indexTypeNames(), signatures: signatures)
+end 'opaqueReplyAliasedStateType'
 
 function replyGraphRefusalOfType(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns String throws MapError
 	match replyTransferWalk(signatures, replyType: replyType, declFilePath: declFilePath) 'graph'
@@ -711,6 +754,7 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 		messageIsOverloaded(methodName, declarationCount) then return "`{String.from(typeName)}.{String.from(methodName)}` is a message of the service `{String.from(typeName)}` and is declared {declarationCount} times. A message becomes ONE variant of the synthesized `{String.from(serviceRequestCompanionName(typeName))}` union, and one variant carries one payload shape — so an overloaded message has no single shape to become. Give the overloads distinct names"
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
 		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), source: "", noun: noun)
+		messageReplyAliasesServiceState(methodName, replyTypeName) then return serviceGenericReplyAliasesStateRefusal(typeName, methodName: methodName, replyTypeName: replyTypeName)
 		messageReplyIsNotCarriable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry"
 	end 'why'
 end 'serviceRosterRefusalMessage'
@@ -816,8 +860,20 @@ end 'serviceSendCannotBeTriedRefusal'
 // message PARAMETER, which reaches nothing of the state at all — because a refusal's noun is what a reader takes
 // away.
 module function serviceReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray) returns String
-	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `{String.from(typeName)}` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs"
+	return "{serviceReplyAliasesStateClaim(typeName, methodName: methodName)} makes `{String.from(typeName)}` a service. The caller would then hold a second reference to that box, on another green thread. {ServiceReplyAliasCure}"
 end 'serviceReplyAliasesStateRefusal'
+
+// The substituted type is named because a `spawn` shows the factory's arguments and not the `T` the message
+// declares — the noun is what tells the author which instantiation is refused.
+function serviceGenericReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray, replyTypeName String) returns String
+	return "{serviceReplyAliasesStateClaim(typeName, methodName: methodName)} makes `{String.from(typeName)}` a service over a `{replyTypeName}`, which is a value it would then share with the caller on another green thread. {ServiceReplyAliasCure}"
+end 'serviceGenericReplyAliasesStateRefusal'
+
+function serviceReplyAliasesStateClaim(typeName ByteArray, methodName ByteArray) returns String
+	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn`"
+end 'serviceReplyAliasesStateClaim'
+
+let ServiceReplyAliasCure = "Return a `.clone()`, or return the scalars the caller needs"
 
 // ⭐ **WHAT THE NOTE ON A WHOLE-PROGRAM SERVICE DIAGNOSTIC SAYS, written once for every rule that carries
 // one.** The note's job is to answer the question the primary line raises — *"since when is this a

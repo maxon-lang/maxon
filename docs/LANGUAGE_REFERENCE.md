@@ -4264,7 +4264,9 @@ either side could write, because the two green threads may run at the same time 
 - A value the sender does not solely own — captured by a closure, held in a container, borrowed from a
   parameter — is **E3138**; send a `.clone()`.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
-  **E3135**. A reply that is part of the service's own state is **E3137**; return a copy.
+  **E3135**. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
+  service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
+  state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
   moved or lent like any other value. A conformer sent at its own type whose graph the runtime cannot walk
   (an OS handle) is **E3138**; once it is held at the interface type it is checked through its witness at
@@ -4275,8 +4277,8 @@ either side could write, because the two green threads may run at the same time 
   outside the graph, the program aborts with exit code **96** before anything is sent. A reply is checked
   after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
   generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
-  container or a reference-holding record from the service's own state aborts with **96**, and a reply whose
-  graph holds a type the runtime cannot walk (an OS handle) is **E3138** at the `spawn`. A generic service
+  container or a reference-holding record from the service's own state is **E3137** at the `spawn`, and a
+  reply whose graph holds a type the runtime cannot walk (an OS handle) is **E3138** there. A generic service
   cannot be spawned over a value held at an interface type (**E2015**).
 
 **Module-level state.** A service handler — and anything it calls — may not read or write a module-level

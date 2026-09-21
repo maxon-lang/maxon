@@ -1,0 +1,21 @@
+// Test: error.a-generic-reply-that-is-the-services-own-string-state-is-refused-at-the-spawn
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function peek() returns T
+		return self.item
+	end 'peek'
+end 'Box'
+
+function main() returns ExitCode
+	let h = spawn Box.create("ok")
+	let s = try await h.peek() otherwise ""
+	return s.byteLength() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3137: <fragment>:15:10: `Box.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Box` a service over a `String`, which is a value it would then share with the caller on another green thread. Return a `.clone()`, or return the scalars the caller needs
