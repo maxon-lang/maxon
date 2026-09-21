@@ -495,11 +495,12 @@ end 'RegAllocCounters'
 // the main thread's to supply - the core has no `String` to spare and no report to write it into.
 module type RegAllocFacts
 	export var livenessMarkSteps as EventCount
+	export var rowWordsVisited as EventCount
 	export var maxPressure as RegCountColumn
 	export var maxLoopDepth as LoopDepth
 
 	export static function create() returns RegAllocFacts
-		return Self{livenessMarkSteps: 0, maxPressure: zeroClassRow(), maxLoopDepth: 0}
+		return Self{livenessMarkSteps: 0, rowWordsVisited: 0, maxPressure: zeroClassRow(), maxLoopDepth: 0}
 	end 'create'
 end 'RegAllocFacts'
 
@@ -516,6 +517,9 @@ export type RegAllocStats
 	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
 	export var livenessMarkStepsTotal as EventCount
 	export var livenessMarkStepsMax as EventCount
+
+	export var rowWordsVisitedTotal as EventCount
+	export var rowWordsVisitedMax as EventCount
 
 	// The worst per-FILE pressure seen, and the function it was seen in — one entry per register
 	// class, because the peak of a mixed figure is no file's peak. `maxPressureFunc` names the
@@ -570,7 +574,7 @@ export type RegAllocStats
 			maxPressureFunc.push("")
 		end 'eachClass'
 
-		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, forcedInsteadOfRefused: 0, repairedByWidening: 0, repairedByEviction: 0}
+		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, rowWordsVisitedTotal: 0, rowWordsVisitedMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0, forcedInsteadOfRefused: 0, repairedByWidening: 0, repairedByEviction: 0}
 	end 'create'
 
 	// Scalars, not a PhaseCost — see CompileTimings.addPhaseCost. These are the per-function
@@ -597,6 +601,14 @@ export type RegAllocStats
 			self.livenessMarkStepsMax = steps
 		end 'newMax'
 	end 'recordLivenessMarkSteps'
+
+	export function recordRowWordsVisited(words EventCount)
+		self.rowWordsVisitedTotal = self.rowWordsVisitedTotal + words
+
+		if words > self.rowWordsVisitedMax 'newMax'
+			self.rowWordsVisitedMax = words
+		end 'newMax'
+	end 'recordRowWordsVisited'
 
 	export function recordPressure(pressure RegCount, class RegClass, funcName ByteArray)
 		if pressure > classRowGet(self.maxPressure, class: class) 'newMax'
@@ -1222,6 +1234,7 @@ module function foldFunctionAllocation(project Project, stats RegAllocStats, fun
 
 	stats.merge(counters)
 	stats.recordLivenessMarkSteps(facts.livenessMarkSteps)
+	stats.recordRowWordsVisited(facts.rowWordsVisited)
 
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
@@ -1316,11 +1329,13 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	harvestDebugValueLocations(alloc, liveness: liveness, valueIds: debugValueIds, into: debugLocations)
 
 	// ⚠ THE PER-FUNCTION FIGURES ARE READ AFTER THE COLOURING, NOT BEFORE IT, AND THE REPAIR IS WHY. A
-	// repair is a SPLIT: it walks liveness (`livenessMarkSteps`) and it lowers a block's demand
-	// (`maxPressure`). Read before the loop above, the one counter that would show a repair's liveness
-	// cost would drop every one of them, and the pressure would be the pre-repair figure. Loop depth is a
-	// property of the CFG, which splitting cannot change, so it reads the same either side.
+	// repair is a SPLIT: it walks liveness (`livenessMarkSteps`), it enumerates live rows
+	// (`rowWordsVisited`), and it lowers a block's demand (`maxPressure`). Read before the loop above,
+	// the two counters that would show a repair's cost would drop every one of them, and the pressure
+	// would be the pre-repair figure. Loop depth is a property of the CFG, which splitting cannot
+	// change, so it reads the same either side.
 	facts.livenessMarkSteps = liveness.livenessMarkSteps
+	facts.rowWordsVisited = driver.takeRowWordsVisited()
 
 	// PER CLASS, so the module report can name the file that was tight rather than a mixed figure that
 	// is no file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files
@@ -1991,8 +2006,8 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var liveBuf = ValueIdArray.create()
 	var seedBuf = ValueIdArray.create()
 	var ordered = OpIndexArray.create()
-	var seenBelow = BitWordArray.create()
-	seenBelow.resize(wordsPerRow)
+	var seenBelow = BitRow.create()
+	seenBelow.widen(wordsPerRow)
 
 	// The death scan's per-class live tally. It is never READ — the scan wants the row alone — but the
 	// backward step maintains it as it flips bits and its decrements panic on underflow, so it must be
@@ -2705,13 +2720,13 @@ end 'BlockDeaths'
 // is not live below it. `seenBelow` is a single dense row (bits flip at every op, so a bitset is the
 // right shape INSIDE a block) — seeded from the SPARSE live-out list and cleared back to zero in
 // O(live) by the caller, never copied a full value-space row at a time.
-function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, block IrBlock, buf OperandList, seenBelow BitWordArray, seedBuf ValueIdArray, liveByClass RegCountColumn) returns BlockDeaths
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, block IrBlock, buf OperandList, seenBelow BitRow, seedBuf ValueIdArray, liveByClass RegCountColumn) returns BlockDeaths
 	let n = ordered.count()
 
 	liveness.liveOutInto(local, out: seedBuf)
 
 	for v in seedBuf 'seed'
-		bitsetAdd(seenBelow, base: 0, bit: v as BitIndex)
+		seenBelow.add(v as BitIndex)
 	end 'seed'
 
 	// ⚠ `liveByClass` HERE TALLIES THE ROW, AND THIS ROW IS NOT A LIVE SET. `seenBelow` means "seen
@@ -2744,13 +2759,13 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 			if operandIsVirtual(o) 'virt'
 				let v = operandValueId(o)
 
-				if not bitsetTest(seenBelow, base: 0, bit: v as BitIndex) 'dies'
+				if not seenBelow.test(v as BitIndex) 'dies'
 					posOf.push(pos)
 					valueOf.push(v)
 
 					// Mark it seen, so the SAME value appearing twice in this op (`sub x, x`) is
 					// recorded as dying ONCE. The row's tally follows the row — see the note above.
-					bitsetAdd(seenBelow, base: 0, bit: v as BitIndex)
+					seenBelow.add(v as BitIndex)
 					stepClassLive(liveByClass, classes: liveness.valueClass, v: v, entering: true)
 				end 'dies'
 			end 'virt'
@@ -2758,7 +2773,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 
 		// Transform `seenBelow` from live-below-this-op to live-below-the-op-above it —
 		// the same backward SSA transfer the liveness pressure sweep uses.
-		stepRowBackwardOverOperands(seenBelow, base: 0, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
+		stepRowBackwardOverOperands(seenBelow, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 	end 'eachOpRev'
 
 	// Return the row to zero for the next block, in O(live + phis): what it holds now is this
@@ -2766,11 +2781,11 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	liveness.liveInInto(local, out: seedBuf)
 
 	for v in seedBuf 'clearLiveIn'
-		bitsetRemove(seenBelow, base: 0, bit: v as BitIndex)
+		seenBelow.remove(v as BitIndex)
 	end 'clearLiveIn'
 
 	for arg in block.blockArgs 'clearPhis'
-		bitsetRemove(seenBelow, base: 0, bit: arg.valueId as BitIndex)
+		seenBelow.remove(arg.valueId as BitIndex)
 	end 'clearPhis'
 
 	// The scan discovered the deaths in REVERSE op order; the counting sort in `buildCsr`
@@ -3041,7 +3056,7 @@ module function regAllocStatsMessage(stats RegAllocStats) returns String
 		msg.append(" max {class.name}={classRowGet(stats.maxPressure, class: class)} (in '{try stats.maxPressureFunc.get(class.ordinal) otherwise panic("regAllocStatsMessage: no maxPressureFunc entry for the {class.name} file")}');")
 	end 'eachClass'
 
-	msg.append(" maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
+	msg.append(" maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}; row-words visited total={stats.rowWordsVisitedTotal} max={stats.rowWordsVisitedMax}\n")
 	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}, of which colorer repairs by widening={stats.repairedByWidening} and by eviction={stats.repairedByEviction}, and full-pool peaks across a cold run={stats.forcedInsteadOfRefused}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
 

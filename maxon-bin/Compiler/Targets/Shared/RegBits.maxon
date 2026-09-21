@@ -2,19 +2,13 @@
 // physical-register MASK (one bit per register, GPRs at bits 0-15 and XMMs at 16-31). NO `Set`
 // and NO hashing anywhere in the allocator's hot path (design §"Data representation").
 //
-// **A bitset is the right shape INSIDE a block, and the wrong shape ACROSS blocks.** Within a
-// block's backward sweep, bits flip at every op, so a dense row is exactly right. But per-block
-// LIVE SETS are sparse — a handful of live values out of thousands of value ids — and storing them
-// as a `blocks × ceil(values/64)` matrix makes every cost proportional to the value space instead
-// of to the information: a 19,200-block function allocated and zeroed 61 MB of live sets even when
-// only ONE value was ever live. Those sets are now one sparse list per block
-// (`TargetLiveness.LiveSets`), and the
-// matrix — along with the dataflow fixpoint that needed its row union / row difference / row
-// equality primitives — is gone.
+// A bitset is the right shape INSIDE a block and the wrong shape ACROSS blocks. Within a block's
+// backward sweep bits flip at every op, so a dense row is exactly right. Per-block LIVE SETS are
+// sparse — a handful of live values out of thousands of value ids — so they are one sparse list per
+// block (`TargetLiveness.LiveSets`): a `blocks × ceil(values/64)` matrix would make every cost
+// proportional to the value space rather than to the information in it.
 
-// A dense bit-vector: 64-bit words, indexed with an explicit word BASE. Used for the ONE working
-// row a block's backward sweep mutates, and for `forbiddenPhys`; never as a per-block matrix.
-export typealias BitWordArray = Array with MachineWord
+typealias BitWordArray = Array with MachineWord
 
 // The index of a BIT within a bitset row — a ValueId, wherever the row is a live set — or, as an
 // exclusive upper bound, the row's width in bits. Distinct in PURPOSE from the WORD index that
@@ -23,8 +17,7 @@ export typealias BitWordArray = Array with MachineWord
 // word offset belongs.
 export typealias BitIndex = int(0 to u64.max)
 
-// The index of one 64-bit WORD inside a `BitWordArray` — a row's BASE, or a word within a row.
-export typealias BitWordIndex = int(0 to u64.max)
+typealias BitWordIndex = int(0 to u64.max)
 
 // A number of 64-bit WORDS: a row's width (`wordsPerRow`), a matrix's total size.
 export typealias BitWordCount = int(0 to u64.max)
@@ -58,55 +51,233 @@ export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
 	return words if words > 0 else 1
 end 'bitsetWordsFor'
 
-function wordIndexOf(base BitWordIndex, bit BitIndex) returns BitWordIndex
-	return base + ((bit shr BitWordShift) as BitWordIndex)
+function wordIndexOf(bit BitIndex) returns BitWordIndex
+	return (bit shr BitWordShift) as BitWordIndex
 end 'wordIndexOf'
 
 function bitOf(bit BitIndex) returns MachineWord
 	return 1 shl (bit and BitIndexMask)
 end 'bitOf'
 
-// Test bit `bit` of the row starting at word `base`.
-export function bitsetTest(words BitWordArray, base BitWordIndex, bit BitIndex) returns bool
-	let w = try words.get(wordIndexOf(base, bit: bit)) otherwise panic("bitsetTest: word index out of range (base={base}, bit={bit}, count={words.count()})")
-	return (w and bitOf(bit)) != 0
-end 'bitsetTest'
+function summaryIndexOf(word BitWordIndex) returns BitWordIndex
+	return (word shr BitWordShift) as BitWordIndex
+end 'summaryIndexOf'
 
-// Set bit `bit` of the row starting at word `base`.
-export function bitsetAdd(words BitWordArray, base BitWordIndex, bit BitIndex)
-	let idx = wordIndexOf(base, bit: bit)
-	let w = try words.get(idx) otherwise panic("bitsetAdd: word index out of range (base={base}, bit={bit}, count={words.count()})")
-	try words.set(idx, value: w or bitOf(bit)) otherwise panic("bitsetAdd: word index out of range on set")
-end 'bitsetAdd'
+function summaryBitOf(word BitWordIndex) returns MachineWord
+	return 1 shl (word and BitIndexMask)
+end 'summaryBitOf'
 
-// Clear bit `bit` of the row starting at word `base`.
-export function bitsetRemove(words BitWordArray, base BitWordIndex, bit BitIndex)
-	let idx = wordIndexOf(base, bit: bit)
-	let w = try words.get(idx) otherwise panic("bitsetRemove: word index out of range (base={base}, bit={bit}, count={words.count()})")
-	try words.set(idx, value: w and not bitOf(bit)) otherwise panic("bitsetRemove: word index out of range on set")
-end 'bitsetRemove'
-
-// The set bits of the row starting at `base`, appended to `out` in ascending order.
+// A dense bit row over the value space, with two levels of occupancy summary above it: one
+// `summary` bit per 64 row words, one `topSummary` bit per 64 summary words. INVARIANT: a level's
+// bit is set exactly when the word below it is nonzero (`requireSummaryIsExact` checks it). A lost
+// summary bit is a live value `collect` never reaches — a candidate pool silently short, not an
+// error.
 //
-// This is the ONE way to walk a live set, and using it is a performance CONTRACT, not a style
-// preference. A live set is SPARSE — a handful of live values out of thousands of value ids in the
-// function — so a consumer that instead loops `for v in 0 upto valueCount` and tests each bit runs
-// in O(valueCount) where the answer is O(live). Done once per BLOCK (seeding a colorer's in-use
-// mask, seeding the checker's register state) that is O(blocks × values): a QUADRATIC, and
-// measurably the dominant cost of register allocation on a large function. Done once per CLOBBER
-// op (forbidding caller-saved registers for the values live across a call) it is O(calls × values):
-// the same quadratic again.
-//
-// Word-parallel: a word with no live bits costs one compare, so an empty stretch of the value
-// space is skipped 64 ids at a time. `out` is CLEARED first and is meant to be a reusable scratch
-// buffer — pass the same one across blocks so the walk allocates nothing in the hot path.
-export function bitsetCollectRow(words BitWordArray, base BitWordIndex, wordsPerRow BitWordCount, out ValueIdArray)
-	out.clear()
+// Two levels and not one: with a single level an enumeration still reads O(values/4096) words,
+// which on a large function is nearly all of the words it reads at all. A third level is the same
+// nesting again for a term 4096× smaller, and not worth an array per row.
+export type BitRow
+	var words as BitWordArray
+	var summary as BitWordArray
+	var topSummary as BitWordArray
+	var wordsVisited as EventCount
 
-	for w in 0 upto wordsPerRow 'eachWord'
-		appendSetBitsOfWord(try words.get(base + w) otherwise panic("bitsetCollectRow: word out of range"), bitBase: w shl BitWordShift, out: out)
-	end 'eachWord'
-end 'bitsetCollectRow'
+	export static function create() returns BitRow
+		return Self{words: BitWordArray.create(), summary: BitWordArray.create(), topSummary: BitWordArray.create(), wordsVisited: 0}
+	end 'create'
+
+	// GROWN, never `resize`d: a split widens the value space by a handful of ids, and `resize` takes
+	// the ask at face value, so a row extended a word at a time is reallocated and copied IN FULL at
+	// every 64-id tick — Θ(wordsPerRow²) over a function. `growFilled` grows capacity geometrically
+	// and zeroes only the words it added.
+	export function widen(wordCount BitWordCount)
+		let summaryCount = bitsetWordsFor(wordCount as BitIndex)
+		self.words.growFilled(wordCount as ElementIndex, value: 0)
+		self.summary.growFilled(summaryCount as ElementIndex, value: 0)
+		self.topSummary.growFilled(bitsetWordsFor(summaryCount as BitIndex) as ElementIndex, value: 0)
+	end 'widen'
+
+	export function test(bit BitIndex) returns bool
+		let w = try self.words.get(wordIndexOf(bit)) otherwise panic("BitRow.test: word index out of range (bit={bit}, words={self.words.count()})")
+		return (w and bitOf(bit)) != 0
+	end 'test'
+
+	// `add` and `remove` open their propagation inline, and `collect` and `clear` each walk the three
+	// levels themselves, rather than sharing a helper: these are the allocator's hottest loops and a
+	// factoring puts a call or a closure on every one of them. `requireSummaryIsExact` is what covers
+	// the divergence four near-identical walks risk.
+	export function add(bit BitIndex)
+		let idx = wordIndexOf(bit)
+		let w = try self.words.get(idx) otherwise panic("BitRow.add: word index out of range (bit={bit}, words={self.words.count()})")
+		try self.words.set(idx, value: w or bitOf(bit)) otherwise panic("BitRow.add: word index out of range on set")
+
+		if w != 0 'theWordWasAlreadyOccupied'
+			return
+		end 'theWordWasAlreadyOccupied'
+
+		let s = summaryIndexOf(idx)
+		let sw = try self.summary.get(s) otherwise panic("BitRow.add: summary word {s} out of range (bit={bit}, summary={self.summary.count()})")
+		try self.summary.set(s, value: sw or summaryBitOf(idx)) otherwise panic("BitRow.add: summary word out of range on set")
+
+		if sw != 0 'theSummaryWordWasAlreadyOccupied'
+			return
+		end 'theSummaryWordWasAlreadyOccupied'
+
+		let t = summaryIndexOf(s)
+		let tw = try self.topSummary.get(t) otherwise panic("BitRow.add: top-summary word {t} out of range (bit={bit}, topSummary={self.topSummary.count()})")
+		try self.topSummary.set(t, value: tw or summaryBitOf(s)) otherwise panic("BitRow.add: top-summary word out of range on set")
+	end 'add'
+
+	export function remove(bit BitIndex)
+		let idx = wordIndexOf(bit)
+		let w = try self.words.get(idx) otherwise panic("BitRow.remove: word index out of range (bit={bit}, words={self.words.count()})")
+		let left = w and not bitOf(bit)
+		try self.words.set(idx, value: left) otherwise panic("BitRow.remove: word index out of range on set")
+
+		if left != 0 'theWordStillHoldsBits'
+			return
+		end 'theWordStillHoldsBits'
+
+		let s = summaryIndexOf(idx)
+		let sw = (try self.summary.get(s) otherwise panic("BitRow.remove: summary word {s} out of range (bit={bit}, summary={self.summary.count()})")) and not summaryBitOf(idx)
+		try self.summary.set(s, value: sw) otherwise panic("BitRow.remove: summary word out of range on set")
+
+		if sw != 0 'theSummaryWordStillHoldsBits'
+			return
+		end 'theSummaryWordStillHoldsBits'
+
+		let t = summaryIndexOf(s)
+		let tw = try self.topSummary.get(t) otherwise panic("BitRow.remove: top-summary word {t} out of range (bit={bit}, topSummary={self.topSummary.count()})")
+		try self.topSummary.set(t, value: tw and not summaryBitOf(s)) otherwise panic("BitRow.remove: top-summary word out of range on set")
+	end 'remove'
+
+	// The set bits, appended to `out` (cleared first) in ASCENDING id order: each level is walked low
+	// bit first, and consumers rest on that order — the splitter's per-file live list is stated in it
+	// and `chooseVictim`'s tie-break resolves to the lowest id, so a different order moves emitted
+	// code.
+	//
+	// This is the ONE way to walk a live set, and using it is a performance CONTRACT. It costs the
+	// LIVE population, not the value space, and it is asked at every clobber op of the liveness sweep
+	// and every screen-fired op of the splitter's — so a consumer that instead loops `for v in 0 upto
+	// valueCount`, or reads every word of the row, is O(ops × values) for an answer of size O(live).
+	// `out` is meant to be a reusable scratch buffer, so the walk allocates nothing on that path.
+	export function collect(out ValueIdArray)
+		out.clear()
+
+		let topCount = self.topSummary.count()
+		var visited = topCount as EventCount
+
+		for t in 0 upto topCount 'eachTopWord'
+			var topRemaining = try self.topSummary.get(t) otherwise panic("BitRow.collect: top-summary word {t} out of range")
+
+			while topRemaining != 0 'eachOccupiedSummaryWord'
+				let lowestSummary = topRemaining and -topRemaining
+				let s = ((t shl BitWordShift) + trailingZeroCount(lowestSummary)) as BitWordIndex
+				var remaining = try self.summary.get(s) otherwise panic("BitRow.collect: summary word {s} out of range")
+				visited = visited + 1
+
+				while remaining != 0 'eachOccupiedWord'
+					let lowest = remaining and -remaining
+					let idx = ((s shl BitWordShift) + (trailingZeroCount(lowest) as BitWordIndex)) as BitWordIndex
+					visited = visited + 1
+					appendSetBitsOfWord(try self.words.get(idx) otherwise panic("BitRow.collect: word {idx} out of range"), bitBase: (idx shl BitWordShift) as BitIndex, out: out)
+					remaining = remaining and (remaining - 1)
+				end 'eachOccupiedWord'
+
+				topRemaining = topRemaining and (topRemaining - 1)
+			end 'eachOccupiedSummaryWord'
+		end 'eachTopWord'
+
+		self.wordsVisited = self.wordsVisited + visited
+	end 'collect'
+
+	export function clear()
+		let topCount = self.topSummary.count()
+		var visited = topCount as EventCount
+
+		for t in 0 upto topCount 'eachTopWord'
+			var topRemaining = try self.topSummary.get(t) otherwise panic("BitRow.clear: top-summary word {t} out of range")
+
+			while topRemaining != 0 'eachOccupiedSummaryWord'
+				let lowestSummary = topRemaining and -topRemaining
+				let s = ((t shl BitWordShift) + trailingZeroCount(lowestSummary)) as BitWordIndex
+				var remaining = try self.summary.get(s) otherwise panic("BitRow.clear: summary word {s} out of range")
+				visited = visited + 1
+
+				while remaining != 0 'eachOccupiedWord'
+					let lowest = remaining and -remaining
+					let idx = ((s shl BitWordShift) + (trailingZeroCount(lowest) as BitWordIndex)) as BitWordIndex
+					visited = visited + 1
+					try self.words.set(idx, value: 0) otherwise panic("BitRow.clear: set OOB at word {idx} of {self.words.count()}")
+					remaining = remaining and (remaining - 1)
+				end 'eachOccupiedWord'
+
+				try self.summary.set(s, value: 0) otherwise panic("BitRow.clear: set OOB at summary word {s} of {self.summary.count()}")
+				topRemaining = topRemaining and (topRemaining - 1)
+			end 'eachOccupiedSummaryWord'
+
+			try self.topSummary.set(t, value: 0) otherwise panic("BitRow.clear: set OOB at top-summary word {t} of {topCount}")
+		end 'eachTopWord'
+
+		self.wordsVisited = self.wordsVisited + visited
+	end 'clear'
+
+	// Every bit goes, rather than an undo of exactly the ones the last fill set: the splitter's rows
+	// are LIVENESS data, so a bit left standing is a wrong live set, hence a wrong victim and a
+	// silently wrong program. "The row is empty" is checkable where "exactly the bits a fill could
+	// have set" is an argument.
+	export function reset(wordCount BitWordCount)
+		self.widen(wordCount)
+		self.clear()
+	end 'reset'
+
+	export function takeWordsVisited() returns EventCount
+		let visited = self.wordsVisited
+		self.wordsVisited = 0
+		return visited
+	end 'takeWordsVisited'
+
+	export function sameAs(other BitRow) returns bool
+		if self.words.count() != other.words.count() 'width'
+			return false
+		end 'width'
+
+		for w in 0 upto self.words.count() 'eachWord'
+			let mine = try self.words.get(w) otherwise panic("BitRow.sameAs: word {w} out of range")
+			let theirs = try other.words.get(w) otherwise panic("BitRow.sameAs: word {w} out of range in the other row")
+
+			if mine != theirs 'differs'
+				return false
+			end 'differs'
+		end 'eachWord'
+
+		return true
+	end 'sameAs'
+
+	export function requireSummaryIsExact(what String)
+		for w in 0 upto self.words.count() 'eachWord'
+			let word = try self.words.get(w) otherwise panic("BitRow.requireSummaryIsExact: word {w} out of range")
+			let s = summaryIndexOf(w as BitWordIndex)
+			let sw = try self.summary.get(s) otherwise panic("BitRow.requireSummaryIsExact: summary word {s} out of range for word {w}")
+			let summarised = (sw and summaryBitOf(w as BitWordIndex)) != 0
+
+			if summarised != (word != 0) 'summaryDisagrees'
+				panic("{what}: summary bit for word {w} says {summarised} but the word is {word} — a set bit the enumeration cannot reach, or an empty word it walks for nothing")
+			end 'summaryDisagrees'
+		end 'eachWord'
+
+		for s in 0 upto self.summary.count() 'eachSummaryWord'
+			let summaryWord = try self.summary.get(s) otherwise panic("BitRow.requireSummaryIsExact: summary word {s} out of range")
+			let t = summaryIndexOf(s as BitWordIndex)
+			let tw = try self.topSummary.get(t) otherwise panic("BitRow.requireSummaryIsExact: top-summary word {t} out of range for summary word {s}")
+			let summarised = (tw and summaryBitOf(s as BitWordIndex)) != 0
+
+			if summarised != (summaryWord != 0) 'topSummaryDisagrees'
+				panic("{what}: top-summary bit for summary word {s} says {summarised} but that summary word is {summaryWord} — an occupied row word the enumeration cannot reach, or an empty summary word it walks for nothing")
+			end 'topSummaryDisagrees'
+		end 'eachSummaryWord'
+	end 'requireSummaryIsExact'
+end 'BitRow'
 
 // The set bits of ONE word, emitted as `bitBase + position` — the inner loop of the row walk above.
 function appendSetBitsOfWord(word MachineWord, bitBase BitIndex, out ValueIdArray)
@@ -122,8 +293,8 @@ function appendSetBitsOfWord(word MachineWord, bitBase BitIndex, out ValueIdArra
 end 'appendSetBitsOfWord'
 
 // The index of the LOWEST set bit of `word`, i.e. its trailing-zero count. Undefined for zero —
-// every caller must exclude it (`appendSetBitsOfWord` — the one inner loop both collectors go
-// through — only calls it on a non-zero word; the Hall census guards on an empty live set).
+// every caller must exclude it (`appendSetBitsOfWord` — the row walk's one inner loop — only calls
+// it on a non-zero word; the Hall census guards on an empty live set).
 // Binary search over the word width — 6 compares, no loop over 64 bits. The six increments below
 // sum to at most 32+16+8+4+2+1 = 63, which is why the result fits `WordBitIndex` by construction.
 export function trailingZeroCount(word MachineWord) returns WordBitIndex

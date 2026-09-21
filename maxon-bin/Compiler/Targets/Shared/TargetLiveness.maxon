@@ -538,11 +538,11 @@ end 'FuncCfg'
 // live on entry to block `b`, `outSets[b]` those live on exit. One list per block per direction —
 // never a bitset.
 //
-// **Sparse is the point.** A dense `blocks × ceil(values/64)` bitset matrix is proportional to the
-// value space, not to the information: a function with 19,200 blocks and 12,800 values allocates
-// and zeroes 61 MB of live sets EVEN WHEN ONLY ONE VALUE IS EVER LIVE, and every consumer then
-// scans 200 words per block to find the handful of live values in it — the last superlinear term
-// register allocation can carry. These lists are proportional to the liveness that actually exists —
+// Sparse is the point. A dense `blocks × ceil(values/64)` bitset matrix is proportional to the
+// value space, not to the information: it allocates and zeroes a full row per block EVEN WHEN ONLY
+// ONE VALUE IS EVER LIVE, and every consumer then scans the whole row to find the handful of live
+// values in it — a superlinear term register allocation cannot carry. These lists are proportional
+// to the liveness that actually exists —
 // which is what the SSA path exploration computes directly, so nothing is thrown away to build them.
 //
 // **EDITABLE is the other point, and it is why these are lists and not CSR.** Compressed sparse row
@@ -631,6 +631,7 @@ export type LivenessResult
 	export var cfg as FuncCfg
 	export var valueCount as ValueId
 	export var wordsPerRow as BitWordCount
+	export var rowWordsVisited as EventCount
 	export var live as LiveSets
 	export var forbidden as RegMaskColumn
 
@@ -733,8 +734,8 @@ export type LivenessResult
 	// The runs of every cold block (`ColdRunTable`), rebuilt for the blocks a split touches.
 	export var coldRuns as ColdRunTable
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts, coldRuns ColdRunTable) returns LivenessResult
-		return Self{coldRuns: coldRuns, cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, rowWordsVisited EventCount, live LiveSets, forbidden RegMaskColumn, establishedAtDef RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts, coldRuns ColdRunTable) returns LivenessResult
+		return Self{coldRuns: coldRuns, cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, rowWordsVisited: rowWordsVisited, live: live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
 	end 'create'
 
 	// The dead block-arg count of local block `local`, for ONE register file.
@@ -861,29 +862,28 @@ export type LivenessResult
 	// Seed a dense working ROW with `local`'s live-out set. One dense row (not a matrix) is the
 	// right shape for a backward per-op sweep inside a block — bits flip at every op — but it must
 	// be seeded and cleared in O(live), never by copying a full value-space row per block. Pair with
-	// `clearRowOfLiveOut`, which removes exactly the bits this set.
-	export function seedRowFromLiveOut(local CfgIndex, row BitWordArray, scratch ValueIdArray)
+	// `clearRowAfterSweep`, which removes exactly the bits this set.
+	export function seedRowFromLiveOut(local CfgIndex, row BitRow, scratch ValueIdArray)
 		self.liveOutInto(local, out: scratch)
 
 		for v in scratch 'each'
-			bitsetAdd(row, base: 0, bit: v as BitIndex)
+			row.add(v as BitIndex)
 		end 'each'
 	end 'seedRowFromLiveOut'
 
 	// Clear a dense working row that `seedRowFromLiveOut` seeded and a backward block sweep then
 	// mutated. What such a row holds at the end of the sweep is the block's LIVE-IN set plus any of
 	// its own block-args that are live (the sweep re-adds a phi when an op in the block reads it),
-	// so removing exactly those two sets returns the row to zero in O(live + phis). Clearing the
-	// full row instead would be O(values/64) per block — the very term the sparse sets remove.
-	export function clearRowAfterSweep(local CfgIndex, block IrBlock, row BitWordArray, scratch ValueIdArray)
+	// so removing exactly those two sets returns the row to zero in O(live + phis).
+	export function clearRowAfterSweep(local CfgIndex, block IrBlock, row BitRow, scratch ValueIdArray)
 		self.liveInInto(local, out: scratch)
 
 		for v in scratch 'eachLiveIn'
-			bitsetRemove(row, base: 0, bit: v as BitIndex)
+			row.remove(v as BitIndex)
 		end 'eachLiveIn'
 
 		for arg in block.blockArgs 'eachPhi'
-			bitsetRemove(row, base: 0, bit: arg.valueId as BitIndex)
+			row.remove(arg.valueId as BitIndex)
 		end 'eachPhi'
 	end 'clearRowAfterSweep'
 
@@ -1007,7 +1007,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let coldRuns = ColdRunTable.build(module, topo: cfg.topo, buf: sweep.buf, opFacts: opFacts)
 
 	for i in 0 upto numBlocks 'eachBlock'
-		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, runs: coldRuns.of(i), live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
+		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, runs: coldRuns.of(i), live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, scratch: sweep, demandOut: demand, opFacts: opFacts)
 		sweepEstablishedRegisters(module, topo: cfg.topo, blockLocal: i, establishedAtDef: establishedAtDef, scratch: sweep, opFacts: opFacts)
 
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
@@ -1029,7 +1029,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 		end 'hasOne'
 	end 'theContributionsNoSweepMakes'
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts, coldRuns: coldRuns)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, rowWordsVisited: sweep.takeRowWordsVisited(), live: walk.live, forbidden: forbidden, establishedAtDef: establishedAtDef, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts, coldRuns: coldRuns)
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
@@ -3445,7 +3445,7 @@ end 'LivenessMarkScratch'
 // it in O(live), never a word at a time), so it is never wholesale-cleared. `widenRow` is what follows
 // a value space that a split has GROWN.
 export type PressureSweepScratch
-	export var liveRow as BitWordArray
+	export var liveRow as BitRow
 	export var buf as OperandList
 	export var liveBuf as ValueIdArray
 	export var ordered as OpIndexArray
@@ -3466,15 +3466,19 @@ export type PressureSweepScratch
 	export var physLiveAfter as RegMaskColumn
 
 	export static function create() returns PressureSweepScratch
-		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create()}
+		return Self{liveRow: BitRow.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create()}
 	end 'create'
 
 	// Widen the working rows to `wordsPerRow`, ZEROING only the words the growth added — the rest of
 	// each row is already zero, and re-zeroing it would be O(values/64) on every split.
 	export function widenRow(wordsPerRow BitWordCount)
-		self.liveRow.growFilled(wordsPerRow as ElementIndex, value: 0)
+		self.liveRow.widen(wordsPerRow)
 		self.coldRun.widen(wordsPerRow)
 	end 'widenRow'
+
+	export function takeRowWordsVisited() returns EventCount
+		return self.liveRow.takeWordsVisited() + self.coldRun.takeRowWordsVisited()
+	end 'takeRowWordsVisited'
 end 'PressureSweepScratch'
 
 // ONE block's per-op sweep, filling `establishedAtDef` for every value the block defines: the physical
@@ -3598,7 +3602,7 @@ end 'sweepEstablishedRegisters'
 // residue neither can prevent — greedy is not exact for list colouring — is repaired by
 // `SplitDriver.repairAtExhaustion` / `repairByEvictingOccupant`. Restating that argument here would be
 // the same one-fact-written-twice `HallCondition.hallVerdictAt`'s own header warns about.
-function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, runs ColdBlockRuns, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
+function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, runs ColdBlockRuns, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -3614,7 +3618,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal C
 	let liveOutList = live.liveOut(blockLocal)
 
 	for v in liveOutList 'seedLiveOut'
-		bitsetAdd(liveRow, base: 0, bit: v as BitIndex)
+		liveRow.add(v as BitIndex)
 	end 'seedLiveOut'
 
 	seedClassLive(liveByClass, classes: classes, values: liveOutList)
@@ -3628,13 +3632,13 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal C
 	collectBlockOps(block, out: ordered)
 
 	if block.heat == BlockHeat.cold 'coldBlock'
-		scratch.coldRun.beginBlock(wordsPerRow)
+		scratch.coldRun.emptyReadLater()
 	end 'coldBlock'
 
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let pos = ordered.count() - 1 - ri
 		let opIdx = try ordered.get(pos) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as BlockOpPos, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun)
+		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as BlockOpPos, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun)
 
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
@@ -3648,14 +3652,13 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal C
 
 	// Return the working row to zero for the next block, in O(live). What it holds now is the block's
 	// LIVE-IN set plus any of its own block-args the sweep re-added (a phi read by an op in the block),
-	// so removing exactly those two sets clears it. Clearing the whole row instead would be
-	// O(values/64) per block — the term the sparse sets exist to remove.
+	// so removing exactly those two sets clears it.
 	for v in live.liveIn(blockLocal) 'clearLiveIn'
-		bitsetRemove(liveRow, base: 0, bit: v as BitIndex)
+		liveRow.remove(v as BitIndex)
 	end 'clearLiveIn'
 
 	for arg in block.blockArgs 'clearPhis'
-		bitsetRemove(liveRow, base: 0, bit: arg.valueId as BitIndex)
+		liveRow.remove(arg.valueId as BitIndex)
 	end 'clearPhis'
 
 	// The block's demand, per file: that file's peak simultaneous count plus its own dead-phi
@@ -3674,14 +3677,14 @@ end 'sweepBlockPressure'
 //
 // It WRITES the row rather than returning a count, because the answer is per class and a per-op
 // return value would be a heap object on the sweep's hottest path.
-function countDeadPhis(block IrBlock, liveRow BitWordArray, classes ValueClassColumn, deadPhis RegCountColumn, blockLocal CfgIndex)
+function countDeadPhis(block IrBlock, liveRow BitRow, classes ValueClassColumn, deadPhis RegCountColumn, blockLocal CfgIndex)
 	for classOrdinal in 0 upto RegClassCount 'zeroRow'
 		let class = regClassAt(classOrdinal)
 		try deadPhis.set(classRowIndex(blockLocal, class: class), value: 0) otherwise panic("countDeadPhis: deadPhis.set OOB for block {blockLocal}")
 	end 'zeroRow'
 
 	for arg in block.blockArgs 'each'
-		if not bitsetTest(liveRow, base: 0, bit: arg.valueId as BitIndex) 'deadPhi'
+		if not liveRow.test(arg.valueId as BitIndex) 'deadPhi'
 			let class = try classes.get(arg.valueId) otherwise panic("countDeadPhis: block-arg value {arg.valueId} has no recorded register class")
 			let idx = classRowIndex(blockLocal, class: class)
 			try deadPhis.set(idx, value: (try deadPhis.get(idx) otherwise panic("countDeadPhis: deadPhis.get OOB")) + 1) otherwise panic("countDeadPhis: deadPhis.set OOB")
@@ -4018,7 +4021,7 @@ end 'nonSweptForbidOf'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS this op's transient
 // register (see `addOpTransientPressure`).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, pos BlockOpPos, runs ColdBlockRuns, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep)
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, pos BlockOpPos, runs ColdBlockRuns, liveRow BitRow, forbidden RegMaskColumn, buf OperandList, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 
 	// This also fills `buf` with the op's operands, which everything below reads.
@@ -4033,13 +4036,13 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 	addOpTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
 	if clobberMask != 0 'hasClobber'
-		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, liveBuf: liveBuf)
 	end 'hasClobber'
 
 	if heat == BlockHeat.cold 'coldBlock'
 		match runs.runAt(pos) 'run'
 			none then break 'run'
-			run(id) then coldRun.confineRunOp(op, buf: buf, opFacts: opFacts, runs: runs, id: id, pos: pos, liveRow: liveRow, forbidden: forbidden, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+			run(id) then coldRun.confineRunOp(op, buf: buf, opFacts: opFacts, runs: runs, id: id, pos: pos, liveRow: liveRow, forbidden: forbidden, liveBuf: liveBuf)
 		end 'run'
 	end 'coldBlock'
 
@@ -4057,7 +4060,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, heat BlockHeat, 
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
 
-	stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveByClass: liveByClass, classes: classes)
+	stepRowBackwardOverOperands(liveRow, buf: buf, liveByClass: liveByClass, classes: classes)
 
 	// This op's pressure, per file: the live-BEFORE population of that file, plus the op's transient
 	// already folded in above if the register it holds belongs to that file.
@@ -4421,46 +4424,46 @@ end 'captureAt'
 // `readLater` holds the values the run's ops after the current one read; the backward walk meets a
 // run's last op first and empties it there.
 export type ColdRunSweep
-	var readLater as BitWordArray
+	var readLater as BitRow
 
 	// Whether `readLater` holds a bit, so a block start clears it only when there is something to clear.
 	var readLaterHeld as bool
 
 	export static function create() returns ColdRunSweep
-		return Self{readLater: BitWordArray.create(), readLaterHeld: false}
+		return Self{readLater: BitRow.create(), readLaterHeld: false}
 	end 'create'
 
 	export function widen(wordsPerRow BitWordCount)
-		self.readLater.growFilled(wordsPerRow as ElementIndex, value: 0)
+		self.readLater.widen(wordsPerRow)
 	end 'widen'
 
-	export function beginBlock(wordsPerRow BitWordCount)
-		self.emptyReadLater(wordsPerRow)
-	end 'beginBlock'
+	export function takeRowWordsVisited() returns EventCount
+		return self.readLater.takeWordsVisited()
+	end 'takeRowWordsVisited'
 
-	function emptyReadLater(wordsPerRow BitWordCount)
+	export function emptyReadLater()
 		if self.readLaterHeld 'held'
-			zeroRow(self.readLater, wordsPerRow: wordsPerRow)
+			self.readLater.clear()
 			self.readLaterHeld = false
 		end 'held'
 	end 'emptyReadLater'
 
 	// One run op, walked backward: the run's last op empties the set, a clobber confines the values read
 	// later in the run, and this op's reads are then counted for the ops before it.
-	export function confineRunOp(op TargetOp, buf OperandList, opFacts OpVariantFacts, runs ColdBlockRuns, id ColdRunId, pos BlockOpPos, liveRow BitWordArray, forbidden RegMaskColumn, wordsPerRow BitWordCount, liveBuf ValueIdArray)
+	export function confineRunOp(op TargetOp, buf OperandList, opFacts OpVariantFacts, runs ColdBlockRuns, id ColdRunId, pos BlockOpPos, liveRow BitRow, forbidden RegMaskColumn, liveBuf ValueIdArray)
 		if pos == runs.lastOf(id) 'theRunsLastOp'
-			self.emptyReadLater(wordsPerRow)
+			self.emptyReadLater()
 		end 'theRunsLastOp'
 
 		let raw = rawClobberMask(op, buf: buf, opFacts: opFacts)
 
 		if raw != 0 'clobbers'
-			applyForbiddenWithin(liveRow, within: self.readLater, forbidden: forbidden, buf: buf, clobberMask: raw, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+			applyForbiddenWithin(liveRow, within: self.readLater, forbidden: forbidden, buf: buf, clobberMask: raw, liveBuf: liveBuf)
 		end 'clobbers'
 
 		for o in buf 'eachOperand'
 			if (not operandIsDef(o)) and operandIsVirtual(o) 'read'
-				bitsetAdd(self.readLater, base: 0, bit: operandValueId(o) as BitIndex)
+				self.readLater.add(operandValueId(o) as BitIndex)
 				self.readLaterHeld = true
 			end 'read'
 		end 'eachOperand'
@@ -4590,7 +4593,7 @@ end 'transientDefOperand'
 // this pass call the ONE implementation and cannot disagree about where the transient lands — they
 // must agree or the splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added,
 // which `opTransientDefOf` below decides and states once.
-export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, pressureOut RegCountColumn)
+export function addOpTransientPressure(buf OperandList, liveRow BitRow, classes ValueClassColumn, pressureOut RegCountColumn)
 	let transient = opTransientDefOf(buf)
 
 	if not transient.found 'noVirtualDef'
@@ -4604,14 +4607,14 @@ export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, cl
 	if transient.isReuse 'reuseDef'
 		// Against the FULL pool a reuse def whose input DIES here simply inherits the input's register
 		// and costs nothing; one whose input outlives the op needs a register of its own.
-		if bitsetTest(liveRow, base: 0, bit: operandReuseInputValueId(defOperand, buf: buf) as BitIndex) 'inputLiveAfter'
+		if liveRow.test(operandReuseInputValueId(defOperand, buf: buf) as BitIndex) 'inputLiveAfter'
 			classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
 		end 'inputLiveAfter'
 
 		return
 	end 'reuseDef'
 
-	if bitsetTest(liveRow, base: 0, bit: defId as BitIndex) 'defLiveAfter'
+	if liveRow.test(defId as BitIndex) 'defLiveAfter'
 		return
 	end 'defLiveAfter'
 
@@ -4665,7 +4668,7 @@ end 'opTransientDefOf'
 //
 // It selects the op's def through `opTransientDefOf`, the same one the full-pool answer uses, so the
 // two can differ in their RULE and never in which register they are talking about.
-export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liveness LivenessResult) returns ConfinedTransient
+export function opConfinedTransient(buf OperandList, liveRow BitRow, liveness LivenessResult) returns ConfinedTransient
 	let transient = opTransientDefOf(buf)
 
 	if not transient.found 'noVirtualDef'
@@ -4707,12 +4710,12 @@ export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liven
 		// ⚠ NO "a use dies here" RELIEF, unlike the full-pool arm below. The register a dying use
 		// vacates need not be one this def may hold — the same argument the reuse arm makes — and a
 		// pressure analysis that cannot prove the inheritance has to assume the competition.
-		return ConfinedTransient.create(not bitsetTest(liveRow, base: 0, bit: defId as BitIndex) and liveness.forbiddenOf(defId) != 0, at: transient.at)
+		return ConfinedTransient.create(not liveRow.test(defId as BitIndex) and liveness.forbiddenOf(defId) != 0, at: transient.at)
 	end 'plainDef'
 
 	let reuseInputId = operandReuseInputValueId(defOperand, buf: buf)
 
-	if bitsetTest(liveRow, base: 0, bit: reuseInputId as BitIndex) 'inputLiveAfter'
+	if liveRow.test(reuseInputId as BitIndex) 'inputLiveAfter'
 		return ConfinedTransient.create(true, at: transient.at)
 	end 'inputLiveAfter'
 
@@ -4736,10 +4739,10 @@ end 'neederMayTakeAnyRegisterOf'
 // `allocateDef`'s class filter then puts straight back into `blocked`, so this is exactly the set a def
 // of `class` can actually inherit. One dying use is enough: no `TargetOp` defines more than one value,
 // so one freed register covers the whole demand.
-function anyVirtualUseDiesAt(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, class RegClass) returns bool
+function anyVirtualUseDiesAt(buf OperandList, liveRow BitRow, classes ValueClassColumn, class RegClass) returns bool
 	for o in buf 'each'
 		if (not operandIsDef(o)) and operandIsVirtual(o) and operandClass(o, classes: classes) == class 'virtualUseOfThisFile'
-			if not bitsetTest(liveRow, base: 0, bit: operandValueId(o) as BitIndex) 'diesHere'
+			if not liveRow.test(operandValueId(o) as BitIndex) 'diesHere'
 				return true
 			end 'diesHere'
 		end 'virtualUseOfThisFile'
@@ -4754,10 +4757,6 @@ end 'anyVirtualUseDiesAt'
 // must already hold the op's operands. Shared by the liveness pressure sweep
 // (`stepBackwardOverOp`) and the colorer's per-block death computation — an identical
 // backward SSA transfer that must not drift between the two.
-// (`OpPressure` is gone. It paired an op's PRESSURE with the live POPULATION before it, as two
-// scalars, when both are now per-class ROWS: `liveByClass` IS the live-before population — the step
-// leaves it there — and `pressureOut` is the pressure. Two caller-owned rows, mutated in place, and a
-// per-op heap object off the allocator's hottest path.)
 
 // Takes the row's live POPULATION before the step and returns it after — maintained INCREMENTALLY,
 // by counting only the bits that actually flip. Recomputing it with a popcount over the whole row
@@ -4775,13 +4774,13 @@ end 'anyVirtualUseDiesAt'
 // `liveByClass` IS the population — the caller reads it after the step, and the total is
 // `classRowTotal`. There is no separate count to return and therefore no second counter to disagree
 // with the row it summarises.
-export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
+export function stepRowBackwardOverOperands(row BitRow, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
 	for o in buf 'removeDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			let v = operandValueId(o)
 
-			if bitsetTest(row, base: base, bit: v as BitIndex) 'wasLive'
-				bitsetRemove(row, base: base, bit: v as BitIndex)
+			if row.test(v as BitIndex) 'wasLive'
+				row.remove(v as BitIndex)
 				stepClassLive(liveByClass, classes: classes, v: v, entering: false)
 			end 'wasLive'
 		end 'vd'
@@ -4791,8 +4790,8 @@ export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex,
 		if (not operandIsDef(o)) and operandIsVirtual(o) 'vu'
 			let v = operandValueId(o)
 
-			if not bitsetTest(row, base: base, bit: v as BitIndex) 'wasDead'
-				bitsetAdd(row, base: base, bit: v as BitIndex)
+			if not row.test(v as BitIndex) 'wasDead'
+				row.add(v as BitIndex)
 				stepClassLive(liveByClass, classes: classes, v: v, entering: true)
 			end 'wasDead'
 		end 'vu'
@@ -4806,10 +4805,11 @@ end 'stepRowBackwardOverOperands'
 // masks it invalidated would re-walk every op of every dirty block; it reads `PressureIndex.clobberOr`
 // instead — one RANGE OR per block of the value's live range — so a narrow scope has no caller.
 //
-// It walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op, so testing
-// each value id would be O(clobber-ops × values). `liveBuf` is scratch reused across ops.
-function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
-	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
+// It walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op, so
+// both testing each value id and reading every word of the row would be O(clobber-ops × values) for
+// an answer of size O(live). `liveBuf` is scratch reused across ops.
+function applyForbidden(liveRow BitRow, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, liveBuf ValueIdArray)
+	liveRow.collect(liveBuf)
 
 	for v in liveBuf 'eachTarget'
 		forbidLiveValue(v, forbidden: forbidden, buf: buf, clobberMask: clobberMask)
@@ -4818,11 +4818,11 @@ end 'applyForbidden'
 
 // `applyForbidden` over the values of `liveRow` that are ALSO in `within` — a cold run's clobber, which
 // confines only the values read later in the run (`ColdRunSweep`).
-function applyForbiddenWithin(liveRow BitWordArray, within BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
-	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
+function applyForbiddenWithin(liveRow BitRow, within BitRow, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, liveBuf ValueIdArray)
+	liveRow.collect(liveBuf)
 
 	for v in liveBuf 'eachTarget'
-		if bitsetTest(within, base: 0, bit: v as BitIndex) 'readLater'
+		if within.test(v as BitIndex) 'readLater'
 			forbidLiveValue(v, forbidden: forbidden, buf: buf, clobberMask: clobberMask)
 		end 'readLater'
 	end 'eachTarget'

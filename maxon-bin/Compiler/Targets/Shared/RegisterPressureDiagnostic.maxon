@@ -392,12 +392,16 @@ end 'firstOriginLineOfOp'
 // order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
 // than moving the reference-typed candidates around (moving them would mutate the array while
 // an element borrow is live, which the borrow checker rejects).
+//
+// It tests each id of the value space rather than walking the row's set bits, which is the opposite
+// of what `BitRow.collect`'s contract asks of every consumer on a hot path: `peak` arrives as a
+// `let` and collecting writes the row's own counter. This runs once, on the E5001 refusal path.
 function collectCandidates(project Project, module TargetModule, func IrFunction, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionOps OpIndexArray) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount as BitIndex)
 	var candidates = PressureCandidateArray.create()
 
 	for v in 0 upto cfg.valueCount 'eachValue'
-		if not bitsetTest(peak.liveBefore, base: 0, bit: v) 'notLive'
+		if not peak.liveBefore.test(v) 'notLive'
 			continue
 		end 'notLive'
 
@@ -552,8 +556,8 @@ end 'classifyValue'
 // property of the four routes, which cannot answer for such a function at all (see the file header).
 function defRangeOf(project Project, module TargetModule, func IrFunction, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, wordsPerRow BitWordCount, lineage SplitLineage) returns SourceRange
 	var ranges = SourceRangeArray.create()
-	var visited = BitWordArray.create()
-	visited.resize(wordsPerRow)
+	var visited = BitRow.create()
+	visited.widen(wordsPerRow)
 	collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: valueId, lineage: lineage, visited: visited, out: ranges)
 
 	if ranges.count() == 0 'ruleThree'
@@ -567,12 +571,12 @@ end 'defRangeOf'
 // a phi's incoming spans transitively, a split-derived value's source span transitively.
 // `visited` bounds the recursion (a phi's back-edge incoming can transitively reference the phi;
 // a lineage chase is acyclic but shares the guard), so each value is explored once.
-function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
-	if bitsetTest(visited, base: 0, bit: valueId as BitIndex) 'seen'
+function collectReachableRanges(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, valueId ValueId, lineage SplitLineage, visited BitRow, out SourceRangeArray)
+	if visited.test(valueId as BitIndex) 'seen'
 		return
 	end 'seen'
 
-	bitsetAdd(visited, base: 0, bit: valueId as BitIndex)
+	visited.add(valueId as BitIndex)
 
 	match classifyValue(project, funcIndex: funcIndex, valueId: valueId, lineage: lineage) 'src'
 		param(range) then out.push(range)
@@ -586,7 +590,7 @@ end 'collectReachableRanges'
 // nothing when the value is not a block-arg of any block — that leaves the caller's `out` free
 // of a span from this value, and only a value with no other route contributes none at all
 // (Rule 3).
-function chasePhiIncomings(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitWordArray, out SourceRangeArray)
+function chasePhiIncomings(project Project, module TargetModule, topo FuncTopology, funcIndex FuncIndex, phiValueId ValueId, lineage SplitLineage, visited BitRow, out SourceRangeArray)
 	for incoming in phiIncomingValues(module, topo: topo, phiValueId: phiValueId) 'each'
 		collectReachableRanges(project, module: module, topo: topo, funcIndex: funcIndex, valueId: incoming, lineage: lineage, visited: visited, out: out)
 	end 'each'

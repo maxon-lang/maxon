@@ -416,7 +416,7 @@ end 'RegPoolCensus'
 // sweep. The snapshot DEDUPES: an op may name one value twice (`x + x`, or a reuse def whose input
 // is also its use), and counting a single flip twice would corrupt the census for the rest of the
 // block.
-export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass RegCountColumn, ids ValueIdArray, wasLive BoolArray)
+export function stepCensusBackwardOverOp(row BitRow, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass RegCountColumn, ids ValueIdArray, wasLive BoolArray)
 	ids.clear()
 	wasLive.clear()
 
@@ -432,15 +432,15 @@ export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, cens
 		end 'alreadySnapshot'
 
 		ids.push(v)
-		wasLive.push(bitsetTest(row, base: 0, bit: v as BitIndex))
+		wasLive.push(row.test(v as BitIndex))
 	end 'snapshot'
 
-	stepRowBackwardOverOperands(row, base: 0, buf: buf, liveByClass: liveByClass, classes: classes)
+	stepRowBackwardOverOperands(row, buf: buf, liveByClass: liveByClass, classes: classes)
 
 	for k in 0 upto ids.count() 'applyDelta'
 		let v = try ids.get(k) otherwise panic("stepCensusBackwardOverOp: ids.get OOB at {k}")
 		let was = try wasLive.get(k) otherwise panic("stepCensusBackwardOverOp: wasLive.get OOB at {k}")
-		let now = bitsetTest(row, base: 0, bit: v as BitIndex)
+		let now = row.test(v as BitIndex)
 
 		if was == now 'unchanged'
 			continue
