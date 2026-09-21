@@ -603,14 +603,11 @@ function requireOutputWritten(project Project, outputPath FilePath) throws Compi
 	try refuseCompile(project)
 end 'requireOutputWritten'
 
-// ⭐ **WHAT A REFUSED COMPILE DOES, WRITTEN ONCE.** Five sites refuse a build after accumulating
-// diagnostics — the two output-path checks above, the name-index refusal, the pipeline gate and the backend
-// gate — and each carried its own copy of these two lines plus its own retelling of the second one's reason.
-//
-// ⚠ **A FRESH THROW, NEVER A RETHROW OF THE CAUGHT OBJECT.** Re-throwing the error a `try … otherwise`
-// caught risks a NULL incref on the rethrow, whereas a fresh
-// throw of the same arm propagates cleanly. That is the fact this function exists to hold in one place.
-function refuseCompile(project Project) throws CompileError
+// ⚠ A fresh throw, never a rethrow of the caught object. Re-throwing the error a `try … otherwise`
+// caught risks a NULL incref on the rethrow, whereas a fresh throw of the same arm propagates cleanly.
+// That is the fact this function exists to hold in one place, for every site that refuses a build after
+// accumulating diagnostics.
+module function refuseCompile(project Project) throws CompileError
 	printDiagnostics(project)
 	throw CompileError.compileError
 end 'refuseCompile'

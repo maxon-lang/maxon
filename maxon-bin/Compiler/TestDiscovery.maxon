@@ -69,6 +69,14 @@ export function discoverTests(projectDir FilePath, target Target) returns Discov
 	var project = try loadProject([projectDir], target: target, sourceSelection: SourceSelection.productionAndTests)
 	let signatures = try queryProgramSignatures(project)
 
+	// Nothing downstream refuses these: stopping at the declaration sweep makes this the last holder of
+	// `project`, so a lexer error the sweep reported dies with it and the roster is merely short that
+	// file's tests — a run answering that no test matched instead of printing the error. The sweep
+	// raises no parse or semantic diagnostic, so the staged compile's own refusal is never doubled here.
+	if projectHasErrors(project) 'theSweepReported'
+		try refuseCompile(project)
+	end 'theSweepReported'
+
 	var found = DiscoveredTestArray.create()
 
 	for declared in signatures.declaredTests 'eachDeclaredTest'

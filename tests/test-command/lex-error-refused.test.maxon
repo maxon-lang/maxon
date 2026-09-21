@@ -1,0 +1,22 @@
+// lex-error-refused.test.maxon — A `*.test.maxon` that fails to tokenize is a compile error under
+// `test`, not a project that turns out to have no tests: the run is refused at exit 2 with the lexer's
+// diagnostic naming the file the author wrote.
+//
+// Two spawning tests in one file naming one fixture, for the concurrency reason
+// `reserved-name-refused.test.maxon`'s header owns.
+//
+// ⚠ The fixture's `argv.txt` filter names only the broken file's test, which is the shape the symptom
+// needs: with nothing else selected, a discovery that swallows the lexer error has no test left to run
+// and answers that no test matched. A run with no filter still has `good.test.maxon`'s test to report,
+// so it says nothing about the file that vanished.
+
+let LexErrorCase = "lex-error-refused"
+
+test 'lex-error-refused is a compile error, not an empty run'
+	try checkFixture(LexErrorCase)
+end 'lex-error-refused is a compile error, not an empty run'
+
+test 'a lex error names the author file that failed to tokenize'
+	let run = runFixture(LexErrorCase)
+	try Expect.contains(run.stderr, needle: "{LexErrorCase}{FilePath.separator()}broken.test.maxon:", message: "a file that fails to TOKENIZE must be reported like any other compile error under `{TestedCommandName}`, naming the author's file — a file whose tests silently vanish from the roster reads as a project that has none. It said: {run.stderr}")
+end 'a lex error names the author file that failed to tokenize'

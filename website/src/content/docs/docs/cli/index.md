@@ -443,7 +443,7 @@ normally with `maxon build`.
 | Option | Description |
 |--------|-------------|
 | `-t P`, `-t=P`, `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Comma-separated patterns are a union. A bare `-t` with nothing after it is refused. |
-| `--list` | Print the tests that would run, and compile nothing. |
+| `--list` | Print the tests that would run, and compile nothing. A project whose sources do not all tokenize is still refused, so the list is never quietly short a file. |
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
 | `--bail`, `--bail=N` | Stop starting new work after `N` failures (`--bail` alone means 1). Work already running finishes, so the count may exceed `N`. Without it, every test runs. |
@@ -483,7 +483,8 @@ process from the start.
 | `2` | The run could not happen: a bad option, a compile error, no source files, no such project |
 
 A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
-not read as green.
+not read as green. A source file that does not tokenize is a compile error like any other: the run
+exits 2 with the diagnostic, rather than reporting that file's tests as absent.
 
 **Example.** A failing expectation, then the fix:
 
