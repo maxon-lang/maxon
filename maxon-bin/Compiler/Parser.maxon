@@ -25311,8 +25311,11 @@ export type Parser
 			panic("publishNestedFunctionAlias: nested function typealias '{String.from(alias.name)}' was published with an EMPTY enclosing type — every caller reads a `type`/`extension` BODY, where `enterTypeScope` has set one")
 		end 'noEnclosingTypeToQualifyWith'
 
+		let qualified = joinQualifiedName(self.enclosingType, member: alias.name)
+
 		into.push(alias)
-		into.push(alias.underName(joinQualifiedName(self.enclosingType, member: alias.name)))
+		into.push(alias.underName(qualified))
+		self.signatures.recordNestedFunctionAlias(qualified)
 	end 'publishNestedFunctionAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS** — `typealias IntBox = Box with Integer`. The cursor

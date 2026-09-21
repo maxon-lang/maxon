@@ -813,6 +813,13 @@ no cost, and `return` re-brands implicitly.
 
 - A `[...]` literal carries no brand and fits either.
 - A closure literal or a declared function carries no brand and fits any function alias of its shape.
+- A function alias declared **inside a type or extension body** carries no brand either, in both
+  directions: no source outside the type can write `Array.SortComparator`, so it is never the name an
+  author chose to distinguish two shapes. A value of any other alias of that shape flows into it, and a
+  value of it flows into any other alias of that shape.
+- Two **file-scope** function aliases of one shape still refuse each other — including two
+  directory-qualified ones, `api.Score` and `legacy.Score`, which are file-scope declarations wearing
+  their directory and can be written in a type position.
 - Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
   elements have different layouts, so build a new container instead.
 
@@ -864,6 +871,11 @@ typealias PoolB = Pool with Integer
 `PoolA.Idx` and `PoolB.Idx` are different types; passing one where the other is expected is **E3005**
 (`expected 'PoolB.Idx', got 'PoolA.Idx'`). Convert with `a as PoolB.Idx`. Literals that fit the range are
 accepted by both.
+
+A per-instance **function** alias is not a brand, because no source outside the type can write its name.
+`Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
+function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no
+cast and no wrapping closure.
 
 ---
 

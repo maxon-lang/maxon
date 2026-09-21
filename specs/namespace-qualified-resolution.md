@@ -1554,3 +1554,43 @@ inAlpha lvl=3 alpha/a.maxon:9
 inBeta lvl=5 beta/b.maxon:9
 sum=2:3:4:9:9
 ```
+
+<!-- test: error.two-directories-function-aliases-of-one-shape-do-not-interchange -->
+**A DIRECTORY-QUALIFIED FUNCTION ALIAS IS A BRAND.** `api.Score` and `legacy.Score` are file-scope
+declarations wearing their directory, and an author can write either in a type position — so the
+nominal rule of `nominal-function-alias.md` applies to them exactly as it does to a bare `Handler` and
+`Callback`. The qualifier is not what makes a name brandless; being unwritable outside its type is, and
+these are writable.
+```maxon
+// --- file: api/types.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+// --- file: legacy/types.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+// --- file: app/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function pickLegacy() returns legacy.Score
+	return addOne
+end 'pickLegacy'
+
+function runApi(f api.Score) returns Integer
+	return f(20)
+end 'runApi'
+
+function main() returns ExitCode
+	let h = pickLegacy()
+	print("{runApi(h)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: app/<fragment>:27:10: argument type mismatch for 'f': expected 'api.Score', got 'legacy.Score'
+```

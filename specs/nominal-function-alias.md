@@ -24,7 +24,12 @@ runCallback(h as Callback) // a re-brand: the same code pointer, the same enviro
 ```
 
 **Decay.** A closure literal and a declared function carry no brand and fit any function alias whose
-shape they match. The shape check comes first; the brand check runs only after two shapes agree.
+shape they match. The shape check comes first; the brand check runs only after two shapes agree. A
+function alias declared inside a `type` or `extension` body carries no brand either — `Array.SortComparator`
+is a name no source outside `Array` can write, so it can never be the name an author chose to distinguish:
+a value of any other alias of that shape flows into it, and a value of it flows into any other alias of
+that shape. Two FILE-SCOPE aliases still refuse each other, and a directory-qualified one (`api.Score`,
+`legacy.Score`) is file-scope — writable in a type position, and a brand.
 
 **Nested positions are nominal.** In `typealias Outer = function(f Handler) returns Integer`, the
 parameter type `Handler` is compared by NAME against a candidate's `(f Callback)` — the descent that
@@ -62,6 +67,55 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:20:10: argument type mismatch for 'f': expected 'Callback', got 'Handler'
+```
+
+<!-- test: a-branded-comparator-decays-into-the-per-instance-sort-alias -->
+A function alias declared inside a type body is not a brand: no source outside the type can write
+`Array.SortComparator`, so it is never the name an author chose to tell two shapes apart. A
+`RowComparator` value passes to `Array.sort` unchanged, and a value of the nested alias fits a
+`RowComparator` slot the same way.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RowComparator = function(Row, Row) returns Ordering
+typealias Rows = Array with Row
+
+type Row
+	export var key as Integer
+
+	static function create(key Integer) returns Self
+		return Self{key: key}
+	end 'create'
+end 'Row'
+
+type Sorter
+	export var compare as RowComparator
+
+	static function create() returns Self
+		return Self{compare: function(left Row, right Row) gives left.key.compare(right.key)}
+	end 'create'
+end 'Sorter'
+
+function main() returns ExitCode
+	var rows = Rows.create()
+	rows.push(Row.create(3))
+	rows.push(Row.create(1))
+	rows.push(Row.create(2))
+	let sorter = Sorter.create()
+	rows.sort(sorter.compare)
+
+	for row in rows 'each'
+		print("{row.key}")
+	end 'each'
+
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+123
 ```
 
 <!-- test: a-handler-converts-at-a-callback-return -->
