@@ -1,0 +1,91 @@
+// Test: a-bool-half-pair-return-is-read-back-correctly
+typealias Num = int(0 to 1000)
+
+function probe(x Num) returns (bool, Num)
+	return (x > 500, x - 500)
+end 'probe'
+
+function main() returns ExitCode
+	let hit = probe(542)
+	let miss = probe(500)
+	let value = hit._1 if hit._0 else 100
+	let bonus = 200 if miss._0 else 0
+	return value + bonus
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_state@0 = i64 0
+}
+
+func @probe {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 1000
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.cmp x0, 500
+    arm64.cset x1, gt
+    arm64.sub x9, x0, 500
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-bool-half-pair-return-is-read-back-correctly.test:4: Range check failed: value outside typealias 'Num'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x9, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 542
+    arm64.bl probe
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x9
+    arm64.movImm x0, 500
+    arm64.bl probe
+    arm64.cbz x19, ternaryfalse#2
+  ternarytrue#1:
+    arm64.movRegReg x1, x20
+    arm64.b matchcont#3
+  ternaryfalse#2:
+    arm64.movImm x1, 100
+  matchcont#3:
+    arm64.cbz x0, ternaryfalse#5
+  ternarytrue#4:
+    arm64.movImm x0, 200
+    arm64.b matchcont#6
+  ternaryfalse#5:
+    arm64.movImm x0, 0
+  matchcont#6:
+    arm64.add x0, x1, x0
+    arm64.cmp x0, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x0, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at a-bool-half-pair-return-is-read-back-correctly.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
