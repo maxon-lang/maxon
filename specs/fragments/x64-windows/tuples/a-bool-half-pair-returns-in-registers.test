@@ -1,0 +1,124 @@
+// Test: a-bool-half-pair-returns-in-registers
+typealias Num = int(0 to 1000)
+
+function classify(x Num) returns (bool, Num)
+	if x == 0 'zero'
+		return (false, 0)
+	end 'zero'
+
+	return (x > 500, x + 1)
+end 'classify'
+
+function main() returns ExitCode
+	let p = classify(750)
+	print("{p._0} {p._1}")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@32768 = i64 0
+  __slab_arena_map_l1@32776 = i64 0
+  __slab_state@32784 = i64 0
+  __ds_base@32792 = i64 0
+  __ds_buf_size@32800 = i64 0
+  __ds_buf_mask@32808 = i64 0
+  __ds_start_ts@32816 = i64 0
+  __ds_lock@32824 = i64 0
+  __mm_alloc_id@32832 = i64 0
+  __mrt_console_probe_stdin@32840 = i8 0
+  __mrt_console_probe_stdout@32841 = i8 0
+  __mrt_console_probe_stderr@32842 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+  ifcont:
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 751
+  __il_cont#2:
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 10
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __bool_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_1]  ; " "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot4, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 10
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __int_to_string
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRegReg rax, rbx, r14
+    x64.leaRegRegReg rax, rax, r8
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot2, r8
+    x64.leaRegRegImm32 r12, r8, 56
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rdx, slot4
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot3
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot3
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [rax + 0], r12
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __write_stdout
+  __il_cont#1:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1373,3 +1373,22 @@ At regalloc the tags read `__Tuple4.bool.int.bool.int` 0 (was 50.7M), `__Tuple2.
 −466,086 at rung 0 (−6.3%) to −11,078,023 at rung 5 (−12.1%), the whole of it in `regalloc`
 (26,964,169 → 15,886,108 at rung 5); ratios 1.31 1.51 1.68 1.82 1.91 per doubling (1.34 … 1.92 before —
 the per-op term was the steepest). CPU within the noise band (−1.0% at rung 5).
+
+### Result — 2026-09-20, a `bool` half joins the two-register tuple return convention
+
+A tuple element declared `bool` occupies an 8-byte slot but is stored and loaded as `i1`, and
+`ValueTupleReturn`'s half predicate admitted only `i64`, so every `(bool, X)` and `(X, bool)` return was a
+16-byte box per call while `(Num, Num)` came back in the two return registers. The predicate now admits
+`i1` beside `i64` — on x64 an `i1` is `setcc` + `movzx`, on arm64 `cset`, both a clean zero-extended 0/1
+in a full general-purpose register, the flag register is moved full width, and wasm coerces at every
+push — so the register arms and the in-frame arm take a bool half alike; float stays refused. Cases in
+`specs/tuples.md`: `a-bool-half-pair-returns-in-registers` (the in-frame elision), `…-from-two-call-sites`
+(the register convention, bool high) and `a-bool-half-pair-return-is-read-back-correctly` (bool low, on
+every lane including wasm, where the flag local is `i64` and each consumer wraps).
+
+**Ladder against a control built from 72e336c5df, interleaved, two runs each:** Δ0 in every column
+(±30 allocations, noise) and byte-identical code at every rung — the corpus has no two-element tuple
+return with a bool half, so the instrument is blind to this change. What it reaches: every user
+program returning a `(value, ok)` pair, `stdlib/helpers/sort/pdqsort.maxon`'s `partition` (a box per
+partition step before), and the compiler's own `constDefInfo` in `SplitLiveRanges.maxon` on its next
+generation (7,092 `__Tuple2.int.bool` boxes per self-compile in the stage-2 reading above).

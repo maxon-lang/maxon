@@ -16,7 +16,9 @@ time that no reference is used after that.
 - **Scalars** — integers, floats, `bool`, payload-free enum values, and an
   [inline packed record](/docs/language/composite-types/#inline-packed-records) — are plain values. Assigning one copies it.
 - **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
-  live on the heap. A variable holds a **reference** to its record.
+  live on the heap. A variable holds a **reference** to its record. A two-element tuple of register-wide
+  elements returned from a function is the one exception: it comes back in the two return registers and no
+  record is built (see [Memory Semantics](/docs/language/composite-types/#memory-semantics) under Tuples).
 
 ### Reference-by-Default Assignment
 

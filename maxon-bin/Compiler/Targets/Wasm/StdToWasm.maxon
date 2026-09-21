@@ -3090,10 +3090,9 @@ type WasmFuncEmitter
 
 		self.body.localGet(errorFlagId as Wasm32Index)
 
-		// The flag is always i64 (a zero `const`, a scalar `ordinal + bias`, or a propagated `tryCall`
-		// flag — all i64), so this coercion is a no-op; it is kept for the same value-meets-declared-type
-		// robustness every other push in this file carries, and matches the i64 second result the
-		// signature declares.
+		// The second result the signature declares is i64 and the value pushed here need not be: a `bool`
+		// half riding the value-tuple return convention is an i32 local, which this coercion widens with
+		// an `i64.extend_i32_u`.
 		coerceOnStack(self.body, from: getValtype(self.valtypes, v: errorFlagId), to: WasmValType.i64)
 		self.body.returnOp()
 	end 'emitErrorReturn'

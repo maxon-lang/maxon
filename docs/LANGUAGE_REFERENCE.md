@@ -1665,7 +1665,10 @@ end 'loop'
 ### Memory Semantics
 
 A tuple is a reference-counted record, like a `type`. Assigning a tuple shares it; a tuple holding managed
-values (strings, records) releases them when the last reference goes away.
+values (strings, records) releases them when the last reference goes away. A returned pair is the one
+exception: a two-element tuple of register-wide elements (a whole-word integer or a `bool`), returned by a
+function that does not throw and whose address is not taken, comes back in the two return registers and
+allocates nothing.
 
 ---
 
@@ -4453,7 +4456,9 @@ time that no reference is used after that.
 - **Scalars** — integers, floats, `bool`, payload-free enum values, and an
   [inline packed record](#inline-packed-records) — are plain values. Assigning one copies it.
 - **Records** — values of a `type`, tuples, unions with payloads, strings, arrays and other collections —
-  live on the heap. A variable holds a **reference** to its record.
+  live on the heap. A variable holds a **reference** to its record. A two-element tuple of register-wide
+  elements returned from a function is the one exception: it comes back in the two return registers and no
+  record is built (see [Memory Semantics](#memory-semantics) under Tuples).
 
 ### Reference-by-Default Assignment
 

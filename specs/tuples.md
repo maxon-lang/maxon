@@ -56,6 +56,11 @@ function swap(t (Integer, Integer)) returns (Integer, Integer)
 end 'swap'
 ```
 
+A returned pair may cost nothing. A two-element tuple whose elements are register-wide — a whole-word
+integer or a `bool` — returned by a function that does not throw and whose address is not taken, comes
+back in the two return registers and allocates nothing. Every other tuple is a heap record, and a pair
+that escapes into an array or any other container keeps its heap record.
+
 ## Tests
 
 <!-- test: basic-tuple -->
@@ -197,7 +202,7 @@ end 'main'
 
 <!-- test: small-tuple-return-allocates-nothing -->
 <!-- MmTrace -->
-A returned tuple of exactly two whole-word fields is a VALUE: it comes back in the two return
+A returned tuple of exactly two register-wide fields is a VALUE: it comes back in the two return
 registers rather than a heap record, so the call allocates nothing. Returning the pair by register
 is what makes this observable — the heap lowering is still the fallback for every tuple and every
 shape that does not fit the gate.
@@ -431,6 +436,137 @@ end 'main'
 ```
 ```exitcode
 75
+```
+
+<!-- test: a-bool-half-pair-returns-in-registers -->
+<!-- MmTrace -->
+RED: today a `(bool, Num)` return is a heap `__Tuple2` on every call, because a bool half is read as
+an `i1` and the two-register convention admits only whole-word halves — so a `__Tuple2` alloc, decref
+and free appear in the trace below and this case fails on the golden.
+
+A `bool` is a whole return-register value like any other: a pair of a bool and an integer is a VALUE,
+and the call must allocate nothing, exactly as `(Num, Num)` already does in
+`small-tuple-return-allocates-nothing`. Both `return` shapes here are fresh two-word boxes nothing
+else in `classify` can see, and `main`'s only uses of the pair are the two half reads.
+
+⭐ **THE ASSERTION IS THE ABSENCE OF A `__Tuple2` LINE.** The golden holds the interpolation `print`
+builds and nothing else — one `InterpolationScratch` per `{…}` (five bytes for the bool's text, 21 for
+the integer's) and the `StringRecord` they are copied into.
+```maxon
+typealias Num = int(0 to 1000)
+
+function classify(x Num) returns (bool, Num)
+	if x == 0 'zero'
+		return (false, 0)
+	end 'zero'
+
+	return (x > 500, x + 1)
+end 'classify'
+
+function main() returns ExitCode
+	let p = classify(750)
+	print("{p._0} {p._1}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true 751
+```
+```mm-trace
+mm_alloc InterpolationScratch #1 size=5
+mm_alloc InterpolationScratch #2 size=21
+mm_alloc StringRecord #3 size=65
+mm_decref InterpolationScratch #1 rc=0
+mm_free InterpolationScratch #1
+mm_decref InterpolationScratch #2 rc=0
+mm_free InterpolationScratch #2
+mm_decref StringRecord #3 rc=0
+mm_free StringRecord #3
+```
+
+<!-- test: a-bool-half-pair-returns-in-registers-from-two-call-sites -->
+<!-- MmTrace -->
+RED: the bool in the HIGH half is refused by the same gate, so `split` keeps the heap record and the
+trace below carries a `__Tuple2` alloc, decref and free per call site.
+
+The bool on the other end of the pair, and called TWICE so the result cannot be the frame-local a
+called-once leaf earns: the register arm is what deletes the box here. Each call builds a fresh
+two-word box, each call site reads both halves and drops the box through the trivial `__mm_decref`,
+so nothing allocates at either end and the golden is the interpolation alone.
+```maxon
+typealias Num = int(0 to 1000)
+
+function split(x Num) returns (Num, bool)
+	if x == 0 'zero'
+		return (0, false)
+	end 'zero'
+
+	return (x + 1, x > 500)
+end 'split'
+
+function main() returns ExitCode
+	let a = split(10)
+	let b = split(700)
+	print("{a._0} {a._1} {b._0} {b._1}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 false 701 true
+```
+```mm-trace
+mm_alloc InterpolationScratch #1 size=21
+mm_alloc InterpolationScratch #2 size=5
+mm_alloc InterpolationScratch #3 size=21
+mm_alloc InterpolationScratch #4 size=5
+mm_alloc StringRecord #5 size=74
+mm_decref InterpolationScratch #1 rc=0
+mm_free InterpolationScratch #1
+mm_decref InterpolationScratch #2 rc=0
+mm_free InterpolationScratch #2
+mm_decref InterpolationScratch #3 rc=0
+mm_free InterpolationScratch #3
+mm_decref InterpolationScratch #4 rc=0
+mm_free InterpolationScratch #4
+mm_decref StringRecord #5 rc=0
+mm_free StringRecord #5
+```
+
+<!-- test: a-bool-half-pair-return-is-read-back-correctly -->
+RED: nothing — this case is GREEN today, on the heap convention, and its whole job is to stay green
+when the pair comes back in registers. It carries no trace marker, so it is the ONE case of the three
+that reaches the wasm lane — where the flag rides an `i64` local that every bool consumer wraps back
+to `i32`, and a dropped or swapped half is a validation failure rather than a wrong word.
+
+`probe` is called TWICE so it keeps a frame of its own and really hands the pair back in the two
+registers, and each call site reads both halves and drops the box through the one trivial
+`__mm_decref` — the call-site shape, rather than the frame-local one the other two cases take. The
+exit code is computed from BOTH halves of BOTH results: each bool chooses a value and each integer is
+one, so a half read out of the wrong register, or a bool widened from the wrong bits, is a different
+exit code. Returns 42.
+```maxon
+typealias Num = int(0 to 1000)
+
+function probe(x Num) returns (bool, Num)
+	return (x > 500, x - 500)
+end 'probe'
+
+function main() returns ExitCode
+	let hit = probe(542)
+	let miss = probe(500)
+	let value = hit._1 if hit._0 else 100
+	let bonus = 200 if miss._0 else 0
+	return value + bonus
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: for-in-over-map-allocates-no-tuple -->

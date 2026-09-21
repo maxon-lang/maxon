@@ -1315,13 +1315,20 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 	end 'op'
 end 'opAccountsForTheValue'
 
-// An access at offset 0 or 8, one whole machine word wide. Anything narrower, wider or misaligned is not a
-// half of the pair — and a FLOAT half is refused here too, because the secondary return slot is a
-// general-purpose register and an `f64` virtual constrained to it would cross register files.
+// A half may ride a return register only if its access type fills a general register on every backend. An
+// `i1` does: it is materialised zero-extended (`setcc`+`movzx` on x64, `cset` on arm64), moved full width
+// and read full width. A float is refused because the secondary return slot is a general-purpose register
+// and an `f64` virtual constrained to it would cross register files. A narrow integer such as `u32` is
+// refused because its store truncates and its load zero-extends: with the record deleted the register
+// would carry bits that round trip discards.
+function occupiesAWholeGeneralRegister(valueType StdType) returns bool
+	return valueType == StdType.i64 or valueType == StdType.i1
+end 'occupiesAWholeGeneralRegister'
+
 function isAWholeHalf(offset ByteOffset, valueType StdType) returns bool
-	if valueType != StdType.i64 'notAWholeIntegralWord'
+	if not occupiesAWholeGeneralRegister(valueType) 'notAWholeGeneralRegister'
 		return false
-	end 'notAWholeIntegralWord'
+	end 'notAWholeGeneralRegister'
 
 	return offset == LowHalfOffset or offset == HighHalfOffset
 end 'isAWholeHalf'
