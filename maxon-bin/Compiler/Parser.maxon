@@ -40179,27 +40179,6 @@ export type Parser
 		end 'r'
 	end 'holdErrorMatchRefusal'
 
-	// An arm an `and fallthrough` reaches is entered twice: by the dispatch, in the match's entry move state, and
-	// by the fall-through edge, in the state of the arm it falls out of. A combined error matched on the second
-	// and not the first is a join whose paths disagree.
-	function holdErrorMatchRefusalAcrossFallthrough(entryMoveMark MoveMark, anchor Token)
-		let arrived = self.captureMoveMark()
-
-		for i in 0 upto entryMoveMark.moved.count() 'eachOwned'
-			if not self.movedBetweenMarks(entryMoveMark, after: arrived, index: i) 'settledAlike'
-				continue
-			end 'settledAlike'
-
-			let owned = try self.ownedBindings.get(i) otherwise panic("holdErrorMatchRefusalAcrossFallthrough: ownedBindings.get OOB at {i} — the entry mark holds one entry per owned binding")
-			let isObligation = owned.isErrorMatchObligation
-			let name = owned.name
-
-			if isObligation 'matchedOnOneEdge'
-				self.holdErrorMatchRefusal(name, reason: ErrorMatchPathsDisagreeReason, anchor: anchor)
-			end 'matchedOnOneEdge'
-		end 'eachOwned'
-	end 'holdErrorMatchRefusalAcrossFallthrough'
-
 	// Refuse the held broken obligation, if there is one — asked where a handler ends, the last door its paths reach.
 	function requireNoHeldErrorMatchRefusal() throws ParseError
 		let refusal = self.errorMatchRefusal
@@ -41859,6 +41838,11 @@ export type Parser
 					if not movedOnEdge 'liveEdge'
 						self.currentBlock = edge.block
 						let liveValue = try edge.mark.values.get(i) otherwise panic("reconcileMovesAtMerge: edge mark values.get OOB at {i}")
+
+						// ⚠ A bare decref, where `emitScopeDrops` drops a cell binding in two steps. Sound
+						// because the value here is never a cell's box: a cell binding cannot be moved — the
+						// poisoning doors match a binding through `boundValue` and a cell's reads yield fresh
+						// loads — so no cell binding is ever mixed at a merge.
 						self.emitDecref(liveValue, range: SourceRange.ofToken(anchor))
 					end 'liveEdge'
 				end 'dropLive'
@@ -49751,7 +49735,8 @@ export type Parser
 		// The move state entering the arms — captured after the temp-scrutinee enrolment so the scrutinee
 		// binding is included. Each FRESH arm is parsed from it (`restoreMoveMark` at the arm-restore sites,
 		// the twin of `restoreBindings`), and each reaching arm captures its own exit move state for the
-		// merge reconciliation. A `and fallthrough` arm does NOT restore — it inherits the prior arm's state.
+		// merge reconciliation. A `and fallthrough` arm does NOT restore — it inherits the prior arm's
+		// state, and the fallen-into arm's dispatch edge pays for it (`enterDispatchEdgeDrops`).
 		let entryMoveMark = self.captureMoveMark()
 
 		// ⭐ **THE MATCH BECOMES A `break` TARGET FOR ITS ARMS** (see `MatchContext`). A match STATEMENT
@@ -49812,31 +49797,42 @@ export type Parser
 				let defTok = self.current()
 				try self.consume(TokenKind.default)
 
-				// The default's body: for a PLANNED match its own block (the dispatch's miss edges branch
-				// here); for the linear chain the last real arm's `else` target (`currentTestBlock`), or the
-				// entry block when the match is default-only. `var` because `parseArmBody` mutates it.
-				//
-				// ⚠ **SEATED FROM AN ID, BECAUSE `currentTestBlock` IS CARRIED BY THE ARM LOOP.** Binding it
-				// to a second name here would MOVE it out of the loop (a bare-local read is a move), which is
-				// E2015. `.id` is a field read off a borrowed receiver, and the block is re-fetched — the same
-				// id-threading the arm loop already uses for `prevTestBlockId`.
+				var defaultArrivedMoveMark = self.emptyMoveMark
+				var defaultNeedsADispatchEdge = false
+
+				if prevFallthrough 'defaultIsFtArrival'
+					defaultArrivedMoveMark = self.captureMoveMark()
+					defaultNeedsADispatchEdge = self.movesALiveBinding(entryMoveMark, after: defaultArrivedMoveMark)
+				end 'defaultIsFtArrival'
+
+				// `var` because `parseArmBody` mutates it, and seated from an ID because `currentTestBlock`
+				// is carried by the arm loop: binding it to a second name here would move it out of the loop
+				// (a bare-local read is a move), which is E2015. `.id` is a field read off a borrowed
+				// receiver, and the block is re-fetched — the id-threading the arm loop uses for
+				// `prevTestBlockId`.
 				var defaultBodyId = currentTestBlock.id
 
-				if usePlan 'planDefaultBlock'
+				// In the linear chain the default's body is `currentTestBlock` itself. A dispatch-edge drop
+				// needs a block only the fail edge reaches, so the body moves out to its own block and
+				// `currentTestBlock` becomes that edge.
+				if usePlan or defaultNeedsADispatchEdge 'planDefaultBlock'
 					defaultBodyId = self.newBlock(func, label: b"matchdefault", line: defTok.line).id
 				end 'planDefaultBlock'
 
 				var defaultBody = try self.artifact.module.getBlockByIdIn(func, id: defaultBodyId) otherwise panic("parseMatchCommon: the default body block {defaultBodyId} is not in its own function")
 
 				if prevFallthrough 'defaultIsFtTarget'
-					self.holdErrorMatchRefusalAcrossFallthrough(entryMoveMark, anchor: defTok)
 					let matchEdgeArgs = self.setupFallthroughTargetPhis(defaultBody, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 
 					if usePlan 'planDefaultArgs'
-						// The dispatch's miss edges into the default body carry these phi args — recorded when
-						// the dispatch is emitted after the loop, not here.
+						// The default's match-edge phi args; the dispatch emits the edges that carry them
+						// after the loop, not here.
 						planMissArgs = matchEdgeArgs
-					end 'planDefaultArgs' else if hasRealArm 'defaultFailEdge'
+					end 'planDefaultArgs' else if defaultNeedsADispatchEdge 'defaultFailEdgeDrops'
+						self.reconcileMovesAtTwoEdgeMerge(currentTestBlock, markA: entryMoveMark, b: prevExitBlock, markB: defaultArrivedMoveMark, anchor: defTok)
+						self.recordBranchEdge(currentTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
+						self.emitBranch(currentTestBlock, targetId: defaultBody.id)
+					end 'defaultFailEdgeDrops' else if hasRealArm 'defaultFailEdge'
 						// The fail edge into the default body — the last real arm's `condBranch` else, already
 						// emitted; only its phi args are recorded now.
 						var prevTestBlock = try self.artifact.module.getBlockByIdIn(func, id: prevTestBlockId) otherwise panic("parseMatchCommon: the previous test block {prevTestBlockId} is not in its own function")
@@ -49861,6 +49857,11 @@ export type Parser
 				end 'errorUnionDefaultEntry' else if usePlan 'planMissTarget'
 					planMissBlockId = defaultBody.id
 				end 'planMissTarget'
+
+				if usePlan and defaultNeedsADispatchEdge 'defaultDropsOnTheDispatchEdge'
+					planMissBlockId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: defaultArrivedMoveMark, prevExit: prevExitBlock, targetId: planMissBlockId, edgeArgs: planMissArgs, anchor: defTok)
+					planMissArgs = ValueIdArray.create()
+				end 'defaultDropsOnTheDispatchEdge'
 
 				// ⭐ **A `default` IS AN ARM THE USER WROTE**, including the `default throws` / `default panic`
 				// spellings, and its count answers "was the default ever reached". Minted after the reseat above,
@@ -49992,10 +49993,11 @@ export type Parser
 					cond = try self.emitPatternCondition(scrut, scrutTag: scrutTag, seenValues: seenValues)
 				end 'scalarChainPattern'
 
+				var armArrivedMoveMark = self.emptyMoveMark
 				var matchEdgeArgs = ValueIdArray.create()
 
 				if prevFallthrough 'armIsFtTarget'
-					self.holdErrorMatchRefusalAcrossFallthrough(entryMoveMark, anchor: patternTok)
+					armArrivedMoveMark = self.captureMoveMark()
 					matchEdgeArgs = self.setupFallthroughTargetPhis(bodyBlock, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 				end 'armIsFtTarget' else 'armFresh'
 					if self.beginFreshArm(carried, entryVals: entryVals, entryMoveMark: entryMoveMark, scrut: scrut) 'priorArmConsumed'
@@ -50003,19 +50005,42 @@ export type Parser
 					end 'priorArmConsumed'
 				end 'armFresh'
 
+				// The short-circuit is load-bearing: a fresh arm leaves `armArrivedMoveMark` the shared
+				// empty mark, which `movesALiveBinding` would index out of bounds against the entry mark.
+				let armDropsOnItsDispatchEdge = prevFallthrough and self.movesALiveBinding(entryMoveMark, after: armArrivedMoveMark)
+
 				if usePlan 'planEdgeArgs'
 					// The dispatch records each test→arm edge from the stamped intervals. No `condBranch` here — the
 					// dispatch emits all of them later.
 					if isErrorUnionMatch and not armOwnsMemberBox 'errorUnionArmEntry'
 						let entry = self.enterErrorUnionArm(func, members: arm.members, fused: requireErrorUnionInfo(errorUnion).fusedOrdinal, fallenInto: prevFallthrough, body: bodyBlock, edgeArgs: matchEdgeArgs, flag: scrut, anchor: patternTok)
-						retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: entry.targetId, args: entry.args)
+
+						if armDropsOnItsDispatchEdge 'unionArmDropsOnItsDispatchEdge'
+							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: entry.targetId, edgeArgs: entry.args, anchor: patternTok)
+							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: edgeId, args: ValueIdArray.create())
+						end 'unionArmDropsOnItsDispatchEdge' else 'unionArmDispatchedDirectly'
+							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: entry.targetId, args: entry.args)
+						end 'unionArmDispatchedDirectly'
+
 						bodyBlock = try self.artifact.module.getBlockByIdIn(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the arm body block {entry.bodyId} is not in its own function")
 					end 'errorUnionArmEntry' else 'dispatchIntoBody'
-						retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: bodyBlock.id, args: matchEdgeArgs)
+						if armDropsOnItsDispatchEdge 'armDropsOnItsDispatchEdge'
+							let edgeId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok)
+							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: edgeId, args: ValueIdArray.create())
+						end 'armDropsOnItsDispatchEdge' else 'armDispatchedDirectly'
+							retargetArmIntervals(dispatchIntervals, from: intervalMark, targetId: bodyBlock.id, args: matchEdgeArgs)
+						end 'armDispatchedDirectly'
 					end 'dispatchIntoBody'
 				end 'planEdgeArgs' else 'chainEdge'
-					self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
-					self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTestId, ifTok: patternTok)
+					var armTargetId = bodyBlock.id
+
+					if armDropsOnItsDispatchEdge 'chainArmDropsOnItsDispatchEdge'
+						armTargetId = self.enterDispatchEdgeDrops(func, entryMoveMark: entryMoveMark, arrived: armArrivedMoveMark, prevExit: prevExitBlock, targetId: bodyBlock.id, edgeArgs: matchEdgeArgs, anchor: patternTok)
+					end 'chainArmDropsOnItsDispatchEdge' else 'chainArmDispatchedDirectly'
+						self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
+					end 'chainArmDispatchedDirectly'
+
+					self.emitCondBranch(currentTestBlock, cond: cond, thenId: armTargetId, elseId: nextTestId, ifTok: patternTok)
 				end 'chainEdge'
 
 				// A `walk(dir)` arm's payload bindings are declared at the HEAD of the arm body, in a
@@ -50519,6 +50544,21 @@ export type Parser
 		self.emitBranch(prevExitBlock, targetId: bodyBlock.id)
 		return matchEdgeArgs
 	end 'setupFallthroughTargetPhis'
+
+	// The body of an arm a `and fallthrough` reaches is a two-edge join: the dispatch enters it in
+	// the match's entry move state, the fallthrough edge in the state the prior arm left. A binding
+	// the prior arm moved is still live on the dispatch edge, and only a static bit says otherwise —
+	// so its scope drop is skipped and it leaks. Reconciled like any other two-edge merge, on a block
+	// only the dispatch edge reaches: a drop at the body's head would free the fallthrough path's
+	// value twice.
+	function enterDispatchEdgeDrops(func IrFunction, entryMoveMark MoveMark, arrived MoveMark, prevExit IrBlock, targetId BlockId, edgeArgs ValueIdArray, anchor Token) returns BlockId
+		var edge = self.newBlock(func, label: b"ftdispatch", line: anchor.line)
+		let edgeId = edge.id
+		self.reconcileMovesAtTwoEdgeMerge(edge, markA: entryMoveMark, b: prevExit, markB: arrived, anchor: anchor)
+		self.recordBranchEdge(edge, targetId: targetId, argIds: edgeArgs)
+		self.emitBranch(edge, targetId: targetId)
+		return edgeId
+	end 'enterDispatchEdgeDrops'
 
 	// Create the merge block LAST (so it lays out after every arm body) and join the reaching arms
 	// into it. An empty set means every arm terminated — the merge is `dead`. Otherwise mint the

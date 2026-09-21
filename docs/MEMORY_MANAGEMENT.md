@@ -345,6 +345,9 @@ The compiler inserts scope-end cleanup at every scope exit point (block end, bre
 - the managed variables declared in this scope, which are decref'd
 - the variables to skip (the return value, and parameters, which the caller owns)
 
+A value moved in a `match` arm that ends `and fallthrough` is released on the fallen-into arm's own
+dispatch edge, where the move never ran.
+
 ### Cleanup on All Exit Paths
 
 Scope cleanup runs on every possible exit path:

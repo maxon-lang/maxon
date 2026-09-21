@@ -1215,6 +1215,334 @@ end 'main'
 the falling-through payload, long enough to be a heap string
 ```
 
+<!-- test: a-var-moved-in-a-fallthrough-arm-is-dropped-on-the-dispatch-edge -->
+A value moved in an arm that ends `and fallthrough` is released on the fallen-into arm's own
+dispatch edge, where the move never ran. Here `a`'s body is skipped, so `s` is still live when `b`
+is entered and nothing downstream would ever drop it.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.b 'k'
+		a then t = s and fallthrough
+		b then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-is-not-dropped-twice -->
+The control for the case above, entered at `a`: the move does run, `t` owns the string, and the
+taken fallthrough edge reaches the body without passing the dispatch edge's drop.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.a 'k'
+		a then t = s and fallthrough
+		b then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-is-dropped-on-the-dispatch-edge-beside-a-fresh-arm -->
+A third arm that is entered FRESH sits beside the fallen-into one, so the match's merge also sees
+`s` moved on one reaching path and live on the other — the drop on the dispatch edge and the drop
+the merge places on the fresh arm's edge have to be right together.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.b 'k'
+		a then t = s and fallthrough
+		b then n = n + 7
+		c then n = n + 1
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-is-dropped-on-the-dispatch-edge-of-a-chain-default -->
+A `String` scrutinee keeps the per-arm compare chain, where the default's body is the last arm's
+fail target. The drop still goes on the edge alone: the default gets a body block of its own and
+that fail target becomes the edge into it.
+```maxon
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match "b" 'k'
+		"a" then t = s and fallthrough
+		default then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-into-a-chain-default-is-not-dropped-twice -->
+Its control, entered at `"a"`: the move runs and the fallthrough edge enters the default body
+directly, past the fail edge the drop sits on.
+```maxon
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match "a" 'k'
+		"a" then t = s and fallthrough
+		default then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-is-dropped-on-the-dispatch-edge-of-a-planned-default -->
+The other default shape: an integer scrutinee dispatches through the interval plan, so it is the
+plan's miss edges into the default that are wrapped.
+```maxon
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match 2 'k'
+		1 then t = s and fallthrough
+		default then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-into-a-planned-default-is-not-dropped-twice -->
+Its control, entered at `1`, so the move runs and the fallthrough edge carries it into the default.
+```maxon
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match 1 'k'
+		1 then t = s and fallthrough
+		default then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-is-dropped-on-the-dispatch-edge-of-a-chain-pattern-arm -->
+The fallen-into arm of a compare chain is a PATTERN arm here rather than the default, so the drop
+goes on that arm's own match edge — the then-edge of the test that selected it.
+```maxon
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match "b" 'k'
+		"a" then t = s and fallthrough
+		"b" then n = n + 7
+		default then n = n + 1
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-into-a-chain-pattern-arm-is-not-dropped-twice -->
+Its control, entered at `"a"`: the fallthrough is taken and the match edge carrying the drop is
+never reached.
+```maxon
+typealias Code = int(0 to 255)
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match "a" 'k'
+		"a" then t = s and fallthrough
+		"b" then n = n + 7
+		default then n = n + 1
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-var-moved-in-a-fallthrough-arm-beside-a-fresh-arm-taken-fresh-drops-once -->
+The third path of the three-arm match: the fresh arm runs alone, `s` was never moved on it, and
+the merge is the one that releases it.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.c 'k'
+		a then t = s and fallthrough
+		b then n = n + 7
+		c then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: two-vars-moved-along-a-fallthrough-chain-are-both-dropped-on-the-last-dispatch-edge -->
+Two arms in a row end `and fallthrough`, and the match enters the last of them. A binding stays
+moved once it has been moved, so the state arriving at that arm holds BOTH moves and its one
+dispatch edge owes both drops.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var u = "a third heap string long enough to be a real allocation".clone()
+	var w = "a fourth heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.c 'k'
+		a then t = s and fallthrough
+		b then w = u and fallthrough
+		c then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: two-vars-moved-along-a-fallthrough-chain-entered-at-the-middle-drop-once-each -->
+The same chain entered in the middle: that arm's dispatch edge drops what the first arm moved, and
+its own move then travels the taken fallthrough edge into the last arm.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var u = "a third heap string long enough to be a real allocation".clone()
+	var w = "a fourth heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.b 'k'
+		a then t = s and fallthrough
+		b then w = u and fallthrough
+		c then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: two-vars-moved-along-a-fallthrough-chain-taken-whole-are-not-dropped-twice -->
+The chain's control: entered at the first arm, every move runs and no dispatch edge is on the path.
+```maxon
+typealias Code = int(0 to 255)
+
+union U
+	a
+	b
+	c
+end 'U'
+
+function main() returns ExitCode
+	var s = "a heap string long enough to be a real allocation".clone()
+	var t = "a second heap string long enough to be a real allocation".clone()
+	var u = "a third heap string long enough to be a real allocation".clone()
+	var w = "a fourth heap string long enough to be a real allocation".clone()
+	var n = 0 as Code
+	match U.a 'k'
+		a then t = s and fallthrough
+		b then w = u and fallthrough
+		c then n = n + 7
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.fallthrough-into-a-managed-binding-arm -->
 ⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD**, and this is the case that made it a
 refusal rather than a rule on paper: `a(s) … and fallthrough` reaches `b(t)`'s body while the
