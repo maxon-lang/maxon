@@ -1,0 +1,28 @@
+// Test: error.two-shapes-of-one-contested-name-are-told-apart-by-their-files
+// --- file: a.maxon
+typealias Tally = int(0 to 1000)
+typealias Step = function(Tally) returns Tally
+
+function pick() returns Step
+	return function(n Tally) gives n + 1
+end 'pick'
+
+export function goA() returns String
+	return foldB("go", step: pick())
+end 'goA'
+
+// --- file: b.maxon
+typealias Step = function(String) returns String
+
+export function foldB(label String, step Step) returns String
+	return step(label)
+end 'foldB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	print("{goA()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:11:9: argument type mismatch for 'step': expected 'Step' (declared in b.maxon), got 'Step' (declared in a.maxon)

@@ -27,6 +27,8 @@ error E3063: Ambiguous typealias 'Score': multiple visible definitions found.
 
 The qualifying namespace is the declaring file's directory (joined with `.` for nested directories — e.g. `lib.fmt.Score` for a file at `lib/fmt/types.maxon`). Same-file duplicates remain a hard E3061 error (no qualification can disambiguate two declarations in the same file). File-private aliases (`typealias` with no modifier) are scoped to their declaring file and never participate in cross-file ambiguity.
 
+The rule is the same for a FUNCTION typealias (`export typealias Step = function(…) returns …`): two exported declarations of one bare name earn E3063 at the reference, whether or not the two shapes agree.
+
 This mirrors **E3095** for function-name ambiguity — same model, different registry.
 
 ## Tests
@@ -211,6 +213,57 @@ end 'main'
 error E3063: app/specs/fragments/typealias-collision/error.three-way-ambiguous-typealias.test:13:16: Ambiguous typealias 'Score': multiple visible definitions found. Qualify with a directory name. Candidates: alpha.Score, mid.Score, zulu.Score
 ```
 
+
+<!-- test: error.exported-function-alias-collision-is-ambiguous-at-the-reference -->
+A FUNCTION typealias collides on the same terms as a ranged one. Two directories export `Step` over the identical shape; the shapes agreeing does not make the bare reference unambiguous, because either declaration is one the reader may legally name.
+```maxon
+// --- file: api/t.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Step = function(n Integer) returns Integer
+
+// --- file: legacy/t.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Step = function(n Integer) returns Integer
+
+// --- file: app/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function run(f Step) returns Integer
+	return f(1)
+end 'run'
+
+function main() returns ExitCode
+	return run(function(n Integer) gives n + 1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3063: app/specs/fragments/typealias-collision/error.exported-function-alias-collision-is-ambiguous-at-the-reference.test:13:16: Ambiguous typealias 'Step': multiple visible definitions found. Qualify with a directory name. Candidates: api.Step, legacy.Step
+```
+
+<!-- test: error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous -->
+The twin of the case above with the two exported `Step`s declared over DIFFERENT shapes. The answer is the same E3063: disagreeing shapes are a reason the reader cannot be assumed to mean either one, not a way to pick between them.
+```maxon
+// --- file: api/t.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Step = function(n Integer) returns Integer
+
+// --- file: legacy/t.maxon
+export typealias Step = function(s String) returns String
+
+// --- file: app/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function run(f Step) returns Integer
+	return f(1)
+end 'run'
+
+function main() returns ExitCode
+	return run(function(n Integer) gives n + 1) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3063: app/specs/fragments/typealias-collision/error.exported-function-alias-collision-over-two-shapes-is-still-ambiguous.test:12:16: Ambiguous typealias 'Step': multiple visible definitions found. Qualify with a directory name. Candidates: api.Step, legacy.Step
+```
 
 <!-- test: error.ambiguous-typealias-is-anchored-on-the-name-token -->
 **WHERE E3063 POINTS**, pinned on its own because the ported expectation for

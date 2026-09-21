@@ -3698,6 +3698,10 @@ end 'maxonTypeName'
 // function of the type: a brand-scoped spelling would let one function type render two ways at two sites
 // and make a merge disagree about a type it agrees about. The site-free door is exactly that pure function
 // of the gid — and it is still the author's `typealias`, which is what a caption owes.
+//
+// ⚠ For the same reason a compiler mint reaching a slot here is NOT stripped to its source spelling. Two
+// mints of one contested name would then render alike, and a comparison this string decides would call two
+// different function types equal.
 function fnTypeSlotName(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
 	if maxonTypeTag(t) == ValueTypeTag.genericInstance 'anInstantiationOfAGenericBase'
 		return String.from(signatures.instanceDisplayName(genericInstanceIdOf(t)))
@@ -8271,6 +8275,12 @@ typealias GenericAliasDeclarationGroupMap = Map with (ByteArray, GenericAliasDec
 // registry interns by id and holds no interner of its own: the one writer is `intern`, so the buckets
 // cannot drift from the columns they index.
 export typealias GenericInstanceIdArray = Array with GenericInstanceId
+typealias DeclaredGenericAliasInstanceMap = Map with (String, GenericInstanceId)
+
+// What a generic-instance slot contributes to a function-alias shape key when the walk meets an instance it
+// is already inside (`typealias A = Array with A`): a constant, which is what bounds the walk.
+let CyclicGenericSlotMark = 0x9E3779B97F4A7C15 as HashDigest
+
 export typealias GenericInstanceIdSet = Set with GenericInstanceId
 export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstanceIdArray)
 
@@ -10017,6 +10027,13 @@ export function rangeQualifiedAliasName(name ByteArray, low ParsedInt, high Pars
 	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{low}_{high}".toByteArray()
 end 'rangeQualifiedAliasName'
 
+// The qualifier is the shape DIGEST in hex, not the shape spelled out. This mint ends up inside a mangled
+// symbol, where the separators a spelled-out signature needs (`:`, `|`, parentheses) are not symbol
+// characters — and a `function`-tagged element spells only the bare word `function`, which collides.
+export function shapeQualifiedAliasName(name ByteArray, shape HashDigest) returns ByteArray
+	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{shape:x}".toByteArray()
+end 'shapeQualifiedAliasName'
+
 // The same range as a reader SEES it -- `int(0 to 255)`, the syntax the source declares it in.
 //
 // ⭐⭐ **TWO SPELLINGS OF ONE RANGE, AND THE SPLIT IS THE SAME ONE `mangleGenericInstance` AND
@@ -10096,10 +10113,17 @@ function instanceQualifiedAliasName(name ByteArray, canonicalInstance ByteArray)
 	return "{String.from(name)}{CompilerQualifiedAliasSeparator}{String.from(canonicalInstance)}".toByteArray()
 end 'instanceQualifiedAliasName'
 
+// The one tier at which a stored alias name becomes text an author reads. Every diagnostic that quotes a
+// typealias goes through here, so no renderer can quote a compiler mint and no producer has to remember to
+// strip one before filling in an error's payload.
+export function sourceSpelledAliasText(name ByteArray) returns String
+	return String.from(sourceSpelledAliasName(name))
+end 'sourceSpelledAliasText'
+
 // ⭐⭐ **THE NAME AS *SOURCE* SPELLS IT** — `Byte$0_255` ⇒ `Byte`, and any name the compiler never
 // qualified handed back UNCHANGED, by reference, so an unqualified name costs one byte scan and no
-// allocation. The exact inverse of BOTH mints (`rangeQualifiedAliasName`, `instanceQualifiedAliasName`), so
-// a mint and the strip cannot come to disagree about where a name divides.
+// allocation. The exact inverse of every mint (`rangeQualifiedAliasName`, `shapeQualifiedAliasName`,
+// `instanceQualifiedAliasName`), so a mint and the strip cannot come to disagree about where a name divides.
 //
 // ⚠ **IT DIVIDES AT THE FIRST `$`, NOT THE LAST (N3), AND THE TWO STOPPED AGREEING WHEN THE MINTS NESTED.**
 // A generic alias's qualifier is an instance's canonical name, which CONTAINS a range qualifier whenever its
@@ -10472,12 +10496,14 @@ export type ProgramSignatures
 	// name.
 	var typeAliases as RangedAliasRegistry
 
-	// FUNCTION typealias name -> its declaration (P1.5-A1). Like `typeAliases` it carries NO type-name
-	// ids — a function alias's return type is stored interner-free as a (tag, name-ByteArray) pair (see
-	// FunctionTypeAlias) — so it travels by name and arrives by name, needing no interner and no remap.
-	// THE door `Parser.parseTypeReference` asks "is this name a function alias?" through, and the one an
-	// indirect call recovers the callee's return type from.
-	var functionTypeAliases as FunctionTypeAliasMap
+	// Every FUNCTION typealias in the program, keyed by (name, declaring file) for `typeAliases`' reason: a
+	// non-exported one is file-local, so two files declaring one name are two types and a bare key would
+	// hand one file the other's shape. Like `typeAliases` it carries NO type-name ids — a function alias's
+	// return type is stored interner-free as a (tag, name-ByteArray) pair (see FunctionTypeAlias) — so it
+	// travels by name and arrives by name, needing no interner and no remap. THE door
+	// `Parser.parseTypeReference` asks "is this name a function alias?" through, and the one an indirect
+	// call recovers the callee's return type from.
+	var functionTypeAliases as FunctionAliasRegistry
 
 	// The `<Type>.<member>` spellings `Parser.publishNestedFunctionAlias` mints beside a nested function
 	// alias's bare name. A name in here is NOT a brand: no source position outside the declaring type can
@@ -11738,7 +11764,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), nameableTupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.createForSource(0), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), nameableTupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.createForSource(0), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -16007,7 +16033,7 @@ export type ProgramSignatures
 	// digest is folded at PARSE time from the parameter TOKENS, unconditionally in both passes
 	// (`Parser.readFunctionTypeAlias`), so it is the one parameter fact both passes mint identically.
 	function recordFunctionTypeAlias(alias FunctionTypeAlias)
-		self.functionTypeAliases.upsert(alias.name, value: alias)
+		self.functionTypeAliases.record(alias)
 		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeFunctionAlias), bytes: alias.name)
 		self.hash = Hasher.combined(self.mixAliasReturnSlot(named, alias: alias), value: alias.paramSpelling)
 	end 'recordFunctionTypeAlias'
@@ -19976,10 +20002,14 @@ export type ProgramSignatures
 		// index — each holds one declaration — while a bare reference from a third file could mean either.
 		// One column read, unwritten in every program that contests nothing.
 		if self.crossKindContested(name) 'severalKindsHoldTheName'
-			return self.crossKindAmbiguousCandidates(name, readerFilePath: readerFilePath)
+			return self.claimAmbiguousCandidates(try self.crossKindClaimsOf(name) otherwise panic("ProgramSignatures.ambiguousAliasCandidates: '{String.from(name)}' is not cross-kind contested — `crossKindContested` answered true one line above"), name: name, readerFilePath: readerFilePath)
 		end 'severalKindsHoldTheName'
 
 		let contested = self.typeAliases.contestedDeclarations(name)
+
+		if contested.count() == 0 'noRangedAliasOfThisNameIsContested'
+			return self.functionAliasAmbiguousCandidates(name, readerFilePath: readerFilePath)
+		end 'noRangedAliasOfThisNameIsContested'
 
 		if contested.contains(readerFilePath.toString()) 'theReadersOwnDeclarationIsWhatItMeans'
 			return sharedEmptyCandidateNames
@@ -20042,22 +20072,33 @@ export type ProgramSignatures
 		return not self.declaredByTheCorpus(declFilePath)
 	end 'candidateIsReachableFrom'
 
-	// ⭐⭐ **E3063's CANDIDATES FOR A NAME SEVERAL *KINDS* HOLD** — `ambiguousAliasCandidates`' cross-form
-	// half, applying the SAME four narrowing rules through the SAME predicates
-	// (`candidateIsReachableFrom`, `deeperEnclosingScope`, `scopeAdmits`, `qualifiedCandidateName`) over
-	// `crossKindContests`' claims instead of the ranged registry's declarations.
-	//
-	// ⚠ **THE LOOP IS ITS OWN AND THE RANGED ONE IS UNTOUCHED, WHICH IS A MEASURED CHOICE.** That path's two
-	// allocation-free guards — the reader's own declaration, then a reachable COUNT — are what keep `Byte`
-	// and `Codepoint`, contested inside `stdlib/` in every compile there is, off any claim-building path;
-	// funnelling both through one loop would have built a claim per declaration at every named type
-	// reference in the library. What may not be duplicated is the RULES, and none of them is.
+	function functionAliasAmbiguousCandidates(name ByteArray, readerFilePath FilePath) returns StringArray
+		let contested = self.functionTypeAliases.contestedDeclarations(name)
+
+		if contested.count() == 0 'oneFileDeclaresIt'
+			return sharedEmptyCandidateNames
+		end 'oneFileDeclaresIt'
+
+		var claims = TypeNameClaimArray.create()
+
+		for (_, alias) in contested 'eachDeclaringFile'
+			claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+		end 'eachDeclaringFile'
+
+		return self.claimAmbiguousCandidates(claims, name: name, readerFilePath: readerFilePath)
+	end 'functionAliasAmbiguousCandidates'
+
+	// ⚠ **THE RANGED REGISTRY'S OWN LOOP IN `ambiguousAliasCandidates` IS NOT FUNNELLED THROUGH HERE, AND
+	// THAT IS A COST CHOICE, NOT AN OVERSIGHT.** Its two allocation-free guards — the reader's own
+	// declaration, then a reachable COUNT — are what keep `Byte` and `Codepoint`, contested inside
+	// `stdlib/` in every compile there is, off any claim-building path; routing them here would build a
+	// claim per declaration at every named type reference in the library. What may not be duplicated is
+	// the four narrowing RULES, and none of them is: they live in `candidateIsReachableFrom`,
+	// `deeperEnclosingScope`, `scopeAdmits` and `qualifiedCandidateName`.
 	//
 	// ⚠ **A NOMINAL CLAIM IS NOT A CANDIDATE.** The diagnostic says "Ambiguous typealias", and a nominal
-	// declaration that a reader could ALSO name never coexists with an alias in the first place
-	// (`typeNamePairMayCoexist`) — so one reaching here would be a claim the contest should not hold.
-	function crossKindAmbiguousCandidates(name ByteArray, readerFilePath FilePath) returns StringArray
-		let claims = try self.crossKindClaimsOf(name) otherwise panic("ProgramSignatures.crossKindAmbiguousCandidates: '{String.from(name)}' is not cross-kind contested — the caller asks `crossKindContested` first")
+	// declaration a reader could ALSO name never coexists with an alias (`typeNamePairMayCoexist`).
+	function claimAmbiguousCandidates(claims TypeNameClaimArray, name ByteArray, readerFilePath FilePath) returns StringArray
 		let readerDirectory = self.moduleDirectoryOf(readerFilePath)
 		let readerPath = readerFilePath.toString()
 		var reachable = 0 as ElementIndex
@@ -20101,7 +20142,7 @@ export type ProgramSignatures
 		end 'oneScopeWon'
 
 		return candidates
-	end 'crossKindAmbiguousCandidates'
+	end 'claimAmbiguousCandidates'
 
 	// ⭐⭐ **IS A DECLARATION IN THIS FILE THE LIBRARY'S? — THE ONE SPELLING OF PROVENANCE THIS INDEX USES.**
 	// A file's module directory is DERIVED from the provenance the loader already knows
@@ -20200,8 +20241,10 @@ export type ProgramSignatures
 			self.noteCrossKindContest(aliasName, offeredAs: TypeDeclKind.rangedAlias, interfaceSitesByName: interfaceSitesByName)
 		end 'eachRangedAlias'
 
-		for (name, _) in self.functionTypeAliases 'eachFunctionAlias'
-			self.noteCrossKindContest(name, offeredAs: TypeDeclKind.functionAlias, interfaceSitesByName: interfaceSitesByName)
+		let functionAliasNames = self.functionTypeAliases.declaredNames()
+
+		for aliasName in functionAliasNames 'eachFunctionAlias'
+			self.noteCrossKindContest(aliasName, offeredAs: TypeDeclKind.functionAlias, interfaceSitesByName: interfaceSitesByName)
 		end 'eachFunctionAlias'
 
 		var genericAliasNames = ByteArrayArray.create()
@@ -20293,10 +20336,18 @@ export type ProgramSignatures
 			end 'theSoleRangedAlias'
 		end 'atMostOneFileDoes'
 
-		match self.functionAliasInAnyFile(name) 'aFunctionAlias'
-			declared(alias) then claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
-			undeclared then break 'aFunctionAlias'
-		end 'aFunctionAlias'
+		let contestedFunctionAliases = self.functionTypeAliases.contestedDeclarations(name)
+
+		if contestedFunctionAliases.count() > 0 'severalFilesDeclareTheFunctionAlias'
+			for (_, alias) in contestedFunctionAliases 'eachDeclaringFile'
+				claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+			end 'eachDeclaringFile'
+		end 'severalFilesDeclareTheFunctionAlias' else 'atMostOneFileDoes'
+			match self.functionAliasInAnyFile(name) 'theSoleFunctionAlias'
+				declared(alias) then claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
+				undeclared then break 'theSoleFunctionAlias'
+			end 'theSoleFunctionAlias'
+		end 'atMostOneFileDoes'
 
 		for entry in self.genericAliasDecls 'eachGenericAliasDecl'
 			if entry.aliasName.equals(name) 'thisOne'
@@ -20801,9 +20852,13 @@ export type ProgramSignatures
 	// stands where a `Callback` is declared; an anonymous shape — a closure literal's inferred type, a
 	// declared function's own signature — carries no brand and fits any alias of its shape.
 	//
-	// The guard turns on PROVENANCE and not on the spelling: a name the nested minter wrote brands nothing
-	// in either direction. See `nestedFunctionAliasMembers`, which owns that rule and why the test is
-	// membership of that set rather than a dot.
+	// The guard turns on membership of `nestedFunctionAliasMembers` and not on the spelling: a name the
+	// nested minter wrote brands nothing in either direction. See that field, which owns the rule and why
+	// the test is membership rather than a test for a dot.
+	//
+	// Two shape-scoped MINTS of one contested name conflict, which is the point: they are distinct keys,
+	// so the equality below separates them and two files' same-named `function(…)` aliases no longer
+	// satisfy each other's doors.
 	export function functionBrandsConflict(declaredName ByteArray, gotName ByteArray) returns bool
 		if self.nestedFunctionAliasMembers.contains(declaredName) or self.nestedFunctionAliasMembers.contains(gotName) 'notAPlainBrand'
 			return false
@@ -20986,8 +21041,7 @@ export type ProgramSignatures
 	// are not function aliases), spelled as a union arm rather than a sentinel for `DeclaredAlias`'s reason.
 	// It carries no interner ids (the return type is a tag + a name ByteArray), so it needs no `into`.
 	export function functionAliasInAnyFile(name ByteArray) returns DeclaredFunctionAlias
-		let alias = try self.functionTypeAliases.get(name) otherwise return DeclaredFunctionAlias.undeclared
-		return DeclaredFunctionAlias.declared(alias)
+		return self.functionTypeAliases.declarationInAnyFile(name)
 	end 'functionAliasInAnyFile'
 
 	// Is `name` a declared FUNCTION typealias — the `bool` half of `functionAliasOf`, and a HOT-PATH
@@ -21000,6 +21054,198 @@ export type ProgramSignatures
 	export function isFunctionAliasInAnyFile(name ByteArray) returns bool
 		return self.functionTypeAliases.contains(name)
 	end 'isFunctionAliasInAnyFile'
+
+	// The files a diagnostic must name to tell two claimants of one alias spelling apart — and the gate is the
+	// SAME two-tier test `unambiguousAliasSpelling` applies to the display, asked through its own two
+	// predicates. A note keyed on "contested" alone fires on a message the namespace tier has already made
+	// unambiguous, which reads as a second, contradictory qualifier on a name that needed none.
+	export function genericInstanceDeclaringFiles(id GenericInstanceId) returns FilePathArray
+		var files = FilePathArray.create()
+
+		for entry in self.genericAliasDecls 'eachDeclaration'
+			if not self.genericAliasSpellingIsSuperseded(entry.aliasName) or self.contestedAliasNamespacesAreDistinct(entry.aliasName) 'theSpellingAlreadyTellsThemApart'
+				continue
+			end 'theSpellingAlreadyTellsThemApart'
+
+			if self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath) == id 'thisDeclarationNamesThisInstance'
+				files.push(entry.filePath)
+			end 'thisDeclarationNamesThisInstance'
+		end 'eachDeclaration'
+
+		return files
+	end 'genericInstanceDeclaringFiles'
+
+	export function functionAliasMintDeclaringFiles(mintName ByteArray) returns FilePathArray
+		return self.functionTypeAliases.shapeScopedDeclaringFiles(mintName)
+	end 'functionAliasMintDeclaringFiles'
+
+	export function functionValueArmDeclaringFiles(name ByteArray) returns FilePathArray
+		let mints = self.functionTypeAliases.shapeScopedDeclaringFiles(name)
+
+		if mints.count() > 0 'aContestedFunctionAliasMint'
+			return mints
+		end 'aContestedFunctionAliasMint'
+
+		var files = FilePathArray.create()
+
+		if self.funcReturnDeclFiles.contains(name) 'aDeclaredFunctionOrClosure'
+			files.push(self.recordedReturnDeclFileOf(name))
+		end 'aDeclaredFunctionOrClosure'
+
+		return files
+	end 'functionValueArmDeclaringFiles'
+
+	export function functionAliasScopedName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		return self.functionTypeAliases.shapeScopedName(name, readerFilePath: readerFilePath)
+	end 'functionAliasScopedName'
+
+	export function rangeScopedAliasName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		return self.typeAliases.rangeScopedName(name, readerFilePath: readerFilePath)
+	end 'rangeScopedAliasName'
+
+	// ⭐⭐ **THE SECOND FIXPOINT IN THIS INDEX, BESIDE `settleGenericAliasContest`, AND FOR THE SAME REASON:
+	// A CONTESTED SPELLING IN A SLOT CONTESTS ITS CONTAINER.** `typealias Step = function(Item)` keys off
+	// what `Item` means, so a round that refines `Item`'s key moves `Step`'s.
+	//
+	// ⚠ The rounds are JACOBI — every key is read out of `keys` and written into `next` — so no row can see
+	// a sibling refined earlier in the same round. That is what makes the result independent of map
+	// iteration order, and the mint hex, the mangled symbols built from it and every golden that prints one
+	// stable across hosts.
+	//
+	// The bound is one round per name plus one: an acyclic chain of contested slots is at most that deep, so
+	// reaching it with the keys still moving means a cycle, which has no settled key and cannot be minted
+	// from.
+	export function settleFunctionAliasShapeContests()
+		let names = self.functionTypeAliases.multiplyDeclaredNames()
+
+		if names.count() == 0 'noNameIsDeclaredTwice'
+			return
+		end 'noNameIsDeclaredTwice'
+
+		var declaredInstances = DeclaredGenericAliasInstanceMap.create()
+
+		for entry in self.genericAliasDecls 'eachGenericAliasDeclaration'
+			declaredInstances.upsert(functionAliasShapeKeyOf(entry.aliasName, declPath: entry.filePath.toString()), value: entry.internedInstance())
+		end 'eachGenericAliasDeclaration'
+
+		var keys = FunctionAliasShapeKeyMap.create()
+		var moved = false
+
+		for _ in 0 upto names.count() + 1 'eachRound'
+			var next = FunctionAliasShapeKeyMap.create()
+			moved = false
+
+			for name in names 'eachName'
+				for (declPath, alias) in self.functionTypeAliases.contestedDeclarations(name) 'eachDeclaringFile'
+					let rowKey = functionAliasShapeKeyOf(name, declPath: declPath)
+					let key = self.functionAliasShapeKey(alias, known: keys, declaredInstances: declaredInstances)
+
+					if not keys.contains(rowKey) or key != (try keys.get(rowKey) otherwise panic("settleFunctionAliasShapeContests: '{rowKey}' is in the previous round's table and its read failed")) 'thisRoundRefinedIt'
+						moved = true
+					end 'thisRoundRefinedIt'
+
+					next.upsert(rowKey, value: key)
+				end 'eachDeclaringFile'
+			end 'eachName'
+
+			keys = next
+
+			if not moved 'theRoundChangedNothing'
+				break
+			end 'theRoundChangedNothing'
+		end 'eachRound'
+
+		if moved 'theRoundsRanOutWithTheKeysStillMoving'
+			panic("ProgramSignatures.settleFunctionAliasShapeContests: {names.count()} multiply-declared function alias name(s) did not reach a fixpoint in {names.count() + 1} rounds — a slot cycle among contested names (`A = function(B)` beside `B = function(A)`, each declared twice) has no settled key, and minting from a moving table would give two files one shape")
+		end 'theRoundsRanOutWithTheKeysStillMoving'
+
+		self.functionTypeAliases.settleShapeContests(keys)
+	end 'settleFunctionAliasShapeContests'
+
+	// Every slot is asked what its spelling means IN THE DECLARING FILE, which is what makes the key a fact
+	// about the declaration rather than about whoever reads it.
+	function functionAliasShapeKey(alias FunctionTypeAlias, known FunctionAliasShapeKeyMap, declaredInstances DeclaredGenericAliasInstanceMap) returns HashDigest
+		var open = GenericInstanceIdArray.create()
+		var digest = self.mixFunctionAliasSlot(Hasher.empty(), tag: alias.returnTag, typeName: alias.returnTypeName, declFilePath: alias.declFilePath, known: known, open: open, declaredInstances: declaredInstances)
+
+		for param in alias.paramTypes 'eachParam'
+			digest = self.mixFunctionAliasSlot(digest, tag: param.tag, typeName: param.typeName, declFilePath: alias.declFilePath, known: known, open: open, declaredInstances: declaredInstances)
+		end 'eachParam'
+
+		return digest
+	end 'functionAliasShapeKey'
+
+	function mixGenericInstanceSlot(state HashDigest, id GenericInstanceId, declFilePath FilePath, known FunctionAliasShapeKeyMap, open GenericInstanceIdArray, declaredInstances DeclaredGenericAliasInstanceMap) returns HashDigest
+		for held in open 'eachOpenInstance'
+			if held == id 'aCycleAmongTheDeclarations'
+				return Hasher.combined(state, value: CyclicGenericSlotMark)
+			end 'aCycleAmongTheDeclarations'
+		end 'eachOpenInstance'
+
+		open.push(id)
+		var digest = mixBytes(state, bytes: self.genericInstanceBaseName(id))
+
+		for arg in self.genericInstances.instanceArgs(id) 'eachArgument'
+			let tag = maxonTypeTag(arg)
+
+			digest = self.mixGenericInstanceSlot(digest, id: genericInstanceIdOf(arg), declFilePath: declFilePath, known: known, open: open, declaredInstances: declaredInstances) if tag == ValueTypeTag.genericInstance else self.mixFunctionAliasSlot(digest, tag: tag, typeName: self.instanceArgSpelling(arg), declFilePath: declFilePath, known: known, open: open, declaredInstances: declaredInstances)
+		end 'eachArgument'
+
+		_ = try open.pop() otherwise panic("ProgramSignatures.mixGenericInstanceSlot: open.pop on a list this call pushed to")
+
+		return digest
+	end 'mixGenericInstanceSlot'
+
+	function declaredGenericAliasInstance(name ByteArray, declFilePath FilePath, declaredInstances DeclaredGenericAliasInstanceMap) returns GenericInstanceId
+		return try declaredInstances.get(functionAliasShapeKeyOf(name, declPath: declFilePath.toString())) otherwise self.bareGenericAliasInstance(name)
+	end 'declaredGenericAliasInstance'
+
+	function instanceArgSpelling(arg MaxonType) returns ByteArray
+		let tag = maxonTypeTag(arg)
+
+		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef or tag == ValueTypeTag.function or tag == ValueTypeTag.interfaceRef 'namesAType'
+			return self.nameOfId(typeNameIdOf(arg))
+		end 'namesAType'
+
+		return EmptySourceText
+	end 'instanceArgSpelling'
+
+	// ⛔ **A GENERIC-INSTANCE SLOT MIXES ITS BASE NAME AND ARGS, NEVER ITS gid.** A gid is an allocation
+	// index into `genericInstances`, and `rekeyScopedGenericAliases` re-keys instances AFTER this settle —
+	// so a key built on one would depend on intern order and then change under the mints it produced, and
+	// those mints reach minted type names, rdata and symbol spellings.
+	//
+	// The tuple arm mixes the target NAME because the kind ordinal the fallback reaches for is one constant
+	// for every tuple. Two tuple targets differing only in a nested ranged alias are deliberately not split:
+	// canonicalisation erases that difference, so they are one struct.
+	function mixFunctionAliasSlot(state HashDigest, tag ValueTypeTag, typeName ByteArray, declFilePath FilePath, known FunctionAliasShapeKeyMap, open GenericInstanceIdArray, declaredInstances DeclaredGenericAliasInstanceMap) returns HashDigest
+		let spelled = mixBytes(Hasher.combined(state, value: tag.ordinal as HashDigest), bytes: typeName)
+
+		if typeName.isEmpty() 'aPrimitiveSlotCarriesNoName'
+			return spelled
+		end 'aPrimitiveSlotCarriesNoName'
+
+		match self.functionTypeAliases.lookup(typeName, readerFilePath: declFilePath) 'aFunctionAliasSlot'
+			declared(slot) then return Hasher.combined(spelled, value: try known.get(functionAliasShapeKeyOf(typeName, declPath: slot.declFilePath.toString())) otherwise Hasher.empty())
+			undeclared then break 'aFunctionAliasSlot'
+		end 'aFunctionAliasSlot'
+
+		if self.isGenericAliasFor(typeName, readerFilePath: declFilePath) 'aGenericInstanceAliasSlot'
+			return self.mixGenericInstanceSlot(spelled, id: self.declaredGenericAliasInstance(typeName, declFilePath: declFilePath, declaredInstances: declaredInstances), declFilePath: declFilePath, known: known, open: open, declaredInstances: declaredInstances)
+		end 'aGenericInstanceAliasSlot'
+
+		match self.typeAliases.lookup(typeName, readerFilePath: declFilePath) 'aRangedAliasSlot'
+			declared(ranged) then return Hasher.combined(Hasher.combined(spelled, value: ranged.low as HashDigest), value: ranged.high as HashDigest)
+			undeclared then break 'aRangedAliasSlot'
+		end 'aRangedAliasSlot'
+
+		if self.isTupleAliasFor(typeName, readerFilePath: declFilePath) 'aTupleAliasSlot'
+			return mixBytes(spelled, bytes: self.tupleAliasTargetFrom(typeName, readerFilePath: declFilePath))
+		end 'aTupleAliasSlot'
+
+		let form = try self.declaredFormOf(typeName, readerFilePath: declFilePath) otherwise return spelled
+		return Hasher.combined(spelled, value: form.ordinal as HashDigest)
+	end 'mixFunctionAliasSlot'
 
 	// ⭐ **A FUNCTION TYPEALIAS SUBSTITUTED IN AS A TYPE ARGUMENT IS A `function` PLACE, AND IT ARRIVES AS A
 	// `named` LEAF (W43b).** `substitutedInstanceArg` answers the argument AS INTERNED, and a function alias
@@ -25919,21 +26165,34 @@ export type ProgramSignatures
 		return self.arrayByteInstance
 	end 'bareArrayByteInstance'
 
-	// ⭐⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE — ABOUT A RANGE, ABOUT AN INSTANCE
-	// *OR* ABOUT A TUPLE?** The one bool `fileScopedInstance` and `rekeyScopedGenericAliases` both
-	// short-circuit on, and it is written ONCE: two spellings of one predicate is this project's signature
-	// bug, and a door taught about a contest the other spelling does not know about is a wrong answer with no
-	// compile error at either.
+	// ⭐⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE — ABOUT A RANGE, ABOUT A FUNCTION
+	// SHAPE, ABOUT AN INSTANCE *OR* ABOUT A TUPLE?** The one bool `fileScopedInstance` and
+	// `rekeyScopedGenericAliases` both short-circuit on, and it is written ONCE: two spellings of one
+	// predicate is this project's signature bug, and a door taught about a contest the other spelling does
+	// not know about is a wrong answer with no compile error at either.
 	//
-	// ⚠ **THE NEXT CONTEST GOES HERE AND NOWHERE ELSE.** A FUNCTION typealias has the identical whole-program
-	// defect (`Parser.readTypeAliasDeclaration` names it), so a fourth disjunct is expected.
-	//
-	// ⚠ It is deliberately NOT the gate on `settleRangeScopedInstances`, whose own early return stays
-	// range-only: that pass mints RANGE variants and has nothing to do for a generic contest. Its gate
-	// answers a different question that happens to mention the same map.
+	// ⚠ **THE NEXT CONTEST GOES HERE AND NOWHERE ELSE**, and which of the two gates below it also joins is
+	// decided by ONE test: does the contest RE-SPELL AN ELEMENT LEAF, or does it mint its own instances? A
+	// range and a function shape re-spell a leaf, so a generic instance carrying that leaf must be
+	// pre-interned per environment and they belong to `anyElementScopingContest` as well. A generic alias
+	// and a tuple mint instances of their own and owe nothing to that pass, so they stop here.
 	function anythingContested() returns bool
-		return self.typeAliases.anyRangeContest() or self.anyGenericAliasNameContested() or self.anyTupleAliasNameContested()
+		return self.anyElementScopingContest() or self.anyGenericAliasNameContested() or self.anyTupleAliasNameContested()
 	end 'anythingContested'
+
+	function anyElementScopingContest() returns bool
+		return self.typeAliases.anyRangeContest() or self.functionTypeAliases.anyShapeContest()
+	end 'anyElementScopingContest'
+
+	function scopedInstanceEnvironments() returns FilePathArray
+		var environments = self.typeAliases.rangeContestEnvironments()
+
+		for environment in self.functionTypeAliases.shapeContestEnvironments() 'eachShapeContestFile'
+			environments.push(environment)
+		end 'eachShapeContestFile'
+
+		return environments
+	end 'scopedInstanceEnvironments'
 
 	// ⭐⭐ **THE SAME INSTANCE, WITH EVERY CONTESTED NAME IN IT SPELLED THE WAY `filePath` MEANS IT (N2 + N3)**
 	// — the ONE place a generic instance becomes a particular file's instance, so no door grows a qualifier
@@ -26023,6 +26282,12 @@ export type ProgramSignatures
 			return MaxonType.structRef(self.typeNames.intern(self.tupleAliasTargetFrom(name, readerFilePath: filePath)))
 		end 'namesATupleAlias'
 
+		let shapeScoped = self.functionTypeAliases.shapeScopedName(name, readerFilePath: filePath)
+
+		if not shapeScoped.equals(name) 'namesAShapeContestedFunctionAlias'
+			return MaxonType.named(self.typeNames.intern(shapeScoped))
+		end 'namesAShapeContestedFunctionAlias'
+
 		// ⚠ **A CROSS-KIND CONTESTED NAME IS SCOPED ONLY FOR A READER THAT MEANS THE ALIAS BY IT.** The
 		// scoped spelling names one ranged DECLARATION, so handing it to a file whose own `type ParsedInt`
 		// is what it wrote would turn that file's array of STRUCTS into an array of integers — the very
@@ -26064,7 +26329,7 @@ export type ProgramSignatures
 	export function settleRangeScopedInstances()
 		self.typeAliases.settleRangeContests(self.crossKindScopedAliasNames())
 
-		if not self.typeAliases.anyRangeContest() 'noNameInThisProgramIsContested'
+		if not self.anyElementScopingContest() 'noNameInThisProgramIsContested'
 			return
 		end 'noNameInThisProgramIsContested'
 
@@ -26073,7 +26338,7 @@ export type ProgramSignatures
 		// `fileScopedInstance`), so a second pass over the grown registry would mint nothing new.
 		let swept = self.genericInstances.count()
 
-		for environment in self.typeAliases.rangeContestEnvironments() 'eachEnvironment'
+		for environment in self.scopedInstanceEnvironments() 'eachEnvironment'
 			for id in 0 upto swept 'eachSweptInstance'
 				_ = self.fileScopedInstance(id, filePath: environment)
 			end 'eachSweptInstance'
@@ -28520,9 +28785,14 @@ export type ProgramSignatures
 	// per DECLARING FILE (`GenericAliasByDeclaringFile`) — not per directory — so two files in one directory,
 	// or two files in the ROOT (whose namespace is empty), share a namespace and a namespace-qualified
 	// spelling would render `expected 'x.Bytes', got 'x.Bytes'`: a refusal with no content, which is the one
-	// outcome this whole door exists to prevent. Where the namespaces are distinct the namespace is what an
-	// author recognizes and is used; where they are not, the declaring FILE is the qualifier, because the file
-	// IS the scope that resolves the name.
+	// outcome this whole door exists to prevent.
+	//
+	// ⛔ **AND WHERE THE NAMESPACES DO NOT DISTINGUISH THEM, THE ANSWER IS THE BARE SOURCE SPELLING, NOT THE
+	// FILE PATH.** A path joined into the name is the same contentless refusal one level down: the spec
+	// harness normalises file names, so both sides render as the same `<fragment>.Bytes`. The declaring file
+	// is real information, but it is a PROVENANCE NOTE beside the name (`declaringFileList`) and never part
+	// of the spelling — and the note's own gate is this same two-tier test, so a message the namespace tier
+	// already disambiguated gets no note.
 	function unambiguousAliasSpelling(entry GenericAliasEntry) returns ByteArray
 		if not self.genericAliasSpellingIsSuperseded(entry.aliasName) 'onlyOneTypeInThisProgramWearsThisName'
 			return entry.aliasName
@@ -28532,7 +28802,7 @@ export type ProgramSignatures
 			return qualifiedCandidateName(self.moduleDirectoryOf(entry.filePath), bare: entry.aliasName).toByteArray()
 		end 'theNamespaceTellsThemApart'
 
-		return joinQualifiedName(entry.filePath.toString().toByteArray(), member: entry.aliasName)
+		return entry.aliasName
 	end 'unambiguousAliasSpelling'
 
 	// Do the files declaring this contested name sit in DIFFERENT modules? Only then does a namespace-qualified
@@ -31193,7 +31463,7 @@ export type ProgramSignatures
 			// `function` HERE (P1.5-A1). One place, so every reader (a field READ, a `Self{op: op}`
 			// construction check, the store-width query, a union PAYLOAD's class) sees a function VALUE and
 			// not an int.
-			functionAlias then return MaxonType.function(into.intern(name))
+			functionAlias then return MaxonType.function(into.intern(self.functionTypeAliases.shapeScopedName(name, readerFilePath: slotScopeFilePath)))
 
 			// A GENERIC-INSTANCE-typed slot (`export var ops as IntArray`, an `Array` instance) arrives as a
 			// `named` for the same reason a function alias does, and is re-tagged `genericInstance` here
@@ -33826,7 +34096,7 @@ export type ProgramSignatures
 	//
 	// The `allFilesFolded` gate is the same one every whole-program answer is behind: before it, a tuple's
 	// canonical form is not yet computable and the sweep's own reads must see the spelling the sweep minted.
-	function canonicalNameOfStruct(name ByteArray) returns ByteArray
+	export function canonicalNameOfStruct(name ByteArray) returns ByteArray
 		if not self.allFilesFolded or not isTupleTypeName(name) 'notACanonicalizableTuple'
 			return name
 		end 'notACanonicalizableTuple'
@@ -34246,7 +34516,7 @@ export type ProgramSignatures
 		fingerprint.noteDigest("hash", digest: self.hash)
 		fingerprint.note("returnTypes", value: self.returnTypes.count())
 		self.typeAliases.noteFingerprint(fingerprint, group: "typeAliases")
-		fingerprint.note("functionTypeAliases", value: self.functionTypeAliases.count())
+		self.functionTypeAliases.noteFingerprint(fingerprint, group: "functionTypeAliases")
 		fingerprint.note("structTypes", value: self.structTypes.count())
 		fingerprint.note("structNamesInDeclOrder", value: self.structNamesInDeclOrder.count())
 		fingerprint.note("enumTypes", value: self.enumTypes.count())
@@ -34718,11 +34988,23 @@ export type IndexFingerprint
 	end 'create'
 
 	// Name every field noted until `closeGroup` as a field of `group`.
+	//
+	// ⚠ Both doors are inert outside `withLabels`, and that guard is a cost one, not a tidying. `fingerprint()`
+	// runs once per FOLD in `valuesOnly` mode, where `self.group` is never read — so without it each group
+	// stored a label String per fold, which is a term that grows with the corpus.
 	export function openGroup(name String)
+		if self.detail != FingerprintDetail.withLabels 'noLabelIsBuilt'
+			return
+		end 'noLabelIsBuilt'
+
 		self.group = name
 	end 'openGroup'
 
 	export function closeGroup()
+		if self.detail != FingerprintDetail.withLabels 'noLabelIsBuilt'
+			return
+		end 'noLabelIsBuilt'
+
 		self.group = ""
 	end 'closeGroup'
 

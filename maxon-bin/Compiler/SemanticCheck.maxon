@@ -4108,6 +4108,58 @@ function checkFunctionTypeDoors(project Project)
 	end 'eachDoor'
 end 'checkFunctionTypeDoors'
 
+// ⭐ **ONE FORM FOR BOTH SIDES OF A REFUSAL, decided once and handed to each side in turn.** The two names
+// print identically — that is what makes the message contentless without a note — so a note chosen
+// per side could give one side a shape and the other a file, and a reader would take the two as
+// different KINDS of difference. Where the shapes differ the shape text is the whole content; where it
+// does not, the declaring files are.
+//
+// A brand whose source spellings already differ earns nothing: the names carry the content themselves.
+function contestedBrandNote(signatures ProgramSignatures, brand ByteArray, other ByteArray, shapeText String, tellsThemApart bool) returns String
+	if not sourceSpelledAliasName(brand).equals(sourceSpelledAliasName(other)) 'theSourceSpellingsTellThemApart'
+		return ""
+	end 'theSourceSpellingsTellThemApart'
+
+	return " ({shapeText})" if tellsThemApart else " (declared in {declaringFileList(signatures, declFilePaths: signatures.functionAliasMintDeclaringFiles(brand))})"
+end 'contestedBrandNote'
+
+export function declaringFileList(signatures ProgramSignatures, declFilePaths FilePathArray) returns String
+	var rendered = StringArray.create()
+
+	for declFilePath in declFilePaths 'eachDeclaringFile'
+		insertCandidateName(rendered, candidate: projectRelativeFileDisplay(signatures, declFilePath: declFilePath))
+	end 'eachDeclaringFile'
+
+	return renderCandidateList(rendered)
+end 'declaringFileList'
+
+function contestedInstanceNote(signatures ProgramSignatures, tag ValueTypeTag, nameId TypeNameId) returns String
+	if tag != ValueTypeTag.genericInstance 'carriesNoInstance'
+		return ""
+	end 'carriesNoInstance'
+
+	let declFilePaths = signatures.genericInstanceDeclaringFiles(nameId as GenericInstanceId)
+
+	if declFilePaths.count() == 0 'noDeclarationNamesThisInstance'
+		return ""
+	end 'noDeclarationNamesThisInstance'
+
+	return " (declared in {declaringFileList(signatures, declFilePaths: declFilePaths)})"
+end 'contestedInstanceNote'
+
+// The module directory joined to the file name, never the file name alone: two claimants in two directories
+// can share one file name, and a note that printed the same name twice is the contentless refusal the note
+// exists to prevent. A root file has no directory and is already unique by name.
+function projectRelativeFileDisplay(signatures ProgramSignatures, declFilePath FilePath) returns String
+	let directory = signatures.moduleDirectoryOf(declFilePath)
+
+	if directory.isEmpty() 'aRootFile'
+		return declFilePath.filename()
+	end 'aRootFile'
+
+	return "{directory}{ModuleDirectorySeparator}{declFilePath.filename()}"
+end 'projectRelativeFileDisplay'
+
 // One door. Both governing names resolve — see `TypeResolution.requireFunctionShapeOf`.
 function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	let declared = requireFunctionShapeOf(functionTypeRegistryOf(project), name: door.declaredName, side: "declared")
@@ -4126,15 +4178,20 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 
 	// Two brands of ONE shape print as their ALIAS NAMES: the shapes they govern are identical, so a shape
 	// display would read as a type failing to match itself.
-	let expected = String.from(door.declaredName) if brandsConflict else formatFunctionShapeDisplay(declared, typeNames: project.typeNames, signatures: signatures)
-	let actual = String.from(door.gotName) if brandsConflict else formatFunctionShapeDisplay(got, typeNames: project.typeNames, signatures: signatures)
+	let declaredShapeText = formatFunctionShapeDisplay(declared, typeNames: project.typeNames, signatures: signatures)
+	let gotShapeText = formatFunctionShapeDisplay(got, typeNames: project.typeNames, signatures: signatures)
+	let shapesTellThemApart = not declaredShapeText.equals(gotShapeText)
+	let expected = sourceSpelledAliasText(door.declaredName) if brandsConflict else declaredShapeText
+	let actual = sourceSpelledAliasText(door.gotName) if brandsConflict else gotShapeText
+	let expectedNote = contestedBrandNote(signatures, brand: door.declaredName, other: door.gotName, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""
+	let actualNote = contestedBrandNote(signatures, brand: door.gotName, other: door.declaredName, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""
 
 	// A cast is a CAST rejection and takes E3009, the sibling of the cross-kind refusal
 	// `castHasNoLegalConversion` makes; every other door is a type mismatch and takes E3005, the sibling of
 	// what a bool meeting a declared int earns there. ONE sentence for every door, because one RULE decides
 	// them all — the site phrase is the whole of what varies.
 	let code = ErrorCode.semanticUnsafeCast if door.door == FunctionTypeDoor.cast else ErrorCode.typeMismatch
-	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}', got '{actual}'", line: door.line, column: door.column, filePath: door.filePath)
+	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}'{expectedNote}, got '{actual}'{actualNote}", line: door.line, column: door.column, filePath: door.filePath)
 end 'checkOneFunctionTypeDoor'
 
 // ⭐ **E3073 — a spawn of a function that can never suspend.** `async` exists to overlap waiting with other
@@ -6797,8 +6854,8 @@ end 'quotedParamLabel'
 // spellings agree today only because those three are reachable from DIRECT calls alone, where a parameter
 // always has a declared name — a property of today's call graph, not an invariant. The day one of those
 // rules serves an indirect call it would name the parameter `''`, and no test would say so.
-function argTypeMismatchMessage(paramName ByteArray, position ParamCount, expected String, got String) returns String
-	return argTypeMismatchSentence(argParamLabel(paramName, position: position), expected: expected, got: got)
+function argTypeMismatchMessage(paramName ByteArray, position ParamCount, expected String, got String, expectedNote String = "", gotNote String = "") returns String
+	return argTypeMismatchSentence(argParamLabel(paramName, position: position), expected: expected, got: got, expectedNote: expectedNote, gotNote: gotNote)
 end 'argTypeMismatchMessage'
 
 // ⭐ **THE SENTENCE ITSELF, GIVEN THE LABEL** — exported for the SIXTH site, which is in another TIER: a
@@ -6809,8 +6866,10 @@ end 'argTypeMismatchMessage'
 // function's wrong argument gets, because it is the same fact. Written out again over there it would drift,
 // which is exactly what the note above records this sentence already having done once, among five sites in
 // ONE file.
-export function argTypeMismatchSentence(label String, expected String, got String) returns String
-	return "argument type mismatch for {label}: expected '{expected}', got '{got}'"
+// ⚠ A note goes OUTSIDE the quotes and the type stays inside. The quoted span is the spelling an author can
+// search their own source for; a fact about WHICH declaration that spelling resolves to is not part of it.
+export function argTypeMismatchSentence(label String, expected String, got String, expectedNote String = "", gotNote String = "") returns String
+	return "argument type mismatch for {label}: expected '{expected}'{expectedNote}, got '{got}'{gotNote}"
 end 'argTypeMismatchSentence'
 
 // ⭐ **THE SAME SENTENCE WITH THE ONE TAIL THAT IS NOT AN "EXPECTED/GOT" (P1.7a-existentials slice 1).** A
@@ -7593,7 +7652,10 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
 			// fault, same reader, so the same explanation: `argMismatchWithOpaqueTail` appends nothing unless the
 			// ARGUMENT is the opaque one, which leaves every nominal-vs-nominal refusal here spelled as before.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: func.sourceFilePath), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
+			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: func.sourceFilePath)
+			let gotDisplay = valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: func.sourceFilePath)
+			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: expectedDisplay, got: gotDisplay, expectedNote: contestedInstanceNote(argSignatures, tag: paramTag, nameId: typeNameIdOf(paramType)), gotNote: contestedInstanceNote(argSignatures, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -7656,9 +7718,12 @@ function checkFunctionArgShape(project Project, func IrFunction, declaredShape F
 		return false
 	end 'agree'
 
-	let expected = String.from(declaredBrand) if brandsConflict else formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames, signatures: signatures)
-	let actual = String.from(gotBrand) if brandsConflict else formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames, signatures: signatures)
-	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: expected, got: actual), line: callRange.line, column: callRange.column, filePath: filePath)
+	let declaredShapeText = formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames, signatures: signatures)
+	let gotShapeText = formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames, signatures: signatures)
+	let shapesTellThemApart = not declaredShapeText.equals(gotShapeText)
+	let expected = sourceSpelledAliasText(declaredBrand) if brandsConflict else declaredShapeText
+	let actual = sourceSpelledAliasText(gotBrand) if brandsConflict else gotShapeText
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: expected, got: actual, expectedNote: contestedBrandNote(signatures, brand: declaredBrand, other: gotBrand, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else "", gotNote: contestedBrandNote(signatures, brand: gotBrand, other: declaredBrand, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""), line: callRange.line, column: callRange.column, filePath: filePath)
 	return true
 end 'checkFunctionArgShape'
 

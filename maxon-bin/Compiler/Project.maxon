@@ -1962,18 +1962,20 @@ export type RangedAliasRegistry
 	// name — nearly every name in any program — short-circuits on the `multiplyDeclared` miss exactly as
 	// it did, so the hot path is unchanged.
 	//
-	// ⛔⛔ **THIS DOOR HOLDS THE ROSTER: THE SAME THREE TIERS ARE SPELLED THREE TIMES, AND EDITING ONE MEANS
-	// EDITING ALL THREE.** Here over `multiplyDeclared`/`nameable`, at
-	// `ProgramSignatures.scopedGenericAliasInstance` over a GENERIC-INSTANCE alias, and at
+	// ⛔⛔ **THIS DOOR HOLDS THE ROSTER: THE SAME THREE TIERS ARE SPELLED FOUR TIMES, AND EDITING ONE MEANS
+	// EDITING ALL FOUR.** Here over `multiplyDeclared`/`nameable`, at `FunctionAliasRegistry.lookup` over a
+	// FUNCTION alias, at `ProgramSignatures.scopedGenericAliasInstance` over a GENERIC-INSTANCE alias, and at
 	// `ProgramSignatures.scopedTupleAlias` over a TUPLE alias. They cannot be merged: the tiers are identical
-	// but the VALUES are not — a `RangedTypeAlias`, a `GenericInstanceId`, a `DeclaredTupleAlias` — and this
-	// compiler's source has no generic FUNCTION to abstract over that.
+	// but the VALUES are not — a `RangedTypeAlias`, a `FunctionTypeAlias`, a `GenericInstanceId`, a
+	// `DeclaredTupleAlias` — and this compiler's source has no generic FUNCTION to abstract over that. An
+	// interface-constrained row would put a witness call on the type-reference hot path, which is the other
+	// reason.
 	//
-	// ⚠ **THE ROSTER IS NAMED HERE AND NOWHERE ELSE, AND THE OTHER TWO POINT BACK AT IT.** Pairwise pointers
-	// are what let a third copy be written without either of the first two learning of it. The next change is
-	// already known to be coming to all three: the E3063 boundary each stops at — choosing between two LEGAL
-	// candidates by module-directory precedence — is owed by every alias form, and teaching only one is a
-	// wrong answer at whichever door was missed, with no compile error at any of them.
+	// ⚠ **THE ROSTER IS NAMED HERE AND NOWHERE ELSE, AND THE OTHER THREE POINT BACK AT IT.** Pairwise
+	// pointers are what let a further copy be written without any of the others learning of it. The next
+	// change is already known to be coming to all four: the E3063 boundary each stops at — choosing between
+	// two LEGAL candidates by module-directory precedence — is owed by every alias form, and teaching only
+	// one is a wrong answer at whichever door was missed, with no compile error at any of them.
 	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		if let byFile = try self.multiplyDeclared.get(name) 'contested'
 			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
@@ -3742,6 +3744,225 @@ export typealias FunctionAliasParamArray = Array with FunctionAliasParam
 
 export typealias FunctionTypeAliasArray = Array with FunctionTypeAlias
 export typealias FunctionTypeAliasMap = Map with (ByteArray, FunctionTypeAlias)
+
+typealias FunctionAliasByDeclaringFile = Map with (String, FunctionTypeAlias)
+
+let sharedEmptyFunctionAliasDeclarations = FunctionAliasByDeclaringFile.create()
+
+typealias MultiplyDeclaredFunctionAliasMap = Map with (ByteArray, FunctionAliasByDeclaringFile)
+
+export function functionAliasShapeKeyOf(name ByteArray, declPath String) returns String
+	return "{String.from(name)}#{declPath}"
+end 'functionAliasShapeKeyOf'
+
+export typealias FunctionAliasShapeKeyMap = Map with (String, HashDigest)
+typealias HashDigestArray = Array with HashDigest
+
+// Every function typealias in the program, on `RangedAliasRegistry`'s model and for its reason: a
+// non-exported `typealias` is file-local, so a whole-program name key hands one file the other's shape.
+export type FunctionAliasRegistry
+	var byName as FunctionTypeAliasMap
+	var multiplyDeclared as MultiplyDeclaredFunctionAliasMap
+
+	// Filled LAZILY, at the moment a name becomes contested and on every later declaration of one — never
+	// on the first. Its one reader is `lookup`'s contested branch, and an eager upsert would cost a
+	// `FunctionTypeAlias` allocation per alias per fold for a column no uncontested name ever reads.
+	var nameable as FunctionTypeAliasMap
+
+	// The per-(name, declaring file) MINT of every name whose declarations disagree about the shape, so
+	// `shapeScopedName` is a map read rather than a re-derivation at each of the name-resolution doors.
+	var shapeScoped as MultiplyDeclaredFunctionAliasMap
+
+	export static function create() returns FunctionAliasRegistry
+		return Self{byName: FunctionTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredFunctionAliasMap.create(), nameable: FunctionTypeAliasMap.create(), shapeScoped: MultiplyDeclaredFunctionAliasMap.create()}
+	end 'create'
+
+	export function contains(name ByteArray) returns bool
+		return self.byName.contains(name)
+	end 'contains'
+
+	export function record(alias FunctionTypeAlias)
+		let sole = try self.byName.get(alias.name) otherwise 'firstDeclarationOfThisName'
+			self.byName.upsert(alias.name, value: alias)
+			return
+		end 'firstDeclarationOfThisName'
+
+		self.byName.upsert(alias.name, value: alias)
+
+		if self.multiplyDeclared.contains(alias.name) 'alreadyContested'
+			var byFile = try self.multiplyDeclared.get(alias.name) otherwise panic("FunctionAliasRegistry.record: '{String.from(alias.name)}' is in `multiplyDeclared` and its read failed one line after `contains` said it is there")
+			byFile.upsert(alias.declFilePath.toString(), value: alias)
+			self.multiplyDeclared.upsert(alias.name, value: byFile)
+			self.noteNameable(alias)
+			return
+		end 'alreadyContested'
+
+		let declPath = alias.declFilePath.toString()
+		let solePath = sole.declFilePath.toString()
+
+		if solePath.equals(declPath) 'theSameFileRedeclaredIt'
+			return
+		end 'theSameFileRedeclaredIt'
+
+		var byFile = FunctionAliasByDeclaringFile.create()
+		byFile.upsert(solePath, value: sole)
+		byFile.upsert(declPath, value: alias)
+		self.multiplyDeclared.upsert(alias.name, value: byFile)
+		self.noteNameable(sole)
+		self.noteNameable(alias)
+	end 'record'
+
+	function noteNameable(alias FunctionTypeAlias)
+		if not nameableFromAnywhere(alias.visibility) 'thisDeclarationIsNotNameableFromAnywhere'
+			return
+		end 'thisDeclarationIsNotNameableFromAnywhere'
+
+		self.nameable.upsert(alias.name, value: alias)
+	end 'noteNameable'
+
+	// One of the four copies of the own-file → nameable → any cascade. `RangedAliasRegistry.lookup` holds
+	// the roster and the whole argument for why they are four bodies; editing this one means editing those.
+	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredFunctionAlias
+		if let byFile = try self.multiplyDeclared.get(name) 'contested'
+			if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
+				return DeclaredFunctionAlias.declared(own)
+			end 'readersOwnFile'
+
+			if let nameableHere = try self.nameable.get(name) 'someDeclarationIsNameable'
+				return DeclaredFunctionAlias.declared(nameableHere)
+			end 'someDeclarationIsNameable'
+		end 'contested'
+
+		if let any = try self.byName.get(name) 'declaredSomewhere'
+			return DeclaredFunctionAlias.declared(any)
+		end 'declaredSomewhere'
+
+		return DeclaredFunctionAlias.undeclared
+	end 'lookup'
+
+	export function declarationInAnyFile(name ByteArray) returns DeclaredFunctionAlias
+		let alias = try self.byName.get(name) otherwise return DeclaredFunctionAlias.undeclared
+		return DeclaredFunctionAlias.declared(alias)
+	end 'declarationInAnyFile'
+
+	export function contestedDeclarations(name ByteArray) returns FunctionAliasByDeclaringFile
+		return try self.multiplyDeclared.get(name) otherwise sharedEmptyFunctionAliasDeclarations
+	end 'contestedDeclarations'
+
+	export function declaredNames() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+
+		for (name, _) in self.byName 'eachDeclaredName'
+			names.push(name)
+		end 'eachDeclaredName'
+
+		return names
+	end 'declaredNames'
+
+	export function anyShapeContest() returns bool
+		return self.shapeScoped.count() > 0
+	end 'anyShapeContest'
+
+	export function shapeContestEnvironments() returns FilePathArray
+		var environments = FilePathArray.create()
+
+		for (_, byFile) in self.shapeScoped 'eachContestedName'
+			for (_, mint) in byFile 'eachDeclaringFile'
+				environments.push(mint.declFilePath)
+			end 'eachDeclaringFile'
+		end 'eachContestedName'
+
+		return environments
+	end 'shapeContestEnvironments'
+
+	export function multiplyDeclaredNames() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+
+		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
+			names.push(name)
+		end 'eachMultiplyDeclaredName'
+
+		return names
+	end 'multiplyDeclaredNames'
+
+	export function settleShapeContests(keys FunctionAliasShapeKeyMap)
+		var scoped = MultiplyDeclaredFunctionAliasMap.create()
+
+		for name in self.multiplyDeclaredNames() 'eachMultiplyDeclaredName'
+			var mintByFile = FunctionAliasByDeclaringFile.create()
+			var spellings = HashDigestArray.create()
+
+			for (declPath, alias) in self.contestedDeclarations(name) 'eachDeclaringFile'
+				let key = try keys.get(functionAliasShapeKeyOf(name, declPath: declPath)) otherwise panic("FunctionAliasRegistry.settleShapeContests: no shape key for '{String.from(name)}' declared in '{declPath}' — `ProgramSignatures.settleFunctionAliasShapeContests` keys every declaration of every multiply-declared name before handing the table over")
+
+				if not holdsShape(spellings, shape: key) 'aShapeNoEarlierDeclarationClaimed'
+					spellings.push(key)
+				end 'aShapeNoEarlierDeclarationClaimed'
+
+				mintByFile.upsert(declPath, value: alias.underName(shapeQualifiedAliasName(name, shape: key)))
+			end 'eachDeclaringFile'
+
+			if spellings.count() < 2 'everyDeclarationAgreesAboutTheShape'
+				continue
+			end 'everyDeclarationAgreesAboutTheShape'
+
+			scoped.upsert(name, value: mintByFile)
+		end 'eachMultiplyDeclaredName'
+
+		self.shapeScoped = scoped
+
+		for (_, byFile) in self.shapeScoped 'eachContestedName'
+			for (_, mint) in byFile 'eachDeclaringFile'
+				self.record(mint)
+			end 'eachDeclaringFile'
+		end 'eachContestedName'
+	end 'settleShapeContests'
+
+	export function shapeScopedDeclaringFiles(mintName ByteArray) returns FilePathArray
+		var files = FilePathArray.create()
+		let byFile = try self.shapeScoped.get(sourceSpelledAliasName(mintName)) otherwise return files
+
+		for (_, mint) in byFile 'eachDeclaringFile'
+			if mint.name.equals(mintName) 'thisMintsOwnRow'
+				files.push(mint.declFilePath)
+			end 'thisMintsOwnRow'
+		end 'eachDeclaringFile'
+
+		return files
+	end 'shapeScopedDeclaringFiles'
+
+	export function shapeScopedName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		let byFile = try self.shapeScoped.get(name) otherwise return name
+
+		if let own = try byFile.get(readerFilePath.toString()) 'readersOwnFile'
+			return own.name
+		end 'readersOwnFile'
+
+		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
+			undeclared then panic("FunctionAliasRegistry.shapeScopedName: '{String.from(name)}' is shape-contested but resolves to no declaration from '{readerFilePath.toString()}'")
+			declared(alias) then return (try byFile.get(alias.declFilePath.toString()) otherwise panic("FunctionAliasRegistry.shapeScopedName: '{String.from(name)}' resolved to a declaration in '{alias.declFilePath.toString()}', which holds no mint — `settleShapeContests` mints one per declaring file of every contested name")).name
+		end 'resolved'
+	end 'shapeScopedName'
+
+	export function noteFingerprint(fingerprint IndexFingerprint, group String)
+		fingerprint.openGroup(group)
+		fingerprint.note("byName", value: self.byName.count())
+		fingerprint.note("multiplyDeclared", value: self.multiplyDeclared.count())
+		fingerprint.note("nameable", value: self.nameable.count())
+		fingerprint.note("shapeScoped", value: self.shapeScoped.count())
+		fingerprint.closeGroup()
+	end 'noteFingerprint'
+end 'FunctionAliasRegistry'
+
+function holdsShape(spellings HashDigestArray, shape HashDigest) returns bool
+	for held in spellings 'each'
+		if held == shape 'alreadyClaimed'
+			return true
+		end 'alreadyClaimed'
+	end 'each'
+
+	return false
+end 'holdsShape'
 
 // ⭐ **THE CALLABLE SHAPE OF A FUNCTION TYPE — RESOLVED.** What a call through a function value
 // actually depends on: how many arguments it takes, what each one's concrete type is, and what comes

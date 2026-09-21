@@ -1043,7 +1043,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	// first keeps a program's diagnostics in the order a reader meets the declarations.
 	commitTypeNameDecls(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
-	commitFunctionTypeAliases(project, artifact: artifact)
+	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitStructTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
 	commitInterfaces(project, artifact: artifact)
@@ -1579,10 +1579,20 @@ function reportUnderlyingConflict(project Project, alias RangedTypeAlias, prior 
 end 'reportUnderlyingConflict'
 
 // Commit the artifact's FUNCTION typealiases into the project registry (P1.5-A1) — the twin of
-// `commitTypeAliases`, a plain upsert and remap-free (a function alias carries no interner ids).
-function commitFunctionTypeAliases(project Project, artifact FileParseArtifact)
+// `commitTypeAliases`, remap-free (a function alias carries no interner ids).
+//
+// A declaration of a SHAPE-CONTESTED name is committed twice: once bare, and once under this file's mint.
+// The bare key is what an unqualified read still resolves through, and the mint is the key every scoped
+// door hands on — a registry holding only the bare one answers a mint with nothing.
+function commitFunctionTypeAliases(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	for alias in artifact.functionTypeAliases 'each'
 		project.functionTypeAliases.upsert(alias.name, value: alias)
+
+		let scoped = signatures.functionAliasScopedName(alias.name, readerFilePath: alias.declFilePath)
+
+		if not scoped.equals(alias.name) 'thisFilesOwnShapeAnswersUnderItsOwnKey'
+			project.functionTypeAliases.upsert(scoped, value: alias.underName(scoped))
+		end 'thisFilesOwnShapeAnswersUnderItsOwnKey'
 	end 'each'
 end 'commitFunctionTypeAliases'
 

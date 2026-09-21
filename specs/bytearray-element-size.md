@@ -882,20 +882,20 @@ error E3005: app/<fragment>:17:9: argument type mismatch for 'b': expected 'api.
 ```
 
 <!-- test: error.a-contested-alias-in-one-module-is-qualified-by-its-file -->
-### Claimants in ONE module: the DECLARING FILE is the qualifier
+### Claimants in ONE module: the file is a NOTE, not part of the name
 The same contest with both declarations in `pkg/`, where a namespace-qualified spelling would render
-`expected 'pkg.Bytes'` on both sides — the contentless refusal — so the qualifier falls back to the
-file, which IS the scope that resolves a file-local `typealias`.
+`expected 'pkg.Bytes'` on both sides — the contentless refusal. The name therefore stays the bare
+source spelling the author wrote, and the declaring file arrives beside it as a parenthesised note.
+
+A file path joined INTO the name would be the same contentless refusal one level down: this runner
+normalizes every staged file's name to the `<fragment>` token and keeps only its directory
+(`FragmentPathMapping`), so a spelling built from both claimants' paths reads `'pkg/<fragment>.Bytes'`
+on both sides whatever the compiler emitted.
 
 ⚠ **THE WRONG ARGUMENT HERE IS AN `int`, NOT THE OTHER CLAIMANT, AND THAT IS WHAT MAKES THE CASE
-PINNABLE.** This runner normalizes every staged file's NAME to the `<fragment>` token and keeps only
-its directory (`FragmentPathMapping`), so a refusal quoting both claimants' file paths reads
-`'pkg/<fragment>.Bytes'` on both sides here whatever the compiler emitted — the tier would be
-invisible. Quoting ONE side against an `int` keeps the whole qualifier observable: a regression to the
-bare name reads `expected 'Bytes'` and a regression to the namespace tier reads `expected 'pkg.Bytes'`,
-and both fail this expectation. **MEASURED outside the harness, where file names survive:
-`expected 'temp/amb2/a.maxon.Bytes', got 'temp/amb2/main.maxon.Bytes'` — the two paths are distinct
-and it is the runner's normalization, not the compiler, that collapses them.**
+PINNABLE.** Quoting ONE side against an `int` keeps the whole tier observable: a regression to the
+bare name alone reads `expected 'Bytes'`, and a regression to the namespace tier reads
+`expected 'pkg.Bytes'`. Both fail this expectation.
 ```maxon
 // --- file: pkg/lib.maxon
 export typealias Byte = int(0 to 1000)
@@ -916,7 +916,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:17:9: argument type mismatch for 'b': expected 'pkg/<fragment>.Bytes', got 'int'
+error E3005: pkg/<fragment>:17:9: argument type mismatch for 'b': expected 'Bytes' (declared in pkg/lib.maxon), got 'int'
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->

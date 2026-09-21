@@ -126,7 +126,8 @@ is resolved from the file that declares the enum, whichever file reads the case.
 - otherwise the reference is ambiguous. A function call is **E3095** (`Ambiguous bare-name call to 'describe':
   multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
   beta.describe`), worded for a function value or an enum case's backing where the name is one, and a
-  typealias is **E3063**. Qualify the name to resolve it — a call (`api.format(...)`), a function value
+  typealias is **E3063** — in every alias form, including `export typealias Step = function(…) returns …`.
+  Qualify the name to resolve it — a call (`api.format(...)`), a function value
   (`let f = api.format`) and a function-backed enum case (`plain = api.format`) all accept the qualified form.
 
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.

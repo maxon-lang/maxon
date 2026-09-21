@@ -44,19 +44,20 @@ it stays legal — `stdlib/` depends on it in two forms at once: seven files pri
 (a **generic-instance** alias).
 
 The carve-out is per alias FORM, not per keyword, because the three forms of `typealias` denote three
-different things and only one of them is file-scoped:
+different things:
 
 | declaration | denotes | registry |
 |---|---|---|
 | `typealias N = int(lo to hi)` | a **ranged** alias — erases to `int`/`float` | file-scoped (`RangedAliasRegistry`) |
-| `typealias N = function(…)` | a **function** alias — mints a nominal `function` type | bare, whole-program |
-| `typealias N = Base with Args` | a **generic-instance** alias — mints an instance | bare, whole-program |
+| `typealias N = function(…)` | a **function** alias — mints a nominal `function` type | file-scoped (`FunctionAliasRegistry`) |
+| `typealias N = Base with Args` | a **generic-instance** alias — mints an instance | file-scoped (per declaring file) |
 
-So two *ranged* aliases in two files are legal, and two *generic-instance* aliases in two files are
-legal, but a **ranged** alias in one file and a **function** alias in another are not: the bare
-function-alias door wins from every file, including the ranged alias's own. Measured before this rule:
-a file whose only `Handler` is `typealias Handler = int(0 to 10)` had its own `5 as Handler` rejected
-with `Cannot cast from int to function`, against a declaration in a file it never mentions.
+So two *ranged* aliases in two files are legal, two *function* aliases in two files are legal, and two
+*generic-instance* aliases in two files are legal — but two declarations of one name that denote
+different KINDS are not, because a name that is a `function` type in one file and an integer in another
+has no reading a third file could be given. Measured where the kinds were not held apart: a file whose
+only `Handler` is `typealias Handler = int(0 to 10)` had its own `5 as Handler` rejected with
+`Cannot cast from int to function`, against a declaration in a file it never mentions.
 
 The exception is **cross-file and nothing more.** One file declaring the name twice is E3061 whether
 or not other files declare it too, and that is a property of *which* declaration a newcomer is judged

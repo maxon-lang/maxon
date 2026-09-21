@@ -687,14 +687,14 @@ export union ParseError implements Error
 	// arm's type and the first arm's, each already the printable name (`typeTagName` for a scalar
 	// class, the interned aggregate name for two structs/unions) — the same shape `returnTypeMismatch`
 	// carries, so the three coercion-site messages phrase one rule one way.
-	giveTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
+	giveTypeMismatch(got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber)
 
 	// P1.5 #80/#81: a TERNARY (`a if c else b`) whose two branches produce different types — the
 	// ternary twin of `giveTypeMismatch`, split off because its E2028 wording names the TRUE and FALSE
 	// branches by position where a match names the offending arm. Renders as E2028, positioned at the
 	// `if`. `trueType`/`falseType` are each already the printable name: a scalar class, an aggregate
 	// name, or (the #81 function-arm case) a `fn(…) returns …` signature string.
-	ternaryValueTypeMismatch(trueType String, falseType String, line LineNumber, column ColumnNumber)
+	ternaryValueTypeMismatch(trueType String, trueNote String, falseType String, falseNote String, line LineNumber, column ColumnNumber)
 
 	// P1.5 #80: a TERNARY whose CONDITION is not a bool (`x if 42 else y`). The ternary twin of
 	// `nonBoolCondition`, split off because it renders as E2028 (not E3005) and anchors at the `if`.
@@ -13087,12 +13087,12 @@ function assignToImmutableError(nameTok Token) returns ParseError
 	return ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 end 'assignToImmutableError'
 
-export function valueMergeMismatchError(isTernary bool, expectedDisplay String, gotDisplay String, line LineNumber, column ColumnNumber) returns ParseError
+export function valueMergeMismatchError(isTernary bool, expectedDisplay String, gotDisplay String, line LineNumber, column ColumnNumber, expectedNote String = "", gotNote String = "") returns ParseError
 	if isTernary 'ternary'
-		return ParseError.ternaryValueTypeMismatch(expectedDisplay, falseType: gotDisplay, line: line, column: column)
+		return ParseError.ternaryValueTypeMismatch(expectedDisplay, trueNote: expectedNote, falseType: gotDisplay, falseNote: gotNote, line: line, column: column)
 	end 'ternary'
 
-	return ParseError.giveTypeMismatch(gotDisplay, expected: expectedDisplay, line: line, column: column)
+	return ParseError.giveTypeMismatch(gotDisplay, gotNote: gotNote, expected: expectedDisplay, expectedNote: expectedNote, line: line, column: column)
 end 'valueMergeMismatchError'
 
 // How control left one arm's body, plus the exit snapshot the merge (or the next arm's
@@ -32017,7 +32017,7 @@ export type Parser
 				// mirror needs no arm here for the same reason a bare ranged alias needs none: it resolves as
 				// `named` and `TypeResolution` erases it.
 				if self.signatures.allFilesFolded and self.signatures.isFunctionAliasFor(qualified, readerFilePath: self.filePath) 'qualifiedFunctionAlias'
-					return MaxonType.function(self.artifact.typeNames.intern(qualified))
+					return self.functionAliasType(qualified, readerFilePath: self.filePath)
 				end 'qualifiedFunctionAlias'
 
 				return MaxonType.named(self.artifact.typeNames.intern(qualified))
@@ -32240,11 +32240,11 @@ export type Parser
 						let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
 
 						if self.signatures.isFunctionAliasInAnyFile(qualifiedInner) 'thisBodysOwn'
-							return MaxonType.function(self.artifact.typeNames.intern(qualifiedInner))
+							return self.functionAliasType(qualifiedInner, readerFilePath: self.filePath)
 						end 'thisBodysOwn'
 					end 'maybeDeclaredInThisBody'
 
-					return MaxonType.function(self.artifact.typeNames.intern(name))
+					return self.functionAliasType(name, readerFilePath: self.filePath)
 				end 'functionAlias'
 			end 'wholeProgramAliasRegistries'
 
@@ -32798,7 +32798,7 @@ export type Parser
 		// The reader-aware probes for `parseTypeReference`'s reason — this is the READ-side twin of that
 		// cascade and the two may not answer a contested name differently.
 		if self.signatures.isFunctionAliasFor(name, readerFilePath: scopeFilePath) 'fa'
-			return MaxonType.function(id)
+			return self.functionAliasType(name, readerFilePath: scopeFilePath)
 		end 'fa'
 
 		if self.signatures.isGenericAliasFor(name, readerFilePath: scopeFilePath) 'genericAlias'
@@ -36351,6 +36351,10 @@ export type Parser
 		return try self.artifact.typeNames.nameOf(id) otherwise panic("Parser.internedName: type-name id {id} is not in this file's interner — every `named`/`structRef` id is minted from it")
 	end 'internedName'
 
+	function functionAliasType(name ByteArray, readerFilePath FilePath) returns MaxonType
+		return MaxonType.function(self.artifact.typeNames.intern(self.signatures.functionAliasScopedName(name, readerFilePath: readerFilePath)))
+	end 'functionAliasType'
+
 	// The interned type-name id of an SSA value, read straight from the dense `valueNameIds` column —
 	// the id `typeOf` and `valueIsUnsigned` both need, and a scalar (no `MaxonType` materialized). A
 	// miss is a parser invariant break: the two type columns are minted in lockstep for every value.
@@ -36936,7 +36940,7 @@ export type Parser
 			return left
 		end 'theRightAdoptsTheLeft'
 
-		throw ParseError.operandAliasMismatch(opName, left: String.from(sourceSpelledAliasName(left)), right: String.from(sourceSpelledAliasName(right)), line: opTok.line, column: opTok.column)
+		throw ParseError.operandAliasMismatch(opName, left: sourceSpelledAliasText(left), right: sourceSpelledAliasText(right), line: opTok.line, column: opTok.column)
 	end 'operandAliasIdentity'
 
 	// ⭐⭐ **STAMP AN ADOPTED TYPEALIAS ONTO A FRESHLY MINTED ARITHMETIC RESULT — as a NAME, never as a
@@ -56419,7 +56423,7 @@ export type Parser
 			return
 		end 'aDoorBetweenTwoTypes'
 
-		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{String.from(sourceSpelledAliasName(source.name))}' already fits in '{String.from(sourceSpelledAliasName(target.name))}'", range: SourceRange.ofToken(asTok))
+		self.recordArtifactDiagnostic(ErrorCode.semanticUnneededCast, message: "unneeded cast: '{sourceSpelledAliasText(source.name)}' already fits in '{sourceSpelledAliasText(target.name)}'", range: SourceRange.ofToken(asTok))
 	end 'reportUnneededCastBetween'
 
 	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the
@@ -90603,11 +90607,32 @@ export type Parser
 	// overload candidate's PARAMETER (`sweptOverloadArgFit`). Repairing one and not the other is exactly how a
 	// candidate gets scored against a tag its own argument check one pass later never sees.
 	function repairSweptType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
-		return self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(swept, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath)
+		return self.canonicalizeSweptTupleName(self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(swept, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath))
 	end 'repairSweptType'
 
-	// ⭐⭐ **A NAME THAT MEANS TWO THINGS MAY NOT TRAVEL AS A NAME ACROSS THE FILE BOUNDARY — the last step
-	// of the repair, and the one the scope alone does not buy.** Resolving the slot in its DECLARING file
+	// ⚠ **A SWEPT `structRef` IS THE ONE REPAIRED TAG THAT CAN ARRIVE NON-CANONICAL, AND A TUPLE IS WHERE IT
+	// SHOWS.** `canonicalNameOfStruct` is behind `allFilesFolded`, so the SWEEP spells a tuple by its
+	// elements' SOURCE names (`__Tuple2.Tally.String`) while the real parse spells the same tuple by their
+	// canonical ones (`__Tuple2.int.String`) — two names for one type, and a closure offered at a parameter
+	// declared with a tuple-slot function alias was refused on the difference. Outermost step, because it
+	// must see the name the three repairs and the scope crossing below settled on.
+	function canonicalizeSweptTupleName(repaired MaxonType) returns MaxonType
+		if maxonTypeTag(repaired) != ValueTypeTag.structRef 'carriesNoStructName'
+			return repaired
+		end 'carriesNoStructName'
+
+		let name = self.internedName(typeNameIdOf(repaired))
+		let canonical = self.signatures.canonicalNameOfStruct(name)
+
+		if canonical.equals(name) 'theSweepSpelledItCanonically'
+			return repaired
+		end 'theSweepSpelledItCanonically'
+
+		return MaxonType.structRef(self.artifact.typeNames.intern(canonical))
+	end 'canonicalizeSweptTupleName'
+
+	// ⭐⭐ **A NAME THAT MEANS TWO THINGS MAY NOT TRAVEL AS A NAME ACROSS THE FILE BOUNDARY — the step of the
+	// repair the scope alone does not buy.** Resolving the slot in its DECLARING file
 	// gives the right KIND; what it cannot fix is that the resulting value still WEARS the name, and every
 	// rule that reads a `named` value asks what THIS file means by it. MEASURED: `useIt() returns Box` over
 	// `b.maxon`'s file-private `int(0 to 10)`, returned from a `main.maxon` that means `a.maxon`'s
@@ -90620,30 +90645,41 @@ export type Parser
 	// The RANGE goes with it, and that is right too: a range is enforced in the file that declared it
 	// (`RangedAliasRegistry.lookup`), and this file declared nothing.
 	//
-	// ⛔⛔ **THE TEST IS THAT THE TWO FILES *DISAGREE*, AND IT USED TO BE "DOES THIS FILE MEAN THE RANGED
-	// ALIAS" — WHICH ERASED TYPES BOTH FILES AGREED ABOUT.** An `enum` and a `union` are the two kinds that
-	// stay a bare `named` all the way through: `resolveNamedStruct` normalizes a struct, `resolveNamedAlias`
-	// the function/generic/tuple forms and `resolveFloatAliasType` a float alias, and NOTHING normalizes an
-	// enum away — `rewriteRecordedReturnTypes`' header says so in as many words. So a union-returning callee
-	// arrived here wearing its name, failed a question it could never pass, and was erased for a reader that
-	// meant exactly what the callee did. MEASURED: a payload-free enum return became
-	// `E2015 field access on 'lv', which is declared 'int'`; a union return became
-	// `E3005 expected 'Container', got 'int'`; and a BOXED union's returned temporary lost its owned-box
-	// enrolment altogether — **exit 139, clean compile, no output.**
+	// ⛔⛔ **EVERY TEST HERE IS THAT THE TWO FILES *DISAGREE*, AND A ONE-SIDED TEST — "does the SLOT's file
+	// mean X" — ERASES OR RE-SPELLS TYPES BOTH FILES AGREE ABOUT.** An `enum` and a `union` are the two
+	// kinds that stay a bare `named` all the way through: `resolveNamedStruct` normalizes a struct,
+	// `resolveNamedAlias` the function/generic/tuple forms and `resolveFloatAliasType` a float alias, and
+	// NOTHING normalizes an enum away — `rewriteRecordedReturnTypes`' header says so in as many words. So a
+	// union-returning callee arrives here wearing its name and fails any question it could never pass: a
+	// payload-free enum return reads as `E2015 field access on 'lv', which is declared 'int'`, a union
+	// return as `E3005 expected 'Container', got 'int'`, and a BOXED union's returned temporary loses its
+	// owned-box enrolment altogether — a clean compile and a segfault. The RANGE arm makes the same mistake
+	// in its own currency: handing the reader a mint the two files both spell the same way turns
+	// `expected 'Level'` into `expected 'Level', got 'int'`.
 	//
-	// ⚠ **AND A DISAGREEMENT IS NOT ENOUGH ON ITS OWN: only a RANGED alias has an erasure that is true.**
-	// Where the slot's file means a union and the reader means a struct, erasing to a ranged underlying
-	// would be a third wrong answer about a name with no ranged declaration in the pair at all, so that case
-	// is LEFT as it was — the reader's own rules then refuse it loudly, which is the pre-existing behaviour
-	// and the right one until a diagnostic is written for it.
+	// **THE RANGE ARM RUNS FIRST, AND IT RE-SPELLS RATHER THAN ERASES.** Where the two files mint different
+	// ranged names for one spelling, the value keeps a name — the SLOT file's mint — because that file's
+	// declaration is the one whose bounds the value was checked against.
 	//
-	// It is the LAST step because it must see what the three repairs above produced.
+	// ⚠ **BELOW IT, A DISAGREEMENT IS NOT ENOUGH ON ITS OWN: only a RANGED alias has an erasure that is
+	// true.** Where the slot's file means a union and the reader means a struct, erasing to a ranged
+	// underlying would be a third wrong answer about a name with no ranged declaration in the pair at all,
+	// so that case is left alone — the reader's own rules then refuse it loudly, which is the right
+	// outcome until a diagnostic is written for it.
+	//
+	// It runs after the three repairs above because it must see what they produced.
 	function scopeCrossedType(repaired MaxonType, scopeFilePath FilePath) returns MaxonType
 		if maxonTypeTag(repaired) != ValueTypeTag.named 'carriesNoNameToCross'
 			return repaired
 		end 'carriesNoNameToCross'
 
 		let name = self.internedName(typeNameIdOf(repaired))
+
+		let slotRange = self.signatures.rangeScopedAliasName(name, readerFilePath: scopeFilePath)
+
+		if not slotRange.equals(self.signatures.rangeScopedAliasName(name, readerFilePath: self.filePath)) 'theTwoFilesMeanTwoRanges'
+			return MaxonType.named(self.artifact.typeNames.intern(slotRange))
+		end 'theTwoFilesMeanTwoRanges'
 
 		if not self.signatures.crossKindContested(name) 'oneKindHoldsTheName'
 			return repaired

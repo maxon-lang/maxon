@@ -326,7 +326,7 @@ export var sharedCounter = 0                    // visible everywhere
 module var featureState = 0                     // visible to this directory subtree
 ```
 
-When two directories both expose the same bare name, a third file's unqualified reference is ambiguous: **E3095** for functions, **E3063** for typealiases. Qualify with the directory namespace (`api.format(...)`, `lib.fmt.Score`) to disambiguate. Same-file duplicate typealiases remain **E3061**.
+When two directories both expose the same bare name, a third file's unqualified reference is ambiguous: **E3095** for functions, **E3063** for typealiases in every form, function aliases included. Qualify with the directory namespace (`api.format(...)`, `lib.fmt.Score`) to disambiguate. Same-file duplicate typealiases remain **E3061**.
 
 ## Conditional Compilation
 ```maxon

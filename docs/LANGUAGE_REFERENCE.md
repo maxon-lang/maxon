@@ -820,6 +820,18 @@ no cost, and `return` re-brands implicitly.
 - Two **file-scope** function aliases of one shape still refuse each other — including two
   directory-qualified ones, `api.Score` and `legacy.Score`, which are file-scope declarations wearing
   their directory and can be written in a type position.
+- A non-exported function alias is **private to its file**, so two files declaring one name over
+  **different** shapes have two brands and two types: each file's declarations mean its own, and a value
+  of one does not fit a door declared with the other. What a slot's spelling *means* in the declaring
+  file decides — two files that write the identical `function(Tally) returns Tally` over two different
+  `Tally` ranges still have two shapes. Two files that **agree** about the shape share one brand, exactly
+  as two files declaring one ranged alias over one range share one type.
+- When both declarations are `export`ed, a bare reference from a third file is ambiguous rather than
+  split: **E3063**, resolved by qualifying with the directory namespace. This holds whether or not the
+  two shapes agree.
+- Where a refusal would print the same bare name on both sides, the message adds a parenthesised note —
+  the shape where the two shapes differ, otherwise the declaring files. The alias itself is always quoted
+  by the name its author wrote.
 - Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
   elements have different layouts, so build a new container instead.
 
@@ -3963,7 +3975,8 @@ is resolved from the file that declares the enum, whichever file reads the case.
 - otherwise the reference is ambiguous. A function call is **E3095** (`Ambiguous bare-name call to 'describe':
   multiple visible definitions found. Qualify with a directory name. Candidates: alpha.describe,
   beta.describe`), worded for a function value or an enum case's backing where the name is one, and a
-  typealias is **E3063**. Qualify the name to resolve it — a call (`api.format(...)`), a function value
+  typealias is **E3063** — in every alias form, including `export typealias Step = function(…) returns …`.
+  Qualify the name to resolve it — a call (`api.format(...)`), a function value
   (`let f = api.format`) and a function-backed enum case (`plain = api.format`) all accept the qualified form.
 
 Two typealiases with the same name in **one** file are **E3061**, which qualification cannot resolve.
