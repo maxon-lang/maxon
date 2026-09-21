@@ -45,7 +45,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 |--------|---------|-------------|
 | `Array.create()` | `Array` | An empty array. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
-| `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. |
+| `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is not supported (an element slot is one machine word). |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
 | `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
 | `managed` | field | The array's raw storage, for `appendMemory` and library code. |

@@ -1177,7 +1177,8 @@ and a field may hold one. A struct literal (`Self{shape: Square.create(3)}`) or 
 to a `Shape` parameter would; assigning a different conformer releases the one the field held. A value that
 does not conform is **E3005**, and a conformer whose associated-type binding contradicts the field's
 `with` clause is **E3127**. Where the compiler can see the concrete type, calls dispatch statically;
-otherwise they dispatch through a witness table at run time.
+otherwise they dispatch through a witness table at run time. A record holding such a field is cloneable
+on the terms [Explicit Cloning](#explicit-cloning) states.
 
 **The standard interfaces** (declared in the standard library):
 
@@ -4332,6 +4333,7 @@ The [CLI reference](CLI_REFERENCE.md) lists the environment variables a compiled
 | 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
 | 96 | a service send found a value with a second owner |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
+| 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |
 
 ### Targets
 
@@ -4618,6 +4620,17 @@ end 'main'
 `clone()` comes from the `Cloneable` interface (`function clone() returns Self`). The compiler generates it
 for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
 cloneable. Declare `clone()` yourself for custom behaviour, or when a field's type is not cloneable.
+
+A field declared at an [interface](#interfaces) type is cloneable when **every** conformer of that interface
+in the program is — the copy runs the conformer the value actually holds, which is not known until the
+program runs, so the whole program's conformers are what the compiler checks. A conformer that owns an OS
+handle, or a generic type, makes the field uncloneable and the `.clone()` is refused with **E2015**, naming
+the field, the interface and the conformer. A container ELEMENT held at an interface type is a separate
+matter and is never cloneable: an element slot is one machine word and a value at an interface type is two.
+
+A type that both conforms to an interface and holds a value at that interface type cannot be declared at
+all — it is a reference cycle, reported as **E4014** (see the ownership rules in `specs/ownership.md`), so no
+decorator of that shape reaches the clone check.
 
 ### Borrow Checking
 
@@ -5090,6 +5103,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | a green thread neither awaited nor dropped | exit code **75** |
 | a promise consumed through a second read of one container slot or struct field | exit code **118** |
 | `__Builtins.slabCensusTally` asked for a mode it does not implement, or walking a heap it cannot describe | exit code **119** |
+| a deep copy of an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled | exit code **120** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).

@@ -336,6 +336,8 @@ var b = a.clone()   // allocates a new, independent copy with rc=1
 
 The compiler auto-generates `Cloneable` conformance for structs whose fields are all cloneable. Clone creates a deep copy -- each managed field is also cloned.
 
+A field held at an INTERFACE type is deep-copied too: the copy goes through a clone entry in the witness table the value carries, so the conformer it actually holds is what does the copying. Because that conformer is a run-time fact, the compiler admits the clone only when EVERY conformer of that interface in the program can be deep-cloned; otherwise it refuses the `.clone()` and names the field, the interface and the conformer that cannot be copied.
+
 ## Scope Cleanup Mechanism
 
 ### Scope-end cleanup

@@ -293,6 +293,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | a green thread neither awaited nor dropped | exit code **75** |
 | a promise consumed through a second read of one container slot or struct field | exit code **118** |
 | `__Builtins.slabCensusTally` asked for a mode it does not implement, or walking a heap it cannot describe | exit code **119** |
+| a deep copy of an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled | exit code **120** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](/docs/cli/).

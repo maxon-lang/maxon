@@ -1456,7 +1456,7 @@ module union RecordGatedAction
 	destroyThroughWord
 
 	// Take a SECOND owner of `value` through the loaded word with a `callIndirect` — `__retain_existential`,
-	// `__retain_type_param`.
+	// `__retain_type_param`, `__mm_clone_existential`.
 	// A `(i64, i64) -> i64` that ANSWERS WITH WHAT THE WORD HANDED BACK, which is the whole difference: the
 	// co-owner may be a DIFFERENT record from `value` (a `__str_clone` of an immortal `.rdata` literal, see
 	// `IrInterface.WitnessRetainFuncOffset`) and the caller must store what it was given, not what it gave.
@@ -1474,7 +1474,7 @@ end 'RecordGatedAction'
 // is non-zero, act on `value` as `action` says; a zero word is inert. `value` is a LIVE owner (or a live
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
-// **SIX ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+// **SEVEN ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
 //   • `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v) — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
@@ -1494,8 +1494,10 @@ end 'RecordGatedAction'
 //   • `__mm_sole_existential(witness, value, visits) -> visits` / `__mm_share_existential(…)` — a value held
 //     at an interface type walked before it crosses to another green thread, through the table's
 //     `soleWalkFunc@24` / `shareWalkFunc@32`.
+//   • `__mm_clone_existential(witness, value) -> value'` — the DEEP COPY of an interface-typed field's value
+//     half, through the same table's `cloneFunc@40`.
 //
-// All six are "a per-type fact nobody can name statically, read out of a record at run time", so one
+// All seven are "a per-type fact nobody can name statically, read out of a record at run time", so one
 // emitter builds all six: the element-destructor ABI (`emitElementDestructorCall`) and the
 // zero-means-nothing-to-do convention are then stated once and cannot drift between them.
 //

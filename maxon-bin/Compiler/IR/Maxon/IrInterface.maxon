@@ -58,8 +58,9 @@ export typealias WitnessSlotIndex = int(0 to u16.max)
 export typealias WitnessMethodIndex = int(0 to u16.max)
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT**: a header of
-// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `soleWalkFunc@24`, `shareWalkFunc@32`, then
-// `methods[N]@40` — one 8-byte function pointer per requirement of the interface's TRANSITIVE list, each
+// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `soleWalkFunc@24`, `shareWalkFunc@32`,
+// `cloneFunc@40`, then `methods[N]@48` — one 8-byte function pointer per requirement of the
+// interface's TRANSITIVE list, each
 // stamped by a `funcAbs64InRdata` relocation. The fused `witnessCall` reads method `i` from
 // `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so the emitter (the blob) and every reader
 // (the x64, arm64 and wasm lowerings) must share these two constants — which is why they are stated once,
@@ -67,7 +68,7 @@ export typealias WitnessMethodIndex = int(0 to u16.max)
 //
 // ⚠ **THERE IS NO PARENT-TABLE POINTER.** Parent-interface requirements are PROJECTED INTO the
 // child table by `interfaceWitnessSlots`, so there is no runtime chain to follow.
-export let WitnessTableHeaderBytes = 40 as ByteOffset
+export let WitnessTableHeaderBytes = 48 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF** — the conformer's
@@ -108,9 +109,15 @@ export let WitnessRetainFuncOffset = 16 as ByteOffset
 // field, or **0** when the conformer owns nothing a count could be stepped on. `__mm_sole_existential` /
 // `__mm_share_existential` read these words exactly as `__drop_existential` reads `destroyFunc@8`, because
 // which conformer an interface-typed value holds is a run-time fact
-// (`ProgramSignatures.existentialWalkCallee` decides what they hold).
+// (`ProgramSignatures.existentialCascadeCallee` decides what they hold).
 export let WitnessSoleWalkFuncOffset = 24 as ByteOffset
 export let WitnessShareWalkFuncOffset = 32 as ByteOffset
+
+// ⭐⭐ **HOW A FAT POINTER'S VALUE HALF IS DEEP-COPIED** — the conformer's `(box) -> newBox`, or **0** when it
+// owns nothing to copy (an `int` widened to an interface: the value half is not a pointer).
+// `__mm_clone_existential` reads it exactly as the two words above are read, and a conformer nothing can
+// copy takes the abort entry rather than 0 — see `MmRuntime.MmCloneUncloneableName`.
+export let WitnessCloneFuncOffset = 40 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS.**
 // The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and

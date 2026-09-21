@@ -5429,24 +5429,31 @@ function structBoxDropCallee(signatures ProgramSignatures, structName ByteArray)
 	return MmDecrefName
 end 'structBoxDropCallee'
 
-// Which cascade a full-graph gate is asked about. A deep CLONE and a transfer WALK visit one field graph and
-// differ in one shape: a value held at an interface type, which a witness table walks and cannot copy.
+// Which cascade a full-graph gate is asked about.
 enum GraphCascadePurpose
 	deepClone
 	transferWalk
 end 'GraphCascadePurpose'
 
-// A transfer strategy as the `(value, visits) -> visits` word a witness table holds. `asElement: true` upstream
-// means a walkable type always answers `direct`, so an entry taking an element walk is an invariant break;
-// `unsupported` is a conformer no walk can be built for, which the table answers with the abort entry.
-function witnessWalkCalleeOf(strategy ManagedCascadeStrategy) returns ByteArray
+// A conformer's strategy as the word a witness table holds for `action`. `asElement: true` upstream means a
+// type the action serves always answers `direct`, so an entry taking an element walk is an invariant break;
+// `unsupported` is a conformer the action cannot be built for, which the table answers with the abort entry.
+function witnessCascadeCalleeOf(strategy ManagedCascadeStrategy, action CascadeAction) returns ByteArray
 	match strategy 'strategy'
 		direct(callee) then return callee
-		unsupported then return MmWalkUnwalkableName
-		managedElements then panic("witnessWalkCalleeOf: a conformer's transfer walk resolved to a `managedElements` strategy, where `asElement: true` resolves to the thunk")
-		throughWitness then panic("witnessWalkCalleeOf: a conformer's transfer walk resolved to a witness-read walk — a conformer is a concrete type, never a value held at an interface")
+		unsupported then return cascadeUnsupportedEntry(action)
+		managedElements then panic("witnessCascadeCalleeOf: a conformer's cascade resolved to a `managedElements` strategy, where `asElement: true` resolves to the thunk")
+		throughWitness then panic("witnessCascadeCalleeOf: a conformer's cascade resolved to a witness-read entry — a conformer is a concrete type, never a value held at an interface")
 	end 'strategy'
-end 'witnessWalkCalleeOf'
+end 'witnessCascadeCalleeOf'
+
+function cascadeUnsupportedEntry(action CascadeAction) returns ByteArray
+	return match action 'action'
+		clone gives MmCloneUncloneableName
+		soleWalk or
+			shareWalk gives MmWalkUnwalkableName
+	end 'action'
+end 'cascadeUnsupportedEntry'
 
 // ⭐⭐ **WHICH PER-TYPE CASCADE IS BEING ROUTED — the ONE parameter that turns this classification into one
 // per action.** The tree below answers *"what KIND of managed thing is this, and which entry serves it?"*; the
@@ -5454,10 +5461,6 @@ end 'witnessWalkCalleeOf'
 // than the tree being written once per action. A second copy of it would be free to disagree about which types
 // it can route at all — and the `unsupported` arms are exactly what the front-end gate reads.
 //
-// ⭐ **ONE `unsupported` ARM DEPENDS ON THE ACTION, AND THE GATE CARRIES THE SAME SPLIT.** Every other arm that
-// declines does so on the absence of a per-type entry of ANY kind — an OS handle, a base-layout-less instance.
-// A value held at an interface type has a WALK (its witness names the conformer's) and no COPY, so it declines
-// a clone and not a walk — and `typeSupportsDeepClone` asks the same question through `GraphCascadePurpose`.
 // A gate and a strategy that disagree is a symbol nobody builds (see `managedNameCascadeStrategy`).
 export enum CascadeAction
 	// The `(box) -> newBox` deep copy (P1.7 slice 3b-vi-b).
@@ -5513,6 +5516,64 @@ module function serviceHandleCascadeCallee(action CascadeAction) returns ByteArr
 	end 'action'
 end 'serviceHandleCascadeCallee'
 
+export union UncloneableExistentialSlot
+	none
+	slot(structName ByteArray, fieldName ByteArray, interfaceName ByteArray, conformerName ByteArray)
+end 'UncloneableExistentialSlot'
+
+union ConformerCloneBlame
+	none
+	conformer(name ByteArray)
+end 'ConformerCloneBlame'
+
+type CascadeWalkBreak
+	export let reached as bool
+	export let depth as ElementIndex
+
+	static function nothingBroke() returns Self
+		return Self{reached: false, depth: 0}
+	end 'nothingBroke'
+
+	static function atDepth(value ElementIndex) returns Self
+		return Self{reached: true, depth: value}
+	end 'atDepth'
+
+	export function shallowerOf(other CascadeWalkBreak) returns CascadeWalkBreak
+		if not self.reached 'nothingBrokeHere'
+			return other
+		end 'nothingBrokeHere'
+
+		if not other.reached 'nothingBrokeThere'
+			return self
+		end 'nothingBrokeThere'
+
+		if self.depth < other.depth 'thisIsShallower'
+			return self
+		end 'thisIsShallower'
+
+		return other
+	end 'shallowerOf'
+
+	export function restsWithin(walkDepth ElementIndex) returns bool
+		return not self.reached or self.depth >= walkDepth
+	end 'restsWithin'
+end 'CascadeWalkBreak'
+
+type CascadeWalkFrame
+	export let depth as ElementIndex
+	export let enclosingRead as bool
+	export let enclosingBreak as CascadeWalkBreak
+
+	static function create(depth ElementIndex, enclosingRead bool, enclosingBreak CascadeWalkBreak) returns Self
+		return Self{depth: depth, enclosingRead: enclosingRead, enclosingBreak: enclosingBreak}
+	end 'create'
+end 'CascadeWalkFrame'
+
+union OwnedOsHandle
+	none
+	handle(name ByteArray)
+end 'OwnedOsHandle'
+
 // ⭐ **HOW A MANAGED FIELD OF DECLARED TYPE `fieldType` IS CLONED OR PROVED SOLE.** The exact STRUCTURAL DUAL
 // of `managedFieldDropCallee`: a value cloned through the strategy this returns is dropped through the callee
 // `managedFieldDropCallee` returns for the SAME type, so the cloned set and the dropped set agree by
@@ -5543,15 +5604,15 @@ export union ManagedCascadeStrategy
 	managedElements(containerEntry ByteArray, elementEntry ByteArray)
 
 	// Not deep-cloneable by this rung's mechanism — a compiler-owned aggregate (`__ManagedFile`), a
-	// base-layout-less generic instance with no runtime copy of its own (a cursor), an existential's copy, or a
-	// container whose element is not itself `direct` (an array of OS handles). The front end
+	// base-layout-less generic instance with no runtime copy of its own (a cursor), a container ELEMENT held at
+	// an interface type, or a container whose element is not itself `direct` (an array of OS handles). The front end
 	// rejects such an element with a positioned E2015.
 	unsupported
 
-	// ⭐ An INTERFACE-TYPED field's WALK: `entry(witness, value, visits)`, the witness read from the field's
-	// second slot (`IrInterface.InterfaceWitnessHalfOffset`) — `__mm_sole_existential` / `__mm_share_existential`,
-	// which call the walk the conformer's witness table names. It needs the witness beside the value, so a FIELD
-	// position only.
+	// ⭐ An INTERFACE-TYPED field's cascade: `entry(witness, value, …)`, the witness read from the field's
+	// second slot (`IrInterface.InterfaceWitnessHalfOffset`) — `__mm_sole_existential` / `__mm_share_existential`
+	// / `__mm_clone_existential`, each calling what the conformer's witness table names for that action. It
+	// needs the witness beside the value, so a FIELD position only.
 	throughWitness(entry ByteArray)
 end 'ManagedCascadeStrategy'
 
@@ -5637,19 +5698,20 @@ end 'transferWalkFrom'
 // refused here: a conformer no walk can be built for aborts through its witness (`MmRuntime.MmWalkUnwalkableName`).
 function existentialTransferWalk(action CascadeAction, roots TransferRoots) returns TransferWalk
 	return match roots 'roots'
-		one gives TransferWalk.walkedThroughWitness(existentialWalkEntry(action))
+		one gives TransferWalk.walkedThroughWitness(existentialCascadeEntry(action))
 		several panic("existentialTransferWalk: a module `let` is walked as a root, and no module `let` is held at an interface type — its drop routes through `managedFieldDropCallee`, which has no callee for one")
 	end 'roots'
 end 'existentialTransferWalk'
 
-// `__mm_sole_existential` / `__mm_share_existential`: the entry that reads a witness table's walk word.
-function existentialWalkEntry(action CascadeAction) returns ByteArray
+// `__mm_clone_existential` / `__mm_sole_existential` / `__mm_share_existential`: the entry that reads a
+// witness table's word for `action`.
+function existentialCascadeEntry(action CascadeAction) returns ByteArray
 	return match action 'action'
-		clone panic("existentialWalkEntry: a value held at an interface type is walked, never cloned — `existentialFieldCascadeStrategy` answers `unsupported` for a clone")
+		clone gives MmCloneExistentialName
 		soleWalk gives MmSoleExistentialName
 		shareWalk gives MmShareExistentialName
 	end 'action'
-end 'existentialWalkEntry'
+end 'existentialCascadeEntry'
 
 // A byte record is walked on both hand-offs: a view counts the record its inline bytes live in, or the grown buffer
 // it owns, and neither count is visible to a compile-time question. As the whole graph it meets no record twice.
@@ -5681,14 +5743,8 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 		return instanceCascadeStrategy(signatures, id: genericInstanceIdOf(fieldType), asElement: asElement, action: action)
 	end 'instance'
 
-	// ⛔ **AN EXISTENTIAL IS WALKED AND NOT DEEP-CLONED, AND THE GATE AND THE STRATEGY HAVE TO SAY SO
-	// TOGETHER** — this file's standing rule (see `managedNameCascadeStrategy`'s compiler-owned arm): a name the
-	// gate and the strategy disagreed about would admit a clone nobody can emit. A witness table names the
-	// conformer's destructor and walks and no cloner, so there is no per-conformer `(box) -> newBox` to
-	// `callIndirect`; `typeSupportsDeepClone` refuses an existential field for `GraphCascadePurpose.deepClone`
-	// and admits it for `transferWalk`, which is the split below.
 	if tag == ValueTypeTag.interfaceRef 'existential'
-		return existentialFieldCascadeStrategy(action)
+		return ManagedCascadeStrategy.throughWitness(existentialCascadeEntry(action))
 	end 'existential'
 
 	if not (tagNamesADeclaredType(tag) or tag == ValueTypeTag.named) 'notManagedRef'
@@ -5701,14 +5757,6 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
 	let name = signatures.denotedAggregateName(try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCascadeStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in"))
 	return managedNameCascadeStrategy(signatures, declaredName: name, asElement: asElement, action: action)
 end 'managedFieldCascadeStrategy'
-
-function existentialFieldCascadeStrategy(action CascadeAction) returns ManagedCascadeStrategy
-	return match action 'action'
-		clone gives ManagedCascadeStrategy.unsupported
-		soleWalk or
-			shareWalk gives ManagedCascadeStrategy.throughWitness(existentialWalkEntry(action))
-	end 'action'
-end 'existentialFieldCascadeStrategy'
 
 // The clone strategy for a managed field NAMED `declaredName` — a declared struct or boxed union clones
 // through its per-type `__clone_<T>`. A scalar-only box still takes `__clone_<T>` (not the drop side's
@@ -5944,8 +5992,8 @@ function elementRecordCascadeStrategy(signatures ProgramSignatures, id GenericIn
 		// record answers with its one-argument thunk. An answer here means the element door stopped passing the
 		// position, which would silently refuse every nested container again.
 		managedElements then panic("elementRecordCascadeStrategy: instance {id}'s element resolved to a 2-argument `managedElements` strategy at the ELEMENT position, where `asElement: true` mints the one-argument thunk (G18)")
-		throughWitness then panic("elementRecordCascadeStrategy: instance {id}'s element is held at an interface type, which `checkGenericArgType` refuses as a type argument")
-		unsupported then return ManagedCascadeStrategy.unsupported
+		throughWitness or
+			unsupported then return ManagedCascadeStrategy.unsupported
 	end 'element'
 end 'elementRecordCascadeStrategy'
 
@@ -10990,6 +11038,30 @@ export type ProgramSignatures
 	// no type declares a conformance builds a genuinely empty index and must not rebuild it per question.
 	var sweptConformancesBuilt as bool
 
+	// The nested cascade walks in flight, innermost last, and the shallowest optimistic break any of them has
+	// taken — read together by `closeCascadeWalk` to decide which walks may memoize.
+	//
+	// ⚠ **BOTH ARE FRAME-LOCAL AND TOTAL**: every push is undone by its `truncate` and every break is merged
+	// out by its frame, with nothing between that can throw, so both are clear at every fold boundary — which
+	// is why neither is baselined or fingerprinted, unlike the sticky `deepCloneWalkReadInstances` below. A
+	// path that left a root on the stack would poison every later answer about that name.
+	var cascadeWalkRoots as ByteArrayArray
+
+	var cascadeBreakReached as CascadeWalkBreak
+
+	// ⭐ `interfaceConformersSupportDeepClone`'s memo, kept on `deepCloneAnswers`' conditions and journaled
+	// beside it.
+	//
+	// ⚠ **THE ROSTER IT ANSWERS OVER IS ONLY WHOLE ONCE EVERY FILE IS FOLDED**, which is the premise this memo
+	// and `deepCloneAnswers`' `interfaceRef` arm both stand on: `Parser.parseTypeReference` mints an
+	// `interfaceRef` tag only under `allFilesFolded`, so no question carrying one can be asked while
+	// conformances are still arriving. Mint one earlier and both keep verdicts taken over half a program.
+	var interfaceCloneAnswers as DeepCloneAnswerMap
+
+	var someRecordHoldsAnInterfaceValue as bool
+
+	var recordsHoldingAnInterfaceValueCounted as bool
+
 	// ⭐⭐ **THE CONFORMANCES AN `extension <T> implements <I>` DECLARES — the half `sweptConformances` above
 	// STRUCTURALLY CANNOT HOLD, and without which a SUPPRESSION reads a weaker index than the report it defers
 	// to (review of W90).** `StructLayout.conformsTo` is the `type`/`enum` declaration's own clause; an
@@ -11757,7 +11829,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), nameableTupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.createForSource(0), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), nameableTupleAliases: DeclaredTupleAliasMap.create(), crossKindContests: noCrossKindContests, sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: noNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, cascadeWalkRoots: ByteArrayArray.create(), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.createForSource(0), decls: TopLevelDeclArray.create(), crossFileConstantReads: NameInFileArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), deepCloneAnswers: DeepCloneAnswerMap.create(), transferWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), freshReturnForwardsClosed: false, funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: Hasher.empty(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, corpusSlotInitCallees: SlotInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create(), baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -28979,7 +29051,7 @@ export type ProgramSignatures
 			// rule 4), because an element slot is one machine word and a fat pointer is two. This arm is that
 			// refusal's backstop, exactly as `primitiveTypeTagName`'s is.
 			cstring then return EmptySourceText
-			interfaceRef then panic("typeArgAggregateName: an interface type reached a generic type ARGUMENT — `Parser.checkGenericArgType` refuses a container of existentials, because an element slot is one machine word and a fat pointer is two")
+			interfaceRef then panic("typeArgAggregateName: an interface type reached a generic type ARGUMENT — an element slot is one machine word and a fat pointer is two, so no container holds one")
 		end 'k'
 	end 'typeArgAggregateName'
 
@@ -31674,48 +31746,48 @@ export type ProgramSignatures
 	// every slot standing at a type parameter, so walking it would miss whatever the instance put there. A
 	// spawning program keys a concrete instance's table by the instance (`LowerMaxonToStd.witnessTableInstanceFor`),
 	// so this answers only for a widening with no concrete instance in hand.
-	export function existentialWalkCallee(typeName ByteArray, action CascadeAction) returns ByteArray
+	export function existentialCascadeCallee(typeName ByteArray, action CascadeAction) returns ByteArray
 		match self.existentialOwnershipProtocol(typeName) 'protocol'
 			none then return EmptySourceText
 			byteRecord then return byteRecordCascadeCallee(action)
-			greenThread then return MmWalkUnwalkableName
+			greenThread then return cascadeUnsupportedEntry(action)
 			aggregate or
 				bufferRecord or
-				serviceHandle then return self.aggregateConformerWalkCallee(self.denotedAggregateName(typeName), action: action)
+				serviceHandle then return self.aggregateConformerCascadeCallee(self.denotedAggregateName(typeName), action: action)
 		end 'protocol'
-	end 'existentialWalkCallee'
+	end 'existentialCascadeCallee'
 
-	function aggregateConformerWalkCallee(name ByteArray, action CascadeAction) returns ByteArray
+	function aggregateConformerCascadeCallee(name ByteArray, action CascadeAction) returns ByteArray
 		if self.structDeclaresTypeParams(name) 'aGenericConformer'
-			return MmWalkUnwalkableName
+			return cascadeUnsupportedEntry(action)
 		end 'aGenericConformer'
 
-		if not self.aggregateSupportsTransferWalk(name) 'someNestedTypeHasNoWalk'
-			return MmWalkUnwalkableName
-		end 'someNestedTypeHasNoWalk'
+		if not self.aggregateSupportsCascade(name, action: action) 'someNestedTypeHasNoEntry'
+			return cascadeUnsupportedEntry(action)
+		end 'someNestedTypeHasNoEntry'
 
-		return witnessWalkCalleeOf(managedNameCascadeStrategy(self, declaredName: name, asElement: true, action: action))
-	end 'aggregateConformerWalkCallee'
+		return witnessCascadeCalleeOf(managedNameCascadeStrategy(self, declaredName: name, asElement: true, action: action), action: action)
+	end 'aggregateConformerCascadeCallee'
 
 	// The same two words for a PER-INSTANCE table, which names the instance and can therefore walk it.
-	export function instanceExistentialWalkCallee(id GenericInstanceId, action CascadeAction) returns ByteArray
+	export function instanceExistentialCascadeCallee(id GenericInstanceId, action CascadeAction) returns ByteArray
 		match self.typeOwnershipProtocol(MaxonType.genericInstance(id)) 'protocol'
 			none then return EmptySourceText
-			greenThread then return MmWalkUnwalkableName
+			greenThread then return cascadeUnsupportedEntry(action)
 			byteRecord or
 				aggregate or
 				bufferRecord or
-				serviceHandle then return self.instanceConformerWalkCallee(id, action: action)
+				serviceHandle then return self.instanceConformerCascadeCallee(id, action: action)
 		end 'protocol'
-	end 'instanceExistentialWalkCallee'
+	end 'instanceExistentialCascadeCallee'
 
-	function instanceConformerWalkCallee(id GenericInstanceId, action CascadeAction) returns ByteArray
-		if not self.instanceSupportsTransferWalk(id) 'someNestedTypeHasNoWalk'
-			return MmWalkUnwalkableName
-		end 'someNestedTypeHasNoWalk'
+	function instanceConformerCascadeCallee(id GenericInstanceId, action CascadeAction) returns ByteArray
+		if not self.instanceSupportsCascade(id, action: action) 'someNestedTypeHasNoEntry'
+			return cascadeUnsupportedEntry(action)
+		end 'someNestedTypeHasNoEntry'
 
-		return witnessWalkCalleeOf(instanceCascadeStrategy(self, id: id, asElement: true, action: action))
-	end 'instanceConformerWalkCallee'
+		return witnessCascadeCalleeOf(instanceCascadeStrategy(self, id: id, asElement: true, action: action), action: action)
+	end 'instanceConformerCascadeCallee'
 
 	// ⭐⭐ **THE ONE ANSWER BOTH OF A DESCRIPTOR BLOCK'S OWNERSHIP WORDS ARE A SPELLING OF (found at review)** —
 	// `retainFunc@64` through `retainCalleeForProtocol`, `destroyFunc@40` through `typeParamDropCallee`. Written
@@ -32105,7 +32177,7 @@ export type ProgramSignatures
 		var visited = ClonerSet.create()
 
 		match self.managedOpaqueArrayElementOf(id, position: position) 'element'
-			present(element) then return self.typeSupportsDeepClone(element, visited: visited, purpose: GraphCascadePurpose.deepClone)
+			present(element) then return self.elementTypeSupportsCascade(element, visited: visited, purpose: GraphCascadePurpose.deepClone)
 			absent then return false
 		end 'element'
 	end 'genericInstanceOpaqueArrayElementIsCopyable'
@@ -32963,15 +33035,18 @@ export type ProgramSignatures
 			return walked
 		end 'alreadyAnswered'
 
-		// SAVED AND RESTORED rather than simply cleared: no caller today asks this from inside a walk, but one
-		// that did would otherwise clear an enclosing walk's mark and let IT cache a registry-dependent answer.
-		let enclosingRead = self.deepCloneWalkReadInstances
-		self.deepCloneWalkReadInstances = false
-		let answer = self.aggregateNameSupportsDeepClone(aggregateName, visited: ClonerSet.create(), purpose: purpose)
-		let thisWalkRead = self.deepCloneWalkReadInstances
-		self.deepCloneWalkReadInstances = enclosingRead or thisWalkRead
+		let inFlight = self.inFlightCascadeWalkDepthOf(aggregateName)
 
-		if not thisWalkRead 'restsOnDeclarationsAlone'
+		if inFlight.reached 'alreadyInFlight'
+			return self.noteCascadeWalkBreakAt(inFlight.depth)
+		end 'alreadyInFlight'
+
+		let frame = self.openCascadeWalk()
+		self.cascadeWalkRoots.push(aggregateName)
+		let answer = self.aggregateNameSupportsDeepClone(aggregateName, visited: ClonerSet.create(), purpose: purpose)
+		self.cascadeWalkRoots.truncate(frame.depth)
+
+		if self.closeCascadeWalk(frame) 'restsOnDeclarationsAlone'
 			// Keyed on the memo's own copy of the name: a key the journal's restore removes stays in its slot,
 			// and the name a parse asks with is a record of that parse's artifact.
 			answers.upsert(aggregateName.clone(), value: answer)
@@ -32984,6 +33059,369 @@ export type ProgramSignatures
 		return answer
 	end 'memoizedAggregateCascadeAnswer'
 
+	// A linear scan rather than a set membership test, because the answer wanted is the DEPTH the name is in
+	// flight at and a set cannot give it — and that depth is the whole of the keep rule in `closeCascadeWalk`.
+	// The stack holds one entry per NESTED walk, not per name visited.
+	function inFlightCascadeWalkDepthOf(name ByteArray) returns CascadeWalkBreak
+		for i in 0 upto self.cascadeWalkRoots.count() 'eachRoot'
+			let root = try self.cascadeWalkRoots.get(i) otherwise panic("ProgramSignatures.inFlightCascadeWalkDepthOf: cascadeWalkRoots.get OOB at {i} below count {self.cascadeWalkRoots.count()}")
+
+			if root.equals(name) 'thisRoot'
+				return CascadeWalkBreak.atDepth(i)
+			end 'thisRoot'
+		end 'eachRoot'
+
+		return CascadeWalkBreak.nothingBroke()
+	end 'inFlightCascadeWalkDepthOf'
+
+	function noteCascadeWalkBreakAt(reachedDepth ElementIndex) returns bool
+		self.cascadeBreakReached = CascadeWalkBreak.atDepth(reachedDepth).shallowerOf(self.cascadeBreakReached)
+		return true
+	end 'noteCascadeWalkBreakAt'
+
+	function noteCascadeWalkBreakAtEnclosingRoot() returns bool
+		if self.cascadeWalkRoots.count() == 0 'noWalkIsRooted'
+			return true
+		end 'noWalkIsRooted'
+
+		return self.noteCascadeWalkBreakAt(self.cascadeWalkRoots.count() - 1)
+	end 'noteCascadeWalkBreakAtEnclosingRoot'
+
+	// The read mark and the break are CLEARED for the walk about to run and SAVED for the one around it: each
+	// describes the walk in flight, and clearing without saving drops an enclosing walk's own — letting IT keep
+	// an answer resting on a registry read or an optimistic break it really took. `closeCascadeWalk` merges
+	// them back.
+	function openCascadeWalk() returns CascadeWalkFrame
+		let frame = CascadeWalkFrame.create(self.cascadeWalkRoots.count(), enclosingRead: self.deepCloneWalkReadInstances, enclosingBreak: self.cascadeBreakReached)
+		self.deepCloneWalkReadInstances = false
+		self.cascadeBreakReached = CascadeWalkBreak.nothingBroke()
+		return frame
+	end 'openCascadeWalk'
+
+	// ⭐⭐ **WHETHER THIS WALK MAY KEEP ITS ANSWER — and the rule is the SCC head.** A walk that meets a name
+	// already in flight answers `true` and goes on, so its result stands on an assumption about a walk nobody
+	// has finished. A break taken against THIS walk's own root is the ordinary self-cycle the `visited`
+	// convention is entitled to memoize: a type that reaches itself is cloneable exactly when the rest of it
+	// is. A break against an ANCESTOR's root is not — that assumption belongs to a question still open, and
+	// keeping the answer would publish a verdict every later asker of this name reads. The break is merged
+	// OUTWARD as a minimum, so only the walk rooted at the broken-into name keeps anything.
+	//
+	// A walk that read the instance registry keeps nothing either way: its answer is contingent on rows still
+	// being minted.
+	function closeCascadeWalk(frame CascadeWalkFrame) returns bool
+		let thisWalkRead = self.deepCloneWalkReadInstances
+		let thisWalkBreak = self.cascadeBreakReached
+		self.deepCloneWalkReadInstances = frame.enclosingRead or thisWalkRead
+		self.cascadeBreakReached = frame.enclosingBreak.shallowerOf(thisWalkBreak)
+		return not thisWalkRead and thisWalkBreak.restsWithin(frame.depth)
+	end 'closeCascadeWalk'
+
+	function interfaceConformersSupportDeepClone(interfaceName ByteArray, visited ClonerSet) returns bool
+		if let answered = try self.interfaceCloneAnswers.get(interfaceName) 'alreadyAnswered'
+			return answered
+		end 'alreadyAnswered'
+
+		if not self.cloneWalkMayDescendInto(interfaceName, visited: visited) 'alreadyInFlight'
+			return self.noteCascadeWalkBreakAtEnclosingRoot()
+		end 'alreadyInFlight'
+
+		let frame = self.openCascadeWalk()
+		let answer = match self.uncloneableConformerOf(interfaceName) 'blame'
+			none gives true
+			conformer gives false
+		end 'blame'
+
+		if self.closeCascadeWalk(frame) 'restsOnDeclarationsAlone'
+			self.interfaceCloneAnswers.upsert(interfaceName.clone(), value: answer)
+
+			if self.baseline.settled 'pastTheBaseline'
+				self.journal.noteInterfaceCloneAnswer(interfaceName)
+			end 'pastTheBaseline'
+		end 'restsOnDeclarationsAlone'
+
+		return answer
+	end 'interfaceConformersSupportDeepClone'
+
+	// ⭐ **ONE VERDICT SERVES THE GATE AND THE DIAGNOSTIC**: the gate is "this answered none", and the refusal
+	// names the conformer it answered with. A second copy of the question drifts both ways — a refusal able to
+	// name nobody, and a clone admitted over a conformer only one of the two rosters reaches.
+	function uncloneableConformerOf(interfaceName ByteArray) returns ConformerCloneBlame
+		for conformer in self.cloneConformerRosterOf(interfaceName) 'eachConformer'
+			if not self.conformerSupportsDeepClone(conformer) 'uncloneable'
+				return ConformerCloneBlame.conformer(conformer)
+			end 'uncloneable'
+		end 'eachConformer'
+
+		return ConformerCloneBlame.none
+	end 'uncloneableConformerOf'
+
+	// Both halves of the roster, the declaration's `implements` clause and the extensions', and both
+	// `extends`-transitive through `typeDeclaresInterface` — an `extension T implements Derived` is a conformer
+	// of `Derived`'s BASE too, and a roster blind to that admits a clone whose witness word aborts.
+	function cloneConformerRosterOf(interfaceName ByteArray) returns ByteArrayArray
+		var conformers = self.declaredConformersOf(interfaceName)
+		var extensionConformers = ByteArrayArray.create()
+
+		for (typeName, _) in self.extensionDeclaredConformances 'eachExtensionConformer'
+			extensionConformers.push(typeName)
+		end 'eachExtensionConformer'
+
+		appendConformersDeclaring(interfaceName, names: extensionConformers, swept: self.extensionDeclaredConformances, interfaces: self.interfaces, into: conformers)
+		return conformers
+	end 'cloneConformerRosterOf'
+
+	// ⭐⭐ **THE GATE READS THE VERY WORD THE TABLE WILL HOLD**, so this file's standing rule — a name the gate
+	// and the strategy disagreed about would admit a clone nobody can emit — holds here by IDENTITY rather than
+	// by two walks agreeing. A structural re-derivation of "can this conformer be cloned?" would be a second
+	// copy free to drift, and the drift's form is a witness word that aborts under a `.clone()` the front end
+	// accepted.
+	export function conformerSupportsDeepClone(typeName ByteArray) returns bool
+		return not self.existentialCascadeCallee(typeName, action: CascadeAction.clone).equals(MmCloneUncloneableName)
+	end 'conformerSupportsDeepClone'
+
+	export function anyRecordHoldsAnInterfaceValue() returns bool
+		if self.recordsHoldingAnInterfaceValueCounted 'alreadyCounted'
+			return self.someRecordHoldsAnInterfaceValue
+		end 'alreadyCounted'
+
+		self.someRecordHoldsAnInterfaceValue = self.walkForAnInterfaceValuedSlot()
+		self.recordsHoldingAnInterfaceValueCounted = true
+		return self.someRecordHoldsAnInterfaceValue
+	end 'anyRecordHoldsAnInterfaceValue'
+
+	// ⭐⭐ **THE CLONE WORD'S STAMP GATE, AND IT MAY OVER-APPROXIMATE BUT NEVER UNDER-APPROXIMATE.** It exists
+	// for the reason `spawnsAnyService` gates the walk words: stamped unconditionally, every conformer's
+	// `__clone_<T>` would be rooted in every program that merely declares an interface. Answering `true` where
+	// nothing needs it costs those bytes.
+	//
+	// ⚠ **ANSWERING `false` WHERE SOMETHING DOES IS A SILENT DOUBLE FREE**, which is why the sweep is over the
+	// CLONER INSTALLER's own roster — `structTypes`, tuples included, plus `enumTypes` payloads — and never
+	// `structNamesInDeclOrder`. A record the installer reaches and this misses takes a zero clone word.
+	function walkForAnInterfaceValuedSlot() returns bool
+		for (name, layout) in self.structTypes 'eachRegisteredType'
+			for i in 0 upto layout.fieldCount() 'eachField'
+				if maxonTypeTag(fieldTypeOf(layout, structName: name, index: i)) == ValueTypeTag.interfaceRef 'anExistentialSlot'
+					return true
+				end 'anExistentialSlot'
+			end 'eachField'
+		end 'eachRegisteredType'
+
+		for (_, enumLayout) in self.enumTypes 'eachDeclaredEnum'
+			for ci in 0 upto enumLayout.caseCount() 'eachCase'
+				let payloads = enumLayout.payloadsAt(ci)
+
+				for fi in 0 upto payloads.count() 'eachPayload'
+					let field = try payloads.get(fi) otherwise panic("ProgramSignatures.walkForAnInterfaceValuedSlot: payloadsAt count disagrees with get at {fi}")
+
+					if maxonTypeTag(field.declaredType) == ValueTypeTag.interfaceRef 'anExistentialPayload'
+						return true
+					end 'anExistentialPayload'
+				end 'eachPayload'
+			end 'eachCase'
+		end 'eachDeclaredEnum'
+
+		return false
+	end 'walkForAnInterfaceValuedSlot'
+
+	// ⭐ **THE BLAME HALF OF THE CLONE GATE — the field, the interface and the conformer a refusal names.** It
+	// descends the slot shapes `typeSupportsDeepClone` descends (a struct field, a union payload, a container
+	// element, a declared generic instance) because it must reach every existential that walk can refuse: a
+	// shape it stops short of answers `none`, and the refusal falls back to wording that names no conformer at
+	// all. `specs/memory-safety.md`'s clone-refusal cases pin which one comes out.
+	export function uncloneableExistentialIn(name ByteArray) returns UncloneableExistentialSlot
+		return self.uncloneableExistentialInAggregate(self.denotedAggregateName(name), visited: ClonerSet.create())
+	end 'uncloneableExistentialIn'
+
+	export function uncloneableExistentialInElementOf(id GenericInstanceId) returns UncloneableExistentialSlot
+		return self.uncloneableExistentialInSlot(self.containerElementType(id), visited: ClonerSet.create())
+	end 'uncloneableExistentialInElementOf'
+
+	function uncloneableExistentialInSlot(slotType MaxonType, visited ClonerSet) returns UncloneableExistentialSlot
+		let tag = maxonTypeTag(slotType)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			let id = genericInstanceIdOf(slotType)
+
+			if not self.isElementBearingRecordInstance(id) 'notAnElementRecord'
+				return UncloneableExistentialSlot.none
+			end 'notAnElementRecord'
+
+			return self.uncloneableExistentialInSlot(self.containerElementType(id), visited: visited)
+		end 'anInstance'
+
+		if not tagMayNameAggregate(tag) 'notAnAggregateSlot'
+			return UncloneableExistentialSlot.none
+		end 'notAnAggregateSlot'
+
+		return self.uncloneableExistentialInAggregate(self.denotedSlotAggregateName(slotType), visited: visited)
+	end 'uncloneableExistentialInSlot'
+
+	function uncloneableExistentialInAggregate(name ByteArray, visited ClonerSet) returns UncloneableExistentialSlot
+		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
+			return UncloneableExistentialSlot.none
+		end 'alreadyInFlight'
+
+		if not self.containsStructInAnyFile(name) 'notAStruct'
+			return self.uncloneableExistentialInUnion(name, visited: visited)
+		end 'notAStruct'
+
+		let layout = self.structLayoutOf(name)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if not self.structFieldIsManaged(name, index: i) 'scalar'
+				continue
+			end 'scalar'
+
+			let found = self.uncloneableExistentialAtField(layout, structName: name, index: i, visited: visited)
+
+			match found 'found'
+				slot then return found
+				none then break 'found'
+			end 'found'
+		end 'eachField'
+
+		return UncloneableExistentialSlot.none
+	end 'uncloneableExistentialInAggregate'
+
+	function uncloneableExistentialInUnion(name ByteArray, visited ClonerSet) returns UncloneableExistentialSlot
+		let layout = try self.enumTypes.get(name) otherwise return UncloneableExistentialSlot.none
+
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for fi in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.uncloneableExistentialInUnion: payloadsAt count disagrees with get at {fi}")
+				let found = self.uncloneableExistentialInSlot(field.declaredType, visited: visited)
+
+				match found 'found'
+					slot then return found
+					none then break 'found'
+				end 'found'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return UncloneableExistentialSlot.none
+	end 'uncloneableExistentialInUnion'
+
+	function uncloneableExistentialAtField(layout StructLayout, structName ByteArray, index FieldIndex, visited ClonerSet) returns UncloneableExistentialSlot
+		let fieldType = fieldTypeOf(layout, structName: structName, index: index)
+
+		if maxonTypeTag(fieldType) != ValueTypeTag.interfaceRef 'notAnExistential'
+			return self.uncloneableExistentialInSlot(fieldType, visited: visited)
+		end 'notAnExistential'
+
+		let interfaceName = self.nameOfId(typeNameIdOf(fieldType))
+
+		return match self.uncloneableConformerOf(interfaceName) 'blame'
+			none gives UncloneableExistentialSlot.none
+			conformer(conformerName) gives UncloneableExistentialSlot.slot(structName, fieldName: layout.fieldNameAt(index), interfaceName: interfaceName, conformerName: conformerName)
+		end 'blame'
+	end 'uncloneableExistentialAtField'
+
+	export function uncloneableConformerReason(typeName ByteArray) returns String
+		if self.structDeclaresTypeParams(typeName) 'aGenericConformer'
+			return "is a GENERIC type, whose clone this compiler mints per declared type only"
+		end 'aGenericConformer'
+
+		match self.osHandleOwnedBy(self.denotedAggregateName(typeName), visited: ClonerSet.create()) 'handle'
+			handle(handleName) then return "owns an OS handle (`{String.from(handleName)}`) and cannot be duplicated"
+			none then break 'handle'
+		end 'handle'
+
+		return "owns a field this compiler cannot deep-clone"
+	end 'uncloneableConformerReason'
+
+	function osHandleOwnedBy(name ByteArray, visited ClonerSet) returns OwnedOsHandle
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedFile or
+				managedDirectory or
+				managedSocket then return OwnedOsHandle.handle(name)
+
+			serviceHandle or
+				userDeclared then break 'compilerOwned'
+		end 'compilerOwned'
+
+		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
+			return OwnedOsHandle.none
+		end 'alreadyInFlight'
+
+		if not self.containsStructInAnyFile(name) 'notAStruct'
+			return self.osHandleInUnion(name, visited: visited)
+		end 'notAStruct'
+
+		let layout = self.structLayoutOf(name)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let nested = self.osHandleInSlot(fieldTypeOf(layout, structName: name, index: i), visited: visited)
+
+			match nested 'nested'
+				handle then return nested
+				none then break 'nested'
+			end 'nested'
+		end 'eachField'
+
+		return OwnedOsHandle.none
+	end 'osHandleOwnedBy'
+
+	function osHandleInSlot(slotType MaxonType, visited ClonerSet) returns OwnedOsHandle
+		let tag = maxonTypeTag(slotType)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.osHandleInInstance(genericInstanceIdOf(slotType), visited: visited)
+		end 'anInstance'
+
+		if not tagMayNameAggregate(tag) 'notAnAggregateSlot'
+			return OwnedOsHandle.none
+		end 'notAnAggregateSlot'
+
+		return self.osHandleOwnedBy(self.denotedSlotAggregateName(slotType), visited: visited)
+	end 'osHandleInSlot'
+
+	function osHandleInInstance(id GenericInstanceId, visited ClonerSet) returns OwnedOsHandle
+		if self.isElementBearingRecordInstance(id) 'anElementRecord'
+			return self.osHandleInSlot(self.containerElementType(id), visited: visited)
+		end 'anElementRecord'
+
+		if not self.genericInstanceHasBaseLayout(id) 'noFieldsToWalk'
+			return OwnedOsHandle.none
+		end 'noFieldsToWalk'
+
+		if not self.cloneWalkMayDescendInto(self.mangleGenericInstance(id), visited: visited) 'alreadyInFlight'
+			return OwnedOsHandle.none
+		end 'alreadyInFlight'
+
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			let nested = self.osHandleInSlot(self.substituteInstanceFieldType(id, index: i), visited: visited)
+
+			match nested 'nested'
+				handle then return nested
+				none then break 'nested'
+			end 'nested'
+		end 'eachField'
+
+		return OwnedOsHandle.none
+	end 'osHandleInInstance'
+
+	function osHandleInUnion(name ByteArray, visited ClonerSet) returns OwnedOsHandle
+		let layout = try self.enumTypes.get(name) otherwise return OwnedOsHandle.none
+
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for fi in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.osHandleInUnion: payloadsAt count disagrees with get at {fi}")
+				let nested = self.osHandleInSlot(field.declaredType, visited: visited)
+
+				match nested 'nested'
+					handle then return nested
+					none then break 'nested'
+				end 'nested'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return OwnedOsHandle.none
+	end 'osHandleInUnion'
+
 	// The INSTANCE twin of `aggregateSupportsTransferWalk`, the one the transfer door reads about a container.
 	// It is the same full-graph walk keyed by instance rather than by name, which is what a value tagged
 	// `genericInstance` has — asking it by base NAME would answer about the declaration and not about the
@@ -32991,6 +33429,22 @@ export type ProgramSignatures
 	export function instanceSupportsTransferWalk(id GenericInstanceId) returns bool
 		return self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.transferWalk)
 	end 'instanceSupportsTransferWalk'
+
+	function aggregateSupportsCascade(aggregateName ByteArray, action CascadeAction) returns bool
+		return match action 'action'
+			clone gives self.aggregateSupportsDeepClone(aggregateName)
+			soleWalk or
+				shareWalk gives self.aggregateSupportsTransferWalk(aggregateName)
+		end 'action'
+	end 'aggregateSupportsCascade'
+
+	function instanceSupportsCascade(id GenericInstanceId, action CascadeAction) returns bool
+		return match action 'action'
+			clone gives self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
+			soleWalk or
+				shareWalk gives self.instanceSupportsTransferWalk(id)
+		end 'action'
+	end 'instanceSupportsCascade'
 
 	// ⭐⭐ **HOW A GRAPH IS WALKED BEFORE ANOTHER GREEN THREAD MAY HOLD IT — proved sole for a move, marked
 	// shared for a lend — OR THE NOUN FOR WHY NO WALK CAN BE BUILT.** The door a message argument, a reply and a
@@ -33107,11 +33561,17 @@ export type ProgramSignatures
 			return self.instanceGraphSupportsDeepClone(genericInstanceIdOf(type), visited: visited, purpose: purpose)
 		end 'instance'
 
-		// ⭐ Walked through the witness of whatever conformer it holds at run time, and never copied — see
-		// `existentialFieldCascadeStrategy`. A conformer with no walk aborts at the crossing
-		// (`MmRuntime.MmWalkUnwalkableName`), because which conformer it is cannot be known here.
+		// ⭐ **THE ONE SHAPE THE TWO PURPOSES ANSWER DIFFERENTLY, AND THE ASYMMETRY IS THE CLOSED WORLD.** A walk
+		// refuses nothing here: which conformer the value holds is a run-time fact, and a conformer with no walk
+		// aborts at the crossing (`MmRuntime.MmWalkUnwalkableName`). A clone is refused at COMPILE time instead,
+		// because its answer IS knowable — every conformer of the interface in the program has to be
+		// deep-cloneable, and the program's roster of them is closed.
 		if tag == ValueTypeTag.interfaceRef 'anExistential'
-			return purpose == GraphCascadePurpose.transferWalk
+			if purpose == GraphCascadePurpose.transferWalk 'walkedThroughTheWitness'
+				return true
+			end 'walkedThroughTheWitness'
+
+			return self.interfaceConformersSupportDeepClone(self.nameOfId(typeNameIdOf(type)), visited: visited)
 		end 'anExistential'
 
 		if not tagMayNameAggregate(tag) 'notManagedRef'
@@ -33251,7 +33711,7 @@ export type ProgramSignatures
 		// BY A PER-INSTANCE ONE-ARGUMENT THUNK** (`MmRuntime.synthesizeElementRecordCloner`), whose whole body is
 		// that 2-arg call, so the arity is no reason to refuse and this arm asks the SAME question in
 		// both positions. `elementRecordCascadeStrategy` mints the thunk's symbol on exactly this envelope.
-		return self.typeSupportsDeepClone(self.containerElementType(id), visited: visited, purpose: purpose)
+		return self.elementTypeSupportsCascade(self.containerElementType(id), visited: visited, purpose: purpose)
 	end 'instanceGraphSupportsDeepClone'
 
 	// ⭐⭐ **CAN A NON-`Array` GENERIC INSTANCE BE DEEP-CLONED (W162)?** `structFieldsSupportDeepClone`'s
@@ -33303,6 +33763,18 @@ export type ProgramSignatures
 
 		return true
 	end 'declaredInstanceSupportsDeepClone'
+
+	// ⭐ **A CONTAINER ELEMENT HELD AT AN INTERFACE TYPE IS REFUSED FOR BOTH PURPOSES, WHERE A FIELD IS ADMITTED
+	// FOR BOTH** — the asymmetry is the slot and not the type. An element rides `callIndirect(fn, elem)`, which
+	// carries ONE word; a fat pointer is two, and the witness half has nowhere to ride. A FIELD's witness half
+	// sits in the box beside its value half, so the entry can read it back out.
+	function elementTypeSupportsCascade(element MaxonType, visited ClonerSet, purpose GraphCascadePurpose) returns bool
+		if maxonTypeTag(element) == ValueTypeTag.interfaceRef 'aFatPointerElement'
+			return false
+		end 'aFatPointerElement'
+
+		return self.typeSupportsDeepClone(element, visited: visited, purpose: purpose)
+	end 'elementTypeSupportsCascade'
 
 	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		let layout = self.structLayoutOf(structName)
@@ -34306,6 +34778,10 @@ export type ProgramSignatures
 			_ = self.transferWalkAnswers.remove(name)
 		end 'eachTransferWalkAnswer'
 
+		for name in self.journal.interfaceCloneNames 'eachInterfaceCloneAnswer'
+			_ = self.interfaceCloneAnswers.remove(name)
+		end 'eachInterfaceCloneAnswer'
+
 		self.crossFileConstantReads.truncate(self.baseline.crossFileConstantReadCount as ElementIndex)
 		self.canonicalNamesIndexedThrough = self.baseline.canonicalNamesIndexedThrough
 		self.arrayByteInstance = self.baseline.arrayByteInstance
@@ -34570,6 +35046,8 @@ export type ProgramSignatures
 		fingerprint.note("associatedTypeHoldings", value: self.associatedTypeHoldings.count())
 		fingerprint.note("sweptConformances", value: self.sweptConformances.count())
 		fingerprint.noteFlag("sweptConformancesBuilt", flag: self.sweptConformancesBuilt)
+		fingerprint.noteFlag("recordsHoldingAnInterfaceValueCounted", flag: self.recordsHoldingAnInterfaceValueCounted)
+		fingerprint.noteFlag("someRecordHoldsAnInterfaceValue", flag: self.someRecordHoldsAnInterfaceValue)
 		fingerprint.note("extensionDeclaredConformances", value: self.extensionDeclaredConformances.count())
 		fingerprint.note("extensionMethodConstraints", value: self.extensionMethodConstraints.count())
 		fingerprint.note("unconstrainedExtensionMethods", value: self.unconstrainedExtensionMethods.count() as EntryCount)
@@ -34588,6 +35066,7 @@ export type ProgramSignatures
 		fingerprint.noteFlag("globalAliasReturnsClosed", flag: self.globalAliasReturnsClosed)
 		fingerprint.note("byRefBareNames", value: self.byRefBareNames.count() as EntryCount)
 		fingerprint.note("deepCloneAnswers", value: self.deepCloneAnswers.count())
+		fingerprint.note("interfaceCloneAnswers", value: self.interfaceCloneAnswers.count())
 		fingerprint.note("transferWalkAnswers", value: self.transferWalkAnswers.count())
 		fingerprint.noteFlag("deepCloneWalkReadInstances", flag: self.deepCloneWalkReadInstances)
 		fingerprint.note("funcThrows", value: self.funcThrows.count())
@@ -34811,10 +35290,12 @@ type IndexJournal
 	export var originIds as GenericInstanceIdArray
 	export var tupleAliasWrites as TupleAliasWriteArray
 	export var deepCloneNames as ByteArrayArray
+
+	export var interfaceCloneNames as ByteArrayArray
 	export var transferWalkNames as ByteArrayArray
 
 	static function create() returns IndexJournal
-		return Self{tupleNames: ByteArrayArray.create(), separatorBearingTokens: ByteArrayArray.create(), canonicalTupleNames: ByteArrayArray.create(), compiledNameIds: GenericInstanceIdArray.create(), canonicalNameIds: GenericInstanceIdArray.create(), canonicalIndexWrites: CanonicalIndexWriteArray.create(), originIds: GenericInstanceIdArray.create(), tupleAliasWrites: TupleAliasWriteArray.create(), deepCloneNames: ByteArrayArray.create(), transferWalkNames: ByteArrayArray.create()}
+		return Self{tupleNames: ByteArrayArray.create(), separatorBearingTokens: ByteArrayArray.create(), canonicalTupleNames: ByteArrayArray.create(), compiledNameIds: GenericInstanceIdArray.create(), canonicalNameIds: GenericInstanceIdArray.create(), canonicalIndexWrites: CanonicalIndexWriteArray.create(), originIds: GenericInstanceIdArray.create(), tupleAliasWrites: TupleAliasWriteArray.create(), deepCloneNames: ByteArrayArray.create(), transferWalkNames: ByteArrayArray.create(), interfaceCloneNames: ByteArrayArray.create()}
 	end 'create'
 
 	function noteTupleName(name ByteArray)
@@ -34856,6 +35337,10 @@ type IndexJournal
 		end 'purpose'
 	end 'noteCascadeAnswer'
 
+	function noteInterfaceCloneAnswer(name ByteArray)
+		self.interfaceCloneNames.push(name)
+	end 'noteInterfaceCloneAnswer'
+
 	function noteFingerprint(fingerprint IndexFingerprint, group String)
 		fingerprint.openGroup(group)
 		fingerprint.note("tupleNames", value: self.tupleNames.count())
@@ -34868,6 +35353,7 @@ type IndexJournal
 		fingerprint.note("tupleAliasWrites", value: self.tupleAliasWrites.count())
 		fingerprint.note("deepCloneNames", value: self.deepCloneNames.count())
 		fingerprint.note("transferWalkNames", value: self.transferWalkNames.count())
+		fingerprint.note("interfaceCloneNames", value: self.interfaceCloneNames.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 end 'IndexJournal'

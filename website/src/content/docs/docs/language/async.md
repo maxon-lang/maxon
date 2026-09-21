@@ -325,6 +325,7 @@ The [CLI reference](/docs/cli/) lists the environment variables a compiled progr
 | 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
 | 96 | a service send found a value with a second owner |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
+| 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |
 
 ## Targets
 

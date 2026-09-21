@@ -291,7 +291,8 @@ and a field may hold one. A struct literal (`Self{shape: Square.create(3)}`) or 
 to a `Shape` parameter would; assigning a different conformer releases the one the field held. A value that
 does not conform is **E3005**, and a conformer whose associated-type binding contradicts the field's
 `with` clause is **E3127**. Where the compiler can see the concrete type, calls dispatch statically;
-otherwise they dispatch through a witness table at run time.
+otherwise they dispatch through a witness table at run time. A record holding such a field is cloneable
+on the terms [Explicit Cloning](/docs/language/memory-model/#explicit-cloning) states.
 
 **The standard interfaces** (declared in the standard library):
 

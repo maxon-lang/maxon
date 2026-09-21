@@ -454,6 +454,22 @@ export let MmShareExistentialName = b"__mm_share_existential"
 // run-time form, taken before anything crosses. A zero word would read as a conformer that owns nothing.
 export let MmWalkUnwalkableName = b"__mm_walk_unwalkable"
 
+// ⭐⭐ **`__mm_clone_existential(witness, value) -> value'` — THE DEEP COPY OF A VALUE HELD AT AN INTERFACE
+// TYPE.** The walk pair's shape one word along (`IrInterface.WitnessCloneFuncOffset`), built by the same
+// emitter. The inert path answers `value` itself, which IS the copy for a conformer that owns nothing: its
+// value half is not a pointer (`existentialOwnershipProtocol.none`), so the two owners share no box.
+export let MmCloneExistentialName = b"__mm_clone_existential"
+
+// ⭐⭐ **`__mm_clone_uncloneable(value)` — WHAT A WITNESS TABLE'S CLONE WORD NAMES FOR A CONFORMER NOTHING CAN
+// DEEP-COPY**, the `__mm_walk_unwalkable` of the clone cascade and unreachable for the same reason: the front
+// end admits a clone only where every conformer of the interface can be deep-cloned, so reaching this entry
+// says the conformer roster the gate read missed one.
+//
+// ⚠ **A ZERO WORD WOULD BE WORSE THAN AN ABORT HERE**, and this is the whole reason the entry exists: zero
+// already means "owns nothing", whose inert path answers the value it was handed, so an uncloneable conformer
+// would hand two owners ONE box with one reference — freed twice, with nothing said.
+export let MmCloneUncloneableName = b"__mm_clone_uncloneable"
+
 // The prefix every HEAP runtime entry point shares — the single test for "does this program touch the
 // heap at all?", which `StringRuntime.scanRuntimeUsage` reads for its `usesHeap` bit.
 let RuntimeCallPrefix = b"__mm_"
@@ -753,9 +769,17 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 		buildRecordGatedAction(module, symbolName: MmShareExistentialName, wordOffset: WitnessShareWalkFuncOffset, action: RecordGatedAction.walkThroughWord)
 	end 'shareBox'
 
+	if usage.usesCloneExistential 'cloneExistential'
+		buildRecordGatedAction(module, symbolName: MmCloneExistentialName, wordOffset: WitnessCloneFuncOffset, action: RecordGatedAction.retainThroughWord)
+	end 'cloneExistential'
+
+	if usage.usesCloneUncloneable 'cloneUncloneable'
+		buildAbortingRuntimeEntry(module, symbolName: MmCloneUncloneableName, paramCount: SingleValueEntryParamCount, paramTypes: oneI64Param(), abort: RuntimeAbort.existentialNotCloneable)
+	end 'cloneUncloneable'
+
 	if usage.usesSoleWalk or usage.usesShareWalk 'visitTable'
 		installWalkVisitTable(module)
-		buildMmWalkUnwalkable(module)
+		buildAbortingRuntimeEntry(module, symbolName: MmWalkUnwalkableName, paramCount: WalkParamCount, paramTypes: twoI64Params(), abort: RuntimeAbort.transferredRecordNotSole)
 	end 'visitTable'
 
 	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__managed_cow_detach`, under
@@ -1926,22 +1950,23 @@ end 'buildMmBoxWalk'
 export let WalkBoxParam = 0 as ValueId
 let WalkVisitsParam = 1 as ValueId
 let WalkElementWalkParam = 2 as ValueId
-let RecordWalkParamCount = 1 as ParamCount
+let SingleValueEntryParamCount = 1 as ParamCount
 let WalkParamCount = 2 as ParamCount
 let ElementWalkParamCount = 3 as ParamCount
 
-// `__mm_walk_unwalkable(value, visits) -> visits` — see `MmWalkUnwalkableName`. A graph walk's signature, because a
-// witness table's walk word is called as one.
-function buildMmWalkUnwalkable(module StdModule)
-	var func = IrFunction.createFromStd(MmWalkUnwalkableName, returnType: StdReturnType.value(StdType.i64), paramCount: WalkParamCount, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(WalkParamCount)
+// An entry whose whole body is an abort, and the caller states its arity because it must be the arity of the
+// WORD it stands in for: it is reached through a `callIndirect` on a witness word, so a parameter list that
+// merely fits the abort disagrees with the call — a disagreement wasm refuses as an invalid module.
+function buildAbortingRuntimeEntry(module StdModule, symbolName ByteArray, paramCount ParamCount, paramTypes StdTypeArray, abort RuntimeAbort)
+	var func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: WalkParamCount)
-	emitRuntimeAbort(module, func: func, block: entry, abort: RuntimeAbort.transferredRecordNotSole, ids: ids)
+	emitParams(module, block: entry, count: paramCount)
+	emitRuntimeAbort(module, func: func, block: entry, abort: abort, ids: ids)
 
 	module.functions.push(func)
-end 'buildMmWalkUnwalkable'
+end 'buildAbortingRuntimeEntry'
 
 // A walk over a graph carries exactly one value from block to block, its visit table; a walk over one record
 // carries none.
@@ -1979,7 +2004,7 @@ function walkEntryParamCount(scope WalkScope, walksElements bool) returns ParamC
 		panic("walkEntryParamCount: a walk over one record is handed no element walk")
 	end 'oneRecordHasNoElementWalk'
 
-	return RecordWalkParamCount
+	return SingleValueEntryParamCount
 end 'walkEntryParamCount'
 
 function walkScopeOf(cursor CascadeCursor) returns WalkScope
@@ -4702,10 +4727,27 @@ function emitFieldWalkCall(module StdModule, block IrBlock, box ValueId, offset 
 end 'emitFieldWalkCall'
 
 function emitClonedFieldStore(module StdModule, visit CascadeCursor, box ValueId, offset ByteOffset, oldPtr ValueId, strategy ManagedCascadeStrategy, ids ValueMinter) returns CascadeCursor
-	let newPtr = emitCloneCall(module, block: visit.block, oldPtr: oldPtr, strategy: strategy, ids: ids)
+	let newPtr = emitFieldCloneCall(module, block: visit.block, box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, ids: ids)
 	emitStoreField(module, block: visit.block, record: box, offset: offset, value: newPtr)
 	return visit
 end 'emitClonedFieldStore'
+
+function emitFieldCloneCall(module StdModule, block IrBlock, box ValueId, offset ByteOffset, oldPtr ValueId, strategy ManagedCascadeStrategy, ids ValueMinter) returns ValueId
+	match strategy 'strategy'
+		throughWitness(entry) then return emitWitnessReadClone(module, block: block, box: box, offset: offset, value: oldPtr, entry: entry, ids: ids)
+		direct or
+			managedElements or
+			unsupported then return emitCloneCall(module, block: block, oldPtr: oldPtr, strategy: strategy, ids: ids)
+	end 'strategy'
+end 'emitFieldCloneCall'
+
+// An interface-typed field's clone: `entry(witness, value)`, the witness read from the slot beside the value
+// half. Only the value half is stored back (`emitClonedFieldStore`) — a copy holds the SAME conformer, so the
+// witness half the record copy already carried is the right one.
+function emitWitnessReadClone(module StdModule, block IrBlock, box ValueId, offset ByteOffset, value ValueId, entry ByteArray, ids ValueMinter) returns ValueId
+	let witness = emitLoadField(module, block: block, record: box, offset: offset + InterfaceWitnessHalfOffset, ids: ids)
+	return emitRuntimeCall(module, block: block, callee: entry, args: twoArgs(witness, second: value), ids: ids)
+end 'emitWitnessReadClone'
 
 // The label the guarded field block wears, so a dumped body still says which cascade it belongs to.
 function cascadeFieldBlockLabel(action CascadeAction) returns ByteArray

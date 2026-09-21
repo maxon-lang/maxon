@@ -2660,9 +2660,13 @@ type MaxonToStdLowering
 		// that hands a value to another green thread and so the only reader of either word. Stamped in every
 		// program, each conformer's walk cascades would be installed where nothing can reach them.
 		if self.signatures.spawnsAnyService() 'aValueCanCross'
-			self.stampOwnershipWord(self.witnessWalkCallee(typeName, instance: table, action: CascadeAction.soleWalk), label: label, offsetInLabel: WitnessSoleWalkFuncOffset)
-			self.stampOwnershipWord(self.witnessWalkCallee(typeName, instance: table, action: CascadeAction.shareWalk), label: label, offsetInLabel: WitnessShareWalkFuncOffset)
+			self.stampOwnershipWord(self.witnessCascadeCallee(typeName, instance: table, action: CascadeAction.soleWalk), label: label, offsetInLabel: WitnessSoleWalkFuncOffset)
+			self.stampOwnershipWord(self.witnessCascadeCallee(typeName, instance: table, action: CascadeAction.shareWalk), label: label, offsetInLabel: WitnessShareWalkFuncOffset)
 		end 'aValueCanCross'
+
+		if self.signatures.anyRecordHoldsAnInterfaceValue() 'aValueCanBeCloned'
+			self.stampOwnershipWord(self.witnessCascadeCallee(typeName, instance: table, action: CascadeAction.clone), label: label, offsetInLabel: WitnessCloneFuncOffset)
+		end 'aValueCanBeCloned'
 
 		for i in 0 upto methodCount 'eachMethod'
 			let slot = try slots.get(i) otherwise panic("ensureWitnessTable: slots.get OOB at {i} below count {methodCount}")
@@ -2684,7 +2688,7 @@ type MaxonToStdLowering
 	//   • the conformance's impls carry NO hidden dictionary AND the program spawns no service, so a
 	//     per-instance table would name the identical slots as the shared one under a second label. A program
 	//     that spawns reads the table's walk words, and only an instance's table can name its walk
-	//     (`ProgramSignatures.existentialWalkCallee`);
+	//     (`ProgramSignatures.existentialCascadeCallee`);
 	//   • the instance is not CONCRETE, so there is no descriptor and no argument witness to put in one. An
 	//     instance over the enclosing body's own type parameters is exactly this shape, and it is the same
 	//     fact `emitInstanceDescriptorAddr` acts on one mechanism over (it forwards the caller's blocks; a
@@ -2724,12 +2728,12 @@ type MaxonToStdLowering
 		end 'table'
 	end 'witnessRetainCallee'
 
-	function witnessWalkCallee(typeName ByteArray, instance WitnessTableInstance, action CascadeAction) returns ByteArray
+	function witnessCascadeCallee(typeName ByteArray, instance WitnessTableInstance, action CascadeAction) returns ByteArray
 		return match instance 'table'
-			shared gives self.signatures.existentialWalkCallee(typeName, action: action)
-			perInstance(gid) gives self.signatures.instanceExistentialWalkCallee(gid, action: action)
+			shared gives self.signatures.existentialCascadeCallee(typeName, action: action)
+			perInstance(gid) gives self.signatures.instanceExistentialCascadeCallee(gid, action: action)
 		end 'table'
-	end 'witnessWalkCallee'
+	end 'witnessCascadeCallee'
 
 	// The `<Type>` half of a table's label: the conformer's own name for the shared table, the instance's
 	// canonical mangling for a per-instance one — the SAME mangling `__layout_<instance>` is built from

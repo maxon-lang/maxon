@@ -493,6 +493,431 @@ end 'main'
 a holds: original label long enough for a heap record
 ```
 
+<!-- test: clone-of-a-record-holding-an-interface-value-is-deep -->
+### A clone reaches through a field held at an interface type
+Which conformer such a field holds is a run-time fact, so the copy goes through a clone word in the
+witness table the value carries. Copying the two words alone would leave the clone and the original
+owning one box.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+
+	function grow()
+		self.side = self.side + 1
+	end 'grow'
+end 'Square'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Square.create(2))
+	var b = a.clone()
+	b.shape.grow()
+	print("{a.shape.area()} {b.shape.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 9
+```
+
+<!-- test: clone-of-an-array-of-records-holding-an-interface-value-is-deep -->
+### An array of such records copies each element's interface-typed field
+The array's clone copies every element record, and each element's own cloner reaches its
+interface-typed field the same way. A record HOLDING a value at an interface type is a cloneable
+element; a fat pointer as the element itself is not one, because an element slot is one word.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+
+	function grow()
+		self.side = self.side + 1
+	end 'grow'
+end 'Square'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+typealias Holders = Array with Holder
+
+function main() returns ExitCode
+	var a = Holders.create()
+	a.push(Holder.create(Square.create(2)))
+	var b = a.clone()
+	var grown = try b.get(0) otherwise panic("no holder")
+	grown.shape.grow()
+	let kept = try a.get(0) otherwise panic("no holder")
+	let reread = try b.get(0) otherwise panic("no holder")
+	print("{kept.shape.area()} {reread.shape.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 9
+```
+
+<!-- test: error.clone-of-a-record-holding-an-interface-whose-conformer-owns-a-handle-is-refused -->
+### The clone is admitted only if EVERY conformer can be copied
+The conformer a field holds is not known until it runs, so the gate is the whole program's roster of
+conformers. One that cannot be duplicated refuses the clone at compile time, naming the field, the
+interface and the conformer that fails it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+type Tap implements Shape
+	var f as __ManagedFile
+
+	static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+
+	function area() returns Integer
+		return 1
+	end 'area'
+end 'Tap'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Tap.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+	let b = a.clone()
+	return b.shape.area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:30:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedFile`) and cannot be duplicated
+```
+
+<!-- test: clone-of-a-record-holding-a-record-that-holds-an-interface-value-is-deep -->
+### A nested record's interface-typed field is reached too
+The field is found at any depth: a record whose field is a record whose field is held at an interface
+type clones deeply, and the gate that admits the clone walks the same nesting.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+
+	function grow()
+		self.side = self.side + 1
+	end 'grow'
+end 'Square'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+type Outer
+	export var holder as Holder
+
+	static function create(holder Holder) returns Self
+		return Self{holder: holder}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let a = Outer.create(Holder.create(Square.create(2)))
+	var b = a.clone()
+	b.holder.shape.grow()
+	print("{a.holder.shape.area()} {b.holder.shape.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 9
+```
+
+<!-- test: error.a-conformer-that-holds-the-same-interface-is-a-type-cycle-and-the-clone-gate-terminates -->
+### A conformer holding its own interface is a reference cycle
+A type that conforms to `Shape` and holds a `Shape` is undeclarable: `TypeCycleCheck` refuses it with
+E4014, which is the output pinned here. The case exists for the walk that runs BEFORE that check —
+the clone gate has to terminate on this shape for E4014 to be reachable at all, so this is not an
+E4014 control.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Dot implements Shape
+	var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function area() returns Integer
+		return self.v
+	end 'area'
+
+	function grow()
+		self.v = self.v + 1
+	end 'grow'
+end 'Dot'
+
+type Scaled implements Shape
+	var inner as Shape
+
+	static function create(inner Shape) returns Self
+		return Self{inner: inner}
+	end 'create'
+
+	function area() returns Integer
+		return self.inner.area() * 2
+	end 'area'
+
+	function grow()
+		self.inner.grow()
+	end 'grow'
+end 'Scaled'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Scaled.create(Dot.create(2)))
+	var b = a.clone()
+	b.shape.grow()
+	print("{a.shape.area()} {b.shape.area()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4014: <fragment>:25:6: type 'Scaled' contains a reference cycle (via Scaled → inner: Shape → Scaled); recursive type references are not allowed
+```
+
+<!-- test: error.clone-of-a-record-holding-an-interface-a-handle-owner-conforms-to-through-an-extension-is-refused -->
+### The roster counts extensions, and follows `extends`
+A conformance declared by `extension T implements I` is a conformance, and a conformer of an
+interface that `extends` `Shape` is a conformer of `Shape`. A roster reading only the type
+declarations' own `implements` clauses would admit this clone.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+interface Drawable extends Shape
+	function draw() returns Integer
+end 'Drawable'
+
+type Tap
+	var f as __ManagedFile
+
+	static function create(f __ManagedFile) returns Self
+		return Self{f: f}
+	end 'create'
+end 'Tap'
+
+extension Tap implements Drawable
+	function area() returns Integer
+		return 1
+	end 'area'
+
+	function draw() returns Integer
+		return 2
+	end 'draw'
+end 'Tap'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = Holder.create(Tap.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+	let b = a.clone()
+	return b.shape.area() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:40:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedFile`) and cannot be duplicated
+```
+
+<!-- test: clone-of-a-record-holding-a-record-that-holds-an-interface-value-is-deep -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+
+	function grow()
+		self.side = self.side + 1
+	end 'grow'
+end 'Square'
+
+type Holder
+	export var shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+end 'Holder'
+
+type Outer
+	export var holder as Holder
+
+	static function create(holder Holder) returns Self
+		return Self{holder: holder}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let a = Outer.create(Holder.create(Square.create(2)))
+	var b = a.clone()
+	b.holder.shape.grow()
+	print("{a.holder.shape.area()} {b.holder.shape.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 9
+```
+
+<!-- test: an-array-of-interface-values-probe -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+	function grow()
+end 'Shape'
+
+type Square implements Shape
+	var side as Integer
+
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+
+	function grow()
+		self.side = self.side + 1
+	end 'grow'
+end 'Square'
+typealias Shapes = Array with Shape
+
+function main() returns ExitCode
+	var xs = Shapes.create()
+	xs.push(Square.create(3))
+	let first = try xs.get(0) otherwise panic("no shape")
+	print("{xs.count()} {first.area()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 9
+```
+
 <!-- test: clone-of-struct-with-union-field-copies-the-payload -->
 ### Cloning a struct whose FIELD is a union copies that union
 A struct auto-conforms once every field does, so a union field is what carries the conformance

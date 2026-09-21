@@ -152,6 +152,17 @@ end 'main'
 for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
 cloneable. Declare `clone()` yourself for custom behaviour, or when a field's type is not cloneable.
 
+A field declared at an [interface](/docs/language/composite-types/#interfaces) type is cloneable when **every** conformer of that interface
+in the program is — the copy runs the conformer the value actually holds, which is not known until the
+program runs, so the whole program's conformers are what the compiler checks. A conformer that owns an OS
+handle, or a generic type, makes the field uncloneable and the `.clone()` is refused with **E2015**, naming
+the field, the interface and the conformer. A container ELEMENT held at an interface type is a separate
+matter and is never cloneable: an element slot is one machine word and a value at an interface type is two.
+
+A type that both conforms to an interface and holds a value at that interface type cannot be declared at
+all — it is a reference cycle, reported as **E4014** (see the ownership rules in `specs/ownership.md`), so no
+decorator of that shape reaches the clone check.
+
 ### Borrow Checking
 
 A `let` bound to an element read out of a mutable collection **borrows** from that collection. While the
