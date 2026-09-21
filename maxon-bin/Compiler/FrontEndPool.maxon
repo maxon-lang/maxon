@@ -255,9 +255,8 @@ union FrontEndDrainInput
 	parsing(queries ParseQueryArray)
 end 'FrontEndDrainInput'
 
-// ⭐⭐ **THE DRIVER, for one front end.** P is the SCHEDULER's resolved processor count, not the machine's, and
-// F is the most files one drain dispatched: `min(P, F)` workers, because a worker with no file to lex or parse is
-// a mailbox bought for nothing.
+// The driver, for one front end. The pool is sized by the most files one drain dispatched; `PoolSizing` owns
+// the rule.
 module type FrontEndPool
 	// ⚖ **WHETHER THIS BINARY'S OWN RUNTIME CAN MOVE A GRAPH THAT REACHES ONE RECORD TWICE**, which a lexed stream and
 	// a parse artifact both are. The compiler that builds this source binds it `true`
@@ -370,12 +369,18 @@ module type FrontEndPool
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
 		let filesDispatched = self.mostFilesDispatched
 
-		// The only evidence that the front end ran in PARALLEL rather than merely correctly: the byte-identity
-		// gate passes on a pool of one.
 		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
-			let workerCount = self.workers.count()
-			let processors = Runtime.processorCount()
-			logDebug(LogCategory.compiler, message: function() gives "front end: {workerCount} worker(s) over {processors} processor(s), {filesDispatched} file(s)")
+			let sizing = PoolSizing.forJobs(filesDispatched)
+
+			// The reported count is derived, while `tests/parallel-compile/` reads the line back as an
+			// observation of the pool that ran; without this, that case would compare the rule with itself.
+			// Equality holds by construction — `requireWorkers` grows the pool to `min(P, filesDispatched)` on
+			// every drain and `min` is monotone in a maximum — so this catches a future divergence loudly.
+			if sizing.workerCount != self.workers.count() as PoolJob 'theReportedPoolIsNotTheOneThatRan'
+				panic("FrontEndPool.close: the pool holds {self.workers.count()} worker(s) where min(P, {filesDispatched}) is {sizing.workerCount} — `requireWorkers` grows it to that size on every drain, so a difference is a pool the reported line does not describe")
+			end 'theReportedPoolIsNotTheOneThatRan'
+
+			logDebug(LogCategory.compiler, message: function() gives sizing.line(PoolKind.frontEnd))
 		end 'onTheWorkers' else 'inProcess'
 			logDebug(LogCategory.compiler, message: function() gives "front end: serial, in process, {filesDispatched} file(s) — this binary's runtime cannot move a shared-record graph")
 		end 'inProcess'
@@ -397,11 +402,9 @@ module type FrontEndPool
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
 	end 'close'
 
-	// Grow the pool to `min(P, filesDispatched)` workers — sized by what this drain hands out, so a warm front end
-	// that re-parses one file spawns one worker.
+	// Sized by what this drain hands out, so a warm front end that re-parses one file spawns one worker.
 	function requireWorkers(project Project, filesDispatched PoolJob)
-		let processors = Runtime.processorCount() as PoolJob
-		let wanted = processors if processors < filesDispatched else filesDispatched
+		let wanted = PoolSizing.forJobs(filesDispatched).workerCount
 
 		while self.workers.count() < wanted 'eachMissingWorker'
 			self.workers.push(spawn FrontEndWorker.create(project.target.cpu, os: project.target.os, debugStream: project.debugStream))

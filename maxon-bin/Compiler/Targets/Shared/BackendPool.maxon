@@ -263,6 +263,58 @@ export type PoolDispatch
 	end 'land'
 end 'PoolDispatch'
 
+export enum PoolKind
+	regalloc
+	stdFanOut
+	frontEnd
+end 'PoolKind'
+
+// Every worker pool in the compiler is `min(P, jobs)` workers. P is the scheduler's resolved processor
+// count, not the machine's: `MAXON_MAX_PROCS=1` resolves it to one and the pool is then one worker,
+// which is the whole of what pinning does. The job count bounds it because a worker with no job to run
+// is a mailbox and a green thread bought for nothing.
+//
+// `workerCount` is a `PoolJob` rather than a `PoolSize` because zero is a legal answer: a caller with
+// no jobs still logs its line, and each consumer casts to `PoolSize` past its own `> 0` guard.
+export type PoolSizing
+	export var workerCount as PoolJob
+	var processors as PoolJob
+	var jobCount as PoolJob
+
+	export static function forJobs(jobCount PoolJob) returns PoolSizing
+		let processors = Runtime.processorCount() as PoolJob
+
+		// `Runtime.processorCount()` is declared `int(1 to i64.max)`, so this is belt and braces at the
+		// boundary the count arrives on: an empty pool runs nothing and reports nothing, which is a
+		// worse failure than a panic.
+		if processors < 1 'theSchedulerResolvedNoProcessor'
+			panic("PoolSizing.forJobs: the scheduler resolved {processors} processor(s), so the pool would be empty and no job would run at all")
+		end 'theSchedulerResolvedNoProcessor'
+
+		let workerCount = processors if processors < jobCount else jobCount
+		return Self{workerCount: workerCount, processors: processors, jobCount: jobCount}
+	end 'forJobs'
+
+	// The pool's one debug line, and the only evidence that a pool of many ran rather than a pool of one:
+	// both compile byte-identically, so nothing else can tell the two apart. `tests/parallel-compile/`
+	// reads this wording word by word, so rewording it fails that suite.
+	export function line(kind PoolKind) returns String
+		let name = match kind 'name'
+			regalloc gives "regalloc"
+			stdFanOut gives "stdFanOut"
+			frontEnd gives "front end"
+		end 'name'
+
+		let job = match kind 'job'
+			regalloc or
+				stdFanOut gives "function"
+			frontEnd gives "file"
+		end 'job'
+
+		return "{name}: {self.workerCount} worker(s) over {self.processors} processor(s), {self.jobCount} {job}(s)"
+	end 'line'
+end 'PoolSizing'
+
 function uniformPipelineSize(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolJobSize
 	var total = 0 as PoolJobSize
 
@@ -407,12 +459,8 @@ export type BackendWorker
 	end 'finish'
 end 'BackendWorker'
 
-// ⭐⭐ **LOWER AND ALLOCATE EVERY FUNCTION ON A POOL OF `min(P, F)` WORKERS, and hand back the assembled
-// Target module.** The one entry both native backends call.
-//
-// P is the SCHEDULER's resolved processor count, not the machine's: `MAXON_MAX_PROCS=1` resolves it to
-// one and the pool is then one worker, which is the whole of what pinning does here. F is the function
-// count, because a worker with no function to run is a mailbox and a green thread bought for nothing.
+// Lower and allocate every function on a worker pool, and hand back the assembled Target module. The one
+// entry both native backends call; `PoolSizing` owns how the pool is sized.
 //
 // `throws CompileError` because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
 // Only USER functions are present here — x64's `mrt_start` is prepended AFTER this pass by
@@ -438,29 +486,18 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	let abi = CalleeAbiTable.build(funcNames)
 	var module = assembleTargetModule(stdModule)
 	let funcCount = stdModule.funcCount()
-	let processors = __Builtins.schedProcessorCount()
-	let workerCount = processors if processors < funcCount else funcCount
+	let sizing = PoolSizing.forJobs(funcCount as PoolJob)
 
-	// The only evidence that the backend ran in PARALLEL rather than merely correctly: both
-	// byte-identity gates pass on a pool of one, so nothing else can tell a pool of one from a pool of
-	// sixteen. `tests/parallel-compile/` pins this line.
-	logDebug(LogCategory.codegen, message: function() gives "regalloc: {workerCount} worker(s) over {processors} processor(s), {funcCount} function(s)")
+	// Logged above the empty-module return, so a module of no functions still reports its pool.
+	logDebug(LogCategory.codegen, message: function() gives sizing.line(PoolKind.regalloc))
 
 	if funcCount == 0 'nothingToLower'
 		return module
 	end 'nothingToLower'
 
-	// ⛔ **THE FLOOR IS ASKED, NOT ASSUMED.** `min(P, F)` is the pool size, so a resolved P of zero would
-	// make an EMPTY pool — and an empty pool lowers nothing, which is a program emitted with no code at
-	// all rather than a diagnostic. The scheduler clamps to one; this is where that promise is held to,
-	// because the alternative failure is silent.
-	if processors < 1 'theSchedulerResolvedNoProcessor'
-		panic("lowerAndAllocateOnAWorkerPool: the scheduler resolved {processors} processor(s), so the pool would be empty and no function would be lowered at all")
-	end 'theSchedulerResolvedNoProcessor'
-
 	var workers = BackendWorkerHandleArray.create()
 
-	for _ in 0 upto workerCount 'eachWorker'
+	for _ in 0 upto sizing.workerCount 'eachWorker'
 		workers.push(spawn BackendWorker.create(target.cpu, os: target.os, abi: CalleeAbiTable.copyOf(abi), usesGt: usesGt))
 	end 'eachWorker'
 
@@ -474,7 +511,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	// mean the whole pool ran on the M that dispatched it — a correct compile at one processor's speed,
 	// which every other reading here would report as success.
 	let stealsBefore = __Builtins.schedStealCount()
-	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: workerCount as PoolSize, landed: landed, slots: slots)
+	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: sizing.workerCount as PoolSize, landed: landed, slots: slots)
 	let stealsAfter = __Builtins.schedStealCount()
 	logDebug(LogCategory.codegen, message: function() gives "regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
 

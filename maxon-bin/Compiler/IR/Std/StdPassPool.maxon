@@ -281,23 +281,19 @@ type StdPassWorkerReport
 	end 'of'
 end 'StdPassWorkerReport'
 
-// ⭐⭐ **RUN THE SCHEDULE'S PER-FUNCTION PASSES OVER EVERY FUNCTION ON A POOL OF `min(P, F)` WORKERS.**
-//
-// P is the SCHEDULER's resolved processor count, not the machine's: `MAXON_MAX_PROCS=1` resolves it to
-// one and the pool is then one worker. F is the function count, because a worker with no function to
-// run is a mailbox and a green thread bought for nothing. `members` is the schedule, every one a pass
-// `classifyPass` answers `perFunction` for (`PassPipeline.requireFanOutMembership`).
+// Run the schedule's per-function passes over every function on a worker pool; `PoolSizing` owns how the
+// pool is sized. `members` is the schedule, every one a pass `classifyPass` answers `perFunction` for
+// (`PassPipeline.requireFanOutMembership`).
 export function runStdPassesOnAWorkerPool(project Project, module StdModule, members StdFanOutStepArray)
 	let funcCount = module.funcCount()
-	let processors = Runtime.processorCount() as FuncCount
-	let workerCount = processors if processors < funcCount else funcCount
+	let sizing = PoolSizing.forJobs(funcCount as PoolJob)
+	let workerCount = sizing.workerCount
 	let reducesDivision = targetLowersMulHigh(project.target.cpu)
 
-	// The only evidence that the passes ran in PARALLEL rather than merely correctly: the byte-identity
-	// gates pass on a pool of one. Under `codegen`, beside the allocator's line, so that `--log=ir:trace`
-	// — whose per-function lines `tests/parallel-compile/log-order` compares pinned against default —
-	// does not carry a worker count that differs between the two.
-	logDebug(LogCategory.codegen, message: function() gives "stdFanOut: {workerCount} worker(s) over {processors} processor(s), {funcCount} function(s)")
+	// Under `codegen`, beside the allocator's line, so that `--log=ir:trace` — whose per-function lines
+	// `tests/parallel-compile/log-order` compares pinned against default — does not carry a worker count
+	// that differs between the two.
+	logDebug(LogCategory.codegen, message: function() gives sizing.line(PoolKind.stdFanOut))
 
 	var tallies = StdPassTallyArray.create()
 
