@@ -269,7 +269,7 @@ That is a cost call, not a rule.)*
 
 **A user-visible change also names its documentation gate — but not as a red-first case.** When it adds a
 command, option, MCP tool or `public` stdlib API, the doc-coverage gate that owns the surface
-(`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`) reads the
+(`maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`) reads the
 built compiler or the tree's `stdlib/`, so it is green today and turns red only once the new surface exists.
 It is not in this set; it is acceptance, read in §8's battery after §6 has written the documentation.
 Every other user-visible change still owes its `docs/` source an edit (§6), which the gates cannot see.
@@ -488,8 +488,8 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
-| **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin -o temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
-| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli -t reference-documents`, `tests/mcp -t reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
+| **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin --output=temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
+| **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |
 

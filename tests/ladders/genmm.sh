@@ -85,7 +85,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build temp/mm-buffer-512.maxon -o temp/mm.exe --metrics=temp/mm.tsv
+#     maxon build temp/mm-buffer-512.maxon --output=temp/mm.exe --metrics=temp/mm.tsv
 #     grep -P '^phase\t(signatures|parse|isel)\t' temp/mm.tsv
 #
 # ⚠ **READ THE ALLOCATION COLUMN FIRST — it is exact and bit-reproducible, so a ratio off it is a

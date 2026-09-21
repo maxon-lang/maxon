@@ -413,12 +413,12 @@ Four doors are still standing open rather than shut:
   `scripts/seed-shim/` over the first build for exactly that; `docs/RELEASING.md` owns the rule.
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```
-  ./.bootstrap/maxon.exe build maxon-bin -o maxon-bin/.maxon/maxon
+  ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon
   ```
   **A SEED OLDER THAN NAMED MANIFEST TARGETS READS `maxon-bin` AS A PATH, NOT A TARGET**, and a path
   build picks its own output name. MEASURED with the v0.1.0 release as the seed: it wrote
   `maxon-bin/Compiler/BorrowCheck.exe`, left the slot EMPTY, and **exited 0** — so the next command is
-  a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `-o` for this reason;
+  a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `--output=` for this reason;
   `CONTRIBUTING.md` spells it too.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
 - Exit code **101** means a memory leak was detected.
@@ -588,7 +588,7 @@ WASI Preview2 component).
 vendored wasmtime. By hand, for ONE program:
 
 ```
-./maxon-bin/.maxon/maxon build f.maxon -o out --target=wasm32-wasi
+./maxon-bin/.maxon/maxon build f.maxon --output=out --target=wasm32-wasi
 ./vendor/wasmtime/wasmtime run -S cli-exit-with-code=y out.wasm
 ./vendor/wasm-tools/wasm-tools print out.wasm      # attribute a wrong answer to an instruction
 ```

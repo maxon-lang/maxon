@@ -25,7 +25,7 @@ test 'a self-rebuild that fails to compile leaves the running image in the slot,
 	try File.writeText(broken, content: BrokenSource) otherwise panic("could not write {broken.path}")
 
 	let failed = rebuildOwnImage(dir, compiler: compiler, program: broken)
-	try Expect.equal(failed.exitCode() as AssertedInt, expected: CompileErrorExit, message: "`{BuildCommandName} {BrokenFileName} {OutputOption} {imageName}` names an undeclared value and should fail to compile. It exited {failed.exitCode()} and said: {failed.stderr}")
+	try Expect.equal(failed.exitCode() as AssertedInt, expected: CompileErrorExit, message: "`{BuildCommandName} {BrokenFileName} {OutputOptionPrefix}{imageName}` names an undeclared value and should fail to compile. It exited {failed.exitCode()} and said: {failed.stderr}")
 
 	try Expect.isTrue(File.exists(compiler), message: "a self-rebuild that failed to compile left no {imageName} in the slot, so nothing is left to build the fix. It said: {failed.stderr}")
 	let keptBytes = try File.readBinary(compiler) otherwise panic("could not read back {compiler.path}")

@@ -21,7 +21,7 @@ end 'main'
 The return value becomes the process exit code. Compile and run it:
 
 ```bash
-maxon build hello.maxon -o hello
+maxon build hello.maxon --output=hello
 ./hello
 echo $?
 ```

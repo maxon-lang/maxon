@@ -131,7 +131,7 @@ jobs:
           work="$(mktemp -d)"
           cp "$HOME/.maxon/examples/hello.maxon" "$work/"
           cd "$work"
-          "$HOME/.maxon/bin/maxon" build hello.maxon -o hello
+          "$HOME/.maxon/bin/maxon" build hello.maxon --output=hello
           [ "$(./hello)" = "Hello, world!" ]
 
       - name: A download is not quarantined, so Gatekeeper does not stop it
@@ -177,7 +177,7 @@ jobs:
           [ "$found" = "$home/.local/bin/maxon" ] || { echo "::error::the caller's PATH finds '$found'"; exit 1; }
           work="$(mktemp -d)"
           cp "$home/.maxon/examples/hello.maxon" "$work/"
-          (cd "$work" && env PATH="$caller_path" maxon build hello.maxon -o hello)
+          (cd "$work" && env PATH="$caller_path" maxon build hello.maxon --output=hello)
           [ "$("$work/hello")" = "Hello, world!" ]
           # `maxon upgrade`'s shape: --no-modify-path over an install the link already puts on PATH.
           out="$(env HOME="$home" PATH="$caller_path" sh -s -- --no-modify-path < website/public/install.sh)"
@@ -406,7 +406,7 @@ jobs:
           $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'hello')
           Copy-Item "$HOME\.maxon\examples\hello.maxon" $work
           Set-Location $work
-          & "$HOME\.maxon\bin\maxon.exe" build hello.maxon -o hello.exe
+          & "$HOME\.maxon\bin\maxon.exe" build hello.maxon --output=hello.exe
           if ($LASTEXITCODE -ne 0) { throw 'the build failed' }
           $out = & .\hello.exe
           if ($out -ne 'Hello, world!') { throw "hello printed '$out'" }

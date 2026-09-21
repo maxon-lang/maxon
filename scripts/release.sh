@@ -85,7 +85,7 @@ package_one() {
 	if [ "$native" -eq 1 ]; then
 		cp "$maxon" "$stage/maxon$exe_ext"
 	else
-		"$maxon" run build --target="$tgt" -o "$stage/maxon$exe_ext" >/dev/null \
+		"$maxon" run build --target="$tgt" --output="$stage/maxon$exe_ext" >/dev/null \
 			|| { echo "release.sh: cross-build failed for $tgt" >&2; return 1; }
 	fi
 	chmod +x "$stage/maxon$exe_ext"
@@ -263,7 +263,7 @@ The one-line installers do all of this for you — see https://maxon.dev/docs/ge
 By hand: extract the archive somewhere permanent and add that directory to your PATH. Then:
 
     maxon version
-    maxon build examples/basic.maxon -o hello
+    maxon build examples/basic.maxon --output=hello
     ./hello
 
 EOF

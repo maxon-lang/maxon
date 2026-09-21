@@ -45,7 +45,7 @@ itself, so which binary you hold decides what your programs become. Writes only 
 `temp/fixpoint/`.
 
 ⛔ **THE TWO OUTPUTS SHARE A BASENAME AND DIFFER ONLY IN DIRECTORY.** On macOS the ad-hoc
-code-signature identifier is taken from the output FILENAME, so `-o stage2` and `-o stage3` differ in
+code-signature identifier is taken from the output FILENAME, so `--output=stage2` and `--output=stage3` differ in
 exactly one byte for that reason alone — a difference that reads as a miscompile and is not one.
 
 ## Hosting the x64-linux lane locally
@@ -58,9 +58,9 @@ so a binary under `temp/` in this tree reaches this tree's library. WSL starts i
 directory, so nothing has to `cd`:
 
 ```
-./maxon-bin/.maxon/maxon.exe build maxon-bin --target=x64-linux -o temp/linux-lane/maxon
+./maxon-bin/.maxon/maxon.exe build maxon-bin --target=x64-linux --output=temp/linux-lane/maxon
 wsl -- chmod +x temp/linux-lane/maxon
-wsl -- ./temp/linux-lane/maxon build maxon-bin -o temp/linux-lane/maxon2   # C2, hosted on Linux
+wsl -- ./temp/linux-lane/maxon build maxon-bin --output=temp/linux-lane/maxon2   # C2, hosted on Linux
 wsl -- ./temp/linux-lane/maxon2 spec-test
 ```
 

@@ -46,7 +46,7 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 
 // The driver surface under test, spelled as the command line takes it.
 let BuildCommandName = "build"
-let OutputOption = "-o"
+let OutputOptionPrefix = "--output="
 export let RecheckCommandName = "verify-recheck"
 export let DefineOption = "--define="
 
@@ -135,8 +135,8 @@ function builtExecutable(staged FilePath) returns FilePath
 	return staged.join("{BuiltStem}{executableSuffix()}")
 end 'builtExecutable'
 
-// Compile the staged tree to a named output, with whatever extra options the case is about. `-o` is what
-// keeps a build out of the tree lock, so concurrent case files can compile at once.
+// Compile the staged tree to a named output, with whatever extra options the case is about.
+// `--output=` is what keeps a build out of the tree lock, so concurrent case files can compile at once.
 //
 // ⚠ **THE STAGED DIRECTORY IS COMPILED, NOT A FILE IN IT.** A fixture may be several files in several
 // directories, and naming one of them would compile only that one — which for the ambiguity fixture would
@@ -145,8 +145,7 @@ function spawnBuild(staged FilePath, extraArguments StringArray) returns Collect
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 	arguments.push(staged.toString())
-	arguments.push(OutputOption)
-	arguments.push(builtExecutable(staged).toString())
+	arguments.push("{OutputOptionPrefix}{builtExecutable(staged).toString()}")
 
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)

@@ -69,7 +69,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build temp/dir-regions-1024/ -o temp/dir.exe --metrics=temp/dir.tsv
+#     maxon build temp/dir-regions-1024/ --output=temp/dir.exe --metrics=temp/dir.tsv
 #     grep -P '^phase\t(directives|lex|signatures|parse)\t' temp/dir.tsv
 #
 # ⚠ **READ THE ALLOCATION COLUMN FIRST — it is exact and bit-reproducible, so a ratio off it is a

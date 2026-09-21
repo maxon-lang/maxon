@@ -70,7 +70,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build temp/tp-types-512/ -o temp/tp.exe --metrics=temp/tp.tsv
+#     maxon build temp/tp-types-512/ --output=temp/tp.exe --metrics=temp/tp.tsv
 #     grep -P '^phase\t(signatures|parse|merge)\t' temp/tp.tsv
 #
 # ⚠ **READ THE ALLOCATION COLUMN FIRST — it is exact and bit-reproducible, so a ratio off it is a

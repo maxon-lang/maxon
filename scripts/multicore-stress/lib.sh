@@ -60,7 +60,7 @@ build_program() {
 	fi
 
 	# shellcheck disable=SC2086
-	"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" $preludes -o "$out"
+	"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" $preludes --output="$out"
 }
 
 # One field off a program's stdout, or "-" when the program does not print it. Each program prints a

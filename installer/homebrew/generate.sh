@@ -116,7 +116,7 @@ EOF
     MAXON
 
     assert_match version.to_s, shell_output("#{bin}/maxon version")
-    system bin/"maxon", "build", testpath/"hello.maxon", "-o", testpath/"hello"
+    system bin/"maxon", "build", testpath/"hello.maxon", "--output=#{testpath}/hello"
     assert_equal "hello\n", shell_output(testpath/"hello")
   end
 end

@@ -53,7 +53,7 @@ WINDOWS_CLANG = r"C:\Program Files\LLVM\bin\clang.exe"
 CLANG_FLAGS = ["-O3", "-march=native", "-Wall", "-Wno-unknown-pragmas"]
 # The seed predates the manifest's named targets, so it compiles `maxon-bin/` as a plain program and
 # has to be told the output stem — the same command `.github/workflows/ci.yml` runs on a fresh checkout.
-SEED_BUILD_ARGS = "build maxon-bin -o maxon-bin/.maxon/maxon"
+SEED_BUILD_ARGS = "build maxon-bin --output=maxon-bin/.maxon/maxon"
 LEAK_EXIT_CODE = 101
 # The self-compile band: a change that makes the compiler compile ITSELF this much slower than the
 # control does is a HALT for the user (ruling 2026-09-08), whatever it bought the benchmark. The
@@ -279,7 +279,7 @@ def time_self_compile(arm):
     stem = os.path.join(arm["dir"], "selfcompile", "maxon")
     os.makedirs(os.path.dirname(stem), exist_ok=True)
     start = time.perf_counter()
-    r = run([arm["compiler"], "build", SELF_COMPILE_SOURCE, "-o", stem], cwd=REPO)
+    r = run([arm["compiler"], "build", SELF_COMPILE_SOURCE, f"--output={stem}"], cwd=REPO)
     ms = (time.perf_counter() - start) * 1000.0
     if r.returncode != 0 or not os.path.exists(stem + EXE):
         raise BuildFailure(f"self-compile with {arm['label']} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")

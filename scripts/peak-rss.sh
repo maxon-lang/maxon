@@ -92,9 +92,9 @@ for _ in $(seq 1 "$repeat"); do
 		exe="$1"; shift
 		[ -f "$exe" ] && exe="$(cygpath -m "$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")")"
 		helper="$(cygpath -m "$(cd "$(dirname "$0")" && pwd)/lib/peak-rss.ps1")"
-		# Arguments go through a FILE, one per line — see the helper's own note. A bare `-o` in a
-		# PowerShell array argument binds as a PARAMETER NAME, so any child carrying a dash-flag
-		# (every `build ... -o out` invocation) would break the harness rather than the child.
+		# Arguments go through a FILE, one per line — see the helper's own note. A dash-led word in a
+		# PowerShell array argument binds as a PARAMETER NAME, so a child command line carrying one
+		# would break the harness rather than the child.
 		printf '%s\n' "$@" > "$tmpdir/args.txt"
 		out="$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$helper" \
 			-Exe "$exe" -OutFile "$(cygpath -m "$tmpdir/out.txt")" \

@@ -330,7 +330,7 @@ absent / **62.9 µs** present, `File.writeBinary` of 64 bytes **449 µs**.
 **⭐ The reading it exists to make re-runnable: `changeExtension` charges by what the String is a
 PRODUCT OF, not by what it says.** `change_extension` and `change_extension_forward_spelt` build the
 same final path text, both the way `Compiler.resolveOutputPath` does — by interpolating the platform
-extension onto the raw `-o` value — and differ only in the separator that went in. On Windows
+extension onto the raw `--output=` value — and differ only in the separator that went in. On Windows
 `FilePath.create` normalizes `/` to `\` through `String.replace`, so the forward-spelt one arrives as
 a `replace()` result and the native-spelt one arrives as the interpolation's own buffer:
 **8 allocations / 343 bytes against 10 / 368**, for two `FilePath`s that compare EQUAL. Build them
@@ -431,7 +431,7 @@ the two plane arms, and this argument, are unchanged).
 ## Reading one
 
 ```
-<compiler> build out.maxon -o out --metrics=m.txt
+<compiler> build out.maxon --output=out --metrics=m.txt
 awk -F'\t' '$1=="regalloc" && $2=="splitting"' m.txt      # nanos, allocs, frees, bytes
 ```
 

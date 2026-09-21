@@ -1,7 +1,8 @@
-// build-dot-without-output-names-the-directory.test.maxon - `maxon build .` with no `-o` names the executable
-// for the directory `.` is, never `..exe` and never for a source file inside it.
+// build-dot-without-output-names-the-directory.test.maxon - `maxon build .` with no `--output=`
+// names the executable for the directory `.` is, never `..exe` and never for a source file inside it.
 //
-// Staged outside the checkout: a build without `-o` inside it would take the checkout's tree lock.
+// Staged outside the checkout: a build without `--output=` inside it would take the checkout's tree
+// lock.
 
 let CaseDirName = "build-dot-without-output"
 let AppDirName = "app"
@@ -10,7 +11,7 @@ let MainSourceFileName = "zeta.maxon"
 let MainSourceStem = "zeta"
 let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
-test 'a directory built as . without -o is named for the directory'
+test 'a directory built as . without --output= is named for the directory'
 	let dir = freshOutsideCheckoutDir(CaseDirName)
 	let app = dir.join(AppDirName)
 
@@ -28,4 +29,4 @@ test 'a directory built as . without -o is named for the directory'
 	let named = app.join("{AppDirName}{executableSuffix()}")
 	try Expect.isTrue(File.exists(named), message: "`maxon build .` in {app.toString()} wrote no {named.toString()}. {said}")
 	try Expect.isFalse(File.exists(app.join("{MainSourceStem}{executableSuffix()}")), message: "`maxon build .` named its executable for a source file. {said}")
-end 'a directory built as . without -o is named for the directory'
+end 'a directory built as . without --output= is named for the directory'

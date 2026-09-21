@@ -33,8 +33,8 @@ support; LSP, VS Code or MCP behaviour.
   `docs/*.md` file (or the error-code registry) that owns each surface.
 - **Then regenerate the site:** `node website/scripts/sync-docs.mjs`. The reference pages are generated from
   those sources and `website.yml` fails on drift, so a hand edit to a generated page is overwritten.
-- **The doc-coverage gates catch an undocumented surface:** `maxon test tests/cli -t reference-documents`,
-  `tests/mcp -t reference-documents`, `tests/docs`. They check names, not truth — a statement the change made
+- **The doc-coverage gates catch an undocumented surface:** `maxon test tests/cli --filter=reference-documents`,
+  `tests/mcp --filter=reference-documents`, `tests/docs`. They check names, not truth — a statement the change made
   false is found by grepping the docs for what changed.
 
 ## Code Quality

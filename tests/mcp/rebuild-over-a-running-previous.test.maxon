@@ -34,7 +34,7 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 	try File.writeText(program, content: printingProgramSource(KnownLine)) otherwise panic("could not write {program.path}")
 
 	let first = rebuildOwnImage(dir, compiler: compiler, program: program)
-	try Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOption} {imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
+	try Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
 
 	let vacatedBytes = try File.readBinary(previous) otherwise panic("could not read {previous.path}")
 	try Expect.isTrue(vacatedBytes.equals(originalBytes), message: "{previousName} should hold the compiler image the build vacated ({originalBytes.count()} bytes); it holds {vacatedBytes.count()} bytes that differ.")

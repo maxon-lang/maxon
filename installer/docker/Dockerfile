@@ -58,7 +58,7 @@ RUN set -eu; \
     mkdir /tmp/warm; \
     cp /opt/maxon/examples/hello.maxon /tmp/warm/; \
     cd /tmp/warm; \
-    /opt/maxon/bin/maxon build hello.maxon -o hello; \
+    /opt/maxon/bin/maxon build hello.maxon --output=hello; \
     ./hello
 
 FROM debian:bookworm-slim AS debian

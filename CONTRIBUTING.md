@@ -94,7 +94,7 @@ release has, and an out-of-date seed fails the first build.
 
 ```bash
 scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
-./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
+./.bootstrap/maxon build maxon-bin --output=maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon run build            # afterwards, it rebuilds itself
 ./maxon-bin/.maxon/maxon spec-test
 ```

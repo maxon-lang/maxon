@@ -70,7 +70,7 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 // The command line the one build is run from. The output name carries `.exe` because the TARGET does, not
 // because this host might.
 let BuildCommandName = "build"
-let OutputOption = "-o"
+let OutputOptionPrefix = "--output="
 let WindowsTargetName = "x64-windows"
 let TargetOptionPrefix = "--target="
 let OutputFileName = "out.exe"
@@ -171,17 +171,16 @@ function stagedProgram() returns FilePath
 	return staged
 end 'stagedProgram'
 
-// Compile the staged program for Windows and hand back the image. `-o` is what keeps the build out of the
-// tree lock. A build that fails is not this corpus's subject — there is simply nothing to read — so both
-// of its failure shapes panic.
+// Compile the staged program for Windows and hand back the image. `--output=` is what keeps the build
+// out of the tree lock. A build that fails is not this corpus's subject — there is simply nothing to
+// read — so both of its failure shapes panic.
 function buildStagedProgram(staged FilePath) returns FilePath
 	let executable = staged.join("{OutputFileName}")
 
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 	arguments.push(staged.join("{StagedProgramFileName}").toString())
-	arguments.push(OutputOption)
-	arguments.push(executable.toString())
+	arguments.push("{OutputOptionPrefix}{executable.toString()}")
 	arguments.push("{TargetOptionPrefix}{WindowsTargetName}")
 
 	let build = spawnCompiler(arguments, staged: staged)

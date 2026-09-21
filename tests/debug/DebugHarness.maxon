@@ -40,10 +40,10 @@ let StagedSourceSuffix = ".maxon"
 // the RUNNER does.
 export let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 
-// The command line one build is run from: `build <staged>/main.maxon -o <staged>/out[.exe]`.
-// `-o` is what keeps the build out of the tree lock, so two case files can compile at once.
+// The command line one build is run from: `build <staged>/main.maxon --output=<staged>/out[.exe]`.
+// `--output=` is what keeps the build out of the tree lock, so two case files can compile at once.
 let BuildCommandName = "build"
-let OutputOption = "-o"
+let OutputOptionPrefix = "--output="
 let OutputFileStem = "out"
 
 // How a declaration is recognized in the staged fixture source.
@@ -124,8 +124,7 @@ export function spawnBuild(source FilePath, staged FilePath, label String, extra
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 	arguments.push(source.toString())
-	arguments.push(OutputOption)
-	arguments.push(builtExecutable(staged).toString())
+	arguments.push("{OutputOptionPrefix}{builtExecutable(staged).toString()}")
 
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)
@@ -154,8 +153,9 @@ end 'spawnCompiler'
 
 // Where a build's executable lands: ONE path per staging directory, never one per run, because the output
 // basename reaches the emitted image — on Mach-O it is the ad-hoc signature's identifier, whose length
-// moves the `__LINKEDIT` sizes. The host suffix is spelled INTO the `-o` argument rather than left for the
-// compiler to append, so the path handed to the child and the path read back are one spelling.
+// moves the `__LINKEDIT` sizes. The host suffix is spelled INTO the `--output=` argument rather than
+// left for the compiler to append, so the path handed to the child and the path read back are one
+// spelling.
 export function builtExecutable(staged FilePath) returns FilePath
 	return staged.join("{OutputFileStem}{executableSuffix()}")
 end 'builtExecutable'

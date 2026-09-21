@@ -14,7 +14,7 @@
 # against REGRESSION, not against an independent answer — so a defect that predates the pin stays pinned.
 #
 # ⛔ THE TWO OUTPUTS MUST SHARE A BASENAME. On macOS the ad-hoc code-signature identifier is taken
-# from the output filename, so `-o stage2` and `-o stage3` differ in exactly one byte for that reason
+# from the output filename, so `--output=stage2` and `--output=stage3` differ in exactly one byte for that reason
 # alone — a difference that reads as a miscompile and is not one. Same name, different directories.
 #
 # A failing stage's own output goes to stderr where it fails, named, and its exit status is carried out
@@ -64,7 +64,7 @@ run_stage() {
 	fi
 }
 
-# A stage can exit 0 and write no `-o` file at all, and nothing downstream notices: `wc -c` and `cmp` are
+# A stage can exit 0 and write no `--output=` file at all, and nothing downstream notices: `wc -c` and `cmp` are
 # the comparison's only readers, and a failure of either inside a command substitution leaves the
 # enclosing `printf` returning 0, so `set -e` never fires — two empty files report FIXPOINT HOLDS on a
 # fixpoint nothing tested. The requirement is per stage because stage 2's binary is EXECUTED by stage 3
@@ -93,7 +93,7 @@ require_stage_binary() {
 }
 
 echo "=== stage 2: $start_bin builds the compiler"
-run_stage "stage 2" "$out/a.log" "$start_bin" build maxon-bin -o "$out/a/maxon"
+run_stage "stage 2" "$out/a.log" "$start_bin" build maxon-bin --output="$out/a/maxon"
 a="$out/a/maxon$MAXON_EXE_EXT"
 
 # Between the stages, never after both: a missing or non-executable stage 2 otherwise surfaces from the
@@ -101,7 +101,7 @@ a="$out/a/maxon$MAXON_EXE_EXT"
 require_stage_binary "stage 2" "$a" executable
 
 echo "=== stage 3: that binary builds it again"
-run_stage "stage 3" "$out/b.log" "$a" build maxon-bin -o "$out/b/maxon"
+run_stage "stage 3" "$out/b.log" "$a" build maxon-bin --output="$out/b/maxon"
 b="$out/b/maxon$MAXON_EXE_EXT"
 require_stage_binary "stage 3" "$b" readable
 

@@ -6,14 +6,13 @@
 // lives here is the command line, where the staged tree goes, and the exit code.
 //
 // ⛔⛔ **A TEST RUN TAKES NO TREE LOCK, AND THAT IS A REQUIREMENT RATHER THAN AN OMISSION.** Under
-// `Main.acquireBuildTreeLock`'s rule a project build with no `-o`, inside a checkout with a `stdlib/`
-// above it, locks the whole checkout — and every case under `tests/test-fixtures/` IS such a build,
-// spawned from a `test` that is ITSELF running inside a build of this kind (`tests/test-command/`).
-// It would come back as exit 2 with an EMPTY stdout, nine times over. This command never goes through
-// `runBuild`: it calls
-// `Compiler.compileToProduct` directly, which locks nothing, and it names its own output. That is the
-// same exemption `spec-test` buys with `isHarnessFixtureSubRun`, obtained here by not being a
-// lock-taking shape at all.
+// `Main.acquireBuildTreeLock`'s rule a project build with no `--output=`, inside a checkout with a
+// `stdlib/` above it, locks the whole checkout — and every case under `tests/test-fixtures/` IS such
+// a build, spawned from a `test` that is ITSELF running inside a build of this kind
+// (`tests/test-command/`). It would come back as exit 2 with an EMPTY stdout, nine times over. This
+// command never goes through `runBuild`: it calls `Compiler.compileToProduct` directly, which locks
+// nothing, and it names its own output. That is the same exemption `spec-test` buys with
+// `isHarnessFixtureSubRun`, obtained here by not being a lock-taking shape at all.
 
 // The command's own name — the word every message in this file uses for what failed, and the token
 // `MaxonArgs.parse` matches. One spelling, so a renamed command cannot keep announcing the old one.
@@ -56,7 +55,7 @@ let TestBinaryStem = "maxon-test"
 
 // The usage line a refusal prints under itself.
 function testUsageLine() returns String
-	return "maxon {TestCommandName} [<directory>] [-t|--filter=PATTERN] [--list] [--json] [options]"
+	return "maxon {TestCommandName} [<directory>] [{FilterFlagPrefix}PATTERN] [--list] [--json] [options]"
 end 'testUsageLine'
 
 // ============================================================================================
@@ -151,9 +150,9 @@ let FilterPatternSeparator = ","
 // ⭐⭐ **WHICH DISCOVERED TESTS THIS RUN SELECTED. NO FILTER KEEPS EVERYTHING.**
 //
 // A pattern matches a test when it is a substring of the test's NAME or of its FILE's DISPLAYED path,
-// so `-t math` finds both a file called math and a test about maths. Comma-separated patterns UNION,
-// which is what makes `-t a,b` mean "run a and b" rather than "run nothing". Matching is
-// case-insensitive: these are prose names a human is retyping off a report.
+// so `--filter=math` finds both a file called math and a test about maths. Comma-separated patterns
+// UNION, which is what makes `--filter=a,b` mean "run a and b" rather than "run nothing". Matching
+// is case-insensitive: these are prose names a human is retyping off a report.
 //
 // ⚠ **SELECTION IS A RUNTIME ARGUMENT AND NEVER A COMPILE-TIME ONE.** Every discovered test is compiled
 // in every time and `--select=` picks which of them run, which is what lets a filter change between runs

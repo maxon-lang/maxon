@@ -4444,7 +4444,7 @@ no sources to compile`) rather than read as "everything here".
 
 ### The Command Line Wins
 
-Flags typed on the command line outrank the manifest: `-o` replaces the output path, `--target` chooses
+Flags typed on the command line outrank the manifest: `--output=` replaces the output path, `--target` chooses
 the target (the manifest itself always runs on the host), a `--define` is applied after the manifest's
 defines, and debug information is written only if both the manifest and the command line allow it.
 

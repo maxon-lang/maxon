@@ -96,7 +96,7 @@ function discardAndRequire(p FilePath)
 end 'discardAndRequire'
 
 // How `Compiler.resolveOutputPath` builds the output path: INTERPOLATE the platform extension onto
-// the raw `-o` value, then hand the result to FilePath. The interpolation is load-bearing — see the
+// the raw `--output=` value, then hand the result to FilePath. The interpolation is load-bearing — see the
 // note in `main`.
 function resolveLike(override String) returns FilePath
 	return try FilePath.from("{override}.exe") otherwise panic("resolveLike: bad path")

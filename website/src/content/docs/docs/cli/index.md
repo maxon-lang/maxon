@@ -43,9 +43,6 @@ and `verify-warm-rebuild`. `maxon` with no arguments does not list them; `maxon 
 Only the **first** command word on a line is the command. A later one is an ordinary positional
 argument, so `maxon fmt fmt` formats the directory `fmt/`.
 
-An option the driver does not implement is refused before any command runs (`error: unknown option:
-<option>`, exit 1, or 2 for `maxon test`), rather than ignored.
-
 ## `maxon execute`
 
 Compiles a program, or reuses a cached build of it, and runs it.
@@ -60,8 +57,8 @@ command word. That is what a kernel hands the interpreter for a script whose fir
 `#!/usr/bin/env maxon`.
 
 **Everything after the path is the program's command line** and reaches it untouched, including tokens
-that look like driver options: in `maxon execute app.maxon --filter=x -o out`, both `--filter=x` and
-`-o out` are the program's. So `execute` takes no options of its own.
+that look like driver options: in `maxon execute app.maxon --filter=x --output=out`, both `--filter=x`
+and `--output=out` are the program's. So `execute` takes no options of its own.
 
 The program inherits stdin, stdout, stderr and the working directory, and **its exit code becomes this
 command's**. The build itself prints nothing, so the program's output is not mixed with compiler
@@ -187,11 +184,12 @@ file and the task name, so two tasks of one file never share a build.
 
 **A task may describe a build**, by calling `Build.build`, `Build.target`, `Build.buildTargets`,
 `Build.buildWithConfig` or `Build.delegate` — the same calls a `project.maxon` makes (see
-[Describing a build](/docs/cli/project-structure/#describing-a-build)). The build is performed once the task exits 0, and `-o`,
-`--target`, `--define` and `--no-debug-info` apply to it exactly as they do to `maxon build`.
+[Describing a build](/docs/cli/project-structure/#describing-a-build)). The build is performed once the task exits 0, and
+`--output=`, `--target`, `--define` and `--no-debug-info` apply to it exactly as they do to
+`maxon build`.
 
 ```bash
-maxon run build -o dist/maxon --target=x64-linux
+maxon run build --output=dist/maxon --target=x64-linux
 ```
 
 ## `maxon init`
@@ -252,7 +250,7 @@ with no `project.maxon` prints a usage line and exits 1.
 
 | Option | Description |
 |--------|-------------|
-| `-o <path>`, `--output=<path>` | Output executable path. Without it the name comes from the first path given: a file is built beside itself (`foo.maxon` → `foo.exe` on Windows), and a directory into itself under its own name (`app` → `app/app.exe`). The target's executable extension is added unless the path already carries it. A value that is not a path (a non-`file` URL, or on Windows a name holding `< > " \| ? *` or a control character) is refused with exit 1. |
+| `--output=<path>` | Output executable path. Without it the name comes from the first path given: a file is built beside itself (`foo.maxon` → `foo.exe` on Windows), and a directory into itself under its own name (`app` → `app/app.exe`). The target's executable extension is added unless the path already carries it. A value that is not a path (a non-`file` URL, or on Windows a name holding `< > " \| ? *` or a control character) is refused with exit 1. |
 | `--target=<cpu>-<os>` | Compile for this target instead of the host: `x64-windows`, `x64-linux`, `arm64-macos`, `arm64-linux` or `wasm32-wasi`. See [Targets](/docs/cli/targets/). |
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function is refused. |
@@ -278,7 +276,7 @@ reused the cached one. That compile makes no progress lines of its own — see
 
 ```bash
 maxon build hello.maxon                       # → hello.exe on Windows, hello elsewhere
-maxon build src/ -o build/app                 # a whole directory, named output
+maxon build src/ --output=build/app           # a whole directory, named output
 maxon build a.maxon b.maxon                   # one program from two files, in that order
 maxon build                                   # run project.maxon
 maxon build app                               # project.maxon's target named "app"
@@ -442,7 +440,7 @@ normally with `maxon build`.
 
 | Option | Description |
 |--------|-------------|
-| `-t P`, `-t=P`, `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Comma-separated patterns are a union. A bare `-t` with nothing after it is refused. |
+| `--filter=P` | Run only tests whose name or file path contains `P` (case-insensitive). Comma-separated patterns are a union. |
 | `--list` | Print the tests that would run, and compile nothing. A project whose sources do not all tokenize is still refused, so the list is never quietly short a file. |
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
@@ -537,7 +535,7 @@ command reports `2 pass`, `0 fail` and exits 0.
 ```bash
 maxon test                        # every test under the working directory
 maxon test src/parser             # one project's tests
-maxon test -t json                # only tests whose name or file mentions "json"
+maxon test --filter=json          # only tests whose name or file mentions "json"
 maxon test --filter=parser,lexer  # two patterns, as a union
 maxon test --list                 # what would run, without compiling
 maxon test --json --no-timing     # machine-readable and reproducible

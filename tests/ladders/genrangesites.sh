@@ -84,7 +84,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build temp/rs-one-256/ -o temp/rs.exe --metrics=temp/rs.tsv
+#     maxon build temp/rs-one-256/ --output=temp/rs.exe --metrics=temp/rs.tsv
 #     grep -P '^phase\tinsertRangeChecks' temp/rs.tsv
 #
 # ⚠ **READ THE ALLOCATION COLUMN FIRST — it is exact and bit-reproducible, so a ratio off it is a

@@ -367,7 +367,7 @@ echo "procs:    $PROCS_LIST"
 echo
 
 # ----------------------------------------------------------------------------
-# Compile each program once, into $WORK. `maxon build <src> -o <out>` keeps the
+# Compile each program once, into $WORK. `maxon build <src> --output=<out>` keeps the
 # binaries out of the source directory, so a second run of this script cannot
 # measure a stale one it forgot to overwrite.
 # ----------------------------------------------------------------------------
@@ -387,7 +387,7 @@ for entry in $REFUSED_PROGRAMS; do
 	prog="${entry%%:*}"
 	code="${entry##*:}"
 
-	if "$MAXON" build "$HERE/$prog.maxon" -o "$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
+	if "$MAXON" build "$HERE/$prog.maxon" --output="$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
 		bad "$prog COMPILED — it must be refused with $code; the rule it mirrors has stopped covering the shape it was written for"
 		continue
 	fi

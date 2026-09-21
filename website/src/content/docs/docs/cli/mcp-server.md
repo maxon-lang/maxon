@@ -76,7 +76,7 @@ Compiles a source file, a directory, a manifest target or an inline snippet, as 
 |----------|------|-------------|
 | `path` | string | Source file or project directory. Omitted, the working directory's `project.maxon` runs. |
 | `source` | string | Inline Maxon source to build instead of a path. Give `path` or `source`, not both. |
-| `output` | string | Output executable path (`-o`) |
+| `output` | string | Output executable path (`--output=<path>`) |
 | `target` | string | A target such as `wasm32-wasi` (a value containing `-` is passed as `--target=`), or the name of a target declared in `project.maxon` (a bare word) |
 | `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
 

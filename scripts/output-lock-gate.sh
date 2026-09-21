@@ -7,7 +7,7 @@
 #
 #   * It is the refusal arm of `Compiler.discardPreviousOutput`, and the suite runs the SUCCESS arm
 #     constantly: `specs/.spec-tmp/<spec>/` is not cleaned between runs, so every re-run of a
-#     spec finds the previous run's exe at the same `-o` path and deletes it. The branch is evaluated
+#     spec finds the previous run's exe at the same `--output=` path and deletes it. The branch is evaluated
 #     thousands of times per suite and taken exactly never — which is the worst shape a branch can
 #     have, because the coverage looks incidental rather than absent.
 #   * Taking it needs the filesystem to REFUSE that unlink — a running image on Windows, a read-only
@@ -142,7 +142,7 @@ MAXON
 printf '=== output-lock gate ===\n'
 
 # ---- CHECK 1: the baseline build succeeds and produces the output -------------------------------
-"$MAXON" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-baseline.log" 2>&1
+"$MAXON" build "$SRC" --output="$LOCK_DIR/prog" > "$WORK/build-baseline.log" 2>&1
 BASELINE_STATUS=$?
 
 if [ "$BASELINE_STATUS" -eq 0 ] && [ -f "$OUT" ]; then
@@ -161,7 +161,7 @@ if ! lock_output; then
 fi
 
 # ---- CHECK 2: the locked rebuild fails, with E6002 ----------------------------------------------
-"$MAXON" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-locked.log" 2>&1
+"$MAXON" build "$SRC" --output="$LOCK_DIR/prog" > "$WORK/build-locked.log" 2>&1
 LOCKED_STATUS=$?
 
 if [ "$LOCKED_STATUS" -ne 0 ]; then
@@ -213,7 +213,7 @@ fi
 # ---- CHECK 7: negative control -------------------------------------------------------------------
 unlock_output
 
-"$MAXON" build "$SRC" -o "$LOCK_DIR/prog" > "$WORK/build-unlocked.log" 2>&1
+"$MAXON" build "$SRC" --output="$LOCK_DIR/prog" > "$WORK/build-unlocked.log" 2>&1
 UNLOCKED_STATUS=$?
 
 if [ "$UNLOCKED_STATUS" -eq 0 ] && ! grep -q 'error E6002' "$WORK/build-unlocked.log"; then

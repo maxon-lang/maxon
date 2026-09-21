@@ -125,7 +125,7 @@ end 'build'
 
 The compiler runs that directory's manifest **with the directory as its working directory**, and
 resolves the relative `sources` and `output` it states against it — so the delegated project builds
-the same thing whether it is reached from above or built from inside. The command line's `-o`,
+the same thing whether it is reached from above or built from inside. The command line's `--output=`,
 `--target`, `--define` and `--no-debug-info` are applied afterwards, exactly as they are to a build
 described in place. Delegation more than eight deep is refused as a cycle.
 
@@ -167,7 +167,7 @@ breaks `maxon build some/file.maxon`. Two or more positionals are always paths.
 
 | Command line | Manifest | Result |
 |--------------|----------|--------|
-| `-o <path>` | `output` | The command line's path |
+| `--output=<path>` | `output` | The command line's path |
 | `--define=<name>=<value>` | `defines` | Both apply; for the same name, the command line's value wins |
 | `--no-debug-info` | `debug_info` | Either one can turn the sidecar off; neither can force it on |
 | `--target=<cpu>-<os>` | *(no key)* | The built program uses the command line's target; the manifest program itself is always built for the host |
@@ -200,9 +200,9 @@ ancestor above it. Only a marker *below* the path you named can exclude anything
 - Manifests conventionally write their outputs there (`output: ".maxon/myapp"`), and the compiler
   creates the output directory if it is missing.
 
-A plain `maxon build <directory>` without `-o` does not use `.maxon/`: it writes the executable into the
-directory, named for it (`maxon build app` writes `app/app.exe` on Windows). Pass `-o` or use a manifest to
-choose the location.
+A plain `maxon build <directory>` without `--output=` does not use `.maxon/`: it writes the executable
+into the directory, named for it (`maxon build app` writes `app/app.exe` on Windows). Pass `--output=`
+or use a manifest to choose the location.
 
 ## The tree lock
 
@@ -212,7 +212,7 @@ holds a `stdlib/` directory (a Maxon source checkout or install). A project with
 takes no lock.
 
 The lock is the file `.maxon-tree.lock` at that root. It is taken by `spec-test`, `scale-test`, and by a
-`build` of a directory without `-o`. `run`, `test`, `fmt` and builds with `-o` take none.
+`build` of a directory without `--output=`. `run`, `test`, `fmt` and builds with `--output=` take none.
 
 A command that finds the lock held prints what holds it and exits **2** without doing anything:
 

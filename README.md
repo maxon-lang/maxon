@@ -115,7 +115,7 @@ fail the first build.
 
 ```bash
 scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
-./.bootstrap/maxon build maxon-bin -o maxon-bin/.maxon/maxon   # first build, with the seed
+./.bootstrap/maxon build maxon-bin --output=maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon run build            # afterwards, it rebuilds itself
 maxon-bin/.maxon/maxon execute examples/basic.maxon    # compile if needed, then run it
 maxon-bin/.maxon/maxon build examples/basic.maxon  # or produce a binary to keep

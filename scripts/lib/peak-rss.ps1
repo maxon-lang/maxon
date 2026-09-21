@@ -21,9 +21,9 @@
 param(
 	[Parameter(Mandatory=$true)][string]$Exe,
 	# ⚠ Arguments arrive through a FILE, one per line, NOT as a [string[]] parameter. PowerShell
-	# binds a bare `-o` in an array argument as a PARAMETER NAME ("ParameterAlreadyBound"), so any
-	# child command carrying a dash-flag breaks the harness rather than the child. A file cannot be
-	# reinterpreted as parameter syntax.
+	# binds a dash-led word in an array argument as a PARAMETER NAME — one abbreviating a parameter
+	# this script already has is "ParameterAlreadyBound" — so a child command line carrying one
+	# breaks the harness rather than the child. A file cannot be reinterpreted as parameter syntax.
 	[string]$ArgsFile = "",
 	[Parameter(Mandatory=$true)][string]$OutFile,
 	[Parameter(Mandatory=$true)][string]$ErrFile

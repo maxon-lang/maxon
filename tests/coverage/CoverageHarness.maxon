@@ -51,7 +51,7 @@ export let BuildCommandName = "build"
 let CoverageCommandName = "coverage"
 let RunVerbName = "run"
 export let CoverageBuildFlag = "--coverage"
-let OutputOption = "-o"
+let OutputOptionPrefix = "--output="
 
 // The counter file an instrumented binary writes on its way out, named for the binary with its extension
 // still on: `out.exe` -> `out.exe.mxcov`.
@@ -140,14 +140,13 @@ export function coverageDataPath(executable FilePath) returns FilePath
 	return try FilePath.from(spelled) otherwise panic("coverage tests: the gate could not run — '{spelled}' is not a spellable path")
 end 'coverageDataPath'
 
-// Compile the staged program to a named output. `-o` is what keeps a build out of the tree lock, so
-// concurrent case files can compile at once.
+// Compile the staged program to a named output. `--output=` is what keeps a build out of the tree
+// lock, so concurrent case files can compile at once.
 function spawnBuild(staged FilePath, output FilePath, extraArguments StringArray) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 	arguments.push(staged.join("{StagedProgramFileName}").toString())
-	arguments.push(OutputOption)
-	arguments.push(output.toString())
+	arguments.push("{OutputOptionPrefix}{output.toString()}")
 
 	for extra in extraArguments 'eachExtra'
 		arguments.push(extra)

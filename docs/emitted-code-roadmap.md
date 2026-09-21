@@ -2144,7 +2144,7 @@ code, **disassemble or use `--emit-ir` / `--emit-ir-runtime`** and count.
 
 ### Reproducing this document's measurements
 
-⚠ The `.ir` is named after the SOURCE, not after `-o`, so an A/B must run its two binaries into
+⚠ The `.ir` is named after the SOURCE, not after `--output=`, so an A/B must run its two binaries into
 SEPARATE directories or rename between runs, or the second silently overwrites the first's `.ir`.
 
 ```

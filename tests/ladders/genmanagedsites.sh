@@ -30,7 +30,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build temp/mp-one-256/ -o temp/mp.exe --metrics=temp/mp.tsv
+#     maxon build temp/mp-one-256/ --output=temp/mp.exe --metrics=temp/mp.tsv
 #     grep inlineManagedPrimitives temp/mp.tsv          # nanos, allocs, frees, bytes, cputicks
 #
 # ⚠ **READ THE ALLOCATION AND BYTE COLUMNS — they are exact and bit-reproducible, so a ratio off them

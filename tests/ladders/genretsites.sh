@@ -72,7 +72,7 @@
 # Read it with `--metrics`, whose `phase` rows carry the counts (field 4 = allocations, 6 = bytes,
 # 7 = cputicks):
 #
-#     maxon build temp/rr-one-400/ -o temp/rr --metrics=temp/rr.tsv
+#     maxon build temp/rr-one-400/ --output=temp/rr --metrics=temp/rr.tsv
 #     grep insertRangeChecks temp/rr.tsv
 #
 # ⚠ The CPU column moves a few percent with turbo and cache pressure, so take the MINIMUM of a few runs

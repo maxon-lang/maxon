@@ -137,7 +137,7 @@ tests/
     dry-run-is-upgrade-only.test.maxon                      every other command refuses `--dry-run`
     reference-documents-every-command.test.maxon            docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.test.maxon        every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)
-    build-directory-without-output-names-the-directory.test.maxon   `build <dir>` with no `-o` writes `<dir>/<dirname><ext>`, staged outside the checkout
+    build-directory-without-output-names-the-directory.test.maxon   `build <dir>` with no `--output=` writes `<dir>/<dirname><ext>`, staged outside the checkout
     build-walk-skips-a-case-folded-manifest.test.maxon      a `BUILD.maxon` beside the program is not compiled as source
     census-by-tag-reports-a-table.test.maxon                `--census-by-tag` prints the residency census's per-tag table, and nothing prints it without the flag
     interner-presize-never-regrows.test.maxon               every source file's type-name interner reports itself under `--log=compiler:debug`, and none of them regrew
@@ -509,9 +509,9 @@ default log level announces every file it writes, and those lines land on the st
 speaking through. Sabotage-proved: dropping the driver's `quietTheBuildChatter` call reddens this case
 alone, with three `INFO` lines in `received:`.
 
-⚠ **`argv`'s ARGUMENTS ARE DELIBERATELY WORDS THE DRIVER KNOWS** — `--filter=x`, `-o`, `build`, `test`. A
-parser that did not stop at the program would swallow `-o`'s neighbour, select `build` as the command, or
-abort over a flag it does not implement; bland arguments would be green through all three.
+⚠ **`argv`'s ARGUMENTS ARE DELIBERATELY WORDS THE DRIVER KNOWS** — `--filter=x`, `--output=x`, `build`,
+`test`. A parser that did not stop at the program would select `build` as the command, or consume a flag
+and hand the program a short or reordered tail; bland arguments would be green either way.
 
 ⛔ **WHAT `concurrent` CANNOT SEE: THE CREATION OF THE SLOT DIRECTORY.** `stageCase` clears a case's cache
 of FILES and leaves its directories standing, so a case's slot directory survives from its previous run
@@ -560,7 +560,7 @@ until an encoding or a redirection makes it not — and a `specs` case is a prog
 was built.
 
 ⭐ **THE TARGET IS PINNED, NOT INHERITED.** The build names `--target=x64-windows` and spells `.exe` into
-its own `-o`, because the entry stub under test is that target's. A case taking the host's default would
+its own `--output=`, because the entry stub under test is that target's. A case taking the host's default would
 assert a Windows-only fact about a Mach-O or an ELF on every other host.
 
 ⛔ **THE ABSENCE IS ASSERTED BESIDE THE TWO PRESENCES**, and it is the half that would otherwise rot: a
@@ -649,7 +649,7 @@ the Benchmarks Game's reference output was produced at, and expects that output 
 
 ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED** — the gate is about the files a reader runs.
 Only the output is staged, into `temp/examples/<example>/`; `maxon test` runs files concurrently, and
-`-o` keeps each build out of the tree lock. A document's program has no file of its own, so it is cut
+`--output=` keeps each build out of the tree lock. A document's program has no file of its own, so it is cut
 out of the document as it stands and written into `temp/examples/<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
 more than once. It runs at the default deadline.
 

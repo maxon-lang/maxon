@@ -62,7 +62,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build temp/leaf-one-256/ -o temp/leaf.exe --metrics=temp/leaf.tsv
+#     maxon build temp/leaf-one-256/ --output=temp/leaf.exe --metrics=temp/leaf.tsv
 #     grep inlineLeaves temp/leaf.tsv          # nanos, allocs, frees, bytes, cputicks
 #
 # and confirm the sites were really taken with `--log=ir:debug`, which prints the pass's own census

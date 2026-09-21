@@ -69,7 +69,7 @@
 #
 # Read it with `--metrics`, whose `phase` rows carry the exact allocation counts:
 #
-#     maxon build p16/ -o temp/p16.exe --metrics=temp/p16.tsv
+#     maxon build p16/ --output=temp/p16.exe --metrics=temp/p16.tsv
 #     grep -P '^phase\tparse' temp/p16.tsv
 #
 # ⚠ **READ THE ALLOCATION COLUMN, NOT THE CPU ONE.** Allocations are exact and bit-reproducible for
@@ -160,7 +160,7 @@ LADDER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REAL_MODULE="$LADDER_DIR/../../../stdlib/helpers/string/utf16.maxon"
 
 mkdir -p "$OUT"
-# Prune only `.maxon`, never the directory: an `-o` output or a metrics TSV a caller parked here is
+# Prune only `.maxon`, never the directory: an `--output=` file or a metrics TSV a caller parked here is
 # theirs, and a generator that removed it would be deleting evidence.
 find "$OUT" -maxdepth 1 -name '*.maxon' -delete
 

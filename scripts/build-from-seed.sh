@@ -16,7 +16,7 @@
 #
 # ⛔ **THE SEED'S OUTPUT IS NAMED EXPLICITLY** for the same reason: a seed reading `maxon-bin` as a path
 # writes the compiler to a default of its own choosing — MEASURED: `maxon-bin/Profile/ProfileSampler`
-# — and exits 0. `-o` is correct under both readings. `C1` builds by NAME, so it runs the manifest.
+# — and exits 0. `--output=` is correct under both readings. `C1` builds by NAME, so it runs the manifest.
 #
 # ⛔ **A TREE DECLARING A BUILTIN THE PREVIOUS RELEASE DOES NOT KNOW CANNOT BE BUILT BY ITS OWN SEED**,
 # and the seed is the one compiler nothing here can regenerate — every CI lane and every release runner
@@ -105,9 +105,9 @@ stage_shim() {
 	shim_staged="$touched"
 }
 
-if ! "$seed" build maxon-bin -o "$built"; then
+if ! "$seed" build maxon-bin --output="$built"; then
 	stage_shim
-	"$seed" build maxon-bin -o "$built"
+	"$seed" build maxon-bin --output="$built"
 	withdraw_shim
 fi
 

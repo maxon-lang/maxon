@@ -1,9 +1,10 @@
-// build-directory-without-output-names-the-directory.test.maxon - `maxon build <dir>` with no `-o` names the
-// executable for the DIRECTORY, `<dir>/<dirname><ext>`, and never for whichever source the walk met first.
+// build-directory-without-output-names-the-directory.test.maxon - `maxon build <dir>` with no
+// `--output=` names the executable for the DIRECTORY, `<dir>/<dirname><ext>`, and never for
+// whichever source the walk met first.
 //
 // Two sources whose names sort either side of the directory's, so neither walk order nor sorting can land
-// on the right name by accident. Staged outside the checkout: a build without `-o` inside it would take
-// the checkout's tree lock.
+// on the right name by accident. Staged outside the checkout: a build without `--output=` inside it
+// would take the checkout's tree lock.
 
 let CaseDirName = "build-directory-without-output"
 let AppDirName = "app"
@@ -13,7 +14,7 @@ let SourceExtension = ".maxon"
 let MainSource = "function main() returns ExitCode\n\treturn helperAnswer()\nend 'main'\n"
 let HelperSource = "export function helperAnswer() returns ExitCode\n\treturn 0\nend 'helperAnswer'\n"
 
-test 'a directory built without -o is named for the directory'
+test 'a directory built without --output= is named for the directory'
 	let dir = freshOutsideCheckoutDir(CaseDirName)
 	let app = dir.join(AppDirName)
 
@@ -35,7 +36,7 @@ test 'a directory built without -o is named for the directory'
 		let misnamed = app.join("{stem}{executableSuffix()}")
 		try Expect.isFalse(File.exists(misnamed), message: "`maxon build {AppDirName}` named its executable for a source file: {misnamed.toString()}. {said}")
 	end 'eachSource'
-end 'a directory built without -o is named for the directory'
+end 'a directory built without --output= is named for the directory'
 
 function writeSource(path FilePath, content String)
 	try File.writeText(path, content: content) otherwise panic("build-directory-without-output: the gate could not run - could not write {path.toString()}")

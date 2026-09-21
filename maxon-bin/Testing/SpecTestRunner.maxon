@@ -58,13 +58,13 @@ let TempSubdirName = ".spec-tmp"
 let RunWorkingSubdirName = "temp"
 
 // A multi-file test's staged source DIRECTORY hangs off `<tempDir>/<name>.src`, NOT `<tempDir>/<name>`
-// — because `<tempDir>/<name>` is exactly the `-o` output base (`exeBase`, prepareOneTest). With no suffix
-// the two collide: on a host whose `executableExtension` is EMPTY (macOS, Linux) `build <dir> -o <dir>`
-// resolves the exe path back onto the source directory, the compile reports success but writes no
-// runnable file, and spawning the directory fails (126). x64-windows only escaped it because its
-// `.exe` suffix made the output land beside the directory rather than on it. The suffix makes the
-// source and the exe SIBLINGS on every host; it never reaches a golden (every compiled path is
-// normalized to `<fragment>`), so the committed x64 fragments are byte-unchanged.
+// — because `<tempDir>/<name>` is exactly the output base (`exeBase`, prepareOneTest). With no suffix
+// the two collide: on a host whose `executableExtension` is EMPTY (macOS, Linux)
+// `build <dir> --output=<dir>` resolves the exe path back onto the source directory, the compile
+// reports success but writes no runnable file, and spawning the directory fails (126). x64-windows
+// escapes it because its `.exe` suffix makes the output land beside the directory rather than on it.
+// The suffix makes the source and the exe SIBLINGS on every host, and it never reaches a golden:
+// every compiled path is normalized to `<fragment>`.
 let MultiFileSourceDirSuffix = ".src"
 
 // A case's private SOURCE TIERS hang off `<tempDir>/<name>.tiers`, which holds a `stdlib/` and a
@@ -4012,8 +4012,7 @@ function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe 
 	argv.push(BuildSubcommandName)
 	argv.push(projectRoot.toString())
 	argv.push("{TargetFlagPrefix}{targetKey}")
-	argv.push(OutputFlagName)
-	argv.push(guestExe.toString())
+	argv.push("{OutputFlagPrefix}{guestExe.toString()}")
 
 	let built = try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDir(), timeoutMs: GuestCompilerBuildDeadlineMs) otherwise (e) 'buildUnspawnable'
 		return GuestCompiler.unavailable("could not run `{harnessExe.toString()} {BuildSubcommandName} {projectRoot.toString()}`: {e.displayReason()}")

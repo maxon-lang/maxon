@@ -1150,7 +1150,7 @@ Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 ### Options (compile/build)
 | Option | Description |
 |--------|-------------|
-| `-o PATH` | Output executable path |
+| `--output=PATH` | Output executable path |
 | `--target=ARCH-OS` | Compile for another target (default: the host) |
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir` |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or `stdlib/` functions (implies `--emit-ir`) |

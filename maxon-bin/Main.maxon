@@ -31,9 +31,7 @@ let LspServerCommandName = "lsp-server"
 let DevFlag = "--dev"
 let ScaleTestCommandName = "scale-test"
 
-module let OutputFlagName = "-o"
-
-let OutputFlagPrefix = "--output="
+module let OutputFlagPrefix = "--output="
 
 // `fmt` takes no options, including flags other commands implement: `runFmt` refuses any
 // `-`-leading argument (`anyOption`). Silently dropping one is destructive — `maxon fmt --check`
@@ -89,7 +87,7 @@ module let RunCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 
 module let WorkerPersistentFlag = "--worker-persistent"
 
-let FilterFlagPrefix = "--filter="
+module let FilterFlagPrefix = "--filter="
 
 // `module` because `SpecTestRunner.reportGoldenDrift` and `reportUnrunHere` name this flag as the
 // remedy.
@@ -149,10 +147,6 @@ let TestBailFlag = "--bail"
 let TestBailFlagPrefix = "--bail="
 let TestTimeoutFlagPrefix = "--timeout="
 let TestColorFlagPrefix = "--color="
-
-// `-t P` is the separated form, which a pattern containing spaces needs.
-let TestFilterShortFlag = "-t"
-let TestFilterShortPrefix = "-t="
 
 // Failures allowed before the run stops CLAIMING work, when `--bail` is given with no count.
 let DefaultBailAfter = 1
@@ -425,7 +419,7 @@ function runBuildManifest(args MaxonArgs, targetName String) returns ManifestRun
 			return ManifestRun.noSuchTarget
 		end 'nameWithoutManifest'
 
-		printError("Usage: maxon build <file|directory|target>... [-o <output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
+		printError("Usage: maxon build <file|directory|target>... [{OutputFlagPrefix}<output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
 		printError("\n")
 		printError("With no path, `maxon build` runs the {ProjectManifestFileName} in the current directory. There is none here.\n")
 		return ManifestRun.ran(1)
@@ -633,7 +627,8 @@ module function buildFromManifestOutput(described String, args MaxonArgs, target
 		return ManifestRun.ran(1)
 	end 'noPaths'
 
-	// `-o` outranks the manifest: the person typing answers a narrower question than the file does.
+	// `--output=` outranks the manifest: the person typing answers a narrower question than the file
+	// does.
 	let outputOverride = chosenOutput(rebasedOnManifest(output, base: base), fromFlag: args.outputOverride)
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return ManifestRun.ran(1)
@@ -852,8 +847,8 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 	return buildAndReport(inputPaths, target: target, args: args, outputOverride: args.outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(), defines: args.defines)
 end 'runBuildPaths'
 
-// The lock is asked of the command line's `-o`: `outputOverride` may be a manifest's own `output`,
-// which says nothing about who else writes the tree.
+// The lock is asked of the command line's `--output=`: `outputOverride` may be a manifest's own
+// `output`, which says nothing about who else writes the tree.
 function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride String, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns ExitCode
 	if refusedBuildOptions(args, target: target, debugInfo: debugInfo) 'refusedOptions'
 		return 1
@@ -900,9 +895,9 @@ end 'refusedBuildOptions'
 // A build takes this checkout's lock only when it writes into a tree at a derived output path. Two
 // questions decide it, and neither is how many paths were typed:
 //
-// · Did the caller say where the output goes? A `-o` build writes where the caller said and takes
-//   nothing, which is what keeps the harnesses' nested `build … -o …` compiles from deadlocking
-//   inside a run that already holds the lock.
+// · Did the caller say where the output goes? An `--output=` build writes where the caller said and
+//   takes nothing, which is what keeps the harnesses' nested `build … --output=…` compiles from
+//   deadlocking inside a run that already holds the lock.
 //
 // · Otherwise, is the project root a directory? `resolveOutputPath` writes beside the input when
 //   the root is a file, and into the tree otherwise.
@@ -1477,8 +1472,8 @@ module function reportCompileError(e CompileError)
 		// Not "share no directory": two top-level directories on one drive share the drive root, which a
 		// `FilePath` cannot hold (see `Compiler.commonAncestorOf`).
 		noCommonRoot(first, other) then emitDiagnosticLine("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
-		unnamedDirectory(d) then emitDiagnosticLine("error: {d} has no name for its executable to take. Name the output with -o")
-		invalidOutputPath(spelling) then emitDiagnosticLine("error: -o {spelling} is not a valid path")
+		unnamedDirectory(d) then emitDiagnosticLine("error: {d} has no name for its executable to take. Name the output with {OutputFlagPrefix}<path>")
+		invalidOutputPath(spelling) then emitDiagnosticLine("error: {OutputFlagPrefix}{spelling} is not a valid path")
 		readError(p) then emitDiagnosticLine("error: could not read {p}")
 		stdlibNotFound then emitDiagnosticLine("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
 		runtimeNotFound then emitDiagnosticLine("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
@@ -1623,7 +1618,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		monitor gives CommandReference.create(MonitorCommandName, arguments: "<exe> [args...]", summary: "Launch an executable with the debug-stream monitor attached.", detail: "Everything after the executable is the CHILD's command line and reaches it untouched.", audience: CommandAudience.usingTheCompiler)
 		profile gives CommandReference.create(ProfileCommandName, arguments: "run <exe>", summary: "Launch a program and sample where its CPU time goes.", detail: "It needs no instrumentation and no rebuild: only the `.mxdbg` sidecar is read.", audience: CommandAudience.usingTheCompiler)
 		execute gives CommandReference.create(ExecuteCommandName, arguments: "<file|directory> [args...]", summary: "Compile a program and run it, reusing a cached build when nothing changed.", detail: "Everything after the path is the PROGRAM's command line and reaches it untouched; its stdin, stdout, stderr and exit code are this command's own, and the build itself says nothing.{ParagraphSeparator}A first argument ending in `{MaxonSourceExtension}` selects this command with no word at all, which is what a kernel hands the interpreter for a file whose first line is `#!/usr/bin/env maxon`.{ParagraphSeparator}The build is kept in a per-program directory under the first of {cacheRootChain()} whose variable names a directory this compiler can create, and reused while the program's sources, the standard library and this compiler all still hash the same. `{CacheCommandName} {CacheClearVerb}` empties it. Freshness is a CONTENT hash rather than a timestamp: a file's modification time is whole seconds, so an edit landing in the same second as a build would tie.", audience: CommandAudience.usingTheCompiler)
-		run gives CommandReference.create(RunCommandName, arguments: "[<task> [args...]]", summary: "Run a task declared in `{TaskFileName}`.", detail: "A task is an exported function of no parameters returning `ExitCode`. With no task named, the tasks are listed. Everything after the task name reaches it as its own command line, and its stdin, stdout, stderr and exit code are this command's own.{ParagraphSeparator}A task that describes a build (`Build.build`, `Build.target` or `Build.delegate`) has that build performed once it exits 0, and `{OutputFlagName}`, `{TargetFlagPrefix}<cpu>-<os>` and `{DefineFlagPrefix}<name>=<value>` apply to it exactly as they do to `{BuildSubcommandName}`.", audience: CommandAudience.usingTheCompiler)
+		run gives CommandReference.create(RunCommandName, arguments: "[<task> [args...]]", summary: "Run a task declared in `{TaskFileName}`.", detail: "A task is an exported function of no parameters returning `ExitCode`. With no task named, the tasks are listed. Everything after the task name reaches it as its own command line, and its stdin, stdout, stderr and exit code are this command's own.{ParagraphSeparator}A task that describes a build (`Build.build`, `Build.target` or `Build.delegate`) has that build performed once it exits 0, and `{OutputFlagPrefix}<path>`, `{TargetFlagPrefix}<cpu>-<os>` and `{DefineFlagPrefix}<name>=<value>` apply to it exactly as they do to `{BuildSubcommandName}`.", audience: CommandAudience.usingTheCompiler)
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		test gives CommandReference.create(TestCommandName, arguments: "[dir]", summary: "Run a PROJECT's own `test` declarations (default: the working dir).", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
@@ -1687,7 +1682,7 @@ end 'OptionReference'
 // edit.
 function optionReference(option HelpOption) returns OptionReference
 	return match option 'whichOption'
-		output gives OptionReference.create("{OutputFlagName}, {OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build])
+		output gives OptionReference.create("{OutputFlagPrefix}<path>", description: "Output executable path (default: derived from input).", commands: [MaxonCommand.build])
 		emitIr gives OptionReference.create(EmitIrFlag, description: "Also write the lowered Target IR beside the exe as <output>.ir.", commands: [MaxonCommand.build])
 		emitIrRuntime gives OptionReference.create("{EmitIrRuntimeFlagPrefix}<a>,<b>", description: "Render these compiler-emitted functions in that IR too. A list of functions to print is a request for the printing, so it implies {EmitIrFlag}.", commands: [MaxonCommand.build])
 		target gives OptionReference.create("{TargetFlagPrefix}<cpu>-<os>", description: "Use this target instead of the host, one of: {supportedTargetList()} (default: the host target). For {SpecTestCommandName} a cross target cross-compiles each selected test and runs it under the vendored runtime. For {TestCommandName} it builds the test binary for that target and then SPAWNS it, so a target this host cannot execute reports every test as not run.", commands: [MaxonCommand.build, MaxonCommand.specTest, MaxonCommand.test])
@@ -1708,7 +1703,7 @@ function optionReference(option HelpOption) returns OptionReference
 		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest])
 		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest])
 		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest])
-		testFilter gives OptionReference.create("{TestFilterShortFlag} P, {TestFilterShortPrefix}P, {FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive; comma-separated patterns are a union).", commands: [MaxonCommand.test])
+		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive; comma-separated patterns are a union).", commands: [MaxonCommand.test])
 		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run and compile nothing.", commands: [MaxonCommand.test])
 		testJson gives OptionReference.create(TestJsonFlag, description: "Emit the report as JSON instead of text.", commands: [MaxonCommand.test])
 		testIsolate gives OptionReference.create(TestIsolateFlag, description: "Run every test in its own process, rather than one process per test FILE.", commands: [MaxonCommand.test])
@@ -2201,10 +2196,7 @@ module type MaxonArgs
 
 			if named != MaxonCommand.unknown 'commandWord'
 				parsed.command = named
-			end 'commandWord' else if arg == OutputFlagName 'dashOutput'
-				i = i + 1
-				parsed.outputOverride = try args.get(i) otherwise ""
-			end 'dashOutput' else if arg.startsWith(OutputFlagPrefix) 'longOutput'
+			end 'commandWord' else if arg.startsWith(OutputFlagPrefix) 'longOutput'
 				parsed.outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == EmitIrFlag 'emitIrFlag'
 				parsed.emitIr = true
@@ -2336,17 +2328,7 @@ module type MaxonArgs
 					valid(mode) then parsed.colorMode = mode
 					invalid then parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 				end 'colorArg'
-			end 'colorFlag' else if arg.startsWith(TestFilterShortPrefix) 'shortFilterWithValue'
-				parsed.filter = try CommandLine.optionValue(arg) otherwise ""
-			end 'shortFilterWithValue' else if arg == TestFilterShortFlag 'shortFilterSeparated'
-				// A `-t` with nothing after it is refused: a filter naming no pattern would select everything.
-				i = i + 1
-				parsed.filter = try args.get(i) otherwise ""
-
-				if parsed.filter.isEmpty() 'namesNoPattern'
-					parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
-				end 'namesNoPattern'
-			end 'shortFilterSeparated' else if arg.startsWith("--log=") 'logFlag'
+			end 'colorFlag' else if arg.startsWith("--log=") 'logFlag'
 				let spec = try CommandLine.optionValue(arg) otherwise ""
 
 				if not parseLogOption(spec) 'badSpec'
