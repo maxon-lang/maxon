@@ -2296,10 +2296,12 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	let occupancy = describeRegisterOccupants(occupants, liveness: liveness, alloc: alloc, classPool: classPool)
 	occupants.push(v)
 
-	match hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: HallScratch.create()) 'verdict'
-		overflow(witness, tight) then panic("reportExhaustion: no free register for {situation} — and Hall's EXACT verdict at this point is OVERFLOW: {tight} of the values here are confined to the witness {witness}, which offers {regMaskPopcount(witness)} register(s), so {tight - regMaskPopcount(witness)} of them must leave. THE SPLITTER LEFT AN OVER-POOL POINT UNRELIEVED — relieving every one of them before coloring is what `SplitDriver.relievePressure`'s post-condition claims. If the witness IS the whole class pool it is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it; if it is a proper subset, `RegPoolCensus.screenViolates` plus `HallCondition`'s exact confirmation own it. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` and `opConfinedTransient` are the ONE place each is counted, and a demand they miss is one no popcount over a live set can ever see. Occupants:{occupancy}")
-		feasible then break 'verdict'
-	end 'verdict'
+	var hall = HallScratch.create()
+	let verdict = hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: hall)
+
+	if not verdict.feasible 'theExactVerdictIsOverflow'
+		panic("reportExhaustion: no free register for {situation} — and Hall's EXACT verdict at this point is OVERFLOW: {verdict.tight} of the values here are confined to the witness {verdict.witness}, which offers {regMaskPopcount(verdict.witness)} register(s), so {verdict.tight - regMaskPopcount(verdict.witness)} of them must leave. THE SPLITTER LEFT AN OVER-POOL POINT UNRELIEVED — relieving every one of them before coloring is what `SplitDriver.relievePressure`'s post-condition claims. If the witness IS the whole class pool it is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it; if it is a proper subset, `RegPoolCensus.screenViolates` plus `HallCondition`'s exact confirmation own it. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` and `opConfinedTransient` are the ONE place each is counted, and a demand they miss is one no popcount over a live set can ever see. Occupants:{occupancy}")
+	end 'theExactVerdictIsOverflow'
 
 	// ⭐ A REGISTER IS FREE, AND IT IS NECESSARILY ONE `v` IS FORBIDDEN. The greedy exhausted, so
 	// `classPool ⊆ held ∪ forbidden(v)`, hence `classPool ∖ held ⊆ forbidden(v)`. And it is non-empty:

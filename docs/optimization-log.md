@@ -1328,3 +1328,48 @@ control carried neither the residency sampling nor the TSV write. The untraced `
 runs each:** total allocations +383…+442 at every rung — a flat constant (the two reader entries every
 heap program installs and optimizes: `installRuntime` +136, `optimizeEmittedBand` +128,
 `foldEmittedConstOperands` +88), no slope; ratios 1.34 1.54 1.70 1.84 1.92 per doubling, unchanged.
+
+### Result — 2026-09-20, regalloc's per-op verdicts stop allocating
+
+The reading above put 121.6M of a self-compile's 308M allocations inside the register allocator's
+`splitting` sub-phase: per op of the pressure sweep — per block, per op, per split iteration —
+`opTransientDefOf` returned a `(bool, ValueId, bool, ValueId)` box, `opConfinedTransient` a
+`(bool, ValueId)` box, `hallVerdictAt` and `confinementOnly` a `HallVerdict` union each, and the peak
+walk a `LiveAcrossSpan`, a `BlockLastUse` and a `BlockPeakSlot` per candidate. Now the two transient
+verdicts are inline packed records naming the def by OPERAND INDEX (34 and 33 bits; two `ValueId`s
+would be 128), `BlockLastUse` is an inline record over a `u32` position that `seqAt`'s own bound makes
+exact, and `HallVerdict`, `LiveAcrossSpan` and `BlockPeakSlot` are refilled in place on function-owned
+scratch (`HallScratch.verdict`, `SplitScratch.span`, two on `PressureIndex` because the verifier holds
+both of one index's answers). `OperandIndex` narrowed to `u32` so the records fit a word, and
+`packOperand` now refuses a constraint arg past its 8-bit field instead of OR-ing it in unmasked. The
+allocator's decisions are unchanged: the rung-0 ladder corpus compiled by the control and by this tree
+is byte-identical, and every regalloc golden compared.
+
+⚠ `withIterator()` on the operand list is a heap object per call: with it the sweep read WORSE than
+before (12,100 extra allocations for 560 added statements against the baseline's 3,364). A plain index
+loop is the shape on a per-op path.
+
+**Gate:** `tests/cli/regalloc-splitting-allocates-per-split-not-per-op` — `splitting` allocations for a
+90-statement body against a 650-statement one: 96,175 → 99,539 before (+3,364, at least one box per
+op); 26,111 → 26,115 after (+4).
+
+**Self-compile, `--debugstream` with `--allocations-by-tag`, same host as the reading above:**
+
+| | before | after |
+| --- | ---: | ---: |
+| allocations, whole compile | 308,518,324 | 190,382,674 |
+| regalloc | 164,329,279 | 46,191,972 |
+| regalloc:splitting | 121,600,046 | 5,630,941 |
+| regalloc:liveness | 5,532,587 | 3,344,606 |
+
+At regalloc the tags read `__Tuple4.bool.int.bool.int` 0 (was 50.7M), `__Tuple2.bool.int` 0 (23.1M),
+`HallVerdict` 11,597 (18.8M), `LiveAcrossSpan` 11,588 (11.2M), `BlockLastUse` 0 (10.8M),
+`BlockPeakSlot` 23,176 (3.6M) — one or two per function, none per op. The peak-allocating phase is now
+`frontEndPool` (58.3M); regalloc's remaining rows are `TargetVReg` 9.64M, `ArrayRecord` 9.40M,
+`ElementBuffer` 7.86M, `TargetOp` 7.13M, `ColdRunAt` 2.77M — the per-op rebuilds of `colorTargetOp` and
+`substituteValueInOp`, and the per-function scratch arrays.
+
+**Ladder against a control built from 13dcc9c76a, interleaved, two runs each:** total allocations
+−466,086 at rung 0 (−6.3%) to −11,078,023 at rung 5 (−12.1%), the whole of it in `regalloc`
+(26,964,169 → 15,886,108 at rung 5); ratios 1.31 1.51 1.68 1.82 1.91 per doubling (1.34 … 1.92 before —
+the per-op term was the steepest). CPU within the noise band (−1.0% at rung 5).

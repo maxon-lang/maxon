@@ -25,9 +25,13 @@ export typealias Operand = bits(64)
 // across every op of every function.
 export typealias OperandList = Array with Operand
 
-// Index of an operand within an op's own operand list — the target of a `reuse`
-// constraint (a def that must land in the same register as an earlier operand).
-export typealias OperandIndex = int(0 to u64.max)
+// Index of an operand within an op's own operand list: the target of a `reuse`
+// constraint (a def that must land in the same register as an earlier operand),
+// and the coordinate a pressure record names an op's def by. This range is not
+// the `reuse` field's bound — that field is 8 bits and `packOperand` enforces it.
+// It is narrow so that a record carrying one still fits a word and can be packed
+// inline rather than heap-boxed per op.
+export typealias OperandIndex = int(0 to u32.max)
 
 // --- Operand field kinds (typed views of the packed bits) ---
 
@@ -105,6 +109,10 @@ function packOperand(vreg TargetVReg, kind OperandKind, position OperandPosition
 	if operandPositionIsLate(position) 'isLate'
 		word = word or OperandPositionBit
 	end 'isLate'
+
+	if constraintArg > OperandConstraintArgMask 'argumentPastItsField'
+		panic("packOperand: constraint argument {constraintArg} does not fit the constraint-argument field, whose widest value is {OperandConstraintArgMask} — shifted into place it would overwrite the vreg tag and the vreg payload, and `operandConstraintArg` would decode a different argument than was packed")
+	end 'argumentPastItsField'
 
 	word = word or (constraintTag shl OperandConstraintTagShift)
 	word = word or (constraintArg shl OperandConstraintArgShift)
@@ -194,7 +202,7 @@ end 'operandPhysicalRegNum'
 
 // Decode `reuse(i)`'s operand index (caller must have checked `operandIsReuseDef`).
 function operandReuseIndex(op Operand) returns OperandIndex
-	return operandConstraintArg(op)
+	return operandConstraintArg(op) as OperandIndex
 end 'operandReuseIndex'
 
 // The VALUE ID of a reuse def's input — the operand its reuse index names in `buf`.

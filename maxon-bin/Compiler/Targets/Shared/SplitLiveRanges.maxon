@@ -1110,9 +1110,15 @@ type BlockPeakSlot
 	export var slot as PressureSlot
 	export var pressure as PressureDelta
 
-	static function create(found bool, slot PressureSlot, pressure PressureDelta) returns BlockPeakSlot
-		return Self{found: found, slot: slot, pressure: pressure}
+	static function create() returns BlockPeakSlot
+		return Self{found: false, slot: 0, pressure: 0}
 	end 'create'
+
+	export function refill(anyOp bool, atSlot PressureSlot, demand PressureDelta)
+		self.found = anyOp
+		self.slot = atSlot
+		self.pressure = demand
+	end 'refill'
 end 'BlockPeakSlot'
 
 // Does the max suffix of a node START IN ITS LEFT child? `left` covers the EARLIER slots, so a suffix
@@ -1176,8 +1182,15 @@ export type PressureIndex
 	// free: at the one place an op is seated. `storeFitsPool` is what reads it.
 	var defSlot as PressureSlotColumn
 
+	// `blockPeak`'s answer and `blockPeakByScan`'s, each refilled in place per call so that neither costs
+	// a heap object per block sweep. TWO of them, and they may not be merged: `verifyPressureIndex` holds
+	// both answers about the SAME index at once to compare them, and one shared object would compare a
+	// reading with itself and agree whatever the tree folded.
+	var peak as BlockPeakSlot
+	var scanPeak as BlockPeakSlot
+
 	export static function create() returns PressureIndex
-		return Self{slotCount: 1, blockFirst: PressureSlotColumn.create(), blockLen: PressureSlotColumn.create(), blockNode: ColumnLengthColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: BlockOpPosArray.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: PressureSlotColumn.create()}
+		return Self{slotCount: 1, blockFirst: PressureSlotColumn.create(), blockLen: PressureSlotColumn.create(), blockNode: ColumnLengthColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: BlockOpPosArray.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: PressureSlotColumn.create(), peak: BlockPeakSlot.create(), scanPeak: BlockPeakSlot.create()}
 	end 'create'
 
 	// ----------------------------------------------------------------------
@@ -1499,9 +1512,11 @@ export type PressureIndex
 	export function blockPeak(blockLocal CfgIndex, class RegClass) returns BlockPeakSlot
 		let top = self.nodeOf(blockLocal)
 		let best = self.bestOf(top, class: class)
+		var answer = self.peak
 
 		if (try self.nodeOps.get(top) otherwise panic("PressureIndex.blockPeak: nodeOps.get OOB at node {top}")) == 0 'noOpsAtAll'
-			return BlockPeakSlot.create(false, slot: 0, pressure: 0)
+			answer.refill(false, atSlot: 0, demand: 0)
+			return answer
 		end 'noOpsAtAll'
 
 		var node = top
@@ -1512,7 +1527,8 @@ export type PressureIndex
 			node = left if suffixBestIsInLeft(self.bestOf(left, class: class), rightSum: self.sumOf(right, class: class), rightBest: self.bestOf(right, class: class)) else right
 		end 'descend'
 
-		return BlockPeakSlot.create(true, slot: ((node - self.slotCount) as PressureSlot), pressure: best)
+		answer.refill(true, atSlot: ((node - self.slotCount) as PressureSlot), demand: best)
+		return answer
 	end 'blockPeak'
 
 	// `blockPeak`'s answer, recomputed by SCANNING the block's run backward. VERIFY MODE's own oracle for
@@ -1546,7 +1562,9 @@ export type PressureIndex
 			end 'aNewBest'
 		end 'eachSlotBackward'
 
-		return BlockPeakSlot.create(found, slot: bestSlot, pressure: best)
+		var answer = self.scanPeak
+		answer.refill(found, atSlot: bestSlot, demand: best)
+		return answer
 	end 'blockPeakByScan'
 
 	// How many ops the block lays out, as the index sees it.
@@ -2451,7 +2469,7 @@ end 'refreshTransientsNaming'
 //     which is about the op's own operands and applies whether or not `w` outlives it (an `idiv`'s
 //     divisor dies at the op and must still stay out of RAX/RDX);
 //  3. the CLOBBERS of every op `w` is live ACROSS — `applyForbidden`'s half.
-function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, paramCross ParamCrossForbid, dirty BlockSet, buf OperandList)
+function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, paramCross ParamCrossForbid, dirty BlockSet, buf OperandList, span LiveAcrossSpan)
 	let index = liveness.useIndex
 
 	// SOURCE 1. Asked of `nonSweptForbidOf` rather than restated here, because `computeLivenessOn` asks
@@ -2494,7 +2512,7 @@ function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressu
 	// a fresh id lives only inside the block whose reload minted it — so walking it and skipping the
 	// blocks `w` is not live in reaches every block that can contribute and no others.
 	for k in 0 upto dirty.count() 'eachBlock'
-		mask = mask or liveAcrossClobbersIn(module, liveness: liveness, pressure: pressure, w: w, blockLocal: dirty.at(k), buf: buf)
+		mask = mask or liveAcrossClobbersIn(module, liveness: liveness, pressure: pressure, w: w, blockLocal: dirty.at(k), buf: buf, span: span)
 	end 'eachBlock'
 
 	liveness.clearForbidden(w)
@@ -2526,26 +2544,43 @@ end 'implicitTouchOf'
 // (`findConfiningClobber`, which picks a repair's cut). Derived twice, the mask a value's forbid is
 // built from and the op a repair splits at could disagree about where the range runs, and the repair
 // would cut where nothing was forbidden.
+//
+// `liveAcrossSpanIn` REFILLS one of these through its `out` parameter rather than returning a fresh
+// one, and `SplitScratch` holds the single instance its callers pass down — it is asked per value per
+// dirty block, where a mint would be a heap object per ask. So no caller may hold a span across
+// another `liveAcrossSpanIn` on the same object, which would silently answer about a different block.
 type LiveAcrossSpan
 	export var found as bool
 	export var lo as PressureSlot
 	export var hi as PressureSlot
 
-	static function create(found bool, lo PressureSlot, hi PressureSlot) returns LiveAcrossSpan
-		return Self{found: found, lo: lo, hi: hi}
+	static function create() returns LiveAcrossSpan
+		return Self{found: false, lo: 0, hi: 0}
 	end 'create'
+
+	function becomeEmpty()
+		self.found = false
+		self.lo = 0
+		self.hi = 0
+	end 'becomeEmpty'
+
+	function becomeStretch(lowSlot PressureSlot, highSlot PressureSlot)
+		self.found = true
+		self.lo = lowSlot
+		self.hi = highSlot
+	end 'becomeStretch'
 end 'LiveAcrossSpan'
 
-function liveAcrossSpanIn(liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex) returns LiveAcrossSpan
+function liveAcrossSpanIn(liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex, out LiveAcrossSpan)
 	let index = liveness.useIndex
 	let live = liveness.live
 	let definedHere = index.defKindOf(w) != ValueDefKind.none and index.defBlockOf(w) == blockLocal
 	let liveOut = liveListHolds(live.liveOut(blockLocal), v: w)
 	let lastUse = lastUsePositionIn(index, w: w, blockLocal: blockLocal)
-	let empty = LiveAcrossSpan.create(false, lo: 0, hi: 0)
 
 	if not (definedHere or liveOut or lastUse.found or liveListHolds(live.liveIn(blockLocal), v: w)) 'notLiveInThisBlockAtAll'
-		return empty
+		out.becomeEmpty()
+		return
 	end 'notLiveInThisBlockAtAll'
 
 	// A block-arg's def is the block's ENTRY, so it opens where a live-in value does; only an OP def
@@ -2557,28 +2592,31 @@ function liveAcrossSpanIn(liveness LivenessResult, pressure PressureIndex, w Val
 	end 'opensAfterItsOwnDef'
 
 	if liveOut 'liveOnEveryExit'
-		return LiveAcrossSpan.create(true, lo: lo, hi: pressure.exitSlotOf(blockLocal))
+		out.becomeStretch(lo, highSlot: pressure.exitSlotOf(blockLocal))
+		return
 	end 'liveOnEveryExit'
 
 	if not lastUse.found 'readNowhereHereAndNotLiveOut'
 		// Defined or live-in but never read here and not carried out: live across nothing.
-		return empty
+		out.becomeEmpty()
+		return
 	end 'readNowhereHereAndNotLiveOut'
 
-	let lastUseSlot = pressure.slotOfPosition(blockLocal, pos: lastUse.position)
+	let lastUseSlot = pressure.slotOfPosition(blockLocal, pos: lastUse.position as BlockOpPos)
 
 	if lastUseSlot <= lo 'closesBeforeItOpens'
-		return empty
+		out.becomeEmpty()
+		return
 	end 'closesBeforeItOpens'
 
-	return LiveAcrossSpan.create(true, lo: lo, hi: lastUseSlot - 1)
+	out.becomeStretch(lo, highSlot: lastUseSlot - 1)
 end 'liveAcrossSpanIn'
 
 // The OR of the clobbers of every op of `blockLocal` that `w` is live ACROSS — 0 when `w` is not live
 // there at all. A cold block's ops carry no confining clobber (`opClobberMask`); what confines there is
 // the run rule, answered per value by `coldRunClobbersFor`.
-function liveAcrossClobbersIn(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex, buf OperandList) returns RegMask
-	let span = liveAcrossSpanIn(liveness, pressure: pressure, w: w, blockLocal: blockLocal)
+function liveAcrossClobbersIn(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex, buf OperandList, span LiveAcrossSpan) returns RegMask
+	liveAcrossSpanIn(liveness, pressure: pressure, w: w, blockLocal: blockLocal, out: span)
 
 	if not span.found 'liveAcrossNothingHere'
 		return 0
@@ -2647,14 +2685,19 @@ function lastReadWithin(index UseIndex, w ValueId, block IrBlock, blockLocal Cfg
 	return lastRead
 end 'lastReadWithin'
 
+// A use's position within its block. Narrower than `BlockOpPos` so that a `BlockLastUse` fits a word
+// and packs inline, and exact rather than a truncation: `seqAt` panics at `SeqStride` ops in one block
+// and `SeqStride` is 2^32, so no position this reads back can exceed the range.
+typealias BlockUsePos = int(0 to u32.max)
+
 // The LAST position `w` is read at in `blockLocal`, or `found: false` when it is read there not at all.
 // A value's use thread is ascending by sequence, so the last record in the block is the last one before
 // it leaves — one walk, no search.
 type BlockLastUse
-	export var found as bool
-	export var position as BlockOpPos
+	export let found as bool
+	export let position as BlockUsePos
 
-	static function create(found bool, position BlockOpPos) returns BlockLastUse
+	static function create(found bool, position BlockUsePos) returns BlockLastUse
 		return Self{found: found, position: position}
 	end 'create'
 end 'BlockLastUse'
@@ -2662,7 +2705,7 @@ end 'BlockLastUse'
 function lastUsePositionIn(index UseIndex, w ValueId, blockLocal CfgIndex) returns BlockLastUse
 	let useSites = index.useCount(w)
 	var found = false
-	var position = 0 as BlockOpPos
+	var position = 0 as BlockUsePos
 
 	if useSites == 0 'neverRead'
 		return BlockLastUse.create(false, position: 0)
@@ -2673,7 +2716,7 @@ function lastUsePositionIn(index UseIndex, w ValueId, blockLocal CfgIndex) retur
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == blockLocal 'readHere'
 			found = true
-			position = index.usePosAt(record)
+			position = index.usePosAt(record) as BlockUsePos
 		end 'readHere'
 
 		record = index.nextUseOf(record)
@@ -2825,6 +2868,8 @@ type SplitScratch
 	export var runStarts as BoolArray
 	export var splitOperands as OperandList
 
+	export var span as LiveAcrossSpan
+
 	// WHERE THE SPLIT IN FLIGHT CUTS — one object per FUNCTION, re-pointed at each cut. See
 	// `SplitAnchor`, and `PeakRank` for the discipline it follows.
 	export var anchor as SplitAnchor
@@ -2839,7 +2884,7 @@ type SplitScratch
 	export var confinedMode as bool
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), anchor: SplitAnchor.create(), confinedMode: false, unrelievableAtLastPeak: 0}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), span: LiveAcrossSpan.create(), anchor: SplitAnchor.create(), confinedMode: false, unrelievableAtLastPeak: 0}
 	end 'create'
 
 	// Size everything the incremental update needs and BUILD the positional pressure index. Deferred
@@ -3338,7 +3383,8 @@ export type SplitDriver
 		// Is `w` still live ACROSS the point? It was when the colouring pass recorded it, but an earlier
 		// repair in this same round may since have cut it. Asked through the SAME span the forbid masks are
 		// rebuilt from, so "live across" has one definition here and there.
-		let span = liveAcrossSpanIn(funcLiveness, pressure: work.pressure, w: w, blockLocal: point.blockLocal)
+		var span = work.span
+		liveAcrossSpanIn(funcLiveness, pressure: work.pressure, w: w, blockLocal: point.blockLocal, out: span)
 		let pointSlot = work.pressure.slotOfPosition(point.blockLocal, pos: point.pos)
 
 		if not (span.found and span.lo <= pointSlot and pointSlot <= span.hi) 'noLongerLiveAcrossThePoint'
@@ -3557,6 +3603,7 @@ function findConfiningClobber(module TargetModule, liveness LivenessResult, scra
 	var pressure = scratch.pressure
 	var buf = scratch.splitOperands
 	var fallback = ConfiningClobber.create(false, blockLocal: 0, pos: 0)
+	var span = scratch.span
 
 	// ASCENDING block order, so the first hit in each tier is the EARLIEST cut: the clobbers a cut
 	// removes are the ones at and after it, so cutting early removes the most.
@@ -3564,7 +3611,7 @@ function findConfiningClobber(module TargetModule, liveness LivenessResult, scra
 
 	for k in 0 upto dirty.count() 'eachBlock'
 		let blockLocal = dirty.at(k)
-		let span = liveAcrossSpanIn(liveness, pressure: pressure, w: v, blockLocal: blockLocal)
+		liveAcrossSpanIn(liveness, pressure: pressure, w: v, blockLocal: blockLocal, out: span)
 
 		if not span.found 'liveAcrossNothingHere'
 			continue
@@ -3803,10 +3850,11 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	end 'eachDirtyBlock'
 
 	// The three things the dirty-block sweep produces, each restated against what actually moved.
-	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands)
+	var span = scratch.span
+	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands, span: span)
 
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
-		rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: f, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands)
+		rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: f, paramCross: paramCross, dirty: dirty, buf: scratch.splitOperands, span: span)
 	end 'eachFresh'
 
 	refreshDeadPhisFor(module, liveness: liveness, victim: split.victim)
@@ -4434,9 +4482,12 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		var transientValue = 0 as ValueId
 
 		if censusNeeded 'confinedTransientNeedsACensusToMatter'
-			let (held, heldBy) = opConfinedTransient(buf, liveRow: liveRow, liveness: liveness)
-			transientHeld = held
-			transientValue = heldBy
+			let confined = opConfinedTransient(buf, liveRow: liveRow, liveness: liveness)
+			transientHeld = confined.competes
+
+			if transientHeld 'theTransientIsAValueOfItsOwn'
+				transientValue = operandValueId(transientDefOperand(buf, at: confined.at))
+			end 'theTransientIsAValueOfItsOwn'
 		end 'confinedTransientNeedsACensusToMatter'
 
 		if censusNeeded 'stepWithCensus'
@@ -4665,14 +4716,18 @@ function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask
 
 		let classPool = poolOfClass(pool, class: class, file: liveness.registerFile)
 
-		match confinementOnly(hallVerdictAt(liveness, live: hall.classLive, pool: classPool, scratch: hall), classPool: classPool) 'verdict'
-			feasible then continue
-			overflow(witness, tight) then betterPeak(best, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
-		end 'verdict'
+		var verdict = hallVerdictAt(liveness, live: hall.classLive, pool: classPool, scratch: hall)
+		confinementOnly(verdict, classPool: classPool)
+
+		if verdict.feasible 'thisFileColours'
+			continue
+		end 'thisFileColours'
+
+		betterPeak(best, pressure: verdict.tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: verdict.witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
 	end 'eachClass'
 end 'confinedPeakAt'
 
-// Hall's verdict with one shape reported as FEASIBLE: an overflow whose witness is the file's WHOLE
+// Flip one shape of `verdict` to FEASIBLE, in place: an overflow whose witness is the file's WHOLE
 // pool. Such a witness is not a CONFINEMENT — it says the values do not fit the pool at all, which is
 // the FULL-POOL overflow — and calling it `clobberOnly` would route the pigeonhole down the
 // forced-bracket path that exists for values the ABI has excluded from PART of the pool.
@@ -4682,11 +4737,12 @@ end 'confinedPeakAt'
 // is only blocked by a proper subset. It is load-bearing for `confinedOverflowAtPeak`, which asks Hall
 // AT a full-pool peak precisely to find the confinement hiding underneath it — and where a "witness"
 // of the whole pool is exactly the answer that must not come back.
-function confinementOnly(verdict HallVerdict, classPool RegMask) returns HallVerdict
-	return match verdict 'v'
-		feasible gives HallVerdict.feasible
-		overflow(witness, tight) gives HallVerdict.feasible if regMaskPopcount(witness) >= regMaskPopcount(classPool) else HallVerdict.overflow(witness, tight: tight)
-	end 'v'
+function confinementOnly(verdict HallVerdict, classPool RegMask)
+	if verdict.feasible or regMaskPopcount(verdict.witness) < regMaskPopcount(classPool) 'aProperSubsetOrNothingAtAll'
+		return
+	end 'aProperSubsetOrNothingAtAll'
+
+	verdict.becomeFeasible()
 end 'confinementOnly'
 
 // The live values of ONE file, in the ascending id order `bitsetCollectRow` produced — so the

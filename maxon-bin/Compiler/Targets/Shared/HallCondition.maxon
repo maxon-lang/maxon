@@ -521,22 +521,44 @@ export type HallScratch
 	// over. Allocated once with the rest of the scratch, for the same reason.
 	export var classLive as ValueIdArray
 
+	// `hallVerdictAt`'s answer, refilled in place per call rather than minted — so a caller must read it
+	// before asking about the next point. The exact test runs at every op of a confined census, where a
+	// fresh verdict object is a heap allocation per op.
+	export var verdict as HallVerdict
+
 	export static function create() returns HallScratch
-		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create()}
+		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create(), verdict: HallVerdict.create()}
 	end 'create'
 end 'HallScratch'
 
 // What the exact test says about one program point.
-export union HallVerdict
-	// Every live value can be given a DISTINCT register it is allowed to take. The point colours,
-	// whatever the screen suspected.
-	feasible
+//
+// `feasible` means every live value can be given a DISTINCT register it is allowed to take — the point
+// colours, whatever the screen suspected. Otherwise `witness` is the register set the overflow is
+// against (the callee-saved subset at a call, `pool ∖ {rax,rdx}` at an `idiv`, or the callee-saved
+// subset at a point that is not a call at all), and `tight` is how many live values are confined to
+// it, so `tight - popcount(witness)` is the EXACT number that must leave. `witness` and `tight` are
+// meaningless while `feasible`.
+export type HallVerdict
+	export var feasible as bool
+	export var witness as RegMask
+	export var tight as RegCount
 
-	// It cannot. `witness` is the register set the overflow is against (the callee-saved subset at a
-	// call, `pool ∖ {rax,rdx}` at an `idiv`, or — the case this file was written for — the
-	// callee-saved subset at a point that is not a call at all). `tight` is how many live values are
-	// confined to it, so `tight - popcount(witness)` is the EXACT number that must leave.
-	overflow(witness RegMask, tight RegCount)
+	export static function create() returns HallVerdict
+		return Self{feasible: true, witness: 0, tight: 0}
+	end 'create'
+
+	export function becomeFeasible()
+		self.feasible = true
+		self.witness = 0
+		self.tight = 0
+	end 'becomeFeasible'
+
+	function becomeOverflow(tightSet RegMask, confinedCount RegCount)
+		self.feasible = false
+		self.witness = tightSet
+		self.tight = confinedCount
+	end 'becomeOverflow'
 end 'HallVerdict'
 
 // The EXACT verdict for one program point: can the values in `live` be given distinct registers they
@@ -633,8 +655,11 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 		end 'grew'
 	end 'augment'
 
+	var verdict = scratch.verdict
+
 	if matched == valueCount 'saturated'
-		return HallVerdict.feasible
+		verdict.becomeFeasible()
+		return verdict
 	end 'saturated'
 
 	let witness = tightRegisterSet(scratch, valueCount: valueCount, noRegister: noRegister, noValue: noValue)
@@ -651,7 +676,8 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 		panic("hallVerdictAt: {tight} live values are confined to the witness {witness} but the matching's tight set has {expected} (witness {regMaskPopcount(witness)} + unmatched {valueCount - matched}) — the maximum matching and its alternating-path reachability disagree")
 	end 'inconsistentTightSet'
 
-	return HallVerdict.overflow(witness, tight: tight)
+	verdict.becomeOverflow(witness, confinedCount: tight)
+	return verdict
 end 'hallVerdictAt'
 
 // One augmenting search from value position `start`, growing the matching by one if it can.

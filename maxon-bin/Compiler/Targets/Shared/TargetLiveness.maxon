@@ -274,8 +274,8 @@ export function operandClass(o Operand, classes ValueClassColumn) returns RegCla
 end 'operandClass'
 
 // The same lookup for a caller that holds the VALUE and no operand — which is what
-// `opTransientDefOf`'s callers hold, deliberately: the transient's selection rule is stated once and
-// hands back an id, so the class read may not be a second `classes.get` spelled beside each use.
+// `opTransientDefOf`'s callers hold once they have decoded the operand it selected, so the class read
+// may not be a second `classes.get` spelled beside each use.
 function valueClass(v ValueId, classes ValueClassColumn) returns RegClass
 	return try classes.get(v) otherwise panic("valueClass: value {v} has no recorded register class — the lowering's class column does not cover it")
 end 'valueClass'
@@ -2959,7 +2959,7 @@ function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 
 		index.recordSpillStore(slotRole, valueId: v)
 
-		if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
+		if isFirstUseOfValueInOp(buf, upto: k as OperandIndex, valueId: v) 'firstOccurrence'
 			index.addUseRecord(v, blockLocal: blockLocal, opIdx: opIdx, seq: seqAt(blockLocal, pos: pos), onEdge: false)
 		end 'firstOccurrence'
 	end 'eachOperand'
@@ -4512,6 +4512,36 @@ module function physicalOperandMask(buf OperandList, census OperandCensus) retur
 	return mask
 end 'physicalOperandMask'
 
+// `opTransientDefOf`'s answer, and `opConfinedTransient`'s below it: the op's transient-holding def,
+// named by its OPERAND INDEX. `at` is meaningless unless `found` (respectively `competes`). It carries
+// the index rather than the def's value id — and the reuse input's — because two `ValueId`s are 128
+// bits and would not fit a word; one of these is produced per op of every pressure sweep, and a record
+// too wide to pack inline is a heap box per op. `transientDefOperand` is the decode.
+type TransientDef
+	export let found as bool
+	export let isReuse as bool
+	export let at as OperandIndex
+
+	static function create(found bool, isReuse bool, at OperandIndex) returns TransientDef
+		return Self{found: found, isReuse: isReuse, at: at}
+	end 'create'
+end 'TransientDef'
+
+export type ConfinedTransient
+	export let competes as bool
+	export let at as OperandIndex
+
+	static function create(competes bool, at OperandIndex) returns ConfinedTransient
+		return Self{competes: competes, at: at}
+	end 'create'
+end 'ConfinedTransient'
+
+// `opTransientDefOf`'s own loop reads `buf` directly instead of through here: it is SEARCHING for the
+// operand rather than decoding a recorded index, and it is the innermost loop of the sweep.
+module function transientDefOperand(buf OperandList, at OperandIndex) returns Operand
+	return try buf.get(at) otherwise panic("transientDefOperand: operand {at} is not in the op's operand list")
+end 'transientDefOperand'
+
 // Add this op's TRANSIENT register demand to `pressureOut`, in the FILE the register belongs to: the
 // registers the colorer holds AT the op that are in NO live set, and which the op-boundary popcounts
 // therefore cannot see. There are two, they are mutually exclusive, and they are the same fact about
@@ -4561,25 +4591,27 @@ end 'physicalOperandMask'
 // must agree or the splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added,
 // which `opTransientDefOf` below decides and states once.
 export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, pressureOut RegCountColumn)
-	let (found, defId, isReuse, reuseInputId) = opTransientDefOf(buf)
+	let transient = opTransientDefOf(buf)
 
-	if not found 'noVirtualDef'
+	if not transient.found 'noVirtualDef'
 		return
 	end 'noVirtualDef'
 
+	let defOperand = transientDefOperand(buf, at: transient.at)
+	let defId = operandValueId(defOperand)
 	let defClass = valueClass(defId, classes: classes)
 
-	if isReuse 'reuseDef'
+	if transient.isReuse 'reuseDef'
 		// Against the FULL pool a reuse def whose input DIES here simply inherits the input's register
 		// and costs nothing; one whose input outlives the op needs a register of its own.
-		if bitsetTest(liveRow, base: 0, bit: reuseInputId) 'inputLiveAfter'
+		if bitsetTest(liveRow, base: 0, bit: operandReuseInputValueId(defOperand, buf: buf) as BitIndex) 'inputLiveAfter'
 			classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
 		end 'inputLiveAfter'
 
 		return
 	end 'reuseDef'
 
-	if bitsetTest(liveRow, base: 0, bit: defId) 'defLiveAfter'
+	if bitsetTest(liveRow, base: 0, bit: defId as BitIndex) 'defLiveAfter'
 		return
 	end 'defLiveAfter'
 
@@ -4590,34 +4622,27 @@ export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, cl
 	classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
 end 'addOpTransientPressure'
 
-// ⭐⭐ **THE OP'S ONE TRANSIENT-HOLDING DEF, SELECTED IN EXACTLY ONE PLACE.** Both transient questions
-// — the FULL-POOL one above and the CONFINED one below — begin by finding the same operand under the
-// same rule, and walking `buf` for it in each with its own copy of that rule is one fact written
-// twice, in the file whose most reliable bug signature it is.
+// The op's one transient-holding def, selected in exactly one place. Both transient questions — the
+// FULL-POOL one above and the CONFINED one below — begin by finding the same operand under the same
+// rule, and walking `buf` for it in each with its own copy of that rule is one fact written twice.
 //
-// ⛔ The premise *"no `TargetOp` defines more than one value, so the FIRST virtual def decides the
-// whole answer"* would then live in two loops; `refreshTransientAt` PANICS when a second virtual def
-// appears (it counts them), while a second copy would silently take the first and answer for an op it
-// does not describe. A
-// clause added to one walk and not the other is a wrong pressure figure — a colorer panic or an
-// unrelieved point — never a compile error.
-//
-// The tuple is `(found, defId, isReuse, reuseInputId)`: `defId` and `isReuse` are meaningless unless
-// `found`, and `reuseInputId` unless `isReuse`. A discriminated record, not a sentinel.
-function opTransientDefOf(buf OperandList) returns (bool, ValueId, bool, ValueId)
-	for o in buf 'each'
+// The premise "no `TargetOp` defines more than one value, so the FIRST virtual def decides the whole
+// answer" would then live in two loops; `refreshTransientAt` panics when a second virtual def appears
+// (it counts them), while a second copy would silently take the first and answer for an op it does not
+// describe. A clause added to one walk and not the other is a wrong pressure figure — a colorer panic
+// or an unrelieved point — never a compile error.
+function opTransientDefOf(buf OperandList) returns TransientDef
+	for i in 0 upto buf.count() 'each'
+		let o = try buf.get(i) otherwise panic("opTransientDefOf: operand {i} is not in the op's operand list")
+
 		if not (operandIsDef(o) and operandIsVirtual(o)) 'notAVirtualDef'
 			continue
 		end 'notAVirtualDef'
 
-		if not operandIsReuseDef(o) 'plainDef'
-			return (true, operandValueId(o), false, 0)
-		end 'plainDef'
-
-		return (true, operandValueId(o), true, operandReuseInputValueId(o, buf: buf))
+		return TransientDef.create(true, isReuse: operandIsReuseDef(o), at: i as OperandIndex)
 	end 'each'
 
-	return (false, 0, false, 0)
+	return TransientDef.create(false, isReuse: false, at: 0)
 end 'opTransientDefOf'
 
 // ⭐⭐ **THE SAME REGISTER, ASKED ABOUT THE CONFINED POOL — AND THE ANSWER IS NOT THE SAME.**
@@ -4638,17 +4663,19 @@ end 'opTransientDefOf'
 // the def may hold too (`forbidden(def) ⊆ forbidden(input)`). Anything less is a maybe, and a
 // pressure analysis that answers "maybe" has to answer "yes, it competes".
 //
-// The pair is `(competes, v)`, `v` meaningful only when `competes` — a discriminated pair, not a
-// sentinel. It selects the op's def through `opTransientDefOf`, the same one the full-pool answer
-// uses, so the two can differ in their RULE and never in which register they are talking about.
-export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liveness LivenessResult) returns (bool, ValueId)
-	let (found, defId, isReuse, reuseInputId) = opTransientDefOf(buf)
+// It selects the op's def through `opTransientDefOf`, the same one the full-pool answer uses, so the
+// two can differ in their RULE and never in which register they are talking about.
+export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liveness LivenessResult) returns ConfinedTransient
+	let transient = opTransientDefOf(buf)
 
-	if not found 'noVirtualDef'
-		return (false, 0)
+	if not transient.found 'noVirtualDef'
+		return ConfinedTransient.create(false, at: 0)
 	end 'noVirtualDef'
 
-	if not isReuse 'plainDef'
+	let defOperand = transientDefOperand(buf, at: transient.at)
+	let defId = operandValueId(defOperand)
+
+	if not transient.isReuse 'plainDef'
 		// ⛔⛔ **A PLAIN DEF THAT IS LIVE NOWHERE IS THE OTHER HALF OF THIS HOLE, AND IT IS NOT COVERED
 		// BY BEING "its own live range's demand".** A def the census sees at every op of its range needs
 		// nothing here; a def with NO range is seen at no op, while its register is as real as any
@@ -4680,14 +4707,16 @@ export function opConfinedTransient(buf OperandList, liveRow BitWordArray, liven
 		// ⚠ NO "a use dies here" RELIEF, unlike the full-pool arm below. The register a dying use
 		// vacates need not be one this def may hold — the same argument the reuse arm makes — and a
 		// pressure analysis that cannot prove the inheritance has to assume the competition.
-		return (not bitsetTest(liveRow, base: 0, bit: defId) and liveness.forbiddenOf(defId) != 0, defId)
+		return ConfinedTransient.create(not bitsetTest(liveRow, base: 0, bit: defId as BitIndex) and liveness.forbiddenOf(defId) != 0, at: transient.at)
 	end 'plainDef'
 
-	if bitsetTest(liveRow, base: 0, bit: reuseInputId) 'inputLiveAfter'
-		return (true, defId)
+	let reuseInputId = operandReuseInputValueId(defOperand, buf: buf)
+
+	if bitsetTest(liveRow, base: 0, bit: reuseInputId as BitIndex) 'inputLiveAfter'
+		return ConfinedTransient.create(true, at: transient.at)
 	end 'inputLiveAfter'
 
-	return (not neederMayTakeAnyRegisterOf(liveness, holder: reuseInputId, needer: defId), defId)
+	return ConfinedTransient.create(not neederMayTakeAnyRegisterOf(liveness, holder: reuseInputId, needer: defId), at: transient.at)
 end 'opConfinedTransient'
 
 // Is every register `holder` may hold one that `needer` may hold too? A subset test on the FORBIDDEN
