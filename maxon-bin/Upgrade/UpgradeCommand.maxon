@@ -26,9 +26,6 @@ let CheckoutSlotDirName = ".maxon"
 let ScriptInstallBinDirName = "bin"
 let CompilerBaseName = "maxon"
 
-// What stands for the release a reader picks, in the refusal that sends them to the script for one.
-let ReleasePlaceholder = "X.Y.Z"
-
 // How the dry run spells a word holding a space: quoted, as a reader would retype it.
 let WordBreak = " "
 let WordQuote = "\""
@@ -50,9 +47,8 @@ let WordQuote = "\""
 	let PowerShellModulePathVariable = "PSModulePath"
 	let PowerShellModulesUnderSystemRoot = "System32\\WindowsPowerShell\\v1.0\\Modules"
 
-	// The script's own switches. An upgrade leaves PATH as the install that is being upgraded left it.
+	// The script's own switch. An upgrade leaves PATH as the install that is being upgraded left it.
 	let NoPathUpdateSwitch = "-NoPathUpdate"
-	let ScriptVersionSwitch = "-Version"
 
 	// The script reports through `$LASTEXITCODE` and never exits, because it may be running in a user's own
 	// session; run on its own, the status has to be forwarded. It starts at failure because a download that
@@ -75,9 +71,8 @@ let WordQuote = "\""
 	let ShReadsScriptFromStdin = "-s"
 	let ScriptArgumentsFollow = "--"
 
-	// The script's own flags. An upgrade leaves PATH as the install that is being upgraded left it.
+	// The script's own flag. An upgrade leaves PATH as the install that is being upgraded left it.
 	let NoModifyPathFlag = "--no-modify-path"
-	let ScriptVersionFlag = "--version"
 #endif
 
 export function runUpgrade(args MaxonArgs) returns ExitCode
@@ -103,18 +98,6 @@ export function runUpgrade(args MaxonArgs) returns ExitCode
 		unlocated gives refuse("the operating system did not say where this compiler is, so there is no install to update. Install with: {installOneLiner()}")
 	end 'origin'
 end 'runUpgrade'
-
-// ⭐ **`--version` AFTER `upgrade` ASKS FOR A PARTICULAR RELEASE**, which this command never installs: it
-// installs the newest. The install script takes a version, so this names it, spelled for this host.
-export function pinnedReleaseRefusal(option String) returns String
-	#if os(Windows)
-		let pinned = "{scriptBlockInvocation()} {ScriptVersionSwitch} {ReleasePlaceholder}"
-	#else
-		let pinned = "{installOneLiner()} {ShReadsScriptFromStdin} {ScriptArgumentsFollow} {ScriptVersionFlag} {ReleasePlaceholder}"
-	#endif
-
-	return "error: {option} is not an option of `{commandAsTyped()}`, which installs the newest release. For a specific release, run the install script with its version option: {pinned}"
-end 'pinnedReleaseRefusal'
 
 function commandAsTyped() returns String
 	return "maxon {UpgradeCommandName}"

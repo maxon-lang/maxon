@@ -126,7 +126,6 @@ tests/
     help-lists-trace-flags.test.maxon       `help build` lists `--async-trace` and `--debugstream`, which the parser accepts
     profile-usage-names-every-option.test.maxon   every option `profile`'s usage body documents is in its `Usage:` line (x64-windows only, as `profile` is)
     hidden-command-still-parses.test.maxon  a command left off the short LIST is still a command
-    withdrawn-help-flags.test.maxon         `--help` / `-h` refused BY NAME, naming the command
     unknown-command-refused.test.maxon      a word naming no command fails at both doors
     help-takes-no-options.test.maxon        `help` refuses a flag another command implements
     upgrade-refuses-a-container-image.test.maxon            MAXON_IMAGE set: refused, naming `docker pull` of that image
@@ -135,7 +134,6 @@ tests/
     upgrade-refuses-an-unrecognised-layout.test.maxon       a flat `maxon` + `stdlib/`: refused, giving the install one-liner
     upgrade-dry-run-names-the-install.test.maxon            `<root>/bin/maxon`: names THAT root, never the caller's MAXON_INSTALL, runs nothing
     upgrade-takes-no-arguments.test.maxon                   a positional argument and a foreign option are both refused
-    upgrade-version-points-at-the-install-script.test.maxon `upgrade --version X` points at the install script's `--version`
     dry-run-is-upgrade-only.test.maxon                      every other command refuses `--dry-run`
     reference-documents-every-command.test.maxon            docs/CLI_REFERENCE.md has a `###` heading naming `maxon <command>` for every command `help` documents, and spells every option it lists
     reference-documents-only-real-options.test.maxon        every `--option` that document shows is listed by `help` or a subcommand's own usage (x64-windows only, as `profile` is)

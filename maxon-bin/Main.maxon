@@ -105,14 +105,6 @@ module let UpdateRequiredFlag = "--update-required"
 // counted.
 module let NetworkFlag = "--network"
 
-// `--compiler=<path>` is withdrawn. `spec-test` compiles every case in this process, so the
-// compiler under test is this binary's own code and there is nothing a path could select; a flag
-// kept as a no-op would read as though it chose something.
-//
-// Refused by name rather than as an unknown option, so a script still passing it is told what
-// replaced it instead of being sent looking for a typo. See `withdrawnOptionMessage`.
-let WithdrawnCompilerFlagPrefix = "--compiler"
-
 // Re-emitted: a cross-target spec run forwards it to every worker (`SpecWorkerPool.spawnNoWait`),
 // and the parser reads it back through this constant.
 module let TargetFlagPrefix = "--target="
@@ -209,19 +201,7 @@ module let OptionPrefix = "-"
 // A command rather than a flag, so `maxon` with no arguments lists it with every other command.
 let HelpCommandName = "help"
 
-// Withdrawn in favour of `maxon help`, and refused by name: these are the spellings every other CLI
-// teaches people to try first, so "unknown option: --help" would claim this driver has no help. See
-// `withdrawnOptionMessage`.
-let WithdrawnHelpFlag = "--help"
-let WithdrawnHelpFlagShort = "-h"
-
 let VersionCommandName = "version"
-
-// Withdrawn: a flag beside `maxon version` would be a second door onto one answer, free to drift.
-// Refused by name because packagers, CI steps and bug-report templates reach for these first, and
-// "unknown option" would send the reader hunting for a typo. See `withdrawnOptionMessage`.
-let WithdrawnVersionFlag = "--version"
-let WithdrawnVersionFlagShort = "-V"
 
 // `module` because `ScaleTestRunner.compileRung` spawns one build per rung with it.
 module let MetricsFlagPrefix = "--metrics="
@@ -271,20 +251,6 @@ end 'defineFromPair'
 
 function main() returns ExitCode
 	let args = MaxonArgs.parse()
-
-	// A withdrawn option is reported before an unknown one: its author needs to be told what replaced
-	// it rather than sent looking for a typo.
-	if not args.withdrawnOption.isEmpty() 'withdrawnOption'
-		printError("{withdrawnOptionMessage(args.withdrawnOption, command: args.command)}\n")
-
-		// `upgrade`'s stdout is its dry run's report, which a script reads, so none of its refusals write
-		// there.
-		if args.command != MaxonCommand.upgrade 'owedTheCommandList'
-			printCommandList()
-		end 'owedTheCommandList'
-
-		return refusedCommandLineExit(args.command)
-	end 'withdrawnOption'
 
 	// An option the driver does not implement aborts before any command runs: proceeding as though it
 	// had been honoured is the one outcome a caller can neither see nor recover from. `fmt`, `upgrade`
@@ -1422,27 +1388,6 @@ function reportSignalled(executable Executable, signal SignalNumber, speaker Str
 	return OwnFailureExit
 end 'reportSignalled'
 
-// A withdrawn option was understood once and is now impossible, so it owes an explanation an
-// unknown one does not. The `panic` holds this list to `MaxonArgs.parse`'s: a spelling recorded
-// there and unnamed here would be refused with an empty sentence.
-//
-// `command` matters after `upgrade`, where `--version` asks the install script for a release.
-function withdrawnOptionMessage(option String, command MaxonCommand) returns String
-	if option.startsWith(WithdrawnCompilerFlagPrefix) 'theCompilerFlag'
-		return "error: {WithdrawnCompilerFlagPrefix}= was REMOVED. spec-test compiles every selected test IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one. Run the suite with the binary you mean to test: `<compiler> {SpecTestCommandName}`."
-	end 'theCompilerFlag' else if option == WithdrawnVersionFlag or option == WithdrawnVersionFlagShort 'theVersionFlag'
-		if command == MaxonCommand.upgrade 'aReleaseToUpgradeTo'
-			return pinnedReleaseRefusal(option)
-		end 'aReleaseToUpgradeTo'
-
-		return "error: {option} was REMOVED. The version is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {VersionCommandName}`."
-	end 'theVersionFlag' else if option == WithdrawnHelpFlag or option == WithdrawnHelpFlagShort 'theHelpFlag'
-		return "error: {option} was REMOVED. Help is a command, so there is one door onto it and it is listed with everything else this binary does: `maxon {HelpCommandName}` for the whole reference, `maxon {HelpCommandName} <command>` for one command."
-	end 'theHelpFlag'
-
-	panic("withdrawnOptionMessage: '{option}' was recorded as a withdrawn option by `MaxonArgs.parse`, and this is the one place that says what replaced one — a flag recorded there and unnamed here would be refused with an empty sentence")
-end 'withdrawnOptionMessage'
-
 // Golden drift is not in the pass/fail counts: a test whose golden no longer matches still passed,
 // so `0 failed` means the spec tests passed, and drift gets its own line.
 //
@@ -2147,15 +2092,11 @@ module type MaxonArgs
 
 	export var devMode as bool
 
-	// An option this driver deliberately withdrew. Separate from `badOption` because the two owe the
-	// reader different sentences; see `withdrawnOptionMessage`.
-	export var withdrawnOption as String
-
 	// The defaults live here rather than in `parse`'s locals: `parse` accumulates into a record (see
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	export static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false, withdrawnOption: ""}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: "", emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filter: "", updateRequired: false, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metricsPath: "", defines: DefineArray.create(), emitCorpus: "", rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: "", resultJson: "", targetSpec: "", includeNetwork: false, listOnly: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), badOption: "", dryRun: false, devMode: false}
 	end 'create'
 
 	// A command that takes no options refuses by this.
@@ -2334,12 +2275,7 @@ module type MaxonArgs
 				end 'workersArg'
 			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				parsed.workerPersistent = true
-			end 'workerPersistentFlag' else if arg.startsWith(WithdrawnCompilerFlagPrefix) 'withdrawnCompilerFlag'
-				// Recorded as withdrawn; see `withdrawnOptionMessage`. Matched without its `=`, so
-				// `--compiler`, `--compiler=` and `--compiler=<path>` all get the sentence. Must precede the
-				// anonymous `-`-leading arm, which would swallow it into `badOption`.
-				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
-			end 'withdrawnCompilerFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
+			end 'workerPersistentFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
 				parsed.metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith(DefineFlagPrefix) 'defineFlag'
 				let pair = try CommandLine.optionValue(arg) otherwise ""
@@ -2430,14 +2366,7 @@ module type MaxonArgs
 
 				// Also a bad option, as `--dry-run` is: only `mcp-server` has a contributor mode.
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
-			end 'devFlag' else if arg == WithdrawnVersionFlag or arg == WithdrawnVersionFlagShort 'withdrawnVersionFlag'
-				// Recorded as withdrawn and matched exactly: a longer spelling names no option this driver had
-				// and is an ordinary typo.
-				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
-			end 'withdrawnVersionFlag' else if arg == WithdrawnHelpFlag or arg == WithdrawnHelpFlagShort 'withdrawnHelpFlag'
-				// Recorded as withdrawn, matched exactly as the version spellings are.
-				parsed.withdrawnOption = firstBadOption(parsed.withdrawnOption, arg: arg)
-			end 'withdrawnHelpFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
+			end 'devFlag' else if arg.startsWith(OptionPrefix) 'unknownFlag'
 				parsed.badOption = firstBadOption(parsed.badOption, arg: arg)
 			end 'unknownFlag' else 'positional'
 				// Kept: which positionals a command uses is the command's question, unanswerable before its

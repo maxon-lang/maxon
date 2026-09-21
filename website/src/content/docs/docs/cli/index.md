@@ -573,8 +573,8 @@ A compiler the script did not install is refused with exit 1, naming what does u
 | Anywhere else | The install one-liner |
 
 `--dry-run` never bypasses a refusal, and a refusal writes nothing to stdout. The command takes no other
-argument. To install a specific release, use the install script's own version option; `maxon upgrade`
-refuses `--version`, naming that option.
+argument and no option but `--dry-run`. To install a specific release, run the install script yourself
+with its own version option.
 
 ## `maxon version`
 
@@ -585,7 +585,7 @@ maxon version    # maxon 0.1.1 (a1b2c3d 2026-09-09) (x64-windows)
 ```
 
 The line holds the release number, the commit and date the compiler was built from, and the host
-target. It takes no arguments. The old `--version` and `-V` spellings are refused, naming this command.
+target. It takes no arguments.
 
 ## `maxon help`
 
@@ -601,8 +601,7 @@ with every option each command reads listed under it. An option several commands
 `--target=`) is listed under each. Commands are listed alphabetically.
 
 `maxon help <command>` prints one entry. A word that names no command is refused with exit 1 and the
-command list. `help` takes no options, and the old `--help` and `-h` spellings are refused, naming this
-command.
+command list. `help` takes no options.
 
 ## Logging
 

@@ -191,10 +191,9 @@ commands.** Both are published once and never revised, and the commands change b
 `scripts/announce.sh` and `scripts/release.sh` write them that way.
 
 ⚠ **The compiler prints the install commands too.** `maxon upgrade` gives this host's one-liner when it
-refuses an install it does not manage, and the pinned-release form when asked for `--version`, both from
-`maxon-bin/Upgrade/UpgradeCommand.maxon`. Change either on the site and change it there as well.
-`tests/cli/upgrade-refuses-an-unrecognised-layout.test.maxon` reads the one-liner out of `src/install.ts`
-and fails until the two agree; nothing compares the pinned-release form with `installation.mdx`'s.
+refuses an install it does not manage, from `maxon-bin/Upgrade/UpgradeCommand.maxon`. Change it on the
+site and change it there as well. `tests/cli/upgrade-refuses-an-unrecognised-layout.test.maxon` reads the
+one-liner out of `src/install.ts` and fails until the two agree.
 
 ## Positioning & copy decisions (keep these consistent)
 
