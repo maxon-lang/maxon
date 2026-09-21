@@ -391,6 +391,80 @@ end 'main'
 error E3004: <fragment>:3:10: call to undefined function 'frobnicate'
 ```
 
+<!-- test: unknown-function-result-iterated -->
+Iterating the result names the CALL. A loop header cannot be abandoned once the parser has begun
+emitting it, so the deferred source becomes a zero-trip stand-in range rather than a refusal of the
+`for`.
+```maxon
+function main() returns ExitCode
+	for x in frobnicate(2) 'each'
+		print("{x}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:11: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-a-range-bound -->
+A counted range's end bound defers the same way: E3004 at the call, not a complaint about the bound.
+```maxon
+function main() returns ExitCode
+	for i in 0 to frobnicate(2) 'each'
+		print("{i}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-as-a-range-start -->
+The range's start is the loop's source expression, and it defers where the end bound does.
+```maxon
+function main() returns ExitCode
+	for i in frobnicate(2) to 10 'each'
+		print("{i}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:11: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-destructured -->
+A destructuring pattern binds each name to a deferred element of its own. The element count of an
+undefined callee's result is unknowable, so the pattern's arity is not refused ahead of E3004.
+```maxon
+function main() returns ExitCode
+	for (k, v) in frobnicate(2) 'each'
+		print("{k}{v}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
+```
+
+<!-- test: unknown-function-result-element-used-in-the-body -->
+The element the body binds is deferred too, so a method call on it is not an error about the loop
+counter's type.
+```maxon
+function main() returns ExitCode
+	for s in frobnicate(2) 'each'
+		print("{s.byteLength()}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:11: call to undefined function 'frobnicate'
+```
+
 <!-- test: unknown-function-result-field-access -->
 A field read off the result names the CALL, not the field.
 ```maxon

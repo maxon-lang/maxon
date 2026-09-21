@@ -2492,6 +2492,9 @@ type ForSourceFacts
 	// A String source, iterated by grapheme.
 	export var isString as bool
 
+	// The source is a call to no declared function, so the body's element is a fresh `unresolved`.
+	export var sourceIsADeferredCall as bool
+
 	// The cursor protocol this source is walked through, when it is walked by one.
 	export var cursorSurface as MethodSurface
 
@@ -2509,7 +2512,7 @@ type ForSourceFacts
 	export var claimsWithIteratorPromise as bool
 
 	export static function create(limit ValueId, testAnchorIndex TokenIndex) returns ForSourceFacts
-		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText, claimsWithIteratorPromise: false}
+		return Self{isRange: false, rangeInclusive: false, limit: limit, testAnchorIndex: testAnchorIndex, isCharacterRange: false, isString: false, sourceIsADeferredCall: false, cursorSurface: MethodSurface.none, cursorEntrySeed: CursorEntrySeed.atTheFirstElement, sourceLock: false, elementBorrowSubject: EmptySourceText, claimsWithIteratorPromise: false}
 	end 'create'
 end 'ForSourceFacts'
 
@@ -45841,6 +45844,19 @@ export type Parser
 	// ⚠ It takes six arguments and that is the honest count: this is a self-contained step of the parse
 	// (*"bind one loop variable per tuple element"*) and each argument is a fact only the caller holds.
 	function declareDestructuredLoopVariables(func IrFunction, nameToks TokenArray, loopValue ValueId, claimsWithIteratorPromise bool, patternTok Token, forTok Token, bodyEndIndex TokenIndex) throws ParseError
+		// Each position mints its own value: E3012 is counted per binding, so two names sharing one ValueId
+		// would be one binding to everything downstream. The arity is left unchecked — an undeclared
+		// callee's element count is unknowable.
+		if tagIsUnresolved(self.tagOf(loopValue)) 'deferredCallElement'
+			for i in 0 upto nameToks.count() 'eachDeferredName'
+				let deferredNameTok = try nameToks.get(i) otherwise panic("declareDestructuredLoopVariables: nameToks.get OOB at {i} below count {nameToks.count()}")
+
+				try self.declareLoopVariable(func, nameTok: deferredNameTok, value: self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId), bodyEndIndex: bodyEndIndex)
+			end 'eachDeferredName'
+
+			return
+		end 'deferredCallElement'
+
 		let layout = try self.requireDestructurableTuple(loopValue, nameToks: nameToks, keywordTok: forTok, patternSubject: ForPatternSubject, sourceNoun: ForPatternSourceNoun, needsClause: ForPatternNeedsClause)
 
 		for i in 0 upto nameToks.count() 'eachName'
@@ -45954,6 +45970,18 @@ export type Parser
 		// thing is being iterated*, settled once by the header and read by every phase after it.
 		var src = ForSourceFacts.create(source, testAnchorIndex: forIndex)
 
+		// A source `mintCallResult` deferred has no iterable shape to read, and this parser cannot abandon a
+		// construct it has begun emitting — so the header becomes a zero-trip `0 upto 0` that routes past
+		// `requireIterableSource`. Nothing ever runs it: `SemanticCheck.validateCall` refuses the program
+		// with E3004 at the call, and a refusal here would land in front of that one, at the `for`.
+		// Earlier and `src` does not exist; later and `requireIterableSource` has already spoken.
+		if tagIsUnresolved(self.tagOf(source)) 'deferredCallSource'
+			source = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+			src.isRange = true
+			src.limit = source
+			src.sourceIsADeferredCall = true
+		end 'deferredCallSource'
+
 		// ⭐⭐ **A RANGE WHOSE BOUNDS ARE BOTH CHARACTER LITERALS IS A RANGE OF `Character`S** (A5m-ab), and
 		// this is the one place that is decided. Every character literal is a `Character`
 		// (`parseCharLiteral`), so `for c in 'a' to 'e'` arrives here with two RECORDS where the loop needs two
@@ -45974,6 +46002,13 @@ export type Parser
 			self.advance()
 			let limitStart = self.pos
 			src.limit = try self.parseExpression(func, block: self.currentBlock, rangeIsAValue: false)
+
+			// The two lines below read `src.limit`'s tag and then coerce it, so the stand-in has to be in
+			// place before them or `integerizedOperand` refuses the deferral in front of E3004.
+			if tagIsUnresolved(self.tagOf(src.limit)) 'deferredCallLimit'
+				src.limit = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+			end 'deferredCallLimit'
+
 			let bothWereCharacters = self.tagOf(source) == ValueTypeTag.character and self.tagOf(src.limit) == ValueTypeTag.character
 			source = try self.integerizedOperand(source, expected: ValueTypeTag.integer, start: sourceStart, pastEnd: src.testAnchorIndex)
 			src.limit = try self.integerizedOperand(src.limit, expected: ValueTypeTag.integer, start: limitStart, pastEnd: self.pos)
@@ -46306,6 +46341,13 @@ export type Parser
 		self.currentBlock = body
 		var loopValue = bodyCounter
 		var graphemeEnd = indexPhi
+
+		// The element is not the counter the stand-in range steps: every body consumer already has an arm for
+		// `unresolved`, where an `int` element earns a refusal of its own — a destructuring pattern rejects
+		// "a 'int' element", a method call "'int' has no method" — in front of E3004.
+		if src.sourceIsADeferredCall 'deferredCallElement'
+			loopValue = self.mintValue(ValueTypeTag.unresolved, nameId: UnnamedTypeId)
+		end 'deferredCallElement'
 
 		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
 		// range — two producers of the SAME owned per-trip Character, which is why the ownership below is
@@ -90390,11 +90432,9 @@ export type Parser
 	// symptom at an unrelated line — and a sweep that had merely MISSED a declaration would refuse a correct
 	// program.
 	//
-	// ⚠ Two positions still refuse one. `for … in` over a deferred call result reports E2015: its
-	// refusal stands in front of a loop the parser must still emit, and deferring there needs a way
-	// to abandon a half-emitted construct that this parser has not got. The doors whose parameter
-	// type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`, `__ManagedSocket`,
-	// `__ManagedDirectory`) also still throw, which only a file allowed to spell those names reaches.
+	// ⚠ The doors whose parameter type is a `__`-reserved builtin (`__ManagedMemory`, `__ManagedFile`,
+	// `__ManagedSocket`, `__ManagedDirectory`) still throw, which only a file allowed to spell those names
+	// reaches.
 	function deferredUnresolvedMemberResult() returns ValueId
 		self.skipDeferredMemberChain()
 
