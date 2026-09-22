@@ -11,16 +11,17 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
-typealias StringBoxHandle = Box.handle with String
-typealias HandleArray = Array with StringBoxHandle
+typealias SmallBoxHandle = Box.handle with Small
+typealias HandleArray = Array with SmallBoxHandle
 
 function main() returns ExitCode
 	var hs = HandleArray.create()
-	hs.push(spawn Box.create("abcdef"))
+	hs.push(spawn Box.create(6 as Small))
 	let h = try hs.get(0) otherwise return 1 as ExitCode
-	let s = try await h.peek() otherwise ""
-	return s.byteLength() as ExitCode
+	let s = try await h.peek() otherwise 0
+	return s as ExitCode
 end 'main'
+typealias Small = int(0 to 100)
 ---
 ExitCode: 6
 ---
@@ -85,9 +86,7 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
+    arm64.prologue 48
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -95,39 +94,21 @@ func @main {
     arm64.leaFuncAddr x1, __mbox_handle_drop_box
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_2  ; "abcdef"
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-    arm64.add x0, x21, 57
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x22, x0
-    arm64.add x23, x22, 56
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x20
-    arm64.movRegReg x2, x21
-    arm64.bl __str_copy
-    arm64.add x0, x23, x21
-    arm64.storeBaseDispReg.word64 [x22 + 0], x23
-    arm64.storeBaseDispReg.word64 [x22 + 8], x21
-    arm64.movImm x0, 18446744073709551613
-    arm64.storeBaseDispReg.word64 [x22 + 16], x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x22 + 24], x0
-  __il_body#14:
+    arm64.movImm x20, 6
+  __il_body:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 0], x22
-  __il_cont#13:
+    arm64.movRegReg x21, x0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x20
+  __il_cont:
     arm64.movImm x1, 0
-    arm64.movRegReg x0, x20
-    arm64.bl __sole_Box_String
+    arm64.movRegReg x0, x21
+    arm64.bl __sole_Box_Small
     arm64.bl __mm_walk_settle
-    arm64.leaFuncAddr x0, Box_String.__loop
+    arm64.leaFuncAddr x0, Box_Small.__loop
     arm64.leaFuncAddr x2, Box.__abandon
-    arm64.movRegReg x1, x20
+    arm64.movRegReg x1, x21
     arm64.bl __svc_spawn
     arm64.movRegReg x20, x0
     arm64.movImm x0, 8
@@ -147,18 +128,18 @@ func @main {
     arm64.movImm x0, 0
     arm64.loadRegBaseDisp.word64 x2, [x19 + 40]
     arm64.cmp x2, 0
-    arm64.b.eq critsplit#17
+    arm64.b.eq critsplit#12
   __im_empty:
     arm64.cmp x20, 0
     arm64.b.eq __im_slow
-  critsplit#18:
+  critsplit#13:
     arm64.movRegReg x9, x0
     arm64.b __im_cont
-  critsplit#17:
+  critsplit#12:
     arm64.movRegReg x9, x0
   __im_cont:
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.eq tryok#1
   tryerr#2:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
@@ -167,11 +148,9 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
-  tryok:
+  tryok#1:
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
@@ -187,49 +166,29 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
-    arm64.b.eq __il_body#16
+    arm64.b.eq tryok#3
   tryerr#4:
-    arm64.leaRdata x0, __str_rec_3  ; ""
-    arm64.bl __str_retain
-  __il_body#16:
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-  __il_cont#15:
-    arm64.cmp x20, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x20, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
-    arm64.bl __str_decref
+    arm64.movImm x20, 0
+    arm64.b trycont
+  tryok#3:
+    arm64.movRegReg x20, x0
+  trycont:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
   __im_slow:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.movRegReg x20, x0
     arm64.b __im_cont
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_5  ; "panic at a-generic-service-handle-lives-in-an-array.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.epilogue 64
-    arm64.ret
 }
 
-func @Box_String.__loop {
+func @Box_Small.__loop {
   entry:
     arm64.prologue 64
     arm64.storeSlotReg slot4, x23
@@ -247,7 +206,7 @@ func @Box_String.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=peek] @__jumptable_13
+    arm64.jumpTable x0, default=stopping [[0]=__shutdown, [1]=peek] @__jumptable_8
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x0
@@ -264,7 +223,7 @@ func @Box_String.__loop {
     arm64.b.ne abandon
   finished:
     arm64.movRegReg x0, x19
-    arm64.bl __destruct_Box_String
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x20
     arm64.bl __mbox_service_exit
     arm64.movRegReg x1, x0
@@ -281,7 +240,7 @@ func @Box_String.__loop {
     arm64.b drain
   peek:
     arm64.loadRegBaseDisp.word64 x22, [x21 + 8]
-    arm64.leaRdata x0, __layout_Box_String
+    arm64.leaRdata x0, __layout_Box_Small
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.bl __retain_type_param
@@ -289,12 +248,9 @@ func @Box_String.__loop {
   __il_cont:
     arm64.movRegReg x0, x21
     arm64.bl __mm_decref
-    arm64.movImm x21, 0
-    arm64.movRegReg x0, x23
-    arm64.bl __managed_sole_alone
+    arm64.movImm x2, 0
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
-    arm64.movRegReg x2, x21
     arm64.bl __gt_cell_complete
     arm64.b serve
 }
@@ -305,7 +261,7 @@ func @Box.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=peek] @__jumptable_14
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=peek] @__jumptable_9
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0

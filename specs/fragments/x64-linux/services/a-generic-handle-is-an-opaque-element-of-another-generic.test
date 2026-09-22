@@ -11,7 +11,7 @@ type Box uses T
 	end 'peek'
 end 'Box'
 
-typealias StringBoxHandle = Box.handle with String
+typealias SmallBoxHandle = Box.handle with Small
 
 type Cell uses E
 	var slot as E
@@ -25,16 +25,17 @@ type Cell uses E
 	end 'grab'
 end 'Cell'
 
-typealias HandleCell = Cell with StringBoxHandle
+typealias HandleCell = Cell with SmallBoxHandle
 
 function main() returns ExitCode
-	let c = HandleCell.create(spawn Box.create("abc"))
+	let c = HandleCell.create(spawn Box.create(3 as Small))
 	let first = c.grab()
-	let a = try await first.peek() otherwise ""
+	let a = try await first.peek() otherwise 0
 	let second = c.grab()
-	let b = try await second.peek() otherwise ""
-	return (a.byteLength() + b.byteLength()) as ExitCode
+	let b = try await second.peek() otherwise 0
+	return (a + b) as ExitCode
 end 'main'
+typealias Small = int(0 to 100)
 ---
 ExitCode: 6
 ---
@@ -125,40 +126,22 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.leaRegRdata rax, [rip + __str_rec_2]  ; "abc"
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 57
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 56
-    x64.movRegReg rcx, r14
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r14, r12
-    x64.storeBaseDispReg.word64 [r13 + 0], r14
-    x64.storeBaseDispReg.word64 [r13 + 8], r12
-    x64.movRegImm rax, 18446744073709551613
-    x64.storeBaseDispReg.word64 [r13 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegImm32 rbx, 3
   __il_body#12:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg rbx, r8
-    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
   __il_cont#11:
     x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __sole_Box_String
+    x64.movRegReg rcx, r12
+    x64.callDirect __sole_Box_Small
     x64.movRegReg rcx, r8
     x64.callDirect __mm_walk_settle
-    x64.leaRegFunc rcx, [rip + Box_String.__loop]
+    x64.leaRegFunc rcx, [rip + Box_Small.__loop]
     x64.leaRegFunc rax, [rip + Box.__abandon]
-    x64.movRegReg rdx, rbx
+    x64.movRegReg rdx, r12
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -177,7 +160,7 @@ func @main {
   __il_cont#10:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
-    x64.leaRegRdata rdx, [rip + __layout_Cell_StringBoxHandle]
+    x64.leaRegRdata rdx, [rip + __layout_Cell_SmallBoxHandle]
     x64.movRegReg rcx, rbx
     x64.callDirect Cell.grab
     x64.movRegReg r12, r8
@@ -198,14 +181,12 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#1
   tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; ""
-    x64.callDirect __str_retain
-    x64.movRegReg r13, r8
-    x64.jmp trycont
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont#3
   tryok#1:
     x64.movRegReg r13, r8
-  trycont:
-    x64.leaRegRdata rdx, [rip + __layout_Cell_StringBoxHandle]
+  trycont#3:
+    x64.leaRegRdata rdx, [rip + __layout_Cell_SmallBoxHandle]
     x64.movRegReg rcx, rbx
     x64.callDirect Cell.grab
     x64.movRegReg r14, r8
@@ -226,34 +207,25 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#4
   tryerr#5:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]  ; ""
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r8
-    x64.jmp __il_body#16
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#6
   tryok#4:
-    x64.movRegReg rcx, r8
-  __il_body#16:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-  __il_body#17:
-    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
-  __il_cont#14:
-    x64.leaRegRegReg r15, rax, rdx
-    x64.cmpRegImm32 r15, 0
+    x64.movRegReg rax, r8
+  trycont#6:
+    x64.leaRegRegReg r13, r13, rax
+    x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.cmpRegImm32 r15, 255
+    x64.cmpRegImm32 r13, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.callDirect __str_decref
     x64.movRegReg rcx, r14
     x64.callDirect __mbox_handle_drop_box
-    x64.movRegReg rcx, r13
-    x64.callDirect __str_decref
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Cell_StringBoxHandle
-    x64.movRegReg r8, r15
+    x64.callDirect __destruct_Cell_SmallBoxHandle
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
@@ -263,7 +235,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at a-generic-handle-is-an-opaque-element-of-another-generic.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-generic-handle-is-an-opaque-element-of-another-generic.test:36: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -276,7 +248,7 @@ func @main {
     x64.ret
 }
 
-func @Box_String.__loop {
+func @Box_Small.__loop {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -296,7 +268,7 @@ func @Box_String.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=peek] @__jumptable_13
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=peek] @__jumptable_9
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -312,7 +284,7 @@ func @Box_String.__loop {
     x64.jcc notEqual, abandon
   finished:
     x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Box_String
+    x64.callDirect __mm_decref
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_service_exit
     x64.movRegReg rax, r8
@@ -331,7 +303,7 @@ func @Box_String.__loop {
     x64.jmp drain
   peek:
     x64.loadRegBaseDisp.word64 r14, [r13 + 8]
-    x64.leaRegRdata rcx, [rip + __layout_Box_String]
+    x64.leaRegRdata rcx, [rip + __layout_Box_Small]
   __il_body:
     x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
     x64.callDirect __retain_type_param
@@ -339,12 +311,9 @@ func @Box_String.__loop {
   __il_cont:
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r15
-    x64.callDirect __managed_sole_alone
+    x64.movRegImm32 rax, 0
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r15
-    x64.movRegReg rax, r13
     x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
@@ -357,7 +326,7 @@ func @Box.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=peek] @__jumptable_14
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=peek] @__jumptable_10
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
