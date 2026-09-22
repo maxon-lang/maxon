@@ -1,0 +1,31 @@
+typealias Step = int(0 to 1000000)
+
+function tiny(x Step) returns Step
+	return x + 1 // anchor: tiny-body
+end 'tiny'
+
+function host(seed Step) returns Step
+	var total = seed
+	var round = 0
+	while round < 3 'rounds'
+		total = total + tiny(round) // anchor: host-first
+		total = total + tiny(total) // anchor: host-second
+		round = round + 1
+	end 'rounds'
+
+	return total // anchor: host-return
+end 'host'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 2 'outer'
+		total = total + host(i) // anchor: main-call
+		i = i + 1
+	end 'outer'
+
+	total = total + host(1)
+	print("inlined {total}\n")
+
+	return 0
+end 'main'

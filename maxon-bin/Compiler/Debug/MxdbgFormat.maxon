@@ -25,7 +25,7 @@ let MxdbgMagicByte4 = 71
 
 // Bumped on any change to what the file MEANS. A reader refuses a version it does not know rather than
 // misreading it.
-module let MxdbgFormatVersion = 4
+module let MxdbgFormatVersion = 5
 
 // The one width of every count/offset/length word in the file.
 module let MxdbgFieldSize = 4
@@ -86,7 +86,11 @@ module let MxdbgOffInlineRangeTableOff = 104
 
 module let MxdbgOffInlineRangeCount = 108
 
-module let MxdbgHeaderSize = 112
+module let MxdbgOffConstTableOff = 112
+
+module let MxdbgOffConstCount = 116
+
+module let MxdbgHeaderSize = 120
 
 // Fixed record strides.
 module let MxdbgFileEntrySize = 8
@@ -97,11 +101,11 @@ module let MxdbgFuncEntrySize = 40
 // codeOffset fileId line col flags — five raw u32s, no deltas.
 module let MxdbgLineEntrySize = 20
 
-module let MxdbgTypeEntrySize = 28
+module let MxdbgTypeEntrySize = 36
 
 module let MxdbgFieldEntrySize = 16
 
-module let MxdbgLocalEntrySize = 28
+module let MxdbgLocalEntrySize = 32
 
 // codeOffset fileId line col branchLine branchCol funcNameOff funcNameLen flags. A point's COUNTER
 // INDEX is its record index, which is what binds this table to the `.mxcov` counter array
@@ -114,9 +118,13 @@ module let MxdbgInlineSiteEntrySize = 12
 // codeStart codeEnd site — disjoint, ascending by codeStart; nesting lives in the site's `parent`.
 module let MxdbgInlineRangeEntrySize = 12
 
+module let MxdbgConstEntrySize = 4
+
 // A site spliced into its function's own text, spelled explicitly rather than as a 0 that site 0 would
 // collide with.
 export let MxdbgNoParentSite = 0xFFFFFFFF as MxdbgIndex
+
+export let MxdbgNoElementType = 0xFFFFFFFF as MxdbgIndex
 
 // Line-entry flag bits. A row this compiler writes is always a statement boundary — see
 // `DebugLineRowBuilder`, which is where that granularity is decided.
@@ -208,6 +216,10 @@ module let MxdbgTypeFieldFirst = 20
 
 module let MxdbgTypeFieldCount = 24
 
+module let MxdbgTypeElementTypeId = 28
+
+module let MxdbgTypeFlags = 32
+
 // Where a field record's fields sit inside its 16 bytes.
 module let MxdbgFieldNameOff = 0
 
@@ -231,6 +243,8 @@ module let MxdbgLocalTypeId = 16
 module let MxdbgLocalScopeStart = 20
 
 module let MxdbgLocalScopeEnd = 24
+
+module let MxdbgLocalFlags = 28
 
 // Where an inline-site record's fields sit inside its 12 bytes.
 module let MxdbgInlineSiteNameOff = 0
@@ -264,6 +278,7 @@ export typealias MxdbgIndex = int(0 to u32.max)
 export typealias MxdbgCodeOffset = int(0 to u32.max)
 
 export typealias MxdbgCodeOffsetArray = Array with MxdbgCodeOffset
+export typealias MxdbgIndexArray = Array with MxdbgIndex
 
 // A local record's `locValue`: a stack displacement, a register number, or unused, per its `locKind`.
 export typealias MxdbgLocValue = int(i32.min to i32.max)
@@ -283,16 +298,38 @@ export let MxdbgTypeKindEnum = 4 as MxdbgIndex
 export let MxdbgTypeKindUnion = 5 as MxdbgIndex
 export let MxdbgTypeKindString = 6 as MxdbgIndex
 
-// The one kind this compiler never writes — the fused heap Array record has no declaration to describe it
-// from — and it is declared so the dump can render a sidecar that does carry it.
-let MxdbgTypeKindArray = 7 as MxdbgIndex
+export let MxdbgTypeKindArray = 7 as MxdbgIndex
 export let MxdbgTypeKindManagedRecord = 8 as MxdbgIndex
 
-// ⭐ **WHERE A LOCAL LIVES, AND THERE IS NO FOURTH ANSWER.** `optimizedOut` is the honest one for a value
-// the compiler cannot place: a guessed slot number is a debugger printing a byte of somebody else's frame.
 export let MxdbgLocKindStackSlot = 0 as MxdbgIndex
 export let MxdbgLocKindRegister = 1 as MxdbgIndex
 export let MxdbgLocKindOptimizedOut = 2 as MxdbgIndex
+export let MxdbgLocKindConstant = 3 as MxdbgIndex
+export let MxdbgLocKindFoldedAggregate = 4 as MxdbgIndex
+
+export let MxdbgLocalFlagIndirect = 1 as MxdbgIndex
+
+// Signedness is a property of the declared type and cannot be recovered from the bits, so a reader
+// without this flag renders a narrow signed local as the unsigned pattern it holds.
+export let MxdbgTypeFlagSigned = 1 as MxdbgIndex
+
+export let MxdbgUnionAggregateWords = 2 as MxdbgIndex
+
+export function mxdbgFoldedAggregateWordCount(typeKind MxdbgIndex, fieldCount MxdbgIndex) returns MxdbgIndex
+	if typeKind == MxdbgTypeKindStruct 'aStruct'
+		return fieldCount
+	end 'aStruct'
+
+	if typeKind == MxdbgTypeKindUnion 'aUnion'
+		return MxdbgUnionAggregateWords
+	end 'aUnion'
+
+	return 0
+end 'mxdbgFoldedAggregateWordCount'
+
+export function mxdbgTypeKindIsIndirect(kind MxdbgIndex) returns bool
+	return kind == MxdbgTypeKindStruct or kind == MxdbgTypeKindUnion or kind == MxdbgTypeKindString or kind == MxdbgTypeKindArray or kind == MxdbgTypeKindManagedRecord
+end 'mxdbgTypeKindIsIndirect'
 
 // The word a type record's kind renders as. A kind this build does not know renders as its NUMBER, which
 // is the only honest answer for a file some other writer made.

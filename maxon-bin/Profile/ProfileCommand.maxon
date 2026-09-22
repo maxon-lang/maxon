@@ -74,14 +74,13 @@
 	// profile that hits its deadline has every sample it took, so it reports them as PARTIAL. There is no
 	// refusal here to attach a "raise it and run again" recourse to.
 	let DefaultTimeoutSeconds = 600.0 as ProfileSeconds
-	let MaxTimeoutSeconds = 922337203685.0 as ProfileSeconds
 
 	// The half-sentence a deadline's refusal is built around, so the flag and its refusal describe one rule.
 	let PositiveSecondsRequirement = "needs a positive number of seconds"
 
 	// How long one drained line may keep the tick loop from its deadline: a bounded number of lines per
 	// stream per tick, so a chatty child cannot starve the sampler while an idle one costs two polls.
-	let MaxDrainedLinesPerTick = 4
+	let MaxDrainedLinesPerTick = 4 as ChildLineTally
 
 	// The kill a deadline performs: the shortest wait that still terminates the child.
 	let KillWaitMs = 1 as DurationMs
@@ -236,15 +235,10 @@
 	// deadline that rounds away to zero expires before the program could possibly run, and would then be
 	// reported as a setting the caller asked for.
 	function recordProfileTimeout(request ProfileRequest, raw String) returns bool
-		let seconds = try float.fromString(raw) otherwise 'notANumber'
-			return false
-		end 'notANumber'
-
-		if not (seconds > 0.0 and seconds <= MaxTimeoutSeconds) 'notAPositiveFiniteDuration'
-			return false
-		end 'notAPositiveFiniteDuration'
-
-		request.timeoutSeconds = seconds as ProfileSeconds
+		match parsePositiveSeconds(raw) 'read'
+			refused then return false
+			reading(value) then request.timeoutSeconds = value.seconds as ProfileSeconds
+		end 'read'
 
 		return true
 	end 'recordProfileTimeout'
@@ -254,34 +248,13 @@
 	// `MAXON_MAX_PROCS` that is the difference between a reproducible green-thread profile and a
 	// machine-dependent one. A repeated NAME takes the LAST value, matching a shell assignment.
 	function recordProfileTargetEnv(request ProfileRequest, raw String) returns bool
-		let halves = raw.split(EnvAssignment)
-		let name = try halves.get(0) otherwise ""
-
-		if name.isEmpty() or halves.count() < 2 'noName'
-			return false
-		end 'noName'
-
-		request.targetEnv.upsert(name, value: profileEnvValueOf(halves))
+		match parseTargetEnv(raw) 'read'
+			malformed then return false
+			pair(name, value) then request.targetEnv.upsert(name, value: value)
+		end 'read'
 
 		return true
 	end 'recordProfileTargetEnv'
-
-	// Everything past the FIRST `=` is the value, because a value may contain one of its own.
-	function profileEnvValueOf(halves StringArray) returns String
-		var value = ""
-
-		for (iter, piece) in halves.withIterator() 'eachPiece'
-			if iter.index() == 0 'theName'
-				continue
-			end 'theName'
-
-			value.append(piece if value.isEmpty() and iter.index() == 1 else "{EnvAssignment}{piece}")
-		end 'eachPiece'
-
-		return value
-	end 'profileEnvValueOf'
-
-	let EnvAssignment = "="
 
 	// ========================================================================================
 	// THE MEASUREMENT
@@ -435,7 +408,7 @@
 			end 'timeToLookAgain'
 
 			session.sampleOnce(accumulator, image: image, frames: frames)
-			drainChildOutput(child)
+			_ = forwardChildOutput(child, routing: ChildOutputRouting.allToStandardError, budget: ChildLineBudget.atMost(MaxDrainedLinesPerTick))
 
 			// ⭐ LIVENESS IS CHECKED AFTER THE SAMPLE, so a short program's last moments are measured rather
 			// than lost to a check that happened to win the race.
@@ -463,7 +436,7 @@
 			_ = try child.waitWithTimeout(KillWaitMs) otherwise 0
 		end 'stillRunning'
 
-		drainChildTail(child)
+		_ = forwardChildTail(child, routing: ChildOutputRouting.allToStandardError)
 
 		return emitProfileReport(request, report: accumulator.finish(reportPathDisplay(request.exePath), targetStatus: status, runCompleted: completed, requestedRateHz: request.rateHz, ticks: session.ticks, durationSeconds: seconds, minPercent: request.minPercent))
 	end 'runProfileTicks'
@@ -483,65 +456,6 @@
 			exited gives true
 		end 'k'
 	end 'profileStatusObserved'
-
-	// ⭐ **THE PROFILED PROGRAM'S OWN OUTPUT GOES TO STDERR — BOTH STREAMS OF IT** — which is what keeps
-	// stdout exactly the report. Bounded per tick: a chatty child must not starve the sampler's schedule.
-	function drainChildOutput(child StreamingSubprocess)
-		for stream in ProfileChildStream.allCases 'eachStream'
-			var taken = 0
-			var buffered = true
-
-			while buffered and taken < MaxDrainedLinesPerTick 'someOfIt'
-				match pollProfileChildLine(child, stream: stream) 'polled'
-					line(text) then printError("{text}\n")
-					none then buffered = false
-				end 'polled'
-
-				taken = taken + 1
-			end 'someOfIt'
-		end 'eachStream'
-	end 'drainChildOutput'
-
-	// Everything the child left behind once it has ended, including a final line it wrote with no terminator
-	// — the poll stops at a newline that never arrives, and by this point an empty blocking read can only be
-	// end of stream.
-	function drainChildTail(child StreamingSubprocess)
-		for stream in ProfileChildStream.allCases 'eachStream'
-			var buffered = true
-
-			while buffered 'untilNothingIsBuffered'
-				match pollProfileChildLine(child, stream: stream) 'polled'
-					line(text) then printError("{text}\n")
-					none then buffered = false
-				end 'polled'
-			end 'untilNothingIsBuffered'
-
-			let tail = readProfileChildTail(child, stream: stream)
-
-			if not tail.isEmpty() 'thereWasOne'
-				printError("{tail}\n")
-			end 'thereWasOne'
-		end 'eachStream'
-	end 'drainChildTail'
-
-	enum ProfileChildStream
-		stdout
-		stderr
-	end 'ProfileChildStream'
-
-	function pollProfileChildLine(child StreamingSubprocess, stream ProfileChildStream) returns LinePoll
-		return match stream 'which'
-			stdout gives child.tryReadStdoutLine()
-			stderr gives child.tryReadStderrLine()
-		end 'which'
-	end 'pollProfileChildLine'
-
-	function readProfileChildTail(child StreamingSubprocess, stream ProfileChildStream) returns String
-		return match stream 'which'
-			stdout gives try child.readStdoutLine() otherwise ""
-			stderr gives try child.readStderrLine() otherwise ""
-		end 'which'
-	end 'readProfileChildTail'
 
 	// ⛔ stdout is the report and nothing else. The exit code answers whether the MEASUREMENT completed: a
 	// run killed at its deadline is real data CI must not read as a finished measurement.

@@ -1,0 +1,46 @@
+let ClearMidTrapCaseLabel = "clear-while-another-machine-is-mid-trap"
+
+let SpawnSpelling = "async worker("
+let TwoProcessors = "2"
+let ContinuesPastEveryWorker = 60
+
+test 'a breakpoint cleared while other machines are still inside it lets every one of them run on'
+	let staged = builtFixture(ClearMidTrapCaseLabel, fixture: CoroutineFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let workers = stagedLinesContaining(staged, needle: SpawnSpelling)
+	let entryLine = anchorLine(staged, anchor: "worker-entry")
+
+	try Expect.atLeast(workers as AssertedInt, than: 2, message: "this case is about the machines that are still going to reach a breakpoint when it is cleared, so the fixture must spawn more than one green thread. It spawns {workers}.")
+
+	var commands = StringArray.create()
+	commands.push("{BreakCommand} {lineTarget(entryLine)}")
+	commands.push(RunCommand)
+	commands.push("{ClearCommand} {lineTarget(entryLine)}")
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine(appendedCommands(commands, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryWorker))), extraOptions: [targetEnvOption(MaxProcsVariableName, value: TwoProcessors)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let cleared = eventsOfKind(events, kind: BreakpointEventName)
+	try Expect.equal(cleared.count() as AssertedInt, expected: 2, message: "arming the breakpoint and clearing it are two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let disarmed = eventAt(cleared, index: 1)
+	try Expect.equal(textOf(disarmed, node: disarmed.root, key: ActionKey), expected: ClearedAction, message: "`{ClearCommand}` over the line the session is stopped on must report it as `{ClearedAction}`; a breakpoint the driver believes is still armed is one it will keep waiting for. {said}")
+
+	var stoppedAfterTheClear = 0
+
+	for (iter, stop) in eventsOfKind(events, kind: StopEventName).withIterator() 'eachStop'
+		if iter.index() > 0 and numberOf(stop, node: stop.root, key: LineKey) == entryLine as EventNumber 'aLaterHitOfThatLine'
+			stoppedAfterTheClear = stoppedAfterTheClear + 1
+		end 'aLaterHitOfThatLine'
+	end 'eachStop'
+
+	try Expect.equal(stoppedAfterTheClear as AssertedInt, expected: 0, message: "the breakpoint was cleared at the first stop, so no machine may report it again. It stopped there {stoppedAfterTheClear} more times. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "⛔ THE REGRESSION THIS GUARDS IS A PROCESS DEATH. Clearing a breakpoint while OTHER machines are still on their way into it leaves each of them about to take a trap on a byte nobody owns any more — and an unowned trap is `CONTINUE_SEARCH`, which is not a missed stop but the whole program dying. The run must reach its own end. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached, so the clear changed what it computed. {said}")
+	try Expect.equal(eventsOfKind(events, kind: CrashEventName).count() as AssertedInt, expected: 0, message: "the program faulted after its breakpoint was cleared. {said}")
+end 'a breakpoint cleared while other machines are still inside it lets every one of them run on'

@@ -98,8 +98,12 @@ hand-assembled chunk or the entry stub is `DataReach.declared` on that reader's 
 Std walk sees the reader; `GlobalDataTable.requireLaidOutCoversReferences` panics by label on a surviving
 `globalAddr` the layout does not hold. `usesCpuCount` keeps the ordinary kind of consumer: the Windows
 optional import band and the two hand-assembled `mrt_host_cpu_count` chunks.
-⚠ **THE ORDER OF `BackendDispatch.dataSectionRoster` IS THE `.data` ORDER**, and filtering never reorders —
-so a program that reaches every word it names lays each out at the offset a gate would have given it.
+⚠ **THE `.data` ORDER IS TWO SEGMENTS, EACH SORTED BY SIZE CLASS WITHIN ITSELF**: the user's globals first,
+then the runtime's, in `BackendDispatch.dataSectionRoster` order (`GlobalDataTable.layOut`). Filtering never
+reorders, so a program that reaches every word it names lays each out at the offset a gate would have given
+it — but the roster order alone is NOT the `.data` order, because `layOut` sorts each segment largest slot
+first. The segment split is what keeps a runtime word added anywhere from moving every user global of a
+narrower size class.
 
 The fault probe's family predicate `isFaultProbeRuntimeCallee` outlived its bit, because
 `MmRuntime.reservedCalleeReasonOf` still routes the call refusal through it; it moved there with the two
@@ -194,6 +198,29 @@ CALL OWES A LINE IN THAT ROSTER, AND ITS MINTER MUST RIDE THE SAME GATE**; the p
 body either way.
 ⭐ **`runtime/SlabRuntime.maxon`'s THIRD, FOURTH AND FIFTH ENTRY POINTS NEEDED NO NEW LINE**, because the
 roster is keyed by FILE and that file was already on it — which is the whole reason it is keyed that way.
+
+⛔⛔ **`runtime/DebugAgent.maxon` IS THE FIRST ALWAYS-REACHED TIER FAMILY, SO EVERY BYTE IT COSTS IS
+CHARGED TO EVERY PROGRAM.** It is rooted by the call the entry stub mints (`DeadFunctionElimination`'s
+`debugAgentRoots`, its own list because `compilerOwnedRoots` refuses a name a declaration carries and these
+four are declared), emitted by default on x64-windows, and dark at run time unless `MAXON_DEBUG` names it a
+control segment. ⇒ **NO GUARDED CONSTRUCT MAY APPEAR IN IT.** A ranged cast or a variable shift mints a
+panic string, and a panic string in this family lands in the `.rdata` of every program the compiler builds
+— which is how it first tripped the stdlib-loading rdata gate. Test a flag by mask, walk bytes over the
+value, and build a needed literal with `storeWord`s into scratch rather than spelling it. `--no-debug-agent`
+is the opt-out, and it is the one debugging flag that changes the executable (`--no-debug-info`'s byte
+identity stands, gated by `tests/debug/byte-identical-debug-info`).
+
+⚠ **ITS GEOMETRY IS WRITTEN TWICE AND PINNED, ON THE SLAB RUNTIME'S TERMS.**
+`Compiler/Debug/DebugControlLayout.maxon` owns the control segment's layout, the tier restates every figure,
+and `checkDebugAgentGeometry` reads the tier's own constants back out and compares them. So **a pinned
+figure, or a `__Raw` row's arity, takes a STAGED build** — tier file back to the current emitter's values →
+build C1 → restore → build C2 with C1 — exactly as the slab state region does above.
+
+⛔ **TWO x64-windows FACTS THE AGENT RESTS ON, both silent when wrong.** Windows hands a breakpoint trap a
+`CONTEXT.Rip` already backed onto the `int3`, the opposite of the POSIX convention, so the delivered pc IS
+the breakpoint's address. And the trap thunk saves `rsi`/`rdi` by hand: Maxon's own convention treats them
+as volatile (`X64PrologueEpilogue.calleeSavedOrder` is rbx and r12–r15) while Win64 requires a handler to
+preserve them, and nothing in a run reports the difference.
 
 ⛔⛔ **E3153 IS COMPLETE ON BOTH SIDES, AND THE VALUE SIDE IS COMPLETE BECAUSE IT IS ASKED OF THE VALUE
 RATHER THAN OF THE BINDING FORM.** `parseTypeReference` catches every type a runtime file WRITES.
@@ -660,6 +687,10 @@ facts worth knowing before you get there:
 
 One test per file is structural, not tidiness: a file is what ONE process runs and that process has a
 5 s default deadline, so twelve compiler-spawning tests in one file report a spurious `TIMED OUT`.
+
+⚠ **`tests/debug` IS 42 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
+debugged run inside one file's deadline. Run it as `maxon test tests/debug --timeout=60000`; the default
+deadline reports the corpus as timed out rather than failed.
 
 ## `maxon fmt`
 

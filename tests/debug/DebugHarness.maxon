@@ -240,7 +240,7 @@ end 'whitespaceTokens'
 // begins: a heading missing from it would have its rows read as the previous section's.
 export let DumpFilesHeading = "files ("
 export let DumpFunctionsHeading = "functions ("
-let DumpTypesHeading = "types ("
+export let DumpTypesHeading = "types ("
 export let DumpLineTableHeading = "line table ("
 
 // The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
@@ -424,3 +424,612 @@ end 'stagingDir'
 function listing(dir FilePath) returns PathArray
 	return try Directory.list(dir) otherwise panic("debug tests: the gate could not run — could not list {dir.toString()}")
 end 'listing'
+
+// ============================================================================================
+// THE DEBUGGER: FIXTURES, THE `maxon debug` FACES, AND THE EVENTS ONE PRINTS
+// ============================================================================================
+
+export let SteppingFixtureName = "stepping"
+export let ValuesFixtureName = "values"
+export let InlinedFixtureName = "inlined"
+export let FuzzyFixtureName = "fuzzy"
+export let CoroutineFixtureName = "coroutine"
+export let HeaplessFixtureName = "heapless"
+export let CrashFixtureName = "crash"
+export let SpinFixtureName = "spin"
+export let GenericsFixtureName = "generics"
+
+export let DebugBatchOption = "--batch"
+export let DebugCommandsOptionPrefix = "--commands="
+export let DebugCompleteOptionPrefix = "--complete="
+export let DebugStopTimeoutOptionPrefix = "--stop-timeout="
+let DebugTargetEnvOptionPrefix = "--target-env="
+export let NoDebugAgentOption = "--no-debug-agent"
+export let MaxProcsVariableName = "MAXON_MAX_PROCS"
+let CommandSeparator = ";"
+
+export let SidecarSuffix = ".mxdbg"
+
+// A line of a staged fixture, found by the `// anchor: <name>` comment exactly one line carries.
+let AnchorMarker = "// anchor: "
+
+typealias SourceLine = int(1 to u32.max)
+typealias EventIndex = int(0 to u32.max)
+typealias EventTally = int(0 to u32.max)
+export typealias EventNumber = int(i64.min to i64.max)
+export typealias JsonDocArray = Array with JsonDoc
+
+// What a reader answers for a key an event does not carry. The caller reports the absence naming the
+// key and printing the whole event, exactly as `describedLocalType` reports an absent local row.
+export let AbsentEventText = ""
+let AbsentEventNumber = i64.min
+
+let JsonObjectOpen = "\{"
+
+export union CodeRangeLookup
+	none
+	range(start SidecarNumber, limit SidecarNumber)
+end 'CodeRangeLookup'
+
+// ============================================================================================
+// SPAWNING THE DRIVER'S THREE FACES
+// ============================================================================================
+
+export function spawnDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(DebugSubcommandName)
+	arguments.push(DebugBatchOption)
+	arguments.push("{DebugCommandsOptionPrefix}{commands}")
+
+	for option in extraOptions 'eachOption'
+		arguments.push(option)
+	end 'eachOption'
+
+	arguments.push(executable.toString())
+
+	return spawnCompiler(arguments, staged: staged, what: "`{DebugSubcommandName} {DebugBatchOption}`")
+end 'spawnDebugBatch'
+
+export function spawnDebugComplete(executable FilePath, staged FilePath, partial String) returns CollectedOutput
+	var arguments = StringArray.create()
+	arguments.push(DebugSubcommandName)
+	arguments.push("{DebugCompleteOptionPrefix}{partial}")
+	arguments.push(executable.toString())
+
+	return spawnCompiler(arguments, staged: staged, what: "`{DebugSubcommandName} {DebugCompleteOptionPrefix}`")
+end 'spawnDebugComplete'
+
+// The REPL face: no `--batch`, the script on the driver's own stdin, one command per line.
+export function spawnDebugRepl(executable FilePath, staged FilePath, script String) returns CollectedOutput
+	let binary = testedDebugDriverPath()
+
+	if not File.exists(binary) 'noBinary'
+		panic("debug tests: the gate could not run — the REPL case needs a compiler at {binary.toString()} and there is none. Build `{TestedCompilerStem}` first, from the CHECKOUT ROOT.")
+	end 'noBinary'
+
+	var arguments = StringArray.create()
+	arguments.push(DebugSubcommandName)
+	arguments.push(executable.toString())
+
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+	config.standardInput = InputSource.bytes(script)
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("debug tests: the gate could not run — could not spawn the `{DebugSubcommandName}` REPL ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'spawnDebugRepl'
+
+// The same path `spawnCompiler` resolves, reachable from the one spawn that does not go through it
+// because it feeds the child a stdin of its own.
+function testedDebugDriverPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{debugExecutableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
+
+	return relative.resolve(Directory.currentPath())
+end 'testedDebugDriverPath'
+
+function debugExecutableSuffix() returns String
+	#if os(Windows)
+		let suffix = ".exe"
+	#else
+		let suffix = ""
+	#endif
+
+	return suffix
+end 'debugExecutableSuffix'
+
+// `--target-env=NAME=VALUE`, the one option that reaches the DEBUGGEE's environment rather than the
+// driver's.
+export function targetEnvOption(name String, value String) returns String
+	return "{DebugTargetEnvOptionPrefix}{name}={value}"
+end 'targetEnvOption'
+
+export function debugCommandLine(commands StringArray) returns String
+	var line = ""
+
+	for command in commands 'eachCommand'
+		line = command if line.isEmpty() else "{line}{CommandSeparator}{command}"
+	end 'eachCommand'
+
+	return line
+end 'debugCommandLine'
+
+// ============================================================================================
+// THE BATCH EVENT STREAM — one JSON object per stdout line, asserted as PARSED FIELDS
+// ============================================================================================
+
+// ⛔ A line that OPENS an object and does not parse PANICS: `--batch` promises a pure-JSON stdout, so a
+// line that is neither blank nor an object is the gate having nothing to read rather than a driver
+// answering wrongly.
+export function batchEvents(stdout String) returns JsonDocArray
+	var events = JsonDocArray.create()
+
+	for rawLine in withoutCarriageReturns(stdout).split(LineFeed) 'eachLine'
+		let line = rawLine.trim()
+
+		if not line.startsWith(JsonObjectOpen) 'notAnEventLine'
+			continue
+		end 'notAnEventLine'
+
+		let doc = try Json.parse(line) otherwise panic("debug tests: the gate could not run — `{DebugBatchOption}` wrote a line that opens a JSON object and does not parse: {line}")
+		events.push(doc)
+	end 'eachLine'
+
+	return events
+end 'batchEvents'
+
+function eventKind(event JsonDoc) returns String
+	return textOf(event, node: event.root, key: "event")
+end 'eventKind'
+
+export function eventKinds(events JsonDocArray) returns StringArray
+	var kinds = StringArray.create()
+
+	for event in events 'eachEvent'
+		kinds.push(eventKind(event))
+	end 'eachEvent'
+
+	return kinds
+end 'eventKinds'
+
+export function eventsOfKind(events JsonDocArray, kind String) returns JsonDocArray
+	var matching = JsonDocArray.create()
+
+	for event in events 'eachEvent'
+		if eventKind(event) == kind 'thisKind'
+			matching.push(event)
+		end 'thisKind'
+	end 'eachEvent'
+
+	return matching
+end 'eventsOfKind'
+
+export function eventAt(events JsonDocArray, index EventIndex) returns JsonDoc
+	return try events.get(index) otherwise panic("debug tests: the gate could not run — event {index} was looked up in a stream of {events.count()}")
+end 'eventAt'
+
+// ============================================================================================
+// READING ONE EVENT'S FIELDS
+// ============================================================================================
+
+export function textOf(doc JsonDoc, node JsonNodeId, key String) returns String
+	return try doc.getString(node, key: key) otherwise AbsentEventText
+end 'textOf'
+
+export function numberOf(doc JsonDoc, node JsonNodeId, key String) returns EventNumber
+	return try doc.getInt(node, key: key) otherwise AbsentEventNumber
+end 'numberOf'
+
+export function flagOf(doc JsonDoc, node JsonNodeId, key String) returns bool
+	return try doc.getBool(node, key: key) otherwise false
+end 'flagOf'
+
+// The one node a key names, as a list of AT MOST ONE — so "the key is absent" is a count of zero
+// rather than a node id standing in for nothing.
+export function memberOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
+	var found = JsonNodeIdArray.create()
+	let child = try doc.getChild(node, key: key) otherwise return found
+	found.push(child)
+
+	return found
+end 'memberOf'
+
+// The elements of an array-valued key, EMPTY when the key is absent or is not an array — which the
+// caller reports as the list being missing, naming the key.
+export function childrenOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
+	var children = JsonNodeIdArray.create()
+	let arrayId = try doc.getChild(node, key: key) otherwise return children
+	let length = try doc.arrayLength(arrayId) otherwise return children
+
+	for i in 0 upto length 'eachElement'
+		children.push(try doc.arrayAt(arrayId, index: i) otherwise continue)
+	end 'eachElement'
+
+	return children
+end 'childrenOf'
+
+// The whole stream as the text a failure report shows.
+export function renderedEvents(stdout String, stderr String) returns String
+	return "It wrote to stdout:{renderedRows(withoutCarriageReturns(stdout).split(LineFeed))}{LineFeed}and to stderr:{renderedRows(withoutCarriageReturns(stderr).split(LineFeed))}"
+end 'renderedEvents'
+
+// ============================================================================================
+// THE STAGED SOURCE — every line a case names is found by its anchor, never written down
+// ============================================================================================
+
+export function anchorLine(staged FilePath, anchor String) returns SourceLine
+	let program = staged.join(StagedProgramFileName)
+	let marker = "{AnchorMarker}{anchor}"
+	var found = 0
+	var carriers = 0
+
+	for (iter, line) in linesOfStagedSource(program).withIterator() 'eachLine'
+		if line.trim().endsWith(marker) 'thisAnchor'
+			found = iter.index() + 1
+			carriers = carriers + 1
+		end 'thisAnchor'
+	end 'eachLine'
+
+	if carriers != 1 'notExactlyOne'
+		panic("debug tests: the gate could not run — {carriers} lines of {program.toString()} carry '{marker}'; exactly one must, or the case names a line it is not about.")
+	end 'notExactlyOne'
+
+	return found as SourceLine
+end 'anchorLine'
+
+export function stagedLinesContaining(staged FilePath, needle String) returns EventTally
+	var tally = 0
+
+	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
+		tally = tally + 1 if line.contains(needle) else tally
+	end 'eachLine'
+
+	return tally as EventTally
+end 'stagedLinesContaining'
+
+// The staged program's own file name, as a `file:line` break target and an event's `file` field spell it.
+// ============================================================================================
+// THE DUMP'S FUNCTION AND TYPE BLOCKS — a row and the rows nested under it
+// ============================================================================================
+
+// A function row carries the frame column; a local row nested under it does not, which is what tells
+// the two apart once `dumpSectionRows` has trimmed the indentation away.
+let FunctionRowColumn = "frame="
+let TypeFieldRowPrefix = "+0x"
+let TypeRowPrefix = "["
+
+export function functionRowOf(functionRows StringArray, name String) returns String
+	for row in functionRows 'eachRow'
+		if row.contains(FunctionRowColumn) and firstToken(row) == name 'thisFunction'
+			return row
+		end 'thisFunction'
+	end 'eachRow'
+
+	return AbsentEventText
+end 'functionRowOf'
+
+export function localRowsOf(functionRows StringArray, name String) returns StringArray
+	var locals = StringArray.create()
+	var inside = false
+
+	for row in functionRows 'eachRow'
+		if row.contains(FunctionRowColumn) 'aFunctionRow'
+			inside = firstToken(row) == name
+			continue
+		end 'aFunctionRow'
+
+		if inside 'aLocalOfThisFunction'
+			locals.push(row)
+		end 'aLocalOfThisFunction'
+	end 'eachRow'
+
+	return locals
+end 'localRowsOf'
+
+export function declaredFunctionRows(functionRows StringArray) returns StringArray
+	var rows = StringArray.create()
+
+	for row in functionRows 'eachRow'
+		if row.contains(FunctionRowColumn) 'aFunctionRow'
+			rows.push(row)
+		end 'aFunctionRow'
+	end 'eachRow'
+
+	return rows
+end 'declaredFunctionRows'
+
+export function typeRowOf(typeRows StringArray, name String) returns String
+	for row in typeRows 'eachRow'
+		if row.startsWith(TypeRowPrefix) and typeNameIn(row) == name 'thisType'
+			return row
+		end 'thisType'
+	end 'eachRow'
+
+	return AbsentEventText
+end 'typeRowOf'
+
+export function typeFieldRowsOf(typeRows StringArray, name String) returns StringArray
+	var fields = StringArray.create()
+	var inside = false
+
+	for row in typeRows 'eachRow'
+		if row.startsWith(TypeRowPrefix) 'aTypeRow'
+			inside = typeNameIn(row) == name
+			continue
+		end 'aTypeRow'
+
+		if inside and row.startsWith(TypeFieldRowPrefix) 'aFieldOfThisType'
+			fields.push(row)
+		end 'aFieldOfThisType'
+	end 'eachRow'
+
+	return fields
+end 'typeFieldRowsOf'
+
+// A type row is `[N] NAME KIND size=… align=… fields=…`, so its name is the second word and its kind
+// the third.
+function typeNameIn(row String) returns String
+	return try whitespaceTokens(row).get(1) otherwise AbsentEventText
+end 'typeNameIn'
+
+export function typeKindIn(row String) returns String
+	return try whitespaceTokens(row).get(2) otherwise AbsentEventText
+end 'typeKindIn'
+
+// The type a local row or a field row names: everything past its last `: ` separator, because a type's
+// rendering may be several words (`<generic instance>`) and a last-WORD reader answers half of one.
+export function describedTypeIn(row String) returns String
+	let pieces = row.split(TypeSeparatorToken)
+
+	if pieces.count() < 2 'namesNoType'
+		return AbsentEventText
+	end 'namesNoType'
+
+	return (try pieces.get(pieces.count() - 1) otherwise AbsentEventText).trim()
+end 'describedTypeIn'
+
+let TypeSeparatorToken = ": "
+
+export function firstToken(row String) returns String
+	return try whitespaceTokens(row).get(0) otherwise AbsentEventText
+end 'firstToken'
+
+// The `lines=` column of a function row, as a number.
+export function columnValueIn(row String, column String) returns SidecarNumber
+	for token in whitespaceTokens(row) 'eachToken'
+		if token.startsWith(column) 'thisColumn'
+			return decimalValue(token.replace(column, with: ""))
+		end 'thisColumn'
+	end 'eachToken'
+
+	return 0
+end 'columnValueIn'
+
+function decimalValue(token String) returns SidecarNumber
+	var value = 0
+
+	for c in token.trim() 'eachCharacter'
+		let code = try c.asciiValue() otherwise break
+
+		if code < AsciiDigitZero or code > AsciiDigitNine 'pastTheDigits'
+			break
+		end 'pastTheDigits'
+
+		value = value * DecimalBase + (code - AsciiDigitZero)
+	end 'eachCharacter'
+
+	return value
+end 'decimalValue'
+
+// A `[0xSTART, 0xLIMIT)` pair anywhere in a row: the function row's code range, or the scope range a
+// local row carries. A location column spells `[rbp-0x18]`, which opens no pair because it does not
+// close with a comma.
+export function codeRangeIn(row String) returns CodeRangeLookup
+	let tokens = whitespaceTokens(row)
+
+	for (iter, token) in tokens.withIterator() 'eachToken'
+		if not token.startsWith(RangeOpen) or not token.endsWith(RangeSeparator) 'notARangeStart'
+			continue
+		end 'notARangeStart'
+
+		let limitToken = try tokens.get(iter.index() + 1) otherwise continue
+
+		if not limitToken.endsWith(RangeClose) 'notARangeLimit'
+			continue
+		end 'notARangeLimit'
+
+		return CodeRangeLookup.range(hexValue(token.replace(RangeOpen, with: "").replace(RangeSeparator, with: "")), limit: hexValue(limitToken.replace(RangeClose, with: "")))
+	end 'eachToken'
+
+	return CodeRangeLookup.none
+end 'codeRangeIn'
+
+let RangeOpen = "[0x"
+let RangeSeparator = ","
+let RangeClose = ")"
+
+// ============================================================================================
+// THE VOCABULARY EVERY CASE SPELLS — commands, event names, keys and the values they take
+// ============================================================================================
+//
+// ⛔ ONE HOME, because a file-private `let` does not collide: a command word or an event key written
+// down twice is the duplication nothing in this corpus catches for you.
+
+export let BreakCommand = "break"
+export let ClearCommand = "clear"
+export let RunCommand = "run"
+export let ContinueCommand = "continue"
+export let StepCommand = "step"
+export let NextCommand = "next"
+export let FinishCommand = "finish"
+export let BacktraceCommand = "backtrace"
+export let PrintCommand = "print"
+export let LocalsCommand = "locals"
+export let QuitCommand = "quit"
+
+export let BreakpointEventName = "breakpoint"
+export let StopEventName = "stop"
+export let BacktraceEventName = "backtrace"
+export let LocalsEventName = "locals"
+export let ValueEventName = "value"
+export let ExitEventName = "exit"
+export let CrashEventName = "crash"
+export let TimeoutEventName = "timeout"
+export let ErrorEventName = "error"
+
+export let ActionKey = "action"
+export let FunctionKey = "function"
+export let FileKey = "file"
+export let LineKey = "line"
+export let ReasonKey = "reason"
+export let CodeKey = "code"
+export let FramesKey = "frames"
+export let BacktraceKey = "backtrace"
+export let LocalsKey = "locals"
+export let InlinedKey = "inlined"
+export let OffsetsKey = "offsets"
+export let CandidatesKey = "candidates"
+export let SuggestionKey = "suggestion"
+let NameKey = "name"
+export let DisplayKey = "display"
+export let UnavailableKey = "unavailable"
+export let MessageKey = "message"
+export let ValueKey = "value"
+export let FrameKey = "frame"
+
+export let SetAction = "set"
+export let ClearedAction = "cleared"
+export let AmbiguousAction = "ambiguous"
+export let NoMatchAction = "no-match"
+
+let EntryStopReason = "entry"
+export let BreakpointStopReason = "breakpoint"
+export let StepStopReason = "step"
+
+export let OptimizedOutReason = "optimized-out"
+
+// A `file.maxon:LINE` break target over the staged program, so no case writes a line number down.
+export function lineTarget(line SourceLine) returns String
+	return "{StagedProgramFileName}:{line}"
+end 'lineTarget'
+
+// One staged, built fixture — the preamble every case in this corpus opens with, in ONE place. A build
+// that failed stops the case running at all, so it panics naming the fixture rather than failing an
+// assertion about a debugger that was never handed a program.
+export function builtFixture(caseLabel String, fixture String, extraArguments StringArray = StringArray.create()) returns FilePath
+	let staged = stagedFixture(caseLabel, fixture: fixture)
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: fixture, extraArguments: extraArguments)
+
+	if build.exitCode() != 0 'didNotBuild'
+		panic("debug tests: the gate could not run — the '{fixture}' build for case '{caseLabel}' exited {build.exitCode()}, so there is no program to debug. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	return staged
+end 'builtFixture'
+
+// The program run with nothing attached — the control every case comparing a debugged run with an
+// undebugged one needs, because "the answer looks right" is not the claim; "the answer is the SAME" is.
+export function runBuiltProgram(staged FilePath, arguments StringArray = StringArray.create()) returns CollectedOutput
+	let program = builtExecutable(staged)
+
+	if not File.exists(program) 'noProgram'
+		panic("debug tests: the gate could not run — there is no program at {program.toString()} to run undebugged.")
+	end 'noProgram'
+
+	var config = Configuration.create(Executable.path(program))
+	config.arguments = arguments
+	config.workingDirectory = staged
+
+	return try config.run() otherwise (e) 'spawnFailed'
+		panic("debug tests: the gate could not run — could not run {program.toString()} undebugged ({e.displayReason()}).")
+	end 'spawnFailed'
+end 'runBuiltProgram'
+
+// A command repeated: the only honest way to drive a session past a breakpoint whose hit count is a
+// property of the fixture's loops rather than of the debugger.
+export function repeatedCommand(command String, times EventTally) returns StringArray
+	var commands = StringArray.create()
+
+	for _ in 0 upto times 'eachRepeat'
+		commands.push(command)
+	end 'eachRepeat'
+
+	return commands
+end 'repeatedCommand'
+
+export function appendedCommands(first StringArray, rest StringArray) returns StringArray
+	var all = StringArray.create()
+
+	for command in first 'eachFirst'
+		all.push(command)
+	end 'eachFirst'
+
+	for command in rest 'eachRest'
+		all.push(command)
+	end 'eachRest'
+
+	return all
+end 'appendedCommands'
+
+// A string element of an array-valued key — a candidate name, a completion — read off the node itself
+// rather than out of an object field, because the element IS the string.
+export function stringAt(doc JsonDoc, node JsonNodeId) returns String
+	return doc.get(node).stringValue
+end 'stringAt'
+
+export function stringsOf(doc JsonDoc, node JsonNodeId, key String) returns StringArray
+	var strings = StringArray.create()
+
+	for element in childrenOf(doc, node: node, key: key) 'eachElement'
+		strings.push(stringAt(doc, node: element))
+	end 'eachElement'
+
+	return strings
+end 'stringsOf'
+
+// ============================================================================================
+// RENDERED VALUES — a `locals` list, a `print` answer, a struct's children
+// ============================================================================================
+
+// Every value of a list as `name=display`, which is what a disagreement has to show a reader: a
+// display that is wrong is only legible beside the name it was rendered for.
+export function valueRows(doc JsonDoc, node JsonNodeId, key String) returns StringArray
+	var rows = StringArray.create()
+
+	for value in childrenOf(doc, node: node, key: key) 'eachValue'
+		rows.push("{textOf(doc, node: value, key: NameKey)}={textOf(doc, node: value, key: DisplayKey)}")
+	end 'eachValue'
+
+	return rows
+end 'valueRows'
+
+// The one value of a list carrying `name` — EMPTY when the list holds none, which the caller reports
+// as the value being missing rather than as a wrong rendering of it.
+export function valueNamed(doc JsonDoc, node JsonNodeId, key String, name String) returns JsonNodeIdArray
+	var found = JsonNodeIdArray.create()
+
+	for value in childrenOf(doc, node: node, key: key) 'eachValue'
+		if textOf(doc, node: value, key: NameKey) == name 'thisValue'
+			found.push(value)
+		end 'thisValue'
+	end 'eachValue'
+
+	return found
+end 'valueNamed'
+
+export function nodeAt(nodes JsonNodeIdArray, index EventIndex) returns JsonNodeId
+	return try nodes.get(index) otherwise panic("debug tests: the gate could not run — node {index} was looked up in a list of {nodes.count()}")
+end 'nodeAt'
+
+export let ChildrenKey = "children"
+
+// A row whose code range is a PRECONDITION rather than the claim — a function row, whose
+// `[0xSTART, 0xLIMIT)` the dump has printed since `sidecar-dump` first pinned it.
+export function requiredCodeRange(row String, what String) returns (SidecarNumber, SidecarNumber)
+	match codeRangeIn(row) 'theRange'
+		none then panic("debug tests: the gate could not run — {what} carries no `[0xSTART, 0xLIMIT)` code range: {row}")
+		range(start, limit) then return (start, limit)
+	end 'theRange'
+end 'requiredCodeRange'

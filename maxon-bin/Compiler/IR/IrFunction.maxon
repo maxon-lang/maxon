@@ -175,7 +175,12 @@ let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
 var sharedEmptyParamGuards = RangeCheckParamGuardArray.create()
 var sharedEmptyInlineSites = InlineSiteArray.create()
 
-// ⭐⭐ **ONE SOURCE NAME A DEBUGGER CAN BE ASKED ABOUT, AND EVERY SSA VALUE IT EVER OWNED.**
+export union DebugFoldedConstant
+	none
+	immediate(value ParsedInt)
+end 'DebugFoldedConstant'
+
+// One source name a debugger can be asked about, and every SSA value it ever owned.
 //
 // A name owns a SEQUENCE of values, not one: `mergeAtContinuation` mints a fresh `ValueId` where control
 // flow rejoins and a loop header mints a phi, so a `var` written in both arms of an `if` and read after it
@@ -195,12 +200,47 @@ export type DebugLocalDecl
 	// answer for such a binding is `optimizedOut`.
 	export var heldInACell as bool
 
+	export var foldedConstant as DebugFoldedConstant = DebugFoldedConstant.none
+
+	export var foldedRecord as ParsedIntArray = ParsedIntArray.create()
+
 	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, heldInACell bool) returns DebugLocalDecl
 		var valueIds = ValueIdArray.create()
 		valueIds.push(firstValue)
 
 		return Self{name: name, declaredType: declaredType.clone(), valueIds: valueIds, heldInACell: heldInACell}
 	end 'create'
+
+	export function noteFoldedConstant(value ValueId, constant ParsedInt)
+		match self.foldedConstant 'already'
+			none then break 'already'
+			immediate then return
+		end 'already'
+
+		if self.namesValue(value) 'thisBinding'
+			self.foldedConstant = DebugFoldedConstant.immediate(constant)
+		end 'thisBinding'
+	end 'noteFoldedConstant'
+
+	export function noteFoldedRecord(value ValueId, words ParsedIntArray)
+		if self.foldedRecord.count() > 0 'alreadyRecorded'
+			return
+		end 'alreadyRecorded'
+
+		if self.namesValue(value) 'thisBinding'
+			self.foldedRecord = words
+		end 'thisBinding'
+	end 'noteFoldedRecord'
+
+	function namesValue(value ValueId) returns bool
+		for named in self.valueIds 'eachValue'
+			if named == value 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachValue'
+
+		return false
+	end 'namesValue'
 
 	export function renumberTypeIds(remap TypeIdRemap)
 		self.declaredType = remapMaxonType(self.declaredType, remap: remap)
@@ -234,6 +274,21 @@ export type DebugValueLocation
 end 'DebugValueLocation'
 
 export typealias DebugValueLocationArray = Array with DebugValueLocation
+
+export typealias DebugOpAnchor = int(0 to u64.max)
+
+export type DebugValueRange
+	export var valueOrdinal as ElementIndex
+	export var blockId as BlockId
+	export var first as DebugOpAnchor
+	export var last as DebugOpAnchor
+
+	export static function create(valueOrdinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor) returns DebugValueRange
+		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: first, last: last}
+	end 'create'
+end 'DebugValueRange'
+
+export typealias DebugValueRangeArray = Array with DebugValueRange
 
 // The immutable names of one function in declaration order: the `let` bindings the author wrote and the
 // module-level `let`s its body reads (`moduleLets`, image data among them in `images`). A value bound by two of
@@ -1102,6 +1157,7 @@ end 'FunctionPlaceholders'
 // argument; this is the half of it written where the next singleton will be reached for.
 let sharedEmptyDebugLocals = DebugLocalDeclArray.create()
 let sharedEmptyDebugValueLocations = DebugValueLocationArray.create()
+let sharedEmptyDebugValueRanges = DebugValueRangeArray.create()
 
 // The store column of a function that stores into no interface-typed field, shared for
 // `sharedEmptyDebugLocals`' reason and with its invariant — never pushed into, so `createFromStd` does not
@@ -1714,6 +1770,11 @@ export type IrFunction
 	// boundary apart and only their ORDER can cross it.
 	export var debugLocalLocations as DebugValueLocationArray
 
+	// The code each of those values is live over, one row per run. A location is only that value's while
+	// the value is live: read past its last use, a register holds whatever was put there next, so a name
+	// scoped to the whole function renders another value's bits as confidently as its own.
+	export var debugLocalRanges as DebugValueRangeArray
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
@@ -1796,7 +1857,8 @@ export type IrFunction
 			paramGuards: placeholders.paramGuards,
 			inlineSites: placeholders.inlineSites,
 			debugLocals: sharedEmptyDebugLocals,
-			debugLocalLocations: sharedEmptyDebugValueLocations
+			debugLocalLocations: sharedEmptyDebugValueLocations,
+			debugLocalRanges: sharedEmptyDebugValueRanges
 		}
 	end 'create'
 
@@ -1870,7 +1932,8 @@ export type IrFunction
 			paramGuards: RangeCheckParamGuardArray.create(),
 			inlineSites: InlineSiteArray.create(),
 			debugLocals: DebugLocalDeclArray.create(),
-			debugLocalLocations: DebugValueLocationArray.create()
+			debugLocalLocations: DebugValueLocationArray.create(),
+			debugLocalRanges: DebugValueRangeArray.create()
 		}
 	end 'createFromStd'
 
@@ -1903,6 +1966,7 @@ export type IrFunction
 			valueTags: src.valueTags,
 			debugLocals: src.debugLocals,
 			debugLocalLocations: src.debugLocalLocations,
+			debugLocalRanges: src.debugLocalRanges,
 			valueNameIds: src.valueNameIds,
 			valueBrandIds: src.valueBrandIds,
 			valueMintedSole: src.valueMintedSole,

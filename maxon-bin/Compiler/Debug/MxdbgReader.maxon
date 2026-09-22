@@ -64,10 +64,20 @@ export type MxdbgTypeInfo
 	export var align as MxdbgIndex
 	export var fieldFirst as MxdbgIndex
 	export var fieldCount as MxdbgIndex
+	export var elementTypeId as MxdbgIndex
+	export var flags as MxdbgIndex
 
-	export static function create(name String, kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fieldFirst MxdbgIndex, fieldCount MxdbgIndex) returns MxdbgTypeInfo
-		return Self{name: name, kind: kind, size: size, align: align, fieldFirst: fieldFirst, fieldCount: fieldCount}
+	export static function create(name String, kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fieldFirst MxdbgIndex, fieldCount MxdbgIndex, elementTypeId MxdbgIndex, flags MxdbgIndex) returns MxdbgTypeInfo
+		return Self{name: name, kind: kind, size: size, align: align, fieldFirst: fieldFirst, fieldCount: fieldCount, elementTypeId: elementTypeId, flags: flags}
 	end 'create'
+
+	export function describesAnElement() returns bool
+		return self.elementTypeId != MxdbgNoElementType
+	end 'describesAnElement'
+
+	export function isSigned() returns bool
+		return (self.flags and MxdbgTypeFlagSigned) != 0
+	end 'isSigned'
 end 'MxdbgTypeInfo'
 
 // One field record, materialized. For an enum entry a "field" is a CASE and `offset` is its RAW TAG
@@ -90,10 +100,27 @@ export type MxdbgLocalInfo
 	export var typeId as MxdbgIndex
 	export var scopeStart as MxdbgCodeOffset
 	export var scopeEnd as MxdbgCodeOffset
+	export var flags as MxdbgIndex
 
-	export static function create(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset) returns MxdbgLocalInfo
-		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd}
+	export static function create(name String, locKind MxdbgIndex, locValue MxdbgLocValue, typeId MxdbgIndex, scopeStart MxdbgCodeOffset, scopeEnd MxdbgCodeOffset, flags MxdbgIndex) returns MxdbgLocalInfo
+		return Self{name: name, locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags}
 	end 'create'
+
+	export function holdsAPointer() returns bool
+		return (self.flags and MxdbgLocalFlagIndirect) != 0
+	end 'holdsAPointer'
+
+	export function isAConstant() returns bool
+		return self.locKind == MxdbgLocKindConstant
+	end 'isAConstant'
+
+	export function isAFoldedAggregate() returns bool
+		return self.locKind == MxdbgLocKindFoldedAggregate
+	end 'isAFoldedAggregate'
+
+	export function covers(codeOffset MxdbgCodeOffset) returns bool
+		return codeOffset >= self.scopeStart and codeOffset < self.scopeEnd
+	end 'covers'
 end 'MxdbgLocalInfo'
 
 // One coverage point, materialized. Its COUNTER INDEX is its index in this table — the same number the
@@ -200,6 +227,8 @@ export type MxdbgReader
 	var inlineSiteTally as MxdbgIndex
 	var inlineRangeTableOff as ByteOffset
 	var inlineRangeTally as MxdbgIndex
+	var constTableOff as ByteOffset
+	var constTally as MxdbgIndex
 
 	// Function indices in code-start order, which is what makes `functionContaining` a binary search. It is
 	// a sort rather than a claim about the writer: a sidecar may store its table in emission order, so a walk
@@ -266,10 +295,17 @@ export type MxdbgReader
 			throw MxdbgReadError.truncated
 		end 'inlineTablePastEnd'
 
+		let constTableOff = imageReadU32(image, at: MxdbgOffConstTableOff) as ByteOffset
+		let constTally = imageReadU32(image, at: MxdbgOffConstCount) as MxdbgIndex
+
+		if not imageRangeFits(image, start: constTableOff, count: (constTally * MxdbgConstEntrySize) as BytePos) 'constTablePastEnd'
+			throw MxdbgReadError.truncated
+		end 'constTablePastEnd'
+
 		let tripleOff = imageReadU32(image, at: MxdbgOffTripleOff) as ByteOffset
 		let tripleLen = imageReadU32(image, at: MxdbgOffTripleLen) as BytePos
 
-		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
+		return Self{image: image, buildId: imageReadU64(image, at: MxdbgOffBuildId) as HashDigest, triple: String.from(imageSlice(image, start: stringPoolOff + tripleOff, count: tripleLen)), stringPoolOff: stringPoolOff, fileTableOff: fileTableOff, fileTally: fileTally, funcTableOff: funcTableOff, funcTally: funcTally, lineTableOff: lineTableOff, lineTally: lineTally, typeTableOff: typeTableOff, typeTally: typeTally, fieldTableOff: fieldTableOff, fieldTally: fieldTally, localTableOff: localTableOff, localTally: localTally, covTableOff: covTableOff, covTally: covTally, inlineSiteTableOff: inlineSiteTableOff, inlineSiteTally: inlineSiteTally, inlineRangeTableOff: inlineRangeTableOff, inlineRangeTally: inlineRangeTally, constTableOff: constTableOff, constTally: constTally, funcOrder: functionOrderByCodeStart(image, tableOff: funcTableOff, tally: funcTally)}
 	end 'parse'
 
 	export function fileCount() returns MxdbgIndex
@@ -310,6 +346,18 @@ export type MxdbgReader
 	export function inlineRangeCount() returns MxdbgIndex
 		return self.inlineRangeTally
 	end 'inlineRangeCount'
+
+	export function constantWordCount() returns MxdbgIndex
+		return self.constTally
+	end 'constantWordCount'
+
+	export function constantWord(index MxdbgIndex) returns MxdbgLocValue
+		if index >= self.constTally 'noSuchWord'
+			panic("MxdbgReader.constantWord: word {index} is past the sidecar's {self.constTally} — every caller bounds itself by the window its local record names")
+		end 'noSuchWord'
+
+		return mxdbgSignedWord(imageReadU32(self.image, at: self.constTableOff + (index * MxdbgConstEntrySize) as ByteOffset) as MxdbgIndex)
+	end 'constantWord'
 
 	export function inlineSite(index MxdbgIndex) returns MxdbgInlineSiteInfo
 		if index >= self.inlineSiteTally 'noSuchSite'
@@ -368,7 +416,7 @@ export type MxdbgReader
 
 		let rec = self.typeTableOff + (index * MxdbgTypeEntrySize) as ByteOffset
 
-		return MxdbgTypeInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgTypeNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgTypeNameLen) as BytePos), kind: imageReadU32(self.image, at: rec + MxdbgTypeKindWord) as MxdbgIndex, size: imageReadU32(self.image, at: rec + MxdbgTypeSize) as MxdbgIndex, align: imageReadU32(self.image, at: rec + MxdbgTypeAlign) as MxdbgIndex, fieldFirst: imageReadU32(self.image, at: rec + MxdbgTypeFieldFirst) as MxdbgIndex, fieldCount: imageReadU32(self.image, at: rec + MxdbgTypeFieldCount) as MxdbgIndex)
+		return MxdbgTypeInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgTypeNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgTypeNameLen) as BytePos), kind: imageReadU32(self.image, at: rec + MxdbgTypeKindWord) as MxdbgIndex, size: imageReadU32(self.image, at: rec + MxdbgTypeSize) as MxdbgIndex, align: imageReadU32(self.image, at: rec + MxdbgTypeAlign) as MxdbgIndex, fieldFirst: imageReadU32(self.image, at: rec + MxdbgTypeFieldFirst) as MxdbgIndex, fieldCount: imageReadU32(self.image, at: rec + MxdbgTypeFieldCount) as MxdbgIndex, elementTypeId: imageReadU32(self.image, at: rec + MxdbgTypeElementTypeId) as MxdbgIndex, flags: imageReadU32(self.image, at: rec + MxdbgTypeFlags) as MxdbgIndex)
 	end 'typeRecord'
 
 	export function fieldRecord(index MxdbgIndex) returns MxdbgFieldInfo
@@ -388,7 +436,7 @@ export type MxdbgReader
 
 		let rec = self.localTableOff + (index * MxdbgLocalEntrySize) as ByteOffset
 
-		return MxdbgLocalInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgLocalNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgLocalNameLen) as BytePos), locKind: imageReadU32(self.image, at: rec + MxdbgLocalLocKind) as MxdbgIndex, locValue: mxdbgSignedWord(imageReadU32(self.image, at: rec + MxdbgLocalLocValue) as MxdbgIndex), typeId: imageReadU32(self.image, at: rec + MxdbgLocalTypeId) as MxdbgIndex, scopeStart: imageReadU32(self.image, at: rec + MxdbgLocalScopeStart) as MxdbgCodeOffset, scopeEnd: imageReadU32(self.image, at: rec + MxdbgLocalScopeEnd) as MxdbgCodeOffset)
+		return MxdbgLocalInfo.create(self.poolString(imageReadU32(self.image, at: rec + MxdbgLocalNameOff) as ByteOffset, length: imageReadU32(self.image, at: rec + MxdbgLocalNameLen) as BytePos), locKind: imageReadU32(self.image, at: rec + MxdbgLocalLocKind) as MxdbgIndex, locValue: mxdbgSignedWord(imageReadU32(self.image, at: rec + MxdbgLocalLocValue) as MxdbgIndex), typeId: imageReadU32(self.image, at: rec + MxdbgLocalTypeId) as MxdbgIndex, scopeStart: imageReadU32(self.image, at: rec + MxdbgLocalScopeStart) as MxdbgCodeOffset, scopeEnd: imageReadU32(self.image, at: rec + MxdbgLocalScopeEnd) as MxdbgCodeOffset, flags: imageReadU32(self.image, at: rec + MxdbgLocalFlags) as MxdbgIndex)
 	end 'localRecord'
 
 	export function coveragePoint(index MxdbgIndex) returns MxdbgCovPointInfo
@@ -495,6 +543,37 @@ export type MxdbgReader
 			found(fn) then return self.lastRowAtOrBefore(fn, codeOffset: codeOffset)
 		end 'enclosing'
 	end 'pcToLine'
+
+	export function lineToOffsets(fileIds MxdbgIndexArray, line MxdbgIndex) returns MxdbgCodeOffsetArray
+		var offsets = MxdbgCodeOffsetArray.create()
+
+		if fileIds.count() == 0 'noFileNamed'
+			return offsets
+		end 'noFileNamed'
+
+		for i in 0 upto self.lineTally 'eachRow'
+			let rec = self.lineTableOff + (i * MxdbgLineEntrySize) as ByteOffset
+
+			if (imageReadU32(self.image, at: rec + MxdbgLineFlags) and MxdbgLineFlagStatement) == 0 'notAStatement'
+				continue
+			end 'notAStatement'
+
+			if (imageReadU32(self.image, at: rec + MxdbgLineLine) as MxdbgIndex) != line or not fileIds.contains(imageReadU32(self.image, at: rec + MxdbgLineFileId) as MxdbgIndex) 'anotherLine'
+				continue
+			end 'anotherLine'
+
+			offsets.push(imageReadU32(self.image, at: rec + MxdbgLineCodeOffset) as MxdbgCodeOffset)
+		end 'eachRow'
+
+		return offsets
+	end 'lineToOffsets'
+
+	// The offset to look up for a code offset that is a RETURN address, stated once for every walker. A
+	// return address is the instruction after the call, so resolving it unbiased names the next line — and
+	// where the call is a function's last instruction, the next FUNCTION.
+	export static function callSiteLookup(codeOffset MxdbgCodeOffset) returns MxdbgCodeOffset
+		return codeOffset - ReturnAddrSymbolBias if codeOffset > 0 else codeOffset
+	end 'callSiteLookup'
 
 	function lastRowAtOrBefore(fn MxdbgFunctionInfo, codeOffset MxdbgCodeOffset) returns MxdbgLineLookup
 		var best = MxdbgLineLookup.none

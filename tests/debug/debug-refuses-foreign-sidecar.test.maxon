@@ -1,0 +1,26 @@
+let ForeignSidecarCaseLabel = "debug-refuses-foreign-sidecar"
+let ForeignSidecarDonorLabel = "debug-refuses-foreign-sidecar-donor"
+
+let AcceptedSessionExitCode = 0
+let ForeignSidecarExitCode = 1
+
+test 'a sidecar describing another build is refused rather than read for line numbers'
+	let subject = builtFixture(ForeignSidecarCaseLabel, fixture: HeaplessFixtureName)
+	let donor = builtFixture(ForeignSidecarDonorLabel, fixture: SteppingFixtureName)
+
+	let accepted = spawnDebugBatch(builtExecutable(subject), staged: subject, commands: RunCommand, extraOptions: StringArray.create())
+
+	try Expect.equal(accepted.exitCode() as AssertedInt, expected: AcceptedSessionExitCode, message: "this program with its OWN sidecar beside it is the CONTROL: a refusal that is equally happy to refuse a good build says nothing at all about the foreign one below. {renderedEvents(accepted.stdout, stderr: accepted.stderr)}")
+
+	let donorSidecar = try FilePath.from("{builtExecutable(donor).toString()}{SidecarSuffix}") otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — could not spell the donor's sidecar path.")
+	let subjectSidecar = try FilePath.from("{builtExecutable(subject).toString()}{SidecarSuffix}") otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — could not spell the subject's sidecar path.")
+	let donorImage = try File.readBinary(donorSidecar) otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — the donor build wrote no sidecar at {donorSidecar.toString()}.")
+
+	try File.writeBinary(subjectSidecar, content: donorImage) otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — could not put the donor's sidecar beside the subject's executable.")
+
+	let session = spawnDebugBatch(builtExecutable(subject), staged: subject, commands: RunCommand, extraOptions: StringArray.create())
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(session.exitCode() as AssertedInt, expected: ForeignSidecarExitCode, message: "a sidecar whose build-id does not fold to this image's `.text` describes another program, and reading it produces confident WRONG line numbers rather than missing ones — so the session must be refused. {said}")
+	try Expect.equal(eventsOfKind(batchEvents(session.stdout), kind: StopEventName).count() as AssertedInt, expected: 0, message: "the session stopped the program while holding a foreign sidecar. {said}")
+end 'a sidecar describing another build is refused rather than read for line numbers'

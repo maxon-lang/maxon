@@ -1,0 +1,46 @@
+let WordGap = " "
+
+export function debugCompletionsFor(line String, symbols DebugSymbols) returns StringArray
+	let words = completionWordsOf(line)
+	let head = try words.get(0) otherwise ""
+
+	if words.count() <= 1 and not line.endsWith(WordGap) 'theCommandWord'
+		return completionsFor(head, pool: debugCommandVocabulary())
+	end 'theCommandWord'
+
+	if not debugCommandTakesAFunctionName(head) 'notATargetArgument'
+		return StringArray.create()
+	end 'notATargetArgument'
+
+	return symbols.completionPool(partialTargetOf(line, words: words))
+end 'debugCompletionsFor'
+
+function debugCommandTakesAFunctionName(word String) returns bool
+	for row in debugCommandRows() 'eachRow'
+		if row.canonical == word or row.aliases.contains(word) 'thisRow'
+			return row.completesAFunctionName
+		end 'thisRow'
+	end 'eachRow'
+
+	return false
+end 'debugCommandTakesAFunctionName'
+
+function partialTargetOf(line String, words StringArray) returns String
+	if line.endsWith(WordGap) 'aFreshWord'
+		return ""
+	end 'aFreshWord'
+
+	return try words.get(words.count() - 1) otherwise ""
+end 'partialTargetOf'
+
+function completionWordsOf(line String) returns StringArray
+	var words = StringArray.create()
+
+	for piece in line.trim().split(WordGap) 'eachPiece'
+		if not piece.isEmpty() 'aWord'
+			words.push(piece)
+		end 'aWord'
+	end 'eachPiece'
+
+	return words
+end 'completionWordsOf'

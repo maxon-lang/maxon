@@ -9728,6 +9728,7 @@ let StringLiteralRequirement = "string literal"
 // ⭐ What a `__Raw` operand refusal calls its two non-value requirements. Constants for
 // `StringLiteralRequirement`'s reason: a wording a golden pins belongs in one place, not at the throw.
 let RawConstantOperandRequirement = "a compile-time integer constant"
+let RawDebugHostVerbRequirement = "a `DebugHostVerb` code the debug agent's host roster lists"
 let RawScratchSizeRequirement = "a positive whole number of 8-byte slots"
 
 // ⭐ **WHAT A PROMISE-STORAGE MISMATCH SENTENCE CALLS THE PROMISE, ON THE SPAWN ROAD** — beside the phrase
@@ -22367,6 +22368,8 @@ export type Parser
 		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
+		layout.declLine = nameTok.line
+		layout.declColumn = nameTok.column
 
 		// ⭐ **THE TYPE'S MESSAGE ROSTER, COLLECTED ON THE ONE WALK THAT READS ITS MEMBERS IN ORDER (SV1)** —
 		// see `StructLayout.messageMethodNames`, which owns what membership means and why this sweep is the only
@@ -23469,6 +23472,8 @@ export type Parser
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
+		layout.declLine = nameTok.line
+		layout.declColumn = nameTok.column
 		var counter = EnumTagCounter.create()
 
 		var depth = 0 as BlockDepth
@@ -26451,6 +26456,8 @@ export type Parser
 		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
+		layout.declLine = nameTok.line
+		layout.declColumn = nameTok.column
 
 		// `uses T` (P1.6-A) — parsed here so `parseTypeReference` recognizes `T` in the fields and
 		// methods below, and the arity check reads the list off the recorded layout.
@@ -27524,6 +27531,8 @@ export type Parser
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion, conformsTo: conformsTo, visibility: visibility, declFilePath: self.filePath, backing: EnumBacking.unresolved)
+		layout.declLine = nameTok.line
+		layout.declColumn = nameTok.column
 		var counter = EnumTagCounter.create()
 
 		// The cursor sits at the enum body start; remember it so the lazy sibling-receiver walk (#65) can
@@ -36441,9 +36450,17 @@ export type Parser
 		self.recordDebugRebind(binding.debugLocalSlot, current: binding.boundValue, value: value)
 	end 'recordDebugRebindByName'
 
-	// ⭐ **THE FUNCTION'S BINDINGS, HANDED OVER ONCE AT ITS `end`** — `publishExistentialInstances`' twin,
-	// and late for its own reason: a binding leaves SCOPE at its block's `end` while its record must reach
-	// the function's, so the roster is the parser's own `VarInfo` list rather than the scope's.
+	function noteFoldedBinding(record DebugLocalDecl, binding VarInfo)
+		if binding.isCellBinding or record.valueIds.count() != 1 or not self.constIsKnown(binding.boundValue) 'notOneFoldedValue'
+			return
+		end 'notOneFoldedValue'
+
+		record.noteFoldedConstant(binding.boundValue, constant: self.constOf(binding.boundValue))
+	end 'noteFoldedBinding'
+
+	// The function's bindings, handed over once at its `end` — `publishExistentialInstances`' twin, and
+	// late for its own reason: a binding leaves SCOPE at its block's `end` while its record must reach the
+	// function's, so the roster is the parser's own `VarInfo` list rather than the scope's.
 	function publishDebugLocals(func IrFunction)
 		if self.debugLocals.count() == 0 'nothingRecorded'
 			return
@@ -36453,6 +36470,7 @@ export type Parser
 			let record = try self.debugLocals.get(i) otherwise panic("publishDebugLocals: debugLocals.get OOB at {i} despite the upto bound")
 			let binding = try self.debugBindings.get(i) otherwise panic("publishDebugLocals: debugBindings.get OOB at {i} — the two columns are appended by one door")
 			requireDebugRecordIsCurrent(record, current: binding.boundValue)
+			self.noteFoldedBinding(record, binding: binding)
 		end 'eachRecord'
 
 		func.debugLocals = self.debugLocals
@@ -86442,6 +86460,17 @@ export type Parser
 			constant = try self.reserveRawScratchSlot(func, bytes: constant, callee: callee, calleeTok: calleeTok)
 		end 'frameRecord'
 
+		if intrinsic == RawIntrinsic.osDebugHost 'aVerbOperand'
+			let listed = match debugHostVerbLookup(constant) 'verb'
+				found gives true
+				notListed gives false
+			end 'verb'
+
+			if not listed 'unlistedVerb'
+				throw ParseError.builtinOperandType(String.from(callee), required: RawDebugHostVerbRequirement, got: "{constant}", line: calleeTok.line, column: calleeTok.column)
+			end 'unlistedVerb'
+		end 'aVerbOperand'
+
 		try self.recordFrameDirective(func, intrinsic: intrinsic, calleeTok: calleeTok)
 
 		let result = self.mintValue(rawIntrinsicResultTag(intrinsic), nameId: UnnamedTypeId)
@@ -86499,7 +86528,13 @@ export type Parser
 				osFreePages or
 				osLockInit or
 				osLockEnter or
-				osLockLeave then break 'row'
+				osLockLeave or
+				osDebugHost or
+				dbgEnvironmentValue or
+				dbgAttachSegment or
+				dbgCtlAddr or
+				dbgTextBase or
+				dbgTextLimit then break 'row'
 		end 'row'
 	end 'recordFrameDirective'
 

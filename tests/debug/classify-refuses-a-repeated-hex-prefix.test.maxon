@@ -1,0 +1,15 @@
+let RepeatedPrefixCaseLabel = "classify-refuses-a-repeated-hex-prefix"
+
+let ClassifyPrefixOption = "--classify="
+let RepeatedPrefixSpelling = "0x120x34"
+let RepeatedPrefixRefusal = "is not a sequence of hex byte pairs"
+
+test 'a hex sequence carrying a second `0x` is refused rather than read as the digits around it'
+	let staged = builtFixture(RepeatedPrefixCaseLabel, fixture: HeaplessFixtureName)
+	let run = spawnCompiler([DebugSubcommandName, "{ClassifyPrefixOption}{RepeatedPrefixSpelling}"], staged: staged, what: "`{DebugSubcommandName} {ClassifyPrefixOption}{RepeatedPrefixSpelling}`")
+	let said = renderedEvents(run.stdout, stderr: run.stderr)
+
+	try Expect.equal(run.exitCode() as AssertedInt, expected: 1, message: "⛔ A PREFIX REMOVED BY SUBSTITUTION IS A CONFIDENT WRONG ANSWER. `{RepeatedPrefixSpelling}` carries a `0x` that does not open it, and a reader that strips EVERY `0x` turns it into the perfectly good `1234` — two bytes nobody wrote, classified and printed as though they were. The refusal is the only honest answer. {said}")
+	try Expect.contains(withoutCarriageReturns(run.stderr), needle: RepeatedPrefixRefusal, message: "the refusal names the token it could not read, so a caller can see which of its comma-separated sequences was rejected. {said}")
+	try Expect.isEmpty(withoutCarriageReturns(run.stdout).trim(), message: "a refused sequence prints no classification: stdout carries answers and nothing else, so a caller reading it cannot mistake a rejected token for a classified one. {said}")
+end 'a hex sequence carrying a second `0x` is refused rather than read as the digits around it'

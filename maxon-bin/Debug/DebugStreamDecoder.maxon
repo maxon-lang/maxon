@@ -234,7 +234,7 @@ module type DebugStreamDecoder
 	/// it, it is a run that would print `tag=1` for every event and a golden that would fail without ever
 	/// saying why.
 	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
-		let segment = try SharedSegment.create(mintSegmentName(), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
+		let segment = try SharedSegment.create(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
 		end 'noSegment'
 
@@ -455,12 +455,12 @@ end 'copySegmentBytes'
 // The segment: naming and seeding
 // ============================================================================
 
-// A fresh ring name for this monitor. The process id is unique among living processes and the nonce
-// covers the rest — see `SegmentNamePrefix`.
-function mintSegmentName() returns String
+// A fresh section name for a driver that is about to hand it to a child. The process id is unique among
+// living processes and the nonce covers the rest — see `SegmentNamePrefix`.
+module function mintSharedSegmentName(prefix String) returns String
 	let nonce = Clock.nowNanos() and SegmentNonceMask
-	return "{SegmentNamePrefix}{__Builtins.currentProcessId()}_{nonce:08x}"
-end 'mintSegmentName'
+	return "{prefix}{__Builtins.currentProcessId()}_{nonce:08x}"
+end 'mintSharedSegmentName'
 
 // ⭐ Every header field the producer reads, written before it can read any of them.
 //

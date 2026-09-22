@@ -979,8 +979,17 @@ export type GlobalDataTable
 	// ⭐ **A `walked` SLOT NOBODY SURVIVING NAMES IS DROPPED BEFORE THE SORT**, and dropping keeps the
 	// survivors' relative order — so a program that reaches every word it names lays each out at the offset
 	// it would have had with nothing dropped (`DataReach`).
-	export function layOut(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet)
-		self.dataSection = sortBySizeDescendingStable(retainReachedSlots(roster, referenced: referenced))
+	export function layOut(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet, userGlobalCount ElementIndex)
+		// The user's globals are laid out ahead of the runtime's, each segment sorted within itself. One
+		// sort over both would interleave them by size class, so a runtime word added anywhere would move
+		// every user global of a narrower class — and `.data` would stop being a function of the source.
+		var laidOut = sortBySizeDescendingStable(retainReachedSlots(rosterSegment(roster, from: 0, upto: userGlobalCount), referenced: referenced))
+
+		for entry in sortBySizeDescendingStable(retainReachedSlots(rosterSegment(roster, from: userGlobalCount, upto: roster.count()), referenced: referenced)) 'eachRuntimeSlot'
+			laidOut.push(entry)
+		end 'eachRuntimeSlot'
+
+		self.dataSection = laidOut
 		self.dataIndex = DataSectionIndexMap.create()
 
 		// ⭐ **THE RESERVED RUNS GO FIRST, AND THE ZERO-PADDING CLAIM ABOVE SURVIVES IT EXACTLY**:
@@ -1102,6 +1111,16 @@ function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedG
 
 	return kept
 end 'retainReachedSlots'
+
+function rosterSegment(roster DataSectionEntryArray, from ElementIndex, upto ElementIndex) returns DataSectionEntryArray
+	var segment = DataSectionEntryArray.create()
+
+	for index in from upto upto 'eachEntry'
+		segment.push(try roster.get(index) otherwise panic("rosterSegment: entry {index} is not below the roster's {roster.count()}"))
+	end 'eachEntry'
+
+	return segment
+end 'rosterSegment'
 
 // `declared` ordered by storage size, LARGEST FIRST, preserving declaration order among equal
 // sizes — see `GlobalDataTable.layOut` for why both halves are load-bearing.

@@ -631,7 +631,7 @@ end 'x64FaultFrameHome'
 // ⭐⭐ **THE STACK THE OS ITSELF WRITES BELOW A GREEN THREAD's STACK POINTER — Go's `stackSystem`.** Where a
 // fault's frame lands on the faulting stack, the room for it is reserved under the guard word, as Go reserves
 // it on Windows; everywhere else nothing is.
-function gtStackSystemBytes(target Target) returns ParsedInt
+export function gtStackSystemBytes(target Target) returns ParsedInt
 	return match gtFaultFrameHome(target) 'home'
 		faultingStack gives GtWindowsExceptionDispatchBytes
 		signalStack gives 0
@@ -646,6 +646,12 @@ end 'gtStackSystemBytes'
 // frame, which has `stackSystem + 2 * margin` less its pushes — about 5.9 KB — beneath it. AVX-512's larger
 // XSAVE area adds about 1.6 KB and still fits.
 let GtWindowsExceptionDispatchBytes = 0x1000 as ParsedInt
+
+let GtWindowsExceptionDispatchMeasured = 0xA50 as StackSize
+
+export function gtWindowsExceptionDispatchMeasuredBytes() returns StackSize
+	return GtWindowsExceptionDispatchMeasured
+end 'gtWindowsExceptionDispatchMeasuredBytes'
 
 // ⭐⭐ **HOW FAR ABOVE A GREEN THREAD's STACK BASE ITS GUARD WORD SITS — Go's `stackGuard`.** Maxon's margin
 // for the frames that free-ride between checkpoints, plus the OS's reservation below them. `__gt_spawn` and

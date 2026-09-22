@@ -24,7 +24,7 @@ typealias MxdbgPrimitiveWidth = int(0 to 8)
 
 union MxdbgPrimitiveSpelling
 	notAPrimitive
-	width(bytes MxdbgPrimitiveWidth)
+	width(bytes MxdbgPrimitiveWidth, signed bool)
 end 'MxdbgPrimitiveSpelling'
 
 // The names the language's own types are described under. A `MaxonType` arm carries no spelling of its
@@ -71,9 +71,11 @@ type MxdbgTypeDesc
 	export var size as MxdbgIndex
 	export var align as MxdbgIndex
 	export var fields as MxdbgFieldDescArray
+	export var elementTypeName as ByteArray
+	export var flags as MxdbgIndex
 
-	export static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray) returns MxdbgTypeDesc
-		return Self{kind: kind, size: size, align: align, fields: fields}
+	export static function create(kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fields MxdbgFieldDescArray, elementTypeName ByteArray = ByteArray.create(), flags MxdbgIndex = 0) returns MxdbgTypeDesc
+		return Self{kind: kind, size: size, align: align, fields: fields, elementTypeName: elementTypeName, flags: flags}
 	end 'create'
 end 'MxdbgTypeDesc'
 
@@ -95,6 +97,8 @@ typealias MxdbgTypeEntryArray = Array with MxdbgTypeEntry
 // id `idOf` answers the id the table was written under.
 typealias MxdbgTypePositionMap = Map with (ByteArray, ElementIndex)
 
+typealias MxdbgArrayElementMap = Map with (ByteArray, ByteArray)
+
 export type MxdbgTypeTable
 	// Discovery order until `seal`, name order after it — and a sealed entry's position IS the type id
 	// every field and every local record carries.
@@ -107,8 +111,10 @@ export type MxdbgTypeTable
 	// a table that has already been written.
 	var sealed as bool
 
+	var arrayElements as MxdbgArrayElementMap
+
 	export static function create() returns MxdbgTypeTable
-		return Self{entries: MxdbgTypeEntryArray.create(), positionByName: MxdbgTypePositionMap.create(), sealed: false}
+		return Self{entries: MxdbgTypeEntryArray.create(), positionByName: MxdbgTypePositionMap.create(), sealed: false, arrayElements: MxdbgArrayElementMap.create()}
 	end 'create'
 
 	// Every type the program DECLARES. Seeded whatever reaches a local, because an enum is erased to its
@@ -118,19 +124,31 @@ export type MxdbgTypeTable
 	// ⚠ The registries are hash maps and their walk order is not a promise, which costs nothing here: an
 	// entry's id is its position in the NAME order `seal` fixes, so the table is the same table whatever
 	// order it was discovered in.
-	export function closeDeclaredTypes(project Project)
+	export function closeDeclaredTypes(project Project, signatures ProgramSignatures)
+		self.indexArrayInstances(project, signatures: signatures)
+
 		for (name, _) in project.structTypes 'eachStruct'
-			self.close(project, name: name)
+			self.close(project, signatures: signatures, name: name)
 		end 'eachStruct'
 
 		for (name, _) in project.enumTypes 'eachEnumOrUnion'
-			self.close(project, name: name)
+			self.close(project, signatures: signatures, name: name)
 		end 'eachEnumOrUnion'
 	end 'closeDeclaredTypes'
 
+	function indexArrayInstances(project Project, signatures ProgramSignatures)
+		for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+			if not signatures.isArrayBaseName(signatures.genericInstanceBaseName(id as GenericInstanceId)) 'notAnArray'
+				continue
+			end 'notAnArray'
+
+			self.arrayElements.upsert(signatures.mangleGenericInstance(id as GenericInstanceId), value: mxdbgTypeNameOf(project, signatures: signatures, ref: signatures.containerElementType(id as GenericInstanceId)))
+		end 'eachInstance'
+	end 'indexArrayInstances'
+
 	// Describe `name` and everything it refers to. A worklist rather than recursion: a type may reach
 	// itself through a field, and the "already described" test is what ends the walk either way.
-	export function close(project Project, name ByteArray)
+	export function close(project Project, signatures ProgramSignatures, name ByteArray)
 		if self.sealed 'alreadyNumbered'
 			panic("MxdbgTypeTable.close: '{String.from(name)}' arrived after the table was sealed — the sort fixes every id, so a type described past it would be numbered against a table already written")
 		end 'alreadyNumbered'
@@ -156,13 +174,17 @@ export type MxdbgTypeTable
 
 			// ⚠ The names this one refers to are collected FIRST and appended only past `next`'s last use:
 			// `next` is an element borrow of the worklist, and growing the worklist under it is E3070.
-			let desc = mxdbgDescribeType(project, name: next)
+			let desc = mxdbgDescribeType(project, signatures: signatures, name: next, elementName: try self.arrayElements.get(next) otherwise ByteArray.create())
 			var referenced = ByteArrayArray.create()
 			referenced.reserve(desc.fields.count())
 
 			for field in desc.fields 'eachFieldType'
 				referenced.push(field.typeName)
 			end 'eachFieldType'
+
+			if not desc.elementTypeName.isEmpty() 'describesItsElement'
+				referenced.push(desc.elementTypeName)
+			end 'describesItsElement'
 
 			self.append(next, desc: desc)
 
@@ -182,12 +204,24 @@ export type MxdbgTypeTable
 		return (try self.positionByName.get(name) otherwise panic("MxdbgTypeTable.idOf: '{String.from(name)}' is not in the table — every name a record points at is closed over before any id is asked for")) as MxdbgIndex
 	end 'idOf'
 
+	export function aggregateWordCount(name ByteArray) returns MxdbgIndex
+		let entry = try self.entries.get(self.idOf(name) as ElementIndex) otherwise panic("MxdbgTypeTable.aggregateWordCount: '{String.from(name)}' has an id this table's own entries do not hold")
+
+		return mxdbgFoldedAggregateWordCount(entry.desc.kind, fieldCount: entry.desc.fields.count() as MxdbgIndex)
+	end 'aggregateWordCount'
+
+	export function holdsAPointer(name ByteArray) returns bool
+		let entry = try self.entries.get(self.idOf(name) as ElementIndex) otherwise panic("MxdbgTypeTable.holdsAPointer: '{String.from(name)}' has an id this table's own entries do not hold")
+
+		return mxdbgTypeKindIsIndirect(entry.desc.kind)
+	end 'holdsAPointer'
+
 	export function writeInto(writer MxdbgWriter)
 		self.seal()
 
 		for i in 0 upto self.entries.count() 'eachType'
 			let entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
-			writer.addType(String.from(entry.name), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align)
+			writer.addType(String.from(entry.name), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align, elementTypeId: MxdbgNoElementType if entry.desc.elementTypeName.isEmpty() else self.idOf(entry.desc.elementTypeName), flags: entry.desc.flags)
 
 			for field in entry.desc.fields 'eachField'
 				writer.addField(String.from(field.name), offset: field.offset, typeId: self.idOf(field.typeName))
@@ -238,7 +272,7 @@ end 'MxdbgTypeTable'
 // ⭐ **THE NAME A `MaxonType` IS DESCRIBED UNDER, AND THE ONE PLACE IT IS CHOSEN.** A field's type and a
 // local's type both come through here, so an entry a record points at and the entry the table built are
 // the same by construction rather than by agreement.
-export function mxdbgTypeNameOf(project Project, ref MaxonType) returns ByteArray
+export function mxdbgTypeNameOf(project Project, signatures ProgramSignatures, ref MaxonType) returns ByteArray
 	return match ref 'arm'
 		boolean gives MxdbgBoolName
 		integer gives MxdbgIntName
@@ -250,7 +284,7 @@ export function mxdbgTypeNameOf(project Project, ref MaxonType) returns ByteArra
 		string gives MxdbgStringName
 		function(id) gives mxdbgInternedName(project, id: id)
 		typeParameter gives MxdbgTypeParameterName
-		genericInstance gives MxdbgGenericInstanceName
+		genericInstance(id) gives signatures.mangleGenericInstance(id)
 		character gives MxdbgCharacterName
 
 		// A `cstring` is a raw byte POINTER and names no declared type, so the sidecar describes it by the
@@ -276,17 +310,21 @@ end 'mxdbgInternedName'
 // primitive. A name in none of them is a record reached through a pointer, described as exactly that —
 // which is what gives a field or a local of such a type a truthful entry to point at instead of landing
 // on an unrelated one.
-function mxdbgDescribeType(project Project, name ByteArray) returns MxdbgTypeDesc
+function mxdbgDescribeType(project Project, signatures ProgramSignatures, name ByteArray, elementName ByteArray) returns MxdbgTypeDesc
+	if not elementName.isEmpty() 'aFusedArrayRecord'
+		return MxdbgTypeDesc.create(MxdbgTypeKindArray, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create(), elementTypeName: elementName)
+	end 'aFusedArrayRecord'
+
 	if name.equals(MxdbgStringName) or name.equals(MxdbgCharacterName) 'aFusedByteRecord'
 		return MxdbgTypeDesc.create(MxdbgTypeKindString, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
 	end 'aFusedByteRecord'
 
 	if let layout = try project.structTypes.get(name) 'aDeclaredStruct'
-		return mxdbgDescribeStruct(project, layout: layout)
+		return mxdbgDescribeStruct(project, signatures: signatures, layout: layout)
 	end 'aDeclaredStruct'
 
 	if let layout = try project.enumTypes.get(name) 'aDeclaredEnumOrUnion'
-		return mxdbgDescribeEnum(project, layout: layout)
+		return mxdbgDescribeEnum(project, signatures: signatures, layout: layout)
 	end 'aDeclaredEnumOrUnion'
 
 	match project.typeAliases.lookup(name, readerFilePath: CompilerOwnedDeclFilePath) 'alias'
@@ -296,20 +334,20 @@ function mxdbgDescribeType(project Project, name ByteArray) returns MxdbgTypeDes
 
 	match mxdbgPrimitiveSpellingOf(name) 'primitive'
 		notAPrimitive then break 'primitive'
-		width(bytes) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create())
+		width(bytes, signed) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create(), flags: MxdbgTypeFlagSigned if signed else 0)
 	end 'primitive'
 
 	return MxdbgTypeDesc.create(MxdbgTypeKindManagedRecord, size: MxdbgManagedRecordBytes, align: MxdbgAggregateAlign, fields: MxdbgFieldDescArray.create())
 end 'mxdbgDescribeType'
 
 // A struct's fields in DECLARATION order, at the very offsets codegen laid them out at.
-function mxdbgDescribeStruct(project Project, layout StructLayout) returns MxdbgTypeDesc
+function mxdbgDescribeStruct(project Project, signatures ProgramSignatures, layout StructLayout) returns MxdbgTypeDesc
 	var fields = MxdbgFieldDescArray.create()
 	fields.reserve(layout.fieldCount() as ElementIndex)
 
 	for i in 0 upto layout.fieldCount() 'eachField'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("mxdbgDescribeStruct: fieldTypes.get OOB at {i} for `type {String.from(layout.name)}`, whose columns are index-parallel")
-		fields.push(MxdbgFieldDesc.create(layout.fieldNameAt(i), offset: layout.offsetOfField(i) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, ref: fieldType)))
+		fields.push(MxdbgFieldDesc.create(layout.fieldNameAt(i), offset: layout.offsetOfField(i) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, signatures: signatures, ref: fieldType)))
 	end 'eachField'
 
 	return MxdbgTypeDesc.create(MxdbgTypeKindStruct, size: layout.sizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
@@ -321,14 +359,14 @@ end 'mxdbgDescribeStruct'
 //
 // A case's "type" is its payload: `void` for a payload-free case, that type for a single value, and the
 // managed-record placeholder for a multi-value payload, which has no single type in this model.
-function mxdbgDescribeEnum(project Project, layout EnumLayout) returns MxdbgTypeDesc
+function mxdbgDescribeEnum(project Project, signatures ProgramSignatures, layout EnumLayout) returns MxdbgTypeDesc
 	var fields = MxdbgFieldDescArray.create()
 	fields.reserve(layout.caseCount() as ElementIndex)
 
 	for i in 0 upto layout.caseCount() 'eachCase'
 		let tag = try layout.caseTags.get(i) otherwise panic("mxdbgDescribeEnum: caseTags.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
 		let payload = try layout.casePayloads.get(i) otherwise panic("mxdbgDescribeEnum: casePayloads.get OOB at {i} for `{String.from(layout.name)}`, whose columns are index-parallel")
-		fields.push(MxdbgFieldDesc.create(layout.caseNameAt(i), offset: mxdbgTagWord(tag), typeName: mxdbgCasePayloadName(project, payload: payload)))
+		fields.push(MxdbgFieldDesc.create(layout.caseNameAt(i), offset: mxdbgTagWord(tag), typeName: mxdbgCasePayloadName(project, signatures: signatures, payload: payload)))
 	end 'eachCase'
 
 	return MxdbgTypeDesc.create(MxdbgTypeKindUnion if layout.isUnion else MxdbgTypeKindEnum, size: layout.boxSizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
@@ -345,7 +383,7 @@ function mxdbgTagWord(tag ParsedInt) returns MxdbgIndex
 	return tag as MxdbgIndex
 end 'mxdbgTagWord'
 
-function mxdbgCasePayloadName(project Project, payload PayloadFieldArray) returns ByteArray
+function mxdbgCasePayloadName(project Project, signatures ProgramSignatures, payload PayloadFieldArray) returns ByteArray
 	if payload.count() == 0 'payloadFree'
 		return MxdbgVoidName
 	end 'payloadFree'
@@ -356,7 +394,7 @@ function mxdbgCasePayloadName(project Project, payload PayloadFieldArray) return
 
 	let only = try payload.get(0) otherwise panic("mxdbgCasePayloadName: payload.get OOB at 0 of a payload holding {payload.count()}")
 
-	return mxdbgTypeNameOf(project, ref: only.declaredType)
+	return mxdbgTypeNameOf(project, signatures: signatures, ref: only.declaredType)
 end 'mxdbgCasePayloadName'
 
 // A ranged alias carries the width it is STORED in, not the width of the keyword it was declared over —
@@ -371,8 +409,11 @@ function mxdbgDescribeRangedAlias(alias RangedTypeAlias) returns MxdbgTypeDesc
 	end 'backing'
 
 	let bytes = rangedAliasStorageBytes(alias.low, high: alias.high) as MxdbgIndex
+	// A negative low bound is the only thing that makes an alias signed, and `LayoutDescriptor` gives
+	// every such alias all 8 bytes — so no reader has to sign-extend a narrow one.
+	let signed = kind == MxdbgTypeKindIntRanged and alias.low < 0
 
-	return MxdbgTypeDesc.create(kind, size: bytes, align: bytes, fields: MxdbgFieldDescArray.create())
+	return MxdbgTypeDesc.create(kind, size: bytes, align: bytes, fields: MxdbgFieldDescArray.create(), flags: MxdbgTypeFlagSigned if signed else 0)
 end 'mxdbgDescribeRangedAlias'
 
 function mxdbgPrimitiveAlign(bytes MxdbgPrimitiveWidth) returns MxdbgIndex
@@ -384,23 +425,39 @@ end 'mxdbgPrimitiveAlign'
 // bytes — `void` is one of those.
 function mxdbgPrimitiveSpellingOf(name ByteArray) returns MxdbgPrimitiveSpelling
 	if name.equals(MxdbgVoidName) 'void'
-		return MxdbgPrimitiveSpelling.width(0)
+		return MxdbgPrimitiveSpelling.width(0, signed: false)
 	end 'void'
 
-	if name.equals(MxdbgBoolName) or name.equals(b"i8") or name.equals(b"u8") 'oneByte'
-		return MxdbgPrimitiveSpelling.width(1)
+	if name.equals(b"i8") 'oneSignedByte'
+		return MxdbgPrimitiveSpelling.width(1, signed: true)
+	end 'oneSignedByte'
+
+	if name.equals(MxdbgBoolName) or name.equals(b"u8") 'oneByte'
+		return MxdbgPrimitiveSpelling.width(1, signed: false)
 	end 'oneByte'
 
-	if name.equals(b"i16") or name.equals(b"u16") 'twoBytes'
-		return MxdbgPrimitiveSpelling.width(2)
+	if name.equals(b"i16") 'twoSignedBytes'
+		return MxdbgPrimitiveSpelling.width(2, signed: true)
+	end 'twoSignedBytes'
+
+	if name.equals(b"u16") 'twoBytes'
+		return MxdbgPrimitiveSpelling.width(2, signed: false)
 	end 'twoBytes'
 
-	if name.equals(b"i32") or name.equals(b"u32") or name.equals(b"f32") 'fourBytes'
-		return MxdbgPrimitiveSpelling.width(4)
+	if name.equals(b"i32") 'fourSignedBytes'
+		return MxdbgPrimitiveSpelling.width(4, signed: true)
+	end 'fourSignedBytes'
+
+	if name.equals(b"u32") or name.equals(b"f32") 'fourBytes'
+		return MxdbgPrimitiveSpelling.width(4, signed: false)
 	end 'fourBytes'
 
-	if name.equals(MxdbgIntName) or name.equals(b"u64") or name.equals(MxdbgFloatName) or name.equals(b"cstring") 'eightBytes'
-		return MxdbgPrimitiveSpelling.width(8)
+	if name.equals(MxdbgIntName) 'eightSignedBytes'
+		return MxdbgPrimitiveSpelling.width(8, signed: true)
+	end 'eightSignedBytes'
+
+	if name.equals(b"u64") or name.equals(MxdbgFloatName) or name.equals(b"cstring") 'eightBytes'
+		return MxdbgPrimitiveSpelling.width(8, signed: false)
 	end 'eightBytes'
 
 	return MxdbgPrimitiveSpelling.notAPrimitive

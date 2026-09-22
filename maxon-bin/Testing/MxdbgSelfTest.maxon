@@ -6,11 +6,6 @@
 // about the binary beside it — and it needs three spawned processes to do it. This one is pure and
 // costs microseconds.
 //
-// Scoped to the surface this compiler HAS: the build-id, the file, function, line and inline-frame
-// tables, the three lookups and their boundaries. There are no type, field, local or coverage assertions
-// because nothing writes those sections — a test of a table this compiler cannot fill would pass by not
-// selecting anything.
-//
 // ⚠ **THE ROWS GO IN ASCENDING ORDER.** This writer does not sort — it REFUSES an out-of-order row
 // (`requireAscendingLineTable`), because its caller walks chunks in `.text` order — so ascending is the
 // contract being exercised, not a convenience.
@@ -50,6 +45,42 @@ let DebitEnd = 60 as MxdbgCodeOffset
 let InDebitOnly = 45 as MxdbgCodeOffset
 let InBoth = 35 as MxdbgCodeOffset
 let InNeither = 70 as MxdbgCodeOffset
+
+let TotalName = "total"
+let AmountName = "amount"
+let TotalRegister = 3 as MxdbgLocValue
+let AmountRegister = 5 as MxdbgLocValue
+let TotalFirstRunEnd = 40 as MxdbgCodeOffset
+let TotalSecondRunStart = 60 as MxdbgCodeOffset
+
+let AmountTypeName = "Amount"
+let AmountArrayTypeName = "Array_Amount"
+let AmountTypeId = 0 as MxdbgIndex
+let AmountArrayTypeId = 1 as MxdbgIndex
+let LimitName = "limit"
+let LimitConstant = 42 as MxdbgLocValue
+let AmountTypeBytes = 8 as MxdbgIndex
+let ParcelTypeName = "Parcel"
+let ShipmentTypeName = "Shipment"
+let ParcelTypeId = 2 as MxdbgIndex
+let ShipmentTypeId = 3 as MxdbgIndex
+let ParcelName = "parcel"
+let ShipmentName = "shipment"
+let ParcelWidth = 3 as MxdbgLocValue
+let ParcelHeight = 4 as MxdbgLocValue
+let ShipmentTag = 1 as MxdbgLocValue
+let ShipmentPayload = 19 as MxdbgLocValue
+let ParcelWordBase = 0 as MxdbgLocValue
+let ShipmentWordBase = 2 as MxdbgLocValue
+let AggregateBoxBytes = 16 as MxdbgIndex
+let ArrayRecordBytes = 8 as MxdbgIndex
+
+let SharedLine = 12 as MxdbgIndex
+let SharedLineFirstOffset = 40 as MxdbgCodeOffset
+let SharedLineSecondOffset = 140 as MxdbgCodeOffset
+let UnvisitedLine = 99 as MxdbgIndex
+
+let FirstCodeOffset = 0 as MxdbgCodeOffset
 
 let BrokenRowIndent = "\n  "
 
@@ -96,21 +127,226 @@ function checkTablesRoundTrip(broken StringArray)
 	checkFunctionWindows(broken, reader: reader)
 	checkLineLookups(broken, reader: reader)
 	checkInlineLookups(broken, reader: reader)
+	checkLocalRanges(broken, reader: reader)
+	checkFoldedAndIndirect(broken, reader: reader)
+	checkFoldedAggregates(broken, reader: reader)
+	checkArrayElement(broken, reader: reader)
+	checkTypeSignedness(broken, reader: reader)
+	checkLineToOffsets(broken, reader: reader)
+	checkCallSiteBias(broken)
 end 'checkTablesRoundTrip'
 
-// The image the checks below read: two files, two functions with disjoint ranges, and five line rows in
-// code order — three inside the first function and two inside the second.
+function checkFoldedAggregates(broken StringArray, reader MxdbgReader)
+	if reader.constantWordCount() != 4 'sectionLost'
+		broken.push("the constant-word section reads back {reader.constantWordCount()} word(s) against the 4 written — an aggregate whose words are gone is a struct a debugger names and cannot open")
+		return
+	end 'sectionLost'
+
+	requireAggregateReads(broken, reader: reader, name: ParcelName, typeId: ParcelTypeId, first: ParcelWordBase, expectedWords: 2, firstWord: ParcelWidth, lastWord: ParcelHeight)
+	requireAggregateReads(broken, reader: reader, name: ShipmentName, typeId: ShipmentTypeId, first: ShipmentWordBase, expectedWords: MxdbgUnionAggregateWords, firstWord: ShipmentTag, lastWord: ShipmentPayload)
+end 'checkFoldedAggregates'
+
+function requireAggregateReads(broken StringArray, reader MxdbgReader, name String, typeId MxdbgIndex, first MxdbgLocValue, expectedWords MxdbgIndex, firstWord MxdbgLocValue, lastWord MxdbgLocValue)
+	let withdraw = reader.functionRecord(0)
+	var rows = 0
+
+	for k in withdraw.localFirst upto withdraw.localFirst + withdraw.localCount 'eachLocal'
+		let local = reader.localRecord(k as MxdbgIndex)
+
+		if local.name != name 'anotherName'
+			continue
+		end 'anotherName'
+
+		rows = rows + 1
+
+		if not local.isAFoldedAggregate() or local.locValue != first or local.typeId != typeId 'rowLost'
+			broken.push("'{name}' reads back as kind {local.locKind} over words from {local.locValue} of type {local.typeId}, against a folded aggregate from {first} of type {typeId}")
+			return
+		end 'rowLost'
+
+		let described = reader.typeRecord(local.typeId)
+		let words = mxdbgFoldedAggregateWordCount(described.kind, fieldCount: described.fieldCount)
+
+		if words != expectedWords 'wordCountLost'
+			broken.push("'{name}' is described as {mxdbgTypeKindName(described.kind)} with {described.fieldCount} field(s), which says its folded value is {words} word(s) against {expectedWords} — the COUNT is read off the type and nowhere else, so a reader and the writer that sized the window would disagree")
+			return
+		end 'wordCountLost'
+
+		if reader.constantWord((first as MxdbgIndex)) != firstWord or reader.constantWord((first as MxdbgIndex) + words - 1) != lastWord 'wordsLost'
+			broken.push("'{name}' reads back {reader.constantWord(first as MxdbgIndex)} and {reader.constantWord((first as MxdbgIndex) + words - 1)}, against {firstWord} and {lastWord}")
+		end 'wordsLost'
+	end 'eachLocal'
+
+	if rows != 1 'notOneRow'
+		broken.push("'{name}' has {rows} row(s) under '{WithdrawName}' against the 1 written")
+	end 'notOneRow'
+end 'requireAggregateReads'
+
+function checkFoldedAndIndirect(broken StringArray, reader MxdbgReader)
+	let withdraw = reader.functionRecord(0)
+	var foldedRows = 0
+	var pointerRows = 0
+
+	for k in withdraw.localFirst upto withdraw.localFirst + withdraw.localCount 'eachLocal'
+		let local = reader.localRecord(k as MxdbgIndex)
+
+		if local.name == LimitName and local.isAConstant() and local.locValue == LimitConstant 'theFoldedOne'
+			foldedRows = foldedRows + 1
+		end 'theFoldedOne'
+
+		if local.name == TotalName and local.holdsAPointer() 'theArrayOne'
+			pointerRows = pointerRows + 1
+		end 'theArrayOne'
+
+		if local.name == AmountName and local.holdsAPointer() 'aScalarClaimingIndirection'
+			broken.push("'{AmountName}' is a scalar in a register and reads back as holding a POINTER — a debugger would dereference the value itself")
+		end 'aScalarClaimingIndirection'
+
+		if local.isAConstant() and local.holdsAPointer() 'aConstantClaimingIndirection'
+			broken.push("'{local.name}' reads back as a folded constant that also claims to hold a pointer; a folded immediate is the value and there is nothing to dereference")
+		end 'aConstantClaimingIndirection'
+	end 'eachLocal'
+
+	if foldedRows != 1 'constantLost'
+		broken.push("'{LimitName}' was written as the folded constant {LimitConstant} and {foldedRows} row(s) read back that way — a constant kind nothing round-trips is a name the debugger still cannot answer for")
+	end 'constantLost'
+
+	if pointerRows != 2 'indirectionLost'
+		broken.push("{pointerRows} of '{TotalName}''s 2 rows read back as holding a POINTER — the driver would read the fused record out of the slot itself rather than out of the address in it")
+	end 'indirectionLost'
+end 'checkFoldedAndIndirect'
+
+function checkLocalRanges(broken StringArray, reader MxdbgReader)
+	let withdraw = reader.functionRecord(0)
+
+	if withdraw.localCount != 6 'windowLost'
+		broken.push("'{WithdrawName}' claims {withdraw.localCount} local row(s) against the 6 added under it")
+		return
+	end 'windowLost'
+
+	var runs = MxdbgCodeOffsetArray.create()
+
+	for k in withdraw.localFirst upto withdraw.localFirst + withdraw.localCount 'eachLocal'
+		let local = reader.localRecord(k as MxdbgIndex)
+
+		if local.name != TotalName 'anotherName'
+			continue
+		end 'anotherName'
+
+		if local.locKind != MxdbgLocKindRegister or local.locValue != TotalRegister or local.typeId != AmountArrayTypeId 'rowLost'
+			broken.push("a '{TotalName}' row reads back as kind {local.locKind} value {local.locValue} type {local.typeId}")
+		end 'rowLost'
+
+		runs.push(local.scopeStart)
+		runs.push(local.scopeEnd)
+	end 'eachLocal'
+
+	if runs.count() != 4 'notTwoRuns'
+		broken.push("'{TotalName}' reads back as {runs.count() / 2} live range(s) against the 2 it was written with — a name whose rows were merged is one a debugger reads at a PC it is not live at")
+		return
+	end 'notTwoRuns'
+
+	if (try runs.get(0) otherwise 0) != WithdrawStart or (try runs.get(1) otherwise 0) != TotalFirstRunEnd or (try runs.get(2) otherwise 0) != TotalSecondRunStart or (try runs.get(3) otherwise 0) != WithdrawEnd 'boundsLost'
+		broken.push("'{TotalName}' reads back over [0x{try runs.get(0) otherwise 0:x}, 0x{try runs.get(1) otherwise 0:x}) and [0x{try runs.get(2) otherwise 0:x}, 0x{try runs.get(3) otherwise 0:x})")
+	end 'boundsLost'
+end 'checkLocalRanges'
+
+function checkArrayElement(broken StringArray, reader MxdbgReader)
+	if reader.typeCount() != 4 'countsLost'
+		broken.push("the type table reads back {reader.typeCount()} entries against 4")
+		return
+	end 'countsLost'
+
+	let element = reader.typeRecord(AmountTypeId)
+
+	if element.name != AmountTypeName or element.describesAnElement() 'elementRowLost'
+		broken.push("type {AmountTypeId} reads back as '{element.name}' and claims an element of its own")
+	end 'elementRowLost'
+
+	let array = reader.typeRecord(AmountArrayTypeId)
+
+	if array.name != AmountArrayTypeName or array.kind != MxdbgTypeKindArray 'arrayRowLost'
+		broken.push("type {AmountArrayTypeId} reads back as '{array.name}' of kind {mxdbgTypeKindName(array.kind)} against '{AmountArrayTypeName}' of kind {mxdbgTypeKindName(MxdbgTypeKindArray)}")
+	end 'arrayRowLost'
+
+	if not array.describesAnElement() or array.elementTypeId != AmountTypeId 'elementLost'
+		broken.push("'{AmountArrayTypeName}' names element type {array.elementTypeId} against {AmountTypeId} — an array whose element is unnamed says nothing about how far apart two of them are")
+	end 'elementLost'
+end 'checkArrayElement'
+
+function checkTypeSignedness(broken StringArray, reader MxdbgReader)
+	let ranged = reader.typeRecord(AmountTypeId)
+
+	if not ranged.isSigned() 'signednessLost'
+		broken.push("'{AmountTypeName}' reads back UNSIGNED — a signed local holding a negative value then renders as its unsigned bit pattern")
+	end 'signednessLost'
+
+	let aggregate = reader.typeRecord(ParcelTypeId)
+
+	if aggregate.isSigned() 'signednessInvented'
+		broken.push("'{ParcelTypeName}' reads back SIGNED against the unsigned flag word it was written with")
+	end 'signednessInvented'
+end 'checkTypeSignedness'
+
+function checkLineToOffsets(broken StringArray, reader MxdbgReader)
+	var accountFile = MxdbgIndexArray.create()
+	accountFile.push(AccountFileId)
+	let offsets = reader.lineToOffsets(accountFile, line: SharedLine)
+
+	if offsets.count() != 2 'copiesLost'
+		broken.push("{AccountFileName}:{SharedLine} resolves to {offsets.count()} offset(s) against the 2 rows that carry it — a line that lives at several addresses owes every one of them")
+		return
+	end 'copiesLost'
+
+	if (try offsets.get(0) otherwise 0) != SharedLineFirstOffset or (try offsets.get(1) otherwise 0) != SharedLineSecondOffset 'orderLost'
+		broken.push("{AccountFileName}:{SharedLine} resolves to 0x{try offsets.get(0) otherwise 0:x} and 0x{try offsets.get(1) otherwise 0:x}, against 0x{SharedLineFirstOffset:x} and 0x{SharedLineSecondOffset:x} ascending")
+	end 'orderLost'
+
+	if reader.lineToOffsets(accountFile, line: UnvisitedLine).count() != 0 'aLineWithNoCode'
+		broken.push("{AccountFileName}:{UnvisitedLine} carries no row and resolved to an offset anyway")
+	end 'aLineWithNoCode'
+end 'checkLineToOffsets'
+
+function checkCallSiteBias(broken StringArray)
+	if MxdbgReader.callSiteLookup(FirstCodeOffset) != FirstCodeOffset 'wrappedPastTheStart'
+		broken.push("the call-site bias moves offset 0 to 0x{MxdbgReader.callSiteLookup(FirstCodeOffset):x}, which is past the start of `.text`")
+	end 'wrappedPastTheStart'
+
+	if MxdbgReader.callSiteLookup(SharedLineFirstOffset) != SharedLineFirstOffset - 1 'notBiased'
+		broken.push("the call-site bias leaves a return address at 0x{SharedLineFirstOffset:x} unbiased, which names the line AFTER the call")
+	end 'notBiased'
+end 'checkCallSiteBias'
+
 function selfTestImage(buildId HashDigest) returns ByteArray
 	var writer = MxdbgWriter.create()
 	writer.addFile(AccountFileName)
 	writer.addFile(IoFileName)
+	writer.addType(AmountTypeName, kind: MxdbgTypeKindIntRanged, size: AmountTypeBytes, align: AmountTypeBytes, elementTypeId: MxdbgNoElementType, flags: MxdbgTypeFlagSigned)
+	writer.addType(AmountArrayTypeName, kind: MxdbgTypeKindArray, size: ArrayRecordBytes, align: ArrayRecordBytes, elementTypeId: AmountTypeId, flags: 0)
+	writer.addType(ParcelTypeName, kind: MxdbgTypeKindStruct, size: AggregateBoxBytes, align: AmountTypeBytes, elementTypeId: MxdbgNoElementType, flags: 0)
+	writer.addField("width", offset: 0, typeId: AmountTypeId)
+	writer.addField("height", offset: AmountTypeBytes, typeId: AmountTypeId)
+	writer.addType(ShipmentTypeName, kind: MxdbgTypeKindUnion, size: AggregateBoxBytes, align: AmountTypeBytes, elementTypeId: MxdbgNoElementType, flags: 0)
+	writer.addField("empty", offset: 0, typeId: AmountTypeId)
+	writer.addField("carrying", offset: 1, typeId: AmountTypeId)
+	_ = writer.addConstantWord(ParcelWidth)
+	_ = writer.addConstantWord(ParcelHeight)
+	_ = writer.addConstantWord(ShipmentTag)
+	_ = writer.addConstantWord(ShipmentPayload)
 	writer.addFunction(WithdrawName, codeStart: WithdrawStart, codeEnd: WithdrawEnd, frameSize: WithdrawFrame, paramCount: WithdrawParams)
+	writer.addLocal(AmountName, locKind: MxdbgLocKindRegister, locValue: AmountRegister, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
+	writer.addLocal(LimitName, locKind: MxdbgLocKindConstant, locValue: LimitConstant, typeId: AmountTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
+	writer.addLocal(ParcelName, locKind: MxdbgLocKindFoldedAggregate, locValue: ParcelWordBase, typeId: ParcelTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
+	writer.addLocal(ShipmentName, locKind: MxdbgLocKindFoldedAggregate, locValue: ShipmentWordBase, typeId: ShipmentTypeId, scopeStart: WithdrawStart, scopeEnd: WithdrawEnd, flags: 0)
+	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: WithdrawStart, scopeEnd: TotalFirstRunEnd, flags: MxdbgLocalFlagIndirect)
+	writer.addLocal(TotalName, locKind: MxdbgLocKindRegister, locValue: TotalRegister, typeId: AmountArrayTypeId, scopeStart: TotalSecondRunStart, scopeEnd: WithdrawEnd, flags: MxdbgLocalFlagIndirect)
 	writer.addFunction(ParseBatchName, codeStart: ParseBatchStart, codeEnd: ParseBatchEnd, frameSize: ParseBatchFrame, paramCount: ParseBatchParams)
 	writer.addLine(0, fileId: AccountFileId, line: 10, column: 1, flags: MxdbgLineFlagStatement)
 	writer.addLine(16, fileId: AccountFileId, line: 11, column: 5, flags: MxdbgLineFlagStatement)
-	writer.addLine(40, fileId: AccountFileId, line: 12, column: 5, flags: MxdbgLineFlagStatement)
+	writer.addLine(SharedLineFirstOffset, fileId: AccountFileId, line: SharedLine, column: 5, flags: MxdbgLineFlagStatement)
 	writer.addLine(100, fileId: IoFileId, line: 5, column: 1, flags: MxdbgLineFlagStatement)
 	writer.addLine(120, fileId: IoFileId, line: 6, column: 9, flags: MxdbgLineFlagStatement)
+	writer.addLine(SharedLineSecondOffset, fileId: AccountFileId, line: SharedLine, column: 5, flags: MxdbgLineFlagStatement)
 
 	// The nested body's blocks carry the inner site, so `debit` is two ranges around `checkFunds`'s one.
 	writer.addInlineSite(DebitName, parent: MxdbgNoParentSite)
@@ -182,8 +418,8 @@ function checkHeader(broken StringArray, reader MxdbgReader, buildId HashDigest)
 		broken.push("the target triple reads back as '{reader.triple}' rather than '{SelfTestTriple}'")
 	end 'tripleLost'
 
-	if reader.fileCount() != 2 or reader.functionCount() != 2 or reader.lineCount() != 5 'countsLost'
-		broken.push("the table counts read back as {reader.fileCount()} files / {reader.functionCount()} functions / {reader.lineCount()} rows against 2 / 2 / 5")
+	if reader.fileCount() != 2 or reader.functionCount() != 2 or reader.lineCount() != 6 'countsLost'
+		broken.push("the table counts read back as {reader.fileCount()} files / {reader.functionCount()} functions / {reader.lineCount()} rows against 2 / 2 / 6")
 	end 'countsLost'
 
 	if reader.fileName(AccountFileId) != AccountFileName or reader.fileName(IoFileId) != IoFileName 'namesLost'
@@ -206,8 +442,8 @@ function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 
 	let parseBatch = reader.functionRecord(1)
 
-	if parseBatch.lineFirst != 3 or parseBatch.lineCount != 2 'secondWindowWrong'
-		broken.push("'{ParseBatchName}' claims rows [{parseBatch.lineFirst}, +{parseBatch.lineCount}) against the 2 that lie inside its range")
+	if parseBatch.lineFirst != 3 or parseBatch.lineCount != 3 'secondWindowWrong'
+		broken.push("'{ParseBatchName}' claims rows [{parseBatch.lineFirst}, +{parseBatch.lineCount}) against the 3 that lie inside its range")
 	end 'secondWindowWrong'
 
 	if not functionAtIs(reader, offset: 150, name: ParseBatchName) 'containmentWrong'

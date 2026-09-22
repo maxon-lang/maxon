@@ -1,0 +1,33 @@
+let ReplPrompt = "(maxon debug) "
+
+export function runDebugRepl(session DebugSession) returns ExitCode
+	var reader = Console.stdin()
+	var reading = true
+
+	print("{ReplPrompt}")
+
+	while reading 'eachLine'
+		let line = try reader.readLine() otherwise 'endOfInput'
+			reading = false
+			continue
+		end 'endOfInput'
+
+		if line.trim().isEmpty() 'nothingTyped'
+			print("{ReplPrompt}")
+			continue
+		end 'nothingTyped'
+
+		session.run(line)
+
+		if session.isOver() 'theReaderLeft'
+			reading = false
+			continue
+		end 'theReaderLeft'
+
+		print("{ReplPrompt}")
+	end 'eachLine'
+
+	print("\n")
+
+	return session.closeAfterLettingItFinish()
+end 'runDebugRepl'

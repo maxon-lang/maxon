@@ -198,6 +198,7 @@ export enum HostFacility
 	// alone would not FAIL — it would symbolize garbage into a confident profile, which is the worst kind of
 	// wrong answer a profiler can give. The table is keyed on a whole `Target` precisely so this can be said.
 	processSampling
+	debugAgent
 end 'HostFacility'
 
 // The answer `calleeHostFacility` returns. A union rather than a bool-plus-out-param so that "this callee
@@ -692,6 +693,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// than a lowering of `osHostSample`. The row stays `false` until that decoder exists; a `true`
 			// here would read three unrelated words as RIP/RSP/RBP.
 			processSampling gives false
+			debugAgent gives false
 		end 'f'
 	end 'darwinArm64'
 
@@ -878,6 +880,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// different sampling MECHANISM, and the register file they answer is AArch64's rather than the
 			// x64 `CONTEXT` the sample decoder reads.
 			processSampling gives false
+			debugAgent gives false
 		end 'f'
 	end 'linuxArm64'
 
@@ -1016,6 +1019,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `osHostSample` onto: Linux's equivalent is `ptrace` with a stop protocol, or
 			// `process_vm_readv` plus a signal, neither of which is this op's shape.
 			processSampling gives false
+			debugAgent gives false
 		end 'f'
 	end 'linuxX64'
 
@@ -1062,7 +1066,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 				threadLocalSlot or
 				terminalDetection or
 				sharedMemory or
-				processSampling gives false
+				processSampling or
+				debugAgent gives false
 		end 'f'
 	end 'wasmWasi'
 

@@ -1,0 +1,64 @@
+let InstructionClassCaseLabel = "breakpoint-on-each-instruction-class"
+
+let PlainStatementAnchor = "plain"
+let CallStatementAnchor = "outer-call"
+let BranchConditionAnchor = "branch"
+let LoopBackEdgeAnchor = "backedge"
+let ReturnStatementAnchor = "outer-return"
+
+let ContinuesPastEveryHit = 200
+
+test 'a breakpoint on each instruction class is hit and resumed, and the program answers exactly as it does undebugged'
+	let staged = builtFixture(InstructionClassCaseLabel, fixture: SteppingFixtureName)
+	let undebugged = runBuiltProgram(staged)
+
+	var anchored = StringArray.create()
+	anchored.push(PlainStatementAnchor)
+	anchored.push(CallStatementAnchor)
+	anchored.push(BranchConditionAnchor)
+	anchored.push(LoopBackEdgeAnchor)
+	anchored.push(ReturnStatementAnchor)
+
+	var armings = StringArray.create()
+
+	for anchor in anchored 'eachAnchor'
+		armings.push("{BreakCommand} {lineTarget(anchorLine(staged, anchor: anchor))}")
+	end 'eachAnchor'
+
+	armings.push(RunCommand)
+
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	var stoppedLines = StringArray.create()
+
+	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
+		stoppedLines.push("{numberOf(stop, node: stop.root, key: LineKey)}")
+	end 'eachStop'
+
+	var never = StringArray.create()
+
+	for anchor in anchored 'eachAnchorHit'
+		let line = anchorLine(staged, anchor: anchor)
+		var hits = 0
+
+		for stopped in stoppedLines 'eachStoppedLine'
+			hits = hits + 1 if stopped == "{line}" else hits
+		end 'eachStoppedLine'
+
+		if hits == 0 'neverHit'
+			never.push("`{anchor}` (line {line}) was never stopped on")
+		end 'neverHit'
+	end 'eachAnchorHit'
+
+	try Expect.isEmpty(renderedRows(never), message: "a breakpoint is armed by DISPLACING one instruction and resumed by executing it out of line, so an instruction class the driver classifies wrongly is a breakpoint that is armed and never reached — or one that corrupts the resume. The session stopped on lines: {renderedRows(stoppedLines)}. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end, so nothing here says the resumes were correct. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	try Expect.contains(withoutCarriageReturns(session.stderr), needle: withoutCarriageReturns(undebugged.stdout).trim(), message: "the debugged program did not print what the same program prints undebugged. In `{DebugBatchOption}` the debuggee's own streams go to the driver's STDERR, so stdout stays pure JSON. Undebugged it printed: {undebugged.stdout}. {said}")
+end 'a breakpoint on each instruction class is hit and resumed, and the program answers exactly as it does undebugged'

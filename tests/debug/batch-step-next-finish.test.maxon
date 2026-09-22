@@ -1,0 +1,34 @@
+let StepNextFinishCaseLabel = "batch-step-next-finish"
+
+let InnerFunctionName = "inner"
+let OuterFunctionName = "outer"
+
+test 'step enters the callee, next steps over it, and finish returns to the caller'
+	let staged = builtFixture(StepNextFinishCaseLabel, fixture: SteppingFixtureName)
+	let callLine = anchorLine(staged, anchor: "outer-call")
+	let afterLine = anchorLine(staged, anchor: "outer-after")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand, FinishCommand, NextCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	var walked = StringArray.create()
+
+	for stop in stops 'eachStop'
+		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)}")
+	end 'eachStop'
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 4, message: "the breakpoint and the three walks are four stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let entered = eventAt(stops, index: 1)
+	try Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: InnerFunctionName, message: "`{StepCommand}` at a call statement enters the callee; a step that landed back in `{OuterFunctionName}` stepped OVER it and is `{NextCommand}`. The session stopped: {renderedRows(walked)}. {said}")
+	try Expect.equal(textOf(entered, node: entered.root, key: ReasonKey), expected: StepStopReason, message: "a walked stop is a `{StepStopReason}`, not a breakpoint. The session stopped: {renderedRows(walked)}. {said}")
+
+	let returned = eventAt(stops, index: 2)
+	try Expect.equal(textOf(returned, node: returned.root, key: FunctionKey), expected: OuterFunctionName, message: "`{FinishCommand}` runs to the return of the frame it is in and stops in that frame's CALLER. The session stopped: {renderedRows(walked)}. {said}")
+
+	let steppedOver = eventAt(stops, index: 3)
+	try Expect.equal(textOf(steppedOver, node: steppedOver.root, key: FunctionKey), expected: OuterFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. The session stopped: {renderedRows(walked)}. {said}")
+	try Expect.equal(numberOf(steppedOver, node: steppedOver.root, key: LineKey) as AssertedInt, expected: afterLine as AssertedInt, message: "`{NextCommand}` from the call line lands on the next line of the same function. The session stopped: {renderedRows(walked)}. {said}")
+end 'step enters the callee, next steps over it, and finish returns to the caller'

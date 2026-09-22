@@ -2611,6 +2611,8 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	// ⭐ x64's twin: one bool test per op when debug info is off, and the span column untouched.
 	let captureSpans = module.spans.armed
 	var lineRows = DebugLineRowBuilder.create(captureSpans)
+	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
+	var blockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// Where this chunk's coverage counters land — the x64 backend's channel, filled the same way.
 	var covOffsets = CovPointOffsetArray.create()
@@ -2645,8 +2647,10 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 				lineRows.note(module.spans.at(opIdx), codeOffset: code.count())
 			end 'aRowMayOpenHere'
 
+			let opStart = code.count()
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
 			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
+			runOffsets.note(opIdx, codeStart: opStart, codeEnd: code.count())
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
@@ -2654,10 +2658,13 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 				lineRows.note(module.spans.at(block.terminatorIndex()), codeOffset: code.count())
 			end 'aRowMayOpenAtTheTerminator'
 
+			let termStart = code.count()
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
 			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
+			runOffsets.note(block.terminatorIndex(), codeStart: termStart, codeEnd: code.count())
 		end 'hasTerm'
 
+		blockEnds.place(block.id, value: code.count())
 		inlineRanges.note(block.inlineSite, codeStart: blockStart, codeEnd: code.count())
 	end 'eachBlock'
 
@@ -2682,6 +2689,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
+		chunk.localRanges = runOffsets.resolve(func, blockStarts: blockOffsets, blockEnds: blockEnds)
 		chunk.frameSize = arm64FunctionFrameBytes(module, func: func)
 		chunk.paramCount = func.paramCount
 	end 'debugInfo'

@@ -824,22 +824,71 @@ end 'stdOpMayWriteMemory'
 // the `StdOpMeta` backing attaches per variant and cannot reach an opcode buried
 // inside a field. That is why arithmetic is `binOp(… opcode StdBinOpcode)` with a
 // separate `cmp(…)` beside it.
-// ⭐⭐⭐ **WHICH HOST SERVICE ONE `osHostSample` ASKS FOR — a closed roster naming the SERVICE, never the
-// IMPORT.** It is `osAllocPages`' discipline one family over: the Std tier asks for PAGES and only the PE
-// writer knows pages come from `VirtualAlloc`; here the Std tier asks to SUSPEND A THREAD and only
+// Which host service one `osDebugHost` asks for. A closed roster naming the SERVICE rather than the
+// import, and one op carrying a compile-time verb, for the reasons `ProfileHostCall` states below.
+let DebugHostVerbInstallTrapHandlerCode = 1
+let DebugHostVerbProtectPagesCode = 2
+let DebugHostVerbFlushCodeCode = 3
+let DebugHostVerbParkWaitCode = 4
+let DebugHostVerbQueryRegionCode = 5
+let DebugHostVerbProcessIdCode = 6
+let DebugHostVerbAllocExecPagesCode = 7
+let DebugHostVerbOpenDriverProcessCode = 8
+let DebugHostVerbDriverExitedCode = 9
+
+export enum DebugHostVerb
+	installTrapHandler
+	protectPages
+	flushCode
+	parkWait
+	queryRegion
+	processId
+	allocExecPages
+	openDriverProcess
+	driverExited
+end 'DebugHostVerb'
+
+export function debugHostVerbCode(verb DebugHostVerb) returns ParsedInt
+	return match verb 'code'
+		installTrapHandler gives DebugHostVerbInstallTrapHandlerCode
+		protectPages gives DebugHostVerbProtectPagesCode
+		flushCode gives DebugHostVerbFlushCodeCode
+		parkWait gives DebugHostVerbParkWaitCode
+		queryRegion gives DebugHostVerbQueryRegionCode
+		processId gives DebugHostVerbProcessIdCode
+		allocExecPages gives DebugHostVerbAllocExecPagesCode
+		openDriverProcess gives DebugHostVerbOpenDriverProcessCode
+		driverExited gives DebugHostVerbDriverExitedCode
+	end 'code'
+end 'debugHostVerbCode'
+
+export union DebugHostVerbLookup
+	found(verb DebugHostVerb)
+	notListed
+end 'DebugHostVerbLookup'
+
+export function debugHostVerbLookup(code ParsedInt) returns DebugHostVerbLookup
+	for verb in DebugHostVerb.allCases 'eachVerb'
+		if debugHostVerbCode(verb) == code 'thisOne'
+			return DebugHostVerbLookup.found(verb)
+		end 'thisOne'
+	end 'eachVerb'
+
+	return DebugHostVerbLookup.notListed
+end 'debugHostVerbLookup'
+
+// Which host service one `osHostSample` asks for — a closed roster naming the SERVICE, never the import.
+// It is `osAllocPages`' discipline one family over: the Std tier asks to SUSPEND A THREAD and only
 // `StdToX64Conversion` knows that is `kernel32!SuspendThread`. A roster spelled in Win32 names would put a
 // per-import fact in the target-neutral tier, where nothing can check it.
 //
-// ⭐⭐ **THIRTEEN SERVICES, ONE OP, AND THE ARITHMETIC IS THE WHOLE DESIGN.** A `system`-band Std op of this
-// shape costs 58 arms of exhaustive `match`es across 17 files, MEASURED by adding this one. Thirteen
-// separate ops would be thirteen times that, and a missed arm in `ValueTupleReturn` or `PromoteStackRecords`
-// is a compile error that surfaces only when the whole compiler is rebuilt. One op with a SELECTOR operand
-// is `osStdHandle`'s precedent — three standard streams that differ only in an immediate are one op, not
-// three copies of one marshalling — taken as far as it goes.
+// One op with a selector operand, on `osStdHandle`'s precedent, because a `system`-band Std op costs an arm
+// in dozens of exhaustive matches spread over a dozen files: a roster of separate ops multiplies that, and
+// a missed arm surfaces only when the whole compiler is rebuilt.
 //
-// ⚠ **THE ROSTER IS CLOSED, WHICH IS WHAT MAKES THE x64 MAP TOTAL.** `profileHostCallSlot` is exhaustive
-// over this enum, so a service added here without an import fails to compile at the map rather than
-// reaching a backend as a silent no-op.
+// ⚠ The roster is closed, which is what makes the x64 map total. `profileHostCallSlot` is exhaustive over
+// this enum, so a service added without an import fails to compile at the map rather than reaching a
+// backend as a silent no-op.
 export enum ProfileHostCall
 	// A handle to the process being sampled, and the walk over its threads. The walk hands back handles that
 	// already carry the access mask asked for, which is why there is no "open thread" service here.
@@ -2958,6 +3007,8 @@ export union StdOp
 	// write through a pointer the caller owns, so a reordering that moved a load of that buffer above the call
 	// would read the block before it was filled.
 	osSocketServe(resultId ValueId, verb SocketServeVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	osDebugHost(resultId ValueId, verb DebugHostVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -3127,6 +3178,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// `specs/netpoll-socket.md`'s `n-concurrent-reads-do-not-serialise` asserts by demanding ZERO retakes
 		// across a window that accepts four connections.
 		osSocketServe gives SyscallClass.schedulerBound
+		osDebugHost gives SyscallClass.schedulerBound
 
 		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages gives SyscallClass.schedulerBound
@@ -3306,6 +3358,7 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osSocketClose or
 			osSocketOverlapped or
 			osSocketServe or
+			osDebugHost or
 			osCpuCount or
 			osThreadCpuTicks or
 			osDecommitPages or
@@ -3781,6 +3834,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe then operands.recordNeither()
+		osDebugHost then operands.recordNeither()
 	end 'b'
 end 'classifyArithOperands'
 
@@ -4009,7 +4063,8 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 			osHostSample or
 			osNetpoll or
 			osSocketOverlapped or
-			osSocketServe then access.recordNeither()
+			osSocketServe or
+			osDebugHost then access.recordNeither()
 	end 'a'
 end 'classifyAccessOperands'
 
@@ -4327,6 +4382,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe then call.recordOther()
+		osDebugHost then call.recordOther()
 	end 'c'
 end 'classifyCallOperands'
 
@@ -4848,6 +4904,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
 		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osSocketServe(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
+		osDebugHost(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
 		osFileRename(_, oldPathPtr, newPathPtr) then insertUsePair(referenced, a: oldPathPtr, b: newPathPtr)
@@ -5166,6 +5223,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osNetpoll(resultId, _, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketServe(resultId, _, _, _, _) then def.recordOne(resultId)
+		osDebugHost(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
 		osFileDelete(resultId, _) then def.recordOne(resultId)
 		osFileRename(resultId, _, _) then def.recordOne(resultId)
@@ -5460,6 +5518,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osNetpoll(resultId, verb, a0, a1, a2, a3, a4) gives StdOp.osNetpoll(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst))
 		osSocketOverlapped(resultId, verb, a0, a1, a2, a3) gives StdOp.osSocketOverlapped(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osSocketServe(resultId, verb, a0, a1, a2) gives StdOp.osSocketServe(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
+		osDebugHost(resultId, verb, a0, a1, a2, a3) gives StdOp.osDebugHost(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -5821,6 +5880,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe gives refuseUnclonable(op)
+		osDebugHost gives refuseUnclonable(op)
 	end 'r'
 end 'cloneStdOp'
 
@@ -6361,6 +6421,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe then break 'term'
+		osDebugHost then break 'term'
 	end 'term'
 end 'collectStdBlockSuccessorIds'
 
@@ -6555,5 +6616,6 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe then out.recordOther()
+		osDebugHost then out.recordOther()
 	end 'term'
 end 'classifyBranch'

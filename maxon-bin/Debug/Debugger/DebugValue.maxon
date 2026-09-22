@@ -1,0 +1,516 @@
+let DebugOptimizedOutReason = "optimized-out"
+let DebugNotLiveHereReason = "not-live-here"
+let DebugReadFailedReason = "read-failed"
+let DebugLayoutNotDescribedReason = "layout-not-described"
+
+export union DebugValueAnswer
+	rendered(tree DebugValueTree)
+	unknownName(spelling String)
+	unknownField(spelling String)
+end 'DebugValueAnswer'
+
+union DebugValueSource
+	word(bits DebugWord)
+	address(at DebugAddress)
+	folded(first MxdbgIndex)
+	nowhere
+end 'DebugValueSource'
+
+union DebugChildLookup
+	none
+	at(index DebugValueIndex)
+end 'DebugChildLookup'
+
+typealias DebugByteWidth = int(0 to 512)
+typealias DebugBitShift = int(0 to 63)
+typealias DebugElementTally = int(0 to u32.max)
+typealias DebugRealValue = float(f64.min to f64.max)
+
+let WordBytes = 8 as DebugByteWidth
+let ByteBits = 8
+let ByteMask = 0xFF
+
+let MaxCountableElements = 4294967295 as DebugWord
+let UnionFoldedWords = 2
+
+let SingleMantissaBits = 23 as DebugBitShift
+let SingleMantissaMask = 8388607 as DebugWord
+let SingleExponentMask = 255 as DebugWord
+let SingleImplicitBit = 8388608 as DebugWord
+let SingleSignBit = 2147483648 as DebugWord
+let DoubleInfinityBits = 9218868437227405312 as DebugWord
+let DoubleQuietNaNBits = 9221120237041090560 as DebugWord
+let SingleSubnormalScale = -149.0 as DebugRealValue
+let SingleNormalScale = -150.0 as DebugRealValue
+
+let BoolTypeName = "i1"
+let DoubleTypeName = "f64"
+let SingleTypeName = "f32"
+let FlagBytes = 1 as DebugByteWidth
+let NullPointerDisplay = "<null>"
+let StructDisplay = "\{…\}"
+let MemberSeparator = "."
+let VoidPayloadName = "void"
+
+let MaxRenderedChildren = 32 as DebugElementTally
+let MaxRenderedTextBytes = 256 as DebugByteWidth
+
+let ManagedBufferOffset = 0 as DebugAddress
+let ManagedLengthOffset = 8 as DebugAddress
+let ManagedElementSizeOffset = 24 as DebugAddress
+
+let UnionTagOffset = 0 as DebugAddress
+let UnionTagBytes = 8 as DebugByteWidth
+
+let MinimumPlausibleHeapAddress = 0x10000 as DebugWord
+
+export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress) returns DebugValueTree
+	var tree = DebugValueTree.create()
+	var named = DebugNameSet.create()
+	let locals = symbols.localsAt(offset)
+
+	for local in locals 'eachLocal'
+		if named.contains(local.name) 'alreadyListed'
+			continue
+		end 'alreadyListed'
+
+		named.insert(local.name)
+		tree.roots.push(renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: local.name))
+	end 'eachLocal'
+
+	return tree
+end 'renderLocals'
+
+export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress, path String) returns DebugValueAnswer
+	let pieces = path.trim().split(MemberSeparator)
+	let head = try pieces.get(0) otherwise return DebugValueAnswer.unknownName(path)
+
+	let locals = symbols.localsAt(offset)
+
+	match symbols.localCoveringIn(locals, offset: offset, name: head) 'known'
+		undeclared then return DebugValueAnswer.unknownName(path)
+		notLiveHere then break 'known'
+		live then break 'known'
+	end 'known'
+
+	var tree = DebugValueTree.create()
+	var current = renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: head)
+
+	for (iter, member) in pieces.withIterator() 'eachMember'
+		if iter.index() == 0 'theLocalItself'
+			continue
+		end 'theLocalItself'
+
+		match childNamed(tree, parent: current, name: member) 'found'
+			none then return DebugValueAnswer.unknownField(path)
+			at(child) then current = child
+		end 'found'
+	end 'eachMember'
+
+	let held = tree.nodeAt(current)
+	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, unavailable: held.unavailable, children: held.children)))
+
+	return DebugValueAnswer.rendered(tree)
+end 'renderValuePath'
+
+function childNamed(tree DebugValueTree, parent DebugValueIndex, name String) returns DebugChildLookup
+	for child in tree.nodeAt(parent).children 'eachChild'
+		if tree.nodeAt(child).name == name 'thisOne'
+			return DebugChildLookup.at(child)
+		end 'thisOne'
+	end 'eachChild'
+
+	return DebugChildLookup.none
+end 'childNamed'
+
+function renderNamedLocal(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, locals DebugLocalArray, offset DebugAddress, framePointer DebugAddress, name String) returns DebugValueIndex
+	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
+		undeclared then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
+		notLiveHere then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
+		live(local) then return renderLocalRecord(tree, memory: memory, symbols: symbols, local: local, framePointer: framePointer, name: name)
+	end 'known'
+end 'renderNamedLocal'
+
+function renderLocalRecord(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, local MxdbgLocalInfo, framePointer DebugAddress, name String) returns DebugValueIndex
+	let typeName = symbols.typeNameOf(local.typeId)
+
+	if local.locKind == MxdbgLocKindOptimizedOut 'nowhere'
+		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: "", reason: DebugOptimizedOutReason))
+	end 'nowhere'
+
+	if not symbols.typeIsDescribed(local.typeId) 'noLayout'
+		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: "", reason: DebugLayoutNotDescribedReason))
+	end 'noLayout'
+
+	return renderTyped(tree, memory: memory, symbols: symbols, name: name, typeId: local.typeId, source: try sourceOf(memory, local: local, framePointer: framePointer) otherwise return unreadable(tree, name: name, typeName: typeName, kind: ""))
+end 'renderLocalRecord'
+
+function sourceOf(memory DebugMemory, local MxdbgLocalInfo, framePointer DebugAddress) returns DebugValueSource throws DebugMemoryError
+	if local.isAConstant() 'foldedToAnImmediate'
+		return DebugValueSource.word(local.locValue as DebugWord)
+	end 'foldedToAnImmediate'
+
+	if local.isAFoldedAggregate() 'foldedToWords'
+		return DebugValueSource.folded(local.locValue as MxdbgIndex)
+	end 'foldedToWords'
+
+	if local.locKind == MxdbgLocKindRegister 'aRegister'
+		if local.locValue < 0 or local.locValue >= DbgRegisterSlots 'notARegisterOfThisFile'
+			return DebugValueSource.nowhere
+		end 'notARegisterOfThisFile'
+
+		let held = memory.registerValue(local.locValue as EngineRegisterNumber)
+
+		return DebugValueSource.address(try addressOf(held)) if local.holdsAPointer() else DebugValueSource.word(held)
+	end 'aRegister'
+
+	let slot = framePointer - ((0 - local.locValue) as DebugAddress) if local.locValue < 0 else framePointer + (local.locValue as DebugAddress)
+
+	if not local.holdsAPointer() 'theValueItself'
+		return DebugValueSource.address(slot)
+	end 'theValueItself'
+
+	return DebugValueSource.address(try addressOf(try readRaw(memory, source: DebugValueSource.address(slot), width: WordBytes)))
+end 'sourceOf'
+
+function renderTyped(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeId MxdbgIndex, source DebugValueSource) returns DebugValueIndex
+	let record = symbols.typeRecordOf(typeId)
+	let typeName = symbols.typeNameOf(typeId)
+	let kind = mxdbgTypeKindName(record.kind)
+
+	if record.kind == MxdbgTypeKindPrimitive and typeName == BoolTypeName 'aFlag'
+		return renderFlag(tree, memory: memory, name: name, typeName: typeName, kind: kind, source: source)
+	end 'aFlag'
+
+	if record.kind == MxdbgTypeKindFloatRanged or (record.kind == MxdbgTypeKindPrimitive and isFloatSpelling(typeName)) 'aRealNumber'
+		return renderReal(tree, memory: memory, name: name, typeName: typeName, kind: kind, source: source, width: widthOf(record))
+	end 'aRealNumber'
+
+	if record.kind == MxdbgTypeKindPrimitive or record.kind == MxdbgTypeKindIntRanged or record.kind == MxdbgTypeKindEnum 'aWholeNumber'
+		return renderNumberOrCase(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, source: source)
+	end 'aWholeNumber'
+
+	if record.kind == MxdbgTypeKindString 'someText'
+		return renderText(tree, memory: memory, name: name, typeName: typeName, kind: kind, source: source)
+	end 'someText'
+
+	if record.kind == MxdbgTypeKindArray 'aSequence'
+		return renderSequence(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, source: source)
+	end 'aSequence'
+
+	if record.kind == MxdbgTypeKindStruct 'aRecord'
+		return renderStruct(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, source: source)
+	end 'aRecord'
+
+	if record.kind == MxdbgTypeKindUnion 'aCaseWithAPayload'
+		return renderUnion(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, source: source)
+	end 'aCaseWithAPayload'
+
+	if record.kind == MxdbgTypeKindManagedRecord 'aPointer'
+		return renderOpaquePointer(tree, name: name, typeName: typeName, kind: kind, source: source)
+	end 'aPointer'
+
+	return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
+end 'renderTyped'
+
+function renderNumberOrCase(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns DebugValueIndex
+	let width = widthOf(record)
+	let raw = try readRaw(memory, source: source, width: width) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if record.kind == MxdbgTypeKindEnum 'aDeclaredCase'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: caseNameOf(symbols, record: record, tag: raw)))
+	end 'aDeclaredCase'
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{signExtended(raw, width: width) if record.isSigned() else raw}"))
+end 'renderNumberOrCase'
+
+function renderFlag(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource) returns DebugValueIndex
+	let raw = try readRaw(memory, source: source, width: FlagBytes) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "true" if raw != 0 else "false"))
+end 'renderFlag'
+
+function renderReal(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource, width DebugByteWidth) returns DebugValueIndex
+	let raw = try readRaw(memory, source: source, width: width) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if width < WordBytes 'aSingle'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{singleFrom(raw)}"))
+	end 'aSingle'
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{__Builtins.bitsToFloat(raw)}"))
+end 'renderReal'
+
+// A 32-bit float widened by ARITHMETIC rather than by reassembling a 64-bit pattern: the significand and
+// the power of two are what the encoding means, and reading them off costs no second bit layout to get
+// wrong.
+function singleFrom(bits DebugWord) returns DebugRealValue
+	let exponent = (bits shr SingleMantissaBits) and SingleExponentMask
+	let mantissa = bits and SingleMantissaMask
+	let magnitude = singleMagnitude(exponent, mantissa: mantissa)
+
+	return 0.0 - magnitude if (bits and SingleSignBit) != 0 else magnitude
+end 'singleFrom'
+
+function singleMagnitude(exponent DebugWord, mantissa DebugWord) returns DebugRealValue
+	if exponent == SingleExponentMask 'infiniteOrNotANumber'
+		return __Builtins.bitsToFloat(DoubleInfinityBits if mantissa == 0 else DoubleQuietNaNBits)
+	end 'infiniteOrNotANumber'
+
+	if exponent == 0 'subnormalOrZero'
+		return (mantissa as DebugRealValue) * (Math.pow(2.0, exponent: SingleSubnormalScale) as DebugRealValue)
+	end 'subnormalOrZero'
+
+	return ((mantissa + SingleImplicitBit) as DebugRealValue) * (Math.pow(2.0, exponent: (exponent as DebugRealValue) + SingleNormalScale) as DebugRealValue)
+end 'singleMagnitude'
+
+function renderText(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource) returns DebugValueIndex
+	let record = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if record == 0 'noRecord'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'noRecord'
+
+	let buffer = try pointerAt(memory, address: record + ManagedBufferOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let length = try countAt(memory, address: record + ManagedLengthOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let shown = (length as DebugByteWidth) if length < (MaxRenderedTextBytes as DebugElementTally) else MaxRenderedTextBytes
+	let text = try memory.readDebuggeeText(buffer, length: shown as EngineReadLength) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "\"{text}\" (len={length})"))
+end 'renderText'
+
+function renderSequence(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns DebugValueIndex
+	let managed = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if managed == 0 'noRecord'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'noRecord'
+
+	let buffer = try pointerAt(memory, address: managed + ManagedBufferOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let length = try countAt(memory, address: managed + ManagedLengthOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+	let stride = try countAt(memory, address: managed + ManagedElementSizeOffset) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if not record.describesAnElement() or stride == 0 'noElementLayout'
+		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
+	end 'noElementLayout'
+
+	var children = DebugValueIndexArray.create()
+	let shown = length if length < MaxRenderedChildren else MaxRenderedChildren
+
+	for i in 0 upto shown 'eachElement'
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: "[{i}]", typeId: record.elementTypeId, source: DebugValueSource.address(buffer + (i as DebugAddress) * (stride as DebugAddress))))
+	end 'eachElement'
+
+	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: "[{length}]", children: children))
+end 'renderSequence'
+
+function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns DebugValueIndex
+	match source 'held'
+		nowhere then return unreadable(tree, name: name, typeName: typeName, kind: kind)
+		folded(first) then return renderFoldedStruct(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, first: first)
+		word then break 'held'
+		address then break 'held'
+	end 'held'
+
+	let base = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if base == 0 'noRecord'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'noRecord'
+
+	var children = DebugValueIndexArray.create()
+
+	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachField'
+		let field = symbols.fieldRecordOf(k as MxdbgIndex)
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.address(base + (field.offset as DebugAddress))))
+	end 'eachField'
+
+	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: StructDisplay, children: children))
+end 'renderStruct'
+
+function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, first MxdbgIndex) returns DebugValueIndex
+	let words = symbols.foldedWordsFor(first, count: mxdbgFoldedAggregateWordCount(record.kind, fieldCount: record.fieldCount))
+
+	if words.count() as MxdbgIndex != record.fieldCount 'theWindowDoesNotHoldTheFields'
+		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
+	end 'theWindowDoesNotHoldTheFields'
+
+	var children = DebugValueIndexArray.create()
+
+	for (iter, word) in words.withIterator() 'eachWord'
+		let field = symbols.fieldRecordOf(record.fieldFirst + (iter.index() as MxdbgIndex))
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: field.name, typeId: field.typeId, source: DebugValueSource.word(word as DebugWord)))
+	end 'eachWord'
+
+	return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: StructDisplay, children: children))
+end 'renderFoldedStruct'
+
+function renderUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns DebugValueIndex
+	match source 'held'
+		nowhere then return unreadable(tree, name: name, typeName: typeName, kind: kind)
+		folded(first) then return renderFoldedUnion(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, first: first)
+		word then break 'held'
+		address then break 'held'
+	end 'held'
+
+	let box = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if box == 0 'noBox'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'noBox'
+
+	let tag = try readRaw(memory, source: DebugValueSource.address(box + UnionTagOffset), width: UnionTagBytes) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: tag, payload: DebugValueSource.address(box + (UnionTagBytes as DebugAddress)))
+end 'renderUnion'
+
+function renderFoldedUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, first MxdbgIndex) returns DebugValueIndex
+	let words = symbols.foldedWordsFor(first, count: mxdbgFoldedAggregateWordCount(record.kind, fieldCount: record.fieldCount))
+
+	if words.count() != UnionFoldedWords 'theWindowIsNotATagAndAPayload'
+		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
+	end 'theWindowIsNotATagAndAPayload'
+
+	let tag = (try words.get(0) otherwise panic("renderFoldedUnion: a window of two words holds a first")) as DebugWord
+	let payload = (try words.get(1) otherwise panic("renderFoldedUnion: a window of two words holds a second")) as DebugWord
+
+	return caseOf(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, tag: tag, payload: DebugValueSource.word(payload))
+end 'renderFoldedUnion'
+
+function caseOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, tag DebugWord, payload DebugValueSource) returns DebugValueIndex
+	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachCase'
+		let caseRecord = symbols.fieldRecordOf(k as MxdbgIndex)
+
+		if (caseRecord.offset as DebugWord) != tag 'anotherCase'
+			continue
+		end 'anotherCase'
+
+		return tree.add(DebugValueNode.withChildren(name, typeName: typeName, kind: kind, display: caseRecord.name, children: payloadOf(tree, memory: memory, symbols: symbols, caseRecord: caseRecord, payload: payload)))
+	end 'eachCase'
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: unresolvedCaseDisplay(tag)))
+end 'caseOf'
+
+function payloadOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, caseRecord MxdbgFieldInfo, payload DebugValueSource) returns DebugValueIndexArray
+	var children = DebugValueIndexArray.create()
+
+	if symbols.typeIsDescribed(caseRecord.typeId) and symbols.typeNameOf(caseRecord.typeId) != VoidPayloadName 'aPayload'
+		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: caseRecord.name, typeId: caseRecord.typeId, source: payload))
+	end 'aPayload'
+
+	return children
+end 'payloadOf'
+
+function renderOpaquePointer(tree DebugValueTree, name String, typeName String, kind String, source DebugValueSource) returns DebugValueIndex
+	let pointer = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
+
+	if pointer == 0 'noRecord'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: NullPointerDisplay))
+	end 'noRecord'
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "<record 0x{pointer:x}>"))
+end 'renderOpaquePointer'
+
+function isFloatSpelling(typeName String) returns bool
+	return typeName == DoubleTypeName or typeName == SingleTypeName
+end 'isFloatSpelling'
+
+function unreadable(tree DebugValueTree, name String, typeName String, kind String) returns DebugValueIndex
+	return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugReadFailedReason))
+end 'unreadable'
+
+// ⚠ A word read at eight bytes ALREADY carries its sign, because that is the only reading an i64 can
+// hold; a narrower one is read unsigned and is sign-extended here iff the type record says the type is
+// signed. A `renderReal` never comes through here: a float's bits are not a magnitude.
+function signExtended(raw DebugWord, width DebugByteWidth) returns DebugWord
+	if width >= WordBytes or raw < signBitOf(width) 'nothingToExtend'
+		return raw
+	end 'nothingToExtend'
+
+	return raw - signBitOf(width) * 2
+end 'signExtended'
+
+function signBitOf(width DebugByteWidth) returns DebugWord
+	var bit = 1 as DebugWord
+
+	for _ in 0 upto width * ByteBits - 1 'eachBitBelowTheSign'
+		bit = bit * 2
+	end 'eachBitBelowTheSign'
+
+	return bit
+end 'signBitOf'
+
+function widthOf(record MxdbgTypeInfo) returns DebugByteWidth
+	let size = record.size as DebugAddress
+
+	return WordBytes if size == 0 or size > (WordBytes as DebugAddress) else size as DebugByteWidth
+end 'widthOf'
+
+function caseNameOf(symbols DebugSymbols, record MxdbgTypeInfo, tag DebugWord) returns String
+	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachCase'
+		let caseRecord = symbols.fieldRecordOf(k as MxdbgIndex)
+
+		if (caseRecord.offset as DebugWord) == tag 'thisCase'
+			return caseRecord.name
+		end 'thisCase'
+	end 'eachCase'
+
+	return unresolvedCaseDisplay(tag)
+end 'caseNameOf'
+
+function unresolvedCaseDisplay(tag DebugWord) returns String
+	return "<tag {tag}>"
+end 'unresolvedCaseDisplay'
+
+function baseOf(source DebugValueSource) returns DebugAddress throws DebugMemoryError
+	match source 'which'
+		nowhere then throw DebugMemoryError.notReadable
+		folded then throw DebugMemoryError.notReadable
+		word(bits) then return try addressOf(bits)
+		address(at) then return at
+	end 'which'
+end 'baseOf'
+
+function addressOf(word DebugWord) returns DebugAddress throws DebugMemoryError
+	if word < 0 'noAddressIsNegative'
+		throw DebugMemoryError.notReadable
+	end 'noAddressIsNegative'
+
+	return word as DebugAddress
+end 'addressOf'
+
+function pointerAt(memory DebugMemory, address DebugAddress) returns DebugAddress throws DebugMemoryError
+	return try addressOf(try readRaw(memory, source: DebugValueSource.address(address), width: WordBytes))
+end 'pointerAt'
+
+function countAt(memory DebugMemory, address DebugAddress) returns DebugElementTally throws DebugMemoryError
+	let word = try readRaw(memory, source: DebugValueSource.address(address), width: WordBytes)
+
+	if word < 0 or word > MaxCountableElements 'notACount'
+		throw DebugMemoryError.notReadable
+	end 'notACount'
+
+	return word as DebugElementTally
+end 'countAt'
+
+function readRaw(memory DebugMemory, source DebugValueSource, width DebugByteWidth) returns DebugWord throws DebugMemoryError
+	match source 'which'
+		nowhere then throw DebugMemoryError.notReadable
+		folded then throw DebugMemoryError.notReadable
+		word(bits) then return maskedToWidth(bits, width: width)
+		address(at) then return try memory.readDebuggeeWord(at, width: width as EngineReadLength)
+	end 'which'
+end 'readRaw'
+
+function maskedToWidth(bits DebugWord, width DebugByteWidth) returns DebugWord
+	if width >= WordBytes 'theWholeWord'
+		return bits
+	end 'theWholeWord'
+
+	var mask = 0 as DebugWord
+
+	for i in 0 upto width 'eachByte'
+		mask = mask or ((ByteMask as DebugWord) shl ((i * ByteBits) as DebugBitShift))
+	end 'eachByte'
+
+	return bits and mask
+end 'maskedToWidth'

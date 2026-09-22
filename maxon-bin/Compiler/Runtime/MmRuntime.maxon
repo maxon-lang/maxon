@@ -4377,8 +4377,18 @@ function installOneStructCascade(module StdModule, layout StructLayout, typeName
 		return
 	end 'notReferenced'
 
+	module.spans.current = declarationSpanOf(project, declFilePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
 	synthesizeStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, action: action)
+	module.spans.current = NoSpanId
 end 'installOneStructCascade'
+
+function declarationSpanOf(project Project, declFilePath FilePath, line LineNumber, column ColumnNumber) returns SpanId
+	if not project.debugInfo or declFilePath.isEmpty() or line == 0 'positionless'
+		return NoSpanId
+	end 'positionless'
+
+	return project.debugSpanTable.intern(project.debugSpanTable.fileId(declFilePath.toString()), line: line, column: column)
+end 'declarationSpanOf'
 
 // The union twin of `installStructCascades`.
 function installUnionCascades(module StdModule, project Project, signatures ProgramSignatures, needed CascadeSymbolSet, action CascadeAction)
@@ -4388,7 +4398,9 @@ function installUnionCascades(module StdModule, project Project, signatures Prog
 
 	for (_, layout) in project.enumTypes 'each'
 		if needed.contains(perTypeCascadeSymbol(action, typeName: layout.name)) 'referenced'
+			module.spans.current = declarationSpanOf(project, declFilePath: layout.declFilePath, line: layout.declLine, column: layout.declColumn)
 			synthesizeUnionCascade(module, layout: layout, project: project, signatures: signatures, action: action)
+			module.spans.current = NoSpanId
 		end 'referenced'
 	end 'each'
 end 'installUnionCascades'

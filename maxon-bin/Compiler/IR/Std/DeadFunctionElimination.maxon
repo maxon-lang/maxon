@@ -138,13 +138,14 @@ export type EntryStubCalls
 	export let checksLeaks as bool
 	export let bracketsDebugStream as bool
 	export let dumpsCoverage as bool
+	export let attachesDebugAgent as bool
 
 	export static function none() returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false}
+		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, attachesDebugAgent: false}
 	end 'none'
 
 	export static function fromUsage(usage RuntimeUsage) returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage}
+		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, attachesDebugAgent: usage.usesDebugAgent}
 	end 'fromUsage'
 end 'EntryStubCalls'
 
@@ -312,6 +313,12 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 		try markCompilerOwnedRoot(root, project: project, index: index, reached: reached, worklist: worklist)
 	end 'eachOwnedRoot'
 
+	if project.entryStubCalls.attachesDebugAgent 'theAgentIsEmitted'
+		for name in debugAgentRoots() 'eachAgentEntry'
+			markLiveFunction(name, byName: index.byName, reached: reached, worklist: worklist)
+		end 'eachAgentEntry'
+	end 'theAgentIsEmitted'
+
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
 		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
 	end 'eachRdataSlot'
@@ -401,6 +408,17 @@ function seedTestRoots(index FunctionNameIndex, reached BoolArray, worklist Func
 		end 'aTest'
 	end 'eachFunction'
 end 'seedTestRoots'
+
+// The agent's entries are rooted by a list of their own rather than through `compilerOwnedRoots`, whose
+// refusal fires on a name a parsed declaration carries — and these four are declared, in tier source.
+function debugAgentRoots() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(DbgInitName)
+	names.push(DbgOnTrapName)
+	names.push(DebugClaimStackName)
+	names.push(DebugReleaseStackName)
+	return names
+end 'debugAgentRoots'
 
 // Refuse a declaration that took one of the names the compiler owns, and root the name where this build
 // calls it. The refusal reads the whole roster and the root reads the gate, so a name is the compiler's in
@@ -747,6 +765,7 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe then break 'op'
+			osDebugHost then break 'op'
 	end 'op'
 end 'stdFunctionReferenceOf'
 

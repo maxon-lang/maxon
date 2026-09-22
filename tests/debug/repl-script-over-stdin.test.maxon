@@ -1,0 +1,18 @@
+let ReplCaseLabel = "repl-script-over-stdin"
+
+let ReplSessionExitCode = 0
+let ExitLineWord = "exited"
+
+test 'the REPL reads its commands from stdin and answers in text, not in JSON'
+	let staged = builtFixture(ReplCaseLabel, fixture: HeaplessFixtureName)
+	let hotLine = anchorLine(staged, anchor: "hot")
+	let script = "{BreakCommand} {lineTarget(hotLine)}{LineFeed}{RunCommand}{LineFeed}{ContinueCommand}{LineFeed}{QuitCommand}{LineFeed}"
+	let session = spawnDebugRepl(builtExecutable(staged), staged: staged, script: script)
+	let spoken = withoutCarriageReturns(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(session.exitCode() as AssertedInt, expected: ReplSessionExitCode, message: "a REPL script that ran to `{QuitCommand}` is a completed session. {said}")
+	try Expect.contains(spoken, needle: "{lineTarget(hotLine)}", message: "without `{DebugBatchOption}` a stop is reported to a PERSON, as `file:line`. A REPL that printed the batch face's JSON would be the same dispatcher answering the wrong audience. {said}")
+	try Expect.contains(spoken, needle: ExitLineWord, message: "the REPL does not say that the program ended, so a reader is left at a prompt with no idea whether there is still a program behind it. {said}")
+	try Expect.isFalse(spoken.contains("\"{StopEventName}\""), message: "the REPL wrote a batch event onto its text output. {said}")
+end 'the REPL reads its commands from stdin and answers in text, not in JSON'

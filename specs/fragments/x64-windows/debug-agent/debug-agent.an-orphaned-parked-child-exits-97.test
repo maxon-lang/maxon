@@ -1,0 +1,1115 @@
+// Test: debug-agent.an-orphaned-parked-child-exits-97
+typealias Millis = int(0 to i64.max)
+typealias StringArray = Array with String
+
+let MagicText = "MXDBGCTL"
+let SegmentName = "maxon-spec-dbg-orphan"
+let SegmentBytes = 8192
+let DebugVariableName = "MAXON_DEBUG"
+let DriverArgument = "driver"
+let ChildArgument = "child"
+
+let MagicOffset = 0 as SegmentOffset
+let DriverVersionOffset = 8 as SegmentOffset
+let DriverPidOffset = 40 as SegmentOffset
+let StopAtEntryOffset = 48 as SegmentOffset
+let StopSeqOffset = 120 as SegmentOffset
+
+let DriverVersion = 1
+let ParkBeforeMain = 1
+let FirstStop = 1
+let SomePid = 1
+let NoDriverYet = 0
+let ChildExitCode = 5
+let OrphanedExitCode = 97
+
+let PollIntervalMs = 5 as Millis
+let PollDeadlineMs = 20000 as Millis
+let DeadlineMs = 60000 as Millis
+let AsciiBits = 8
+
+function controlMagic() returns SegmentWord
+	var magic = 0
+	var shift = 0
+
+	for b in MagicText.bytes() 'eachByte'
+		magic = magic + ((b as SegmentWord) shl shift)
+		shift = shift + AsciiBits
+	end 'eachByte'
+
+	return magic
+end 'controlMagic'
+
+function awaitWord(segment SharedSegment, offset SegmentOffset, atLeast SegmentWord) returns bool
+	let deadline = (Clock.nowMs() as Millis) + PollDeadlineMs
+
+	while (Clock.nowMs() as Millis) < deadline 'poll'
+		let seen = try segment.readWord(offset) otherwise return false
+
+		if seen >= atLeast 'arrived'
+			return true
+		end 'arrived'
+
+		sleep(PollIntervalMs)
+	end 'poll'
+
+	return false
+end 'awaitWord'
+
+function runDriver() returns ExitCode
+	var segment = try SharedSegment.create(SegmentName, bytes: SegmentBytes) otherwise return 21
+	try segment.writeWord(DriverPidOffset, value: __Builtins.currentProcessId() as SegmentWord) otherwise return 22
+	let parked = awaitWord(segment, offset: StopSeqOffset, atLeast: FirstStop)
+	segment.close()
+
+	return 0 if parked else 23
+end 'runDriver'
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'aSpawnedRole'
+		let role = try arguments.get(1) otherwise return 2
+
+		if role == DriverArgument 'iAmTheDriver'
+			return runDriver()
+		end 'iAmTheDriver'
+
+		return ChildExitCode
+	end 'aSpawnedRole'
+
+	var segment = try SharedSegment.create(SegmentName, bytes: SegmentBytes) otherwise return 3
+	try segment.writeWord(MagicOffset, value: controlMagic()) otherwise return 4
+	try segment.writeWord(DriverVersionOffset, value: DriverVersion) otherwise return 5
+	try segment.writeWord(StopAtEntryOffset, value: ParkBeforeMain) otherwise return 6
+	try segment.writeWord(DriverPidOffset, value: NoDriverYet) otherwise return 7
+
+	let me = try Process.executablePath() otherwise return 8
+	let here = try FilePath.from("") otherwise return 9
+	var driverArgv = StringArray.create()
+	driverArgv.push(DriverArgument)
+	var driver = try StreamingSubprocess.spawn(Executable.path(me), arguments: driverArgv) otherwise return 10
+
+	if not awaitWord(segment, offset: DriverPidOffset, atLeast: SomePid) 'theDriverNeverStamped'
+		return 11
+	end 'theDriverNeverStamped'
+
+	var childArgv = StringArray.create()
+	childArgv.push(ChildArgument)
+	var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(me), arguments: childArgv, workingDirectory: here, environment: Environment.inheritUpdating([DebugVariableName: segment.segmentName()])) otherwise return 12
+
+	let driverCode = try driver.waitWithTimeout(DeadlineMs) otherwise 98
+	driver.release()
+
+	let code = try child.waitWithTimeout(DeadlineMs) otherwise 99
+	child.release()
+	segment.close()
+
+	print("driver={driverCode} child={code} ownExit={code == ChildExitCode} guarded={code == OrphanedExitCode}\n")
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 8192
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __sched_num_procs@352 = i64 0
+  __sched_shutdown_flag@360 = i64 0
+  __sched_lock@368 = i64 0
+  __sched_lock_depth_sink@376 = i64 0
+  __sched_nmspinning@384 = i64 0
+  __sched_needspinning@392 = i64 0
+  __sched_sysmon_event@400 = i64 0
+  __sched_sysmon_wait@408 = i64 0
+  __sched_timer_starts@416 = i64 0
+  __sched_preempt_ext_lock@424 = i64 0
+  __sched_preempt_context@432 = i64 0
+  __io_pipe_seq@440 = i64 0
+  __subp_table@448 = i64 0
+  __subp_last_error@456 = i64 0
+  __slab_arena_list@464 = i64 0
+  __slab_arena_map_l1@472 = i64 0
+  __slab_state@480 = i64 0
+  __dbg_ctl@488 = i64 0
+  __mrt_console_probe_stdin@496 = i8 0
+  __mrt_console_probe_stdout@497 = i8 0
+  __mrt_console_probe_stderr@498 = i8 0
+}
+
+func @awaitWord {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic#9
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic#9
+  __rc_ok#8:
+    x64.callDirect Clock.nowMs
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#12
+  __rc_ok#11:
+    x64.leaRegRegImm32 r14, r8, 20000
+    x64.jmp whilehdr
+  poll:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect SharedSegment.readWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.cmpRegReg r8, r13
+    x64.jcc less, ifcont
+  arrived:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 5
+  __rc_ok#17:
+    x64.callDirect __gt_sleep
+  whilehdr:
+    x64.callDirect Clock.nowMs
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#14
+  __rc_ok#13:
+    x64.cmpRegReg r8, r14
+    x64.jcc less, poll
+  whileexit:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_154]  ; "panic at debug-agent.an-orphaned-parked-child-exits-97.test:43: Range check failed: value outside typealias 'SegmentOffset'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_155]  ; "panic at debug-agent.an-orphaned-parked-child-exits-97.test:44: Range check failed: value outside typealias 'Millis'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_156]  ; "panic at debug-agent.an-orphaned-parked-child-exits-97.test:46: Range check failed: value outside typealias 'Millis'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 344
+  __il_body#38:
+    x64.callDirect __cl_count
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot15, r12
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#39
+  loop:
+    x64.movRegReg rcx, r13
+    x64.callDirect __cl_arg
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_retain
+    x64.movRegReg rcx, r8
+    x64.callDirect String.init
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  forstep#41:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#39:
+    x64.cmpRegReg r13, rbx
+    x64.jcc less, loop
+  __il_cont#37:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc lessEqual, ifcont#6
+  aSpawnedRole:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow
+  __im_load:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#71
+  __im_empty:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow
+  critsplit#72:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont
+  critsplit#71:
+    x64.movRegReg r10, rax
+  __im_cont:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#2
+  tryerr#3:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#2:
+    x64.leaRegRdata rdx, [rip + __str_rec_38]  ; "driver"
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#5
+  __il_body#44:
+    x64.leaRegRdata rax, [rip + __str_rec_37]  ; "maxon-spec-dbg-orphan"
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.movRegImm32 rdx, 8192
+    x64.callDirect SharedSegment.create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#45
+  tryerr#46:
+    x64.movRegImm32 rbx, 21
+    x64.jmp __il_cont#43
+  tryok#45:
+    x64.movRegImm32 r13, 40
+    x64.callDirect __proc_pid
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect SharedSegment.writeWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#47
+  tryerr#48:
+    x64.movRegImm32 r13, 22
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rbx, r13
+    x64.jmp __il_cont#43
+  tryok#47:
+    x64.movRegImm32 rdx, 120
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect awaitWord
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.close
+    x64.cmpRegImm32 r13, 0
+    x64.jcc equal, ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r13, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r13, 23
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+  __rc_ok:
+    x64.movRegReg rbx, r13
+  __il_cont#43:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#5:
+    x64.movRegImm32 rbx, 5
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.leaRegRdata rax, [rip + __str_rec_37]  ; "maxon-spec-dbg-orphan"
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.movRegImm32 rdx, 8192
+    x64.callDirect SharedSegment.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#56
+  tryerr#8:
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#56:
+    x64.movRegImm32 rax, 0
+    x64.storeSlotReg slot35, rax
+    x64.movRegImm32 rax, 0
+    x64.storeSlotReg slot37, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_35]  ; "MXDBGCTL"
+    x64.callDirect String.bytes
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect ByteView.createIterator
+    x64.movRegReg r14, r8
+    x64.movRegReg r15, r10
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_ByteView
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, forempty
+  critsplit#73:
+    x64.loadRegSlot r13, slot35
+    x64.loadRegSlot rdx, slot37
+    x64.jmp forhdr#57
+  __il_body#70:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 16]
+  __il_cont#69:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, shiftneg
+  shiftok:
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rsi, rsi, rcx
+    x64.sarRegImm8 rsi, rsi, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.andRegReg rax, rax, rsi
+    x64.leaRegRegReg r13, r13, rax
+    x64.leaRegRegImm32 r15, rdx, 8
+  forstep#60:
+    x64.movRegReg rcx, r14
+    x64.callDirect ByteIterator.advance
+    x64.movRegReg rax, r10
+    x64.movRegReg rdx, r15
+  forhdr#57:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __il_body#70
+  forexit:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_ByteIterator
+    x64.movRegReg rax, r13
+    x64.jmp __il_cont#55
+  forempty:
+    x64.loadRegSlot rax, slot35
+  __il_cont#55:
+    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rdx, 0
+    x64.callDirect SharedSegment.writeWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegImm32 r13, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.movRegImm32 rdx, 8
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.writeWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.movRegImm32 r13, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#11:
+    x64.movRegImm32 rdx, 48
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.writeWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#13
+  tryerr#14:
+    x64.movRegImm32 r13, 6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.movRegImm32 rdx, 40
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.writeWord
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#15
+  tryerr#16:
+    x64.movRegImm32 r13, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#15:
+    x64.callDirect Process.executablePath
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#17
+  tryerr#18:
+    x64.movRegImm32 r13, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#17:
+    x64.leaRegRdata rcx, [rip + __str_rec_39]  ; ""
+    x64.callDirect FilePath.from
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot2, r14
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#19
+  tryerr#20:
+    x64.movRegImm32 r14, 9
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#19:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.leaRegRdata rcx, [rip + __str_rec_38]  ; "driver"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot34, r15
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r15 + 8], r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callDirect StreamingSubprocess.spawn
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot4, r15
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#21
+  tryerr#22:
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.loadRegSlot rcx, slot34
+    x64.callDirect __destruct_Executable
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.loadRegSlot rcx, slot15
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 10
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#21:
+    x64.loadRegSlot rcx, slot34
+    x64.callDirect __destruct_Executable
+    x64.movRegImm32 rdx, 40
+    x64.movRegImm32 rax, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect awaitWord
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont#24
+  theDriverNeverStamped:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.loadRegSlot rcx, slot15
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 11
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#24:
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot5, r12
+    x64.leaRegRdata rcx, [rip + __str_rec_40]  ; "child"
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot16, r15
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r15 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [r15 + 8], r8
+    x64.leaRegRdata rax, [rip + __str_rec_41]  ; "MAXON_DEBUG"
+    x64.storeSlotReg slot30, rax
+  __il_body#66:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.callDirect __str_retain
+    x64.storeSlotReg slot18, r8
+  __il_cont#65:
+    x64.leaRegRdata rcx, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+    x64.callDirect Map.create
+    x64.storeSlotReg slot20, r8
+    x64.loadRegSlot rax, slot30
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot27, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot24, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot22, r8
+    x64.leaRegRegImm32 rcx, r8, 56
+    x64.storeSlotReg slot31, rcx
+    x64.loadRegSlot rax, slot24
+    x64.loadRegSlot rdx, slot27
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot24
+    x64.loadRegSlot rcx, slot31
+    x64.leaRegRegReg rdx, rcx, rax
+    x64.loadRegSlot rdx, slot22
+    x64.storeBaseDispReg.word64 [rdx + 0], rcx
+    x64.storeBaseDispReg.word64 [rdx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rdx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rdx + 24], rax
+    x64.leaRegRdata r9, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rsi, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_String.Equatable]
+    x64.loadRegSlot rax, slot18
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect Map.upsert
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot28, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.loadRegSlot rax, slot20
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.loadRegSlot rcx, slot16
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r14
+    x64.movRegReg r9, r8
+    x64.callDirect StreamingSubprocess.spawnWithEnvironment
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot6, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#25
+  tryerr#26:
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.loadRegSlot rcx, slot28
+    x64.callDirect __destruct_Environment
+    x64.loadRegSlot rcx, slot16
+    x64.callDirect __destruct_Executable
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_SharedSegment
+    x64.loadRegSlot rcx, slot15
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 12
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#25:
+    x64.loadRegSlot rcx, slot28
+    x64.callDirect __destruct_Environment
+    x64.loadRegSlot rcx, slot16
+    x64.callDirect __destruct_Executable
+    x64.movRegImm32 rdx, 60000
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect StreamingSubprocess.waitWithTimeout
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#27
+  tryerr#28:
+    x64.movRegImm32 r12, 98
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.jmp trycont#29
+  tryok#27:
+    x64.movRegReg r12, r8
+  trycont#29:
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect StreamingSubprocess.release
+    x64.movRegImm32 rdx, 60000
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.waitWithTimeout
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#30
+  tryerr#31:
+    x64.movRegImm32 r14, 99
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.jmp trycont#32
+  tryok#30:
+    x64.movRegReg r14, r8
+  trycont#32:
+    x64.movRegReg rcx, r13
+    x64.callDirect StreamingSubprocess.release
+    x64.movRegReg rcx, rbx
+    x64.callDirect SharedSegment.close
+    x64.leaRegRdata rax, [rip + __str_rec_42]  ; "driver="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot23, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot21, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rax, [rip + __str_rec_43]  ; " child="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot19, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot36, rax
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot13, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot32, r8
+    x64.leaRegRdata rax, [rip + __str_rec_44]  ; " ownExit="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.storeSlotReg slot9, r13
+    x64.cmpRegImm32 r14, 5
+    x64.setccReg equal, r15
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot7, r15
+    x64.leaRegRdata rax, [rip + __str_rec_45]  ; " guarded="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot11, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot29, rax
+    x64.cmpRegImm32 r14, 97
+    x64.setccReg equal, r14
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot12, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot33, r8
+    x64.leaRegRdata rax, [rip + __str_rec_46]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot14, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot26, rax
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rcx, slot36
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot r14, slot32
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot29
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, r8
+    x64.loadRegSlot rcx, slot26
+    x64.leaRegRegReg rax, rax, rcx
+    x64.storeSlotReg slot17, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot25, r8
+    x64.leaRegRegImm32 r13, r8, 56
+    x64.loadRegSlot rdx, slot23
+    x64.movRegReg rcx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r13, rbx
+    x64.loadRegSlot rdx, slot21
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rdx, slot19
+    x64.loadRegSlot rax, slot36
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot36
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot9
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot9
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot11
+    x64.loadRegSlot rax, slot29
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot29
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot12
+    x64.loadRegSlot rax, slot33
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot33
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot14
+    x64.loadRegSlot rax, slot26
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot26
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot25
+    x64.storeBaseDispReg.word64 [rax + 0], r13
+    x64.loadRegSlot rcx, slot17
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.loadRegSlot rcx, slot21
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot13
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot12
+    x64.callDirect __mm_decref
+  __il_body#68:
+    x64.loadRegSlot rcx, slot25
+    x64.callDirect __write_stdout
+  __il_cont#67:
+    x64.loadRegSlot rcx, slot25
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_SharedSegment
+    x64.loadRegSlot rcx, slot15
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont
+  shiftneg:
+    x64.leaRegRdata rcx, [rip + __str_blob_36]  ; "panic at debug-agent.an-orphaned-parked-child-exits-97.test:36: negative shift count\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 344
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

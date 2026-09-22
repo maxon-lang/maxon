@@ -1,0 +1,43 @@
+typealias Step = int(0 to 1000000)
+
+function inner(seed Step) returns Step
+	var total = seed
+	var i = 0
+	while i < 4 'grind'
+		total = total + i // anchor: inner-loop
+		i = i + 1 // anchor: plain
+	end 'grind'
+
+	return total // anchor: inner-return
+end 'inner'
+
+function outer(seed Step) returns Step
+	var carried = seed
+	var round = 0
+	while round < 2 'rounds' // anchor: backedge
+		carried = carried + inner(round) // anchor: outer-call
+		round = round + 1 // anchor: outer-after
+	end 'rounds'
+
+	if carried > 0 'positive' // anchor: branch
+		carried = carried + inner(1) // anchor: branch-taken
+	end 'positive' else 'empty'
+		carried = carried + inner(2)
+	end 'empty'
+
+	return carried // anchor: outer-return
+end 'outer'
+
+function main() returns ExitCode
+	var total = 0
+	var round = 0
+	while round < 2 'mainRounds'
+		total = total + outer(round) // anchor: main-call
+		round = round + 1
+	end 'mainRounds'
+
+	total = total + outer(3)
+	print("total {total}\n") // anchor: main-print
+
+	return 0
+end 'main'

@@ -1,0 +1,87 @@
+let ClassifierCaseLabel = "x64-classifies-each-instruction-class"
+
+let ClassifyOptionPrefix = "--classify="
+let ClassifySeparator = ","
+
+let PlainClass = 1
+let PcRelativeDataClass = 2
+let DirectCallClass = 3
+let DirectJumpClass = 4
+let ConditionalJumpClass = 5
+let ReturnClass = 6
+let IndirectCallClass = 7
+let IndirectJumpClass = 8
+
+let UnclassifiedAnswer = "unclassified"
+
+let LessThanCondition = 12
+
+test 'the x64 classifier answers a length and a class for every instruction class a breakpoint displaces'
+	let staged = builtFixture(ClassifierCaseLabel, fixture: HeaplessFixtureName)
+
+	var probes = ProbeArray.create()
+	probes.push(Probe.create("4d8d0400", expected: "len=4 class={PlainClass} cond=0 disp=4 target=0x0", what: "`lea r8, [r8+rax]` — a REX-prefixed ModRM with a SIB and no displacement"))
+	probes.push(Probe.create("488d4001", expected: "len=4 class={PlainClass} cond=0 disp=3 target=0x0", what: "`lea rax, [rax+1]` — a one-byte displacement"))
+	probes.push(Probe.create("4c89e1", expected: "len=3 class={PlainClass} cond=0 disp=0 target=0x0", what: "`mov rcx, r12` — a register-to-register ModRM"))
+	probes.push(Probe.create("4881fb00000000", expected: "len=7 class={PlainClass} cond=0 disp=0 target=0x0", what: "`cmp rbx, imm32` — a group-1 form whose immediate is operand-sized"))
+	probes.push(Probe.create("48b80100000000000000", expected: "len=10 class={PlainClass} cond=0 disp=0 target=0x0", what: "`mov rax, imm64` — the one immediate REX.W widens to eight bytes"))
+	probes.push(Probe.create("660f1f440000", expected: "len=6 class={PlainClass} cond=0 disp=5 target=0x0", what: "`nop word [rax+rax]` — an operand-size prefix, the 0F map, a SIB and a byte displacement"))
+	probes.push(Probe.create("5d", expected: "len=1 class={PlainClass} cond=0 disp=0 target=0x0", what: "`pop rbp` — a one-byte opcode with no ModRM"))
+	probes.push(Probe.create("488d0dce6f0000", expected: "len=7 class={PcRelativeDataClass} cond=0 disp=3 target=0x7fd5", what: "`lea rcx, [rip+0x6fce]` — the class whose displacement the agent rewrites, so the BYTE POSITION of that displacement and its absolute referent are both part of the answer"))
+	probes.push(Probe.create("e8fbfeffff", expected: "len=5 class={DirectCallClass} cond=0 disp=0 target=0xf00", what: "`call rel32` — a backward call, whose absolute target the agent pushes a return address for"))
+	probes.push(Probe.create("e9ebffffff", expected: "len=5 class={DirectJumpClass} cond=0 disp=0 target=0xff0", what: "`jmp rel32`"))
+	probes.push(Probe.create("eb05", expected: "len=2 class={DirectJumpClass} cond=0 disp=0 target=0x1007", what: "`jmp rel8` — a two-byte jump, whose one-byte displacement is still signed"))
+	probes.push(Probe.create("0f8cebffffff", expected: "len=6 class={ConditionalJumpClass} cond={LessThanCondition} disp=0 target=0xff1", what: "`jl rel32` — the condition NIBBLE rides the class word, because the agent evaluates it against the saved flags"))
+	probes.push(Probe.create("7c05", expected: "len=2 class={ConditionalJumpClass} cond={LessThanCondition} disp=0 target=0x1007", what: "`jl rel8` — the same condition through the short encoding"))
+	probes.push(Probe.create("c3", expected: "len=1 class={ReturnClass} cond=0 disp=0 target=0x0", what: "`ret` — the class the agent simulates by popping the stack"))
+	probes.push(Probe.create("ff1510000000", expected: "len=6 class={IndirectCallClass} cond=0 disp=2 target=0x0", what: "`call [rip+0x10]` — an indirect call, which is classified so the agent can REFUSE it rather than resume past it wrongly"))
+	probes.push(Probe.create("ff2510000000", expected: "len=6 class={IndirectJumpClass} cond=0 disp=2 target=0x0", what: "`jmp [rip+0x10]` — an indirect jump, refused for the same reason"))
+	probes.push(Probe.create("62", expected: UnclassifiedAnswer, what: "a byte this build's tables do not cover — it must be answered `{UnclassifiedAnswer}` rather than given a length nobody can vouch for"))
+	probes.push(Probe.create("d5", expected: UnclassifiedAnswer, what: "a second such byte"))
+	probes.push(Probe.create("f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f390", expected: UnclassifiedAnswer, what: "sixteen `rep` prefixes ahead of a `nop` — a run longer than the fifteen bytes any x64 instruction may occupy, which must be REFUSED rather than measured: the length and the displacement position both ride a fifteen-bit field, so a decoder that answered here would abort the driver on a range check for a token a caller simply mistyped"))
+
+	var spelled = ""
+	var wanted = StringArray.create()
+
+	for probe in probes 'eachProbe'
+		spelled = probe.bytes if spelled.isEmpty() else "{spelled}{ClassifySeparator}{probe.bytes}"
+		wanted.push(probe.expected)
+	end 'eachProbe'
+
+	let run = spawnCompiler([DebugSubcommandName, "{ClassifyOptionPrefix}{spelled}"], staged: staged, what: "`{DebugSubcommandName} {ClassifyOptionPrefix}`")
+	let said = renderedEvents(run.stdout, stderr: run.stderr)
+	var answered = StringArray.create()
+
+	for rawLine in withoutCarriageReturns(run.stdout).split(LineFeed) 'eachLine'
+		if not rawLine.trim().isEmpty() 'anAnswer'
+			answered.push(rawLine.trim())
+		end 'anAnswer'
+	end 'eachLine'
+
+	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{ClassifyOptionPrefix}` reads no program and runs nothing, so it cannot fail. {said}")
+	try Expect.equal(answered.count() as AssertedInt, expected: probes.count() as AssertedInt, message: "{probes.count()} byte sequences are {probes.count()} answers, one per line. It answered: {renderedRows(answered)}. {said}")
+
+	var wrong = StringArray.create()
+
+	for (iter, probe) in probes.withIterator() 'eachAnswer'
+		let got = try answered.get(iter.index()) otherwise AbsentEventText
+
+		if got != probe.expected 'notWhatTheAgentNeeds'
+			wrong.push("{probe.bytes} ({probe.what}) answered '{got}' and not '{probe.expected}'")
+		end 'notWhatTheAgentNeeds'
+	end 'eachAnswer'
+
+	try Expect.isEmpty(renderedRows(wrong), message: "⛔ A CLASS WORD IS WHAT THE AGENT RESUMES ON. A wrong LENGTH copies the wrong bytes into the out-of-line slot and executes them; a wrong CLASS resumes a branch as though it fell through; a wrong DISPLACEMENT POSITION rewrites the wrong four bytes of a pc-relative operand; a wrong CONDITION takes the other arm. None of those is a missing answer a reader can see — each is a program that runs differently under the debugger. {renderedRows(wrong)}")
+end 'the x64 classifier answers a length and a class for every instruction class a breakpoint displaces'
+
+type Probe
+	export var bytes as String
+	export var expected as String
+	export var what as String
+
+	export static function create(bytes String, expected String, what String) returns Probe
+		return Probe{bytes: bytes, expected: expected, what: what}
+	end 'create'
+end 'Probe'
+
+typealias ProbeArray = Array with Probe

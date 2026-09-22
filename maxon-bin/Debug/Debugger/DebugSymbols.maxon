@@ -1,0 +1,519 @@
+export typealias DebugLocalArray = Array with MxdbgLocalInfo
+export typealias DebugNameSet = Set with String
+export typealias MxdbgLocValueArray = Array with MxdbgLocValue
+
+export union BreakResolution
+	atLine(file String, line DebugLineNumber, offsets DebugAddressArray, functionName String)
+	noCode(file String, line DebugLineNumber)
+	ambiguous(candidates StringArray)
+	noMatch(suggestion String)
+	notATarget(spelling String)
+end 'BreakResolution'
+
+let DebugLibraryStdlibComponent = "stdlib"
+let DebugLibraryRuntimeComponent = "runtime"
+let DebugCompilerNamePrefix = "__"
+
+let TargetSeparator = ":"
+let ForwardSlash = "/"
+let Backslash = "\\"
+
+let SourceWindowRadius = 2
+
+export type DebugSymbols
+	let reader as MxdbgReader
+	let code as ByteArray
+	let programFiles as StringArray
+	let sourceRoot as FilePath
+
+	export static function create(reader MxdbgReader, code ByteArray, executable FilePath) returns DebugSymbols
+		var own = StringArray.create()
+
+		for i in 0 upto reader.fileCount() 'eachFile'
+			let spelled = reader.fileName(i as MxdbgIndex)
+
+			if not isLibrarySourcePath(spelled) 'theProgramsOwn'
+				own.push(spelled)
+			end 'theProgramsOwn'
+		end 'eachFile'
+
+		return Self{reader: reader, code: code, programFiles: own, sourceRoot: try executable.parent() otherwise executable}
+	end 'create'
+
+	export function imageCode() returns ByteArray
+		return self.code
+	end 'imageCode'
+
+	export function functionNamePool() returns StringArray
+		var names = StringArray.create()
+		var seen = DebugNameSet.create()
+
+		for i in 0 upto self.reader.functionCount() 'eachFunction'
+			let fn = self.reader.functionRecord(i as MxdbgIndex)
+
+			if self.functionIsTheProgramsOwn(fn) 'aProgramFunction'
+				noteDebugName(names, seen: seen, name: fn.name)
+			end 'aProgramFunction'
+		end 'eachFunction'
+
+		// Spliced names belong in the pool as much as function records do: a method the inliner copied into
+		// every caller has no function record at all, and a user who can read its name expects to break on it.
+		for i in 0 upto self.reader.inlineRangeCount() 'eachSplicedRange'
+			let spliced = self.splicedNameAt(self.reader.inlineRangeStart(i as MxdbgIndex))
+
+			if not spliced.isEmpty() 'aSplicedBody'
+				noteDebugName(names, seen: seen, name: spliced)
+			end 'aSplicedBody'
+		end 'eachSplicedRange'
+
+		return names
+	end 'functionNamePool'
+
+	function splicedNameAt(offset MxdbgCodeOffset) returns String
+		if not self.offsetIsTheProgramsOwn(offset as DebugAddress) 'libraryOrRuntimeCode'
+			return ""
+		end 'libraryOrRuntimeCode'
+
+		match self.reader.inlineSiteContaining(offset) 'site'
+			none then return ""
+			site(index) then return "" if self.reader.inlineSite(index).name.startsWith(DebugCompilerNamePrefix) else self.reader.inlineSite(index).name
+		end 'site'
+	end 'splicedNameAt'
+
+	export function functionNameAt(offset DebugAddress) returns String
+		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+			none gives ""
+			found(fn) gives fn.name
+		end 'enclosing'
+	end 'functionNameAt'
+
+	export function resolveBreakTarget(spelling String) returns BreakResolution
+		let trimmed = spelling.trim()
+
+		if trimmed.isEmpty() 'nothingNamed'
+			return BreakResolution.notATarget(spelling)
+		end 'nothingNamed'
+
+		match self.parsedLineTarget(trimmed) 'aFileAndLine'
+			none then break 'aFileAndLine'
+			at(file, line) then return self.resolvedLine(file, line: line)
+		end 'aFileAndLine'
+
+		match fuzzyResolve(trimmed, pool: self.functionNamePool()) 'named'
+			none(suggestion) then return BreakResolution.noMatch(suggestion)
+			several(candidates) then return BreakResolution.ambiguous(candidates)
+			one(name) then return self.resolvedFunction(name)
+		end 'named'
+	end 'resolveBreakTarget'
+
+	export function completionPool(partial String) returns StringArray
+		return completionsFor(partial, pool: self.functionNamePool())
+	end 'completionPool'
+
+	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress) returns DebugStop
+		let frames = self.frameListFor(stop, textBase: textBase)
+		let offset = stop.pc - textBase
+
+		match self.reader.pcToLine(offset as MxdbgCodeOffset) 'positioned'
+			none then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames)
+			found(row) then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(row.file, line: row.line as DebugLineNumber), frames: frames)
+		end 'positioned'
+	end 'stopRecordFor'
+
+	export function frameListFor(stop EngineStop, textBase DebugAddress) returns DebugFrameArray
+		var frames = DebugFrameArray.create()
+		self.appendFramesFor(frames, pc: stop.pc, framePointer: stop.framePointer, textBase: textBase, biased: false)
+
+		for (iter, returnAddress) in stop.returnAddresses.withIterator() 'eachCaller'
+			if frames.count() == 0 'theWalkAlreadyEnded'
+				break
+			end 'theWalkAlreadyEnded'
+
+			let framePointer = try stop.framePointers.get(iter.index() + 1) otherwise 0
+			let before = frames.count()
+			self.appendFramesFor(frames, pc: returnAddress, framePointer: framePointer, textBase: textBase, biased: true)
+
+			if frames.count() == before 'pastTheProgramsOwnCode'
+				break
+			end 'pastTheProgramsOwnCode'
+		end 'eachCaller'
+
+		return frames
+	end 'frameListFor'
+
+	export function offsetIsTheProgramsOwn(offset DebugAddress) returns bool
+		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+			none gives false
+			found(fn) gives self.functionIsTheProgramsOwn(fn)
+		end 'enclosing'
+	end 'offsetIsTheProgramsOwn'
+
+	export function inlineDepthAt(offset DebugAddress) returns DebugTally
+		return self.inlineChainAt(offset as MxdbgCodeOffset).count() as DebugTally
+	end 'inlineDepthAt'
+
+	export function sourcePositionAt(offset DebugAddress) returns MxdbgLineLookup
+		return self.reader.pcToLine(offset as MxdbgCodeOffset)
+	end 'sourcePositionAt'
+
+	export function localsAt(offset DebugAddress) returns DebugLocalArray
+		var found = DebugLocalArray.create()
+
+		match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
+			none then return found
+			found(fn) then self.appendLocalsOf(found, fn: fn)
+		end 'enclosing'
+
+		return found
+	end 'localsAt'
+
+	// Two rows of one name can both cover an offset, where a reload leaves a value in a register and in its
+	// slot over the same instruction. The first covering row in table order answers.
+	export function localCoveringIn(locals DebugLocalArray, offset DebugAddress, name String) returns MxdbgLocalLookup
+		var declared = false
+
+		for local in locals 'eachLocal'
+			if local.name != name 'anotherName'
+				continue
+			end 'anotherName'
+
+			declared = true
+
+			if offset >= (local.scopeStart as DebugAddress) and offset < (local.scopeEnd as DebugAddress) 'liveHere'
+				return MxdbgLocalLookup.live(local)
+			end 'liveHere'
+		end 'eachLocal'
+
+		return MxdbgLocalLookup.notLiveHere if declared else MxdbgLocalLookup.undeclared
+	end 'localCoveringIn'
+
+	export function foldedWordsFor(first MxdbgIndex, count MxdbgIndex) returns MxdbgLocValueArray
+		var words = MxdbgLocValueArray.create()
+		let tally = self.reader.constantWordCount()
+
+		if count == 0 or first >= tally or count > tally - first 'pastTheSection'
+			return words
+		end 'pastTheSection'
+
+		for i in first upto first + count 'eachWord'
+			words.push(self.reader.constantWord(i as MxdbgIndex))
+		end 'eachWord'
+
+		return words
+	end 'foldedWordsFor'
+
+	export function typeRecordOf(typeId MxdbgIndex) returns MxdbgTypeInfo
+		return self.reader.typeRecord(typeId)
+	end 'typeRecordOf'
+
+	export function typeNameOf(typeId MxdbgIndex) returns String
+		return self.reader.typeName(typeId)
+	end 'typeNameOf'
+
+	export function typeIsDescribed(typeId MxdbgIndex) returns bool
+		return typeId < self.reader.typeCount()
+	end 'typeIsDescribed'
+
+	export function fieldRecordOf(index MxdbgIndex) returns MxdbgFieldInfo
+		return self.reader.fieldRecord(index)
+	end 'fieldRecordOf'
+
+	function appendLocalsOf(into DebugLocalArray, fn MxdbgFunctionInfo)
+		for k in fn.localFirst upto fn.localFirst + fn.localCount 'eachLocal'
+			into.push(self.reader.localRecord(k as MxdbgIndex))
+		end 'eachLocal'
+	end 'appendLocalsOf'
+
+	function innermostName(frames DebugFrameArray, offset DebugAddress) returns String
+		let innermost = try frames.get(0) otherwise return self.functionNameAt(offset)
+
+		return innermost.functionName
+	end 'innermostName'
+
+	function appendFramesFor(frames DebugFrameArray, pc DebugAddress, framePointer DebugAddress, textBase DebugAddress, biased bool)
+		if pc < textBase 'notInThisImage'
+			return
+		end 'notInThisImage'
+
+		let raw = (pc - textBase) as MxdbgCodeOffset
+		// Only the outer frames are return addresses (`callSiteLookup` owns that bias); the innermost
+		// frame's pc is the stop itself and is read where it stands.
+		let offset = MxdbgReader.callSiteLookup(raw) if biased else raw
+
+		match self.reader.functionContaining(offset) 'enclosing'
+			none then return
+			found(fn) then self.appendKnownFrames(frames, fn: fn, offset: offset, framePointer: framePointer)
+		end 'enclosing'
+	end 'appendFramesFor'
+
+	function appendKnownFrames(frames DebugFrameArray, fn MxdbgFunctionInfo, offset MxdbgCodeOffset, framePointer DebugAddress)
+		if not self.functionIsTheProgramsOwn(fn) 'libraryOrRuntimeCode'
+			return
+		end 'libraryOrRuntimeCode'
+
+		let file = self.fileOfFunction(fn)
+		let line = self.lineAt(offset)
+
+		for name in self.inlineChainAt(offset) 'eachSplicedBody'
+			frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: name, file: file, line: line, offset: offset as DebugAddress, inlined: true, framePointer: framePointer))
+		end 'eachSplicedBody'
+
+		frames.push(DebugFrame.create(frames.count() as DebugFrameNumber, functionName: fn.name, file: file, line: line, offset: offset as DebugAddress, inlined: false, framePointer: framePointer))
+	end 'appendKnownFrames'
+
+	function inlineChainAt(offset MxdbgCodeOffset) returns StringArray
+		var names = StringArray.create()
+		var walking = self.reader.inlineSiteContaining(offset)
+		var descending = true
+
+		while descending 'eachSite'
+			match walking 'site'
+				none then descending = false
+				site(index) then names.push(self.reader.inlineSite(index).name)
+			end 'site'
+
+			if descending 'thenItsParent'
+				walking = self.parentOf(walking)
+			end 'thenItsParent'
+		end 'eachSite'
+
+		return names
+	end 'inlineChainAt'
+
+	function parentOf(lookup MxdbgInlineSiteLookup) returns MxdbgInlineSiteLookup
+		return match lookup 'which'
+			none gives MxdbgInlineSiteLookup.none
+			site(index) gives self.reader.inlineSite(index).parent
+		end 'which'
+	end 'parentOf'
+
+	function lineAt(offset MxdbgCodeOffset) returns DebugLineNumber
+		return match self.reader.pcToLine(offset) 'positioned'
+			none gives 0
+			found(row) gives row.line as DebugLineNumber
+		end 'positioned'
+	end 'lineAt'
+
+	function fileOfFunction(fn MxdbgFunctionInfo) returns String
+		if fn.lineCount == 0 'noRows'
+			return ""
+		end 'noRows'
+
+		return baseNameOf(self.reader.lineRecord(fn.lineFirst).file)
+	end 'fileOfFunction'
+
+	function functionIsTheProgramsOwn(fn MxdbgFunctionInfo) returns bool
+		if fn.name.startsWith(DebugCompilerNamePrefix) 'compilerMinted'
+			return false
+		end 'compilerMinted'
+
+		if fn.lineCount == 0 'noSourcePosition'
+			return false
+		end 'noSourcePosition'
+
+		return not isLibrarySourcePath(self.reader.lineRecord(fn.lineFirst).file)
+	end 'functionIsTheProgramsOwn'
+
+	function parsedLineTarget(spelling String) returns DebugLineTarget
+		let pieces = spelling.split(TargetSeparator)
+
+		if pieces.count() == 1 'noColon'
+			match wholeNumberIn(spelling) 'aBareLine'
+				none then return DebugLineTarget.none
+				value(line) then return DebugLineTarget.at(self.fileOfMain(), line: line)
+			end 'aBareLine'
+		end 'noColon'
+
+		if pieces.count() != 2 'notAFileAndLine'
+			return DebugLineTarget.none
+		end 'notAFileAndLine'
+
+		match wholeNumberIn(try pieces.get(1) otherwise "") 'aLineNumber'
+			none then return DebugLineTarget.none
+			value(line) then return DebugLineTarget.at(try pieces.get(0) otherwise "", line: line)
+		end 'aLineNumber'
+	end 'parsedLineTarget'
+
+	function fileOfMain() returns String
+		for i in 0 upto self.reader.functionCount() 'eachFunction'
+			let fn = self.reader.functionRecord(i as MxdbgIndex)
+
+			if fn.name == DebugMainFunctionName and fn.lineCount > 0 'theEntryPoint'
+				return baseNameOf(self.reader.lineRecord(fn.lineFirst).file)
+			end 'theEntryPoint'
+		end 'eachFunction'
+
+		return try self.programFiles.get(0) otherwise ""
+	end 'fileOfMain'
+
+	function resolvedLine(file String, line DebugLineNumber) returns BreakResolution
+		let wanted = baseNameOf(file)
+		var offsets = DebugAddressArray.create()
+		var fileIds = MxdbgIndexArray.create()
+
+		for i in 0 upto self.reader.fileCount() 'eachFile'
+			if baseNameOf(self.reader.fileName(i as MxdbgIndex)) == wanted 'thisFile'
+				fileIds.push(i as MxdbgIndex)
+			end 'thisFile'
+		end 'eachFile'
+
+		for offset in self.reader.lineToOffsets(fileIds, line: line as MxdbgIndex) 'eachOffset'
+			if not offsets.contains(offset as DebugAddress) 'aNewSite'
+				offsets.push(offset as DebugAddress)
+			end 'aNewSite'
+		end 'eachOffset'
+
+		if offsets.count() == 0 'noCodeThere'
+			return BreakResolution.noCode(wanted, line: line)
+		end 'noCodeThere'
+
+		return BreakResolution.atLine(wanted, line: line, offsets: offsets, functionName: self.functionNameAt(try offsets.get(0) otherwise panic("resolvedLine: a roster asserted non-empty holds a first element")))
+	end 'resolvedLine'
+
+	function resolvedFunction(name String) returns BreakResolution
+		for i in 0 upto self.reader.functionCount() 'eachFunction'
+			let fn = self.reader.functionRecord(i as MxdbgIndex)
+
+			if fn.name != name 'anotherFunction'
+				continue
+			end 'anotherFunction'
+
+			match self.firstStatementRowOf(fn) 'opening'
+				none then continue
+				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, offsets: singleOffset(row.codeOffset as DebugAddress), functionName: name)
+			end 'opening'
+		end 'eachFunction'
+
+		return self.resolvedSplicedBody(name)
+	end 'resolvedFunction'
+
+	function resolvedSplicedBody(name String) returns BreakResolution
+		for i in 0 upto self.reader.inlineRangeCount() 'eachSplicedRange'
+			let offset = self.reader.inlineRangeStart(i as MxdbgIndex)
+
+			if self.splicedNameAt(offset) != name 'anotherBody'
+				continue
+			end 'anotherBody'
+
+			match self.reader.pcToLine(offset) 'positioned'
+				none then continue
+				found(row) then return BreakResolution.atLine(baseNameOf(row.file), line: row.line as DebugLineNumber, offsets: singleOffset(offset as DebugAddress), functionName: name)
+			end 'positioned'
+		end 'eachSplicedRange'
+
+		return BreakResolution.noCode(name, line: 0)
+	end 'resolvedSplicedBody'
+
+	function firstStatementRowOf(fn MxdbgFunctionInfo) returns MxdbgLineLookup
+		for k in fn.lineFirst upto fn.lineFirst + fn.lineCount 'eachRow'
+			let row = self.reader.lineRecord(k as MxdbgIndex)
+
+			if (row.flags and MxdbgLineFlagStatement) != 0 'aStoppableRow'
+				return MxdbgLineLookup.found(row)
+			end 'aStoppableRow'
+		end 'eachRow'
+
+		return MxdbgLineLookup.none
+	end 'firstStatementRowOf'
+
+	function sourceWindow(path String, line DebugLineNumber) returns DebugSourceLineArray
+		var window = DebugSourceLineArray.create()
+		let text = self.readSource(path)
+
+		if text.isEmpty() 'noSourceToShow'
+			return window
+		end 'noSourceToShow'
+
+		for (iter, row) in text.split(LineSeparator).withIterator() 'eachLine'
+			let number = (iter.index() + 1) as DebugLineNumber
+
+			if number + SourceWindowRadius >= line and number <= line + SourceWindowRadius 'insideTheWindow'
+				window.push(DebugSourceLine.create(number, text: row.replace(CarriageReturn, with: ""), current: number == line))
+			end 'insideTheWindow'
+		end 'eachLine'
+
+		return window
+	end 'sourceWindow'
+
+	function readSource(path String) returns String
+		let named = try FilePath.from(path) otherwise return ""
+
+		if File.exists(named) 'namedDirectly'
+			return try File.readText(named) otherwise ""
+		end 'namedDirectly'
+
+		let beside = self.sourceRoot.join(baseNameOf(path))
+
+		return try File.readText(beside) otherwise ""
+	end 'readSource'
+end 'DebugSymbols'
+
+export union MxdbgLocalLookup
+	live(local MxdbgLocalInfo)
+	notLiveHere
+	undeclared
+end 'MxdbgLocalLookup'
+
+union DebugLineTarget
+	none
+	at(file String, line DebugLineNumber)
+end 'DebugLineTarget'
+
+union DebugWholeNumber
+	none
+	value(number DebugLineNumber)
+end 'DebugWholeNumber'
+
+let DebugMainFunctionName = "main"
+
+let LineSeparator = "\n"
+let CarriageReturn = "\r"
+
+function wholeNumberIn(spelling String) returns DebugWholeNumber
+	match parseDigits(spelling.trim(), skipping: 0, base: DecimalBase) 'read'
+		invalid then return DebugWholeNumber.none
+		valid(value) then return DebugWholeNumber.value(value as DebugLineNumber)
+	end 'read'
+end 'wholeNumberIn'
+
+function baseNameOf(path String) returns String
+	let components = pathComponentsOf(path)
+
+	return try components.get(components.count() - 1) otherwise path
+end 'baseNameOf'
+
+function isLibrarySourcePath(path String) returns bool
+	for component in pathComponentsOf(path) 'eachComponent'
+		if component == DebugLibraryStdlibComponent or component == DebugLibraryRuntimeComponent 'aLibraryRoot'
+			return true
+		end 'aLibraryRoot'
+	end 'eachComponent'
+
+	return false
+end 'isLibrarySourcePath'
+
+function pathComponentsOf(path String) returns StringArray
+	var components = StringArray.create()
+
+	for piece in path.replace(Backslash, with: ForwardSlash).split(ForwardSlash) 'eachPiece'
+		components.push(piece)
+	end 'eachPiece'
+
+	return components
+end 'pathComponentsOf'
+
+function noteDebugName(names StringArray, seen DebugNameSet, name String)
+	if seen.contains(name) 'alreadyPooled'
+		return
+	end 'alreadyPooled'
+
+	seen.insert(name)
+	names.push(name)
+end 'noteDebugName'
+
+function singleOffset(offset DebugAddress) returns DebugAddressArray
+	var offsets = DebugAddressArray.create()
+	offsets.push(offset)
+
+	return offsets
+end 'singleOffset'

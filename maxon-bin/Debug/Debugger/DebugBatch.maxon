@@ -1,0 +1,55 @@
+let CommandSeparator = ";"
+let ScriptFilePrefix = "@"
+
+export union DebugScript
+	commands(lines StringArray)
+	unreadable(path String)
+end 'DebugScript'
+
+export function debugBatchScript(spelling String) returns DebugScript
+	if not spelling.startsWith(ScriptFilePrefix) 'writtenOnTheCommandLine'
+		return DebugScript.commands(splitCommands(spelling))
+	end 'writtenOnTheCommandLine'
+
+	let spelled = spelling.replaceFirst(ScriptFilePrefix, with: "")
+	let named = try FilePath.from(spelled) otherwise return DebugScript.unreadable(spelled)
+	let body = try File.readText(named) otherwise return DebugScript.unreadable(spelled)
+
+	return DebugScript.commands(scriptLinesOf(body))
+end 'debugBatchScript'
+
+export function runDebugBatch(session DebugSession, lines StringArray) returns ExitCode
+	for line in lines 'eachCommand'
+		if session.isOver() 'theReaderLeft'
+			break
+		end 'theReaderLeft'
+
+		session.run(line)
+	end 'eachCommand'
+
+	return session.close()
+end 'runDebugBatch'
+
+function splitCommands(spelling String) returns StringArray
+	var lines = StringArray.create()
+
+	for piece in spelling.split(CommandSeparator) 'eachCommand'
+		if not piece.trim().isEmpty() 'aCommand'
+			lines.push(piece.trim())
+		end 'aCommand'
+	end 'eachCommand'
+
+	return lines
+end 'splitCommands'
+
+function scriptLinesOf(body String) returns StringArray
+	var lines = StringArray.create()
+
+	for raw in body.replace("\r", with: "").split("\n") 'eachLine'
+		for command in splitCommands(raw) 'eachCommand'
+			lines.push(command)
+		end 'eachCommand'
+	end 'eachLine'
+
+	return lines
+end 'scriptLinesOf'

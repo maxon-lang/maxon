@@ -1,0 +1,544 @@
+export typealias X64Offset = int(0 to u64.max)
+export typealias X64Address = int(0 to u64.max)
+export typealias X64Length = int(0 to 15)
+export typealias X64Class = int(0 to 8)
+export typealias X64Condition = int(0 to 15)
+
+typealias X64ByteValue = int(0 to 255)
+typealias X64ModRmField = int(0 to 7)
+
+export type X64Instruction
+	export var length as X64Length
+	export var instructionClass as X64Class
+	export var condition as X64Condition
+	export var displacementPosition as X64Length
+	export var target as X64Address
+
+	export static function create(length X64Length, instructionClass X64Class, condition X64Condition, displacementPosition X64Length, target X64Address) returns X64Instruction
+		return Self{length: length, instructionClass: instructionClass, condition: condition, displacementPosition: displacementPosition, target: target}
+	end 'create'
+
+	export function classWord() returns X64Address
+		let byteTwo = self.condition as X64Address if self.instructionClass == DbgClassConditionalJump else self.displacementPosition as X64Address
+
+		return (self.length as X64Address) or ((self.instructionClass as X64Address) shl DbgClassShift) or (byteTwo shl DbgCondShift)
+	end 'classWord'
+
+	export function fixupWord() returns X64Address
+		if self.instructionClass == DbgClassPcRelativeData or self.instructionClass == DbgClassDirectCall or self.instructionClass == DbgClassDirectJump or self.instructionClass == DbgClassConditionalJump 'carriesATarget'
+			return self.target
+		end 'carriesATarget'
+
+		return 0
+	end 'fixupWord'
+end 'X64Instruction'
+
+export union X64Decode
+	unclassified
+	decoded(instruction X64Instruction)
+end 'X64Decode'
+
+union X64Immediate
+	none
+	fixed(bytes X64Length)
+	operandSized
+	registerSized
+	groupThree
+end 'X64Immediate'
+
+union X64Shape
+	unknown
+	operation(hasModRm bool, immediate X64Immediate, family X64Family)
+end 'X64Shape'
+
+enum X64Family
+	ordinary
+	directCall
+	directJump
+	conditionalJump
+	returning
+	modRmGroupFive
+end 'X64Family'
+
+type X64Cursor
+	let code as ByteArray
+	export var position as X64Offset
+	let limit as X64Offset
+
+	static function create(code ByteArray, at X64Offset) returns X64Cursor
+		return Self{code: code, position: at, limit: code.count() as X64Offset}
+	end 'create'
+
+	function exhausted() returns bool
+		return self.position >= self.limit
+	end 'exhausted'
+
+	function take() returns X64ByteValue throws X64DecodeError
+		if self.exhausted() 'pastTheEnd'
+			throw X64DecodeError.pastTheCode
+		end 'pastTheEnd'
+
+		let byte = try self.code.get(self.position) otherwise throw X64DecodeError.pastTheCode
+		self.position = self.position + 1
+
+		return byte as X64ByteValue
+	end 'take'
+
+	function peek() returns X64ByteValue throws X64DecodeError
+		if self.exhausted() 'pastTheEnd'
+			throw X64DecodeError.pastTheCode
+		end 'pastTheEnd'
+
+		return (try self.code.get(self.position) otherwise throw X64DecodeError.pastTheCode) as X64ByteValue
+	end 'peek'
+
+	function skip(bytes X64Length) throws X64DecodeError
+		for _ in 0 upto bytes 'eachByte'
+			_ = try self.take()
+		end 'eachByte'
+	end 'skip'
+
+	function spanFrom(at X64Offset) returns X64Length throws X64DecodeError
+		let span = self.position - at
+
+		if span > (MaxInstructionBytes as X64Offset) 'longerThanAnyInstruction'
+			throw X64DecodeError.notAnInstructionThisBuildDecodes
+		end 'longerThanAnyInstruction'
+
+		return span as X64Length
+	end 'spanFrom'
+
+	function signedAt(offset X64Offset, bytes X64Length) returns X64Relative throws X64DecodeError
+		var magnitude = 0 as X64Address
+		var top = 0 as X64ByteValue
+
+		for i in 0 upto bytes 'eachByte'
+			let index = offset + (i as X64Offset)
+
+			if index >= self.limit 'pastTheEnd'
+				throw X64DecodeError.pastTheCode
+			end 'pastTheEnd'
+
+			top = (try self.code.get(index) otherwise throw X64DecodeError.pastTheCode) as X64ByteValue
+			magnitude = magnitude or ((top as X64Address) shl ((i * ByteBits) as X64BitPosition))
+		end 'eachByte'
+
+		if top >= SignBitByteValue 'negative'
+			return X64Relative.backward((twoToThe(bytes) - magnitude) as X64Address)
+		end 'negative'
+
+		return X64Relative.forward(magnitude)
+	end 'signedAt'
+end 'X64Cursor'
+
+union X64Relative
+	forward(magnitude X64Address)
+	backward(magnitude X64Address)
+end 'X64Relative'
+
+enum X64DecodeError implements Error
+	pastTheCode
+	notAnInstructionThisBuildDecodes
+end 'X64DecodeError'
+
+typealias X64BitPosition = int(0 to 63)
+
+let ByteBits = 8
+let SignBitByteValue = 128 as X64ByteValue
+
+let RexLow = 0x40 as X64ByteValue
+let RexHigh = 0x4F as X64ByteValue
+let RexWideBit = 0x08
+
+let OperandSizePrefix = 0x66 as X64ByteValue
+let AddressSizePrefix = 0x67 as X64ByteValue
+let LockPrefix = 0xF0 as X64ByteValue
+let RepnePrefix = 0xF2 as X64ByteValue
+let RepPrefix = 0xF3 as X64ByteValue
+let SegmentCsPrefix = 0x2E as X64ByteValue
+let SegmentSsPrefix = 0x36 as X64ByteValue
+let SegmentDsPrefix = 0x3E as X64ByteValue
+let SegmentEsPrefix = 0x26 as X64ByteValue
+let SegmentFsPrefix = 0x64 as X64ByteValue
+let SegmentGsPrefix = 0x65 as X64ByteValue
+
+let TwoByteEscape = 0x0F as X64ByteValue
+
+let ModRmModShift = 6
+let ModRmRegShift = 3
+let ModRmLowMask = 7
+let ModRmModMask = 3
+let ModRmDirect = 3
+let ModRmDisp8 = 1
+let ModRmDisp32 = 2
+let ModRmSibRm = 4
+let ModRmRipRm = 5
+let SibNoBase = 5
+
+let Disp8Bytes = 1 as X64Length
+let Disp32Bytes = 4 as X64Length
+let Immediate8Bytes = 1 as X64Length
+let Immediate16Bytes = 2 as X64Length
+let Immediate32Bytes = 4 as X64Length
+let Immediate64Bytes = 8 as X64Length
+
+let GroupThreeTestReg = 0
+let GroupThreeTestAliasReg = 1
+let GroupFiveCallReg = 2
+let GroupFiveJumpReg = 4
+
+let ConditionNibbleMask = 0x0F
+
+let MaxInstructionBytes = 15 as X64Length
+
+function twoToThe(bytes X64Length) returns X64Address
+	var value = 1 as X64Address
+
+	for _ in 0 upto bytes * ByteBits 'eachBit'
+		value = value * 2
+	end 'eachBit'
+
+	return value
+end 'twoToThe'
+
+// It decodes what this compiler emits, and nothing else: VEX, EVEX, the 0F38/0F3A maps and x87 all answer
+// `unclassified`, which refuses the breakpoint rather than displacing bytes it has measured wrongly.
+export function decodeX64Instruction(code ByteArray, at X64Offset, address X64Address) returns X64Decode
+	return try decodedX64Instruction(code, at: at, address: address) otherwise X64Decode.unclassified
+end 'decodeX64Instruction'
+
+function decodedX64Instruction(code ByteArray, at X64Offset, address X64Address) returns X64Decode throws X64DecodeError
+	var cursor = X64Cursor.create(code, at: at)
+	var wideOperand = false
+	var narrowOperand = false
+	var scanningPrefixes = true
+
+	while scanningPrefixes 'eachPrefix'
+		let byte = try cursor.peek()
+
+		if byte == OperandSizePrefix 'sixteenBit'
+			narrowOperand = true
+			try cursor.skip(1)
+			continue
+		end 'sixteenBit'
+
+		if isIgnorablePrefix(byte) 'noEffectOnLength'
+			try cursor.skip(1)
+			continue
+		end 'noEffectOnLength'
+
+		if byte >= RexLow and byte <= RexHigh 'aRexByte'
+			wideOperand = (byte and RexWideBit) != 0
+			try cursor.skip(1)
+			continue
+		end 'aRexByte'
+
+		scanningPrefixes = false
+	end 'eachPrefix'
+
+	let primary = try cursor.take()
+
+	if primary == TwoByteEscape 'theSecondMap'
+		let secondary = try cursor.take()
+
+		return try decodedTwoByteInstruction(cursor, at: at, address: address, secondary: secondary, narrowOperand: narrowOperand, wideOperand: wideOperand)
+	end 'theSecondMap'
+
+	return try decodedShapedInstruction(cursor, at: at, address: address, shape: oneByteShape(primary), condition: (primary and ConditionNibbleMask) as X64Condition, relativeBytes: oneByteRelativeBytes(primary), narrowOperand: narrowOperand, wideOperand: wideOperand)
+end 'decodedX64Instruction'
+
+function decodedTwoByteInstruction(cursor X64Cursor, at X64Offset, address X64Address, secondary X64ByteValue, narrowOperand bool, wideOperand bool) returns X64Decode throws X64DecodeError
+	if secondary >= 0x80 and secondary <= 0x8F 'aLongConditionalJump'
+		return try decodedShapedInstruction(cursor, at: at, address: address, shape: X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump), condition: (secondary and ConditionNibbleMask) as X64Condition, relativeBytes: Disp32Bytes, narrowOperand: narrowOperand, wideOperand: wideOperand)
+	end 'aLongConditionalJump'
+
+	return try decodedShapedInstruction(cursor, at: at, address: address, shape: twoByteShape(secondary), condition: 0, relativeBytes: 0, narrowOperand: narrowOperand, wideOperand: wideOperand)
+end 'decodedTwoByteInstruction'
+
+function decodedShapedInstruction(cursor X64Cursor, at X64Offset, address X64Address, shape X64Shape, condition X64Condition, relativeBytes X64Length, narrowOperand bool, wideOperand bool) returns X64Decode throws X64DecodeError
+	match shape 'known'
+		unknown then throw X64DecodeError.notAnInstructionThisBuildDecodes
+		operation(hasModRm, immediate, family) then return try decodedOperation(cursor, at: at, address: address, hasModRm: hasModRm, immediate: immediate, family: family, condition: condition, relativeBytes: relativeBytes, narrowOperand: narrowOperand, wideOperand: wideOperand)
+	end 'known'
+end 'decodedShapedInstruction'
+
+function decodedOperation(cursor X64Cursor, at X64Offset, address X64Address, hasModRm bool, immediate X64Immediate, family X64Family, condition X64Condition, relativeBytes X64Length, narrowOperand bool, wideOperand bool) returns X64Decode throws X64DecodeError
+	var ripRelative = false
+	var displacementPosition = 0 as X64Length
+	var modRmReg = 0 as X64ModRmField
+
+	if hasModRm 'anAddressingByte'
+		let modRm = try cursor.take()
+		let addressing = (modRm shr ModRmModShift) and ModRmModMask
+		let rm = modRm and ModRmLowMask
+		modRmReg = ((modRm shr ModRmRegShift) and ModRmLowMask) as X64ModRmField
+
+		if addressing != ModRmDirect 'aMemoryOperand'
+			var displacementBytes = 0 as X64Length
+
+			if rm == ModRmSibRm 'aScaledIndex'
+				let sib = try cursor.take()
+
+				if addressing == 0 and (sib and ModRmLowMask) == SibNoBase 'anAbsoluteBase'
+					displacementBytes = Disp32Bytes
+				end 'anAbsoluteBase'
+			end 'aScaledIndex' else if addressing == 0 and rm == ModRmRipRm 'programCounterRelative'
+				ripRelative = true
+				displacementBytes = Disp32Bytes
+			end 'programCounterRelative'
+
+			if addressing == ModRmDisp8 'aByteDisplacement'
+				displacementBytes = Disp8Bytes
+			end 'aByteDisplacement' else if addressing == ModRmDisp32 'aWordDisplacement'
+				displacementBytes = Disp32Bytes
+			end 'aWordDisplacement'
+
+			displacementPosition = try cursor.spanFrom(at)
+			try cursor.skip(displacementBytes)
+		end 'aMemoryOperand'
+	end 'anAddressingByte'
+
+	try cursor.skip(immediateBytesOf(immediate, modRmReg: modRmReg, narrowOperand: narrowOperand, wideOperand: wideOperand))
+	try cursor.skip(relativeBytes)
+
+	let length = try cursor.spanFrom(at)
+	let instructionClass = try classOf(family, modRmReg: modRmReg, ripRelative: ripRelative)
+	let taken = condition if instructionClass == DbgClassConditionalJump else 0
+	let target = try targetOf(cursor, at: at, address: address, instructionClass: instructionClass, length: length, relativeBytes: relativeBytes, displacementPosition: displacementPosition)
+
+	return X64Decode.decoded(X64Instruction.create(length, instructionClass: instructionClass, condition: taken, displacementPosition: displacementPosition, target: target))
+end 'decodedOperation'
+
+function classOf(family X64Family, modRmReg X64ModRmField, ripRelative bool) returns X64Class throws X64DecodeError
+	match family 'which'
+		directCall then return DbgClassDirectCall as X64Class
+		directJump then return DbgClassDirectJump as X64Class
+		conditionalJump then return DbgClassConditionalJump as X64Class
+		returning then return DbgClassReturn as X64Class
+		modRmGroupFive then return groupFiveClass(modRmReg, ripRelative: ripRelative)
+		ordinary then return (DbgClassPcRelativeData if ripRelative else DbgClassPlain) as X64Class
+	end 'which'
+end 'classOf'
+
+function groupFiveClass(modRmReg X64ModRmField, ripRelative bool) returns X64Class
+	if modRmReg == GroupFiveCallReg 'anIndirectCall'
+		return DbgClassIndirectCall as X64Class
+	end 'anIndirectCall'
+
+	if modRmReg == GroupFiveJumpReg 'anIndirectJump'
+		return DbgClassIndirectJump as X64Class
+	end 'anIndirectJump'
+
+	return (DbgClassPcRelativeData if ripRelative else DbgClassPlain) as X64Class
+end 'groupFiveClass'
+
+function targetOf(cursor X64Cursor, at X64Offset, address X64Address, instructionClass X64Class, length X64Length, relativeBytes X64Length, displacementPosition X64Length) returns X64Address throws X64DecodeError
+	if instructionClass == DbgClassPcRelativeData 'aRebasedOperand'
+		return relativeTo(address + (length as X64Address), by: try cursor.signedAt(at + (displacementPosition as X64Offset), bytes: Disp32Bytes))
+	end 'aRebasedOperand'
+
+	if instructionClass == DbgClassDirectCall or instructionClass == DbgClassDirectJump or instructionClass == DbgClassConditionalJump 'aBranch'
+		return relativeTo(address + (length as X64Address), by: try cursor.signedAt(at + ((length - relativeBytes) as X64Offset), bytes: relativeBytes))
+	end 'aBranch'
+
+	return 0
+end 'targetOf'
+
+function relativeTo(base X64Address, by X64Relative) returns X64Address
+	return match by 'direction'
+		forward(magnitude) gives base + magnitude
+		backward(magnitude) gives base - magnitude
+	end 'direction'
+end 'relativeTo'
+
+function immediateBytesOf(immediate X64Immediate, modRmReg X64ModRmField, narrowOperand bool, wideOperand bool) returns X64Length
+	return match immediate 'which'
+		none gives 0
+		fixed(bytes) gives bytes
+		operandSized gives operandSizedImmediateBytes(narrowOperand)
+		registerSized gives registerSizedImmediateBytes(narrowOperand, wideOperand: wideOperand)
+		groupThree gives operandSizedImmediateBytes(narrowOperand) if modRmReg == GroupThreeTestReg or modRmReg == GroupThreeTestAliasReg else 0
+	end 'which'
+end 'immediateBytesOf'
+
+function operandSizedImmediateBytes(narrowOperand bool) returns X64Length
+	return Immediate16Bytes if narrowOperand else Immediate32Bytes
+end 'operandSizedImmediateBytes'
+
+function registerSizedImmediateBytes(narrowOperand bool, wideOperand bool) returns X64Length
+	if wideOperand 'aFullWord'
+		return Immediate64Bytes
+	end 'aFullWord'
+
+	return Immediate16Bytes if narrowOperand else Immediate32Bytes
+end 'registerSizedImmediateBytes'
+
+function isIgnorablePrefix(byte X64ByteValue) returns bool
+	return byte == AddressSizePrefix or byte == LockPrefix or byte == RepnePrefix or byte == RepPrefix or byte == SegmentCsPrefix or byte == SegmentSsPrefix or byte == SegmentDsPrefix or byte == SegmentEsPrefix or byte == SegmentFsPrefix or byte == SegmentGsPrefix
+end 'isIgnorablePrefix'
+
+function oneByteRelativeBytes(opcode X64ByteValue) returns X64Length
+	if opcode == 0xE8 or opcode == 0xE9 'aWordBranch'
+		return Immediate32Bytes
+	end 'aWordBranch'
+
+	if opcode == 0xEB or (opcode >= 0x70 and opcode <= 0x7F) 'aByteBranch'
+		return Immediate8Bytes
+	end 'aByteBranch'
+
+	return 0
+end 'oneByteRelativeBytes'
+
+function oneByteShape(opcode X64ByteValue) returns X64Shape
+	if isArithmeticRegisterForm(opcode) 'arithRegRm'
+		return X64Shape.operation(true, immediate: X64Immediate.none, family: X64Family.ordinary)
+	end 'arithRegRm'
+
+	if isArithmeticAccumulatorByte(opcode) 'arithAlImm8'
+		return X64Shape.operation(false, immediate: X64Immediate.fixed(Immediate8Bytes), family: X64Family.ordinary)
+	end 'arithAlImm8'
+
+	if isArithmeticAccumulatorWord(opcode) 'arithEaxImm32'
+		return X64Shape.operation(false, immediate: X64Immediate.operandSized, family: X64Family.ordinary)
+	end 'arithEaxImm32'
+
+	if opcode >= 0x50 and opcode <= 0x5F 'pushPopRegister'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.ordinary)
+	end 'pushPopRegister'
+
+	if opcode >= 0x70 and opcode <= 0x7F 'shortConditionalJump'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.conditionalJump)
+	end 'shortConditionalJump'
+
+	if opcode >= 0xB0 and opcode <= 0xB7 'movByteImmediate'
+		return X64Shape.operation(false, immediate: X64Immediate.fixed(Immediate8Bytes), family: X64Family.ordinary)
+	end 'movByteImmediate'
+
+	if opcode >= 0xB8 and opcode <= 0xBF 'movWordImmediate'
+		return X64Shape.operation(false, immediate: X64Immediate.registerSized, family: X64Family.ordinary)
+	end 'movWordImmediate'
+
+	return oneByteNamedShape(opcode)
+end 'oneByteShape'
+
+function oneByteNamedShape(opcode X64ByteValue) returns X64Shape
+	if opcode == 0x63 or opcode == 0x84 or opcode == 0x85 or opcode == 0x86 or opcode == 0x87 or opcode == 0x88 or opcode == 0x89 or opcode == 0x8A or opcode == 0x8B or opcode == 0x8D or opcode == 0x8F or opcode == 0xD0 or opcode == 0xD1 or opcode == 0xD2 or opcode == 0xD3 or opcode == 0xFE 'modRmOnly'
+		return X64Shape.operation(true, immediate: X64Immediate.none, family: X64Family.ordinary)
+	end 'modRmOnly'
+
+	if opcode == 0x80 or opcode == 0x83 or opcode == 0xC0 or opcode == 0xC1 or opcode == 0xC6 or opcode == 0x6B 'modRmByteImmediate'
+		return X64Shape.operation(true, immediate: X64Immediate.fixed(Immediate8Bytes), family: X64Family.ordinary)
+	end 'modRmByteImmediate'
+
+	if opcode == 0x81 or opcode == 0xC7 or opcode == 0x69 'modRmWordImmediate'
+		return X64Shape.operation(true, immediate: X64Immediate.operandSized, family: X64Family.ordinary)
+	end 'modRmWordImmediate'
+
+	if opcode == 0xF6 or opcode == 0xF7 'groupThreeForm'
+		return X64Shape.operation(true, immediate: X64Immediate.groupThree, family: X64Family.ordinary)
+	end 'groupThreeForm'
+
+	if opcode == 0xFF 'groupFiveForm'
+		return X64Shape.operation(true, immediate: X64Immediate.none, family: X64Family.modRmGroupFive)
+	end 'groupFiveForm'
+
+	if opcode == 0x90 or opcode == 0x98 or opcode == 0x99 or opcode == 0xC9 or opcode == 0xCC or opcode == 0xF4 'noOperand'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.ordinary)
+	end 'noOperand'
+
+	if opcode == 0x6A 'pushByteImmediate'
+		return X64Shape.operation(false, immediate: X64Immediate.fixed(Immediate8Bytes), family: X64Family.ordinary)
+	end 'pushByteImmediate'
+
+	if opcode == 0x68 'pushWordImmediate'
+		return X64Shape.operation(false, immediate: X64Immediate.operandSized, family: X64Family.ordinary)
+	end 'pushWordImmediate'
+
+	if opcode == 0xA8 'testAccumulatorByte'
+		return X64Shape.operation(false, immediate: X64Immediate.fixed(Immediate8Bytes), family: X64Family.ordinary)
+	end 'testAccumulatorByte'
+
+	if opcode == 0xA9 'testAccumulatorWord'
+		return X64Shape.operation(false, immediate: X64Immediate.operandSized, family: X64Family.ordinary)
+	end 'testAccumulatorWord'
+
+	if opcode == 0xC3 'nearReturn'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.returning)
+	end 'nearReturn'
+
+	if opcode == 0xC2 'nearReturnPopping'
+		return X64Shape.operation(false, immediate: X64Immediate.fixed(Immediate16Bytes), family: X64Family.returning)
+	end 'nearReturnPopping'
+
+	if opcode == 0xE8 'directCallForm'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.directCall)
+	end 'directCallForm'
+
+	if opcode == 0xE9 or opcode == 0xEB 'directJumpForm'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.directJump)
+	end 'directJumpForm'
+
+	return X64Shape.unknown
+end 'oneByteNamedShape'
+
+function twoByteShape(opcode X64ByteValue) returns X64Shape
+	if isVectorModRmOnly(opcode) 'modRmOnly'
+		return X64Shape.operation(true, immediate: X64Immediate.none, family: X64Family.ordinary)
+	end 'modRmOnly'
+
+	if opcode == 0x70 or opcode == 0x71 or opcode == 0x72 or opcode == 0x73 or opcode == 0xC2 or opcode == 0xC6 or opcode == 0xC4 or opcode == 0xBA 'modRmByteImmediate'
+		return X64Shape.operation(true, immediate: X64Immediate.fixed(Immediate8Bytes), family: X64Family.ordinary)
+	end 'modRmByteImmediate'
+
+	if opcode == 0x05 or opcode == 0x0B or opcode == 0x31 or opcode == 0xA2 or opcode == 0xA0 or opcode == 0xA1 or opcode == 0xA8 or opcode == 0xA9 'noOperand'
+		return X64Shape.operation(false, immediate: X64Immediate.none, family: X64Family.ordinary)
+	end 'noOperand'
+
+	return X64Shape.unknown
+end 'twoByteShape'
+
+function isVectorModRmOnly(opcode X64ByteValue) returns bool
+	if opcode >= 0x10 and opcode <= 0x17 'moveFamily'
+		return true
+	end 'moveFamily'
+
+	if opcode >= 0x28 and opcode <= 0x2F 'alignedMoveAndCompare'
+		return true
+	end 'alignedMoveAndCompare'
+
+	if opcode >= 0x40 and opcode <= 0x4F 'conditionalMove'
+		return true
+	end 'conditionalMove'
+
+	if opcode >= 0x50 and opcode <= 0x6F 'packedArithmetic'
+		return true
+	end 'packedArithmetic'
+
+	if opcode >= 0x74 and opcode <= 0x7F 'packedCompareAndMove'
+		return true
+	end 'packedCompareAndMove'
+
+	if opcode >= 0x90 and opcode <= 0x9F 'setOnCondition'
+		return true
+	end 'setOnCondition'
+
+	if opcode >= 0xD0 and opcode <= 0xFE 'packedTail'
+		return true
+	end 'packedTail'
+
+	return opcode == 0x0D or opcode == 0x18 or opcode == 0x1F or opcode == 0xA3 or opcode == 0xAB or opcode == 0xAE or opcode == 0xAF or opcode == 0xB0 or opcode == 0xB1 or opcode == 0xB3 or opcode == 0xB6 or opcode == 0xB7 or opcode == 0xBB or opcode == 0xBC or opcode == 0xBD or opcode == 0xBE or opcode == 0xBF or opcode == 0xC0 or opcode == 0xC1 or opcode == 0xC3 or opcode == 0xC7
+end 'isVectorModRmOnly'
+
+function isArithmeticRegisterForm(opcode X64ByteValue) returns bool
+	let low = opcode and 0x07
+
+	return opcode < 0x40 and (low < 4)
+end 'isArithmeticRegisterForm'
+
+function isArithmeticAccumulatorByte(opcode X64ByteValue) returns bool
+	return opcode < 0x40 and (opcode and 0x07) == 4
+end 'isArithmeticAccumulatorByte'
+
+function isArithmeticAccumulatorWord(opcode X64ByteValue) returns bool
+	return opcode < 0x40 and (opcode and 0x07) == 5
+end 'isArithmeticAccumulatorWord'

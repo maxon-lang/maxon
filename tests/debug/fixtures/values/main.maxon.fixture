@@ -1,0 +1,65 @@
+typealias Amount = int(i64.min to i64.max)
+typealias Level = int(0 to 100)
+typealias Ratio = float(f64.min to f64.max)
+typealias AmountArray = Array with Amount
+
+enum Grade
+	bronze = 7
+	silver = 9
+	gold = 11
+end 'Grade'
+
+union Shipment
+	empty
+	carrying(weight Amount)
+end 'Shipment'
+
+type Parcel
+	export var width as Amount
+	export var height as Amount
+
+	export static function create(width Amount, height Amount) returns Parcel
+		return Parcel{width: width, height: height}
+	end 'create'
+end 'Parcel'
+
+function render(seed Amount) returns Amount
+	let whole = 42
+	let level = 5 as Level
+	let flag = true
+	let ratio = 2.5 as Ratio
+	let label = "parcel"
+	let parcel = Parcel.create(3, height: 4)
+	let grade = Grade.silver
+	let shipment = Shipment.carrying(19)
+	var items = AmountArray.create()
+	items.push(1)
+	items.push(2)
+
+	let delta = seed - 9
+	let dead = whole + seed
+	print("dead {dead}\n")
+
+	var hot = 0
+	var i = 0
+	while i < 8 'grind'
+		hot = hot + i * 3
+		i = i + 1
+	end 'grind'
+
+	let carried = match shipment 'kind'
+		empty gives 0
+		carrying(weight) gives weight
+	end 'kind'
+
+	print("{label} {parcel.width} {parcel.height} {grade.name} {flag} {ratio} {level} {items.count()} {carried} {hot} {delta}\n") // anchor: rendered
+
+	return whole + hot
+end 'render'
+
+function main() returns ExitCode
+	let answer = render(1) + render(2)
+	print("answer {answer}\n")
+
+	return 0
+end 'main'

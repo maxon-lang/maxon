@@ -134,6 +134,14 @@ export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_R
 // publishes a section with. ONE Win32 constant, so one name: it is not `VirtualAlloc`'s.
 export let PageReadWriteProtection = 0x4
 
+let PageExecuteReadWriteProtection = 0x40
+
+let DebugAgentHandlerFirst = 1
+
+let CurrentProcessPseudoHandle = -1
+
+let DebugHostVoidAnswer = 0
+
 // The `VirtualFree(addr, 0, MEM_RELEASE)` shape `lowerOsFreePages` and the hand-assembled `__gt_morestack`
 // chunk both emit. `MEM_RELEASE` releases the WHOLE reservation from its base — which is why
 // `dwSize` MUST be 0 and `osFreePages` needs no size operand. EXPORTED for the same one-spelling reason as
@@ -205,6 +213,10 @@ let NullPointer = 0x0
 // once here so the pipe/iocp/event/thread lowerings cannot restate them. `INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE`
 // is what makes the parent read end usable with FILE_FLAG_OVERLAPPED + IOCP (an anonymous `CreatePipe` handle
 // cannot be overlapped).
+let ProcessSynchronizeAccess = 0x00100000
+let DoNotInheritHandles = 0
+let PollingWaitTimeoutMs = 0
+
 let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child inherits the pipe write end)
 
 // ⛔⛔ **`CREATE_SUSPENDED`, AND THE WHOLE PROCESS-TREE KILL RESTS ON IT.** A child assigned to a job object
@@ -295,7 +307,6 @@ let SectionSizeHighDword = 0x0
 
 // `GetCurrentProcess()`'s pseudo-handle, `(HANDLE)-1`. Like the thread one above it is a CONSTANT rather
 // than a handle to open or close, so materializing it inline costs neither an import nor a close.
-let CurrentProcessPseudoHandle = 0 - 1
 
 // `BELOW_NORMAL_PRIORITY_CLASS`. Deliberately NOT `IDLE_PRIORITY_CLASS`: idle work can be starved for as
 // long as anything else wants the CPU, and the harnesses that ask for this bound how long they will wait —
@@ -1127,6 +1138,7 @@ export type StdToX64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe or
+				osDebugHost or
 				osCpuCount or
 				osThreadCpuTicks gives 0
 
@@ -1525,6 +1537,7 @@ export type StdToX64Lowering
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
 			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstBlock: dstBlock)
+			osDebugHost(resultId, verb, a0Id, a1Id, a2Id, a3Id) then self.lowerOsDebugHost(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, dstBlock: dstBlock)
 
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
@@ -1699,6 +1712,7 @@ export type StdToX64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe then panic("StdToX64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
+			osDebugHost then panic("StdToX64Lowering: `osDebugHost` appeared as a block terminator (lowering bug — the debug agent's host primitive is a body op, never a terminator)")
 			osFreePages then panic("StdToX64Lowering: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("StdToX64Lowering: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			witnessTryCall then panic("StdToX64Lowering: a `witnessTryCall` op appeared as a block terminator (lowering bug — a throwing witness call is a value-producing body op)")
@@ -2746,6 +2760,81 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PageReadWriteProtection))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
 	end 'lowerOsAllocPagesWin64'
+
+	function lowerOsDebugHost(resultId ValueId, verb DebugHostVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, dstBlock IrBlock)
+		if self.target.os != Os.windows 'notTheAgentsLane'
+			panic("lowerOsDebugHost: `osDebugHost` reached the {targetToString(self.target)} isel — `TargetFacilities.targetProvidesFacility` denies `debugAgent` off x64-windows, so the entry stub mints no call into `runtime/DebugAgent.maxon` and its bodies are swept as unreached tier")
+		end 'notTheAgentsLane'
+
+		match verb 'verb'
+			installTrapHandler then self.lowerDebugHostInstallTrapHandler(dstBlock)
+			protectPages then self.lowerDebugHostProtectPages(a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, dstBlock: dstBlock)
+			flushCode then self.lowerDebugHostFlushCode(a0Id, a1Id: a1Id, dstBlock: dstBlock)
+			parkWait then self.lowerDebugHostParkWait(a0Id, dstBlock: dstBlock)
+			queryRegion then self.lowerDebugHostQueryRegion(a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
+			processId then self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetCurrentProcessId)))
+			allocExecPages then self.lowerDebugHostAllocExecPages(a0Id, dstBlock: dstBlock)
+			openDriverProcess then self.lowerDebugHostOpenDriverProcess(a0Id, dstBlock: dstBlock)
+			driverExited then self.lowerDebugHostDriverExited(a0Id, dstBlock: dstBlock)
+		end 'verb'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerOsDebugHost'
+
+	function lowerDebugHostInstallTrapHandler(dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: DebugAgentHandlerFirst))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(x64PhysReg(X64Register.rdx), funcName: DebugTrapThunkName))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.AddVectoredExceptionHandler)))
+	end 'lowerDebugHostInstallTrapHandler'
+
+	function lowerDebugHostProtectPages(a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(a1Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a2Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(a3Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualProtect)))
+	end 'lowerDebugHostProtectPages'
+
+	function lowerDebugHostFlushCode(a0Id ValueId, a1Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rcx), value: CurrentProcessPseudoHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a1Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.FlushInstructionCache)))
+	end 'lowerDebugHostFlushCode'
+
+	function lowerDebugHostOpenDriverProcess(a0Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: ProcessSynchronizeAccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: DoNotInheritHandles))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.OpenProcess)))
+	end 'lowerDebugHostOpenDriverProcess'
+
+	function lowerDebugHostDriverExited(a0Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: PollingWaitTimeoutMs))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WaitForSingleObject)))
+	end 'lowerDebugHostDriverExited'
+
+	function lowerDebugHostParkWait(a0Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.Sleep)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: DebugHostVoidAnswer))
+	end 'lowerDebugHostParkWait'
+
+	function lowerDebugHostQueryRegion(a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(a1Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a2Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualQuery)))
+	end 'lowerDebugHostQueryRegion'
+
+	function lowerDebugHostAllocExecPages(a0Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocCommitAndReserve))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PageExecuteReadWriteProtection))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
+	end 'lowerDebugHostAllocExecPages'
 
 	// Linux: `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)`, args in the
 	// syscall ABI registers rdi/rsi/rdx/r10/r8/r9 (the 4th in r10, NOT rcx — the `syscall` instruction
@@ -5563,6 +5652,7 @@ export type StdToX64Lowering
 				osNetpoll or
 				osSocketOverlapped or
 				osSocketServe gives false
+			osDebugHost gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -5787,6 +5877,7 @@ export type StdToX64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a socket host primitive, not a condBranch")
+			osDebugHost panic("condBranchFieldsOf: the terminator of block ref {blockRef} is the debug agent's host primitive, not a condBranch")
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osThreadCpuTicks panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osThreadCpuTicks`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osDecommitPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osDecommitPages`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")

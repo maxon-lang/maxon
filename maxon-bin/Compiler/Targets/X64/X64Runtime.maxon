@@ -97,6 +97,10 @@ let ExcCodeAccessViolation = 0xC0000005
 // has already classified it, so the handler needs no address test the POSIX lanes make.
 let ExcCodeStackOverflow = 0xC00000FD
 
+export let DebugTrapThunkName = b"mrt_dbg_thunk"
+
+let DebugTrapThunkSlots = 6 as StackSize
+
 // EXCEPTION_POINTERS field offsets (the struct RCX points at).
 let ExcPtrsOffExceptionRecord = 0x00
 let ExcPtrsOffContextRecord = 0x08
@@ -1968,6 +1972,90 @@ function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute 
 	chunks.push(buildWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 end 'appendX64WindowsRuntimeChunks'
+
+export function appendX64DebugAgentChunks(chunks FunctionCodeChunkArray)
+	chunks.push(buildDebugTrapThunkChunk())
+end 'appendX64DebugAgentChunks'
+
+export function x64DebugTrapPreSwitchStackBytes() returns StackSize
+	return X64RuntimeAsm.beginFunction(DebugTrapThunkSlots).stackBytesPerCall()
+end 'x64DebugTrapPreSwitchStackBytes'
+
+function emitDebugTrapCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Register, excCode ExceptionCode, ours BlockId)
+	encodeMovRegImm32(asm.code, dest: scratch, value: excCode as MachineWord)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: codeReg, src: scratch, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ours)
+end 'emitDebugTrapCodeArm'
+
+// The vectored handler Windows calls on a trap, and the one place rsi and rdi are saved by hand: Maxon's
+// own convention treats them as volatile (`X64PrologueEpilogue.calleeSavedOrder` is rbx and r12–r15) while
+// Win64 requires a handler to preserve them. Nothing checks it: the interrupted code simply resumes with
+// two registers it never wrote.
+//
+// It switches to the agent's own stack before calling tier code, so a stop costs the interrupted green
+// thread only the OS dispatch frame and this thunk's own — the two `requireDebugTrapFitsItsReserve` bounds.
+function buildDebugTrapThunkChunk() returns FunctionCodeChunk
+	let SlotExcPtrs = 0
+	let SlotPrivate = 1
+	let SlotExcCode = 2
+	let SlotDisposition = 3
+	let SlotSavedRsi = 4
+	let SlotSavedRdi = 5
+	var asm = X64RuntimeAsm.beginFunction(DebugTrapThunkSlots)
+
+	let continueSearch = asm.newLabel()
+	let ours = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRsi), srcReg: X64Register.rsi)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRdi), srcReg: X64Register.rdi)
+
+	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rax, label: DbgCtlLabel)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: continueSearch)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rax, disp: DbgOffAgentPrivate as Imm32, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.r10, src: X64Register.r10, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: continueSearch)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), srcReg: X64Register.r10)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcCode), srcReg: X64Register.rax)
+	emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: DbgExcCodeBreakpoint, ours: ours)
+	emitDebugTrapCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: DbgExcCodeSingleStep, ours: ours)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
+
+	asm.placeLabel(ours)
+
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: DebugClaimStackName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: DbgPrivOffSavedRsp as Imm32, srcReg: X64Register.rsp)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.r8, wide: true)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcCode), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: DbgOnTrapName)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotPrivate), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsp, base: X64Register.r10, disp: DbgPrivOffSavedRsp as Imm32, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDisposition), srcReg: X64Register.r8)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: DebugReleaseStackName)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotDisposition), wide: true)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: done)
+
+	asm.placeLabel(continueSearch)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: VehContinueSearch)
+
+	asm.placeLabel(done)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRsi), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRdi), wide: true)
+
+	return asm.finishFunction(DebugTrapThunkName)
+end 'buildDebugTrapThunkChunk'
 
 // The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack install it and every worker machine
 // call, the sigreturn trampoline and the signal `fault_handler`, over a `write`-syscall stderr writer published

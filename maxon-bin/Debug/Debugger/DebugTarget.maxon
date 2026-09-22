@@ -1,0 +1,86 @@
+export union TargetOutcome
+	running
+	exited(code DebugExitCode)
+	crashed(status DebugAddress)
+	terminated
+end 'TargetOutcome'
+
+let WindowsExitCodeMask = 0xFFFFFFFF
+let NtStatusSeverityMask = 0xC0000000
+
+export type DebugTarget
+	var child as StreamingSubprocess
+	let routing as ChildOutputRouting
+	var faulted as bool
+	var settled as TargetOutcome
+
+	export static function launch(program FilePath, arguments StringArray, workingDirectory FilePath, environment EnvMap, routing ChildOutputRouting) returns DebugTarget throws SubprocessError
+		var spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(program), arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inheritUpdating(environment))
+		spawned.closeStdin()
+
+		return Self{child: spawned, routing: routing, faulted: false, settled: TargetOutcome.running}
+	end 'launch'
+
+	export function pump()
+		self.faulted = forwardChildOutput(self.child, routing: self.routing, budget: ChildLineBudget.unbounded) or self.faulted
+	end 'pump'
+
+	export function poll() returns TargetOutcome
+		if not targetIsRunning(self.settled) 'alreadySettled'
+			return self.settled
+		end 'alreadySettled'
+
+		match self.child.pollExit() 'polled'
+			running then return TargetOutcome.running
+			exited(code) then self.settleAfterExit(code as DebugExitCode)
+		end 'polled'
+
+		return self.settled
+	end 'poll'
+
+	export function reap() returns TargetOutcome
+		if not targetIsRunning(self.settled) 'alreadySettled'
+			return self.settled
+		end 'alreadySettled'
+
+		match self.child.pollExit() 'polled'
+			running then self.settleAfterKill()
+			exited(code) then self.settleAfterExit(code as DebugExitCode)
+		end 'polled'
+
+		return self.settled
+	end 'reap'
+
+	function settleAfterExit(code DebugExitCode)
+		self.faulted = forwardChildTail(self.child, routing: self.routing) or self.faulted
+		self.child.release()
+		self.settled = self.outcomeOf(code)
+	end 'settleAfterExit'
+
+	function settleAfterKill()
+		self.faulted = endChild(self.child, routing: self.routing) or self.faulted
+		self.settled = TargetOutcome.terminated
+	end 'settleAfterKill'
+
+	// A faulting Maxon program is handled by its own vectored handler and exits 1, so an exit code alone
+	// cannot tell a crash from an ordinary failure. Either half answers: the NTSTATUS severity bits a
+	// process killed by the kernel carries, or the runtime's own fault line seen on the child's stderr.
+	function outcomeOf(code DebugExitCode) returns TargetOutcome
+		let masked = (code and WindowsExitCodeMask) as DebugAddress
+
+		if self.faulted or (masked and NtStatusSeverityMask) == NtStatusSeverityMask 'aHardwareFault'
+			return TargetOutcome.crashed(masked)
+		end 'aHardwareFault'
+
+		return TargetOutcome.exited(code)
+	end 'outcomeOf'
+end 'DebugTarget'
+
+export function targetIsRunning(outcome TargetOutcome) returns bool
+	return match outcome 'which'
+		running gives true
+		exited gives false
+		crashed gives false
+		terminated gives false
+	end 'which'
+end 'targetIsRunning'

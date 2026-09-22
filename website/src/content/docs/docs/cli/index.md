@@ -22,6 +22,7 @@ agents, and reads back what a program did.
 | `maxon init [<directory>]` | Scaffold a new project: `project.maxon` and `main.maxon` |
 | `maxon cache [clear]` | Report what this compiler has cached on the host, or remove it |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](/docs/cli/debugging/)) |
+| `maxon debug <exe> [-- args...]` | Debug a program interactively: breakpoints, stepping, backtraces and locals ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --dump-info <exe>` | Print the `.mxdbg` debug-info sidecar beside a binary ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon debug --symbolize <exe> <offset...>` | Resolve code offsets to `file:line:col` ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon fmt [file\|directory]` | Re-print `.maxon` sources in canonical layout, in place |
@@ -255,6 +256,7 @@ with no `project.maxon` prints a usage line and exits 1.
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function is refused. |
 | `--no-debug-info` | Do not write the `<output>.mxdbg` debug-info sidecar. It is written by default, and the executable is byte-identical either way. See [Debugging and Profiling](/docs/cli/debugging/). |
+| `--no-debug-agent` | Do not emit the in-process debug agent. It is emitted by default on x64-windows and is dark unless the environment names a control segment in `MAXON_DEBUG`, so a program built without this flag and run without that variable behaves identically; with it the agent, its trap thunk, its control word and the imports they need are left out of the image and `maxon debug` cannot attach to the result. |
 | `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes the counts to `<output>.mxcov` as it exits. This changes the emitted code, so it is a separate build from the one you ship. Read the counts with `maxon coverage`. Needs the debug-info sidecar, so `--no-debug-info` beside it is refused. |
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](/docs/cli/debugging/). |
@@ -698,5 +700,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. `Scheduler.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
-`MAXON_DEBUGSTREAM` is set by `maxon monitor` to attach a `--debugstream` program to its ring. You do not
-set it yourself.
+`MAXON_DEBUGSTREAM` is set by `maxon monitor` to attach a `--debugstream` program to its ring, and
+`MAXON_DEBUG` is set by `maxon debug` to name the control segment its in-process agent attaches to. You
+do not set either yourself; a program that finds `MAXON_DEBUG` unset carries its agent dark and behaves
+exactly as it would without one.

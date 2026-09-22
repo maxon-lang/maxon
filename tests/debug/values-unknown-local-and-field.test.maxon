@@ -1,0 +1,23 @@
+let UnknownLocalCaseLabel = "values-unknown-local-and-field"
+
+let UnknownLocalName = "noSuchLocal"
+let UnknownFieldPath = "parcel.depth"
+
+test 'a name no local answers to, and a field no type has, are errors rather than values'
+	let staged = builtFixture(UnknownLocalCaseLabel, fixture: ValuesFixtureName)
+	let renderedAt = anchorLine(staged, anchor: "rendered")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, "{PrintCommand} {UnknownLocalName}", "{PrintCommand} {UnknownFieldPath}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let errors = eventsOfKind(events, kind: ErrorEventName)
+
+	try Expect.equal(errors.count() as AssertedInt, expected: 2, message: "a name that is not a local and a field that is not a field are two different mistakes and both are the READER's, so each must be an `{ErrorEventName}`. Answering `{UnknownLocalName}` with an unavailable VALUE would say the local exists and could not be read. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ValueEventName).count() as AssertedInt, expected: 0, message: "a `{ValueEventName}` was printed for a name this program has no such thing under. {said}")
+
+	let unknownLocal = eventAt(errors, index: 0)
+	try Expect.contains(textOf(unknownLocal, node: unknownLocal.root, key: MessageKey), needle: UnknownLocalName, message: "the error does not name the local that was asked for. {said}")
+
+	let unknownField = eventAt(errors, index: 1)
+	try Expect.contains(textOf(unknownField, node: unknownField.root, key: MessageKey), needle: UnknownFieldPath, message: "the error does not name the field path that was asked for. {said}")
+end 'a name no local answers to, and a field no type has, are errors rather than values'

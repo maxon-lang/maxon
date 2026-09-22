@@ -1,0 +1,22 @@
+let UnknownCommandCaseLabel = "unknown-command-suggests"
+
+let MisspelledCommand = "backtrac"
+let UnknowableCommand = "zzzz"
+
+test 'a command word nothing answers to is an error that names the nearest command'
+	let staged = builtFixture(UnknownCommandCaseLabel, fixture: HeaplessFixtureName)
+	let commands = debugCommandLine([MisspelledCommand, UnknowableCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let errors = eventsOfKind(events, kind: ErrorEventName)
+
+	try Expect.equal(errors.count() as AssertedInt, expected: 2, message: "two words that name no command are two errors; a session that stopped at the first one hides the rest of the script. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let nearMiss = eventAt(errors, index: 0)
+	try Expect.contains(textOf(nearMiss, node: nearMiss.root, key: MessageKey), needle: MisspelledCommand, message: "the error does not quote the word that was not understood. {said}")
+	try Expect.equal(textOf(nearMiss, node: nearMiss.root, key: SuggestionKey), expected: BacktraceCommand, message: "`{MisspelledCommand}` is one character from `{BacktraceCommand}`, and a suggestion is what turns a refusal into a correction. {said}")
+
+	let noNearMiss = eventAt(errors, index: 1)
+	try Expect.equal(textOf(noNearMiss, node: noNearMiss.root, key: SuggestionKey), expected: AbsentEventText, message: "`{UnknowableCommand}` is close to nothing, and a suggestion offered for it would teach a reader to distrust every suggestion. {said}")
+end 'a command word nothing answers to is an error that names the nearest command'

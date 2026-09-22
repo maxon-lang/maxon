@@ -1,0 +1,183 @@
+// Which of a child's two output streams a line came off. A parameter rather than two near-identical loops
+// because everything about forwarding a line is the same on both: the poll, its stopping rule, the
+// unterminated tail and the newline.
+enum ChildStream
+	stdout
+	stderr
+end 'ChildStream'
+
+// Where a child's lines go. `allToStandardError` puts BOTH of its streams on this process's stderr, which
+// is what keeps stdout exactly the report — the profiler's table, the debugger's JSON — and nothing else.
+export enum ChildOutputRouting
+	verbatim
+	allToStandardError
+end 'ChildOutputRouting'
+
+export typealias ChildLineTally = int(0 to u32.max)
+
+export union ChildLineBudget
+	unbounded
+	atMost(lines ChildLineTally)
+end 'ChildLineBudget'
+
+export union TargetEnvParse
+	pair(name String, value String)
+	malformed
+end 'TargetEnvParse'
+
+export typealias TargetSeconds = float(0.0 to f64.max)
+
+export type TargetSecondsReading
+	export var seconds as TargetSeconds
+
+	export static function create(seconds TargetSeconds) returns TargetSecondsReading
+		return Self{seconds: seconds}
+	end 'create'
+end 'TargetSecondsReading'
+
+export union TargetSecondsParse
+	reading(value TargetSecondsReading)
+	refused
+end 'TargetSecondsParse'
+
+let EnvAssignment = "="
+
+let MaxTargetSeconds = 922337203685.0 as TargetSeconds
+
+// One tick, because the point of the wait is the TERMINATION it performs and not the waiting.
+let KillDeadlineMs = 1
+
+// ⛔ Emptiness is not the stopping rule, and `LinePoll` is why it cannot be: a child's own blank line and a
+// pipe with nothing in it are the same string once the terminator is off, so a loop keyed off the text
+// drops every blank line the child writes. The poll's `none` is the only honest stopping rule.
+//
+// The budget bounds one pass: a chatty child must not starve the caller's own schedule.
+export function forwardChildOutput(child StreamingSubprocess, routing ChildOutputRouting, budget ChildLineBudget) returns bool
+	var faulted = false
+
+	for stream in ChildStream.allCases 'eachStream'
+		var taken = 0 as ChildLineTally
+		var buffered = true
+
+		while buffered and withinBudget(budget, taken: taken) 'someOfIt'
+			match pollChildStreamLine(child, stream: stream) 'polled'
+				line(text) then faulted = emitChildStreamLine(text, stream: stream, routing: routing) or faulted
+				none then buffered = false
+			end 'polled'
+
+			taken = taken + 1
+		end 'someOfIt'
+	end 'eachStream'
+
+	return faulted
+end 'forwardChildOutput'
+
+// Everything the child left behind, including a last line it wrote with no terminator — the poll above
+// stops at a newline that never arrives. Asked only once the child has ended, which is what makes the
+// blocking read safe: an empty answer there can only be end of stream, and a read that refuses is one too.
+export function forwardChildTail(child StreamingSubprocess, routing ChildOutputRouting) returns bool
+	var faulted = forwardChildOutput(child, routing: routing, budget: ChildLineBudget.unbounded)
+
+	for stream in ChildStream.allCases 'eachStream'
+		let tail = readChildStreamTail(child, stream: stream)
+
+		if not tail.isEmpty() 'thereWasOne'
+			faulted = emitChildStreamLine(tail, stream: stream, routing: routing) or faulted
+		end 'thereWasOne'
+	end 'eachStream'
+
+	return faulted
+end 'forwardChildTail'
+
+export function endChild(child StreamingSubprocess, routing ChildOutputRouting) returns bool
+	_ = try child.waitWithTimeout(KillDeadlineMs) otherwise 0
+	let faulted = forwardChildTail(child, routing: routing)
+	child.release()
+
+	return faulted
+end 'endChild'
+
+// Everything past the FIRST `=` is the value, because a value may contain one of its own.
+export function parseTargetEnv(raw String) returns TargetEnvParse
+	let halves = raw.split(EnvAssignment)
+	let name = try halves.get(0) otherwise ""
+
+	if name.isEmpty() or halves.count() < 2 'noName'
+		return TargetEnvParse.malformed
+	end 'noName'
+
+	return TargetEnvParse.pair(name, value: targetEnvValueOf(halves))
+end 'parseTargetEnv'
+
+export function parsePositiveSeconds(raw String) returns TargetSecondsParse
+	let seconds = try float.fromString(raw) otherwise 'notANumber'
+		return TargetSecondsParse.refused
+	end 'notANumber'
+
+	if not (seconds > 0.0 and seconds <= MaxTargetSeconds) 'notAPositiveFiniteDuration'
+		return TargetSecondsParse.refused
+	end 'notAPositiveFiniteDuration'
+
+	return TargetSecondsParse.reading(TargetSecondsReading.create(seconds as TargetSeconds))
+end 'parsePositiveSeconds'
+
+function childFaultLineSeen(text String) returns bool
+	for kind in HardwareFaultKind.allCases 'eachKind'
+		if text.contains(String.from(faultPanicLinePrefix(kind))) 'aFaultReport'
+			return true
+		end 'aFaultReport'
+	end 'eachKind'
+
+	return false
+end 'childFaultLineSeen'
+
+function targetEnvValueOf(halves StringArray) returns String
+	var value = ""
+
+	for (iter, piece) in halves.withIterator() 'eachPiece'
+		if iter.index() == 0 'theName'
+			continue
+		end 'theName'
+
+		value.append(piece if value.isEmpty() and iter.index() == 1 else "{EnvAssignment}{piece}")
+	end 'eachPiece'
+
+	return value
+end 'targetEnvValueOf'
+
+function withinBudget(budget ChildLineBudget, taken ChildLineTally) returns bool
+	return match budget 'which'
+		unbounded gives true
+		atMost(lines) gives taken < lines
+	end 'which'
+end 'withinBudget'
+
+function pollChildStreamLine(child StreamingSubprocess, stream ChildStream) returns LinePoll
+	return match stream 'which'
+		stdout gives child.tryReadStdoutLine()
+		stderr gives child.tryReadStderrLine()
+	end 'which'
+end 'pollChildStreamLine'
+
+function readChildStreamTail(child StreamingSubprocess, stream ChildStream) returns String
+	return match stream 'which'
+		stdout gives try child.readStdoutLine() otherwise ""
+		stderr gives try child.readStderrLine() otherwise ""
+	end 'which'
+end 'readChildStreamTail'
+
+function emitChildStreamLine(text String, stream ChildStream, routing ChildOutputRouting) returns bool
+	match routing 'where'
+		allToStandardError then printError("{text}\n")
+		verbatim then emitChildLineVerbatim(text, stream: stream)
+	end 'where'
+
+	return childFaultLineSeen(text)
+end 'emitChildStreamLine'
+
+function emitChildLineVerbatim(text String, stream ChildStream)
+	match stream 'which'
+		stdout then print("{text}\n")
+		stderr then printError("{text}\n")
+	end 'which'
+end 'emitChildLineVerbatim'

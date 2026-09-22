@@ -352,20 +352,6 @@
 		return address >= image.textBase and address - image.textBase < image.textSize
 	end 'profileAddressInText'
 
-	// ⭐⭐ **THE OFFSET TO LOOK UP FOR A CODE OFFSET THAT IS A RETURN ADDRESS — stated ONCE.**
-	//
-	// A return address is the instruction AFTER the call, so resolving it unbiased names the next line — and
-	// where the call is a function's last instruction, the next FUNCTION. Biasing by one lands inside the
-	// call itself, which is the frame the caller is actually executing.
-	//
-	// ⚠ It lives HERE rather than beside the sidecar tables it indexes, and that is the E3092 rule rather
-	// than a preference: this is the only walk in the tree that resolves a return address, so an `export` in
-	// the ungated compiler tier would be an export with no reader on every lane where this directory is
-	// gated out. A second walker moves it back down.
-	function profileCallSiteLookup(codeOffset MxdbgCodeOffset) returns MxdbgCodeOffset
-		return codeOffset - 1 if codeOffset > 0 else codeOffset
-	end 'profileCallSiteLookup'
-
 	// What the sidecar calls the code at a `.text` offset, or the placeholder for our own code it does not
 	// name — a runtime helper the function table has no record for.
 	function profileFunctionNameAt(image ProfileImage, offset MxdbgCodeOffset) returns String
@@ -478,7 +464,7 @@
 			// ⭐ A frame above the leaf is a RETURN address, so it resolves through the ONE call-site bias
 			// this tree states — without it, a call that is a function's last instruction names the function
 			// AFTER it.
-			pushProfileFramesAt(frames, image: image, offset: profileCallSiteLookup((returnAddress - image.textBase) as MxdbgCodeOffset))
+			pushProfileFramesAt(frames, image: image, offset: MxdbgReader.callSiteLookup((returnAddress - image.textBase) as MxdbgCodeOffset))
 			walked = walked + 1
 
 			if savedFp <= fp 'notGrowingOutwards'

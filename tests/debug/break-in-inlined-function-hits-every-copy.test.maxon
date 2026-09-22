@@ -1,0 +1,20 @@
+let EveryCopyCaseLabel = "break-in-inlined-function-hits-every-copy"
+
+let SplicedSiteCount = 2
+
+test 'a breakpoint on a line the inliner copied twice is armed at both copies and hit at both'
+	let staged = builtFixture(EveryCopyCaseLabel, fixture: InlinedFixtureName)
+	let leafLine = anchorLine(staged, anchor: "tiny-body")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(leafLine)}", RunCommand, ContinueCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(leafLine)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(breakpoints, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the breakpoint on the spliced line was not `{SetAction}`. {said}")
+	try Expect.equal(childrenOf(armed, node: armed.root, key: OffsetsKey).count() as AssertedInt, expected: SplicedSiteCount, message: "the inliner copied this line's code into {SplicedSiteCount} places, so one breakpoint is {SplicedSiteCount} addresses and `{OffsetsKey}` must list both. A breakpoint armed at one copy silently misses every pass through the other. {said}")
+	try Expect.atLeast(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, than: SplicedSiteCount, message: "the session stopped fewer than {SplicedSiteCount} times, so at least one copy of the spliced line was never armed. It printed: {renderedRows(eventKinds(events))}. {said}")
+end 'a breakpoint on a line the inliner copied twice is armed at both copies and hit at both'

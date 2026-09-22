@@ -1205,7 +1205,7 @@ function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath 
 	var facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
-	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create()) otherwise 'refusedAgain'
+	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValueIds: ValueIdArray.create(), debugLocations: DebugValueLocationArray.create(), debugRanges: DebugValueRangeArray.create()) otherwise 'refusedAgain'
 		try renderRegisterPressureRefusal(project, module: lowered.targetModule, func: func, funcIndex: funcIndex, pool: pool, refusal: refusal)
 	end 'refusedAgain'
 
@@ -1264,7 +1264,7 @@ end 'foldFunctionAllocation'
 // values its caller hands it: `counters` (this function's sums), `facts` (this function's own figures)
 // and `costs` (the sub-phase brackets). A hot-loop overflow leaves through `refusal` and a `throw`,
 // because E5001 can only be built from tables a `Project` holds.
-module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValueIds ValueIdArray, debugLocations DebugValueLocationArray) throws RegAllocRefusal
+module function allocateFunctionCore(module TargetModule, func IrFunction, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, counters RegAllocCounters, costs PoolPhaseCosts, facts RegAllocFacts, refusal RegAllocRefusalSite, debugValueIds ValueIdArray, debugLocations DebugValueLocationArray, debugRanges DebugValueRangeArray) throws RegAllocRefusal
 	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
 	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
@@ -1353,6 +1353,10 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 
 	let rewriteProbe = PhaseProbe.beginCounters()
 	applyAllocation(module, func: func, alloc: alloc, plans: plans, reuseCopies: reuseCopies, brackets: brackets)
+
+	// After the rewrite, which drops self-moves without renumbering: a run harvested before it would
+	// span ops that never reach the encoder, and every window would name code that is not there.
+	harvestDebugValueRanges(module, func: func, liveness: liveness, valueIds: debugValueIds, into: debugRanges)
 	costs.record(RegAllocPhase.rewrite.ordinal, probe: rewriteProbe)
 end 'allocateFunctionCore'
 
@@ -1369,6 +1373,228 @@ function harvestDebugValueLocations(alloc Allocation, liveness LivenessResult, v
 		into.push(debugValueLocationOf(alloc, liveness: liveness, value: value))
 	end 'eachNamedValue'
 end 'harvestDebugValueLocations'
+
+typealias DebugSlotIndex = int(0 to u64.max)
+typealias DebugSlotColumn = Array with DebugSlotIndex
+typealias DebugOrdinalColumn = Array with DebugOpAnchor
+typealias BlockIdColumn = Array with BlockId
+
+// Absent is 0 and every real anchor is biased past it, because the top of an `int(0 to u64.max)` column
+// is not available as a sentinel: it is a value the column is required to be able to hold.
+let NoDebugSlot = 0 as DebugSlotIndex
+let NoDebugOrdinal = 0 as DebugOpAnchor
+let DebugAnchorBias = 1
+
+type DebugTouch
+	export var place as ElementIndex
+	export var slot as DebugSlotIndex
+	export var ordinal as DebugOpAnchor
+
+	export static function create(place ElementIndex, slot DebugSlotIndex, ordinal DebugOpAnchor) returns DebugTouch
+		return Self{place: place, slot: slot, ordinal: ordinal}
+	end 'create'
+end 'DebugTouch'
+
+typealias DebugTouchArray = Array with DebugTouch
+
+function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness LivenessResult, valueIds ValueIdArray, into DebugValueRangeArray)
+	if valueIds.count() == 0 'nothingNamed'
+		return
+	end 'nothingNamed'
+
+	let topo = liveness.cfg.topo
+	var slotOfValue = DebugSlotColumn.create()
+	slotOfValue.refill(liveness.valueCount as ElementIndex, value: NoDebugSlot)
+
+	for (iter, value) in valueIds.withIterator() 'eachNamedValue'
+		if value < liveness.valueCount 'inThisFunction'
+			try slotOfValue.set(value as ElementIndex, value: (iter.index() + DebugAnchorBias) as DebugSlotIndex) otherwise panic("harvestDebugValueRanges: slotOfValue.set OOB at value {value} below the function's {liveness.valueCount}")
+		end 'inThisFunction'
+	end 'eachNamedValue'
+
+	var ordinalOfOp = DebugOrdinalColumn.create()
+	ordinalOfOp.refill(module.ops.count(), value: NoDebugOrdinal)
+	var placeOfLocal = DebugSlotColumn.create()
+	placeOfLocal.refill(topo.numBlocks as ElementIndex, value: NoDebugSlot)
+	var localOfPlace = DebugSlotColumn.create()
+	var blockIdOfPlace = BlockIdColumn.create()
+	var blockFirst = DebugOrdinalColumn.create()
+	var blockLast = DebugOrdinalColumn.create()
+	var ordinal = 0 as DebugOpAnchor
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("harvestDebugValueRanges: blockRef from func.blockRefs not in module.blocks")
+		let opened = ordinal
+
+		for opIdx in block.opRefs 'eachOp'
+			try ordinalOfOp.set(opIdx, value: ordinal + DebugAnchorBias) otherwise panic("harvestDebugValueRanges: ordinalOfOp.set OOB at op {opIdx} of {module.ops.count()}")
+			ordinal = ordinal + 1
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerminator'
+			try ordinalOfOp.set(block.terminatorIndex(), value: ordinal + DebugAnchorBias) otherwise panic("harvestDebugValueRanges: ordinalOfOp.set OOB at terminator {block.terminatorIndex()} of {module.ops.count()}")
+			ordinal = ordinal + 1
+		end 'hasTerminator'
+
+		try placeOfLocal.set(localOfBlockId(topo, blockId: block.id) as ElementIndex, value: (localOfPlace.count() + DebugAnchorBias) as DebugSlotIndex) otherwise panic("harvestDebugValueRanges: placeOfLocal.set OOB for block {block.id} of the topology's {topo.numBlocks}")
+		localOfPlace.push((localOfBlockId(topo, blockId: block.id) + DebugAnchorBias) as DebugSlotIndex)
+		blockIdOfPlace.push(block.id)
+		blockFirst.push(NoDebugOrdinal if ordinal == opened else opened + DebugAnchorBias)
+		blockLast.push(NoDebugOrdinal if ordinal == opened else ordinal)
+	end 'eachBlock'
+
+	var touches = DebugTouchArray.create()
+	collectDebugTouches(touches, liveness: liveness, valueIds: valueIds, ordinalOfOp: ordinalOfOp, placeOfLocal: placeOfLocal, blockFirst: blockFirst)
+	touches.sort(function(left DebugTouch, right DebugTouch) gives compareDebugTouches(left, right: right))
+
+	var startOrd = DebugOrdinalColumn.create()
+	startOrd.refill(valueIds.count(), value: NoDebugOrdinal)
+	var endOrd = DebugOrdinalColumn.create()
+	endOrd.refill(valueIds.count(), value: NoDebugOrdinal)
+	var active = DebugSlotColumn.create()
+	var cursor = 0 as ElementIndex
+
+	for place in 0 upto localOfPlace.count() 'eachBlocksRuns'
+		let first = debugOrdinalAt(blockFirst, at: place)
+		let last = debugOrdinalAt(blockLast, at: place)
+		let local = (debugSlotAt(localOfPlace, at: place) - DebugAnchorBias) as CfgIndex
+
+		if first == NoDebugOrdinal 'emptyBlock'
+			continue
+		end 'emptyBlock'
+
+		active.clear()
+
+		for value in liveness.live.liveIn(local) 'eachLiveIn'
+			openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: debugSlotOf(slotOfValue, value: value), at: first)
+		end 'eachLiveIn'
+
+		while cursor < touches.count() 'eachTouch'
+			let touch = try touches.get(cursor) otherwise panic("harvestDebugValueRanges: touches.get OOB at {cursor} despite the while guard")
+
+			if touch.place != place 'anotherBlock'
+				break
+			end 'anotherBlock'
+
+			openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: touch.slot, at: touch.ordinal)
+			cursor = cursor + 1
+		end 'eachTouch'
+
+		for value in liveness.live.liveOut(local) 'eachLiveOut'
+			openDebugRun(active, startOrd: startOrd, endOrd: endOrd, slot: debugSlotOf(slotOfValue, value: value), at: last)
+		end 'eachLiveOut'
+
+		let blockId = try blockIdOfPlace.get(place) otherwise panic("harvestDebugValueRanges: blockIdOfPlace.get OOB at {place} of {blockIdOfPlace.count()}")
+
+		for slot in active 'eachRun'
+			let named = (slot - DebugAnchorBias) as ElementIndex
+			into.push(DebugValueRange.create(named, blockId: blockId, first: debugOrdinalAt(startOrd, at: named) - DebugAnchorBias, last: debugOrdinalAt(endOrd, at: named) - DebugAnchorBias))
+			try startOrd.set(named, value: NoDebugOrdinal) otherwise panic("harvestDebugValueRanges: startOrd.set OOB at slot {slot}")
+			try endOrd.set(named, value: NoDebugOrdinal) otherwise panic("harvestDebugValueRanges: endOrd.set OOB at slot {slot}")
+		end 'eachRun'
+	end 'eachBlocksRuns'
+
+	into.sort(function(left DebugValueRange, right DebugValueRange) gives compareDebugValueRanges(left, right: right))
+end 'harvestDebugValueRanges'
+
+function debugOrdinalAt(column DebugOrdinalColumn, at ElementIndex) returns DebugOpAnchor
+	return try column.get(at) otherwise panic("harvestDebugValueRanges: an ordinal column was read at {at}, past the {column.count()} it was sized to")
+end 'debugOrdinalAt'
+
+function debugSlotAt(column DebugSlotColumn, at ElementIndex) returns DebugSlotIndex
+	return try column.get(at) otherwise panic("harvestDebugValueRanges: a slot column was read at {at}, past the {column.count()} it was sized to")
+end 'debugSlotAt'
+
+function debugSlotOf(slotOfValue DebugSlotColumn, value ValueId) returns DebugSlotIndex
+	return try slotOfValue.get(value as ElementIndex) otherwise NoDebugSlot
+end 'debugSlotOf'
+
+function openDebugRun(active DebugSlotColumn, startOrd DebugOrdinalColumn, endOrd DebugOrdinalColumn, slot DebugSlotIndex, at DebugOpAnchor)
+	if slot == NoDebugSlot 'unnamed'
+		return
+	end 'unnamed'
+
+	let named = (slot - DebugAnchorBias) as ElementIndex
+
+	if debugOrdinalAt(startOrd, at: named) == NoDebugOrdinal 'firstTouchInThisBlock'
+		try startOrd.set(named, value: at) otherwise panic("openDebugRun: startOrd.set OOB at slot {slot}")
+		try endOrd.set(named, value: at) otherwise panic("openDebugRun: endOrd.set OOB at slot {slot}")
+		active.push(slot)
+
+		return
+	end 'firstTouchInThisBlock'
+
+	if at > debugOrdinalAt(endOrd, at: named) 'widens'
+		try endOrd.set(named, value: at) otherwise panic("openDebugRun: endOrd.set OOB at slot {slot}")
+	end 'widens'
+end 'openDebugRun'
+
+function collectDebugTouches(touches DebugTouchArray, liveness LivenessResult, valueIds ValueIdArray, ordinalOfOp DebugOrdinalColumn, placeOfLocal DebugSlotColumn, blockFirst DebugOrdinalColumn)
+	let index = liveness.useIndex
+
+	for (iter, value) in valueIds.withIterator() 'eachNamedValue'
+		if value >= liveness.valueCount 'notInThisFunction'
+			continue
+		end 'notInThisFunction'
+
+		let slot = (iter.index() + DebugAnchorBias) as DebugSlotIndex
+
+		match index.defKindOf(value) 'def'
+			none then break 'def'
+			opDef then noteDebugTouch(touches, slot: slot, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.requireDefOp(value) as ElementIndex))
+			phiDef then noteDebugTouch(touches, slot: slot, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value)), ordinal: debugBlockOpening(blockFirst, place: debugPlaceOf(placeOfLocal, local: index.defBlockOf(value))))
+		end 'def'
+
+		let useSites = index.useCount(value)
+
+		if useSites == 0 'neverRead'
+			continue
+		end 'neverRead'
+
+		var record = index.firstUseOf(value)
+
+		for _ in 0 upto useSites 'eachUse'
+			noteDebugTouch(touches, slot: slot, place: debugPlaceOf(placeOfLocal, local: index.useBlockAt(record)), ordinal: debugOrdinalAt(ordinalOfOp, at: index.useOpAt(record) as ElementIndex))
+			record = index.nextUseOf(record)
+		end 'eachUse'
+	end 'eachNamedValue'
+end 'collectDebugTouches'
+
+function debugPlaceOf(placeOfLocal DebugSlotColumn, local CfgIndex) returns DebugSlotIndex
+	return try placeOfLocal.get(local as ElementIndex) otherwise NoDebugSlot
+end 'debugPlaceOf'
+
+function debugBlockOpening(blockFirst DebugOrdinalColumn, place DebugSlotIndex) returns DebugOpAnchor
+	if place == NoDebugSlot 'notLaidDown'
+		return NoDebugOrdinal
+	end 'notLaidDown'
+
+	return debugOrdinalAt(blockFirst, at: (place - DebugAnchorBias) as ElementIndex)
+end 'debugBlockOpening'
+
+function noteDebugTouch(touches DebugTouchArray, slot DebugSlotIndex, place DebugSlotIndex, ordinal DebugOpAnchor)
+	if ordinal == NoDebugOrdinal or place == NoDebugSlot 'notEmitted'
+		return
+	end 'notEmitted'
+
+	touches.push(DebugTouch.create((place - DebugAnchorBias) as ElementIndex, slot: slot, ordinal: ordinal))
+end 'noteDebugTouch'
+
+function compareDebugTouches(left DebugTouch, right DebugTouch) returns Ordering
+	if left.place != right.place 'byBlock'
+		return left.place.compare(right.place)
+	end 'byBlock'
+
+	return left.ordinal.compare(right.ordinal)
+end 'compareDebugTouches'
+
+function compareDebugValueRanges(left DebugValueRange, right DebugValueRange) returns Ordering
+	if left.valueOrdinal != right.valueOrdinal 'byName'
+		return left.valueOrdinal.compare(right.valueOrdinal)
+	end 'byName'
+
+	return left.first.compare(right.first)
+end 'compareDebugValueRanges'
 
 // ⭐ **MEMORY BEFORE REGISTERS, AND `nowhere` RATHER THAN A GUESS.** A slot-resident value is one memory
 // holds whatever register it was also coloured into, so the slot is the location a reader can act on at

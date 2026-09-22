@@ -728,6 +728,7 @@ export type StdToArm64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe or
+				osDebugHost or
 				osCpuCount or
 				osThreadCpuTicks gives 0
 
@@ -1164,6 +1165,7 @@ export type StdToArm64Lowering
 			// the same primitive — `closesocket` exists only because a Win32 `SOCKET` is not a file `HANDLE`.
 			osSocketClose(sockId) then self.lowerOsFileClose(sockId, dstRef: dstRef)
 			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstRef: dstRef)
+			osDebugHost then panic("StdToArm64Lowering: `osDebugHost` has no arm64 spelling — the in-process debug agent's trap thunk and out-of-line slot pool are hand-assembled per architecture and only x64-windows has them, so `TargetFacilities.targetProvidesFacility` denies `debugAgent` here, the entry stub mints no call into `runtime/DebugAgent.maxon` and its bodies are swept as unreached tier; reaching here means a compiler bug got one past that gate")
 
 			// ⭐ The MACHINE query: `GetActiveProcessorCount` on Windows, `sysconf(_SC_NPROCESSORS_ONLN)`
 			// here. Two APIs with two failure conventions and one question — see `lowerOsCpuCount`.
@@ -1320,6 +1322,7 @@ export type StdToArm64Lowering
 				osSocketRecv or
 				osSocketClose or
 				osSocketServe then panic("StdToArm64Lowering: a socket host primitive appeared as a block terminator (lowering bug — every socket primitive is a body op, never a terminator)")
+				osDebugHost then panic("StdToArm64Lowering: `osDebugHost` appeared as a block terminator (lowering bug — the debug agent's host primitive is a body op, never a terminator)")
 			osCpuCount then panic("StdToArm64Lowering: an `osCpuCount` op appeared as a block terminator (lowering bug — a machine query is a value-producing body op)")
 			osThreadCpuTicks then panic("StdToArm64Lowering: an `osThreadCpuTicks` op appeared as a block terminator (lowering bug — a thread-CPU read is a body op writing through an out-param)")
 

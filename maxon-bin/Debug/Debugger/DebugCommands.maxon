@@ -1,0 +1,669 @@
+let BreakCommandWord = "break"
+let ClearCommandWord = "clear"
+let RunCommandWord = "run"
+let ContinueCommandWord = "continue"
+let StepCommandWord = "step"
+let NextCommandWord = "next"
+let FinishCommandWord = "finish"
+let UntilCommandWord = "until"
+let BacktraceCommandWord = "backtrace"
+let PrintCommandWord = "print"
+let LocalsCommandWord = "locals"
+let HelpCommandWord = "help"
+let QuitCommandWord = "quit"
+let ThreadsCommandWord = "threads"
+let GreenBacktraceCommandWord = "gt-backtrace"
+let GreenSelectCommandWord = "gt"
+let GreenParkCommandWord = "gt-park"
+let GreenResumeCommandWord = "gt-resume"
+let TraceCommandWord = "trace"
+
+let BreakpointSetAction = "set"
+let BreakpointClearedAction = "cleared"
+let BreakpointNotSetAction = "not-set"
+export let BreakpointNoCodeAction = "no-code"
+export let BreakpointAmbiguousAction = "ambiguous"
+export let BreakpointNoMatchAction = "no-match"
+export let BreakpointRefusedAction = "refused"
+
+let EntryStopReasonName = "entry"
+let BreakpointStopReasonName = "breakpoint"
+let StepStopReasonName = "step"
+
+let GreenThreadWordMessage = "arrives with green-thread support"
+let DebugUnacknowledgedReason = "unacknowledged"
+
+let NoLine = 0 as DebugLineNumber
+let NoOffset = 0 as DebugAddress
+
+let ProgramGoneMessage = "the program is no longer running"
+let DetachRoundCap = 64 as DebugTally
+let WordGap = " "
+
+export type DebugCommandRow
+	export var canonical as String
+	export var aliases as StringArray
+	export var completesAFunctionName as bool
+	export var arrivesWithGreenThreads as bool
+
+	export static function create(canonical String, aliases StringArray, completesAFunctionName bool, arrivesWithGreenThreads bool) returns DebugCommandRow
+		return Self{canonical: canonical, aliases: aliases, completesAFunctionName: completesAFunctionName, arrivesWithGreenThreads: arrivesWithGreenThreads}
+	end 'create'
+end 'DebugCommandRow'
+
+export typealias DebugCommandRowArray = Array with DebugCommandRow
+
+export function debugCommandRows() returns DebugCommandRowArray
+	var rows = DebugCommandRowArray.create()
+	rows.push(DebugCommandRow.create(BreakCommandWord, aliases: ["b"], completesAFunctionName: true, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(ClearCommandWord, aliases: StringArray.create(), completesAFunctionName: true, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(RunCommandWord, aliases: ["r"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(ContinueCommandWord, aliases: ["c"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(StepCommandWord, aliases: ["s"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(NextCommandWord, aliases: ["n"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(FinishCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(UntilCommandWord, aliases: ["u"], completesAFunctionName: true, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(BacktraceCommandWord, aliases: ["bt", "where"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(PrintCommandWord, aliases: ["p"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(LocalsCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(HelpCommandWord, aliases: ["?", "commands"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(QuitCommandWord, aliases: ["q", "exit"], completesAFunctionName: false, arrivesWithGreenThreads: false))
+	rows.push(DebugCommandRow.create(ThreadsCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: true))
+	rows.push(DebugCommandRow.create(GreenBacktraceCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: true))
+	rows.push(DebugCommandRow.create(GreenSelectCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: true))
+	rows.push(DebugCommandRow.create(GreenParkCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: true))
+	rows.push(DebugCommandRow.create(GreenResumeCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: true))
+	rows.push(DebugCommandRow.create(TraceCommandWord, aliases: StringArray.create(), completesAFunctionName: false, arrivesWithGreenThreads: true))
+
+	return rows
+end 'debugCommandRows'
+
+export function debugCommandVocabulary() returns StringArray
+	var words = StringArray.create()
+
+	for row in debugCommandRows() 'eachRow'
+		words.push(row.canonical)
+
+		for alias in row.aliases 'eachAlias'
+			words.push(alias)
+		end 'eachAlias'
+	end 'eachRow'
+
+	return words
+end 'debugCommandVocabulary'
+
+function debugHelpLines() returns StringArray
+	var lines = StringArray.create()
+
+	for row in debugCommandRows() 'eachRow'
+		var spelling = "{row.canonical}"
+
+		for alias in row.aliases 'eachAlias'
+			spelling.append(", {alias}")
+		end 'eachAlias'
+
+		lines.push(spelling)
+	end 'eachRow'
+
+	return lines
+end 'debugHelpLines'
+
+function debugStopReasonName(code DebugAddress) returns String
+	if code == DbgStopReasonEntry 'parkedBeforeMain'
+		return EntryStopReasonName
+	end 'parkedBeforeMain'
+
+	if code == DbgStopReasonStep 'oneInstructionDone'
+		return StepStopReasonName
+	end 'oneInstructionDone'
+
+	return BreakpointStopReasonName
+end 'debugStopReasonName'
+
+union DebugCommandLookup
+	none
+	row(canonical String, arrivesWithGreenThreads bool)
+end 'DebugCommandLookup'
+
+function commandNamed(word String) returns DebugCommandLookup
+	for row in debugCommandRows() 'eachRow'
+		if row.canonical == word or row.aliases.contains(word) 'thisRow'
+			return DebugCommandLookup.row(row.canonical, arrivesWithGreenThreads: row.arrivesWithGreenThreads)
+		end 'thisRow'
+	end 'eachRow'
+
+	return DebugCommandLookup.none
+end 'commandNamed'
+
+type DebugPosition
+	export let record as EngineStop
+	export let stop as DebugStop
+
+	static function create(record EngineStop, stop DebugStop) returns DebugPosition
+		return Self{record: record, stop: stop}
+	end 'create'
+end 'DebugPosition'
+
+union DebugStopState
+	none
+	at(position DebugPosition)
+end 'DebugStopState'
+
+enum DebugWalkMode
+	intoTheCallee
+	overTheCall
+	outOfTheFrame
+	pastThisLine
+end 'DebugWalkMode'
+
+union WalkStep
+	landed(record EngineStop)
+	ended(outcome TargetOutcome)
+	timedOut
+	refused(reason String)
+end 'WalkStep'
+
+export type DebugConversation
+	var engine as DebugEngine
+	var symbols as DebugSymbols
+	var position as DebugStopState
+	var outcome as TargetOutcome
+	var failed as bool
+	var closedByTheReader as bool
+
+	export static function create(engine DebugEngine, symbols DebugSymbols) returns DebugConversation
+		return Self{engine: engine, symbols: symbols, position: DebugStopState.none, outcome: TargetOutcome.running, failed: false, closedByTheReader: false}
+	end 'create'
+
+	export function sessionFailed() returns bool
+		return self.failed
+	end 'sessionFailed'
+
+	export function sessionIsOver() returns bool
+		return self.closedByTheReader
+	end 'sessionIsOver'
+
+	export function close() returns TargetOutcome
+		return self.engine.close()
+	end 'close'
+
+	export function run(line String) returns DebugReplyArray
+		var replies = DebugReplyArray.create()
+		let words = wordsOf(line)
+		let word = try words.get(0) otherwise return replies
+
+		match commandNamed(word) 'known'
+			none then replies.push(DebugReply.failed("'{word}' is not a debugger command", suggestion: nearestName(word, pool: debugCommandVocabulary())))
+			row(canonical, arrivesWithGreenThreads) then self.dispatch(replies, canonical: canonical, arrivesWithGreenThreads: arrivesWithGreenThreads, argument: argumentOf(words))
+		end 'known'
+
+		return replies
+	end 'run'
+
+	function dispatch(replies DebugReplyArray, canonical String, arrivesWithGreenThreads bool, argument String)
+		if canonical == QuitCommandWord 'leaving'
+			self.closedByTheReader = true
+			replies.push(DebugReply.quit)
+
+			return
+		end 'leaving'
+
+		if canonical == HelpCommandWord 'theVocabulary'
+			replies.push(DebugReply.spoken(debugHelpLines()))
+
+			return
+		end 'theVocabulary'
+
+		if arrivesWithGreenThreads 'stageTwo'
+			replies.push(DebugReply.failed("'{canonical}' {GreenThreadWordMessage}", suggestion: DebugNoSuggestion))
+
+			return
+		end 'stageTwo'
+
+		if not targetIsRunning(self.outcome) 'nothingLeftToAsk'
+			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: DebugNoSuggestion))
+
+			return
+		end 'nothingLeftToAsk'
+
+		self.dispatchLiveCommand(replies, canonical: canonical, argument: argument)
+	end 'dispatch'
+
+	function dispatchLiveCommand(replies DebugReplyArray, canonical String, argument String)
+		if canonical == BreakCommandWord 'arming'
+			replies.push(self.armTarget(argument))
+
+			return
+		end 'arming'
+
+		if canonical == ClearCommandWord 'disarming'
+			replies.push(self.disarmTarget(argument))
+
+			return
+		end 'disarming'
+
+		if canonical == RunCommandWord or canonical == ContinueCommandWord 'lettingItRun'
+			self.resumeAndReport(replies)
+
+			return
+		end 'lettingItRun'
+
+		if canonical == BacktraceCommandWord 'walkingTheStack'
+			self.reportBacktrace(replies)
+
+			return
+		end 'walkingTheStack'
+
+		if canonical == LocalsCommandWord 'listingLocals'
+			self.reportLocals(replies)
+
+			return
+		end 'listingLocals'
+
+		if canonical == PrintCommandWord 'printingAValue'
+			self.reportValue(replies, path: argument)
+
+			return
+		end 'printingAValue'
+
+		if canonical == StepCommandWord 'stepping'
+			self.walk(replies, mode: DebugWalkMode.intoTheCallee)
+
+			return
+		end 'stepping'
+
+		if canonical == NextCommandWord 'steppingOver'
+			self.walk(replies, mode: DebugWalkMode.overTheCall)
+
+			return
+		end 'steppingOver'
+
+		if canonical == FinishCommandWord 'leavingTheFrame'
+			self.walk(replies, mode: DebugWalkMode.outOfTheFrame)
+
+			return
+		end 'leavingTheFrame'
+
+		if canonical == UntilCommandWord 'runningPastThisLine'
+			self.walk(replies, mode: DebugWalkMode.pastThisLine)
+
+			return
+		end 'runningPastThisLine'
+
+		panic("DebugConversation.dispatchLiveCommand: '{canonical}' is in the command table and no arm answers it")
+	end 'dispatchLiveCommand'
+
+	function armTarget(spelling String) returns DebugReply
+		match self.symbols.resolveBreakTarget(spelling) 'resolved'
+			notATarget(named) then return DebugReply.failed("'{BreakCommandWord}' needs a function name, `file.maxon:LINE` or a line number, and '{named}' is none of them", suggestion: DebugNoSuggestion)
+			noMatch(suggestion) then return refusedTarget(BreakpointNoMatchAction, spelling: spelling, suggestion: suggestion)
+			ambiguous(candidates) then return ambiguousTarget(spelling, candidates: candidates)
+			noCode(file, line) then return uncoveredTarget(spelling, file: file, line: line)
+			atLine(file, line, offsets, functionName) then return self.armOffsets(spelling, file: file, line: line, offsets: offsets, functionName: functionName)
+		end 'resolved'
+	end 'armTarget'
+
+	function armOffsets(spelling String, file String, line DebugLineNumber, offsets DebugAddressArray, functionName String) returns DebugReply
+		var armed = DebugAddressArray.create()
+		var refusals = StringArray.create()
+
+		for offset in offsets 'eachSite'
+			match decodedAt(self.symbols.imageCode(), offset: offset, address: self.engine.imageTextBase() + offset) 'classified'
+				unclassified then refusals.push(DebugUnclassifiedReason)
+				decoded(instruction) then self.armOne(armed, refusals: refusals, offset: offset, instruction: instruction)
+			end 'classified'
+		end 'eachSite'
+
+		let refusal = try refusals.get(0) otherwise ""
+
+		if armed.count() == 0 'nothingArmed'
+			return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointRefusedAction, target: spelling, functionName: functionName, file: file, line: line, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: refusal))
+		end 'nothingArmed'
+
+		return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointSetAction, target: spelling, functionName: functionName, file: file, line: line, offset: try armed.get(0) otherwise NoOffset, offsets: armed, candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: ""))
+	end 'armOffsets'
+
+	function armOne(armed DebugAddressArray, refusals StringArray, offset DebugAddress, instruction X64Instruction)
+		match self.engine.armBreakpoint(offset, classWord: instruction.classWord() as DebugAddress, fixup: instruction.fixupWord() as DebugAddress) 'answered'
+			done then armed.push(offset)
+			refused(reason) then refusals.push(reason)
+			unacknowledged then refusals.push(DebugUnacknowledgedReason)
+			gone(ending) then self.settle(ending)
+		end 'answered'
+	end 'armOne'
+
+	function disarmTarget(spelling String) returns DebugReply
+		match self.symbols.resolveBreakTarget(spelling) 'resolved'
+			notATarget(named) then return DebugReply.failed("'{ClearCommandWord}' needs a function name, `file.maxon:LINE` or a line number, and '{named}' is none of them", suggestion: DebugNoSuggestion)
+			noMatch(suggestion) then return refusedTarget(BreakpointNoMatchAction, spelling: spelling, suggestion: suggestion)
+			ambiguous(candidates) then return ambiguousTarget(spelling, candidates: candidates)
+			noCode(file, line) then return uncoveredTarget(spelling, file: file, line: line)
+			atLine(file, line, offsets, functionName) then return self.disarmOffsets(spelling, file: file, line: line, offsets: offsets, functionName: functionName)
+		end 'resolved'
+	end 'disarmTarget'
+
+	function disarmOffsets(spelling String, file String, line DebugLineNumber, offsets DebugAddressArray, functionName String) returns DebugReply
+		var cleared = DebugAddressArray.create()
+
+		for offset in offsets 'eachSite'
+			if not self.engine.armedAt(self.engine.imageTextBase() + offset) 'notArmedThere'
+				continue
+			end 'notArmedThere'
+
+			match self.engine.clearBreakpoint(offset) 'answered'
+				done then cleared.push(offset)
+				refused then break 'answered'
+				unacknowledged then break 'answered'
+				gone(ending) then self.settle(ending)
+			end 'answered'
+		end 'eachSite'
+
+		let action = BreakpointClearedAction if cleared.count() > 0 else BreakpointNotSetAction
+
+		return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: functionName, file: file, line: line, offset: try cleared.get(0) otherwise NoOffset, offsets: cleared, candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: ""))
+	end 'disarmOffsets'
+
+	function resumeAndReport(replies DebugReplyArray)
+		match self.engine.resume() 'posted'
+			done then self.awaitStop(replies, waitingFor: BreakpointStopReasonName)
+			refused(reason) then replies.push(DebugReply.failed("the program refused to continue ({reason})", suggestion: DebugNoSuggestion))
+			unacknowledged then self.reportUnacknowledged(replies)
+			gone(ending) then self.reportOutcome(replies, ending: ending)
+		end 'posted'
+	end 'resumeAndReport'
+
+	function awaitStop(replies DebugReplyArray, waitingFor String)
+		match self.engine.waitForStop() 'waited'
+			stopped(record) then self.reportStop(replies, record: record)
+			ended(ending) then self.reportOutcome(replies, ending: ending)
+			timedOut then self.reportTimeout(replies, waitingFor: waitingFor)
+		end 'waited'
+	end 'awaitStop'
+
+	function reportStop(replies DebugReplyArray, record EngineStop)
+		let named = BreakpointStopReasonName if self.engine.armedAt(record.pc) else debugStopReasonName(record.reason)
+		let stop = self.symbols.stopRecordFor(named, stop: record, textBase: self.engine.imageTextBase())
+		self.position = DebugStopState.at(DebugPosition.create(record, stop: stop))
+		replies.push(DebugReply.stopped(stop))
+	end 'reportStop'
+
+	function reportBacktrace(replies DebugReplyArray)
+		match self.position 'stopped'
+			none then replies.push(DebugReply.failed("the program is running: there is no stack to walk until it stops", suggestion: DebugNoSuggestion))
+			at(held) then replies.push(DebugReply.walked(held.stop.frames))
+		end 'stopped'
+	end 'reportBacktrace'
+
+	function reportLocals(replies DebugReplyArray)
+		match self.position 'stopped'
+			none then replies.push(DebugReply.failed("the program is running: there are no locals until it stops", suggestion: DebugNoSuggestion))
+			at(held) then replies.push(DebugReply.locals(held.stop.functionName, values: renderLocals(self.engine, symbols: self.symbols, offset: held.stop.offset, framePointer: held.record.framePointer)))
+		end 'stopped'
+	end 'reportLocals'
+
+	function reportValue(replies DebugReplyArray, path String)
+		if path.isEmpty() 'nothingNamed'
+			replies.push(DebugReply.failed("'{PrintCommandWord}' needs the name of a local or a field path", suggestion: DebugNoSuggestion))
+
+			return
+		end 'nothingNamed'
+
+		match self.position 'stopped'
+			none then replies.push(DebugReply.failed("the program is running: there is nothing to print until it stops", suggestion: DebugNoSuggestion))
+			at(held) then self.reportRenderedValue(replies, held: held, path: path)
+		end 'stopped'
+	end 'reportValue'
+
+	function reportRenderedValue(replies DebugReplyArray, held DebugPosition, path String)
+		match renderValuePath(self.engine, symbols: self.symbols, offset: held.stop.offset, framePointer: held.record.framePointer, path: path) 'answered'
+			unknownName(spelling) then replies.push(DebugReply.failed("'{spelling}' is not a local of {held.stop.functionName}", suggestion: DebugNoSuggestion))
+			unknownField(spelling) then replies.push(DebugReply.failed("'{spelling}' names no field of that value", suggestion: DebugNoSuggestion))
+			rendered(tree) then replies.push(DebugReply.value(tree))
+		end 'answered'
+	end 'reportRenderedValue'
+
+	function walk(replies DebugReplyArray, mode DebugWalkMode)
+		match self.position 'stopped'
+			none then replies.push(DebugReply.failed("the program is running: it must stop before it can be stepped", suggestion: DebugNoSuggestion))
+			at(held) then self.walkFrom(replies, mode: mode, held: held)
+		end 'stopped'
+	end 'walk'
+
+	function walkFrom(replies DebugReplyArray, mode DebugWalkMode, held DebugPosition)
+		if mode == DebugWalkMode.outOfTheFrame and not hasACallerFrame(held.stop) 'theOutermostFrame'
+			replies.push(DebugReply.failed("'{FinishCommandWord}' has no frame to return to: {held.stop.functionName} is the outermost frame of this stack", suggestion: DebugNoSuggestion))
+
+			return
+		end 'theOutermostFrame'
+
+		let startPc = held.record.pc
+		let startFrame = held.record.framePointer
+		let startReturn = try held.record.returnAddresses.get(0) otherwise NoOffset
+		let startLine = held.stop.line
+		let startDepth = self.symbols.inlineDepthAt(held.stop.offset)
+		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.engine.walkBudgetMs()
+		var walking = true
+
+		while walking and (Clock.nowMs() as StopTimeoutMs) < deadline 'eachInstruction'
+			match self.oneStep() 'stepped'
+				refused(reason) then walking = self.reportWalkRefusal(replies, reason: reason)
+				ended(ending) then walking = self.reportWalkOutcome(replies, ending: ending)
+				timedOut then walking = self.reportWalkTimeout(replies)
+				landed(record) then walking = not self.walkSettled(replies, mode: mode, record: record, startPc: startPc, startFrame: startFrame, startReturn: startReturn, startLine: startLine, startDepth: startDepth)
+			end 'stepped'
+		end 'eachInstruction'
+
+		if walking 'theBudgetRanOut'
+			self.reportTimeout(replies, waitingFor: StepStopReasonName)
+		end 'theBudgetRanOut'
+	end 'walkFrom'
+
+	function oneStep() returns WalkStep
+		match self.engine.stepOneInstruction() 'posted'
+			done then break 'posted'
+			refused(reason) then return WalkStep.refused(reason)
+			unacknowledged then return WalkStep.refused(DebugUnacknowledgedReason)
+			gone(ending) then return WalkStep.ended(ending)
+		end 'posted'
+
+		match self.engine.waitForStop() 'waited'
+			stopped(record) then return WalkStep.landed(record)
+			ended(ending) then return WalkStep.ended(ending)
+			timedOut then return WalkStep.timedOut
+		end 'waited'
+	end 'oneStep'
+
+	function walkSettled(replies DebugReplyArray, mode DebugWalkMode, record EngineStop, startPc DebugAddress, startFrame DebugAddress, startReturn DebugAddress, startLine DebugLineNumber, startDepth DebugTally) returns bool
+		// The breakpoint the walk started on is not a breakpoint it arrived at: without the `startPc` test,
+		// a `finish` begun at a breakpoint inside a loop reports that same breakpoint forever.
+		if record.pc != startPc and self.engine.armedAt(record.pc) 'aBreakpointOnTheWay'
+			self.reportStop(replies, record: record)
+
+			return true
+		end 'aBreakpointOnTheWay'
+
+		if self.walkArrived(mode, landed: record, startFrame: startFrame, startReturn: startReturn, startLine: startLine, startDepth: startDepth) 'thereItIs'
+			self.reportStop(replies, record: record)
+
+			return true
+		end 'thereItIs'
+
+		return false
+	end 'walkSettled'
+
+	function walkArrived(mode DebugWalkMode, landed EngineStop, startFrame DebugAddress, startReturn DebugAddress, startLine DebugLineNumber, startDepth DebugTally) returns bool
+		if mode == DebugWalkMode.outOfTheFrame 'leavingTheFrame'
+			return self.leftTheFrame(landed, startFrame: startFrame, startReturn: startReturn, startDepth: startDepth)
+		end 'leavingTheFrame'
+
+		let offset = landed.pc - self.engine.imageTextBase()
+
+		if not self.symbols.offsetIsTheProgramsOwn(offset) 'insideTheLibrary'
+			return false
+		end 'insideTheLibrary'
+
+		let line = match self.symbols.sourcePositionAt(offset) 'positioned'
+			none gives NoLine
+			found(row) gives row.line as DebugLineNumber
+		end 'positioned'
+
+		if line == NoLine 'noSourcePosition'
+			return false
+		end 'noSourcePosition'
+
+		let depth = self.symbols.inlineDepthAt(offset)
+
+		if mode == DebugWalkMode.intoTheCallee 'anyLineChange'
+			return line != startLine or landed.framePointer != startFrame or depth != startDepth
+		end 'anyLineChange'
+
+		if landed.framePointer < startFrame or (landed.framePointer == startFrame and depth > startDepth) 'insideACallee'
+			return false
+		end 'insideACallee'
+
+		if mode == DebugWalkMode.pastThisLine 'onlyForward'
+			return landed.framePointer > startFrame or line > startLine
+		end 'onlyForward'
+
+		return landed.framePointer > startFrame or line != startLine
+	end 'walkArrived'
+
+	// Both the return address AND a risen frame pointer: an epilogue pops rbp before its `ret`, so the frame
+	// alone has already risen one instruction before control leaves the function.
+	function leftTheFrame(landed EngineStop, startFrame DebugAddress, startReturn DebugAddress, startDepth DebugTally) returns bool
+		if startDepth > 0 'aSplicedFrame'
+			return landed.framePointer == startFrame and self.symbols.inlineDepthAt(landed.pc - self.engine.imageTextBase()) < startDepth
+		end 'aSplicedFrame'
+
+		return landed.pc == startReturn and landed.framePointer > startFrame
+	end 'leftTheFrame'
+
+	export function letItFinish(replies DebugReplyArray)
+		if not targetIsRunning(self.outcome) 'itIsAlreadyOver'
+			return
+		end 'itIsAlreadyOver'
+
+		self.engine.clearEveryBreakpoint()
+		var rounds = 0 as DebugTally
+
+		while targetIsRunning(self.outcome) and rounds < DetachRoundCap 'untilItEnds'
+			rounds = rounds + 1
+
+			match self.engine.resume() 'posted'
+				done then break 'posted'
+				refused then return
+				unacknowledged then return
+				gone(ending) then self.reportOutcome(replies, ending: ending)
+			end 'posted'
+
+			match self.engine.waitForStop() 'waited'
+				stopped then break 'waited'
+				ended(ending) then self.reportOutcome(replies, ending: ending)
+				timedOut then return
+			end 'waited'
+		end 'untilItEnds'
+	end 'letItFinish'
+
+	function reportWalkRefusal(replies DebugReplyArray, reason String) returns bool
+		replies.push(DebugReply.failed("the program refused a one-instruction step ({reason})", suggestion: DebugNoSuggestion))
+
+		return false
+	end 'reportWalkRefusal'
+
+	function reportWalkOutcome(replies DebugReplyArray, ending TargetOutcome) returns bool
+		self.reportOutcome(replies, ending: ending)
+
+		return false
+	end 'reportWalkOutcome'
+
+	function reportWalkTimeout(replies DebugReplyArray) returns bool
+		self.reportTimeout(replies, waitingFor: StepStopReasonName)
+
+		return false
+	end 'reportWalkTimeout'
+
+	function reportUnacknowledged(replies DebugReplyArray)
+		self.failed = true
+		replies.push(DebugReply.timedOut("an acknowledgement from the debug agent"))
+	end 'reportUnacknowledged'
+
+	function reportTimeout(replies DebugReplyArray, waitingFor String)
+		self.failed = true
+		replies.push(DebugReply.timedOut(waitingFor))
+	end 'reportTimeout'
+
+	function reportOutcome(replies DebugReplyArray, ending TargetOutcome)
+		self.settle(ending)
+
+		match ending 'which'
+			running then break 'which'
+			terminated then break 'which'
+			exited(code) then replies.push(DebugReply.exited(code))
+			crashed(status) then replies.push(DebugReply.crashed(status))
+		end 'which'
+	end 'reportOutcome'
+
+	function settle(ending TargetOutcome)
+		self.outcome = ending
+		self.position = DebugStopState.none
+
+		match ending 'which'
+			running then break 'which'
+			terminated then break 'which'
+			exited then break 'which'
+			crashed then self.failed = true
+		end 'which'
+	end 'settle'
+end 'DebugConversation'
+
+function refusedTarget(action String, spelling String, suggestion String) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(action, target: spelling, functionName: "", file: "", line: NoLine, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: suggestion, reason: ""))
+end 'refusedTarget'
+
+function ambiguousTarget(spelling String, candidates StringArray) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointAmbiguousAction, target: spelling, functionName: "", file: "", line: NoLine, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: candidates, suggestion: DebugNoSuggestion, reason: ""))
+end 'ambiguousTarget'
+
+function uncoveredTarget(spelling String, file String, line DebugLineNumber) returns DebugReply
+	return DebugReply.breakpoint(DebugBreakpointAnswer.create(BreakpointNoCodeAction, target: spelling, functionName: "", file: file, line: line, offset: NoOffset, offsets: DebugAddressArray.create(), candidates: StringArray.create(), suggestion: DebugNoSuggestion, reason: ""))
+end 'uncoveredTarget'
+
+function hasACallerFrame(stop DebugStop) returns bool
+	var physical = 0 as DebugTally
+
+	for frame in stop.frames 'eachFrame'
+		physical = physical + 1 if not frame.inlined else physical
+	end 'eachFrame'
+
+	return physical > 1 or (stop.frames.count() as DebugTally) > physical
+end 'hasACallerFrame'
+
+function decodedAt(code ByteArray, offset DebugAddress, address DebugAddress) returns X64Decode
+	return decodeX64Instruction(code, at: offset as X64Offset, address: address as X64Address)
+end 'decodedAt'
+
+function wordsOf(line String) returns StringArray
+	var words = StringArray.create()
+
+	for piece in line.trim().split(WordGap) 'eachPiece'
+		if not piece.isEmpty() 'aWord'
+			words.push(piece)
+		end 'aWord'
+	end 'eachPiece'
+
+	return words
+end 'wordsOf'
+
+function argumentOf(words StringArray) returns String
+	var argument = ""
+
+	for (iter, word) in words.withIterator() 'eachWord'
+		if iter.index() == 0 'theCommandWord'
+			continue
+		end 'theCommandWord'
+
+		argument.append(word if argument.isEmpty() else "{WordGap}{word}")
+	end 'eachWord'
+
+	return argument
+end 'argumentOf'

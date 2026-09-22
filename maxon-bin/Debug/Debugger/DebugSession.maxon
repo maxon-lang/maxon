@@ -1,0 +1,80 @@
+export enum DebugFace
+	batch
+	conversational
+end 'DebugFace'
+
+export union DebugSessionStart
+	ready(session DebugSession)
+	refused(reason String)
+	noAgent(reason String)
+end 'DebugSessionStart'
+
+let CompletedSessionExit = 0 as ExitCode
+let FailedSessionExit = 1 as ExitCode
+
+let NoAgentMessage = "no debug agent attached to this program: it was built with"
+
+export type DebugSession
+	var conversation as DebugConversation
+	var symbols as DebugSymbols
+	let face as DebugFace
+
+	export static function launch(program FilePath, reader MxdbgReader, code ByteArray, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, face DebugFace) returns DebugSessionStart
+		let symbols = DebugSymbols.create(reader, code: code, executable: program)
+		let routing = ChildOutputRouting.allToStandardError if face == DebugFace.batch else ChildOutputRouting.verbatim
+
+		match DebugEngine.start(program, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, routing: routing, stopTimeoutMs: stopTimeoutMs) 'started'
+			refused(reason) then return DebugSessionStart.refused(reason)
+			noAgent then return DebugSessionStart.noAgent(NoAgentMessage)
+			ready(engine) then return DebugSessionStart.ready(Self{conversation: DebugConversation.create(engine, symbols: symbols), symbols: symbols, face: face})
+		end 'started'
+	end 'launch'
+
+	export function run(line String)
+		self.deliver(self.conversation.run(line))
+	end 'run'
+
+	export function completions(line String) returns StringArray
+		return debugCompletionsFor(line, symbols: self.symbols)
+	end 'completions'
+
+	export function isOver() returns bool
+		return self.conversation.sessionIsOver()
+	end 'isOver'
+
+	export function closeAfterLettingItFinish() returns ExitCode
+		var replies = DebugReplyArray.create()
+		self.conversation.letItFinish(replies)
+		self.deliver(replies)
+
+		return self.close()
+	end 'closeAfterLettingItFinish'
+
+	export function close() returns ExitCode
+		_ = self.conversation.close()
+
+		return FailedSessionExit if self.conversation.sessionFailed() else CompletedSessionExit
+	end 'close'
+
+	function deliver(replies DebugReplyArray)
+		for reply in replies 'eachReply'
+			match self.face 'which'
+				batch then self.writeEvent(reply)
+				conversational then writeText(reply)
+			end 'which'
+		end 'eachReply'
+	end 'deliver'
+
+	function writeEvent(reply DebugReply)
+		match debugEventLineFor(reply) 'rendered'
+			none then break 'rendered'
+			line(text) then print("{text}\n")
+		end 'rendered'
+	end 'writeEvent'
+end 'DebugSession'
+
+function writeText(reply DebugReply)
+	for line in debugTextLinesFor(reply) 'eachLine'
+		print("{line}\n")
+	end 'eachLine'
+end 'writeText'

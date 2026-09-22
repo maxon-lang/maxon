@@ -104,12 +104,12 @@
 //
 // DENSE COLUMNS, indexed by ValueId, NOT a Map: block-arg ids are function-local and dense, which is
 // the same discipline the register allocator's columns follow.
-type CarriedValues
+export type CarriedValues
 	var seen as BoolArray
 	var only as ValueIdArray
 	var differs as BoolArray
 
-	static function create(bound ValueId) returns CarriedValues
+	export static function create(bound ValueId) returns CarriedValues
 		var seen = BoolArray.create()
 		var only = ValueIdArray.create()
 		var differs = BoolArray.create()
@@ -125,7 +125,7 @@ type CarriedValues
 	// passes the phi to ITSELF, so its incoming set is `{v, phi}` and a naive "all incoming equal"
 	// test sees two distinct values and gives up. `phi = φ(v, phi)` is just `v`. Once a chain has
 	// folded, an incoming that RESOLVED back to this phi is the same thing and is discounted too.
-	function note(arg ValueId, incoming ValueId)
+	export function note(arg ValueId, incoming ValueId)
 		if incoming == arg 'selfReference'
 			return
 		end 'selfReference'
@@ -154,14 +154,14 @@ type CarriedValues
 	// Trivial iff exactly one distinct non-self value ever arrived. A phi with NO non-self incoming
 	// at all (an unreachable block, or a phi fed only by itself) is NOT trivial: there is no value
 	// it could BE.
-	function isTrivial(arg ValueId) returns bool
+	export function isTrivial(arg ValueId) returns bool
 		let hasIncoming = try self.seen.get(arg) otherwise panic("elimTrivialBlockArgs: seen.get({arg}) OOB")
 		let isRealMerge = try self.differs.get(arg) otherwise panic("elimTrivialBlockArgs: differs.get({arg}) OOB")
 		return hasIncoming and not isRealMerge
 	end 'isTrivial'
 
 	// The single value a trivial `arg` carries.
-	function targetOf(arg ValueId) returns ValueId
+	export function targetOf(arg ValueId) returns ValueId
 		return try self.only.get(arg) otherwise panic("elimTrivialBlockArgs: only.get({arg}) OOB")
 	end 'targetOf'
 end 'CarriedValues'

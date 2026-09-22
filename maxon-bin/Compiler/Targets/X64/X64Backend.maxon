@@ -2726,7 +2726,7 @@ end 'emitUnitOps'
 // emitted first and measured after, so no encoder's width is tabled: only a `covered` unit that straddles a
 // window is rolled back, padded to the next boundary and emitted again. Line rows are noted once the
 // placement is final, so a row lands on its instruction and never on the pad before it.
-function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, captureSpans bool)
+function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
 	if covered 'markable'
 		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
 	end 'markable'
@@ -2758,6 +2758,12 @@ function emitUnit(module TargetModule, first OpIndex, last OpIndex, covered bool
 			lineRows.note(module.spans.at(last), codeOffset: lastStart)
 		end 'pair'
 	end 'rows'
+
+	runOffsets.note(first, codeStart: firstStart, codeEnd: lastStart if last != first else code.count())
+
+	if last != first 'pairedOp'
+		runOffsets.note(last, codeStart: lastStart, codeEnd: code.count())
+	end 'pairedOp'
 end 'emitUnit'
 
 // ==========================================================================
@@ -2830,6 +2836,8 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// the loop so an ordinary build never reads the span column at all.
 	let captureSpans = module.spans.armed
 	var lineRows = DebugLineRowBuilder.create(captureSpans)
+	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
+	var chunkBlockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// Where this chunk's coverage counters land. Filled by the encoder itself, which is the only thing that
 	// knows where an instruction begins; empty for every build that emits none.
@@ -2881,15 +2889,16 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 				end 'fuses'
 			end 'lookahead'
 
-			emitUnit(module, first: opIdx, last: last, covered: covered, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, captureSpans: captureSpans)
+			emitUnit(module, first: opIdx, last: last, covered: covered, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 			opPos = opPos + (2 if last != opIdx else 1)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
-			emitUnit(module, first: termIdx, last: termIdx, covered: isBranchWindowUnit(branchWindowRoleOf(opAt(module, opIdx: termIdx)), usesGt: usesGt), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, captureSpans: captureSpans)
+			emitUnit(module, first: termIdx, last: termIdx, covered: isBranchWindowUnit(branchWindowRoleOf(opAt(module, opIdx: termIdx)), usesGt: usesGt), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 		end 'hasTerm'
 
+		chunkBlockEnds.place(block.id, value: code.count())
 		inlineRanges.note(block.inlineSite, codeStart: blockStart, codeEnd: code.count())
 	end 'eachBlock'
 
@@ -2918,9 +2927,11 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
+		chunk.localRanges = runOffsets.resolve(func, blockStarts: chunkLabelOffsets, blockEnds: chunkBlockEnds)
 		chunk.frameSize = x64PrologueFrameBytes(module, func: func)
 		chunk.paramCount = func.paramCount
 		chunk.spillSlotBase = spillBaseDisp
+		chunk.frameLinkBytes = (x64PrologueFrameOf(module, func: func).pushCount as StackSize) * SpillSlotBytes
 	end 'debugInfo'
 
 	return chunk

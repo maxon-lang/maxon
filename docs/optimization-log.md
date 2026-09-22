@@ -1413,3 +1413,31 @@ return with a bool half, so the instrument is blind to this change. What it reac
 program returning a `(value, ok)` pair, `stdlib/helpers/sort/pdqsort.maxon`'s `partition` (a box per
 partition step before), and the compiler's own `constDefInfo` in `SplitLiveRanges.maxon` on its next
 generation (7,092 `__Tuple2.int.bool` boxes per self-compile in the stage-2 reading above).
+
+### Result — 2026-09-22, the sidecar's per-value live runs are grouped once instead of rescanned per value
+
+`MxdbgEmit.mergedLiveRanges` filtered the whole of `DebugFunctionRange.localRanges` by `valueOrdinal`,
+and `collectPlacedRows` called it once per named value of the function — an O(n) scan inside an O(n)
+walk, so writing one function's local records cost O(values x runs) where the new per-(value, live-run)
+rows made both terms grow together. `DebugRunsByOrdinal.over` now groups the rows by ordinal in one
+counting pass per function and `mergedLiveRanges` reads only its own group: O(values + runs).
+
+**Interleaved A/B on `maxon build maxon-bin` (the compiler itself, 12.45 MB sidecar, 23,107 functions
+with debug locals), control built from the same tree with only `mergedLiveRanges` restored, three
+rounds alternating:** `phase:writeDebugInfo` wall 430.0 / 429.7 / 536.9 ms control against
+398.7 / 408.7 / 461.8 ms — the fixed binary faster in every round (-7.3% / -4.9% / -14.0%; the third
+round's pair is inflated by load, which is why it is reported as a pair rather than dropped).
+Allocations are exact and reproducible: 2,088,526 -> 2,157,847 (+69,321) and 238,569,104 ->
+244,005,704 bytes. The +69,321 is exactly three arrays per function that has debug locals (3 x 23,107):
+the ordinal-start column, the fill cursor and the ordered row copy. It is linear in function count and
+it buys the removal of a term that is quadratic in a function's local count.
+
+**Ladder (`run_scale_test`, 6 rungs) against the pre-change run of the same tree at the same path:**
+`phase:writeDebugInfo` allocations 52,448 / 67,819 / 100,028 / 161,248 / 286,761 / 537,610 before and
+53,261 / 68,680 / 100,985 / 162,397 / 288,294 / 539,911 after — the flat-per-rung +813 rising to +2,301
+is the per-function term above, growing with the corpus's function count and not faster. CPU per rung
+38.6M / 55.8M / 69.9M / 116.8M / 230.0M / 492.2M before and 33.9M / 43.9M / 72.1M / 116.1M / 227.7M /
+456.0M after; the last doubling reads x2.14 before and x2.00 after. **The corpus barely expresses this
+change:** its generated functions carry few named values, so `values x runs` is small there and the
+term removed is most of a percent rather than most of the phase. The compiler's own source, where a
+single function carries tens of locals with several live runs each, is where the A/B above reads it.

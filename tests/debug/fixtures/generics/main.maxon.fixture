@@ -1,0 +1,42 @@
+typealias Amount = int(i64.min to i64.max)
+typealias Level = int(0 to 100)
+typealias AmountHolder = Holder with Amount
+typealias LevelHolder = Holder with Level
+
+type Holder uses Slot
+	export var value as Slot
+
+	export static function create(value Slot) returns Holder
+		return Holder{value: value}
+	end 'create'
+
+	export function doubled() returns Slot
+		var carried = self.value
+		var i = 0
+		while i < 2 'rounds'
+			carried = carried + self.value
+			i = i + 1
+		end 'rounds'
+
+		return carried
+	end 'doubled'
+end 'Holder'
+
+type Ticket
+	export var seat as Amount
+	export var row as Amount
+
+	export static function create(seat Amount, row Amount) returns Ticket
+		return Ticket{seat: seat, row: row}
+	end 'create'
+end 'Ticket'
+
+function main() returns ExitCode
+	let whole = AmountHolder.create(3)
+	let level = LevelHolder.create(5)
+	let ticket = Ticket.create(7, row: 2)
+	let copy = ticket.clone()
+	print("generics {whole.doubled()} {level.doubled()} {ticket.seat} {copy.row}\n")
+
+	return 0
+end 'main'

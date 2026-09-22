@@ -590,6 +590,10 @@ export enum IatSlot
 	AssignProcessToJobObject = IatSlotMeta{dll: ImportDll.kernel32}
 	TerminateJobObject = IatSlotMeta{dll: ImportDll.kernel32}
 	SetLastError = IatSlotMeta{dll: ImportDll.kernel32}
+	VirtualProtect = IatSlotMeta{dll: ImportDll.kernel32}
+	FlushInstructionCache = IatSlotMeta{dll: ImportDll.kernel32}
+	VirtualQuery = IatSlotMeta{dll: ImportDll.kernel32}
+	Sleep = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// ⭐⭐ **THE EIGHT `ws2_32.dll` SOCKET IMPORTS — THE FIRST NON-kernel32 IMPORTS THIS WRITER HAS EMITTED.**
 	// `stdlib/TcpClient.maxon` reaches all four `__ManagedSocket` methods and they bottom out here:
@@ -731,9 +735,8 @@ end 'iatSlotIndex'
 // handful of unreferenced imports in the rare build that wants one producer, against a silently-repointed
 // import table — the trade is not close.
 //
-// ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm, which spans
-// `GetEnvironmentVariableA` through `SetLastError`; a producer added later must extend that arm (or fail
-// this total match) and this comment with it.
+// ⚠ **THE BAND'S MEMBERSHIP IS THE RUN BELOW, NOT THIS PROSE.** Read it off the `true` arm; a producer
+// added later must extend that arm, or fail this total match.
 function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
 		GetEnvironmentVariableA or
@@ -775,7 +778,11 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 			CreateJobObjectW or
 			AssignProcessToJobObject or
 			TerminateJobObject or
-			SetLastError gives true
+			SetLastError or
+			VirtualProtect or
+			FlushInstructionCache or
+			VirtualQuery or
+			Sleep gives true
 		ExitProcess or
 			GetStdHandle or
 			WriteFile or
@@ -1836,7 +1843,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// `GetEnvironmentVariableA` and the machine's processor count through `GetActiveProcessorCount`, and its
 	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
 	// installed only with the scheduler.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesDebugAgent
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while

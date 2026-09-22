@@ -4547,6 +4547,8 @@ export type StructLayout
 	// The file this type was declared in — the anchor both wider tiers measure a reader against. Empty for a
 	// compiler-synthesized layout, whose `visibility` is `global` and never consults it.
 	export var declFilePath as FilePath
+	export var declLine as LineNumber = 0
+	export var declColumn as ColumnNumber = 0
 
 	// An EMPTY layout, filled by `addField` (and, for a generic type, `recordTypeParams`). It does not
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
@@ -5978,6 +5980,8 @@ export type EnumLayout
 	// layouts (`Ordering`, the builtin error enums), which no file declares and none may be refused.
 	export var visibility as Visibility
 	export var declFilePath as FilePath
+	export var declLine as LineNumber = 0
+	export var declColumn as ColumnNumber = 0
 
 	// ⭐ **WHAT KIND OF NUMBER `caseTags` HOLDS** (see `EnumBacking`). Written by the case reader as each
 	// case fixes or re-confirms it (`Parser.requireIntBacking`/`requireFloatBacking`, which raise E3032 on a
@@ -8172,6 +8176,11 @@ export type Project
 	// is byte-identical whichever way this is set — which is the whole reason the sidecar may exist at all.
 	export var debugInfo as bool
 
+	// Whether this build leaves the debug agent out of the image. Unlike `debugInfo` above it changes the
+	// executable: the agent is code, emitted into every program and dark until `MAXON_DEBUG` names it a
+	// control segment.
+	export var noDebugAgent as bool
+
 	// The withheld bodies this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime golden's
 	// request). A name here is a REFERENCE the inliner's census must see: a called-once callee spliced away
 	// is dropped by dead-function elimination, and the printer then has no body to render.
@@ -8550,6 +8559,7 @@ export type Project
 			asyncTrace: false,
 			debugStream: debugStream,
 			debugInfo: false,
+			noDebugAgent: false,
 			requestedRuntimeBodies: RuntimeFunctionNameArray.create(),
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,

@@ -1,0 +1,148 @@
+# The seed knows no `__Raw.osDebugHost`, `__Raw.dbgEnvironmentValue`, `__Raw.dbgAttachSegment`,
+# `__Raw.dbgCtlAddr`, `__Raw.dbgTextBase` or `__Raw.dbgTextLimit`, so it refuses `runtime/DebugAgent.maxon` at the first call to one (E3004). Every
+# table that TEACHES those rows — `RawIntrinsics`, `StdDialect`, the x64 lowering, the `IatSlot` band,
+# `TargetFacilities` — is left standing, so `C1` knows them and compiles the unshimmed tree into `C2`.
+#
+# The tier file keeps every constant `checkDebugAgentGeometry` pins and every entry point the roots name;
+# only the six rows are swapped for rows the seed already has, which makes each body inert rather than
+# absent. The second hunk turns the agent OFF in the shimmed build, because an inert agent that the entry
+# stub still called would attach to whatever the substituted rows answered.
+diff --git a/runtime/DebugAgent.maxon b/runtime/DebugAgent.maxon
+--- a/runtime/DebugAgent.maxon
++++ b/runtime/DebugAgent.maxon
+@@ -236,13 +236,13 @@
+ 	let valueBuffer = __Raw.scratch(DbgSegmentNameBytes)
+ 	__Raw.storeByte(valueBuffer, offset: 0, value: DbgNothing)
+ 
+-	let nameCharacters = __Raw.dbgEnvironmentValue(nameBuffer, valueBuffer: valueBuffer, valueBytes: DbgSegmentNameBytes as MachineWord) as DbgWord
++	let nameCharacters = __Raw.atomicCas(nameBuffer, expected: valueBuffer, replacement: DbgSegmentNameBytes as MachineWord) as DbgWord
+ 
+ 	if nameCharacters == 0 'noDebuggerNamedASegment'
+ 		return
+ 	end 'noDebuggerNamedASegment'
+ 
+-	let base = __Raw.dbgAttachSegment(nameBuffer, valueBuffer: valueBuffer, valueBytes: DbgSegmentNameBytes as MachineWord, segmentBytes: DbgSegmentBytes as MachineWord) as DbgWord
++	let base = __Raw.atomicCas(nameBuffer, expected: valueBuffer, replacement: DbgSegmentBytes as MachineWord) as DbgWord
+ 
+ 	if base == 0 'nothingMapped'
+ 		return
+@@ -266,7 +266,7 @@
+ 
+ 	// The displaced instructions live in pages of their own rather than in a chunk of `.text`: anything
+ 	// inside the image sits within `__symtable`'s range and is walked as the program's own code.
+-	let pool = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
++	let pool = __Raw.osAllocPages(DbgSlotPoolBytes as MachineWord) as DbgWord
+ 
+ 	if pool == 0 'noSlotPool'
+ 		return
+@@ -276,7 +276,7 @@
+ 	dbgStore(private, offset: DbgPrivOffSlotPoolBase, value: pool)
+ 	dbgStore(private, offset: DbgPrivOffResumeAction, value: DbgResumeContinue)
+ 
+-	let driverHandle = __Raw.osDebugHost(DbgVerbOpenDriverProcess, a0: dbgLoad(base, offset: DbgOffDriverPid) as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
++	let driverHandle = __Raw.atomicCas(dbgLoad(base, offset: DbgOffDriverPid) as MachineWord, expected: DbgNothing, replacement: DbgNothing) as DbgWord
+ 
+ 	if driverHandle == 0 'theDriverIsAlreadyGone'
+ 		return
+@@ -284,14 +284,14 @@
+ 
+ 	dbgStore(private, offset: DbgPrivOffDriverHandle, value: driverHandle)
+ 
+-	let textBase = __Raw.dbgTextBase() as DbgWord
++	let textBase = __Raw.dsBaseAddr() as DbgWord
+ 	dbgStore(base, offset: DbgOffTextBase, value: textBase)
+-	dbgStore(base, offset: DbgOffTextSize, value: (__Raw.dbgTextLimit() as DbgWord) - textBase)
+-	dbgStore(base, offset: DbgOffAgentPid, value: __Raw.osDebugHost(DbgVerbProcessId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord)
++	dbgStore(base, offset: DbgOffTextSize, value: (__Raw.dsAllocIdAddr() as DbgWord) - textBase)
++	dbgStore(base, offset: DbgOffAgentPid, value: __Raw.osGetPid() as DbgWord)
+ 	dbgStore(base, offset: DbgOffAgentPrivate, value: private)
+ 
+-	__Raw.storeWord(__Raw.dbgCtlAddr(), offset: 0, value: base as MachineWord)
+-	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbInstallTrapHandler, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
++	__Raw.storeWord(__Raw.dsAllocIdAddr(), offset: 0, value: base as MachineWord)
++	dbgSinkHostAnswer(__Raw.atomicCas(__Raw.scratch(DbgWordBytes), expected: DbgNothing, replacement: DbgNothing))
+ 	dbgStore(base, offset: DbgOffFlags, value: DbgFlagAgentAlive)
+ 
+ 	if dbgLoad(base, offset: DbgOffStopAtEntry) == DbgStopAtEntryYes 'parkBeforeMain'
+@@ -314,7 +314,7 @@
+ 			continue
+ 		end 'won'
+ 
+-		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
++		dbgSinkHostAnswer(__Raw.atomicCas(__Raw.scratch(DbgWordBytes), expected: DbgNothing, replacement: DbgNothing))
+ 	end 'spin'
+ 
+ 	return dbgLoad(private, offset: DbgPrivOffAgentSp) as MachineWord
+@@ -389,7 +389,7 @@
+ end 'dbgSinkHostAnswer'
+ 
+ function dbgControlSegment() returns DbgWord
+-	return __Raw.loadWord(__Raw.dbgCtlAddr(), offset: 0) as DbgWord
++	return __Raw.loadWord(__Raw.dsAllocIdAddr(), offset: 0) as DbgWord
+ end 'dbgControlSegment'
+ 
+ function dbgPrivateBlock() returns DbgWord
+@@ -443,11 +443,11 @@
+ 
+ 		// Liveness of the driver PROCESS, never a heartbeat: a user sitting at the REPL sends nothing for
+ 		// minutes, and a clock would read that as an abandoned debuggee and kill a healthy program.
+-		if __Raw.osDebugHost(DbgVerbDriverExited, a0: driverHandle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord == DbgWaitSignalled 'theDriverIsGone'
++		if __Raw.atomicCas(driverHandle as MachineWord, expected: DbgNothing, replacement: DbgNothing) as DbgWord == DbgWaitSignalled 'theDriverIsGone'
+ 			__Raw.osExit(DbgOrphanedExitCode as MachineWord)
+ 		end 'theDriverIsGone'
+ 
+-		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
++		dbgSinkHostAnswer(__Raw.atomicCas(__Raw.scratch(DbgWordBytes), expected: DbgNothing, replacement: DbgNothing))
+ 	end 'poll'
+ end 'dbgPark'
+ 
+@@ -680,14 +680,14 @@
+ 
+ function dbgPatchCode(address DbgWord, value DbgWord)
+ 	let previous = __Raw.scratch(DbgWordBytes)
+-	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbProtectPages, a0: address as MachineWord, a1: DbgOneByte as MachineWord, a2: DbgPageExecuteReadWrite as MachineWord, a3: previous))
++	dbgSinkHostAnswer(__Raw.atomicCas(previous, expected: address as MachineWord, replacement: DbgPageExecuteReadWrite as MachineWord))
+ 	dbgStoreByte(address, offset: 0, value: value)
+-	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbProtectPages, a0: address as MachineWord, a1: DbgOneByte as MachineWord, a2: DbgPageExecuteRead as MachineWord, a3: previous))
++	dbgSinkHostAnswer(__Raw.atomicCas(previous, expected: address as MachineWord, replacement: DbgPageExecuteRead as MachineWord))
+ 	dbgFlushCode(address, length: DbgOneByte)
+ end 'dbgPatchCode'
+ 
+ function dbgFlushCode(address DbgWord, length DbgWord)
+-	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbFlushCode, a0: address as MachineWord, a1: length as MachineWord, a2: DbgNothing, a3: DbgNothing))
++	dbgSinkHostAnswer(__Raw.atomicCas(address as MachineWord, expected: length as MachineWord, replacement: DbgNothing))
+ end 'dbgFlushCode'
+ 
+ function dbgClearBreakpoint(base DbgWord, private DbgWord)
+@@ -981,7 +981,7 @@
+ 
+ 	let query = __Raw.scratch(DbgMbiBytes) as DbgWord
+ 
+-	if __Raw.osDebugHost(DbgVerbQueryRegion, a0: address as MachineWord, a1: query as MachineWord, a2: DbgMbiBytes as MachineWord, a3: DbgNothing) == DbgNothing 'theQueryFailed'
++	if __Raw.atomicCas(query as MachineWord, expected: address as MachineWord, replacement: DbgMbiBytes as MachineWord) == DbgNothing 'theQueryFailed'
+ 		return false
+ 	end 'theQueryFailed'
+ 
+@@ -1002,7 +1002,7 @@
+ end 'dbgRegionIsReadable'
+ 
+ function dbgInsideRuntimeSymbol(textOffset DbgWord) returns bool
+-	let table = __Raw.dbgTextLimit() as DbgWord
++	let table = __Raw.dsAllocIdAddr() as DbgWord
+ 	let count = dbgLoad(table, offset: 0) and DbgSymtabEntryCodeOffsetMask
+ 
+ 	if count == 0 'noSymbols'
+
+diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
+--- a/maxon-bin/Compiler/Compiler.maxon
++++ b/maxon-bin/Compiler/Compiler.maxon
+@@ -1211,7 +1211,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
+ 	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. `usesHeap` is final by here, which
+ 	// is what makes this the earliest honest place to ask.
+ 	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
+-	usage.usesDebugAgent = targetProvidesFacility(project.target, facility: HostFacility.debugAgent) and not project.noDebugAgent
++	usage.usesDebugAgent = false
+ 
+ 	// ⭐ **AND THE COVERAGE BITS, IN THE SAME WINDOW AND FOR THE SAME REASON.** Nothing in a Maxon module
+ 	// names `__cov_dump`, so both are DECLARED here rather than discovered: the stub's coverage dump is
+

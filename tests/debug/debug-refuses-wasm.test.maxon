@@ -1,0 +1,18 @@
+let RefusesWasmCaseLabel = "debug-refuses-wasm"
+
+let WasmModuleFileName = "module.wasm"
+let WasmTargetName = "wasm32-wasi"
+let RefusedSessionExitCode = 1
+
+test 'a wasm module is refused by name rather than debugged'
+	let staged = builtFixture(RefusesWasmCaseLabel, fixture: HeaplessFixtureName)
+	let module = staged.join(WasmModuleFileName)
+
+	try File.writeBinary(module, content: b"\x00asm\x01\x00\x00\x00") otherwise panic("debug-refuses-wasm: the gate could not run — could not stage a wasm header at {module.toString()}.")
+
+	let session = spawnDebugBatch(module, staged: staged, commands: RunCommand, extraOptions: StringArray.create())
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(session.exitCode() as AssertedInt, expected: RefusedSessionExitCode, message: "a wasm module carries no `.text` image and hosts no agent, so a session over one must be refused. {said}")
+	try Expect.contains("{session.stdout}{session.stderr}", needle: WasmTargetName, message: "the refusal does not name `{WasmTargetName}`, so a reader is told only that something failed. {said}")
+end 'a wasm module is refused by name rather than debugged'

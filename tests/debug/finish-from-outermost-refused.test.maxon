@@ -1,0 +1,14 @@
+let FinishOutermostCaseLabel = "finish-from-outermost-refused"
+
+test 'a finish from the outermost frame is refused rather than run off the end of the stack'
+	let staged = builtFixture(FinishOutermostCaseLabel, fixture: SteppingFixtureName)
+	let printLine = anchorLine(staged, anchor: "main-print")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(printLine)}", RunCommand, FinishCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 1, message: "the breakpoint in the outermost user frame is the only stop this session can reach. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ErrorEventName).count() as AssertedInt, expected: 1, message: "a `{FinishCommand}` out of the outermost frame has no caller to return to: it must be refused by name. Arming a breakpoint on the return address of a frame there is not one is where a debugger corrupts the program it is watching. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "the refusal was a wait that eventually gave up rather than an answer. {said}")
+end 'a finish from the outermost frame is refused rather than run off the end of the stack'

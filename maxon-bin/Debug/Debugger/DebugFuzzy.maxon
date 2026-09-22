@@ -1,0 +1,208 @@
+typealias FuzzyDistance = int(0 to u32.max)
+
+export union FuzzyMatch
+	one(name String)
+	several(candidates StringArray)
+	none(suggestion String)
+end 'FuzzyMatch'
+
+let NameSeparator = "."
+
+let MaxSuggestionDistance = 2 as FuzzyDistance
+let SuggestionLengthDivisor = 2
+
+export function fuzzyResolve(spelling String, pool StringArray) returns FuzzyMatch
+	let exact = namesMatching(spelling, pool: pool, rung: FuzzyRung.whole)
+
+	if exact.count() > 0 'anExactName'
+		return answerFor(exact)
+	end 'anExactName'
+
+	let qualified = namesMatching(spelling, pool: pool, rung: FuzzyRung.typeAndMethod)
+
+	if qualified.count() > 0 'aQualifiedMethod'
+		return answerFor(qualified)
+	end 'aQualifiedMethod'
+
+	let leaves = namesMatching(spelling, pool: pool, rung: FuzzyRung.leaf)
+
+	if leaves.count() > 0 'aLeafName'
+		return answerFor(leaves)
+	end 'aLeafName'
+
+	let prefixed = namesMatching(spelling, pool: pool, rung: FuzzyRung.wordPrefix)
+
+	if prefixed.count() > 0 'aWordPrefix'
+		return answerFor(prefixed)
+	end 'aWordPrefix'
+
+	return FuzzyMatch.none(nearestName(spelling, pool: pool))
+end 'fuzzyResolve'
+
+export function completionsFor(partial String, pool StringArray) returns StringArray
+	var offered = StringArray.create()
+	var seen = DebugNameSet.create()
+
+	for name in pool 'eachName'
+		if partial.isEmpty() or name.startsWith(partial) or leafOf(name).startsWith(partial) or qualifiedTailOf(name).startsWith(partial) 'reachesIt'
+			if not seen.contains(name) 'notYetOffered'
+				seen.insert(name)
+				offered.push(name)
+			end 'notYetOffered'
+		end 'reachesIt'
+	end 'eachName'
+
+	return offered
+end 'completionsFor'
+
+export function nearestName(spelling String, pool StringArray) returns String
+	var best = ""
+	var bestDistance = MaxSuggestionDistance + 1
+
+	for name in pool 'eachName'
+		for candidate in spellingsOf(name) 'eachSpelling'
+			let distance = editDistance(spelling, other: candidate)
+
+			if distance < bestDistance and distance <= suggestionBudget(candidate) 'closer'
+				bestDistance = distance
+				best = name
+			end 'closer'
+		end 'eachSpelling'
+	end 'eachName'
+
+	return best
+end 'nearestName'
+
+function editDistance(left String, other String) returns FuzzyDistance
+	let mine = left.toByteArray()
+	let theirs = other.toByteArray()
+	let width = (theirs.count() as FuzzyMatchWidth) + 1
+	var previous = distanceRow(width)
+	var current = distanceRow(width)
+
+	for i in 0 upto width 'eachColumn'
+		try previous.set(i, value: i as FuzzyDistance) otherwise panic("editDistance: a row sized to the second word cannot refuse a column inside it")
+	end 'eachColumn'
+
+	for row in 0 upto mine.count() 'eachRow'
+		try current.set(0, value: (row + 1) as FuzzyDistance) otherwise panic("editDistance: column 0 of a row sized to the second word")
+
+		for column in 1 upto width 'eachColumn'
+			let same = (try mine.get(row) otherwise 0) == (try theirs.get(column - 1) otherwise 0)
+			let substitution = (try previous.get(column - 1) otherwise panic("editDistance: the previous row holds every column")) + (0 if same else 1)
+			let deletion = (try previous.get(column) otherwise panic("editDistance: the previous row holds every column")) + 1
+			let insertion = (try current.get(column - 1) otherwise panic("editDistance: the current row holds every column before this one")) + 1
+			try current.set(column, value: smallerOf(substitution, other: smallerOf(deletion, other: insertion))) otherwise panic("editDistance: a row sized to the second word cannot refuse a column inside it")
+		end 'eachColumn'
+
+		previous = current.clone()
+	end 'eachRow'
+
+	return try previous.get(width - 1) otherwise panic("editDistance: the last column of the last row")
+end 'editDistance'
+
+function leafOf(name String) returns String
+	let pieces = name.split(NameSeparator)
+
+	return try pieces.get(pieces.count() - 1) otherwise name
+end 'leafOf'
+
+function qualifiedTailOf(name String) returns String
+	let pieces = name.split(NameSeparator)
+
+	if pieces.count() < 2 'notQualified'
+		return name
+	end 'notQualified'
+
+	return "{try pieces.get(pieces.count() - 2) otherwise name}{NameSeparator}{try pieces.get(pieces.count() - 1) otherwise name}"
+end 'qualifiedTailOf'
+
+enum FuzzyRung
+	whole
+	typeAndMethod
+	leaf
+	wordPrefix
+end 'FuzzyRung'
+
+typealias FuzzyDistanceRow = Array with FuzzyDistance
+
+function distanceRow(width FuzzyMatchWidth) returns FuzzyDistanceRow
+	var row = FuzzyDistanceRow.create()
+	row.refill(width as ElementIndex, value: 0)
+
+	return row
+end 'distanceRow'
+
+typealias FuzzyMatchWidth = int(0 to u64.max)
+
+function smallerOf(value FuzzyDistance, other FuzzyDistance) returns FuzzyDistance
+	return value if value < other else other
+end 'smallerOf'
+
+function spellingsOf(name String) returns StringArray
+	var spellings = StringArray.create()
+	spellings.push(name)
+
+	if leafOf(name) != name 'aQualifiedName'
+		spellings.push(leafOf(name))
+	end 'aQualifiedName'
+
+	return spellings
+end 'spellingsOf'
+
+function suggestionBudget(candidate String) returns FuzzyDistance
+	let allowed = ((candidate.count() as FuzzyMatchWidth) / SuggestionLengthDivisor) as FuzzyDistance
+
+	return MaxSuggestionDistance if allowed > MaxSuggestionDistance else allowed
+end 'suggestionBudget'
+
+function namesMatching(spelling String, pool StringArray, rung FuzzyRung) returns StringArray
+	var found = StringArray.create()
+
+	for name in pool 'eachName'
+		if nameAnswersTo(name, spelling: spelling, rung: rung) and not found.contains(name) 'itAnswers'
+			found.push(name)
+		end 'itAnswers'
+	end 'eachName'
+
+	return found
+end 'namesMatching'
+
+function nameAnswersTo(name String, spelling String, rung FuzzyRung) returns bool
+	return match rung 'which'
+		whole gives name == spelling
+		typeAndMethod gives qualifiedTailOf(name) == spelling
+		leaf gives leafOf(name) == spelling
+		wordPrefix gives isWordPrefix(spelling, of: name) or isWordPrefix(spelling, of: leafOf(name))
+	end 'which'
+end 'nameAnswersTo'
+
+function isWordPrefix(spelling String, of String) returns bool
+	if spelling.isEmpty() or not of.startsWith(spelling) 'notAPrefixAtAll'
+		return false
+	end 'notAPrefixAtAll'
+
+	if of.count() == spelling.count() 'theWholeName'
+		return true
+	end 'theWholeName'
+
+	return startsANewWord(of, at: spelling.count() as FuzzyMatchWidth)
+end 'isWordPrefix'
+
+function startsANewWord(name String, at FuzzyMatchWidth) returns bool
+	let code = try name.toByteArray().get(at) otherwise return false
+
+	return (code >= AsciiUpperAValue and code <= AsciiUpperZValue) or code == AsciiDotValue
+end 'startsANewWord'
+
+let AsciiUpperAValue = 65
+let AsciiUpperZValue = 90
+let AsciiDotValue = 46
+
+function answerFor(found StringArray) returns FuzzyMatch
+	if found.count() == 1 'exactlyOne'
+		return FuzzyMatch.one(try found.get(0) otherwise panic("fuzzyResolve: a roster of one holds a first element"))
+	end 'exactlyOne'
+
+	return FuzzyMatch.several(found)
+end 'answerFor'

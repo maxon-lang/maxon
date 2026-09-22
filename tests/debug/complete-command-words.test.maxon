@@ -1,0 +1,24 @@
+let CompleteCommandsCaseLabel = "complete-command-words"
+
+let PartialCommandWord = "b"
+let BacktraceAliasWord = "bt"
+
+test 'completing the first word answers the command vocabulary, canonical names and aliases alike'
+	let staged = builtFixture(CompleteCommandsCaseLabel, fixture: HeaplessFixtureName)
+	let completion = spawnDebugComplete(builtExecutable(staged), staged: staged, partial: PartialCommandWord)
+	let said = renderedEvents(completion.stdout, stderr: completion.stderr)
+	var offered = StringArray.create()
+
+	for rawLine in withoutCarriageReturns(completion.stdout).split(LineFeed) 'eachLine'
+		let line = rawLine.trim()
+
+		if not line.isEmpty() 'aCompletion'
+			offered.push(line)
+		end 'aCompletion'
+	end 'eachLine'
+
+	try Expect.equal(completion.exitCode() as AssertedInt, expected: 0, message: "`{DebugCompleteOptionPrefix}{PartialCommandWord}` answers completions and exits 0. {said}")
+	try Expect.contains(renderedRows(offered), needle: BreakCommand, message: "the first word of a line is a COMMAND, so completing it offers the command table's own roster. A completion built from a second list of words goes stale the moment a command is added. It offered: {renderedRows(offered)}. {said}")
+	try Expect.contains(renderedRows(offered), needle: BacktraceAliasWord, message: "`{BacktraceAliasWord}` is an alias a reader may type, so it is part of the vocabulary a completion answers. It offered: {renderedRows(offered)}. {said}")
+	try Expect.isFalse(renderedRows(offered).contains(LocalsCommand), message: "`{LocalsCommand}` does not begin with `{PartialCommandWord}`, so offering it makes the completion a listing rather than a completion. It offered: {renderedRows(offered)}. {said}")
+end 'completing the first word answers the command vocabulary, canonical names and aliases alike'

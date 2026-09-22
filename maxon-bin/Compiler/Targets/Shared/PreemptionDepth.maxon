@@ -58,6 +58,25 @@ export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNam
 	end 'overflowsTheMargin'
 end 'requireAsyncPreemptionFitsItsMargin'
 
+export function requireDebugTrapFitsItsReserve(target Target)
+	let dispatch = gtWindowsExceptionDispatchMeasuredBytes()
+	let preSwitch = debugTrapPreSwitchStackBytes(target)
+	let reserve = gtStackSystemBytes(target)
+	logDebug(LogCategory.codegen, message: function() gives "debug trap depth ({targetToString(target)}): OS dispatch {dispatch} + thunk {preSwitch} = {dispatch + preSwitch} of a {reserve}-byte reserve")
+
+	if (dispatch + preSwitch) as ParsedInt > reserve 'overrunsTheReserve'
+		panic("requireDebugTrapFitsItsReserve: a debug trap on a green thread costs {dispatch} bytes of Windows exception dispatch and {preSwitch} for `{String.from(DebugTrapThunkName)}`'s own frame before it switches to the agent stack, {dispatch + preSwitch} in all, but a green thread reserves only {reserve} bytes below its guard word for the OS. Shrink the thunk's pre-switch path, or raise GtRuntime.GtWindowsExceptionDispatchBytes and measure the self-compile")
+	end 'overrunsTheReserve'
+end 'requireDebugTrapFitsItsReserve'
+
+function debugTrapPreSwitchStackBytes(target Target) returns StackSize
+	return match target.cpu 'cpu'
+		x64 gives x64DebugTrapPreSwitchStackBytes()
+		arm64 panic("debugTrapPreSwitchStackBytes: `TargetFacilities.targetProvidesFacility` denies `debugAgent` on every arm64 lane, so no trap thunk is laid out there")
+		wasm32 panic("debugTrapPreSwitchStackBytes: wasm32-wasi lays out no native frames")
+	end 'cpu'
+end 'debugTrapPreSwitchStackBytes'
+
 function asyncPreemptTrampolineStackBytes(target Target) returns StackSize
 	return match target.cpu 'cpu'
 		x64 gives x64GtAsyncPreemptStackBytes()

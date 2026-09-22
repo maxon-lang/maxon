@@ -2062,10 +2062,29 @@ type MaxonToStdLowering
 			osLockInit then self.stdModule.appendOp(dstBlock, op: StdOp.osLockInit(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			osLockEnter then self.stdModule.appendOp(dstBlock, op: StdOp.osLockEnter(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
 			osLockLeave then self.stdModule.appendOp(dstBlock, op: StdOp.osLockLeave(rawWordOperand(args, index: 0, intrinsic: intrinsic)))
+			osDebugHost then self.appendDebugHostCall(result, code: constant, args: args, intrinsic: intrinsic, dstBlock: dstBlock)
+			dbgEnvironmentValue then self.stdModule.appendOp(dstBlock, op: StdOp.osEnvRead(result, namePtrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), bufPtrId: rawWordOperand(args, index: 1, intrinsic: intrinsic), bufLenId: rawWordOperand(args, index: 2, intrinsic: intrinsic)))
+			dbgAttachSegment then self.appendDebugAgentAttach(result, args: args, intrinsic: intrinsic, dstBlock: dstBlock)
+			dbgCtlAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: DbgCtlLabel))
+			dbgTextBase then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: EntryPointName))
+			dbgTextLimit then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: SymbolTableName))
 			ownFrame or
 				splicedAtEverySite then break 'row'
 		end 'row'
 	end 'lowerRawIntrinsic'
+
+	function appendDebugHostCall(result ValueId, code ParsedInt, args ValueIdArray, intrinsic RawIntrinsic, dstBlock IrBlock)
+		match debugHostVerbLookup(code) 'verb'
+			found(verb) then self.stdModule.appendOp(dstBlock, op: StdOp.osDebugHost(result, verb: verb, a0Id: rawWordOperand(args, index: 0, intrinsic: intrinsic), a1Id: rawWordOperand(args, index: 1, intrinsic: intrinsic), a2Id: rawWordOperand(args, index: 2, intrinsic: intrinsic), a3Id: rawWordOperand(args, index: 3, intrinsic: intrinsic)))
+			notListed then panic("appendDebugHostCall: {code} names no `DebugHostVerb` — `Parser.emitRawIntrinsic` asks `debugHostVerbLookup` of every `__Raw.osDebugHost` verb operand before one reaches here")
+		end 'verb'
+	end 'appendDebugHostCall'
+
+	function appendDebugAgentAttach(result ValueId, args ValueIdArray, intrinsic RawIntrinsic, dstBlock IrBlock)
+		let handle = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.osOpenNamedSegment(handle, namePtrId: rawWordOperand(args, index: 0, intrinsic: intrinsic), bufPtrId: rawWordOperand(args, index: 1, intrinsic: intrinsic), bufLenId: rawWordOperand(args, index: 2, intrinsic: intrinsic)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.osMapNamedSegment(result, handleId: handle, sizeId: rawWordOperand(args, index: 3, intrinsic: intrinsic)))
+	end 'appendDebugAgentAttach'
 
 	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(registerStringLiteralRecord(self.globalData, bytes: bytes, debugStream: self.debugStream))))

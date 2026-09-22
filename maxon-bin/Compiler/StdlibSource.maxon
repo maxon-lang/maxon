@@ -224,15 +224,17 @@ export type LibraryFacts
 	// after this derivation, and `withCompilerCalledTierUnreached` is where the two are joined.
 	export let compilerCalledTier as FunctionNameSet
 
-	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet) returns LibraryFacts
-		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier}
+	export let debugAgentTier as FunctionNameSet
+
+	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, debugAgentTier FunctionNameSet) returns LibraryFacts
+		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, debugAgentTier: debugAgentTier}
 	end 'create'
 
 	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), debugAgentTier: FunctionNameSet.create())
 	end 'empty'
 
 	// ⭐⭐ **THE ONE QUESTION EVERY PRE-ELIMINATION PASS ASKS OF A LIBRARY BODY: WILL DEAD-FUNCTION
@@ -260,18 +262,26 @@ export type LibraryFacts
 	// into a floor nothing installed, while over-approximating what is SWEPT skips the lowering of a body the
 	// program calls. `requireUnreachableLibraryStayedDead` is what turns the second into a refusal rather
 	// than an empty callee.
-	export function withCompilerCalledTierUnreached() returns LibraryFacts
+	export function withCompilerCalledTierUnreached(sweepAllocatorTier bool, sweepDebugAgentTier bool) returns LibraryFacts
 		var unreached = FunctionNameSet.create()
 
 		for name in self.unreachedRuntimeTier 'eachAlreadyUnreached'
 			unreached.insert(name)
 		end 'eachAlreadyUnreached'
 
-		for name in self.compilerCalledTier 'eachCompilerCalled'
-			unreached.insert(name)
-		end 'eachCompilerCalled'
+		if sweepAllocatorTier 'noInstallerMintsAnAllocatorCall'
+			for name in self.compilerCalledTier 'eachCompilerCalled'
+				unreached.insert(name)
+			end 'eachCompilerCalled'
+		end 'noInstallerMintsAnAllocatorCall'
 
-		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier)
+		if sweepDebugAgentTier 'theEntryStubMintsNoAttach'
+			for name in self.debugAgentTier 'eachDebugAgentName'
+				unreached.insert(name)
+			end 'eachDebugAgentName'
+		end 'theEntryStubMintsNoAttach'
+
+		return Self.create(self.libraryFunctions, unreachable: self.unreachable, substrateEntries: self.substrateEntries, runtimeTier: self.runtimeTier, unreachedRuntimeTier: unreached, compilerCalledTier: self.compilerCalledTier, debugAgentTier: self.debugAgentTier)
 	end 'withCompilerCalledTierUnreached'
 end 'LibraryFacts'
 
@@ -325,7 +335,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	if not userCodeReachesStdlib(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces) 'noneReferenced'
 		let noneReached = classifyLibraryReach(roster, reachable: FunctionNameSet.create())
 
-		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached)
+		return LibraryFacts.create(stdlibSet, unreachable: noneReached.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: noneReached.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
 	end 'noneReferenced'
 
 	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
@@ -334,7 +344,7 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 	let reachable = try reachableMaxonFunctionNames(module, project: project, signatures: signatures, stdlib: stdlibSet, initCallees: initCallees, initWitnessInterfaces: initWitnessInterfaces)
 	let split = classifyLibraryReach(roster, reachable: reachable)
 
-	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached)
+	return LibraryFacts.create(stdlibSet, unreachable: split.unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: roster.names, unreachable: split.unreachable), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, debugAgentTier: roster.debugAgent)
 end 'deriveLibraryFacts'
 
 // ⭐⭐ **GROW THE BODY DEMAND BY ONE ROUND — the fixpoint step `queryAllModule` iterates.**
@@ -450,8 +460,10 @@ type LibraryFunctionRoster
 	// same walk as the two columns above so the three cannot come to disagree about which names they hold.
 	export let compilerReached as FunctionNameSet
 
-	export static function create(names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) returns LibraryFunctionRoster
-		return Self{names: names, runtimeTier: runtimeTier, compilerReached: compilerReached}
+	export let debugAgent as FunctionNameSet
+
+	export static function create(names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet, debugAgent FunctionNameSet) returns LibraryFunctionRoster
+		return Self{names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, debugAgent: debugAgent}
 	end 'create'
 end 'LibraryFunctionRoster'
 
@@ -461,24 +473,26 @@ function libraryFunctionRoster(project Project) returns LibraryFunctionRoster th
 	var names = ByteArrayArray.create()
 	var runtimeTier = FunctionNameSet.create()
 	var compilerReached = FunctionNameSet.create()
+	var debugAgent = FunctionNameSet.create()
 
 	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
-		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached)
+		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, debugAgent: debugAgent)
 	end 'eachFile'
 
-	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier, compilerReached: compilerReached)
+	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier, compilerReached: compilerReached, debugAgent: debugAgent)
 end 'libraryFunctionRoster'
 
 // One library file's functions, filed into both columns. ⭐ **THE PATH ARRIVES AS A PARAMETER**, for
 // `demandOneStdlibFileIfReached`'s reason: it is named twice here, and both `isRuntimeSourceFile` (a
 // provenance memo) and `queryParseOps` WRITE `project`, so a borrow read inline out of
 // `project.librarySourcePaths` survives neither call.
-function collectOneLibraryFile(project Project, path FilePath, names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) throws CompileError
+function collectOneLibraryFile(project Project, path FilePath, names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet, debugAgent FunctionNameSet) throws CompileError
 	let isRuntime = isRuntimeSourceFile(project, path: path)
 	let isCompilerCalled = isRuntime and runtimeTierFileIsCompilerCalled(path)
+	let isDebugAgent = isRuntime and runtimeTierFileIsTheDebugAgent(path)
 	let artifact = try queryParseOps(project, path: path)
 
 	for func in artifact.module.functions 'eachFunc'
@@ -491,6 +505,10 @@ function collectOneLibraryFile(project Project, path FilePath, names ByteArrayAr
 		if isCompilerCalled 'declaredReached'
 			compilerReached.insert(func.name)
 		end 'declaredReached'
+
+		if isDebugAgent 'theAgentsOwn'
+			debugAgent.insert(func.name)
+		end 'theAgentsOwn'
 	end 'eachFunc'
 end 'collectOneLibraryFile'
 
@@ -545,6 +563,10 @@ function runtimeTierFileIsCompilerCalled(path FilePath) returns bool
 
 	return filename == SlabArenaTierFileName or filename == SlabRuntimeTierFileName or filename == ManagedGeometryTierFileName
 end 'runtimeTierFileIsCompilerCalled'
+
+function runtimeTierFileIsTheDebugAgent(path FilePath) returns bool
+	return path.filename() == DebugAgentTierFileName
+end 'runtimeTierFileIsTheDebugAgent'
 
 // The roster is walked rather than the path rebuilt from `project.runtimeDir`, because a constant is filed
 // under the identical `FilePath` the loader handed the parser. A path that differs only by a separator or a
@@ -613,7 +635,7 @@ function classifyLibraryReach(roster LibraryFunctionRoster, reachable FunctionNa
 	var unreachedRuntimeTier = FunctionNameSet.create()
 
 	for name in roster.names 'classify'
-		if reachable.contains(name) or roster.compilerReached.contains(name) 'reached'
+		if reachable.contains(name) or roster.compilerReached.contains(name) or roster.debugAgent.contains(name) 'reached'
 			continue
 		end 'reached'
 

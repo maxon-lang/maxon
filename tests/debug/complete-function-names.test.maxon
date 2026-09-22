@@ -1,0 +1,28 @@
+let CompleteFunctionsCaseLabel = "complete-function-names"
+
+let PartialBreakLine = "break depos"
+let AccountMethodName = "Account.deposit"
+let LedgerMethodName = "Ledger.deposit"
+let DepositAllName = "depositAll"
+let UnrelatedFunctionName = "reconcileEverything"
+
+test 'completing a break target answers every function the partial word reaches, one per line'
+	let staged = builtFixture(CompleteFunctionsCaseLabel, fixture: FuzzyFixtureName)
+	let completion = spawnDebugComplete(builtExecutable(staged), staged: staged, partial: PartialBreakLine)
+	let said = renderedEvents(completion.stdout, stderr: completion.stderr)
+	var offered = StringArray.create()
+
+	for rawLine in withoutCarriageReturns(completion.stdout).split(LineFeed) 'eachLine'
+		let line = rawLine.trim()
+
+		if not line.isEmpty() 'aCompletion'
+			offered.push(line)
+		end 'aCompletion'
+	end 'eachLine'
+
+	try Expect.equal(completion.exitCode() as AssertedInt, expected: 0, message: "`{DebugCompleteOptionPrefix}` is a question about a binary and answers one completion per line; it runs nothing and cannot fail. {said}")
+	try Expect.contains(renderedRows(offered), needle: AccountMethodName, message: "a partial break target completes to the FUNCTIONS this program holds, spelled the way a break target spells them. It offered: {renderedRows(offered)}. {said}")
+	try Expect.contains(renderedRows(offered), needle: LedgerMethodName, message: "it offered: {renderedRows(offered)}. {said}")
+	try Expect.contains(renderedRows(offered), needle: DepositAllName, message: "it offered: {renderedRows(offered)}. {said}")
+	try Expect.isFalse(renderedRows(offered).contains(UnrelatedFunctionName), message: "`{UnrelatedFunctionName}` does not answer to the partial word, so offering it makes the completion a listing rather than a completion. It offered: {renderedRows(offered)}. {said}")
+end 'completing a break target answers every function the partial word reaches, one per line'

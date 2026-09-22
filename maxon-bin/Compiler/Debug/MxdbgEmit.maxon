@@ -22,6 +22,11 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		return
 	end 'nothingToDescribe'
 
+	var signatures = try queryProgramSignatures(project) otherwise 'noSignatures'
+		logError(LogCategory.compiler, message: function() gives "Could not read the program's signatures, so no debug-info sidecar was written beside {outputPath}")
+		return
+	end 'noSignatures'
+
 	var writer = MxdbgWriter.create()
 
 	// ⭐ **A COVERAGE POINT'S FILE IS REGISTERED BEFORE THE TABLE IS WALKED.** A point OUTLIVES its function
@@ -43,12 +48,12 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	// every id has to be fixed before the first local record is written.
 	let functionsByName = mxdbgFunctionIndex(codeResult.targetModule)
 	var types = MxdbgTypeTable.create()
-	types.closeDeclaredTypes(project)
+	types.closeDeclaredTypes(project, signatures: signatures)
 
 	for fn in codeResult.debugFunctions 'eachFunctionsTypes'
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
 			none then break 'itsIr'
-			found(func) then closeLocalTypes(project, types: types, func: func)
+			found(func) then closeLocalTypes(project, signatures: signatures, types: types, func: func)
 		end 'itsIr'
 	end 'eachFunctionsTypes'
 
@@ -59,7 +64,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
 			none then break 'itsIr'
-			found(func) then writeFunctionLocals(project, writer: writer, types: types, func: func, range: fn)
+			found(func) then writeFunctionLocals(project, signatures: signatures, writer: writer, types: types, func: func, range: fn)
 		end 'itsIr'
 	end 'eachFunction'
 
@@ -247,9 +252,9 @@ end 'sidecarFileIdsByPath'
 // Every type a function's bindings are declared at, folded into the table so their records have a real
 // entry to point at. A local's type is often a machine primitive or a ranged alias no declaration
 // mentions, which is why the declared types alone are not enough.
-function closeLocalTypes(project Project, types MxdbgTypeTable, func IrFunction)
+function closeLocalTypes(project Project, signatures ProgramSignatures, types MxdbgTypeTable, func IrFunction)
 	for local in func.debugLocals 'eachBinding'
-		types.close(project, name: mxdbgTypeNameOf(project, ref: local.declaredType))
+		types.close(project, signatures: signatures, name: mxdbgTypeNameOf(project, signatures: signatures, ref: local.declaredType))
 	end 'eachBinding'
 end 'closeLocalTypes'
 
@@ -257,11 +262,7 @@ end 'closeLocalTypes'
 // no honest location gets an `optimizedOut` record rather than no record at all, so a debugger says
 // "optimized out" where the alternative is "no local named that here" — a name the user can see in their
 // own source and cannot ask about.
-//
-// ⛔ **AND NEVER A GUESSED SLOT.** A name whose several values disagree about where they live has no one
-// location that is true at every PC of the function, and a record's scope range IS the whole function —
-// so the honest answer there is `optimizedOut` too.
-function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTypeTable, func IrFunction, range DebugFunctionRange)
+function writeFunctionLocals(project Project, signatures ProgramSignatures, writer MxdbgWriter, types MxdbgTypeTable, func IrFunction, range DebugFunctionRange)
 	if func.debugLocals.count() == 0 'noBindings'
 		return
 	end 'noBindings'
@@ -269,12 +270,26 @@ function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTyp
 	var records = MxdbgLocalDraftArray.create()
 	records.reserve(func.debugLocals.count())
 
+	let runs = DebugRunsByOrdinal.over(range.localRanges, ordinalCount: func.debugLocalLocations.count())
 	var at = 0 as ElementIndex
 
 	for local in func.debugLocals 'eachBinding'
-		let placement = mxdbgAgreedPlacement(project, func: func, frameSize: range.frameSize, spillSlotBase: range.spillSlotBase, local: local, first: at)
-		at = at + local.valueIds.count()
-		records.push(MxdbgLocalDraft.create(local.name, placement: placement, typeId: types.idOf(mxdbgTypeNameOf(project, ref: local.declaredType))))
+		let past = at + local.valueIds.count()
+		let typeName = mxdbgTypeNameOf(project, signatures: signatures, ref: local.declaredType)
+		let typeId = types.idOf(typeName)
+		var rows = MxdbgLocalRowArray.create()
+
+		if not local.heldInACell 'placeable'
+			collectPlacedRows(rows, project: project, func: func, range: range, runs: runs, first: at, past: past)
+		end 'placeable'
+
+		if rows.count() == 0 'nothingPlaced'
+			rows.push(unplacedRow(local, writer: writer, types: types, typeName: typeName, range: range))
+		end 'nothingPlaced'
+
+		rows.sort(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
+		records.push(MxdbgLocalDraft.create(local.name, typeId: typeId, indirect: types.holdsAPointer(typeName), rows: rows))
+		at = past
 	end 'eachBinding'
 
 	if at != func.debugLocalLocations.count() 'locationsOutOfStep'
@@ -286,19 +301,238 @@ function writeFunctionLocals(project Project, writer MxdbgWriter, types MxdbgTyp
 	records.sort(function(left MxdbgLocalDraft, right MxdbgLocalDraft) gives compareBytesOrdinally(left.name, right: right.name))
 
 	for record in records 'eachRecord'
-		writer.addLocal(String.from(record.name), locKind: record.locKind, locValue: record.locValue, typeId: record.typeId, scopeStart: range.codeStart as MxdbgCodeOffset, scopeEnd: range.codeEnd as MxdbgCodeOffset)
+		for row in record.rows 'eachRow'
+			writer.addLocal(String.from(record.name), locKind: row.locKind, locValue: row.locValue, typeId: record.typeId, scopeStart: row.codeStart as MxdbgCodeOffset, scopeEnd: row.codeEnd as MxdbgCodeOffset, flags: MxdbgLocalFlagIndirect if record.indirect and mxdbgRowHasALocation(row.locKind) else 0)
+		end 'eachRow'
 	end 'eachRecord'
 end 'writeFunctionLocals'
+
+function mxdbgRowHasALocation(locKind MxdbgIndex) returns bool
+	return locKind == MxdbgLocKindStackSlot or locKind == MxdbgLocKindRegister
+end 'mxdbgRowHasALocation'
+
+function collectPlacedRows(rows MxdbgLocalRowArray, project Project, func IrFunction, range DebugFunctionRange, runs DebugRunsByOrdinal, first ElementIndex, past ElementIndex)
+	var ordinal = first
+
+	while ordinal < past 'eachValue'
+		let location = mxdbgLocationAt(func, at: ordinal)
+
+		if location.kind == DebugValueNowhere 'notInTheCode'
+			ordinal = ordinal + 1
+			continue
+		end 'notInTheCode'
+
+		let placement = mxdbgPlacementOf(project, location: location, range: range)
+		let spans = mergedLiveRanges(range, runs: runs, ordinal: ordinal)
+		// A spill slot belongs to one lineage and is never written by another value (`SplitLiveRanges`),
+		// so the bits in it stay that value's after liveness has let go of it: its last run is extended
+		// to the end of the function rather than stopping at the last use.
+		let holdsToTheEnd = location.kind == DebugValueInSpillSlot
+
+		for (iter, span) in spans.withIterator() 'eachSpan'
+			let last = iter.index() == spans.count() - 1
+			rows.push(MxdbgLocalRow.create(placement, codeStart: span.codeStart, codeEnd: range.codeEnd if last and holdsToTheEnd else span.codeEnd))
+		end 'eachSpan'
+
+		ordinal = ordinal + 1
+	end 'eachValue'
+end 'collectPlacedRows'
+
+function unplacedRow(local DebugLocalDecl, writer MxdbgWriter, types MxdbgTypeTable, typeName ByteArray, range DebugFunctionRange) returns MxdbgLocalRow
+	match foldedAggregatePlacement(local, writer: writer, types: types, typeName: typeName) 'aggregate'
+		none then break 'aggregate'
+		placed(placement) then return MxdbgLocalRow.create(placement, codeStart: range.codeStart, codeEnd: range.codeEnd)
+	end 'aggregate'
+
+	if local.valueIds.count() == 1 'oneValueForTheWholeName'
+		match local.foldedConstant 'folded'
+			none then break 'folded'
+			immediate(value) then return foldedRow(value, range: range)
+		end 'folded'
+	end 'oneValueForTheWholeName'
+
+	return MxdbgLocalRow.create(MxdbgOptimizedOutPlacement, codeStart: range.codeStart, codeEnd: range.codeEnd)
+end 'unplacedRow'
+
+union MxdbgAggregatePlacement
+	none
+	placed(placement MxdbgPlacement)
+end 'MxdbgAggregatePlacement'
+
+function foldedAggregatePlacement(local DebugLocalDecl, writer MxdbgWriter, types MxdbgTypeTable, typeName ByteArray) returns MxdbgAggregatePlacement
+	let words = types.aggregateWordCount(typeName)
+
+	if words == 0 or (local.foldedRecord.count() as MxdbgIndex) != words 'notAFoldedAggregate'
+		return MxdbgAggregatePlacement.none
+	end 'notAFoldedAggregate'
+
+	for word in local.foldedRecord 'eachWord'
+		if word < MxdbgSmallestConstant or word > MxdbgLargestConstant 'notRepresentable'
+			return MxdbgAggregatePlacement.none
+		end 'notRepresentable'
+	end 'eachWord'
+
+	var first = 0 as MxdbgIndex
+	var opened = false
+
+	for word in local.foldedRecord 'eachWordWritten'
+		let index = writer.addConstantWord(word as MxdbgLocValue)
+
+		if not opened 'theFirst'
+			first = index
+			opened = true
+		end 'theFirst'
+	end 'eachWordWritten'
+
+	if first > (MxdbgLargestConstant as MxdbgIndex) 'pastTheWordSpace'
+		return MxdbgAggregatePlacement.none
+	end 'pastTheWordSpace'
+
+	return MxdbgAggregatePlacement.placed(MxdbgPlacement.create(MxdbgLocKindFoldedAggregate, locValue: first as MxdbgLocValue))
+end 'foldedAggregatePlacement'
+
+function foldedRow(value ParsedInt, range DebugFunctionRange) returns MxdbgLocalRow
+	if value < MxdbgSmallestConstant or value > MxdbgLargestConstant 'notRepresentable'
+		return MxdbgLocalRow.create(MxdbgOptimizedOutPlacement, codeStart: range.codeStart, codeEnd: range.codeEnd)
+	end 'notRepresentable'
+
+	return MxdbgLocalRow.create(MxdbgPlacement.create(MxdbgLocKindConstant, locValue: value as MxdbgLocValue), codeStart: range.codeStart, codeEnd: range.codeEnd)
+end 'foldedRow'
+
+let MxdbgSmallestConstant = i32.min as ParsedInt
+let MxdbgLargestConstant = i32.max as ParsedInt
+
+typealias MxdbgRunSlotColumn = Array with ElementIndex
+
+type DebugRunsByOrdinal
+	var starts as MxdbgRunSlotColumn
+	var ordered as DebugLocalCodeRangeArray
+
+	static function over(localRanges DebugLocalCodeRangeArray, ordinalCount ElementIndex) returns DebugRunsByOrdinal
+		var starts = MxdbgRunSlotColumn.create()
+		starts.refill(ordinalCount + 1, value: 0 as ElementIndex)
+
+		for span in localRanges 'eachRange'
+			let slot = runOrdinalOf(span, ordinalCount: ordinalCount) + 1
+			try starts.set(slot, value: runSlotAt(starts, at: slot) + 1) otherwise panic("debug info: the run tally of ordinal {slot - 1} is outside a column sized to {ordinalCount}")
+		end 'eachRange'
+
+		for slot in 1 upto ordinalCount + 1 'eachOrdinal'
+			try starts.set(slot, value: runSlotAt(starts, at: slot) + runSlotAt(starts, at: slot - 1)) otherwise panic("debug info: the run tally of ordinal {slot - 1} is outside a column sized to {ordinalCount}")
+		end 'eachOrdinal'
+
+		var filled = MxdbgRunSlotColumn.create()
+		filled.refill(ordinalCount, value: 0 as ElementIndex)
+		var ordered = DebugLocalCodeRangeArray.create()
+		ordered.refill(localRanges.count(), value: DebugLocalCodeRange.create(0 as ElementIndex, codeStart: 0 as CodeOffset, codeEnd: 0 as CodeOffset))
+
+		for span in localRanges 'eachRangePlaced'
+			let ordinal = runOrdinalOf(span, ordinalCount: ordinalCount)
+			let slot = runSlotAt(starts, at: ordinal) + runSlotAt(filled, at: ordinal)
+			try ordered.set(slot, value: span) otherwise panic("debug info: run slot {slot} is outside the {localRanges.count()} runs this function's code ranges hold")
+			try filled.set(ordinal, value: runSlotAt(filled, at: ordinal) + 1) otherwise panic("debug info: the fill cursor of ordinal {ordinal} is outside a column sized to {ordinalCount}")
+		end 'eachRangePlaced'
+
+		return Self{starts: starts, ordered: ordered}
+	end 'over'
+
+	export function first(ordinal ElementIndex) returns ElementIndex
+		return runSlotAt(self.starts, at: ordinal)
+	end 'first'
+
+	export function past(ordinal ElementIndex) returns ElementIndex
+		return runSlotAt(self.starts, at: ordinal + 1)
+	end 'past'
+
+	export function at(slot ElementIndex) returns DebugLocalCodeRange
+		return try self.ordered.get(slot) otherwise panic("debug info: run slot {slot} is outside the {self.ordered.count()} this function's code ranges hold")
+	end 'at'
+end 'DebugRunsByOrdinal'
+
+function runSlotAt(column MxdbgRunSlotColumn, at ElementIndex) returns ElementIndex
+	return try column.get(at) otherwise panic("debug info: a run column was read at {at}, past the {column.count()} it was sized to")
+end 'runSlotAt'
+
+function runOrdinalOf(span DebugLocalCodeRange, ordinalCount ElementIndex) returns ElementIndex
+	if span.valueOrdinal >= ordinalCount 'pastTheRoster'
+		panic("debug info: a code range names value ordinal {span.valueOrdinal} where the function's roster holds {ordinalCount} — the ranges and the locations describe different value spaces")
+	end 'pastTheRoster'
+
+	return span.valueOrdinal
+end 'runOrdinalOf'
+
+// One run per block arrives here, and they are joined only now, over code offsets. `BranchCleanup`
+// reorders blocks, so two runs that abut in the emitted code need not abut in the block order the
+// allocator walked, and merging before layout would leave a hole a reader reports as "not live here".
+function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ordinal ElementIndex) returns DebugLocalCodeRangeArray
+	var mine = DebugLocalCodeRangeArray.create()
+
+	for slot in runs.first(ordinal) upto runs.past(ordinal) 'eachRange'
+		let span = runs.at(slot)
+		let codeStart = span.codeStart if span.codeStart > range.codeStart else range.codeStart
+		let codeEnd = span.codeEnd if span.codeEnd < range.codeEnd else range.codeEnd
+
+		if codeEnd <= codeStart 'outsideTheFunction'
+			continue
+		end 'outsideTheFunction'
+
+		mine.push(DebugLocalCodeRange.create(ordinal, codeStart: codeStart, codeEnd: codeEnd))
+	end 'eachRange'
+
+	mine.sort(function(left DebugLocalCodeRange, right DebugLocalCodeRange) gives left.codeStart.compare(right.codeStart))
+
+	var merged = DebugLocalCodeRangeArray.create()
+	var openStart = 0 as CodeOffset
+	var openEnd = 0 as CodeOffset
+	var open = false
+
+	for span in mine 'eachSorted'
+		if not open 'theFirst'
+			openStart = span.codeStart
+			openEnd = span.codeEnd
+			open = true
+			continue
+		end 'theFirst'
+
+		if span.codeStart > openEnd 'disjoint'
+			merged.push(DebugLocalCodeRange.create(ordinal, codeStart: openStart, codeEnd: openEnd))
+			openStart = span.codeStart
+			openEnd = span.codeEnd
+			continue
+		end 'disjoint'
+
+		openEnd = span.codeEnd if span.codeEnd > openEnd else openEnd
+	end 'eachSorted'
+
+	if open 'oneStillOpen'
+		merged.push(DebugLocalCodeRange.create(ordinal, codeStart: openStart, codeEnd: openEnd))
+	end 'oneStillOpen'
+
+	return merged
+end 'mergedLiveRanges'
+
+type MxdbgLocalRow
+	export var locKind as MxdbgIndex
+	export var locValue as MxdbgLocValue
+	export var codeStart as CodeOffset
+	export var codeEnd as CodeOffset
+
+	export static function create(placement MxdbgPlacement, codeStart CodeOffset, codeEnd CodeOffset) returns MxdbgLocalRow
+		return Self{locKind: placement.locKind, locValue: placement.locValue, codeStart: codeStart, codeEnd: codeEnd}
+	end 'create'
+end 'MxdbgLocalRow'
+
+typealias MxdbgLocalRowArray = Array with MxdbgLocalRow
 
 // One local record, before the roster is put in name order.
 type MxdbgLocalDraft
 	export var name as ByteArray
-	export var locKind as MxdbgIndex
-	export var locValue as MxdbgLocValue
 	export var typeId as MxdbgIndex
+	export var indirect as bool
+	export var rows as MxdbgLocalRowArray
 
-	export static function create(name ByteArray, placement MxdbgPlacement, typeId MxdbgIndex) returns MxdbgLocalDraft
-		return Self{name: name, locKind: placement.locKind, locValue: placement.locValue, typeId: typeId}
+	export static function create(name ByteArray, typeId MxdbgIndex, indirect bool, rows MxdbgLocalRowArray) returns MxdbgLocalDraft
+		return Self{name: name, typeId: typeId, indirect: indirect, rows: rows}
 	end 'create'
 end 'MxdbgLocalDraft'
 
@@ -316,50 +550,17 @@ end 'MxdbgPlacement'
 
 let MxdbgOptimizedOutPlacement = MxdbgPlacement.create(MxdbgLocKindOptimizedOut, locValue: 0)
 
-// The ONE location a name can be stated at, or `optimizedOut`. A name owns a sequence of values, and the
-// record covers the whole function — so a location is stated only where every value of the name agrees on
-// it, which is the only reading that is true wherever the debugger stops.
-function mxdbgAgreedPlacement(project Project, func IrFunction, frameSize StackSize, spillSlotBase StackSize, local DebugLocalDecl, first ElementIndex) returns MxdbgPlacement
-	// The name denotes a CELL ADDRESS, and the format has no indirect kind to say so with.
-	if local.heldInACell 'nothingToState'
-		return MxdbgOptimizedOutPlacement
-	end 'nothingToState'
-
-	// ⭐ **A VALUE THE COLOURING NEVER PLACED IS NOT IN THE EMITTED CODE**, so no PC holds it and it says
-	// nothing about where the NAME lives. What has to agree is the values that survived.
-	var placed = 0 as ElementIndex
-	var kind = DebugValueNowhere
-	var number = 0 as DebugValueNumber
-	let past = first + local.valueIds.count()
-	var at = first
-
-	while at < past 'eachValue'
-		let location = mxdbgLocationAt(func, at: at)
-		at = at + 1
-
-		if location.kind == DebugValueNowhere 'notInTheCode'
-			continue
-		end 'notInTheCode'
-
-		if placed > 0 and (location.kind != kind or location.number != number) 'theyDisagree'
-			return MxdbgOptimizedOutPlacement
-		end 'theyDisagree'
-
-		kind = location.kind
-		number = location.number
-		placed = placed + 1
-	end 'eachValue'
-
-	if placed == 0 'neverPlaced'
-		return MxdbgOptimizedOutPlacement
-	end 'neverPlaced'
-
-	if kind == DebugValueInRegister 'aRegister'
-		return MxdbgPlacement.create(MxdbgLocKindRegister, locValue: number as MxdbgLocValue)
+function mxdbgPlacementOf(project Project, location DebugValueLocation, range DebugFunctionRange) returns MxdbgPlacement
+	if location.kind == DebugValueInRegister 'aRegister'
+		return MxdbgPlacement.create(MxdbgLocKindRegister, locValue: location.number as MxdbgLocValue)
 	end 'aRegister'
 
-	return MxdbgPlacement.create(MxdbgLocKindStackSlot, locValue: mxdbgFrameDisplacement(project, frameSize: frameSize, spillSlotBase: spillSlotBase, slot: number as SpillSlot))
-end 'mxdbgAgreedPlacement'
+	if location.kind == DebugValueInSpillSlot 'aFrameSlot'
+		return MxdbgPlacement.create(MxdbgLocKindStackSlot, locValue: mxdbgFrameDisplacement(project, frameSize: range.frameSize, spillSlotBase: range.spillSlotBase, frameLinkBytes: range.frameLinkBytes, slot: location.number as SpillSlot))
+	end 'aFrameSlot'
+
+	panic("debug info: the allocator answered location kind {location.kind}, which is none of the three `DebugValueLocation` has")
+end 'mxdbgPlacementOf'
 
 function mxdbgLocationAt(func IrFunction, at ElementIndex) returns DebugValueLocation
 	return try func.debugLocalLocations.get(at) otherwise panic("debug info: '{String.from(func.name)}' has no location at {at} of the {func.debugLocalLocations.count()} the allocator answered for — the roster and the column are walked in one order")
@@ -373,10 +574,10 @@ end 'mxdbgLocationAt'
 // just past it. x64's is rsp-relative and call-dependent — a caller's slots sit above the shadow space and
 // its outgoing arguments — so it is rebased by the frame the prologue reserves, which puts a slot BELOW
 // the notional frame pointer exactly as the reference driver renders it.
-function mxdbgFrameDisplacement(project Project, frameSize StackSize, spillSlotBase StackSize, slot SpillSlot) returns MxdbgLocValue
+function mxdbgFrameDisplacement(project Project, frameSize StackSize, spillSlotBase StackSize, frameLinkBytes StackSize, slot SpillSlot) returns MxdbgLocValue
 	return match project.target.cpu 'isa'
 		arm64 gives arm64SlotDisplacement(slot) as MxdbgLocValue
-		x64 gives mxdbgX64FrameDisplacement(frameSize, spillSlotBase: spillSlotBase, slot: slot)
+		x64 gives mxdbgX64FrameDisplacement(frameSize, spillSlotBase: spillSlotBase, frameLinkBytes: frameLinkBytes, slot: slot)
 		wasm32 gives panicNoFrameOnWasm()
 	end 'isa'
 end 'mxdbgFrameDisplacement'
@@ -385,10 +586,10 @@ end 'mxdbgFrameDisplacement'
 // hold a negative number, and a slot inside the frame the prologue reserved is BELOW the notional frame
 // pointer — so computing it there would trap on the range check for the ordinary case rather than the
 // exotic one.
-function mxdbgX64FrameDisplacement(frameSize StackSize, spillSlotBase StackSize, slot SpillSlot) returns MxdbgLocValue
+function mxdbgX64FrameDisplacement(frameSize StackSize, spillSlotBase StackSize, frameLinkBytes StackSize, slot SpillSlot) returns MxdbgLocValue
 	let fromStackPointer = (spillSlotBase + (slot as StackSize) * SpillSlotBytes) as MxdbgLocValue
 
-	return fromStackPointer - (frameSize as MxdbgLocValue)
+	return fromStackPointer - (frameSize as MxdbgLocValue) - (frameLinkBytes as MxdbgLocValue)
 end 'mxdbgX64FrameDisplacement'
 
 // The wasm lane emits no `.text` image and writes no sidecar at all, so no spill slot of it can reach the

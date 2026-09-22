@@ -1,0 +1,138 @@
+export typealias DebugAddress = int(0 to u64.max)
+export typealias DebugAddressArray = Array with DebugAddress
+export typealias DebugLineNumber = int(0 to u32.max)
+export typealias DebugColumnNumber = int(0 to u32.max)
+export typealias DebugFrameNumber = int(0 to u32.max)
+export typealias DebugTally = int(0 to u32.max)
+export typealias DebugExitCode = int(i64.min to i64.max)
+// Signed, although a debuggee word is not: the range is what the debuggee's own `int(0 to u64.max)` is
+// stored in, and a word with its top bit set fails the check on the way into an unsigned alias.
+export typealias DebugWord = int(i64.min to i64.max)
+
+export let DebugNoSuggestion = ""
+let DebugNoUnavailability = ""
+
+export type DebugSourceLine
+	export var line as DebugLineNumber
+	export var text as String
+	export var current as bool
+
+	export static function create(line DebugLineNumber, text String, current bool) returns DebugSourceLine
+		return Self{line: line, text: text, current: current}
+	end 'create'
+end 'DebugSourceLine'
+
+export typealias DebugSourceLineArray = Array with DebugSourceLine
+
+export type DebugFrame
+	export var number as DebugFrameNumber
+	export var functionName as String
+	export var file as String
+	export var line as DebugLineNumber
+	export var offset as DebugAddress
+	export var inlined as bool
+	export var framePointer as DebugAddress
+
+	export static function create(number DebugFrameNumber, functionName String, file String, line DebugLineNumber, offset DebugAddress, inlined bool, framePointer DebugAddress) returns DebugFrame
+		return Self{number: number, functionName: functionName, file: file, line: line, offset: offset, inlined: inlined, framePointer: framePointer}
+	end 'create'
+end 'DebugFrame'
+
+export typealias DebugFrameArray = Array with DebugFrame
+
+export type DebugStop
+	export var reason as String
+	export var functionName as String
+	export var file as String
+	export var line as DebugLineNumber
+	export var column as DebugColumnNumber
+	export var offset as DebugAddress
+	export var source as DebugSourceLineArray
+	export var frames as DebugFrameArray
+
+	export static function create(reason String, functionName String, file String, line DebugLineNumber, column DebugColumnNumber, offset DebugAddress, source DebugSourceLineArray, frames DebugFrameArray) returns DebugStop
+		return Self{reason: reason, functionName: functionName, file: file, line: line, column: column, offset: offset, source: source, frames: frames}
+	end 'create'
+end 'DebugStop'
+
+export typealias DebugValueIndex = int(0 to u32.max)
+export typealias DebugValueIndexArray = Array with DebugValueIndex
+
+export type DebugValueNode
+	export var name as String
+	export var typeName as String
+	export var kind as String
+	export var display as String
+	export var unavailable as String
+	export var children as DebugValueIndexArray
+
+	export static function create(name String, typeName String, kind String, display String, unavailable String, children DebugValueIndexArray) returns DebugValueNode
+		return Self{name: name, typeName: typeName, kind: kind, display: display, unavailable: unavailable, children: children}
+	end 'create'
+
+	export static function rendered(name String, typeName String, kind String, display String) returns DebugValueNode
+		return Self{name: name, typeName: typeName, kind: kind, display: display, unavailable: DebugNoUnavailability, children: DebugValueIndexArray.create()}
+	end 'rendered'
+
+	export static function withChildren(name String, typeName String, kind String, display String, children DebugValueIndexArray) returns DebugValueNode
+		return Self{name: name, typeName: typeName, kind: kind, display: display, unavailable: DebugNoUnavailability, children: children}
+	end 'withChildren'
+
+	export static function missing(name String, typeName String, kind String, reason String) returns DebugValueNode
+		return Self{name: name, typeName: typeName, kind: kind, display: "", unavailable: reason, children: DebugValueIndexArray.create()}
+	end 'missing'
+end 'DebugValueNode'
+
+export typealias DebugValueNodeArray = Array with DebugValueNode
+
+export type DebugValueTree
+	export var nodes as DebugValueNodeArray
+	export var roots as DebugValueIndexArray
+
+	export static function create() returns DebugValueTree
+		return Self{nodes: DebugValueNodeArray.create(), roots: DebugValueIndexArray.create()}
+	end 'create'
+
+	export function add(node DebugValueNode) returns DebugValueIndex
+		self.nodes.push(node)
+
+		return (self.nodes.count() - 1) as DebugValueIndex
+	end 'add'
+
+	export function nodeAt(index DebugValueIndex) returns DebugValueNode
+		return try self.nodes.get(index) otherwise panic("DebugValueTree.nodeAt: index {index} is past the {self.nodes.count()} nodes this tree holds")
+	end 'nodeAt'
+end 'DebugValueTree'
+
+export type DebugBreakpointAnswer
+	export var action as String
+	export var target as String
+	export var functionName as String
+	export var file as String
+	export var line as DebugLineNumber
+	export var offset as DebugAddress
+	export var offsets as DebugAddressArray
+	export var candidates as StringArray
+	export var suggestion as String
+	export var reason as String
+
+	export static function create(action String, target String, functionName String, file String, line DebugLineNumber, offset DebugAddress, offsets DebugAddressArray, candidates StringArray, suggestion String, reason String) returns DebugBreakpointAnswer
+		return Self{action: action, target: target, functionName: functionName, file: file, line: line, offset: offset, offsets: offsets, candidates: candidates, suggestion: suggestion, reason: reason}
+	end 'create'
+end 'DebugBreakpointAnswer'
+
+export union DebugReply
+	breakpoint(answer DebugBreakpointAnswer)
+	stopped(stop DebugStop)
+	walked(frames DebugFrameArray)
+	locals(functionName String, values DebugValueTree)
+	value(tree DebugValueTree)
+	exited(code DebugExitCode)
+	crashed(status DebugAddress)
+	timedOut(waitingFor String)
+	failed(message String, suggestion String)
+	spoken(lines StringArray)
+	quit
+end 'DebugReply'
+
+export typealias DebugReplyArray = Array with DebugReply

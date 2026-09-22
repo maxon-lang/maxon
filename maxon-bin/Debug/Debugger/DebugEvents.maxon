@@ -1,0 +1,287 @@
+let DebugEventKey = "event"
+let BreakpointEventKind = "breakpoint"
+let StopEventKind = "stop"
+let BacktraceEventKind = "backtrace"
+let LocalsEventKind = "locals"
+let ValueEventKind = "value"
+let ExitEventKind = "exit"
+let CrashEventKind = "crash"
+let TimeoutEventKind = "timeout"
+let ErrorEventKind = "error"
+
+let ActionKey = "action"
+let FunctionKey = "function"
+let FileKey = "file"
+let LineKey = "line"
+let ColumnKey = "col"
+let OffsetKey = "offset"
+let OffsetsKey = "offsets"
+let CandidatesKey = "candidates"
+let SuggestionKey = "suggestion"
+let ReasonKey = "reason"
+let SourceKey = "source"
+let BacktraceKey = "backtrace"
+let FramesKey = "frames"
+let FrameKey = "frame"
+let InlinedKey = "inlined"
+let LocalsKey = "locals"
+let ValueKey = "value"
+let NameKey = "name"
+let TypeKey = "type"
+let KindKey = "kind"
+let DisplayKey = "display"
+let ChildrenKey = "children"
+let UnavailableKey = "unavailable"
+let CodeKey = "code"
+let StatusKey = "status"
+let WaitingForKey = "waitingFor"
+let MessageKey = "message"
+let TextKey = "text"
+let CurrentKey = "current"
+
+let UnavailableSuffix = "Unavailable"
+let NoSourceReason = "no-source-file"
+let NoBacktraceReason = "not-walkable"
+
+export union DebugEventLine
+	none
+	line(text String)
+end 'DebugEventLine'
+
+export function debugEventLineFor(reply DebugReply) returns DebugEventLine
+	var doc = JsonDoc.create()
+
+	match reply 'which'
+		quit then return DebugEventLine.none
+		spoken then return DebugEventLine.none
+		breakpoint(answer) then return DebugEventLine.line(renderedObject(doc, node: breakpointObject(doc, answer: answer)))
+		stopped(stop) then return DebugEventLine.line(renderedObject(doc, node: stopObject(doc, stop: stop)))
+		walked(frames) then return DebugEventLine.line(renderedObject(doc, node: backtraceObject(doc, frames: frames)))
+		locals(functionName, values) then return DebugEventLine.line(renderedObject(doc, node: localsObject(doc, functionName: functionName, values: values)))
+		value(tree) then return DebugEventLine.line(renderedObject(doc, node: valueEventObject(doc, tree: tree)))
+		exited(code) then return DebugEventLine.line(renderedObject(doc, node: exitObject(doc, code: code)))
+		crashed(status) then return DebugEventLine.line(renderedObject(doc, node: crashObject(doc, status: status)))
+		timedOut(waitingFor) then return DebugEventLine.line(renderedObject(doc, node: timeoutObject(doc, waitingFor: waitingFor)))
+		failed(message, suggestion) then return DebugEventLine.line(renderedObject(doc, node: errorObject(doc, message: message, suggestion: suggestion)))
+	end 'which'
+end 'debugEventLineFor'
+
+function renderedObject(doc JsonDoc, node JsonNodeId) returns String
+	doc.root = node
+
+	return Json.stringify(doc)
+end 'renderedObject'
+
+function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: BreakpointEventKind)
+	object.addString(doc, key: ActionKey, value: answer.action)
+	object.addString(doc, key: FunctionKey, value: answer.functionName)
+	object.addString(doc, key: FileKey, value: answer.file)
+	object.addNumber(doc, key: LineKey, value: answer.line as JsonFloat)
+	object.addString(doc, key: OffsetKey, value: hexWord(answer.offset))
+
+	if answer.offsets.count() > 1 'severalSites'
+		object.addNode(OffsetsKey, node: hexArray(doc, offsets: answer.offsets))
+	end 'severalSites'
+
+	if answer.candidates.count() > 0 'moreThanOneName'
+		object.addNode(CandidatesKey, node: stringArray(doc, values: answer.candidates))
+	end 'moreThanOneName'
+
+	if not answer.suggestion.isEmpty() 'somethingClose'
+		object.addString(doc, key: SuggestionKey, value: answer.suggestion)
+	end 'somethingClose'
+
+	if not answer.reason.isEmpty() 'aRefusal'
+		object.addString(doc, key: ReasonKey, value: answer.reason)
+	end 'aRefusal'
+
+	return object.build(doc)
+end 'breakpointObject'
+
+function stopObject(doc JsonDoc, stop DebugStop) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: StopEventKind)
+	object.addString(doc, key: ReasonKey, value: stop.reason)
+	object.addString(doc, key: FunctionKey, value: stop.functionName)
+	object.addString(doc, key: FileKey, value: stop.file)
+	object.addNumber(doc, key: LineKey, value: stop.line as JsonFloat)
+	object.addNumber(doc, key: ColumnKey, value: stop.column as JsonFloat)
+	object.addString(doc, key: OffsetKey, value: hexWord(stop.offset))
+	addListOrAbsence(object, doc: doc, key: SourceKey, node: sourceArray(doc, lines: stop.source), present: stop.source.count() > 0, reason: NoSourceReason)
+	addListOrAbsence(object, doc: doc, key: BacktraceKey, node: frameArray(doc, frames: stop.frames), present: stop.frames.count() > 0, reason: NoBacktraceReason)
+
+	return object.build(doc)
+end 'stopObject'
+
+function backtraceObject(doc JsonDoc, frames DebugFrameArray) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: BacktraceEventKind)
+	addListOrAbsence(object, doc: doc, key: FramesKey, node: frameArray(doc, frames: frames), present: frames.count() > 0, reason: NoBacktraceReason)
+
+	return object.build(doc)
+end 'backtraceObject'
+
+function localsObject(doc JsonDoc, functionName String, values DebugValueTree) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: LocalsEventKind)
+	object.addString(doc, key: FunctionKey, value: functionName)
+	object.addNode(LocalsKey, node: valueArray(doc, tree: values, indices: values.roots))
+
+	return object.build(doc)
+end 'localsObject'
+
+function valueEventObject(doc JsonDoc, tree DebugValueTree) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: ValueEventKind)
+	object.addNode(ValueKey, node: valueObject(doc, tree: tree, index: try tree.roots.get(0) otherwise panic("valueEventObject: a `value` reply carries exactly one root")))
+
+	return object.build(doc)
+end 'valueEventObject'
+
+function exitObject(doc JsonDoc, code DebugExitCode) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: ExitEventKind)
+	object.addNumber(doc, key: CodeKey, value: code as JsonFloat)
+
+	return object.build(doc)
+end 'exitObject'
+
+function crashObject(doc JsonDoc, status DebugAddress) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: CrashEventKind)
+	object.addString(doc, key: StatusKey, value: hexWord(status))
+
+	return object.build(doc)
+end 'crashObject'
+
+function timeoutObject(doc JsonDoc, waitingFor String) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: TimeoutEventKind)
+	object.addString(doc, key: WaitingForKey, value: waitingFor)
+
+	return object.build(doc)
+end 'timeoutObject'
+
+function errorObject(doc JsonDoc, message String, suggestion String) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: ErrorEventKind)
+	object.addString(doc, key: MessageKey, value: message)
+
+	if not suggestion.isEmpty() 'somethingClose'
+		object.addString(doc, key: SuggestionKey, value: suggestion)
+	end 'somethingClose'
+
+	return object.build(doc)
+end 'errorObject'
+
+function valueObject(doc JsonDoc, tree DebugValueTree, index DebugValueIndex) returns JsonNodeId
+	let value = tree.nodeAt(index)
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: NameKey, value: value.name)
+	object.addString(doc, key: TypeKey, value: value.typeName)
+	object.addString(doc, key: KindKey, value: value.kind)
+	object.addString(doc, key: DisplayKey, value: value.display)
+
+	if not value.unavailable.isEmpty() 'nothingToShow'
+		object.addString(doc, key: UnavailableKey, value: value.unavailable)
+	end 'nothingToShow'
+
+	if value.children.count() > 0 'aTree'
+		object.addNode(ChildrenKey, node: valueArray(doc, tree: tree, indices: value.children))
+	end 'aTree'
+
+	return object.build(doc)
+end 'valueObject'
+
+function frameObject(doc JsonDoc, frame DebugFrame) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addNumber(doc, key: FrameKey, value: frame.number as JsonFloat)
+	object.addString(doc, key: FunctionKey, value: frame.functionName)
+	object.addString(doc, key: FileKey, value: frame.file)
+	object.addNumber(doc, key: LineKey, value: frame.line as JsonFloat)
+	object.addString(doc, key: OffsetKey, value: hexWord(frame.offset))
+
+	if frame.inlined 'aSplicedBody'
+		object.addBool(doc, key: InlinedKey, value: true)
+	end 'aSplicedBody'
+
+	return object.build(doc)
+end 'frameObject'
+
+function sourceLineObject(doc JsonDoc, line DebugSourceLine) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addNumber(doc, key: LineKey, value: line.line as JsonFloat)
+	object.addString(doc, key: TextKey, value: line.text)
+	object.addBool(doc, key: CurrentKey, value: line.current)
+
+	return object.build(doc)
+end 'sourceLineObject'
+
+// An absent list is `null` beside a `<key>Unavailable` reason, never `[]`: a reader must not have to tell
+// "the debugger could not answer" from "the answer is nothing".
+function addListOrAbsence(object JsonObjectBuilder, doc JsonDoc, key String, node JsonNodeId, present bool, reason String)
+	if present 'thereIsAList'
+		object.addNode(key, node: node)
+
+		return
+	end 'thereIsAList'
+
+	object.addNode(key, node: doc.add(JsonNode.nullNode()))
+	object.addString(doc, key: "{key}{UnavailableSuffix}", value: reason)
+end 'addListOrAbsence'
+
+function frameArray(doc JsonDoc, frames DebugFrameArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for frame in frames 'eachFrame'
+		ids.push(frameObject(doc, frame: frame))
+	end 'eachFrame'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'frameArray'
+
+function sourceArray(doc JsonDoc, lines DebugSourceLineArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for line in lines 'eachLine'
+		ids.push(sourceLineObject(doc, line: line))
+	end 'eachLine'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'sourceArray'
+
+function valueArray(doc JsonDoc, tree DebugValueTree, indices DebugValueIndexArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for index in indices 'eachValue'
+		ids.push(valueObject(doc, tree: tree, index: index))
+	end 'eachValue'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'valueArray'
+
+function stringArray(doc JsonDoc, values StringArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for value in values 'eachValue'
+		ids.push(doc.add(JsonNode.stringNode(value)))
+	end 'eachValue'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'stringArray'
+
+function hexArray(doc JsonDoc, offsets DebugAddressArray) returns JsonNodeId
+	var spellings = StringArray.create()
+
+	for offset in offsets 'eachOffset'
+		spellings.push(hexWord(offset))
+	end 'eachOffset'
+
+	return stringArray(doc, values: spellings)
+end 'hexArray'
+
+export function hexWord(value DebugAddress) returns String
+	return "0x{value:x}"
+end 'hexWord'

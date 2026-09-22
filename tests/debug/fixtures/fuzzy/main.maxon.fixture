@@ -1,0 +1,77 @@
+typealias Amount = int(0 to 1000000)
+
+type Account
+	export var balance as Amount
+
+	export static function create() returns Account
+		return Account{balance: 0}
+	end 'create'
+
+	export function deposit(amount Amount) returns Amount
+		var total = self.balance
+		var i = 0
+		while i < 2 'twice'
+			total = total + amount // anchor: account-deposit
+			i = i + 1
+		end 'twice'
+
+		self.balance = total
+
+		return total
+	end 'deposit'
+end 'Account'
+
+type Ledger
+	export var entries as Amount
+
+	export static function create() returns Ledger
+		return Ledger{entries: 0}
+	end 'create'
+
+	export function deposit(amount Amount) returns Amount
+		var total = self.entries
+		var i = 0
+		while i < 2 'twice'
+			total = total + amount // anchor: ledger-deposit
+			i = i + 1
+		end 'twice'
+
+		self.entries = total
+
+		return total
+	end 'deposit'
+end 'Ledger'
+
+function depositAll(amount Amount) returns Amount
+	var account = Account.create()
+	var ledger = Ledger.create()
+	var total = 0
+	var i = 0
+	while i < 2 'rounds'
+		total = total + account.deposit(amount) + ledger.deposit(amount) // anchor: deposit-all
+		i = i + 1
+	end 'rounds'
+
+	return total
+end 'depositAll'
+
+function reconcileEverything(seed Amount) returns Amount
+	var total = seed
+	var i = 0
+	while i < 3 'rounds'
+		total = total + depositAll(i) // anchor: reconcile
+		i = i + 1
+	end 'rounds'
+
+	total = total + depositAll(1)
+
+	return total
+end 'reconcileEverything'
+
+function main() returns ExitCode
+	var total = reconcileEverything(1)
+	total = total + reconcileEverything(2)
+	print("fuzzy {total}\n")
+
+	return 0
+end 'main'

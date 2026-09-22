@@ -166,6 +166,7 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	unitModule.spans.requireParallelTo(unitModule.ops.count(), what: "after the backend unit of '{String.from(func.name)}'")
 
 	let opOffset = module.ops.count()
+	let splicedRanges = resolvedDebugRanges(unitModule, unitFunc: unitFunc, opOffset: opOffset)
 	module.appendOps(unitModule)
 	func.blockRefs.clear()
 
@@ -190,4 +191,25 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	end 'debugLocationsOutOfStep'
 
 	func.debugLocalLocations = unitFunc.debugLocalLocations
+	func.debugLocalRanges = splicedRanges
 end 'spliceBackendUnit'
+
+function resolvedDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffset OpIndex) returns DebugValueRangeArray
+	if unitFunc.debugLocalRanges.count() == 0 'noRanges'
+		return unitFunc.debugLocalRanges
+	end 'noRanges'
+
+	let liveOps = unitModule.liveOpIndices(unitFunc)
+	var resolved = DebugValueRangeArray.create()
+	resolved.reserve(unitFunc.debugLocalRanges.count())
+
+	for range in unitFunc.debugLocalRanges 'eachRange'
+		resolved.push(DebugValueRange.create(range.valueOrdinal, blockId: range.blockId, first: splicedOpOf(liveOps, ordinal: range.first, opOffset: opOffset), last: splicedOpOf(liveOps, ordinal: range.last, opOffset: opOffset)))
+	end 'eachRange'
+
+	return resolved
+end 'resolvedDebugRanges'
+
+function splicedOpOf(liveOps OpIndexArray, ordinal DebugOpAnchor, opOffset OpIndex) returns DebugOpAnchor
+	return ((try liveOps.get(ordinal as ElementIndex) otherwise panic("spliceBackendUnit: live-op ordinal {ordinal} is past the {liveOps.count()} ops of the unit the allocator numbered it against")) + opOffset) as DebugOpAnchor
+end 'splicedOpOf'

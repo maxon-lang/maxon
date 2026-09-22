@@ -73,7 +73,7 @@ let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 // scheduler and never calls `__gt_spawn`, so pruning that one function (correctly) would turn the chunk
 // gate off and the link would fail on `__gt_context_switch`. The fact is written down ONCE, where it is
 // decided, and read here.
-export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, dataSection DataSectionEntryArray) returns CodeResult throws CompileError
+export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, dataSection DataSectionEntryArray, userGlobalCount ElementIndex) returns CodeResult throws CompileError
 	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
 	assertNoSugarOps(stdModule)
 	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
@@ -135,7 +135,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// and refuses a run registered after it, and the point COUNT has been final since the merge.
 	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
 	reserveCoverageImage(project)
-	globalData.layOut(dataSection, referenced: survivors.referencedGlobals)
+	globalData.layOut(dataSection, referenced: survivors.referencedGlobals, userGlobalCount: userGlobalCount)
 	globalData.requireLaidOutCoversReferences(survivors.referencedGlobals)
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
@@ -173,6 +173,7 @@ export function dataSectionRoster(userGlobals DataSectionEntryArray, usage Runti
 	appendDataSectionEntries(roster, entries: slabRuntimeGlobals())
 	appendDataSectionEntries(roster, entries: debugStreamRuntimeGlobals())
 	appendDataSectionEntries(roster, entries: managedSocketRuntimeGlobals())
+	appendDataSectionEntries(roster, entries: debugAgentRuntimeGlobals(usage))
 	return roster
 end 'dataSectionRoster'
 
@@ -268,7 +269,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// inliner's census were built from — never a second spelling of those bits: a stub calling a `__ds_init`
 	// nothing installed, or one the roots did not keep alive, does not link.
 	let stub = project.entryStubCalls
-	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage), debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, entryFunction: project.entryFunctionName)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, captureEnvp: linuxReadsEnvironment(usage), debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, attachDebugAgent: stub.attachesDebugAgent, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -310,6 +311,11 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	if usage.usesGt 'gtChunks'
 		appendX64GtRuntimeChunks(chunks, target: target)
 	end 'gtChunks'
+
+	if usage.usesDebugAgent 'debugAgentChunks'
+		appendX64DebugAgentChunks(chunks)
+		requireDebugTrapFitsItsReserve(target)
+	end 'debugAgentChunks'
 
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 	releaseEncodedTargetModule(project, targetModule: targetModule)
@@ -407,7 +413,7 @@ end 'refuseDuplicateChunkName'
 // `entryFunction` is `Project.entryFunctionName` — the ONE place this build's entry is written down. The
 // stub calls whatever it names, so a build that enters somewhere other than `main` needs no arm of its own
 // here; see that field.
-function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, captureEnvp bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, entryFunction ByteArray)
 	// Prepended BEFORE the stub, so the stub prepended below lands directly ahead of it — the layout
 	// `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
@@ -415,7 +421,7 @@ function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool,
 	end 'mainIsAGreenThread'
 
 	match target.os 'os'
-		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, entryFunction: entryFunction)
+		windows then prependEntryStub(module, target: target, checkLeaks: checkLeaks, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, debugStream: debugStream, dumpCoverage: dumpCoverage, attachDebugAgent: attachDebugAgent, entryFunction: entryFunction)
 
 		// The Linux stub brackets the producer exactly as the Windows one does: x64-linux provides both the
 		// named section and the millisecond stopwatch, so `--debugstream` reaches this arm.
@@ -432,6 +438,7 @@ end 'augmentWithRuntime'
 //   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
 //   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
 //   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
+//   [debug agent]      call __dbg_init — before anything a debugger may be asked to stop on
 //   [ds attach]        call __ds_init
 //   the program        `appendProgramCall` — `main` bracketed by the managed globals, or, with green
 //                      threads, `lea rcx, mrt_main_entry ; call __gt_run_main`; its ExitCode in R8 either way
@@ -454,7 +461,7 @@ end 'augmentWithRuntime'
 // backtrace in the corpus expects. Its own saved rbp is whatever the loader left, and the
 // walk's `.text` bound is what discards it. When `main` is a green thread the same line
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
-function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, entryFunction ByteArray)
+function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, attachDebugAgent bool, entryFunction ByteArray)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -462,6 +469,10 @@ function prependEntryStub(module TargetModule, target Target, checkLeaks bool, i
 	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+
+	if attachDebugAgent 'debuggableBuild'
+		module.appendOp(block, op: TargetOp.callDirect(DbgInitName))
+	end 'debuggableBuild'
 
 	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
 	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would

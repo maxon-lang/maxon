@@ -105,13 +105,50 @@ tests/
     version-component-not-a-number-refused.test.maxon         a `version` component that is not a number is refused, and writes nothing
     fixtures/<project>/project.maxon.fixture  main.maxon.fixture   stored names only - see rule 1
   debug/
-    DebugHarness.maxon                      the shared half: the spawn, the staging, the folds
+    DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
     sidecar-dump.test.maxon                 the sidecar says something TRUE about the binary beside it
-    monitor-sched-events.test.maxon         `monitor --filter=sched` shows a green thread's spawn and await
+    byte-identical-debug-info.test.maxon    the sidecar never decides an instruction; `--no-debug-agent` is the one exception
+    dump-info-sections.test.maxon           a word that is not a section is refused by name, and a real list prints only itself
     sidecar-local-types.test.maxon          every local of a two-file program is described under its own type
-    fixtures/spans/main.maxon.fixture       stored name only - see rule 1
-    fixtures/greenthread/main.maxon.fixture stored name only - see rule 1
-    fixtures/twofiles/<name>.maxon.fixture  stored names only - see rule 1
+    sidecar-local-live-range.test.maxon     a local row is scoped to the code it is live over
+    sidecar-array-element-type.test.maxon   an Array local names its element type
+    sidecar-generic-and-clone-lines.test.maxon   a per-type generic body and a synthesized clone carry line rows
+    monitor-sched-events.test.maxon         `monitor --filter=sched` shows a green thread's spawn and await
+    x64-classifies-each-instruction-class.test.maxon   `debug --classify=` gives a length and a class per class
+    classify-refuses-a-repeated-hex-prefix.test.maxon   a second `0x` inside a sequence is refused, never stripped
+    debug-refuses-wasm.test.maxon           a wasm module is refused by the name of its target
+    debug-refuses-foreign-sidecar.test.maxon     a sidecar describing another build is refused, its own build the control
+    debug-refuses-a-no-debug-agent-build.test.maxon   a `--no-debug-agent` binary reports that nothing attached
+    batch-run-to-exit.test.maxon            a completed session exits 0 and reports the program's code as data
+    crash-exits-nonzero.test.maxon          a fault is a `crash` event and a failed session
+    timeout-before-run.test.maxon           a program that never stops times out and is not left running
+    timeout-during-step.test.maxon          a `finish` out of a frame that never returns times out
+    heapless-program-attaches.test.maxon    a program with no heap still attaches, stops and resumes
+    breakpoint-on-each-instruction-class.test.maxon   every anchored line is hit and resumed, and the program answers as it does undebugged
+    break-in-inlined-function-hits-every-copy.test.maxon   a line the inliner copied twice is armed at both copies
+    break-fuzzy-function.test.maxon         exact, then `Type.method`, then a word prefix
+    break-ambiguous-lists-candidates.test.maxon   two functions answering one name is an ambiguity, never a silent pick
+    break-no-match-suggests.test.maxon      a name nothing answers to names the nearest function
+    backtrace-at-breakpoint.test.maxon      the callers outward, innermost frame first
+    inline-frames-in-backtrace.test.maxon   a spliced leaf is a frame of its own, marked inlined
+    stop-shows-a-source-window.test.maxon   a stop carries the source around its line, that line marked current
+    batch-step-next-finish.test.maxon       `step` enters, `next` steps over, `finish` returns
+    step-off-a-conditional-jump.test.maxon        a step onto a SIMULATED jump still publishes the stop that follows it
+    next-stops-at-inner-breakpoint.test.maxon     a stepped-over call's breakpoint is still honoured
+    finish-stops-at-inner-breakpoint.test.maxon   a walk does not swallow a breakpoint it passes
+    finish-from-outermost-refused.test.maxon      a `finish` with no caller is refused, not waited on
+    two-machines-hit-one-breakpoint.test.maxon     every green thread reaching one breakpoint stops on it
+    clear-while-another-machine-is-mid-trap.test.maxon   a breakpoint cleared with other machines still inside it kills nothing
+    gt-breakpoint-in-coroutine.test.maxon   a breakpoint inside an `async` body stops on the green thread running it
+    values-render.test.maxon                every kind of local renders as itself, an enum by its raw tag
+    values-register-local.test.maxon        a register local is read out of the stop's register file
+    values-optimized-out.test.maxon         a local whose range does not cover the stop is unavailable, not a number
+    values-unknown-local-and-field.test.maxon     a name and a field path nothing answers to are errors
+    complete-command-words.test.maxon       the first word completes to the command vocabulary
+    complete-function-names.test.maxon      a break target completes to the program's functions
+    unknown-command-suggests.test.maxon     a word nothing answers to names the nearest command
+    repl-script-over-stdin.test.maxon       the REPL reads stdin and answers in text, never in JSON
+    fixtures/<name>/main.maxon.fixture      stored names only - see rule 1
   coverage/
     CoverageHarness.maxon                   the shared half: the spawn, the staging, the report readers
     coverage-line-states.test.maxon         the four line states, each attached to its own line
@@ -339,10 +376,19 @@ test` runs files concurrently, so every case stages into a directory named for I
 report prefix, byte identity, stderr equality between two runs), each guarded by a positive
 control so two runs that both failed to build cannot read as agreement.
 
-## `debug/` — what a binary can be asked about after it is built
+## `debug/` — what a binary can be asked about after it is built, and what a debugger can do to it
 
-Two cases: stage a fixture, build it with the compiler under test, and ask the binary what it says
-about itself — through its sidecar, or through the trace it writes while `maxon monitor` runs it.
+Every case here stages a fixture, builds it with the compiler under test, and then asks that binary
+something: what its sidecar says about itself, what `maxon monitor` sees while it runs, or — for most of
+the corpus — what `maxon debug` can do to it while it is RUNNING.
+
+⛔ **EVERY CASE THAT DEBUGS A RUNNING PROGRAM NEEDS `--timeout=`.** A file's default deadline is 5,000 ms
+and one of these spends a compile plus a debugged run, so the corpus is run as
+`maxon test tests/debug --timeout=60000`. The deadline is per FILE, and one file is one spawning `test`.
+
+⚠ **THE DRIVER AND THE DEBUGGEE ARE THE SAME BINARY AS THE RUNNER.** `TestedCompilerStem` names it once:
+the compiler that builds each fixture, the driver that debugs it, and the program running the case. A
+runner broken badly enough to report green having run nothing cannot detect itself — READ THE PASS COUNT.
 
 ⛔ **THE SHARED HALF IS A PLAIN `.maxon`, NOT A `.test.maxon`.** `TestedCompilerStem`, the staging, the
 spawning and the stream folds live in `DebugHarness.maxon`, which the runner does not treat as a test
@@ -376,6 +422,23 @@ position in the table and the shape of a prologue all move with codegen and with
 pulls in; a case that pinned them would go red for every unrelated change and teach its reader to
 re-bless it. Every roster this case checks is read OUT OF THE STAGED SOURCE, so a fixture that grows a
 function or a binding grows what is demanded of the sidecar.
+
+### `maxon debug` — the interactive debugger
+
+⭐⭐ **WHAT IS PINNED IS PARSED EVENTS AND ANCHORED LINES, NEVER BYTE TEXT AND NEVER A NUMBER.** A
+`--batch` session writes one JSON object per line on stdout, and every case reads it through
+`batchEvents` and asks about FIELDS; a line a case cares about is found by the `// anchor: <name>`
+comment exactly one line of the fixture carries, so no case writes a line number or a code offset down.
+
+⛔ **A REFUSAL IS ASSERTED BESIDE ITS CONTROL.** `debug-refuses-foreign-sidecar` runs the subject with its
+OWN sidecar first: a refusal equally happy to refuse a good build says nothing about the foreign one.
+
+⛔ **THE CLASSIFIER HAS A GATE OF ITS OWN.** Arming a breakpoint displaces one instruction and resumes by
+executing it out of line, so the driver must answer a LENGTH, a CLASS, a condition nibble and a
+displacement position for it. A line-anchored breakpoint only ever lands on whatever instruction a
+statement happens to begin with, so `x64-classifies-each-instruction-class` asks the classifier directly,
+through `debug --classify=<hex>`, over a table with every class in it — including the two indirect classes
+the agent refuses and bytes this build cannot decode at all.
 
 ### `maxon monitor`
 

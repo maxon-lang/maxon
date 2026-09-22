@@ -5,9 +5,12 @@ sidebar:
   order: 3
 ---
 
-Maxon has **no interactive debugger**: there are no breakpoints, no stepping and no attaching to a
-running process. The tools on this page are what exists: debug information beside every binary, panic
-backtraces, a leak check, a trace monitor, a sampling profiler and code coverage.
+Maxon has an **interactive debugger on x64-windows** — `maxon debug <exe>`: breakpoints, stepping,
+backtraces with inlined frames, and locals read out of the stopped thread. It launches the program
+rather than attaching to one already running, and it needs the in-process debug agent, which is emitted
+by default on that target only. Everything else on this page works on every target: debug information
+beside every binary, panic backtraces, a leak check, a trace monitor, a sampling profiler and code
+coverage.
 
 The examples below use output from real runs; addresses, counts and timings vary from build to build.
 
@@ -59,20 +62,93 @@ the compiler emitted. `maxon test` reports such a test as `LEAKED`, and
 
 ## `maxon debug`
 
-Reads the `.mxdbg` sidecar back. Both forms are read-only and accept either the executable or the sidecar
-itself.
+Debugs a program interactively, and reads the `.mxdbg` sidecar back. The two sidecar forms are read-only
+and accept either the executable or the sidecar itself; the debugger forms launch the executable.
 
 ```bash
+maxon debug <exe> [--stop-timeout=<seconds>] [--target-env=NAME=VALUE]... [-- <program args>...]
+maxon debug --batch --commands=<cmd;cmd;...|@file> <exe> [same options]
+maxon debug --complete=<partial line> <exe>
+maxon debug --classify=<hex>[,<hex>...]
 maxon debug --dump-info <exe|.mxdbg> [header|files|functions|types|lines|statements|inline]
 maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 ```
 
 | Option | Description |
 |--------|-------------|
+| `--batch` | Run `--commands=` instead of prompting, and write one JSON object per line on stdout |
+| `--commands=` | The commands `--batch` runs, separated by `;`, or `@<path>` to read them from a file |
+| `--complete=` | Print the completions for a partially typed debugger line, one per line, and run nothing |
+| `--classify=` | Classify raw x64 instruction bytes the way arming a breakpoint does, and run nothing |
+| `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10) |
+| `--target-env=` | Set a variable in the DEBUGGED program's environment; repeatable |
 | `--dump-info` | Print the sidecar, or only the sections named after the path |
 | `--symbolize` | Resolve offsets into the executable's code section to `file:line:col` |
 
 `maxon debug` with no arguments prints the usage above and exits 1.
+
+**The session.** The driver creates a two-page shared control segment, names it in the `MAXON_DEBUG`
+environment variable of the program it launches, and the agent inside that program parks before `main`
+while the driver arms whatever was asked for. Only the agent writes into the program's own code, and no
+OS debug API is used. A debugged program that finds its driver gone stops where it is and exits 97,
+rather than staying parked forever waiting for a command nobody will send.
+
+A program the debugger cannot drive is refused by name, with exit 1: a wasm module, a binary built for
+another target, one built `--no-debug-agent` (reported as no agent having attached), and a binary whose
+sidecar describes a different build.
+
+**Commands**, with their aliases: `break` (`b`) · `clear` · `run` (`r`) · `continue` (`c`) · `step` (`s`) ·
+`next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `help`
+(`?`, `commands`) · `quit` (`q`, `exit`). `threads`, `gt-backtrace`, `gt`, `gt-park`, `gt-resume` and
+`trace` are answered with an error saying they arrive with green-thread support.
+
+A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, or a function name
+resolved exact → `Type.method` → leaf name → word prefix. More than one match is reported as an
+ambiguity with the candidates, never a silent pick; a name nothing answers to names the nearest function.
+A line the inliner copied into several places is armed at every copy.
+
+`step` enters a callee, `next` stays in the frame it was issued from, `finish` runs to the return of its
+frame and `until` runs forward past the current line. All four are walked one instruction at a time, so
+each honours any breakpoint it passes — except the one it started on — and each is bounded by
+`--stop-timeout=`. A `finish` from the outermost frame is refused rather than run off the end of the
+stack.
+
+```text
+$ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;continue" app.exe
+{"event":"breakpoint","action":"set","function":"work","file":"app.maxon","line":12,"offset":"0x7a"}
+{"event":"stop","reason":"breakpoint","function":"work","file":"app.maxon","line":12,"col":9,"offset":"0x7a","source":[…],"backtrace":[…]}
+{"event":"locals","function":"work","locals":[{"name":"total","type":"Amount","kind":"int","display":"42"}]}
+{"event":"stop","reason":"step","function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e","source":[…],"backtrace":[…]}
+{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"offset":"0x7e"}]}
+{"event":"exit","code":0}
+```
+
+**In `--batch`** stdout is pure JSON, one object per line, and the debugged program's own stdout and
+stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `backtrace`, `locals`,
+`value`, `exit`, `crash`, `timeout` and `error`; a list that cannot be produced is `null` beside a
+`<name>Unavailable` reason rather than an empty array, and a value that cannot be read carries
+`unavailable` with one of `optimized-out`, `not-live-here`, `read-failed` or `layout-not-described`.
+The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
+and 1 on a timeout, an unacknowledged command, a refused session or a crash. A command issued after the
+program has ended is an `error` and does not change that verdict.
+
+**Without `--batch`** the same commands are read from stdin, one per line, and answered as text for a
+person; end of input quits. The debugged program's streams pass through to this driver's own.
+
+**`--classify=`** is the door onto the instruction classifier a breakpoint's out-of-line resume depends
+on. It reads no program:
+
+```text
+$ maxon debug --classify=488d0dce6f0000,c3,62
+len=7 class=2 cond=0 disp=3 target=0x7fd5
+len=1 class=6 cond=0 disp=0 target=0x0
+unclassified
+```
+
+The classes are 1 plain, 2 pc-relative data, 3 direct call, 4 direct jump, 5 conditional jump, 6 return,
+7 indirect call and 8 indirect jump; the agent places a breakpoint on the first six only. `target` is the
+absolute branch target for 3, 4 and 5 and the absolute referent for 2, computed against a fixed probe
+address, and `disp` is the byte position of a pc-relative displacement.
 
 **Sections** of `--dump-info` (with none named, all are printed):
 
@@ -80,8 +156,8 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 |---------|----------|
 | `header` | The file, target and build id |
 | `files` | The source files, including the standard-library and runtime files the program uses |
-| `functions` | Each function's code range, frame size, parameter, line and local counts, and each local's location (a frame slot, a register or `<optimized out>`) and type |
-| `types` | Each type's kind, size, alignment and fields |
+| `functions` | Each function's code range, frame size, parameter, line and local counts, and, per local, the code range `[start, end)` it is live over, its location and its type. A location is a frame slot, a register, `<optimized out>`, `= v` for a value folded to a constant or `= {…}` for a whole record folded to one; a `*` after it means the location holds a pointer to the value rather than the value. A name with several live runs has a row per run. |
+| `types` | Each type's kind, size, alignment and fields, with `(signed)` on a type whose values are signed and an `element` row on an array's |
 | `lines` | The line table: code offset and source position |
 | `statements` | The same table, source positions only |
 | `inline` | Inlined call sites and the code ranges they occupy |
@@ -96,9 +172,10 @@ $ maxon debug --dump-info app.exe functions
   functions (136):
     mrt_start                        [0x0000, 0x003b)  frame=0x20  params=0  lines=0  locals=0
     worker                           [0x0060, 0x00de)  frame=0x28  params=1  lines=4  locals=1
-        base                 reg3  : Integer
+        base                 [0x0064, 0x00a8)  reg3  : Integer
     main                             [0x00e0, 0x053d)  frame=0x88  params=0  lines=50  locals=3
-        points               [rbp-0x60]  : <generic instance>
+        points               [0x0104, 0x053d)  [rbp-0x60]*  : Array_Amount
+        limit                [0x00e0, 0x053d)  = 64  : Amount
 
 $ maxon debug --dump-info app.exe lines
   line table (390):

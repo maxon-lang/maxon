@@ -1,0 +1,44 @@
+let BacktraceCaseLabel = "backtrace-at-breakpoint"
+
+let InnerFunctionName = "inner"
+let OuterFunctionName = "outer"
+let MainFunctionName = "main"
+
+test 'a backtrace at a breakpoint names the callers outward, innermost frame first'
+	let staged = builtFixture(BacktraceCaseLabel, fixture: SteppingFixtureName)
+	let innerLine = anchorLine(staged, anchor: "inner-loop")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(innerLine)}", RunCommand, BacktraceCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
+
+	try Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at a stop printed no `{BacktraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let walked = eventAt(backtraces, index: 0)
+	var named = StringArray.create()
+	var foreignFiles = StringArray.create()
+	var misnumbered = StringArray.create()
+
+	for frame in childrenOf(walked, node: walked.root, key: FramesKey) 'eachFrame'
+		let frameFunction = textOf(walked, node: frame, key: FunctionKey)
+		named.push(frameFunction)
+
+		if textOf(walked, node: frame, key: FileKey) != StagedProgramFileName 'anotherFile'
+			foreignFiles.push("{frameFunction} is attributed to '{textOf(walked, node: frame, key: FileKey)}'")
+		end 'anotherFile'
+
+		if numberOf(walked, node: frame, key: FrameKey) as AssertedInt != named.count() as AssertedInt - 1 'outOfOrder'
+			misnumbered.push("{frameFunction} is frame {numberOf(walked, node: frame, key: FrameKey)} at position {named.count() - 1}")
+		end 'outOfOrder'
+	end 'eachFrame'
+
+	try Expect.isEmpty(renderedRows(foreignFiles), message: "every frame of this stack is in the one file the fixture stages, so a frame attributed elsewhere is a line-table lookup that landed in another function's rows. {said}")
+	try Expect.isEmpty(renderedRows(misnumbered), message: "a frame's `{FrameKey}` is its position outward from the stop, so a list whose numbers do not match its order is one a reader cannot cite a frame out of. {said}")
+	try Expect.equal(childrenOf(walked, node: walked.root, key: FramesKey).count() as AssertedInt, expected: childrenOf(eventAt(eventsOfKind(events, kind: StopEventName), index: 0), node: eventAt(eventsOfKind(events, kind: StopEventName), index: 0).root, key: BacktraceKey).count() as AssertedInt, message: "a `{StopEventName}` carries the same walk under `{BacktraceKey}` that `{BacktraceCommand}` answers, so a reader who did not ask still sees where the program is. The two disagree. {said}")
+
+	try Expect.atLeast(named.count() as AssertedInt, than: 3, message: "a stop inside `{InnerFunctionName}` has at least `{InnerFunctionName}`, `{OuterFunctionName}` and `{MainFunctionName}` on the stack, and the walk produced {named.count()} frames: {renderedRows(named)}. {said}")
+	try Expect.equal(try named.get(0) otherwise AbsentEventText, expected: InnerFunctionName, message: "frame 0 is the INNERMOST frame, which is the function the stop is inside. The walk produced: {renderedRows(named)}. {said}")
+	try Expect.equal(try named.get(1) otherwise AbsentEventText, expected: OuterFunctionName, message: "frame 1 is `{InnerFunctionName}`'s caller. The walk produced: {renderedRows(named)}. {said}")
+	try Expect.equal(try named.get(2) otherwise AbsentEventText, expected: MainFunctionName, message: "frame 2 is `{OuterFunctionName}`'s caller. The walk produced: {renderedRows(named)}. {said}")
+end 'a backtrace at a breakpoint names the callers outward, innermost frame first'

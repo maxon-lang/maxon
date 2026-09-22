@@ -36,8 +36,8 @@
 //
 // A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
 // `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns FilePath throws CompileError
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines)
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, noDebugAgent bool = false, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns FilePath throws CompileError
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, noDebugAgent: noDebugAgent, productVersion: productVersion, defines: defines)
 
 	if emitIr 'emitIr'
 		writeTargetIr(product.irText, outputPath: product.outputPath)
@@ -113,7 +113,7 @@ end 'CompileProduct'
 // diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
 // `emitDiagnosticLine`, so a caller may CAPTURE them instead (see Diagnostics.maxon) — and
 // re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
+export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, noDebugAgent bool = false, stdlibDirOverride String = "", runtimeDirOverride String = "", entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create()) returns CompileProduct throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -150,7 +150,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// in general: it is reached only from `Main.runVerifyWarmRebuild`, which turns a throw into an exit
 	// code, so a throw really does end the process there with nothing left to mis-nest. An in-process
 	// caller of THAT gate would need this drain too.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, noDebugAgent: noDebugAgent, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -159,7 +159,7 @@ end 'compileToProduct'
 // The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, noDebugAgent bool, stdlibDirOverride String, runtimeDirOverride String, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit) returns CompileProduct throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
@@ -167,6 +167,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream)
 	project.asyncTrace = asyncTrace
 	project.debugInfo = debugInfo
+	project.noDebugAgent = noDebugAgent
 	project.requestedRuntimeBodies = runtimeIrNames
 	project.rendersTargetIr = emitIr
 	project.compilesOnceAndExits = true
@@ -1210,6 +1211,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `MAXON_DEBUGSTREAM` out of the captured vector on a libc-less lane. `usesHeap` is final by here, which
 	// is what makes this the earliest honest place to ask.
 	usage.usesDebugStream = buildCarriesDebugStream(project, usage: usage)
+	usage.usesDebugAgent = targetProvidesFacility(project.target, facility: HostFacility.debugAgent) and not project.noDebugAgent
 
 	// ⭐ **AND THE COVERAGE BITS, IN THE SAME WINDOW AND FOR THE SAME REASON.** Nothing in a Maxon module
 	// names `__cov_dump`, so both are DECLARED here rather than discovered: the stub's coverage dump is
@@ -1238,9 +1240,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	//
 	// ⛔ **A NEW MINTER ON A GATE `usesHeap` DOES NOT COVER WOULD BE A LINK FAILURE HERE**, not a missed
 	// optimization: its tier bodies would be filed unreached while the band still called them.
-	if not usage.usesHeap 'noInstallerCallsTheTier'
-		project.libraryFacts = project.libraryFacts.withCompilerCalledTierUnreached()
-	end 'noInstallerCallsTheTier'
+	project.libraryFacts = project.libraryFacts.withCompilerCalledTierUnreached(not usage.usesHeap, sweepDebugAgentTier: not usage.usesDebugAgent)
 
 	// The user's own `.data` slots, already filtered by `DeadGlobalElimination`. The runtime's are appended
 	// and the section is laid out in `buildBackend`, after dead-function elimination has said which runtime
@@ -1333,6 +1333,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// neighbours. `__shm_create` needs `CreateFileMappingA` and `__shm_close` `UnmapViewOfFile`, both at the
 	// end of kernel32's run (see `isOptionalTrailingImport`).
 	pipeline.stdModule.usesSharedMemory = usage.usesSharedMemory
+	pipeline.stdModule.usesDebugAgent = usage.usesDebugAgent
 
 	// ⭐⭐ **AND THE ONLY PRODUCER OF `ntdll.dll` IN THE LANGUAGE**, on the same seam and for the same measured
 	// reason as its neighbours: `lowerMaxonToStd` REPLACES `pipeline.stdModule`, so a flag written any earlier
@@ -1434,6 +1435,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// the geometry check, which runs on every compile rather than only where a program allocates — see its
 	// header for why a check gated on an install is a check that reports a breakage to whoever comes next.
 	checkSlabArenaGeometry(signatures, tierPath: runtimeTierSourcePath(project, tierFileName: SlabArenaTierFileName), target: project.target)
+
+	checkDebugAgentGeometry(signatures, tierPath: runtimeTierSourcePath(project, tierFileName: DebugAgentTierFileName))
 
 	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
 	// the allocator `__mm_alloc` takes its boxes from. Called unconditionally and gated inside, because it
@@ -1726,7 +1729,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// them apart (A1t), and at its root set, for the half of that rule with no pair to count (A1w). Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
 	// maps a Target ValueId back to its source span through.
-	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection) otherwise 'backendFailed'
+	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection, userGlobalCount: userGlobals.count()) otherwise 'backendFailed'
 		try refuseCompile(project)
 	end 'backendFailed'
 

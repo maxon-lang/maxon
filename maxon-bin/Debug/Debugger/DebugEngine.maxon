@@ -1,0 +1,565 @@
+export typealias StopTimeoutMs = int(0 to i64.max)
+export typealias EngineSeq = int(0 to i64.max)
+export typealias EngineReadLength = int(0 to 512)
+export typealias EngineRegisterNumber = int(0 to 79)
+
+let MaxEngineReadLength = 512
+let MaxEngineRegisterNumber = 79
+
+export enum DebugMemoryError implements Error
+	notReadable
+end 'DebugMemoryError'
+
+export interface DebugMemory
+	function readDebuggeeWord(address DebugAddress, width EngineReadLength) returns DebugWord throws DebugMemoryError
+	function readDebuggeeText(address DebugAddress, length EngineReadLength) returns String throws DebugMemoryError
+	function registerValue(number EngineRegisterNumber) returns DebugWord
+end 'DebugMemory'
+
+export type EngineStop
+	export var reason as DebugAddress
+	export var machine as DebugAddress
+	export var greenThread as DebugAddress
+	export var pc as DebugAddress
+	export var stackPointer as DebugAddress
+	export var framePointer as DebugAddress
+	export var registers as DebugAddressArray
+	export var returnAddresses as DebugAddressArray
+	export var framePointers as DebugAddressArray
+	export var truncated as bool
+
+	export static function create(reason DebugAddress, machine DebugAddress, greenThread DebugAddress, pc DebugAddress, stackPointer DebugAddress, framePointer DebugAddress, registers DebugAddressArray, returnAddresses DebugAddressArray, framePointers DebugAddressArray, truncated bool) returns EngineStop
+		return Self{reason: reason, machine: machine, greenThread: greenThread, pc: pc, stackPointer: stackPointer, framePointer: framePointer, registers: registers, returnAddresses: returnAddresses, framePointers: framePointers, truncated: truncated}
+	end 'create'
+end 'EngineStop'
+
+export union CommandOutcome
+	done
+	refused(reason String)
+	unacknowledged
+	gone(outcome TargetOutcome)
+end 'CommandOutcome'
+
+export union StopWait
+	stopped(record EngineStop)
+	ended(outcome TargetOutcome)
+	timedOut
+end 'StopWait'
+
+export union EngineStart
+	ready(engine DebugEngine)
+	noAgent(outcome TargetOutcome)
+	refused(reason String)
+end 'EngineStart'
+
+export let DebugUnclassifiedReason = "unclassified"
+
+let SegmentNamePrefix = "maxon_dbg_"
+
+let PollIntervalMs = 1
+
+let WordBytes = 8
+let FirstStopSeq = 1
+
+type EngineBreakpoint
+	export let offset as DebugAddress
+	export let address as DebugAddress
+
+	static function create(offset DebugAddress, address DebugAddress) returns EngineBreakpoint
+		return Self{offset: offset, address: address}
+	end 'create'
+end 'EngineBreakpoint'
+
+typealias EngineBreakpointArray = Array with EngineBreakpoint
+
+export type DebugEngine implements DebugMemory
+	var page as SharedSegment
+	var target as DebugTarget
+	let stopTimeoutMs as StopTimeoutMs
+	var commandSeq as EngineSeq
+	var lastStopSeq as EngineSeq
+	var breakpoints as EngineBreakpointArray
+	var textBase as DebugAddress
+	var textSize as DebugAddress
+	var cacheBase as DebugAddress
+	var cacheBytes as ByteArray
+	var cacheFilled as bool
+
+	export static function start(program FilePath, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs) returns EngineStart
+		requireEngineBoundsMatchTheLayout()
+
+		var page = try SharedSegment.create(mintSharedSegmentName(SegmentNamePrefix), bytes: DbgSegmentBytes) otherwise 'noSegment'
+			return EngineStart.refused("could not create the debug control segment this driver and the program share")
+		end 'noSegment'
+
+		if not seededControlPage(page) 'unwritable'
+			page.close()
+
+			return EngineStart.refused("could not seed the debug control segment")
+		end 'unwritable'
+
+		var environment = EnvMap.create()
+
+		for (name, value) in targetEnv 'eachVariable'
+			environment.upsert(name, value: value)
+		end 'eachVariable'
+
+		environment.upsert(DbgEnvVarName, value: page.segmentName())
+
+		let target = try DebugTarget.launch(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
+			page.close()
+
+			return EngineStart.refused("could not launch the program ({e.displayReason()})")
+		end 'noChild'
+
+		var engine = Self{page: page, target: target, stopTimeoutMs: stopTimeoutMs, commandSeq: 0, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), textBase: 0, textSize: 0, cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false}
+
+		return engine.awaitAttach()
+	end 'start'
+
+	function awaitAttach() returns EngineStart
+		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
+
+		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
+			self.target.pump()
+			let published = self.readWord(DbgOffStopSeq)
+
+			if published >= FirstStopSeq and (self.readWord(DbgOffFlags) and DbgFlagAgentAlive) != 0 'parkedAtEntry'
+				self.lastStopSeq = published as EngineSeq
+				self.textBase = self.readWord(DbgOffTextBase)
+				self.textSize = self.readWord(DbgOffTextSize)
+
+				return EngineStart.ready(self)
+			end 'parkedAtEntry'
+
+			if not targetIsRunning(self.target.poll()) 'endedWithoutAttaching'
+				return self.abandonedStart()
+			end 'endedWithoutAttaching'
+
+			sleep(PollIntervalMs)
+		end 'poll'
+
+		return self.abandonedStart()
+	end 'awaitAttach'
+
+	function abandonedStart() returns EngineStart
+		let outcome = self.target.reap()
+		self.page.close()
+
+		return EngineStart.noAgent(outcome)
+	end 'abandonedStart'
+
+	export function imageTextBase() returns DebugAddress
+		return self.textBase
+	end 'imageTextBase'
+
+	export function walkBudgetMs() returns StopTimeoutMs
+		return self.stopTimeoutMs
+	end 'walkBudgetMs'
+
+	export function imageTextSize() returns DebugAddress
+		return self.textSize
+	end 'imageTextSize'
+
+	export function close() returns TargetOutcome
+		let outcome = self.target.reap()
+		self.page.close()
+
+		return outcome
+	end 'close'
+
+	export function pollTarget() returns TargetOutcome
+		self.target.pump()
+
+		return self.target.poll()
+	end 'pollTarget'
+
+	export function armBreakpoint(offset DebugAddress, classWord DebugAddress, fixup DebugAddress) returns CommandOutcome
+		let outcome = self.postCommand(DbgCmdSetBreakpoint, arg0: offset, arg1: classWord, arg2: fixup)
+
+		match outcome 'answered'
+			done then self.rememberBreakpoint(offset)
+			refused then break 'answered'
+			unacknowledged then break 'answered'
+			gone then break 'answered'
+		end 'answered'
+
+		return outcome
+	end 'armBreakpoint'
+
+	export function clearBreakpoint(offset DebugAddress) returns CommandOutcome
+		let outcome = self.postCommand(DbgCmdClearBreakpoint, arg0: offset, arg1: 0, arg2: 0)
+
+		match outcome 'answered'
+			done then self.forgetBreakpoint(offset)
+			refused then self.forgetBreakpoint(offset)
+			unacknowledged then break 'answered'
+			gone then break 'answered'
+		end 'answered'
+
+		return outcome
+	end 'clearBreakpoint'
+
+	function forgetBreakpoint(offset DebugAddress)
+		var kept = EngineBreakpointArray.create()
+
+		for breakpoint in self.breakpoints 'eachBreakpoint'
+			if breakpoint.offset != offset 'anotherOne'
+				kept.push(breakpoint)
+			end 'anotherOne'
+		end 'eachBreakpoint'
+
+		self.breakpoints = kept
+	end 'forgetBreakpoint'
+
+	export function clearEveryBreakpoint()
+		var armed = DebugAddressArray.create()
+
+		for breakpoint in self.breakpoints 'eachBreakpoint'
+			armed.push(breakpoint.offset)
+		end 'eachBreakpoint'
+
+		for offset in armed 'eachArmed'
+			_ = self.clearBreakpoint(offset)
+		end 'eachArmed'
+	end 'clearEveryBreakpoint'
+
+	export function armedAt(address DebugAddress) returns bool
+		for breakpoint in self.breakpoints 'eachBreakpoint'
+			if breakpoint.address == address 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachBreakpoint'
+
+		return false
+	end 'armedAt'
+
+	export function armedCount() returns DebugTally
+		return self.breakpoints.count() as DebugTally
+	end 'armedCount'
+
+	export function resume() returns CommandOutcome
+		self.cacheFilled = false
+
+		return self.postCommand(DbgCmdContinue, arg0: 0, arg1: 0, arg2: 0)
+	end 'resume'
+
+	export function stepOneInstruction() returns CommandOutcome
+		self.cacheFilled = false
+
+		return self.postCommand(DbgCmdStepInstruction, arg0: 0, arg1: 0, arg2: 0)
+	end 'stepOneInstruction'
+
+	export function waitForStop() returns StopWait
+		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
+
+		// The order of the three is the whole correctness of this loop. The exit is sampled before the page
+		// is read and acted on after it, so a stop the program published on its way out still wins — a gone
+		// producer's stores are final. Both child streams are pumped every turn, because a full pipe blocks
+		// the debuggee and reads back as a timeout. The deadline comes last, and `lastLookForAStop` after it.
+		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
+			let outcome = self.target.poll()
+			self.target.pump()
+			let published = self.readWord(DbgOffStopSeq)
+
+			if published > (self.lastStopSeq as DebugAddress) 'aStopArrived'
+				self.lastStopSeq = published as EngineSeq
+				self.cacheFilled = false
+
+				return StopWait.stopped(self.readStopRecord())
+			end 'aStopArrived'
+
+			if not targetIsRunning(outcome) 'theProgramEnded'
+				return StopWait.ended(self.target.reap())
+			end 'theProgramEnded'
+
+			sleep(PollIntervalMs)
+		end 'poll'
+
+		return self.lastLookForAStop()
+	end 'waitForStop'
+
+	// ⛔ A program that ended in the last millisecond of the budget has already published everything it
+	// ever will, so the deadline is not the answer until the child has been asked once more.
+	function lastLookForAStop() returns StopWait
+		let outcome = self.target.poll()
+		self.target.pump()
+		let published = self.readWord(DbgOffStopSeq)
+
+		if published > (self.lastStopSeq as DebugAddress) 'aStopArrived'
+			self.lastStopSeq = published as EngineSeq
+			self.cacheFilled = false
+
+			return StopWait.stopped(self.readStopRecord())
+		end 'aStopArrived'
+
+		if not targetIsRunning(outcome) 'theProgramEnded'
+			return StopWait.ended(self.target.reap())
+		end 'theProgramEnded'
+
+		return StopWait.timedOut
+	end 'lastLookForAStop'
+
+	export function readDebuggeeWord(address DebugAddress, width EngineReadLength) returns DebugWord throws DebugMemoryError
+		return littleEndianWordOf(try self.readDebuggeeBytes(address, length: width))
+	end 'readDebuggeeWord'
+
+	export function readDebuggeeText(address DebugAddress, length EngineReadLength) returns String throws DebugMemoryError
+		return String.from(try self.readDebuggeeBytes(address, length: length))
+	end 'readDebuggeeText'
+
+	function readDebuggeeBytes(address DebugAddress, length EngineReadLength) returns ByteArray throws DebugMemoryError
+		if length == 0 'nothingAsked'
+			return ByteArray.create()
+		end 'nothingAsked'
+
+		if not self.cacheCovers(address, length: length) 'notHeld'
+			try self.fillCache(address, length: length)
+		end 'notHeld'
+
+		if not self.cacheCovers(address, length: length) 'shortRead'
+			throw DebugMemoryError.notReadable
+		end 'shortRead'
+
+		return self.slicedCache(address, length: length)
+	end 'readDebuggeeBytes'
+
+	export function registerValue(number EngineRegisterNumber) returns DebugWord
+		return try self.page.readWord((DbgOffRegisters + (number as DebugAddress) * WordBytes) as SegmentOffset) otherwise 0
+	end 'registerValue'
+
+	export function registersOfLastStop() returns DebugAddressArray
+		var values = DebugAddressArray.create()
+
+		for i in 0 upto DbgRegisterSlots 'eachSlot'
+			values.push(self.readWord(DbgOffRegisters + i * WordBytes))
+		end 'eachSlot'
+
+		return values
+	end 'registersOfLastStop'
+
+	export function walkStack() returns CommandOutcome
+		return self.postCommand(DbgCmdBacktrace, arg0: 0, arg1: 0, arg2: 0)
+	end 'walkStack'
+
+	function cacheCovers(address DebugAddress, length EngineReadLength) returns bool
+		return self.cacheFilled and address >= self.cacheBase and address + (length as DebugAddress) <= self.cacheBase + (self.cacheBytes.count() as DebugAddress)
+	end 'cacheCovers'
+
+	function slicedCache(address DebugAddress, length EngineReadLength) returns ByteArray
+		var taken = ByteArray.create()
+		let start = address - self.cacheBase
+
+		for i in 0 upto length 'eachByte'
+			taken.push(try self.cacheBytes.get(start + (i as DebugAddress)) otherwise panic("DebugEngine.slicedCache: the caller asked a span the cache was just proven to hold"))
+		end 'eachByte'
+
+		return taken
+	end 'slicedCache'
+
+	function fillCache(address DebugAddress, length EngineReadLength) throws DebugMemoryError
+		if self.fetchedInto(address, length: DbgMaxReadLength) 'aWholeChunk'
+			return
+		end 'aWholeChunk'
+
+		if self.fetchedInto(address, length: length as DebugAddress) 'exactlyWhatWasAsked'
+			return
+		end 'exactlyWhatWasAsked'
+
+		throw DebugMemoryError.notReadable
+	end 'fillCache'
+
+	function fetchedInto(address DebugAddress, length DebugAddress) returns bool
+		match self.postCommand(DbgCmdReadMemory, arg0: address, arg1: length, arg2: 0) 'answered'
+			done then break 'answered'
+			refused then return false
+			unacknowledged then return false
+			gone then return false
+		end 'answered'
+
+		if self.readWord(DbgOffReadStatus) == 0 'notMapped'
+			return false
+		end 'notMapped'
+
+		self.cacheBase = address
+		self.cacheBytes = try self.page.copyOut(DbgOffReadBuf as SegmentOffset, byteCount: self.readWord(DbgOffReadLen) as SegmentByteCount) otherwise return false
+		self.cacheFilled = true
+
+		return true
+	end 'fetchedInto'
+
+	function readStopRecord() returns EngineStop
+		let reason = self.readWord(DbgOffStopReason)
+		var returnAddresses = DebugAddressArray.create()
+		var framePointers = DebugAddressArray.create()
+
+		if reason != DbgStopReasonEntry 'aThreadIsStopped'
+			match self.walkStack() 'walked'
+				done then self.harvestFrames(returnAddresses, framePointers: framePointers)
+				refused then break 'walked'
+				unacknowledged then break 'walked'
+				gone then break 'walked'
+			end 'walked'
+		end 'aThreadIsStopped'
+
+		return EngineStop.create(reason, machine: self.readWord(DbgOffStopMachine), greenThread: self.readWord(DbgOffStopGreenThread), pc: self.readWord(DbgOffStopPc), stackPointer: self.readWord(DbgOffStopSp), framePointer: self.readWord(DbgOffStopFp), registers: self.registersOfLastStop(), returnAddresses: returnAddresses, framePointers: framePointers, truncated: self.readWord(DbgOffBtTruncated) != 0)
+	end 'readStopRecord'
+
+	function harvestFrames(returnAddresses DebugAddressArray, framePointers DebugAddressArray)
+		let count = self.readWord(DbgOffBtCount)
+
+		for i in 0 upto count 'eachFrame'
+			let slot = DbgOffBtFrames + i * DbgBacktraceFrameWords * WordBytes
+			returnAddresses.push(self.readWord(slot))
+			framePointers.push(self.readWord(slot + WordBytes))
+		end 'eachFrame'
+	end 'harvestFrames'
+
+	function rememberBreakpoint(offset DebugAddress)
+		if not self.armedAt(self.textBase + offset) 'notYetKnown'
+			self.breakpoints.push(EngineBreakpoint.create(offset, address: self.textBase + offset))
+		end 'notYetKnown'
+	end 'rememberBreakpoint'
+
+	function postCommand(command DebugAddress, arg0 DebugAddress, arg1 DebugAddress, arg2 DebugAddress) returns CommandOutcome
+		self.commandSeq = self.commandSeq + 1
+		self.writeWord(DbgOffCmdArg0, value: arg0)
+		self.writeWord(DbgOffCmdArg1, value: arg1)
+		self.writeWord(DbgOffCmdArg2, value: arg2)
+		self.writeWord(DbgOffCmd, value: command)
+		self.writeWord(DbgOffCmdSeq, value: self.commandSeq as DebugAddress)
+
+		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
+
+		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
+			let outcome = self.target.poll()
+			self.target.pump()
+
+			if self.readWord(DbgOffAckSeq) >= (self.commandSeq as DebugAddress) 'acknowledged'
+				return self.acknowledgedOutcome()
+			end 'acknowledged'
+
+			if not targetIsRunning(outcome) 'theProgramEnded'
+				return CommandOutcome.gone(self.target.reap())
+			end 'theProgramEnded'
+
+			sleep(PollIntervalMs)
+		end 'poll'
+
+		return self.lastLookForAnAcknowledgement()
+	end 'postCommand'
+
+	function lastLookForAnAcknowledgement() returns CommandOutcome
+		let outcome = self.target.poll()
+		self.target.pump()
+
+		if self.readWord(DbgOffAckSeq) >= (self.commandSeq as DebugAddress) 'acknowledged'
+			return self.acknowledgedOutcome()
+		end 'acknowledged'
+
+		if not targetIsRunning(outcome) 'theProgramEnded'
+			return CommandOutcome.gone(self.target.reap())
+		end 'theProgramEnded'
+
+		return CommandOutcome.unacknowledged
+	end 'lastLookForAnAcknowledgement'
+
+	function acknowledgedOutcome() returns CommandOutcome
+		if self.readWord(DbgOffCmdResult) == DbgCmdResultDone 'accepted'
+			return CommandOutcome.done
+		end 'accepted'
+
+		return CommandOutcome.refused(refusalReasonName(self.readWord(DbgOffCmdRefusal)))
+	end 'acknowledgedOutcome'
+
+	function readWord(offset DebugAddress) returns DebugAddress
+		return (try self.page.readWord(offset as SegmentOffset) otherwise 0) as DebugAddress
+	end 'readWord'
+
+	function writeWord(offset DebugAddress, value DebugAddress)
+		try self.page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise ignore
+	end 'writeWord'
+end 'DebugEngine'
+
+function refusalReasonName(code DebugAddress) returns String
+	if code == DbgRefusalOutOfText 'outOfText'
+		return "out-of-text"
+	end 'outOfText'
+
+	if code == DbgRefusalInsideRuntimeSymbol 'insideRuntimeSymbol'
+		return "inside-runtime-symbol"
+	end 'insideRuntimeSymbol'
+
+	if code == DbgRefusalUnclassified 'unclassified'
+		return DebugUnclassifiedReason
+	end 'unclassified'
+
+	if code == DbgRefusalTableFull 'tableFull'
+		return "table-full"
+	end 'tableFull'
+
+	if code == DbgRefusalNoSuchBreakpoint 'noSuchBreakpoint'
+		return "no-such-breakpoint"
+	end 'noSuchBreakpoint'
+
+	if code == DbgRefusalUnknownCommand 'unknownCommand'
+		return "unknown-command"
+	end 'unknownCommand'
+
+	if code == DbgRefusalNotStopped 'notStopped'
+		return "not-stopped"
+	end 'notStopped'
+
+	return "refused-{code}"
+end 'refusalReasonName'
+
+function seededControlPage(page SharedSegment) returns bool
+	return seededWord(page, offset: DbgOffMagic, value: DbgMagicWord) and seededWord(page, offset: DbgOffDriverVersion, value: DbgLayoutVersion) and seededWord(page, offset: DbgOffStopAtEntry, value: DbgStopAtEntryYes) and seededWord(page, offset: DbgOffDriverPid, value: __Builtins.currentProcessId() as DebugAddress)
+end 'seededControlPage'
+
+function seededWord(page SharedSegment, offset DebugAddress, value DebugAddress) returns bool
+	try page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise return false
+
+	return true
+end 'seededWord'
+
+function littleEndianWordOf(bytes ByteArray) returns DebugWord
+	var low = 0 as DebugWord
+	var top = 0 as EngineTopByte
+
+	for (iter, byte) in bytes.withIterator() 'eachByte'
+		if iter.index() == EngineTopBytePosition 'theSignBearingByte'
+			top = byte as EngineTopByte
+			continue
+		end 'theSignBearingByte'
+
+		low = low or ((byte as DebugWord) shl ((iter.index() * EngineByteBits) as DebugEngineBitShift))
+	end 'eachByte'
+
+	if top < EngineSignBitByteValue 'positive'
+		return low + (top as DebugWord) * EngineTopByteWeight
+	end 'positive'
+
+	return low + ((top - EngineByteModulus) as DebugWord) * EngineTopByteWeight
+end 'littleEndianWordOf'
+
+typealias DebugEngineBitShift = int(0 to 63)
+typealias EngineTopByte = int(0 to 255)
+
+let EngineByteBits = 8
+let EngineTopBytePosition = 7
+let EngineSignBitByteValue = 128
+let EngineByteModulus = 256
+let EngineTopByteWeight = 72057594037927936
+
+// ⚠ The two bounds below are written twice: a typed range cannot name a `let`, so the only way to
+// keep them true is to compare them with the page they describe before the page is created.
+function requireEngineBoundsMatchTheLayout()
+	if MaxEngineReadLength != DbgMaxReadLength 'aWindowThatIsNotThePages'
+		panic("DebugEngine: EngineReadLength is bounded at {MaxEngineReadLength} and the control page answers a read of at most {DbgMaxReadLength} bytes")
+	end 'aWindowThatIsNotThePages'
+
+	if MaxEngineRegisterNumber != DbgRegisterSlots - 1 'aFileThatIsNotThePages'
+		panic("DebugEngine: EngineRegisterNumber is bounded at {MaxEngineRegisterNumber} and the control page holds {DbgRegisterSlots} register slots")
+	end 'aFileThatIsNotThePages'
+end 'requireEngineBoundsMatchTheLayout'

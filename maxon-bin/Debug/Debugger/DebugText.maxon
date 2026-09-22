@@ -1,0 +1,108 @@
+let FrameIndent = "  "
+let ValueIndent = "    "
+
+export function debugTextLinesFor(reply DebugReply) returns StringArray
+	var lines = StringArray.create()
+
+	match reply 'which'
+		quit then lines.push("quit")
+		spoken(spokenLines) then appendSpoken(lines, spokenLines: spokenLines)
+		breakpoint(answer) then lines.push(breakpointText(answer))
+		stopped(stop) then appendStop(lines, stop: stop)
+		walked(frames) then appendFrames(lines, frames: frames)
+		locals(functionName, values) then appendLocals(lines, functionName: functionName, values: values)
+		value(tree) then appendRoots(lines, tree: tree, indent: "")
+		exited(code) then lines.push("the program exited with code {code}")
+		crashed(status) then lines.push("the program crashed with status {hexWord(status)}")
+		timedOut(waitingFor) then lines.push("timed out waiting for {waitingFor}")
+		failed(message, suggestion) then lines.push(errorText(message, suggestion: suggestion))
+	end 'which'
+
+	return lines
+end 'debugTextLinesFor'
+
+function appendSpoken(lines StringArray, spokenLines StringArray)
+	for spoken in spokenLines 'eachLine'
+		lines.push(spoken)
+	end 'eachLine'
+end 'appendSpoken'
+
+function breakpointText(answer DebugBreakpointAnswer) returns String
+	if answer.action == BreakpointAmbiguousAction 'moreThanOneName'
+		return "'{answer.target}' names {answer.candidates.count()} functions: {joined(answer.candidates)}"
+	end 'moreThanOneName'
+
+	if answer.action == BreakpointNoMatchAction 'nothingAnswersToIt'
+		return "'{answer.target}' names no function{suggestionTail(answer.suggestion)}"
+	end 'nothingAnswersToIt'
+
+	if answer.action == BreakpointRefusedAction 'refused'
+		return "breakpoint at {answer.file}:{answer.line} refused ({answer.reason})"
+	end 'refused'
+
+	if answer.action == BreakpointNoCodeAction 'noCodeThere'
+		return "no code at {answer.file}:{answer.line}"
+	end 'noCodeThere'
+
+	return "breakpoint {answer.action} at {answer.file}:{answer.line} in {answer.functionName} ({answer.offsets.count()} site(s))"
+end 'breakpointText'
+
+function suggestionTail(suggestion String) returns String
+	return "" if suggestion.isEmpty() else " — did you mean '{suggestion}'?"
+end 'suggestionTail'
+
+function appendStop(lines StringArray, stop DebugStop)
+	lines.push("stopped ({stop.reason}) at {stop.file}:{stop.line} in {stop.functionName}")
+
+	for row in stop.source 'eachSourceLine'
+		lines.push("{"->" if row.current else "  "} {row.line}\t{row.text}")
+	end 'eachSourceLine'
+end 'appendStop'
+
+function appendFrames(lines StringArray, frames DebugFrameArray)
+	for frame in frames 'eachFrame'
+		lines.push("{FrameIndent}#{frame.number} {frame.functionName}{inlinedTail(frame.inlined)} at {frame.file}:{frame.line}")
+	end 'eachFrame'
+end 'appendFrames'
+
+function inlinedTail(inlined bool) returns String
+	return " [inlined]" if inlined else ""
+end 'inlinedTail'
+
+function appendLocals(lines StringArray, functionName String, values DebugValueTree)
+	lines.push("locals of {functionName}:")
+	appendRoots(lines, tree: values, indent: ValueIndent)
+end 'appendLocals'
+
+function appendRoots(lines StringArray, tree DebugValueTree, indent String)
+	for root in tree.roots 'eachRoot'
+		appendValue(lines, tree: tree, index: root, indent: indent)
+	end 'eachRoot'
+end 'appendRoots'
+
+function appendValue(lines StringArray, tree DebugValueTree, index DebugValueIndex, indent String)
+	let value = tree.nodeAt(index)
+	lines.push("{indent}{value.name} : {value.typeName} = {valueText(value)}")
+
+	for child in value.children 'eachChild'
+		appendValue(lines, tree: tree, index: child, indent: "{indent}{ValueIndent}")
+	end 'eachChild'
+end 'appendValue'
+
+function valueText(value DebugValueNode) returns String
+	return "<{value.unavailable}>" if not value.unavailable.isEmpty() else value.display
+end 'valueText'
+
+function errorText(message String, suggestion String) returns String
+	return "error: {message}{suggestionTail(suggestion)}"
+end 'errorText'
+
+function joined(values StringArray) returns String
+	var rendered = ""
+
+	for value in values 'eachValue'
+		rendered.append(value if rendered.isEmpty() else ", {value}")
+	end 'eachValue'
+
+	return rendered
+end 'joined'

@@ -1,0 +1,49 @@
+let SourceWindowCaseLabel = "stop-shows-a-source-window"
+
+let SourceKey = "source"
+let TextKey = "text"
+let CurrentKey = "current"
+
+let AnchorSpelling = "// anchor: hot"
+
+test 'a stop carries a window of the source around the line it is on, with that line marked current'
+	let staged = builtFixture(SourceWindowCaseLabel, fixture: HeaplessFixtureName)
+	let hotLine = anchorLine(staged, anchor: "hot")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(hotLine)}", RunCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the breakpoint at {lineTarget(hotLine)} published no stop, so there is no window to read. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	let window = childrenOf(stopped, node: stopped.root, key: SourceKey)
+
+	try Expect.atLeast(window.count() as AssertedInt, than: 2, message: "a stop that names a line and shows none of the source around it makes a reader open an editor to learn what they stopped on. The `{SourceKey}` window held {window.count()} rows. {said}")
+
+	var marked = StringArray.create()
+	var outOfOrder = StringArray.create()
+	var previous = 0 as EventNumber
+
+	for row in window 'eachRow'
+		let number = numberOf(stopped, node: row, key: LineKey)
+
+		if previous != 0 and number != previous + 1 'notTheNextLine'
+			outOfOrder.push("line {number} follows line {previous}")
+		end 'notTheNextLine'
+
+		previous = number
+
+		if flagOf(stopped, node: row, key: CurrentKey) 'theStoppedLine'
+			marked.push("{number}: {textOf(stopped, node: row, key: TextKey)}")
+		end 'theStoppedLine'
+	end 'eachRow'
+
+	try Expect.isEmpty(renderedRows(outOfOrder), message: "the window is a RUN of consecutive source lines, so a gap in it is a reader shown two places as though they were one. {said}")
+	try Expect.equal(marked.count() as AssertedInt, expected: 1, message: "exactly one row of the window is the line the program is stopped on: none leaves the reader guessing and two is a lie. The marked rows were: {renderedRows(marked)}. {said}")
+
+	let current = try marked.get(0) otherwise AbsentEventText
+	try Expect.contains(current, needle: "{hotLine}:", message: "the row marked `{CurrentKey}` is not line {hotLine}, which is the line the stop itself reports. It marked: {current}. {said}")
+	try Expect.contains(current, needle: AnchorSpelling, message: "the marked row's `{TextKey}` is not the staged source's own text for that line — a window read out of some other file, or off by a line, is worse than none. It marked: {current}. {said}")
+end 'a stop carries a window of the source around the line it is on, with that line marked current'

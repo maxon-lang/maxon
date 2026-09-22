@@ -1,0 +1,21 @@
+let FinishInnerCaseLabel = "finish-stops-at-inner-breakpoint"
+
+let InnerFunctionName = "inner"
+
+test 'a finish that passes a breakpoint stops there instead of running to the return'
+	let staged = builtFixture(FinishInnerCaseLabel, fixture: SteppingFixtureName)
+	let innerLine = anchorLine(staged, anchor: "inner-loop")
+	let outerCallLine = anchorLine(staged, anchor: "outer-call")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(outerCallLine)}", RunCommand, StepCommand, "{BreakCommand} {lineTarget(innerLine)}", FinishCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	try Expect.equal(stops.count() as AssertedInt, expected: 3, message: "the breakpoint, the step into `{InnerFunctionName}` and the stop the finish ran into are three stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let landed = eventAt(stops, index: 2)
+	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: BreakpointStopReason, message: "`{FinishCommand}` is a WALK, and a walk that swallows a breakpoint it passed over is a breakpoint that silently does not exist. The stop must be reported as the breakpoint's. {said}")
+	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: innerLine as AssertedInt, message: "the finish did not stop on the breakpoint's line. {said}")
+	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: InnerFunctionName, message: "the finish ran past the frame it was walking out of. {said}")
+end 'a finish that passes a breakpoint stops there instead of running to the return'

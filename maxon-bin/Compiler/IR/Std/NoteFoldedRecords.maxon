@@ -1,0 +1,235 @@
+typealias FoldedOwnerSlot = int(0 to u64.max)
+typealias FoldedOwnerColumn = Array with FoldedOwnerSlot
+
+let NoFoldedOwner = 0 as FoldedOwnerSlot
+let FoldedOwnerBias = 1
+
+let MaxPhiResolutionSteps = 8
+
+let FoldedRecordWordBytes = 8 as ByteOffset
+let SmallestFoldedRecordWord = i32.min as ParsedInt
+let LargestFoldedRecordWord = i32.max as ParsedInt
+
+type FoldedFieldWrite
+	export var owner as FoldedOwnerSlot
+	export var recordValue as ValueId
+	export var offset as ByteOffset
+	export var word as ParsedInt
+
+	export static function create(owner FoldedOwnerSlot, recordValue ValueId, offset ByteOffset, word ParsedInt) returns FoldedFieldWrite
+		return Self{owner: owner, recordValue: recordValue, offset: offset, word: word}
+	end 'create'
+end 'FoldedFieldWrite'
+
+typealias FoldedFieldWriteArray = Array with FoldedFieldWrite
+
+// The constant words a named record's fields were given, recorded onto the binding before the stores
+// that carry them are removed as dead. It is asked immediately after `inlineLeaves` because that is the
+// one window where both halves are true at once: the inliner has dissolved the constructor call, so the
+// fields are plain stores of constants, and no later pass has yet deleted a store into a record nothing
+// reads.
+export function noteFoldedRecords(module StdModule)
+	var liveOps = OpIndexArray.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		noteFoldedRecordsInFunc(module, func: module.getFunc(funcIndex), liveOps: liveOps)
+	end 'eachFunc'
+end 'noteFoldedRecords'
+
+function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIndexArray)
+	if func.debugLocals.count() == 0 'notRecordingBindings'
+		return
+	end 'notRecordingBindings'
+
+	let argBound = blockArgIdBound(module, func: func)
+	let carried = carriedBlockArgValues(module, func: func, argBound: argBound)
+	let valueBound = namedOrDefinedValueBound(module, func: func)
+
+	var ownerOfValue = FoldedOwnerColumn.create()
+	ownerOfValue.refill(valueBound as ElementIndex, value: NoFoldedOwner)
+	var namedOfValue = ValueIdArray.create()
+	namedOfValue.refill(valueBound as ElementIndex, value: 0 as ValueId)
+
+	for (iter, local) in func.debugLocals.withIterator() 'eachBinding'
+		for named in local.valueIds 'eachValue'
+			let carrier = resolveThroughPhis(carried, value: named, argBound: argBound)
+			try ownerOfValue.set(carrier as ElementIndex, value: (iter.index() + FoldedOwnerBias) as FoldedOwnerSlot) otherwise panic("noteFoldedRecords: ownerOfValue.set OOB at value {carrier} of the {ownerOfValue.count()} this function defines")
+			try namedOfValue.set(carrier as ElementIndex, value: named) otherwise panic("noteFoldedRecords: namedOfValue.set OOB at value {carrier} of the {namedOfValue.count()} this function defines")
+		end 'eachValue'
+	end 'eachBinding'
+
+	module.collectLiveOpIndices(func, into: liveOps)
+
+	if not anyStoreIntoANamedValue(module, liveOps: liveOps, ownerOfValue: ownerOfValue) 'noRecordIsFilledHere'
+		return
+	end 'noRecordIsFilledHere'
+
+	var def = StdFoldableDef.create()
+	let constMap = collectConstValues(module, opIndices: liveOps, def: def)
+	var store = StdStoreOperands.create()
+	var writes = FoldedFieldWriteArray.create()
+	var refused = BoolArray.create()
+	refused.refill(func.debugLocals.count(), value: false)
+
+	for opIdx in liveOps 'eachOp'
+		classifyStoreOperands(opAt(module, opIdx: opIdx), store: store)
+
+		if store.isStore() 'aFieldWrite'
+			noteFieldWrite(writes, refused: refused, owner: ownerAt(ownerOfValue, value: store.addrId), recordValue: namedAt(namedOfValue, value: store.addrId), offset: store.offset, valueId: store.valueId, valueType: store.valueType, constMap: constMap)
+		end 'aFieldWrite'
+	end 'eachOp'
+
+	writes.sort(function(left FoldedFieldWrite, right FoldedFieldWrite) gives compareFoldedFieldWrites(left, right: right))
+	publishFoldedRecords(func, writes: writes, refused: refused)
+end 'noteFoldedRecordsInFunc'
+
+function highestNamedValue(func IrFunction) returns ValueId
+	var highest = 0 as ValueId
+
+	for local in func.debugLocals 'eachBinding'
+		for named in local.valueIds 'eachValue'
+			highest = named if named > highest else highest
+		end 'eachValue'
+	end 'eachBinding'
+
+	return highest
+end 'highestNamedValue'
+
+function namedOrDefinedValueBound(module StdModule, func IrFunction) returns ValueId
+	let defined = nextFreeValueId(module, func: func)
+	let pastTheNamed = highestNamedValue(func) + 1
+
+	return defined if defined > pastTheNamed else pastTheNamed
+end 'namedOrDefinedValueBound'
+
+function carriedBlockArgValues(module StdModule, func IrFunction, argBound ValueId) returns CarriedValues
+	var carried = CarriedValues.create(argBound)
+	let pairs = collectPhiOperands(module, func: func, refByBlockId: buildBlockIdIndex(module, func: func))
+
+	for i in 0 upto pairs.count() 'eachSlot'
+		carried.note(pairs.argAt(i), incoming: pairs.incomingAt(i))
+	end 'eachSlot'
+
+	return carried
+end 'carriedBlockArgValues'
+
+// A named value is often the block argument the inliner left behind (`InlineLeaves.attachContinuationArg`)
+// rather than the record itself, so the carrier is found through the arguments' incoming sets. The walk
+// is bounded rather than `findRoot`'s: that forest is acyclic only as an invariant of the fold loop that
+// builds it, and this pass reads the sets from outside that loop.
+function resolveThroughPhis(carried CarriedValues, value ValueId, argBound ValueId) returns ValueId
+	var at = value
+	var steps = 0
+
+	while steps < MaxPhiResolutionSteps 'walk'
+		if at >= argBound or not carried.isTrivial(at) 'notATrivialBlockArg'
+			return at
+		end 'notATrivialBlockArg'
+
+		at = carried.targetOf(at)
+		steps = steps + 1
+	end 'walk'
+
+	return value
+end 'resolveThroughPhis'
+
+function anyStoreIntoANamedValue(module StdModule, liveOps OpIndexArray, ownerOfValue FoldedOwnerColumn) returns bool
+	var store = StdStoreOperands.create()
+
+	for opIdx in liveOps 'eachOp'
+		classifyStoreOperands(opAt(module, opIdx: opIdx), store: store)
+
+		if store.isStore() and ownerAt(ownerOfValue, value: store.addrId) != NoFoldedOwner 'fillsANamedRecord'
+			return true
+		end 'fillsANamedRecord'
+	end 'eachOp'
+
+	return false
+end 'anyStoreIntoANamedValue'
+
+function opAt(module StdModule, opIdx OpIndex) returns StdOp
+	return try module.ops.get(opIdx) otherwise panic("noteFoldedRecords: opIdx {opIdx} from liveOpIndices is not in module.ops")
+end 'opAt'
+
+function noteFieldWrite(writes FoldedFieldWriteArray, refused BoolArray, owner FoldedOwnerSlot, recordValue ValueId, offset ByteOffset, valueId ValueId, valueType StdType, constMap ConstValueMap)
+	if owner == NoFoldedOwner 'notANamedRecord'
+		return
+	end 'notANamedRecord'
+
+	if valueType.rawValue.isFloat or not constMap.contains(valueId) 'notAFoldedField'
+		refuse(refused, owner: owner)
+		return
+	end 'notAFoldedField'
+
+	let word = constMap.constantOf(valueId)
+
+	if word < SmallestFoldedRecordWord or word > LargestFoldedRecordWord 'notRepresentable'
+		refuse(refused, owner: owner)
+		return
+	end 'notRepresentable'
+
+	writes.push(FoldedFieldWrite.create(owner, recordValue: recordValue, offset: offset, word: word))
+end 'noteFieldWrite'
+
+function refuse(refused BoolArray, owner FoldedOwnerSlot)
+	try refused.set((owner - FoldedOwnerBias) as ElementIndex, value: true) otherwise panic("noteFoldedRecords: refused.set OOB at binding {owner - FoldedOwnerBias} of {refused.count()}")
+end 'refuse'
+
+function ownerAt(ownerOfValue FoldedOwnerColumn, value ValueId) returns FoldedOwnerSlot
+	return try ownerOfValue.get(value as ElementIndex) otherwise NoFoldedOwner
+end 'ownerAt'
+
+function namedAt(namedOfValue ValueIdArray, value ValueId) returns ValueId
+	return try namedOfValue.get(value as ElementIndex) otherwise value
+end 'namedAt'
+
+function compareFoldedFieldWrites(left FoldedFieldWrite, right FoldedFieldWrite) returns Ordering
+	if left.owner != right.owner 'byBinding'
+		return left.owner.compare(right.owner)
+	end 'byBinding'
+
+	return left.offset.compare(right.offset)
+end 'compareFoldedFieldWrites'
+
+function publishFoldedRecords(func IrFunction, writes FoldedFieldWriteArray, refused BoolArray)
+	var at = 0 as ElementIndex
+
+	while at < writes.count() 'eachRecord'
+		let owner = (try writes.get(at) otherwise panic("noteFoldedRecords: writes.get OOB at {at} despite the while guard")).owner
+		var past = at
+
+		while past < writes.count() and (try writes.get(past) otherwise panic("noteFoldedRecords: writes.get OOB at {past} despite the while guard")).owner == owner 'sameBinding'
+			past = past + 1
+		end 'sameBinding'
+
+		publishOneFoldedRecord(func, writes: writes, refused: refused, owner: owner, first: at, past: past)
+		at = past
+	end 'eachRecord'
+end 'publishFoldedRecords'
+
+function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, refused BoolArray, owner FoldedOwnerSlot, first ElementIndex, past ElementIndex)
+	let binding = (owner - FoldedOwnerBias) as ElementIndex
+	let wasRefused = try refused.get(binding) otherwise true
+
+	if wasRefused 'aFieldTheCompilerCannotState'
+		return
+	end 'aFieldTheCompilerCannotState'
+
+	var words = ParsedIntArray.create()
+	words.reserve(past - first)
+	var at = first
+
+	while at < past 'eachField'
+		let write = try writes.get(at) otherwise panic("noteFoldedRecords: writes.get OOB at {at} despite the while guard")
+
+		if write.offset != ((at - first) as ByteOffset) * FoldedRecordWordBytes 'notTheNextWholeField'
+			return
+		end 'notTheNextWholeField'
+
+		words.push(write.word)
+		at = at + 1
+	end 'eachField'
+
+	var local = try func.debugLocals.get(binding) otherwise panic("noteFoldedRecords: debugLocals.get OOB at {binding} of {func.debugLocals.count()}")
+	local.noteFoldedRecord((try writes.get(first) otherwise panic("noteFoldedRecords: writes.get OOB at {first}, which its own run named")).recordValue, words: words)
+end 'publishOneFoldedRecord'

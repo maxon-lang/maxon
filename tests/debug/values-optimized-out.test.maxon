@@ -1,0 +1,26 @@
+let OptimizedOutCaseLabel = "values-optimized-out"
+
+let DeadLocalName = "dead"
+let NotLiveHereReason = "not-live-here"
+
+test 'a local whose last use is behind the stop reports itself unavailable rather than a number'
+	let staged = builtFixture(OptimizedOutCaseLabel, fixture: ValuesFixtureName)
+	let renderedAt = anchorLine(staged, anchor: "rendered")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, "{PrintCommand} {DeadLocalName}"])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: ValueEventName)
+
+	try Expect.equal(answers.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {DeadLocalName}` printed no `{ValueEventName}` event. A local that cannot be read is still an ANSWER about that local, and an error would be the wrong one: the name IS declared here. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let answered = eventAt(answers, index: 0)
+	let value = memberOf(answered, node: answered.root, key: ValueKey)
+	try Expect.equal(value.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
+
+	let unavailable = memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey)
+	try Expect.equal(unavailable.count() as AssertedInt, expected: 1, message: "`{DeadLocalName}` is dead before this line, so whatever held it has been reused by another value. Printing a NUMBER here is the worst answer a debugger can give: it is somebody else's bytes wearing this name, and nothing tells the reader so. {said}")
+
+	let reason = stringAt(answered, node: nodeAt(unavailable, index: 0))
+	try Expect.isTrue(reason == NotLiveHereReason or reason == OptimizedOutReason, message: "an unavailability must say WHY: a value the compiler never kept is `{OptimizedOutReason}` and one whose live range does not cover this stop is `{NotLiveHereReason}`, and a reader acts differently on each. It said: '{reason}'. {said}")
+end 'a local whose last use is behind the stop reports itself unavailable rather than a number'
