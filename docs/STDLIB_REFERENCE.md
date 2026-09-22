@@ -35,7 +35,7 @@ end 'main'
 | [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, Process, Subprocess, SharedMemory |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, URL |
 | [Data](#json) | Json, Sha256, Hasher |
-| [Runtime](#clock) | Clock, Runtime, Math, Primitive Extensions |
+| [System](#clock) | Clock, Scheduler, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
 
@@ -59,7 +59,7 @@ end 'main'
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
-| `SchedulerProcessorCount` | `int(1 to i64.max)` | Runtime |
+| `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
@@ -78,7 +78,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, `Runtime.yield`, `Runtime.processorCount` | E3104 |
+| `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |
@@ -2050,28 +2050,28 @@ end 'main'
 
 Output: `true true`.
 
-## Runtime
+## Scheduler
 
-`Runtime` holds controls over the green-thread scheduler. It is a namespace with no fields.
+`Scheduler` holds controls over the green-thread scheduler. It is a namespace with no fields.
 
 | Method | Description |
 |--------|-------------|
-| `Runtime.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
-| `Runtime.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to i64.max)`): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets, clamped to between 1 and the machine's count. The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
+| `Scheduler.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
+| `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to i64.max)`): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets, clamped to between 1 and the machine's count. The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
 
 Both are refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
 [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
 
 ```maxon
 function worker() returns ExitCode
-	Runtime.yield()
+	Scheduler.yield()
 	print("worker\n")
 	return 0
 end 'worker'
 
 function main() returns ExitCode
 	let p = async worker()
-	Runtime.yield()
+	Scheduler.yield()
 	_ = await p
 	print("main\n")
 	return 0

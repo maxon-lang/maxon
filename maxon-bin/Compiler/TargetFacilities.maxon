@@ -74,7 +74,7 @@ export enum HostFacility
 	// A green thread's timed park — `__gt_sleep`, and so `sleep(ms)` through `stdlib/Sleep.maxon`.
 	sleep
 
-	// The cooperative reschedule (`__gt_resched`) — `Runtime.yield()`. The scheduler's run-queue handoff
+	// The cooperative reschedule (`__gt_resched`) — `Scheduler.yield()`. The scheduler's run-queue handoff
 	// through `__gt_context_switch`, which is a hand-assembled per-CPU chunk rather than a lowering.
 	reschedule
 
@@ -234,8 +234,8 @@ end 'CalleeFacility'
 //   • `__clock_*` — `osReadWallClock`'s GetSystemTimeAsFileTime (`__Builtins.currentUnixTimeSeconds`);
 //   • `__gt_sleep` — the green-thread timer park, whose deadline is computed from that same `osReadClock`
 //     reading (`__Builtins.sleep(ms)`, and so every `sleep(ms)` through `stdlib/Sleep.maxon`'s body).
-//   • `__gt_resched` — the cooperative reschedule (`__Builtins.yield()`, and so every `Runtime.yield()`
-//     through `stdlib/Runtime.maxon`'s body). It is the same scheduler: a run-queue handoff through
+//   • `__gt_resched` — the cooperative reschedule (`__Builtins.yield()`, and so every `Scheduler.yield()`
+//     through `stdlib/Scheduler.maxon`'s body). It is the same scheduler: a run-queue handoff through
 //     `__gt_context_switch`, falling back to `__gt_timer_check`, neither of which the other three backends
 //     provide.
 //   • `__cpu_*` — `osCpuCount`'s `GetActiveProcessorCount` (`__Builtins.cpuCount()`). The MACHINE query,
@@ -366,7 +366,7 @@ end 'CalleeFacility'
 // MEASURED on `--target=wasm32-wasi`: `error E3104: … it lowers to the runtime entry '__gt_await_any',
 // which has no wasm32-wasi implementation`, at the call's own span
 // (`specs/await-any.md`'s `error.rejected-on-wasm`, which reaches its subject through
-// `__Builtins.parallelBoundary()` rather than `Runtime.yield()` — the latter is on THIS roster and would
+// `__Builtins.parallelBoundary()` rather than `Scheduler.yield()` — the latter is on THIS roster and would
 // have masked it four lines earlier).
 //
 // ⚠ **THE DOOR IS THIS PREDICATE AND NOT `requireTargetSupportsServiceEntry`, which serves the

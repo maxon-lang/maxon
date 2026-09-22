@@ -51,7 +51,7 @@ not 80.
 - `sleep(milliseconds)` parks the current green thread; it takes a `Milliseconds` value.
 - `async` applies to a direct call of a function or a static method. It cannot start a closure, an
   indirect call or an instance method (**E2015**).
-- The callee must be able to wait — call `sleep`, `await`, `Runtime.yield()`, or perform file, socket or
+- The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, or perform file, socket or
   process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
   yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
 
@@ -177,7 +177,7 @@ when it goes out of scope (or is overwritten), which has the same effect.
 
 ## Yielding
 
-`Runtime.yield()` gives other runnable work a turn and then continues. It never blocks and uses no timer
+`Scheduler.yield()` gives other runnable work a turn and then continues. It never blocks and uses no timer
 (unlike `sleep(0)`); when nothing else is runnable it returns promptly. Use it in a loop that polls for a
 condition; use `await` or `sleep` to actually wait.
 
@@ -306,14 +306,14 @@ APIs.
   cheap. A stack stops growing at 1 GiB; a recursion past it stops the program with `panic: stack overflow`.
 - **Parallelism.** By default the scheduler creates one processor per logical CPU. The environment
   variable `MAXON_MAX_PROCS=N` sets the count, clamped to between 1 and the CPU count; a value that is not a
-  positive number leaves the default. `Runtime.processorCount()` answers the resolved count. Services use
+  positive number leaves the default. `Scheduler.processorCount()` answers the resolved count. Services use
   the processors in parallel; an `async`-only program's coroutines stay on the green thread that started
   them.
 - **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry and moved
   behind the other runnable work, so a CPU-bound loop cannot starve the rest of the program.
   `MAXON_PREEMPT=off` disables preemption; `on`, or unset, is the default, and any other value makes the
   program exit at start-up with code 116.
-- **Coroutines switch only where they wait**: at `await`, `sleep`, `Runtime.yield()` and I/O.
+- **Coroutines switch only where they wait**: at `await`, `sleep`, `Scheduler.yield()` and I/O.
 
 The [CLI reference](/docs/cli/) lists the environment variables a compiled program reads.
 

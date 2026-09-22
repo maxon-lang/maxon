@@ -60,7 +60,7 @@ short-circuits when `__Builtins.schedProcessorCount()` resolves to one (the conf
 `workers=1` is the correct answer and waiting would spend the budget to learn nothing), and reports
 expiry as **`workerwait=timeout`**. Both drivers fail such a row rather than reading it as a pin.
 
-⚠ **IT SLEEPS RATHER THAN YIELDING, AND THAT IS THE LOAD-BEARING CHOICE.** `Runtime.yield()` is one
+⚠ **IT SLEEPS RATHER THAN YIELDING, AND THAT IS THE LOAD-BEARING CHOICE.** `Scheduler.yield()` is one
 turn on the *same* M and returns as soon as nothing else is runnable — under the saturation this
 exists for, a yield-spin competes with the very machine it waits for and drains the queue that
 machine would steal from. A sleep parks on a timer and the scheduler netpolls, so one turn is one

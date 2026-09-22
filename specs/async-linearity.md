@@ -61,7 +61,7 @@ and `VirtualFree` entries, which exist only on x64-windows at this rung. The mar
 *"the linearity RULE itself is target-neutral, and its compile-time refusals carry no marker"* — the RULE
 is target-neutral, but **a case that exercises it cannot be**, and the difference cost two red lanes.
 MEASURED 2026-08-14: a legal `async` spawn needs a callee that YIELDS (`E3073` otherwise), the only yield
-primitive is `Runtime.yield()`, and that lowers to `__gt_resched`, which is x64-windows-only. So the
+primitive is `Scheduler.yield()`, and that lowers to `__gt_resched`, which is x64-windows-only. So the
 thunk reaches a gated construct no matter how it is written, `E3104` is raised at the thunk and — the
 compiler reporting the FIRST error — MASKS the `E3100` the case exists to pin. Six cases here, six in
 `async-await.md` (whose thunks gate on `File.exists`/`__mf_exists` instead) and one in
@@ -76,7 +76,7 @@ moment one does.** Removing the marker before then re-creates the masking, silen
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -100,7 +100,7 @@ spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Re
 the await is reachable from itself across the back-edge, without re-passing the `async` that would re-arm it.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -127,7 +127,7 @@ thread a second name; awaiting through both names awaits it twice. In the compil
 value, so the second await is refused with no thread-id sidetable — the value IS the thread's identity.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -150,7 +150,7 @@ of the promise resolves to the same SSA value it was spawned as (there is no re-
 inside the branch name one thread — and awaiting both is the second await it is.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -180,7 +180,7 @@ a path only when the promise's DEFINITION is re-passed (a re-arm); reassigning `
 `q` still names the first thread when it is awaited — and that await is the second one, refused.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -205,7 +205,7 @@ but the await AFTER the ternary is reachable from the arm that WAS taken, so on 
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -231,7 +231,7 @@ are allowed. A lexical "already awaited" check would reject this valid program; 
 because neither await can reach the other.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -267,7 +267,7 @@ arm written LAST this program was refused **E3142**, and with the two arms swapp
 it compiled and ran. A settle rule that reads the arm order is not a settle rule.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -293,7 +293,7 @@ first await of that thread, not a second await of the old one. The linear check 
 of one thread, not a second `await p` in the text.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -317,7 +317,7 @@ not N awaits of one. This is the case an over-eager check breaks: the alias unif
 re-arm — re-passing the promise's definition on the back-edge — is what keeps the single await legal.
 ```maxon
 function makeValue(i Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return i
 end 'makeValue'
 
@@ -345,7 +345,7 @@ each is the only await on its own path, exactly as in an `if`/`else`. The reacha
 arms as the separate branches they lower to, not as one straight-line block.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -372,7 +372,7 @@ hold: the alias must UNIFY (or `await p; await q` in sequence would double-free)
 EXCLUSIVE (or unifying them would reject this).
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 21
 end 'makeValue'
 
@@ -404,7 +404,7 @@ peek gives an ownership defect: a plausible number.
 that — but `q.inner` is a NON-consuming read, and no linearity check exists that can see one.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -429,7 +429,7 @@ weaker consume than `await`; it renounces the result instead of taking it, and t
 gone.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -452,7 +452,7 @@ struct and returns it to the free list, so a second one hands the allocator a sl
 back.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -474,7 +474,7 @@ is a second reclaim of one thread. This is the case that makes the rule a proper
 rather than of either keyword.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -495,7 +495,7 @@ And the other order. A cancelled promise has no result to hand over — awaiting
 whose struct is on the free list.
 ```maxon
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 

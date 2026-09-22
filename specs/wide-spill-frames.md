@@ -8941,7 +8941,7 @@ function sink(x Integer) returns Integer
 end 'sink'
 
 function wide() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	let n = sink(3)
 	let v0 = n + 1
 	let v1 = n + 2

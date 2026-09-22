@@ -3,7 +3,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -18,7 +18,7 @@ function main() returns ExitCode
 	var spins = 0
 	var after = 0
 	while spins < maxSpins and after == 0 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		after = peek(p)
 		spins = spins + 1
 	end 'drive'
@@ -106,7 +106,7 @@ func @makeValue {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegImm32 r8, 42
     x64.epilogue 32
     x64.popReg rbp
@@ -153,7 +153,7 @@ func @main {
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, whileexit
   drive:
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegReg rcx, rbx
     x64.callDirect peek
     x64.leaRegRegImm32 r13, r13, 1

@@ -93,7 +93,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -106,7 +106,7 @@ function main() returns ExitCode
 	var spins = 0
 	var after = 0
 	while spins < maxSpins and after == 0 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		after = __Builtins.gtIsComplete(p.inner)
 		spins = spins + 1
 	end 'drive'
@@ -138,7 +138,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -180,7 +180,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -195,7 +195,7 @@ function main() returns ExitCode
 	var spins = 0
 	var after = 0
 	while spins < maxSpins and after == 0 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		after = peek(p)
 		spins = spins + 1
 	end 'drive'
@@ -232,7 +232,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -291,7 +291,7 @@ type Holder
 end 'Holder'
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -306,7 +306,7 @@ function main() returns ExitCode
 	var spins = 0
 	var after = 0
 	while spins < maxSpins and after == 0 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		after = __Builtins.gtIsComplete(h.p.inner)
 		spins = spins + 1
 	end 'drive'
@@ -368,7 +368,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -381,5 +381,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:7:10: 'Runtime.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation
+error E3104: <fragment>:7:12: 'Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation
 ```

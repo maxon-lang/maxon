@@ -6,7 +6,7 @@ typealias IntPromiseArray = Array with IntPromise
 let MaxSpins = 200
 
 function value(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n
 end 'value'
 
@@ -22,7 +22,7 @@ end 'arm'
 function completesUnderTheDrive(slots IntPromiseArray) returns bool
 	var spins = 0
 	while spins < MaxSpins 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
 		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
 			return true
@@ -124,7 +124,7 @@ func @value {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -233,7 +233,7 @@ func @completesUnderTheDrive {
     x64.movRegImm32 r12, 0
     x64.jmp whilehdr
   drive:
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegImm32 rdx, 0
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0

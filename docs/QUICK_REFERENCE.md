@@ -926,7 +926,7 @@ end 'each'
 
 - `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which is what creates an independently scheduled green thread (`specs/services.md`)
 - Green threads run on the four native lanes; `wasm32-wasi` has none at all and refuses `async` and `sleep` with **E3104**
-- Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Runtime.yield()` and I/O, never in between
+- Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Scheduler.yield()` and I/O, never in between
 - A green thread that has held its processor for 10 ms is preempted at its next function entry and may resume on another OS thread
 - Reference counting is plain, not atomic — a green thread and its coroutines are one strand, and at most one machine runs a strand's members at a time
 - Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)

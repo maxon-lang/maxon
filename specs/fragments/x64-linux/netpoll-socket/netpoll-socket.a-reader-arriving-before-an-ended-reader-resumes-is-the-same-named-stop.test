@@ -25,11 +25,11 @@ function cancelFirstReader(client TcpClient) returns ReadOutcome
 	let first = async readOutcome(client)
 
 	while phase == 0 'untilMainReads'
-		Runtime.yield()
+		Scheduler.yield()
 	end 'untilMainReads'
 
 	first.cancel()
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'cancelFirstReader'
 
@@ -185,7 +185,7 @@ func @cancelFirstReader {
     x64.callDirect __gt_ready
     x64.jmp whilehdr
   untilMainReads:
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
   whilehdr:
     x64.leaRegGlobal rax, __data_phase
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -194,7 +194,7 @@ func @cancelFirstReader {
   whileexit:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_promise_drop
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12

@@ -52,7 +52,7 @@ its struct + stack silently.
 ```maxon
 
 function trivial() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'trivial'
 
@@ -79,12 +79,12 @@ pins that `a` really had completed when it was dropped: a thread that has not ru
 ```maxon
 
 function ten() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 10
 end 'ten'
 
 function twenty() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 20
 end 'twenty'
 
@@ -108,7 +108,7 @@ reaches `incFlag` and the global stays 0. The drop cancels the never-run thread;
 var flag = 0
 
 function incFlag() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	flag = 1
 	return 1
 end 'incFlag'
@@ -133,7 +133,7 @@ leak gate's tracked live column, and `__gt_live_count` is the gate that catches 
 ```maxon
 
 function trivial() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'trivial'
 
@@ -171,7 +171,7 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -204,7 +204,7 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -232,7 +232,7 @@ sum is 7, and the live count balances to zero across both calls (no GT-leak abor
 ```maxon
 
 function compute() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 7
 end 'compute'
 
@@ -282,7 +282,7 @@ function slowProc() returns Integer
 end 'slowProc'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -310,7 +310,7 @@ function slowProc() returns Integer
 end 'slowProc'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -349,7 +349,7 @@ function slowProc(tag Integer) returns Integer
 end 'slowProc'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -383,7 +383,7 @@ function slowProc(tag Integer) returns Integer
 end 'slowProc'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -490,7 +490,7 @@ unmarked, so the re-arm saw no live thread to drop) and the scope-exit drop misr
 pointer, corrupting the heap count (exit 101).
 ```maxon
 function trivial() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'trivial'
 
@@ -515,7 +515,7 @@ merges the re-armed thread and the untouched one, both marked promises, so the s
 the taken path holds — balanced on every path (exit 0). Before the fix this exited 101.
 ```maxon
 function trivial() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'trivial'
 
@@ -544,7 +544,7 @@ accounted for (the original dropped at the re-arm, the re-armed one awaited). Be
 phi was rejected E2015 ("not a promise").
 ```maxon
 function seven() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 7
 end 'seven'
 
@@ -575,7 +575,7 @@ result (5), every intermediate thread dropped and the live count balanced. Befor
 was rejected E2015 ("not a promise") at the `await`.
 ```maxon
 function five() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 5
 end 'five'
 
@@ -631,7 +631,7 @@ owns nothing, so nothing is dropped at scope exit and no use-after-move is repor
 rather than a scalar, which is the only re-arm the type now admits. What is gone is a spelling, not a rule.
 ```maxon
 function nine() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 9
 end 'nine'
 
@@ -666,7 +666,7 @@ typealias IntPromiseArray = Array with IntPromise
 let MaxSpins = 200
 
 function value(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n
 end 'value'
 
@@ -682,7 +682,7 @@ end 'arm'
 function completesUnderTheDrive(slots IntPromiseArray) returns bool
 	var spins = 0
 	while spins < MaxSpins 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
 		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
 			return true
@@ -731,7 +731,7 @@ typealias IntPromiseArray = Array with IntPromise
 let MaxSpins = 200
 
 function value(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n
 end 'value'
 
@@ -747,7 +747,7 @@ end 'arm'
 function completesUnderTheDrive(slots IntPromiseArray) returns bool
 	var spins = 0
 	while spins < MaxSpins 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
 		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
 			return true
@@ -1026,7 +1026,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function work(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n + 1
 end 'work'
 
@@ -1052,7 +1052,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function work() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 1
 end 'work'
 
@@ -1080,7 +1080,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function work(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n + 1
 end 'work'
 
@@ -1116,7 +1116,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function work(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n + 1
 end 'work'
 
@@ -1152,7 +1152,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function work(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n + 1
 end 'work'
 
@@ -1181,7 +1181,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function work(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n + 1
 end 'work'
 

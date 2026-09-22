@@ -5,7 +5,7 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -25,7 +25,7 @@ function main() returns ExitCode
 	let s6 = async sleeper()
 	let s7 = async sleeper()
 	let s8 = async sleeper()
-	Runtime.yield()
+	Scheduler.yield()
 
 	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
 	let before = __Builtins.schedTimerScanStepCount()
@@ -139,7 +139,7 @@ func @sleeper {
 func @fast {
   entry:
     arm64.prologue 16
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret
@@ -197,7 +197,7 @@ func @main {
     arm64.bl __gt_spawn
     arm64.storeSlotReg slot7, x0
     arm64.bl __gt_ready
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.leaRdata x0, __str_rec_4  ; "for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done"
     arm64.bl __gt_subp_spawn
     arm64.movRegReg x26, x0

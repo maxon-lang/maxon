@@ -45,8 +45,8 @@ green thread — `main`'s, in an `async`-only program — asking to be put behin
   `__Builtins.schedRetakeCount()` counts these.
 - **An overdue timer.** The monitor starts a machine on an idle processor for a timer no running machine will
   fire in time. `__Builtins.schedTimerStartCount()` counts these.
-- **A `Runtime.yield()` with no sibling coroutine to run** puts the green thread on the global queue the way a
-  preemption does (`runtime-yield.md`).
+- **A `Scheduler.yield()` with no sibling coroutine to run** puts the green thread on the global queue the way a
+  preemption does (`scheduler-yield.md`).
 
 Each global put pays a wake — Go's `wakep` — and a wake starts a worker M when a processor is idle. MEASURED
 on this tree: an `async` program whose one coroutine spins for 100 ms reads `workers=1` at

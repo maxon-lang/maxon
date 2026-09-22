@@ -319,7 +319,7 @@ finished before the sleep ends, so the non-blocking peek reads 1 and the reply i
 typealias Integer = int(i64.min to i64.max)
 
 function flip(v Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return v + 1
 end 'flip'
 
@@ -364,7 +364,7 @@ worker may fire that deadline onto its own processor, and the exit it takes next
 typealias Integer = int(i64.min to i64.max)
 
 function child() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	sleep(0)
 	return 1
 end 'child'
@@ -392,12 +392,12 @@ function main() returns ExitCode
 	var i = 0
 
 	while i < 2000 'settle'
-		Runtime.yield()
+		Scheduler.yield()
 		i = i + 1
 	end 'settle'
 
 	let p = async child()
-	Runtime.yield()
+	Scheduler.yield()
 	p.cancel()
 	return 0 as ExitCode
 end 'main'

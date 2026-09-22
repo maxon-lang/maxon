@@ -11,17 +11,17 @@ function down(n Integer) returns Integer
 end 'down'
 
 function seedBytes() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return __Builtins.gtStackBytes()
 end 'seedBytes'
 
 function deep(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return down(n)
 end 'deep'
 
 function shallow(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n
 end 'shallow'
 
@@ -146,7 +146,7 @@ func @down {
 func @seedBytes {
   entry:
     arm64.prologue 16
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.bl __sched_gt_stack_bytes
     arm64.epilogue 16
     arm64.ret
@@ -157,7 +157,7 @@ func @deep {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.movRegReg x0, x19
     arm64.bl down
     arm64.loadRegSlot x19, slot0
@@ -170,7 +170,7 @@ func @shallow {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32

@@ -980,11 +980,11 @@ function cancelFirstReader(client TcpClient) returns ReadOutcome
 	let first = async readOutcome(client)
 
 	while phase == 0 'untilMainReads'
-		Runtime.yield()
+		Scheduler.yield()
 	end 'untilMainReads'
 
 	first.cancel()
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'cancelFirstReader'
 

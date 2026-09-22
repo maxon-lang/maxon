@@ -50,7 +50,7 @@ partial result correctly.
 ```maxon
 
 function deepRecurse(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'
@@ -75,7 +75,7 @@ exact; `main` returns it less 250 to fit the exit code.
 ```maxon
 
 function deepRecurse(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'
@@ -128,7 +128,7 @@ grows in turn — proving free-on-complete leaves no corruption for the next spa
 ```maxon
 
 function deepRecurse(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'
@@ -1223,7 +1223,7 @@ function wide(seed Integer) returns Integer
 end 'wide'
 
 function work(seed Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return wide(seed)
 end 'work'
 
@@ -1369,12 +1369,12 @@ function down(n Integer) returns Integer
 end 'down'
 
 function seedBytes() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return __Builtins.gtStackBytes()
 end 'seedBytes'
 
 function deep(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return down(n)
 end 'deep'
 
@@ -1626,17 +1626,17 @@ function down(n Integer) returns Integer
 end 'down'
 
 function seedBytes() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return __Builtins.gtStackBytes()
 end 'seedBytes'
 
 function deep(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return down(n)
 end 'deep'
 
 function shallow(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n
 end 'shallow'
 

@@ -5772,7 +5772,7 @@ type Svc
 end 'Svc'
 
 function stash(xs Boxes, item Box) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	xs.push(item)
 	return xs.count() as Integer
 end 'stash'
@@ -5818,7 +5818,7 @@ type Svc
 end 'Svc'
 
 function poke(p Box) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	p.n = 9
 	return p.n
 end 'poke'
@@ -5865,7 +5865,7 @@ type Svc
 end 'Svc'
 
 function replace(p Box) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	p.n = 9
 	return p.n
 end 'replace'
@@ -5916,7 +5916,7 @@ type Svc
 end 'Svc'
 
 function stash(xs Boxes, item Box) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	xs.push(item)
 	return xs.count() as Integer
 end 'stash'
@@ -6416,7 +6416,7 @@ type Svc
 end 'Svc'
 
 function bumpIt(b Box) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	b.n = b.n + 1
 	return b.n
 end 'bumpIt'
@@ -8899,7 +8899,7 @@ the shape *"is invisible to every gate the suite has"*.
 
 `fire` builds the shape in three steps, and each one is load-bearing:
 
-- **`Runtime.yield()` after the `async`** hands the strand to the coroutine, which runs until its `sleep` parks
+- **`Scheduler.yield()` after the `async`** hands the strand to the coroutine, which runs until its `sleep` parks
   it on a timer. The handler then reads `probe.started` and a peek of `0`, so `parked=8` says every one of the
   eight coroutines had started and not finished when its handler returned.
 - **The promise is kept in the service's state**, so the one thing that drops it is the shutdown's state drop
@@ -8974,7 +8974,7 @@ type Worker
 	// in the service's state, so the shutdown's state drop is the one thing that can reach it.
 	export function fire(v Integer) returns Integer
 		let p = async slowWork(v, probe: self.probe)
-		Runtime.yield()
+		Scheduler.yield()
 		let parked = self.probe.started and __Builtins.gtIsComplete(p.inner) == 0
 		self.pending.push(p)
 		return 1 if parked else 0

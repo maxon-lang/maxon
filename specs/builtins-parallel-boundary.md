@@ -48,7 +48,7 @@ the intent it spells becomes load-bearing. It is kept for that, and because `scr
 torture programs need it today to make their CPU-bound tasks spawnable at all.
 
 ⚠ **IT IS A CHECKPOINT, NOT A YIELD.** It does not reschedule, it does not park, and it does not hand
-the processor to anybody — `Runtime.yield()` is the intrinsic that does (`__Builtins.yield`, see
+the processor to anybody — `Scheduler.yield()` is the intrinsic that does (`__Builtins.yield`, see
 `builtins-sleep.md`'s neighbours). A future scheduler could hang a cooperative-yield check here; today
 the body is a prologue and an epilogue.
 

@@ -86,7 +86,7 @@ const SOURCES = [
       },
       { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'HttpClient', 'URL'] },
       { page: 'stdlib/data.md', sections: ['Json', 'Sha256', 'Hasher'] },
-      { page: 'stdlib/runtime.md', sections: ['Clock', 'Runtime', 'Math', 'Primitive Extensions'] },
+      { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'Math', 'Primitive Extensions'] },
       { page: 'stdlib/testing.md', sections: ['Testing'] },
       { page: 'stdlib/build.md', sections: ['Build'] },
     ],

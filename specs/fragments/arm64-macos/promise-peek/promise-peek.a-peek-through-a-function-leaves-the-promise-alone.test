@@ -3,7 +3,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -18,7 +18,7 @@ function main() returns ExitCode
 	var spins = 0
 	var after = 0
 	while spins < maxSpins and after == 0 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		after = peek(p)
 		spins = spins + 1
 	end 'drive'
@@ -99,7 +99,7 @@ data {
 func @makeValue {
   entry:
     arm64.prologue 16
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.movImm x0, 42
     arm64.epilogue 16
     arm64.ret
@@ -139,7 +139,7 @@ func @main {
   scmerge:
     arm64.cbz x1, whileexit
   drive:
-    arm64.bl Runtime.yield
+    arm64.bl Scheduler.yield
     arm64.movRegReg x0, x19
     arm64.bl peek
     arm64.add x21, x21, 1

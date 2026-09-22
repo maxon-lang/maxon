@@ -47,7 +47,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function mayFail(succeed bool) returns Integer throws WorkError
-	Runtime.yield()
+	Scheduler.yield()
 	if succeed 'ok'
 		return 42
 	end 'ok'
@@ -76,7 +76,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function mayFail(succeed bool) returns Integer throws WorkError
-	Runtime.yield()
+	Scheduler.yield()
 	if succeed 'ok'
 		return 10
 	end 'ok'
@@ -107,7 +107,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function succeeds() returns Integer throws WorkError
-	Runtime.yield()
+	Scheduler.yield()
 	return 7
 end 'succeeds'
 
@@ -133,7 +133,7 @@ end 'WorkError'
 var flag = 0
 
 function maySetFlag(succeed bool) throws WorkError
-	Runtime.yield()
+	Scheduler.yield()
 	if succeed 'ok'
 		flag = 1
 		return
@@ -161,7 +161,7 @@ enum TaskError implements Error
 end 'TaskError'
 
 function mayFail(mode Integer) returns Integer throws TaskError
-	Runtime.yield()
+	Scheduler.yield()
 	if mode == 0 'ok'
 		return 1
 	end 'ok'
@@ -230,7 +230,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function work(shouldFail bool) returns Integer throws WorkError
-	Runtime.yield()
+	Scheduler.yield()
 	if shouldFail 'fail'
 		throw WorkError.failed
 	end 'fail'
@@ -268,7 +268,7 @@ end 'TaskError'
 var flag = 0
 
 function maySetFlag(succeed bool) throws TaskError
-	Runtime.yield()
+	Scheduler.yield()
 	if succeed 'ok'
 		flag = 1
 		return
@@ -336,7 +336,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function compute() returns Integer throws WorkError
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'compute'
 

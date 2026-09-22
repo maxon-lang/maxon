@@ -1246,8 +1246,8 @@ let GtAnyCompletedName = b"__gt_any_completed"
 // `DeadFunctionElimination` roots the name for it.
 export let GtDrainAtExitName = b"__gt_drain_at_exit"
 
-// ⭐⭐ **`__gt_resched()` — THE COOPERATIVE YIELD BEHIND `Runtime.yield()`** (`stdlib/Runtime.maxon`, spec
-// `specs/runtime-yield.md`). A park of kind `GtParkKindYield`: the strand runner places the yielder behind
+// ⭐⭐ **`__gt_resched()` — THE COOPERATIVE YIELD BEHIND `Scheduler.yield()`** (`stdlib/Scheduler.maxon`, spec
+// `specs/scheduler-yield.md`). A park of kind `GtParkKindYield`: the strand runner places the yielder behind
 // whatever its strand has runnable, or — with nothing — puts the strand at the global queue's tail, Go's
 // `Gosched` (`sched-runqueue.a-yield-goes-behind-the-global-queue`). Either way a spin-wait makes progress:
 // the runner fires due timers and reaps exited children as it places a yielder.
@@ -1286,7 +1286,7 @@ export let GtReschedName = b"__gt_resched"
 // its image is byte-identical. That is the same compile-time gating the six trace SITES already take (see
 // `GtTraceEmitName`), applied to a signature rather than to a call.
 //
-// ⭐ **WHY THE TIMER PARK AND NOT `__gt_resched`.** They are different promises. `Runtime.yield()` is "let
+// ⭐ **WHY THE TIMER PARK AND NOT `__gt_resched`.** They are different promises. `Scheduler.yield()` is "let
 // someone else have a turn IF anyone wants one", so it comes straight back when nothing else is runnable. An
 // I/O yield says "this thread is now WAITING", which must hold whether or not another GT happens to be ready —
 // so it parks on a deadline of `now` and comes back through the timer store, a genuine suspension every time.
@@ -1301,7 +1301,7 @@ let GtIoParkName = b"__gt_io_park"
 // EMITTED unless the build asked for them, so there is no enabled-flag global and no per-spawn branch, and
 // an untraced program carries none of it. (The struct FIELD is not gated — see `GtOffTraceId`.)
 //
-// ⚠ **A YIELD IS NOT TRACED HERE.** `Runtime.yield()` / `__gt_resched` prints no line, because no spec pins
+// ⚠ **A YIELD IS NOT TRACED HERE.** `Scheduler.yield()` / `__gt_resched` prints no line, because no spec pins
 // a yield tag and a seventh spelling beside the six that ARE pinned would be an untested one. A yield storm
 // is visible to `maxon monitor --filter=sched` instead (`emitSchedEventOf`).
 let GtTraceEmitName = b"__gt_trace_emit"
@@ -6160,7 +6160,7 @@ end 'emitCurrentGtTraceLine'
 
 // ⭐ **ONE DebugStream sched event about the green thread `gt`, carrying its trace id.** The sites are the
 // async trace's own — a spawn, an await, the two brackets of a sleep and of an I/O park — plus
-// `Runtime.yield()`, which the async trace does not report. A no-op unless this build carries the producer,
+// `Scheduler.yield()`, which the async trace does not report. A no-op unless this build carries the producer,
 // asked BEFORE the trace-id read so an untraced build's image is unchanged (see `emitMmEvent` for why the
 // gate cannot sit behind the argument). Returns the block to continue in, because the event splits it.
 //

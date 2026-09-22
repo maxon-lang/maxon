@@ -12,7 +12,7 @@ category: concurrency
 `async f(args…)` creates a **coroutine** of the calling green thread, running `f`, and yields a `Promise`
 handle; `await p` parks the caller until `p`'s coroutine completes and hands back its result. A coroutine runs
 on the machine that holds its green thread's strand, one member of the strand at a time, and hands over to a
-sibling only at a wait — an `await`, a `sleep`, a `Runtime.yield()` or an I/O point. The GREEN THREAD around
+sibling only at a wait — an `await`, a `sleep`, a `Scheduler.yield()` or an I/O point. The GREEN THREAD around
 them is preempted: one that has held its processor for 10 ms is stopped at its next function entry and put
 behind every other runnable one (`specs/sched-preempt.md`).
 
@@ -68,7 +68,7 @@ An `async` coroutine runs its function and `await` collects the result.
 ```maxon
 
 function compute() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'compute'
 
@@ -88,12 +88,12 @@ Two green threads are spawned before either is awaited; both run and their resul
 ```maxon
 
 function ten() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 10
 end 'ten'
 
 function twenty() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 20
 end 'twenty'
 
@@ -115,7 +115,7 @@ A spawn/await chain threads a value through two green threads.
 ```maxon
 
 function inc(x Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return x + 1
 end 'inc'
 
@@ -137,7 +137,7 @@ A scalar argument is spilled into the green thread's argument buffer and read ba
 ```maxon
 
 function sixtimes(x Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return x * 6
 end 'sixtimes'
 
@@ -157,7 +157,7 @@ Several scalar arguments (positional first, then labelled) fill the argument buf
 ```maxon
 
 function combine(a Integer, b Integer, c Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return a + b * c
 end 'combine'
 
@@ -177,7 +177,7 @@ A green thread can itself spawn and await another green thread — the current-G
 ```maxon
 
 function leaf() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 20
 end 'leaf'
 
@@ -203,7 +203,7 @@ typealias Integer = int(i64.min to i64.max)
 ```maxon
 
 function answer() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'answer'
 
@@ -224,7 +224,7 @@ rather than 101.
 ```maxon
 
 function compute() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'compute'
 
@@ -253,7 +253,7 @@ never sees them — and, once the counter existed but the free-list did not, thi
 ```maxon
 
 function noop() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 0
 end 'noop'
 
@@ -284,7 +284,7 @@ short-circuit to the PRIOR result without ever running the new thread — a wron
 ```maxon
 
 function dbl(x Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return x * 2
 end 'dbl'
 
@@ -314,7 +314,7 @@ own `await` may. `p4` therefore gets a distinct struct, and `await p1` reads `p1
 ```maxon
 
 function w(x Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return x * 10
 end 'w'
 
@@ -434,7 +434,7 @@ function scale(x Real, depth Integer) returns Integer
 end 'scale'
 
 function sweep() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	let d0 = scale(20.0, depth: 0)
 	if d0 != 20 'bad0'
 		return 1
@@ -489,7 +489,7 @@ function six(a Real, b Real, c Real, d Real, e Real, f Real) returns Integer
 end 'six'
 
 function fpArgs() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return six(6.0, b: 1.5, c: 2.5, d: 3.5, e: 4.5, f: 5.5)
 end 'fpArgs'
 
@@ -523,7 +523,7 @@ spawns a free list served.
 typealias Integer = int(i64.min to i64.max)
 
 function square(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n * n
 end 'square'
 
@@ -562,7 +562,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function twice(n Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return n + n
 end 'twice'
 

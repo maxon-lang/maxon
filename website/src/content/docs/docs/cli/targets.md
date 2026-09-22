@@ -75,7 +75,7 @@ time**, at the call:
 
 | Not available on `wasm32-wasi` | Refused with |
 |--------------------------------|--------------|
-| `async`/`await`, green threads, services, `sleep`, `Runtime.yield`, `Runtime.processorCount` | E3104 |
+| `async`/`await`, green threads, services, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
 | Clocks (`Clock`, current time, CPU ticks) | E3104 |
 | Command-line arguments | E3104 |
 | File and directory I/O | E3104 |

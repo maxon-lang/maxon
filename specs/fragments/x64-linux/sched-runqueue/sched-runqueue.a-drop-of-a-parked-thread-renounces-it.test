@@ -1,6 +1,6 @@
 // Test: sched-runqueue.a-drop-of-a-parked-thread-renounces-it
 function done() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 1
 end 'done'
 
@@ -28,7 +28,7 @@ function main() returns ExitCode
 	while j < 3 'parkedThenDropped'
 		// The previous round's renounced sleeper is queued ahead of us on this strand; one yield lets it run
 		// out, so both records are back before the two spawns below ask for one. See the note above.
-		Runtime.yield()
+		Scheduler.yield()
 
 		let s = async sleeper()
 		let f = async done()
@@ -113,7 +113,7 @@ func @done {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg rbp
@@ -180,7 +180,7 @@ func @main {
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr#4
   parkedThenDropped:
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.leaRegFunc rcx, [rip + sleeper]
     x64.callDirect __gt_spawn
     x64.movRegReg r14, r8

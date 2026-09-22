@@ -40,7 +40,7 @@ end 'main'
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, Process, Subprocess, SharedMemory |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Sha256, Hasher |
-| [Runtime](/docs/stdlib/runtime/#clock) | Clock, Runtime, Math, Primitive Extensions |
+| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
 
@@ -64,7 +64,7 @@ end 'main'
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
-| `SchedulerProcessorCount` | `int(1 to i64.max)` | Runtime |
+| `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
@@ -83,7 +83,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, `Runtime.yield`, `Runtime.processorCount` | E3104 |
+| `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
 | `Subprocess`, `StreamingSubprocess`, `Configuration`, `Process.environmentVariable` | E3074 |

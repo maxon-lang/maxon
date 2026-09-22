@@ -2,7 +2,7 @@
 typealias Integer = int(i64.min to i64.max)
 
 function child() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	sleep(0)
 	return 1
 end 'child'
@@ -30,12 +30,12 @@ function main() returns ExitCode
 	var i = 0
 
 	while i < 2000 'settle'
-		Runtime.yield()
+		Scheduler.yield()
 		i = i + 1
 	end 'settle'
 
 	let p = async child()
-	Runtime.yield()
+	Scheduler.yield()
 	p.cancel()
 	return 0 as ExitCode
 end 'main'
@@ -110,7 +110,7 @@ func @child {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegImm32 rcx, 0
   __rc_ok:
     x64.callDirect __gt_sleep
@@ -155,7 +155,7 @@ func @main {
     x64.movRegImm32 rbx, 0
     x64.jmp whilehdr
   settle:
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.leaRegRegImm32 rbx, rbx, 1
   whilehdr:
     x64.cmpRegImm32 rbx, 2000
@@ -166,7 +166,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_ready
-    x64.callDirect Runtime.yield
+    x64.callDirect Scheduler.yield
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_promise_drop
     x64.movRegImm32 r8, 0

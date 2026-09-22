@@ -427,7 +427,7 @@ var siblingRan = 0
 function yielder() returns Integer
 	var i = 0
 	while i < 1000 'spin'
-		Runtime.yield()
+		Scheduler.yield()
 		i = i + 1
 	end 'spin'
 
@@ -549,7 +549,7 @@ completed would be the tombstone order the two cases above cover instead.
 ✅ **SABOTAGE-VERIFIED.** With the drop's consumer half removed, this case reads `recycled=3` and exits 75.
 ```maxon
 function done() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 1
 end 'done'
 
@@ -603,7 +603,7 @@ every heap value that thread's locals own is stranded. MEASURED with no socket a
 holding one interpolated `String` inside a `sleep`, dropped while parked, exits **101** when the drop frees its
 stack and **0** when the drop renounces it.
 
-⛔⛔ **THE `Runtime.yield()` AT THE TOP OF THE MEASURED LOOP IS A SYNCHRONISATION POINT, NOT A PAUSE — WITHOUT
+⛔⛔ **THE `Scheduler.yield()` AT THE TOP OF THE MEASURED LOOP IS A SYNCHRONISATION POINT, NOT A PAUSE — WITHOUT
 IT THIS NUMBER RACES THE RECLAIM AND VARIES BY LANE.** The renounced sleeper is readied onto MAIN's strand
 queue, and a coroutine is never stolen off a strand (the case above pins exactly that), so a yield puts `main`
 BEHIND it in one FIFO and the thread has run to completion by the time `main` is scheduled again. That is what
@@ -624,7 +624,7 @@ window, and each one either takes a record off the free list or carves a new one
 The two cases above stay GREEN under both.
 ```maxon
 function done() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 1
 end 'done'
 
@@ -652,7 +652,7 @@ function main() returns ExitCode
 	while j < 3 'parkedThenDropped'
 		// The previous round's renounced sleeper is queued ahead of us on this strand; one yield lets it run
 		// out, so both records are back before the two spawns below ask for one. See the note above.
-		Runtime.yield()
+		Scheduler.yield()
 
 		let s = async sleeper()
 		let f = async done()
@@ -705,7 +705,7 @@ let peakLive = 3
 let listSlack = 63
 
 function done() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 1
 end 'done'
 
@@ -1202,7 +1202,7 @@ type Yielder
 	end 'create'
 
 	export function go(sink Tally.handle)
-		Runtime.yield()
+		Scheduler.yield()
 		sink.note(yielderId)
 	end 'go'
 end 'Yielder'

@@ -122,7 +122,7 @@ each a chunk of index-derived integer work, and collects the eight partial sums 
 - **`procs=`** is `__Builtins.schedProcessorCount()` — a direct read of `__sched_num_procs`, the word the
   marker decides. It is not an inference and it is not a race: that word is written once at scheduler
   bring-up and never again. Asking installs the scheduler, so no program reads the word's `.data` seed of
-  **0** — `Runtime.processorCount()` is the public spelling of the same read (`runtime-processor-count.md`).
+  **0** — `Scheduler.processorCount()` is the public spelling of the same read (`scheduler-processor-count.md`).
 - **`clamped=`** is `1` when the count the scheduler resolved is exactly `min(requested, cpuCount())` —
   the marker's contract stated as a comparison the program can make on ANY machine, from two independent
   readings: an OS call and a scheduler word. A bare `procs=4` would have been a claim about this box.

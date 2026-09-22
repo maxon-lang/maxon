@@ -119,7 +119,7 @@ machine running, no timer, child or read pending, and `main` not finished — **
 plain `await` of a thread nobody can run gets. Go's `select {}` reaches its own deadlock detector for
 exactly this reason. `an-empty-array-is-a-scheduler-deadlock` pins it.
 
-### `Runtime.awaitAny` — the nicer spelling, and why it is not here
+### `Scheduler.awaitAny` — the nicer spelling, and why it is not here
 
 The surface a program would rather write is `awaitAny(drains)`, an ordinary stdlib declaration whose body
 is this intrinsic, exactly as `sleep(ms)` is `stdlib/Sleep.maxon`'s declaration over `__Builtins.sleep`.
@@ -158,7 +158,7 @@ function slow(ms Integer) returns Integer
 end 'slow'
 
 function quick() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 2
 end 'quick'
 
@@ -188,7 +188,7 @@ end 'main'
 
 <!-- test: await-any.no-park-when-one-is-already-complete -->
 ⭐ **AN ALREADY-COMPLETE SLOT IS ANSWERED BY THE SCAN, BEFORE ANY PARK.** The promise runs to completion
-under `main`'s own `Runtime.yield()` loop before `awaitAny` is called, and it is the only one in the
+under `main`'s own `Scheduler.yield()` loop before `awaitAny` is called, and it is the only one in the
 program — so at the moment of the call nothing else is runnable, no timer is pending and no child is
 parked. The scan at the top of `__gt_await_any` finds slot 0 `completed` and returns `0` without parking.
 
@@ -201,7 +201,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -213,7 +213,7 @@ function main() returns ExitCode
 	var spins = 0
 	var done = 0
 	while spins < maxSpins and done == 0 'drive'
-		Runtime.yield()
+		Scheduler.yield()
 		done = __Builtins.gtIsComplete(p.inner)
 		spins = spins + 1
 	end 'drive'
@@ -245,7 +245,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function value(v Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return v
 end 'value'
 
@@ -394,7 +394,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function inner(v Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return v
 end 'inner'
 
@@ -434,7 +434,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function makeValue() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'makeValue'
 
@@ -482,7 +482,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function value(v Integer) returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return v
 end 'value'
 
@@ -539,9 +539,9 @@ A WASI component has no addressable call stack for a context switch to move, so 
 scheduler and a program that selects over promises is refused at its own source span with `E3104` naming
 `__gt_await_any` — never a panic from inside a backend.
 
-⚠ **THE THUNK YIELDS THROUGH `__Builtins.parallelBoundary()` AND NOT `Runtime.yield()`, WHICH IS THE
+⚠ **THE THUNK YIELDS THROUGH `__Builtins.parallelBoundary()` AND NOT `Scheduler.yield()`, WHICH IS THE
 DIFFERENCE BETWEEN PINNING THIS RULE AND PINNING A NEIGHBOUR'S.** A legal `async` needs a callee that can
-suspend (E3073), and `Runtime.yield` lowers to `__gt_resched`, which is on the SAME target roster — so it
+suspend (E3073), and `Scheduler.yield` lowers to `__gt_resched`, which is on the SAME target roster — so it
 raises its own E3104 four lines earlier and the case would pass against a compiler that had never heard of
 `awaitAny`. The CPU-parallel checkpoint satisfies E3073 and is deliberately NOT on that roster (its body is
 a void return, which lowers everywhere), so the only refusal left is this one's.

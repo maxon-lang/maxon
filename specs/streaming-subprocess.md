@@ -204,7 +204,7 @@ starts the walk.
 
 The counter reports entries INSPECTED rather than cancels attempted, which is the whole point — a count of
 CALLS reads the same whether a cancel walked one entry or a thousand. Eight sleepers hold eight entries on
-the heap (`Runtime.yield()` puts them all there before the bracket opens), then twenty `echo`s are drained
+the heap (`Scheduler.yield()` puts them all there before the bracket opens), then twenty `echo`s are drained
 line by line inside it. Every readiness in that loop, and the child's exit, is a turned-away cancel over a
 NON-EMPTY heap, so the guard is under load rather than under a heap that is trivially short. The twenty
 lines are one length each (`line-a\n`, 7 bytes), so the 140 in the exit code cannot be reached by a short
@@ -231,7 +231,7 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function fast() returns Integer
-	Runtime.yield()
+	Scheduler.yield()
 	return 42
 end 'fast'
 
@@ -251,7 +251,7 @@ function main() returns ExitCode
 	let s6 = async sleeper()
 	let s7 = async sleeper()
 	let s8 = async sleeper()
-	Runtime.yield()
+	Scheduler.yield()
 
 	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
 	let before = __Builtins.schedTimerScanStepCount()
