@@ -1,37 +1,9 @@
-let FixturesDirName = "tests/emitted-runtime/fixtures"
-let SpawnFixtureName = "spawn"
-let StagingRootDirName = "temp/emitted-runtime"
 let CaseLabel = "steal-acquire-loads"
-let StoredFixtureSuffix = ".fixture"
-let StagedProgramFileName = "main.maxon"
-let PathSeparator = "/"
-
-let TestedCompilerStem = "maxon-bin/.maxon/maxon"
-let BuildCommandName = "build"
-let OutputOptionPrefix = "--output="
-let TargetOptionPrefix = "--target="
-let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
-let OutputStem = "out"
-let IrFileSuffix = ".ir"
-
-let MacosTargetName = "arm64-macos"
-let LinuxTargetName = "arm64-linux"
 
 let StealFunctionName = "__sched_steal"
-let FunctionHeaderPrefix = "func @"
-let FunctionHeaderSuffix = " \{"
-let FunctionBodyEndLine = "\}"
 
-let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
-let AcquireLoadMnemonic = "arm64.ldar.word64"
-let RegisterMovePrefix = "arm64.movRegReg "
 let AtomicCasPrefix = "arm64.arm64AtomicCas "
 let VictimArgumentRegister = "x1"
-let ArgumentSeparator = ", "
-let WordSeparator = " "
-let OperandSeparator = ","
-let LineSeparator = "\n"
-let DestinationWordIndex = 1
 
 let RunqHeadFieldName = "runqHead"
 let RunqTailFieldName = "runqTail"
@@ -47,12 +19,10 @@ let RingWordCount = 3 as LoadTally
 
 let OrderingReason = "The victim publishes each of those words with a release — `emitRunqPublishTail` advances the tail with an atomic read-modify-write, and a head claim is an atomic compare-and-swap — so the slot store the word announces cannot sink past it. A plain `ldr` of the word here is the other half of that pair missing: arm64 may satisfy it from a stale line while the load of the slot it describes is satisfied from a fresh one, and the thief then runs whatever the slot held before the victim wrote it. The three reads are `StdOp.loadAcquire`, which is `ldar` on this target and the same plain `mov` on x64."
 
-typealias FieldOffset = int(0 to 65535)
 typealias LoadTally = int(0 to 65535)
-typealias PathArray = Array with FilePath
 
 test 'a thief reads the victim run queue words with acquire loads'
-	let staged = stagedProgram()
+	let staged = stagedProgram(CaseLabel)
 
 	var findings = StringArray.create()
 	noteTarget(findings, staged: staged, target: MacosTargetName)
@@ -62,34 +32,17 @@ test 'a thief reads the victim run queue words with acquire loads'
 end 'a thief reads the victim run queue words with acquire loads'
 
 function noteTarget(findings StringArray, staged FilePath, target String)
-	let body = stealBody(irLines(buildStagedProgram(staged, target: target)), target: target)
+	let body = functionBody(irLines(buildStagedProgram(staged, target: target, functionName: StealFunctionName)), functionName: StealFunctionName, target: target)
 	let victim = victimRegister(body, target: target)
 
-	notePlainRingLoad(findings, body: body, target: target, victim: victim, field: RunqHeadFieldName, offset: RunqHeadOffset)
-	notePlainRingLoad(findings, body: body, target: target, victim: victim, field: RunqTailFieldName, offset: RunqTailOffset)
-	notePlainRingLoad(findings, body: body, target: target, victim: victim, field: RunnextFieldName, offset: RunnextOffset)
+	notePlainFieldLoad(findings, body: body, target: target, register: victim, offset: RunqHeadOffset, functionName: StealFunctionName, field: "the victim's `{RunqHeadFieldName}` (P+{RunqHeadOffset})")
+	notePlainFieldLoad(findings, body: body, target: target, register: victim, offset: RunqTailOffset, functionName: StealFunctionName, field: "the victim's `{RunqTailFieldName}` (P+{RunqTailOffset})")
+	notePlainFieldLoad(findings, body: body, target: target, register: victim, offset: RunnextOffset, functionName: StealFunctionName, field: "the victim's `{RunnextFieldName}` (P+{RunnextOffset})")
 	noteAcquireLoadCount(findings, body: body, target: target)
 end 'noteTarget'
 
-function notePlainRingLoad(findings StringArray, body StringArray, target String, victim String, field String, offset FieldOffset)
-	let addressed = "[{victim} + {offset}]"
-
-	for text in body 'eachLine'
-		if not text.startsWith(PlainLoadPrefix) 'notAPlainLoad'
-			continue
-		end 'notAPlainLoad'
-
-		if not text.contains(addressed) 'anotherWord'
-			continue
-		end 'anotherWord'
-
-		findings.push("on {target}, `{StealFunctionName}` still reads the victim's `{field}` (P+{offset}) with a plain load — `{text}`")
-		return
-	end 'eachLine'
-end 'notePlainRingLoad'
-
 function noteAcquireLoadCount(findings StringArray, body StringArray, target String)
-	let found = acquireLoadCount(body)
+	let found = bodyLineCount(body, startingWith: AcquireLoadMnemonic, containing: NoFurtherDemand, endingWith: NoFurtherDemand)
 
 	if found >= RingWordCount 'enough'
 		return
@@ -98,209 +51,12 @@ function noteAcquireLoadCount(findings StringArray, body StringArray, target Str
 	findings.push("on {target}, the emitted `{StealFunctionName}` carries {found} `{AcquireLoadMnemonic}` load(s) where the victim's {RingWordCount} ring words need {RingWordCount} — so at least one of them is read through a plain load this case could not attribute to a field")
 end 'noteAcquireLoadCount'
 
-function acquireLoadCount(body StringArray) returns LoadTally
-	var found = 0 as LoadTally
-
-	for text in body 'eachLine'
-		if text.startsWith(AcquireLoadMnemonic) 'anAcquireLoad'
-			found = found + 1
-		end 'anAcquireLoad'
-	end 'eachLine'
-
-	return found
-end 'acquireLoadCount'
-
 function victimRegister(body StringArray, target String) returns String
-	let moveSuffix = "{ArgumentSeparator}{VictimArgumentRegister}"
-	var victim = VictimArgumentRegister
+	let victim = try registerHoldingArgument(body, argument: VictimArgumentRegister) otherwise VictimArgumentRegister
 
-	for text in body 'eachLine'
-		if not text.startsWith(RegisterMovePrefix) 'notAMove'
-			continue
-		end 'notAMove'
-
-		if not text.endsWith(moveSuffix) 'notTheVictimArgument'
-			continue
-		end 'notTheVictimArgument'
-
-		victim = destinationRegisterOf(text)
-		break
-	end 'eachLine'
-
-	if not bodyClaimsHeadOf(body, victim: victim) 'notTheVictim'
+	if bodyLineCount(body, startingWith: AtomicCasPrefix, containing: "[{victim}]", endingWith: NoFurtherDemand) == 0 'notTheVictim'
 		panic("emitted-runtime tests: the gate could not run — on {target}, `{victim}` was read as the register `{StealFunctionName}` holds the victim P in, and nothing in the body claims the victim's head through it (`{AtomicCasPrefix.trim()} … [{victim}]`). The second argument's register, or the shape of the head claim, has moved, and every assertion below reads a register that is not the victim's.")
 	end 'notTheVictim'
 
 	return victim
 end 'victimRegister'
-
-function bodyClaimsHeadOf(body StringArray, victim String) returns bool
-	let claimed = "[{victim}]"
-
-	for text in body 'eachLine'
-		if text.startsWith(AtomicCasPrefix) and text.contains(claimed) 'theHeadClaim'
-			return true
-		end 'theHeadClaim'
-	end 'eachLine'
-
-	return false
-end 'bodyClaimsHeadOf'
-
-function destinationRegisterOf(text String) returns String
-	let words = text.split(WordSeparator)
-	let spelled = try words.get(DestinationWordIndex) otherwise panic("emitted-runtime tests: the gate could not run — '{text}' carries no destination register where the Target IR printer always writes one.")
-
-	return try spelled.split(OperandSeparator).get(0) otherwise panic("emitted-runtime tests: the gate could not run — '{spelled}' is not a register name the Target IR printer would have written.")
-end 'destinationRegisterOf'
-
-function stealBody(lines StringArray, target String) returns StringArray
-	let header = "{FunctionHeaderPrefix}{StealFunctionName}{FunctionHeaderSuffix}"
-	var body = StringArray.create()
-	var found = false
-
-	for line in lines 'eachLine'
-		let text = line.trim()
-
-		if not found 'beforeTheFunction'
-			found = text == header
-			continue
-		end 'beforeTheFunction'
-
-		if text == FunctionBodyEndLine 'theEnd'
-			break
-		end 'theEnd'
-
-		body.push(text)
-	end 'eachLine'
-
-	if not found 'neverRendered'
-		panic("emitted-runtime tests: the gate could not run — the {target} Target IR holds no `{header}`, so the scheduler's thief was never rendered. `{EmitIrRuntimeOptionPrefix}{StealFunctionName}` is what opts a withheld runtime body into that text, and a name nothing emits is refused rather than skipped.")
-	end 'neverRendered'
-
-	if body.isEmpty() 'renderedEmpty'
-		panic("emitted-runtime tests: the gate could not run — the {target} Target IR renders `{StealFunctionName}` with an EMPTY body, and an empty body satisfies every absence demand below by holding nothing at all.")
-	end 'renderedEmpty'
-
-	return body
-end 'stealBody'
-
-function renderedFindings(findings StringArray) returns String
-	var rendered = ""
-
-	for finding in findings 'eachFinding'
-		rendered.append("\n  • {finding}")
-	end 'eachFinding'
-
-	return rendered
-end 'renderedFindings'
-
-function irLines(path FilePath) returns StringArray
-	let text = try File.readText(path) otherwise panic("emitted-runtime tests: the gate could not run — could not read the Target IR the compiler wrote to {path.toString()}.")
-
-	return text.split(LineSeparator)
-end 'irLines'
-
-function stagedProgram() returns FilePath
-	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{CaseLabel}")
-	clearStagedFiles(staged)
-
-	let stored = fixtureDir("{FixturesDirName}{PathSeparator}{SpawnFixtureName}").join("{StagedProgramFileName}{StoredFixtureSuffix}")
-	let body = try File.readText(stored) otherwise panic("emitted-runtime tests: the gate could not run — could not read the stored fixture {stored.toString()}.")
-	try File.writeText(staged.join(StagedProgramFileName), content: body) otherwise panic("emitted-runtime tests: the gate could not run — could not stage {StagedProgramFileName} into {staged.toString()}.")
-
-	return staged
-end 'stagedProgram'
-
-function buildStagedProgram(staged FilePath, target String) returns FilePath
-	let executable = staged.join("{OutputStem}-{target}")
-	let ir = staged.join("{OutputStem}-{target}{IrFileSuffix}")
-
-	var arguments = StringArray.create()
-	arguments.push(BuildCommandName)
-	arguments.push(staged.join(StagedProgramFileName).toString())
-	arguments.push("{OutputOptionPrefix}{executable.toString()}")
-	arguments.push("{TargetOptionPrefix}{target}")
-	arguments.push("{EmitIrRuntimeOptionPrefix}{StealFunctionName}")
-
-	let build = spawnCompiler(arguments, staged: staged)
-
-	if build.exitCode() != 0 'buildFailed'
-		panic("emitted-runtime tests: the gate could not run — `{BuildCommandName} … {TargetOptionPrefix}{target}` exited {build.exitCode()}, so no Target IR was written to read. It wrote to stderr: {build.stderr}")
-	end 'buildFailed'
-
-	if not File.exists(ir) 'nothingWritten'
-		panic("emitted-runtime tests: the gate could not run — `{BuildCommandName} … {EmitIrRuntimeOptionPrefix}{StealFunctionName}` exited 0 and wrote no Target IR to {ir.toString()}.")
-	end 'nothingWritten'
-
-	return ir
-end 'buildStagedProgram'
-
-function spawnCompiler(arguments StringArray, staged FilePath) returns CollectedOutput
-	let binary = testedCompilerPath()
-
-	if not File.exists(binary) 'noBinary'
-		panic("emitted-runtime tests: the gate could not run — this case needs a compiler at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT, the working directory a test binary inherits from `maxon test`; run it from there, and build `{TestedCompilerStem}` first.")
-	end 'noBinary'
-
-	var config = Configuration.create(Executable.path(binary))
-	config.arguments = arguments
-	config.workingDirectory = staged
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("emitted-runtime tests: the gate could not run — could not spawn the `{BuildCommandName}` of the staged program ({e.displayReason()}).")
-	end 'spawnFailed'
-end 'spawnCompiler'
-
-function testedCompilerPath() returns FilePath
-	#if os(Windows)
-		let spelled = "{TestedCompilerStem}.exe"
-	#else
-		let spelled = "{TestedCompilerStem}"
-	#endif
-
-	let relative = try FilePath.from(spelled) otherwise panic("emitted-runtime tests: the gate could not run — '{spelled}' is not a spellable path")
-
-	return relative.resolve(Directory.currentPath())
-end 'testedCompilerPath'
-
-function clearStagedFiles(dir FilePath)
-	for entry in listing(dir) 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("emitted-runtime tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
-	end 'eachEntry'
-end 'clearStagedFiles'
-
-function fixtureDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("emitted-runtime tests: the gate could not run — '{spelled}' is not a spellable path")
-
-	if not Directory.isDirectory(path) 'notThere'
-		panic("emitted-runtime tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
-	end 'notThere'
-
-	return path
-end 'fixtureDir'
-
-function stagingDir(spelled String) returns FilePath
-	var prefix = ""
-
-	for component in spelled.split(PathSeparator) 'eachComponent'
-		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
-		let ancestor = try FilePath.from(prefix) otherwise panic("emitted-runtime tests: the gate could not run — '{prefix}' is not a spellable path")
-
-		if not Directory.create(ancestor) 'couldNotCreate'
-			panic("emitted-runtime tests: the gate could not run — could not create '{prefix}'. It is where the case's runnable copy is built; nothing can be staged without it.")
-		end 'couldNotCreate'
-	end 'eachComponent'
-
-	let path = try FilePath.from(spelled) otherwise panic("emitted-runtime tests: the gate could not run — '{spelled}' is not a spellable path")
-
-	return path.resolve(Directory.currentPath())
-end 'stagingDir'
-
-function listing(dir FilePath) returns PathArray
-	return try Directory.list(dir) otherwise panic("emitted-runtime tests: the gate could not run — could not list {dir.toString()}")
-end 'listing'

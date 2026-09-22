@@ -1,0 +1,90 @@
+let CaseLabel = "locked-relist-doors-acquire-owner"
+
+let FreeToFullFunctionName = "__slab_free_to_full"
+let FreeToRawFunctionName = "__slab_free_to_raw"
+let SpanArgumentRegister = "x1"
+
+// The owner word's displacement, restated: a test program cannot import `SlabRuntime`'s
+// `MspanOwningPOffset`. One that moves there and not here leaves the absence demand below addressing
+// nothing and true for that reason, which is what the acquire demand beside it exists to catch.
+let OwnerWordOffset = 48 as FieldOffset
+
+let SlabCallPrefix = "arm64.bl __slab_"
+let FreeToSpanCallPrefix = "arm64.bl __slab_free_to_span"
+
+let PublicationReason = "The owner word is published by the EVICTING processor: it pops the span dry and stores `MspanStateFull` into `owning_p` with a release (`stlr`). Both of these doors run on another OS thread, under `__slab_lock` — and that lock does not serialise the evicting processor's lock-free pop, so it supplies no ordering edge to that store. A plain `ldr` of the owner word therefore has no edge to the release at all: armv8 may satisfy the free-list head load that follows it from a line fetched before the span was popped dry, and the slot then goes back onto a free list the span no longer owns, handing a LIVE slot out twice. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes and the same plain `mov` on x64."
+
+test 'both locked relist doors re-read the span owner word with an acquire load'
+	let staged = stagedProgram(CaseLabel)
+
+	var doors = StringArray.create()
+	doors.push(FreeToFullFunctionName)
+	doors.push(FreeToRawFunctionName)
+
+	var findings = StringArray.create()
+
+	for door in doors 'eachDoor'
+		noteOwnerRead(findings, staged: staged, target: MacosTargetName, functionName: door)
+		noteOwnerRead(findings, staged: staged, target: LinuxTargetName, functionName: door)
+	end 'eachDoor'
+
+	try Expect.isTrue(findings.isEmpty(), message: "a locked relist door re-reads the span's owner word without the ordering that word is published with:{renderedFindings(findings)}\n\n  {PublicationReason}")
+end 'both locked relist doors re-read the span owner word with an acquire load'
+
+function noteOwnerRead(findings StringArray, staged FilePath, target String, functionName String)
+	let body = functionBody(irLines(buildStagedProgram(staged, target: target, functionName: functionName)), functionName: functionName, target: target)
+	let span = spanRegister(body, target: target, functionName: functionName)
+
+	notePlainFieldLoad(findings, body: body, target: target, register: span, offset: OwnerWordOffset, functionName: functionName, field: "the span's owner word (mspan+{OwnerWordOffset})")
+	noteAcquireBeforeTheFirstSlabCall(findings, body: body, target: target, functionName: functionName)
+end 'noteOwnerRead'
+
+function spanRegister(body StringArray, target String, functionName String) returns String
+	let span = try registerHoldingArgument(body, argument: SpanArgumentRegister) otherwise SpanArgumentRegister
+
+	requireSpanAddressesTheFreeToSpanCall(body, target: target, functionName: functionName, span: span)
+
+	return span
+end 'spanRegister'
+
+function requireSpanAddressesTheFreeToSpanCall(body StringArray, target String, functionName String, span String)
+	let call = try firstLineIndex(body, startingWith: FreeToSpanCallPrefix, containing: NoFurtherDemand, endingWith: NoFurtherDemand) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, the emitted `{functionName}` holds no `{FreeToSpanCallPrefix}`, so the relist road this case is about is not in the body it read, and every demand on it would be satisfied by a body that does none of this work.")
+
+	if spanIsMovedBack(body, before: call, span: span) 'handedBack'
+		return
+	end 'handedBack'
+
+	if span == SpanArgumentRegister and not registerIsWritten(body, before: call, register: SpanArgumentRegister) 'stillTheArgument'
+		return
+	end 'stillTheArgument'
+
+	panic("emitted-runtime tests: the gate could not run — on {target}, `{span}` was read as the register `{functionName}` holds the span in, and the body does not hand that register to the `{FreeToSpanCallPrefix}` at line {call}: no `{RegisterMovePrefix}{SpanArgumentRegister}{ArgumentSeparator}{span}` stands ahead of it, and `{span}` is not the untouched argument register `{SpanArgumentRegister}` either. The span argument's register, or the shape of the call, has moved, and the absence demanded of `{span}` reads a register the span is not addressed through.")
+end 'requireSpanAddressesTheFreeToSpanCall'
+
+function spanIsMovedBack(body StringArray, before LineIndex, span String) returns bool
+	let handoff = try firstLineIndex(body, startingWith: "{RegisterMovePrefix}{SpanArgumentRegister}{ArgumentSeparator}", containing: NoFurtherDemand, endingWith: "{ArgumentSeparator}{span}") otherwise return false
+
+	return handoff < before
+end 'spanIsMovedBack'
+
+function registerIsWritten(body StringArray, before LineIndex, register String) returns bool
+	let write = try firstWriteOfRegister(body, register: register) otherwise return false
+
+	return write < before
+end 'registerIsWritten'
+
+function noteAcquireBeforeTheFirstSlabCall(findings StringArray, body StringArray, target String, functionName String)
+	let firstSlabCall = try firstLineIndex(body, startingWith: SlabCallPrefix, containing: NoFurtherDemand, endingWith: NoFurtherDemand) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, the emitted `{functionName}` holds no `{SlabCallPrefix}…` call, though the `{FreeToSpanCallPrefix}` proven above is one.")
+
+	if acquireStandsAhead(body, before: firstSlabCall) 'ordered'
+		return
+	end 'ordered'
+
+	findings.push("on {target}, the emitted `{functionName}` reaches its first `{SlabCallPrefix}…` call with no `{AcquireLoadMnemonic}` ahead of it, so nothing orders the owner read against the free-list words that call and the ones under it read and write")
+end 'noteAcquireBeforeTheFirstSlabCall'
+
+function acquireStandsAhead(body StringArray, before LineIndex) returns bool
+	let acquire = try firstLineIndex(body, startingWith: AcquireLoadMnemonic, containing: NoFurtherDemand, endingWith: NoFurtherDemand) otherwise return false
+
+	return acquire < before
+end 'acquireStandsAhead'

@@ -35,7 +35,7 @@ SERVER its tests spawn.
 | `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
 | `execute/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExecuteHarness.maxon` — the binary it spawns: the compiler under test, which is also the `execute` DRIVER under test and what every cached build is made by |
 | `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.test.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
-| `emitted-runtime/` | `maxon test`, under the compiler | `TestedCompilerStem` in `steal-reads-the-victim-ring-with-acquire-loads.test.maxon` — the binary it spawns: the compiler under test, which is also what PRINTS the Target IR the case reads |
+| `emitted-runtime/` | `maxon test`, under the compiler | `TestedCompilerStem` in `EmittedRuntimeHarness.maxon` — the binary it spawns: the compiler under test, which is also what PRINTS the Target IR its cases read |
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.test.maxon` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
 | `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
 | `warm-rebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `WarmRebuildHarness.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
@@ -170,7 +170,9 @@ tests/
     console-write-imports.test.maxon        which console API an emitted x64-windows image imports
     fixtures/hello/main.maxon.fixture       stored name only - see rule 1
   emitted-runtime/
+    EmittedRuntimeHarness.maxon             the shared half: the staging, the spawn, the printed body, the line scan, the plain-load reading
     steal-reads-the-victim-ring-with-acquire-loads.test.maxon  the thief reads another P's runqHead, runqTail and runnext with `ldar`, on both arm64 lanes
+    locked-relist-doors-recheck-the-owner-with-an-acquire-load.test.maxon  both doors that finish a slot free under `__slab_lock` re-read the span's owner word with `ldar`, on both arm64 lanes
     fixtures/spawn/main.maxon.fixture       stored name only - see rule 1
   examples/
     ExamplesHarness.maxon                   the shared half: build one example, or one document's program, into temp/examples/<name>/, run it, check its answer
@@ -234,7 +236,7 @@ Two independent reasons, and the second is the one that bites:
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
 `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`, `cli/CliHarness.maxon`,
-`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
+`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon`, `emitted-runtime/EmittedRuntimeHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
 named so the runner does not take them for test files. That is fine and is not an exception being
 smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
 `lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s are string constants inside its
@@ -578,14 +580,40 @@ works in both directions: a name that IS imported is found, and one that is not 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
 directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.
 
-## `emitted-runtime/` — the ORDERING the emitted scheduler reads another processor's ring with
+## `emitted-runtime/` — the ORDERING an emitted runtime body reads another thread's word with
 
-One case, and its subject is a body no author wrote: `__sched_steal`, the green-thread scheduler's
-thief, which the back end synthesizes into every program that spawns. The case builds a two-line
-`spawn` fixture for `arm64-macos` and for `arm64-linux` with
-`--emit-ir-runtime=__sched_steal`, cuts `func @__sched_steal` out of the printed Target IR, and asks
-how that body reads the victim's `runqHead`, `runqTail` and `runnext`: with `ldar`, or with a plain
-`ldr`.
+Two cases, and each one's subject is a body no author wrote: one the back end synthesizes into every
+program that spawns, and two it synthesizes into every program that allocates. Both build the same
+two-line `spawn` fixture for `arm64-macos` and for `arm64-linux` with
+`--emit-ir-runtime=<function>`, cut `func @<function>` out of the printed Target IR, and ask how that
+body reads a word another thread published: with `ldar`, or with a plain `ldr`. The shared half — the
+staging, the spawn, the cut, the line scan and the plain-load reading — lives in
+`EmittedRuntimeHarness.maxon`; see the note under `debug/`. Every demand either case makes is one of
+three scans of the cut body, and neither case walks it itself: `firstLineIndex` where an ORDER is
+demanded and `bodyLineCount` where a TALLY is, both selecting a line by the op it starts with, an
+operand it contains and an operand it ends with; and `firstWriteOfRegister`, which asks each line for
+its destination operand rather than knowing which ops write.
+
+**`steal-reads-the-victim-ring-with-acquire-loads`** — `__sched_steal`, the green-thread scheduler's
+thief, and the victim's `runqHead`, `runqTail` and `runnext`.
+
+**`locked-relist-doors-recheck-the-owner-with-an-acquire-load`** — `__slab_free_to_full` and
+`__slab_free_to_raw`, the two doors that finish a slot free under `__slab_lock` (an exhausted span
+relisted, and a span of the shared raw row), and the span's `owning_p` word at mspan+48. The evicting processor publishes that word with a release
+store while it pops the span dry; these routines read it from another OS thread, under `__slab_lock`,
+which does not serialise that pop. So the read must be an acquire, and the case demands two things of
+EACH door on BOTH lanes: no plain load addresses `[<span> + 48]`, and an `ldar` stands ahead of the
+body's FIRST `bl __slab_…` line — the acquire must precede every slab call, not merely appear
+somewhere in the body. ⛔ **ITS SELF-PROOF IS THAT IT ADDRESSED SOMETHING**: the body must hold
+`bl __slab_free_to_span`, and the register the case attributes the owner word to must be the one that
+call takes its span from. Two emitted shapes satisfy that and nothing else does: the body moves the
+span argument into a callee-saved register (`movRegReg <reg>, x1`) and moves it back
+(`movRegReg x1, <reg>`) ahead of the `bl`, which is `__slab_free_to_full`; or it never moves the span
+at all and the call inherits `x1`, which is `__slab_free_to_raw` — and then the proof is that NO line
+ahead of the `bl` writes `x1`, read off each line's destination operand rather than off a roster of
+the ops that write. Failing both panics rather than passing, because a body that does none of this
+work satisfies an absence demand by holding nothing, and a register the span is not addressed through
+satisfies it the same way.
 
 ⭐⭐ **THE TARGET IR IS THE ONLY PLACE THE ANSWER IS.** The victim publishes its tail with a
 read-modify-write and claims a head with a compare-and-swap, so the WRITER's half of the pair is
@@ -610,17 +638,28 @@ panics rather than passes.
 no acquire load either is a body whose shape has moved; requiring three `ldar.word64` alongside is
 what makes the absences a reading rather than a search that found nothing.
 
-⚠ **THE FIELD OFFSETS ARE THIS FILE'S OWN CONSTANTS** (`P+0`, `P+8`, `P+88`), because a test program
-cannot import the compiler's `SchedRuntime` constants. They are the one thing here that can rot
-silently in the absence half — which is the other reason the acquire COUNT is asserted too.
+⚠ **THE FIELD OFFSETS ARE EACH CASE'S OWN CONSTANTS** (`P+0`, `P+8`, `P+88` in the steal case,
+`mspan+48` in the relist one), because a test program cannot import the compiler's `SchedRuntime` and
+`SlabRuntime` constants. They are the one thing here that can rot silently in the absence half — which
+is the other reason each case demands a presence beside its absences: the acquire COUNT in the steal
+case, and an acquire ahead of the first slab call in the other.
 
 ⚠ **NOTHING IN `ci.yml` RUNS THIS CORPUS**: that workflow runs `spec-test` and `tests/lsp` only, so
 this gate is one a `/land` battery or a contributor runs by name —
 `maxon test tests/emitted-runtime`.
 
-It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
-directory under `temp/emitted-runtime/`), and it keeps rule 5 at the budget `parallel-compile/`
-prices: one spawning `test`, one file, two compiles, well inside the 5,000 ms deadline.
+It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
+directory under `temp/emitted-runtime/`, named for the CASE, because `maxon test` runs files
+concurrently and one fixture staged twice would be two runs over one tree), and it keeps rule 5 at the
+budget `parallel-compile/` prices: one spawning `test` per file, and one compile per body per lane —
+two for the steal case, four for the relist doors. That is the thinnest margin in this corpus:
+MEASURED at 2.9 s of the 5,000 ms deadline on a Windows host, so a body added to either case is a
+`--timeout=` away from needing one.
+
+⚠ **ONE COMPILE PER BODY, THOUGH `--emit-ir-runtime=` TAKES A COMMA-SEPARATED LIST.** A name this
+program contains nothing of PANICS the build (`TargetPrinter.requireEveryNameRendered`), so a list
+would take the bodies named beside it down with it and report nothing about any of them — which is
+exactly the state a door being ADDED is in while it is being added.
 
 ## `examples/` — every program in `examples/`, and every complete program the docs show, still builds and still computes its known answer
 

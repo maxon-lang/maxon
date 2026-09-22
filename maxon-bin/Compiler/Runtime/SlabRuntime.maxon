@@ -419,9 +419,15 @@ let SlabFreeToSpanName = b"__slab_free_to_span"
 // that owns the span now.
 let SlabCollectRemoteName = b"__slab_collect_remote"
 
-// Return a slot to an EXHAUSTED span and relist it, under `__slab_lock`. Once per span, not once per free.
+// The two slot roads that take `__slab_lock`: an exhausted span returned to its class's partial list, which
+// is once per span rather than once per free, and a span of the shared raw row, which any P-less thread
+// frees into.
 let SlabFreeToFullName = b"__slab_free_to_full"
+let SlabFreeToRawName = b"__slab_free_to_raw"
 let SlabSpanDestroyName = b"__slab_span_destroy"
+
+let SlabDoorHandled = 1
+let SlabDoorOwnerMoved = 0
 
 // ⭐⭐ **THE FIVE THIS FILE NAMES BUT NO LONGER BUILDS.** Their bodies are `runtime/SlabRuntime.maxon`
 // source — the OS-direct pair, the state region's commit and the metadata slab's two cursors — and what
@@ -575,6 +581,7 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	_ = globalData.registerRdataConstantLabeled(SlabClassGeomLabel, bytes: slabClassGeometryTable(), kind: RdataPayloadKind.slabTable)
 
 	let model = machineModel(target)
+	let firstFuncIndex = module.funcCount()
 
 	buildSlabCollectRemote(module)
 	buildSlabRoundedSize(module)
@@ -583,6 +590,7 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabAllocEntry(module, name: SlabAllocRawName, zeroed: false, model: model)
 	buildSlabSpanDestroy(module)
 	buildSlabFreeToFull(module)
+	buildSlabFreeToRaw(module)
 	buildSlabScavenge(module, model: model)
 	buildSlabFreeToSpan(module)
 	buildSlabFree(module, model: model)
@@ -595,6 +603,8 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabCensusEntry(module, name: SlabCensusTallyName, callee: SlabCensusTallyWalkName, argument: SlabCensusArgument.forwarded, model: model)
 	buildSlabCensusEntry(module, name: SlabCensusBucketCountName, callee: SlabCensusBucketCountWalkName, argument: SlabCensusArgument.forwarded, model: model)
 	buildSlabCensusEntry(module, name: SlabCensusBucketBytesName, callee: SlabCensusBucketBytesWalkName, argument: SlabCensusArgument.forwarded, model: model)
+
+	assertSpanOwnerAccessIsOrdered(module, firstFuncIndex: firstFuncIndex as FuncIndex)
 end 'installSlabRuntime'
 
 // The one `.data` slot the object layer owns. `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only
@@ -2043,10 +2053,10 @@ end 'emitSlabAllocClass'
 //      `free_count != 0`, so question 2 reads it as a hit; popping it would mutate a free list whose sole
 //      writer is somebody else. Refill instead — which is a MISS, not an error.
 //
-// ⚠ **THE OWNERSHIP LOAD NEEDS NO BARRIER.** A span is stamped for THIS P by this P's own refill
-// (`__slab_refill` installs and stamps in one block, under the lock), so the store this load observes was
-// made by the thread making the load; a span another P stamped can only be a miss here, whichever value
-// the load sees.
+// The ownership load is an acquire, though a hit means the stamp is this P's own. A P is handed between OS
+// threads, so the store this load observes need not have been made by the thread making it; the edge is what
+// puts the pop's free-list and bump reads after the verdict. Without it a hit may read the free list the
+// span carried before the refill that installed it.
 //
 // ⚠ **THIS EDGE CARRIES A BLOCK ARGUMENT OFF A CONDITIONAL, WHICH `SlabArena.maxon` DELIBERATELY NEVER
 // DOES — and the divergence is deliberate, not an oversight.** That file routes every arg-carrying edge
@@ -2070,7 +2080,7 @@ function emitSlabProbe(module StdModule, func IrFunction, cur IrBlock, mcacheSlo
 	var owned = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	module.setTerminator(depleted, op: StdOp.condBranch(drained, thenBlockId: miss.id, elseBlockId: owned.id))
 
-	let owner = emitLoadField(module, block: owned, record: cached, offset: MspanOwningPOffset, ids: ids)
+	let owner = emitLoadAcquireField(module, block: owned, record: cached, offset: MspanOwningPOffset, ids: ids)
 	let mine = emitCmp(module, block: owned, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(owned, op: StdOp.condBranch(mine, thenBlockId: hit.id, elseBlockId: miss.id))
 	owned.branchEdges.push(BranchEdge.create(hit.id, argIds: argsOf(cached)))
@@ -2211,22 +2221,45 @@ function buildSlabOsDirectArm(module StdModule, func IrFunction, cur IrBlock, si
 	module.setTerminator(osCall, op: StdOp.ret(mapped))
 end 'buildSlabOsDirectArm'
 
+// The entry both locked doors share. Precondition: the caller holds `__slab_lock`, which is what makes this
+// thread the sole writer of a span's free list, free count and class list while no processor owns it.
+//
+// ⚠ The lock does not order the owner re-read, which is why it is an acquire. An exhausted span is
+// published by the processor that popped it dry, lock-free, so `__slab_lock` supplies no edge to that
+// store: between the caller's unlocked read and this one a span may have been relisted, cached by another
+// processor, popped dry and evicted again. A plain re-read would leave the free-list words under it free to
+// be satisfied from before those pops, and this slot would go back onto a list a live slot is already on.
+function emitSlabLockedDoorEntry(module StdModule, func IrFunction, entry IrBlock, handled IrBlock, ownerExpected ParsedInt, ids ValueMinter)
+	var elsewhere = module.addBlock(func, label: b"notowner", heat: BlockHeat.cold)
+	var doubleFree = module.addBlock(func, label: b"doublefree", heat: BlockHeat.cold)
+	var moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 2)
+	let span = 1 as ValueId
+
+	let owner = emitLoadAcquireField(module, block: entry, record: span, offset: MspanOwningPOffset, ids: ids)
+	let wanted = emitConst(module, block: entry, value: ownerExpected, ids: ids)
+	let unchanged = emitCmp(module, block: entry, a: owner, b: wanted, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(unchanged, thenBlockId: handled.id, elseBlockId: elsewhere.id))
+
+	let gone = emitConst(module, block: elsewhere, value: MspanOwningPFreed, ids: ids)
+	let isGone = emitCmp(module, block: elsewhere, a: owner, b: gone, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(elsewhere, op: StdOp.condBranch(isGone, thenBlockId: doubleFree.id, elseBlockId: moved.id))
+
+	emitRuntimeAbort(module, func: func, block: doubleFree, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
+
+	let notHandled = emitConst(module, block: moved, value: SlabDoorOwnerMoved, ids: ids)
+	module.setTerminator(moved, op: StdOp.ret(notHandled))
+end 'emitSlabLockedDoorEntry'
+
 // `__slab_free_to_full(slot, span) -> handled` — return a slot to an EXHAUSTED span and put that span back
 // on its class's partial list, which is the one event per span that makes it reachable again.
 //
-// This is the only arm of `__slab_free` that takes a lock for a slot, and it is paid once per span rather
-// than once per free. A span is `Full` only between the allocation that took its last slot and the first
-// free that brings one back; every later free of that span sees `Partial` and takes the lock-free CAS.
-// Routing `Partial` here as well would put one global lock — every class, every processor — on essentially
-// every free in a drop-heavy program, which is what the per-span queue exists to avoid.
-//
-// ⚠ Precondition: the caller holds `__slab_lock`. An exhausted span has no owning processor, so the lock is
-// what makes this thread its sole writer for the free list, the free count and the class list.
-//
-// ⛔ The state is re-read under the lock and the answer is `0` when it has moved. Between the caller's
-// unlocked load and the lock another freer may have listed the span, or a refill may have cached it — and
-// writing its free list from here would then race that processor's lockless pop. The caller falls back to
-// the remote queue, which is legal against any owner.
+// The lock is paid once per span rather than once per free. A span is `Full` only between the allocation
+// that took its last slot and the first free that brings one back; every later free of that span sees
+// `Partial` and takes the lock-free CAS. Routing `Partial` here as well would put one global lock — every
+// class, every processor — on essentially every free in a drop-heavy program, which is what the per-span
+// queue exists to avoid.
 //
 // ⛔ Nothing is destroyed here. `__slab_scavenge` is the only caller of `__slab_span_destroy`, and it
 // reaches a span through the class list rather than through one of its slots — so no thread is ever inside
@@ -2238,27 +2271,11 @@ function buildSlabFreeToFull(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var exhausted = module.addBlock(func, label: b"exhausted", heat: BlockHeat.normal)
-	var notFull = module.addBlock(func, label: b"notfull", heat: BlockHeat.cold)
-	var doubleFree = module.addBlock(func, label: b"doublefree", heat: BlockHeat.cold)
-	var moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
 
-	emitParams(module, block: entry, count: 2)
+	emitSlabLockedDoorEntry(module, func: func, entry: entry, handled: exhausted, ownerExpected: MspanStateFull, ids: ids)
+
 	let slot = 0 as ValueId
 	let span = 1 as ValueId
-
-	let owner = emitLoadField(module, block: entry, record: span, offset: MspanOwningPOffset, ids: ids)
-	let full = emitConst(module, block: entry, value: MspanStateFull, ids: ids)
-	let stillExhausted = emitCmp(module, block: entry, a: owner, b: full, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(stillExhausted, thenBlockId: exhausted.id, elseBlockId: notFull.id))
-
-	let gone = emitConst(module, block: notFull, value: MspanOwningPFreed, ids: ids)
-	let isGone = emitCmp(module, block: notFull, a: owner, b: gone, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notFull, op: StdOp.condBranch(isGone, thenBlockId: doubleFree.id, elseBlockId: moved.id))
-
-	emitRuntimeAbort(module, func: func, block: doubleFree, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
-
-	let notHandled = emitConst(module, block: moved, value: 0, ids: ids)
-	module.setTerminator(moved, op: StdOp.ret(notHandled))
 
 	let state = ids.mint()
 	module.appendOp(exhausted, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
@@ -2271,11 +2288,39 @@ function buildSlabFreeToFull(module StdModule)
 	module.appendOp(exhausted, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(slot, second: span)))
 	emitMcentralLink(module, block: exhausted, span: span, mcentralSlot: mcentralSlot, ids: ids)
 
-	let done = emitConst(module, block: exhausted, value: 1, ids: ids)
+	let done = emitConst(module, block: exhausted, value: SlabDoorHandled, ids: ids)
 	module.setTerminator(exhausted, op: StdOp.ret(done))
 
 	module.functions.push(func)
 end 'buildSlabFreeToFull'
+
+// `__slab_free_to_raw(slot, span) -> handled` — push a slot back onto a span of the shared raw row, which
+// every P-less OS thread allocates from and any of them may free into.
+//
+// ⚠ The re-check is what keeps such a span reachable. A thread that read `MspanOwningPNone` and then waited
+// for the lock can arrive after another thread took the span's last slot and evicted it: the row entry is
+// clear and the owner reads `MspanStateFull`. Pushing the slot anyway would put it on a span that is on no
+// mcentral list and in no row, which no refill finds and no scavenge walk reaches — a span leaked for the
+// life of the process once that slot is the last one outstanding.
+function buildSlabFreeToRaw(module StdModule)
+	var func = IrFunction.createFromStd(SlabFreeToRawName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var onRawRow = module.addBlock(func, label: b"onrawrow", heat: BlockHeat.normal)
+
+	emitSlabLockedDoorEntry(module, func: func, entry: entry, handled: onRawRow, ownerExpected: MspanOwningPNone, ids: ids)
+
+	let slot = 0 as ValueId
+	let span = 1 as ValueId
+
+	module.appendOp(onRawRow, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(slot, second: span)))
+
+	let done = emitConst(module, block: onRawRow, value: SlabDoorHandled, ids: ids)
+	module.setTerminator(onRawRow, op: StdOp.ret(done))
+
+	module.functions.push(func)
+end 'buildSlabFreeToRaw'
 
 // `__slab_span_destroy(span)` — take a span apart: unregister its pages, hand its chunk run back to the
 // arena, and put its header on the metadata free list.
@@ -2652,11 +2697,17 @@ end 'buildSlabCollectRemote'
 //   * **the P running me.** The ordinary case, and the one asked first of the four: a lock-free push onto a
 //     list I am the sole writer of.
 //   * **`MspanStateFull` — exhausted and on no list.** `__slab_free_to_full` takes `__slab_lock` and relists
-//     it. The one slot road that locks, and a span is in this state once per cycle.
+//     it, and a span is in this state once per cycle.
 //   * **`MspanOwningPFreed` — the header is already back on the metadata slab.** A double free, and it
 //     aborts rather than CAS-pushing through a recycled record.
 //   * **anything else — another P, or `MspanStatePartial`.** CAS-push onto the SPAN's own stack and leave;
 //     whoever collects it next puts the slot on the free list.
+//
+// Either locked road may answer `SlabDoorOwnerMoved`, meaning the owner changed between the routing read and
+// the door's re-read under the lock. The road is then chosen again from `routed`, carrying `myP` unchanged
+// rather than re-deriving it: an asynchronous preemption lands only at a safe point in a user frame, and
+// `osLockEnter` is `schedulerBound` rather than a bracketed kernel call, so this thread cannot have its
+// processor taken while it waits — which is the premise the first routing pass already stands on.
 //
 // ⚠ **A NULL TARGET CANNOT HAPPEN AND IS NOT GUARDED, WHICH IS THE OTHER HALF OF STORING A POINTER.**
 // Reconstructing the P from an id and an array that may not be populated would need the guard; here the
@@ -2723,9 +2774,17 @@ function buildSlabFree(module StdModule, model MachineModel)
 	let depthAddr = ids.mint()
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: rawSerialised, state: lockState, model: model, addrId: depthAddr, ids: ids, label: b"rawlocked", heat: BlockHeat.cold)
 	emitSlabLockEnter(module, block: locked, state: lockState, depthAddr: depthAddr, ids: ids)
-	module.appendOp(locked, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(ptr, second: span)))
+	let rawAnswer = ids.mint()
+	module.appendOp(locked, op: StdOp.call(rawAnswer, callee: SlabFreeToRawName, args: twoArgs(ptr, second: span)))
 	emitSlabLockLeave(module, block: locked, state: lockState, depthAddr: depthAddr, ids: ids)
-	module.setTerminator(locked, op: StdOp.retVoid)
+
+	var rawReturned = module.addBlock(func, label: b"rawdone", heat: BlockHeat.cold)
+	let rawMissed = emitConst(module, block: locked, value: SlabDoorOwnerMoved, ids: ids)
+	let rawOwnerMoved = emitCmp(module, block: locked, a: rawAnswer, b: rawMissed, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(locked, op: StdOp.condBranch(rawOwnerMoved, thenBlockId: routed.id, elseBlockId: rawReturned.id))
+	locked.branchEdges.push(BranchEdge.create(routed.id, argIds: argsOf(myP)))
+
+	module.setTerminator(rawReturned, op: StdOp.retVoid)
 
 	// ⭐⭐ **`myP` IS ASKED FIRST OF THE FOUR, BECAUSE IT IS THE ANSWER IN A PROGRAM WITH ONE PROCESSOR AND
 	// THE COMMON ONE IN EVERY OTHER.** The two sentinels below it are a state a span is in once per cycle,
@@ -2746,9 +2805,9 @@ function buildSlabFree(module StdModule, model MachineModel)
 
 	emitRuntimeAbort(module, func: func, block: parked, abort: RuntimeAbort.slabFreeOfParkedSpan, ids: ids)
 
-	// ⛔ **THE ONE SLOT ROAD THAT TAKES THE LOCK, AND IT IS TAKEN ONCE PER SPAN.** An exhausted span is on no
-	// list, so the freer that brings the first slot back is the one that has to relist it — and it takes the
-	// lock BEFORE touching the span, which is what keeps the destroy out of reach of an in-flight freer.
+	// ⛔ **THE LOCK IS TAKEN ONCE PER SPAN.** An exhausted span is on no list, so the freer that brings the
+	// first slot back is the one that has to relist it — and it takes the lock BEFORE touching the span,
+	// which is what keeps the destroy out of reach of an in-flight freer.
 	//
 	// ⚠ **THE LOCK IS THE RAW ARM'S BARGAIN, NOT A SECOND ONE.** Before a scheduler exists the lone main
 	// thread is the only writer of anything, so the two arms are one call with and without the bracket
@@ -2778,9 +2837,10 @@ function buildSlabFree(module StdModule, model MachineModel)
 	var relistReturned = module.addBlock(func, label: b"relistret", heat: BlockHeat.cold)
 	let tookIt = ids.mint()
 	relistDone.blockArgs.push(IrBlockArg.create(tookIt, argType: StdType.i64))
-	let missed = emitConst(module, block: relistDone, value: 0, ids: ids)
+	let missed = emitConst(module, block: relistDone, value: SlabDoorOwnerMoved, ids: ids)
 	let listedMeanwhile = emitCmp(module, block: relistDone, a: tookIt, b: missed, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(relistDone, op: StdOp.condBranch(listedMeanwhile, thenBlockId: remote.id, elseBlockId: relistReturned.id))
+	module.setTerminator(relistDone, op: StdOp.condBranch(listedMeanwhile, thenBlockId: routed.id, elseBlockId: relistReturned.id))
+	relistDone.branchEdges.push(BranchEdge.create(routed.id, argIds: argsOf(myP)))
 
 	module.setTerminator(relistReturned, op: StdOp.retVoid)
 
@@ -2813,3 +2873,247 @@ end 'buildSlabFree'
 export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
 end 'emitSlabFree'
+
+let SpanOwnerCheckName = "assertSpanOwnerAccessIsOrdered"
+
+enum SpanOwnerAccess
+	none
+	orderedRead
+	orderedPublication
+end 'SpanOwnerAccess'
+
+type SpanOwnerAccessCensus
+	export var freeReads as bool
+	export var freeToFullReads as bool
+	export var freeToRawReads as bool
+	export var allocReads as bool
+	export var allocRawReads as bool
+	export var refillPublishes as bool
+	export var allocPublishes as bool
+	export var allocRawPublishes as bool
+
+	static function create() returns Self
+		return Self{freeReads: false, freeToFullReads: false, freeToRawReads: false, allocReads: false, allocRawReads: false, refillPublishes: false, allocPublishes: false, allocRawPublishes: false}
+	end 'create'
+
+	export function noteFunction(name ByteArray, reads bool, publishes bool)
+		self.freeReads = self.freeReads or (reads and name == SlabFreeName)
+		self.freeToFullReads = self.freeToFullReads or (reads and name == SlabFreeToFullName)
+		self.freeToRawReads = self.freeToRawReads or (reads and name == SlabFreeToRawName)
+		self.allocReads = self.allocReads or (reads and name == SlabAllocName)
+		self.allocRawReads = self.allocRawReads or (reads and name == SlabAllocRawName)
+		self.refillPublishes = self.refillPublishes or (publishes and name == SlabRefillName)
+		self.allocPublishes = self.allocPublishes or (publishes and name == SlabAllocName)
+		self.allocRawPublishes = self.allocRawPublishes or (publishes and name == SlabAllocRawName)
+	end 'noteFunction'
+end 'SpanOwnerAccessCensus'
+
+// The owner word's ordering, checked rather than trusted: a plain load or store at that displacement in any
+// body installed above is refused before the module reaches a backend.
+//
+// The displacement alone is the key, and it is sound only because no other record these bodies read has a
+// field at 48 — the mspan's neighbours are 40 and 56, the state head's lock spans that offset, a P is read
+// at `POffId` and `POffRemoteFreeCount`, and the arena map is walked through computed slot addresses at
+// displacement 0. A record that gains a field there is what would make this refuse a body that is correct.
+//
+// ⚠ It sees the plain and the ordered forms only. An atomic carries no displacement to key on, and the
+// bodies lowered from `runtime/SlabRuntime.maxon` are installed before `firstFuncIndex` and are outside the
+// walk — `__slab_meta_free`'s `Freed` stamp and the census walk's read of the word among them.
+function assertSpanOwnerAccessIsOrdered(module StdModule, firstFuncIndex FuncIndex)
+	var census = SpanOwnerAccessCensus.create()
+	var opIndices = OpIndexArray.create()
+	var load = StdLoadOperands.create()
+
+	for index in firstFuncIndex upto module.funcCount() as FuncIndex 'eachFunc'
+		requireOrderedSpanOwnerAccessIn(module, func: module.getFunc(index), census: census, opIndices: opIndices, load: load)
+	end 'eachFunc'
+
+	requireSpanOwnerCensusIsComplete(census)
+end 'assertSpanOwnerAccessIsOrdered'
+
+function requireOrderedSpanOwnerAccessIn(module StdModule, func IrFunction, census SpanOwnerAccessCensus, opIndices OpIndexArray, load StdLoadOperands)
+	module.collectLiveOpIndices(func, into: opIndices)
+
+	var reads = false
+	var publishes = false
+
+	for opIdx in opIndices 'eachOp'
+		let op = liveRuntimeOpAt(module, opIdx: opIdx, reader: SpanOwnerCheckName)
+		requireNoPlainSpanOwnerRead(op, func: func, load: load)
+
+		match spanOwnerAccessOfOp(op, func: func) 'access'
+			none then break 'access'
+			orderedRead then reads = true
+			orderedPublication then publishes = true
+		end 'access'
+	end 'eachOp'
+
+	census.noteFunction(func.name, reads: reads, publishes: publishes)
+end 'requireOrderedSpanOwnerAccessIn'
+
+function requireNoPlainSpanOwnerRead(op StdOp, func IrFunction, load StdLoadOperands)
+	classifyLoadOperands(op, load: load)
+
+	if not load.isLoad() 'notAPlainLoad'
+		return
+	end 'notAPlainLoad'
+
+	if load.offset != MspanOwningPOffset 'notTheOwnerWord'
+		return
+	end 'notTheOwnerWord'
+
+	panic("{SpanOwnerCheckName}: '{String.from(func.name)}' reads a span's owning-P word at offset {MspanOwningPOffset} with a PLAIN load. Another OS thread publishes that word with a release store — the P that evicts an exhausted span, the refill that installs one, the relist that hands it back — and a plain load carries no ordering edge to it, so the span's free-list head and free count read after it may be satisfied from before the publication and this thread links a slot ahead of one already handed out. Read it through `emitLoadAcquireField`")
+end 'requireNoPlainSpanOwnerRead'
+
+function spanOwnerAccessOfOp(op StdOp, func IrFunction) returns SpanOwnerAccess
+	match op 'k'
+		storeIndirect(_, offset, _, _) then return refuseSpanOwnerPlainStore(func, offset: offset)
+		loadAcquire(_, _, offset, _) then return spanOwnerOrderedAccessAt(offset, ordered: SpanOwnerAccess.orderedRead)
+		storeRelease(_, offset, _, _) then return spanOwnerOrderedAccessAt(offset, ordered: SpanOwnerAccess.orderedPublication)
+		const or
+			binOp or
+			unaryOp or
+			cmp or
+			binOpImm or
+			cmpImm or
+			div or
+			mod or
+			condBranch or
+			branch or
+			ret or
+			param or
+			call or
+			retVoid or
+			globalAddr or
+			loadIndirect or
+			osAllocPages or
+			osWriteStdout or
+			rdataAddr or
+			tryCall or
+			errorReturn or
+			osExit or
+			funcAddr or
+			callIndirect or
+			osPanic or
+			osReadClock or
+			osProcessSpawn or
+			osProcessExitCode or
+			osCloseHandle or
+			osWaitHandle or
+			osFreePages or
+			switch or
+			witnessCall or
+			osPipeCreate or
+			osEventCreate or
+			osThreadCreate or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osReadOverlapped or
+			osLastError or
+			osProcessSpawnInherit or
+			osCancelIo or
+			osGetPid or
+			osPipeCreateOutbound or
+			osWriteFile or
+			osReadWallClock or
+			witnessTryCall or
+			osFileOpenRead or
+			osFileClose or
+			osReadFile or
+			osFileOpenWrite or
+			osFileSize or
+			osFileDelete or
+			osFileRename or
+			osFileFindFirst or
+			osFileFindClose or
+			osFileFindNext or
+			osDirCreate or
+			osDirRemove or
+			osDirCurrentPath or
+			osFileAttributes or
+			osPanicValue or
+			osCommandLine or
+			osStdHandle or
+			osExecutablePath or
+			osWriteStderr or
+			stackRecordAddr or
+			osOpenNamedSegment or
+			osMapNamedSegment or
+			osTickCountMs or
+			osHandleSetInherit or
+			osPipePeek or
+			osEnvRead or
+			osProcessTerminate or
+			osSocketStartup or
+			osSocketResolve or
+			osSocketFreeAddrInfo or
+			osSocketCreate or
+			osSocketConnect or
+			osSocketError or
+			osSocketSend or
+			osSocketRecv or
+			osSocketClose or
+			osCpuCount or
+			osThreadCpuTicks or
+			osDecommitPages or
+			memFill or
+			osCommitPages or
+			osReservePages or
+			atomicCas or
+			atomicRmw or
+			currentThreadToken or
+			tlsAlloc or
+			tlsSetValue or
+			tlsSlotLoad or
+			osSetEvent or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			osHandleFileType or
+			osCreateNamedSegment or
+			osUnmapNamedSegment or
+			osUnpublishNamedSegment or
+			covPoint or
+			osHostSample or
+			osNetpoll or
+			osSocketOverlapped or
+			osSocketServe then return SpanOwnerAccess.none
+	end 'k'
+end 'spanOwnerAccessOfOp'
+
+function spanOwnerOrderedAccessAt(offset ByteOffset, ordered SpanOwnerAccess) returns SpanOwnerAccess
+	if offset != MspanOwningPOffset 'notTheOwnerWord'
+		return SpanOwnerAccess.none
+	end 'notTheOwnerWord'
+
+	return ordered
+end 'spanOwnerOrderedAccessAt'
+
+function refuseSpanOwnerPlainStore(func IrFunction, offset ByteOffset) returns SpanOwnerAccess
+	if offset != MspanOwningPOffset 'notTheOwnerWord'
+		return SpanOwnerAccess.none
+	end 'notTheOwnerWord'
+
+	panic("{SpanOwnerCheckName}: '{String.from(func.name)}' publishes a span's owning-P word at offset {MspanOwningPOffset} with a PLAIN store. Another OS thread reads that word with an acquire load and then walks the span's free list, and a plain store gives it no edge to the list and count writes that precede it — so the reader can observe the new owner and a stale list. Emit it through `StdOp.storeRelease`")
+end 'refuseSpanOwnerPlainStore'
+
+function requireSpanOwnerCensusIsComplete(census SpanOwnerAccessCensus)
+	requireSpanOwnerSiteWasSeen(census.freeReads, funcName: SlabFreeName, ordering: "acquire load")
+	requireSpanOwnerSiteWasSeen(census.freeToFullReads, funcName: SlabFreeToFullName, ordering: "acquire load")
+	requireSpanOwnerSiteWasSeen(census.freeToRawReads, funcName: SlabFreeToRawName, ordering: "acquire load")
+	requireSpanOwnerSiteWasSeen(census.allocReads, funcName: SlabAllocName, ordering: "acquire load")
+	requireSpanOwnerSiteWasSeen(census.allocRawReads, funcName: SlabAllocRawName, ordering: "acquire load")
+	requireSpanOwnerSiteWasSeen(census.refillPublishes, funcName: SlabRefillName, ordering: "release store")
+	requireSpanOwnerSiteWasSeen(census.allocPublishes, funcName: SlabAllocName, ordering: "release store")
+	requireSpanOwnerSiteWasSeen(census.allocRawPublishes, funcName: SlabAllocRawName, ordering: "release store")
+end 'requireSpanOwnerCensusIsComplete'
+
+function requireSpanOwnerSiteWasSeen(seen bool, funcName ByteArray, ordering String)
+	if seen 'itWasSeen'
+		return
+	end 'itWasSeen'
+
+	panic("{SpanOwnerCheckName}: no {ordering} of a span's owning-P word at offset {MspanOwningPOffset} was found in '{String.from(funcName)}', so the walk above refused nothing there and a module that has lost the ordering reads exactly like one that keeps it. Either that access moved to a spelling this walk does not recognise, or the door no longer touches the word")
+end 'requireSpanOwnerSiteWasSeen'

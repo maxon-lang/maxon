@@ -448,7 +448,7 @@ func @__slab_free {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 64
+    x64.prologue 80
     x64.movRegReg rbx, rcx
     x64.leaRegGlobal rax, __slab_arena_map_l1
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -538,7 +538,7 @@ func @__slab_free {
     x64.storeBaseDispReg.word64 [r12 + 8], rbx
     x64.aluBaseDispImm32.add [r12 + 16], 1
   push:
-    x64.epilogue 64
+    x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -570,7 +570,7 @@ func @__slab_free {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, rpush
   rpushed:
-    x64.epilogue 64
+    x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -581,43 +581,43 @@ func @__slab_free {
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.leaRegRegImm32 rdx, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#41
-  shard#47:
+    x64.jcc equal, shard#42
+  shard#48:
     x64.mov rcx, gs:[rcx]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#42
-  shard#43:
+    x64.jcc equal, shard#43
+  shard#44:
     x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, shard#49
-  shard#48:
+    x64.jcc equal, shard#50
+  shard#49:
     x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
     x64.aluBaseDispImm32.add [rsi + 312], 1
-  shard#49:
+  shard#50:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#42
-  shard#45:
+    x64.jcc equal, shard#43
+  shard#46:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
     x64.cmpRegImm32 rcx, 255
-    x64.jcc less, shard#46
-  shard#42:
+    x64.jcc less, shard#47
+  shard#43:
     x64.movRegImm32 rax, 1
     x64.leaRegRegImm32 rcx, rdx, 32
     x64.lock add [rcx], rax
     x64.jmp oscall
-  shard#46:
+  shard#47:
     x64.imulRegRegImm32 rcx, rcx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rcx
     x64.movRegReg rdx, rax
-  shard#41:
+  shard#42:
     x64.aluBaseDispImm32.add [rdx + 32], 1
   oscall:
     x64.movRegReg rcx, rbx
     x64.callDirect __slab_os_direct_free
     x64.movRegReg rax, r8
-    x64.epilogue 64
+    x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -625,37 +625,50 @@ func @__slab_free {
   rawlocked#18:
     x64.leaRegGlobal rax, __slab_state
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 rcx, rax, 32
-    x64.loadRegBaseDisp.word64 rdx, [rax + 24]
-    x64.cmpRegImm32 rdx, 0
+    x64.leaRegRegImm32 rsi, rax, 32
+    x64.loadRegBaseDisp.word64 rdi, [rax + 24]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, rawlocked#26
   rawlocked#28:
-    x64.mov rdx, gs:[rdx]
-    x64.cmpRegImm32 rdx, 0
+    x64.mov rdi, gs:[rdi]
+    x64.cmpRegImm32 rdi, 0
     x64.jcc equal, rawlocked#26
   rawlocked#27:
-    x64.leaRegRegImm32 rcx, rdx, 552
+    x64.leaRegRegImm32 rsi, rdi, 552
   rawlocked#26:
-    x64.movRegImm32 rdx, 1
-    x64.lock add [rcx], rdx
-    x64.leaRegRegImm32 rdx, rax, 40
+    x64.movRegImm32 rdi, 1
+    x64.lock add [rsi], rdi
+    x64.leaRegRegImm32 rdi, rax, 40
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
-    x64.movRegReg rcx, rdx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.movRegReg rcx, rdi
     x64.iatCall 21
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __slab_free_to_span
+    x64.callDirect __slab_free_to_raw
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
     x64.leaRegRegImm32 rax, rax, 40
     x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot2, rdx
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, r8
     x64.movRegReg rcx, rax
     x64.iatCall 22
     x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot r8, slot4
     x64.movRegImm rax, 18446744073709551615
-    x64.lock add [rcx], rax
-    x64.epilogue 64
+    x64.lock add [rsi], rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, routed
+  rawdone:
+    x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -666,24 +679,25 @@ func @__slab_free {
   relistlock:
     x64.leaRegGlobal rax, __slab_state
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegRegImm32 rcx, rax, 32
-    x64.loadRegBaseDisp.word64 rsi, [rax + 24]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, relist#32
+    x64.leaRegRegImm32 rsi, rax, 32
+    x64.loadRegBaseDisp.word64 rdi, [rax + 24]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, relist#33
+  relist#35:
+    x64.mov rdi, gs:[rdi]
+    x64.cmpRegImm32 rdi, 0
+    x64.jcc equal, relist#33
   relist#34:
-    x64.mov rsi, gs:[rsi]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, relist#32
+    x64.leaRegRegImm32 rsi, rdi, 552
   relist#33:
-    x64.leaRegRegImm32 rcx, rsi, 552
-  relist#32:
-    x64.movRegImm32 rsi, 1
-    x64.lock add [rcx], rsi
-    x64.leaRegRegImm32 rsi, rax, 40
+    x64.movRegImm32 rdi, 1
+    x64.lock add [rsi], rdi
+    x64.leaRegRegImm32 rdi, rax, 40
     x64.storeSlotReg slot0, rax
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.movRegReg rcx, rsi
+    x64.storeSlotReg slot3, rsi
+    x64.movRegReg rcx, rdi
     x64.iatCall 21
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -691,29 +705,34 @@ func @__slab_free {
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
+    x64.loadRegSlot rsi, slot3
     x64.leaRegRegImm32 rax, rax, 40
     x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
-    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot4, r8
     x64.movRegReg rcx, rax
     x64.iatCall 22
     x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
-    x64.loadRegSlot r8, slot3
+    x64.loadRegSlot rsi, slot3
+    x64.loadRegSlot r8, slot4
     x64.movRegImm rax, 18446744073709551615
-    x64.lock add [rcx], rax
+    x64.lock add [rsi], rax
     x64.jmp relistdone
   relistplain:
+    x64.storeSlotReg slot1, rcx
     x64.storeSlotReg slot2, rdx
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __slab_free_to_full
+    x64.loadRegSlot rcx, slot1
     x64.loadRegSlot rdx, slot2
   relistdone:
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, remote
+    x64.jcc equal, routed
   relistret:
-    x64.epilogue 64
+    x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -722,7 +741,7 @@ func @__slab_free {
     x64.movRegImm32 rcx, 89
     x64.movReg32Reg32 rcx, rcx
     x64.iatCall 0
-    x64.epilogue 64
+    x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
