@@ -2878,7 +2878,7 @@ end 'emitGtFifoSweepDropped'
 //
 // ⚠ **THE RECLAIM RUNS WITH `__sched_lock` RELEASED AT BOTH CALLERS**, and the POP is what makes that safe: a
 // GT taken off a queue is unreachable by anyone else.
-export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, ids ValueMinter)
+export function emitGtTombstoneHandback(module StdModule, func IrFunction, candidate IrBlock, found ValueId, retry IrBlock, requeue ByteArray, ids ValueMinter)
 	var noWork = module.addBlock(func, label: b"tsnowork", heat: BlockHeat.normal)
 	var checkDropped = module.addBlock(func, label: b"tscheckdropped", heat: BlockHeat.normal)
 	var reclaim = module.addBlock(func, label: b"tsreclaim", heat: BlockHeat.normal)
@@ -2891,11 +2891,73 @@ export function emitGtTombstoneHandback(module StdModule, func IrFunction, candi
 
 	let wasDropped = emitGtIsDropped(module, block: checkDropped, gt: found, ids: ids)
 	module.setTerminator(checkDropped, op: StdOp.condBranch(wasDropped, thenBlockId: reclaim.id, elseBlockId: hand.id))
-	module.setTerminator(hand, op: StdOp.ret(found))
+	emitDebugAgentHoldGate(module, func: func, hand: hand, found: found, retry: retry, requeue: requeue, ids: ids)
 
 	module.appendOp(reclaim, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(found)))
 	module.setTerminator(reclaim, op: StdOp.branch(retry.id))
 end 'emitGtTombstoneHandback'
+
+// A hold is a refusal at the hand-over and moves nothing: the candidate goes back on the tail of the queue
+// it came off and the machine looks again. So a held thread stays inside the scheduler's own structures,
+// `__sched_checkdead` keeps seeing a machine running, nothing is parked on a chain the runtime cannot see,
+// and a release needs no wake because the next dequeue simply stops being refused.
+//
+// `requeue` is the caller's own door, not one door. `__sched_find_runnable`'s candidate is an owner token
+// of the global queue and `__gt_strand_next`'s is a member of its owner's strand queue; re-queueing either
+// through the other's door loses the thread.
+//
+// The cost when nothing is held is one load and one branch per dequeue, which is why the gate sits behind
+// `__dbg_ctl`: the agent is emitted into every x64-windows program and is dark in almost all of them.
+function emitDebugAgentHoldGate(module StdModule, func IrFunction, hand IrBlock, found ValueId, retry IrBlock, requeue ByteArray, ids ValueMinter)
+	if not module.usesDebugAgent 'noAgentInThisImage'
+		module.setTerminator(hand, op: StdOp.ret(found))
+		return
+	end 'noAgentInThisImage'
+
+	var askTheAgent = module.addBlock(func, label: b"tshaskagent", heat: BlockHeat.cold)
+	var putItBack = module.addBlock(func, label: b"tshputback", heat: BlockHeat.cold)
+	var handOver = module.addBlock(func, label: b"tshhandover", heat: BlockHeat.normal)
+
+	let ctl = emitLoadGlobalWord(module, block: hand, label: DbgCtlLabel, ids: ids)
+	let dark = emitCmp(module, block: hand, a: ctl, b: emitConst(module, block: hand, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(hand, op: StdOp.condBranch(dark, thenBlockId: handOver.id, elseBlockId: askTheAgent.id))
+
+	let held = ids.mint()
+	module.appendOp(askTheAgent, op: StdOp.call(held, callee: DbgGtShouldHoldName, args: argsOf(found)))
+	let notHeld = emitCmp(module, block: askTheAgent, a: held, b: emitConst(module, block: askTheAgent, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(askTheAgent, op: StdOp.condBranch(notHeld, thenBlockId: handOver.id, elseBlockId: putItBack.id))
+
+	emitSchedLockEnter(module, block: putItBack, ids: ids)
+	module.appendOp(putItBack, op: StdOp.call(ids.mint(), callee: requeue, args: argsOf(found)))
+	emitSchedLockLeave(module, block: putItBack, ids: ids)
+
+	// The retry would otherwise be a hot spin on the one thread the driver has asked to stand still, so the
+	// machine backs off before looking again. That pause is the documented cost of holding a thread.
+	_ = emitNetpoll(module, block: putItBack, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: putItBack, value: DbgHoldRefusePauseUs, ids: ids)), ids: ids)
+	module.setTerminator(putItBack, op: StdOp.branch(retry.id))
+
+	module.setTerminator(handOver, op: StdOp.ret(found))
+end 'emitDebugAgentHoldGate'
+
+// The carve is the hook site because there is no all-threads list to walk and it is the one moment a record
+// comes into existence; the caller's hold of `__sched_lock` is what serialises the append.
+export function emitDebugAgentCarveHook(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+	if not module.usesDebugAgent 'noAgentInThisImage'
+		return cur
+	end 'noAgentInThisImage'
+
+	var register = module.addBlock(func, label: b"dbgcarved", heat: BlockHeat.cold)
+	var done = module.addBlock(func, label: b"dbgcarvedone", heat: BlockHeat.normal)
+
+	let ctl = emitLoadGlobalWord(module, block: cur, label: DbgCtlLabel, ids: ids)
+	let dark = emitCmp(module, block: cur, a: ctl, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(dark, thenBlockId: done.id, elseBlockId: register.id))
+
+	module.appendOp(register, op: StdOp.call(ids.mint(), callee: DbgGtCarvedName, args: argsOf(gt)))
+	module.setTerminator(register, op: StdOp.branch(done.id))
+
+	return done
+end 'emitDebugAgentCarveHook'
 
 // `__gt_enqueue(g)` — append owner token `g` to the tail of the global FIFO run queue. The caller holds
 // `__sched_lock`.
@@ -3032,7 +3094,7 @@ function buildGtStrandNext(module StdModule)
 	module.setTerminator(gotOne, op: StdOp.branch(candidate.id))
 	gotOne.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
 
-	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, ids: ids)
+	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, requeue: GtCoroEnqueueName, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtStrandNext'

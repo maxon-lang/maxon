@@ -125,7 +125,7 @@ export function runDebugCommand(args MaxonArgs) returns ExitCode
 end 'runDebugCommand'
 
 function printDebugUsage()
-	printError("Usage: maxon debug <exe> [{StopTimeoutOptionPrefix}<seconds>] [{TargetEnvOptionPrefix}NAME=VALUE]... [{ProgramArgumentsSeparator} <program args>...]\n")
+	printError("Usage: maxon debug <exe> [{DebugTraceOption}] [{StopTimeoutOptionPrefix}<seconds>] [{TargetEnvOptionPrefix}NAME=VALUE]... [{ProgramArgumentsSeparator} <program args>...]\n")
 	printError("       maxon debug {BatchOption} {CommandsOptionPrefix}<cmd;cmd;...|@file> <exe> [same options]\n")
 	printError("       maxon debug {CompleteOptionPrefix}<partial line> <exe>\n")
 	printError("       maxon debug {ClassifyOptionPrefix}<hex>[,<hex>...]\n")
@@ -165,9 +165,10 @@ type DebuggerRequest
 	export var stopTimeoutMs as DebugTimeoutMs
 	export var targetEnv as EnvMap
 	export var programArguments as StringArray
+	export var traced as bool
 
 	static function create() returns DebuggerRequest
-		return Self{exePath: "", exeGiven: false, batch: false, script: "", scriptGiven: false, face: DebuggerFaceRequest.session, stopTimeoutMs: trunc(DefaultStopTimeoutSeconds * MillisecondsPerSecond) as DebugTimeoutMs, targetEnv: EnvMap.create(), programArguments: StringArray.create()}
+		return Self{exePath: "", exeGiven: false, batch: false, script: "", scriptGiven: false, face: DebuggerFaceRequest.session, stopTimeoutMs: trunc(DefaultStopTimeoutSeconds * MillisecondsPerSecond) as DebugTimeoutMs, targetEnv: EnvMap.create(), programArguments: StringArray.create(), traced: false}
 	end 'create'
 end 'DebuggerRequest'
 
@@ -307,6 +308,12 @@ function recordedDebuggerOption(request DebuggerRequest, argument String) return
 		return DebuggerOptionParse.accepted
 	end 'oneObjectPerLine'
 
+	if argument == DebugTraceOption 'theDebugStreamRing'
+		request.traced = true
+
+		return DebuggerOptionParse.accepted
+	end 'theDebugStreamRing'
+
 	if argument.startsWith(CommandsOptionPrefix) 'aScript'
 		request.script = argument.replaceFirst(CommandsOptionPrefix, with: "")
 		request.scriptGiven = true
@@ -423,7 +430,7 @@ function runDebugSessionFor(request DebuggerRequest, program FilePath, code Byte
 	let inheritCwd = try FilePath.from("") otherwise panic("runDebugSessionFor: the empty path is the 'inherit cwd' sentinel and must be spellable")
 	let face = DebugFace.batch if request.batch else DebugFace.conversational
 
-	match DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritCwd, targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs as StopTimeoutMs, face: face) 'started'
+	match DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritCwd, targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs as StopTimeoutMs, face: face, traced: request.traced) 'started'
 		refused(reason) then return refuseDebugCommand(reason)
 		noAgent(reason) then return refuseDebugCommand("{reason} {NoDebugAgentFlag}, or its agent never attached")
 		ready(session) then return drivenDebugSession(session, request: request)

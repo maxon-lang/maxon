@@ -1,0 +1,67 @@
+let GtParkResumeCaseLabel = "gt-park-resume"
+
+let AnchorName = "worker-loop"
+let WorkerFunctionName = "worker"
+let OneProcessor = "1"
+let FourSecondStopTimeout = 4
+let ContinuesBeforeTheHold = 3
+let ContinuesWhileHeld = 4
+let ContinuesPastEveryWorker = 60
+
+test 'a held green thread runs nothing until it is released, and then runs on'
+	let staged = builtFixture(GtParkResumeCaseLabel, fixture: WorkersFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let loopLine = anchorLine(staged, anchor: AnchorName)
+	let options = [targetEnvOption(MaxProcsVariableName, value: OneProcessor), "{DebugStopTimeoutOptionPrefix}{FourSecondStopTimeout}"]
+	let parked = threadSelector(WaitingThreadStatus, functionName: WorkerFunctionName)
+
+	var acting = StringArray.create()
+	acting.push("{BreakCommand} {lineTarget(loopLine)}")
+	acting.push(RunCommand)
+
+	let upToTheHold = appendedCommands(acting, rest: repeatedCommand(ContinueCommand, times: ContinuesBeforeTheHold))
+	let held = appendedCommands(upToTheHold, rest: [ThreadsCommand, selectorCommand(GtParkCommand, selector: parked)])
+	let whileHeld = appendedCommands(held, rest: repeatedCommand(ContinueCommand, times: ContinuesWhileHeld))
+	let released = appendedCommands(whileHeld, rest: [selectorCommand(GtResumeCommand, selector: HeldResult)])
+	let commands = debugCommandLine(appendedCommands(released, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryWorker)))
+
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: options)
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let rosters = eventsOfKind(events, kind: ThreadsEventName)
+	try Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let roster = eventAt(rosters, index: 0)
+	try Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus) as AssertedInt, than: 1, message: "⛔ THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheHold}rd stop at least one of them is parked on a timer and `{parked}` names it. The roster held: {renderedThreads(roster)}. {said}")
+
+	let holds = eventsOfKind(events, kind: GtParkEventName)
+	try Expect.equal(holds.count() as AssertedInt, expected: 1, message: "`{selectorCommand(GtParkCommand, selector: parked)}` printed no `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let requested = eventAt(holds, index: 0)
+	let chosen = reportedThreadId(requested)
+	try Expect.isFalse(reportsNoThreadId(requested), message: "⛔ THE SELECTOR RESOLVED TO NOTHING, so nothing was held and every claim below is vacuous. The roster held: {renderedThreads(roster)}. {said}")
+	try Expect.equal(threadFieldOfId(roster, id: chosen, key: StatusKey), expected: WaitingThreadStatus, message: "⭐ THE EVENT SAYS WHICH THREAD IT HELD AND THIS IS WHERE THAT IS CHECKED, IN THE SAME SESSION AND AT THE SAME STOP. #{chosen} is not a `{WaitingThreadStatus}` thread on the roster the selector was resolved against. The roster held: {renderedThreads(roster)}. {said}")
+	try Expect.equal(threadFieldOfId(roster, id: chosen, key: FunctionKey), expected: WorkerFunctionName, message: "#{chosen} is not inside `{WorkerFunctionName}`, so the hold is of a thread this case is not about. The roster held: {renderedThreads(roster)}. {said}")
+	try Expect.equal(textOf(requested, node: requested.root, key: ResultKey), expected: HeldResult, message: "holding a thread that is not on a machine answers `{HeldResult}`; it answered '{textOf(requested, node: requested.root, key: ResultKey)}'. {said}")
+
+	let lets = eventsOfKind(events, kind: GtResumeEventName)
+	try Expect.equal(lets.count() as AssertedInt, expected: 1, message: "`{selectorCommand(GtResumeCommand, selector: HeldResult)}` printed no `{GtResumeEventName}` event. {said}")
+
+	let letGo = eventAt(lets, index: 0)
+	try Expect.equal(reportedThreadId(letGo) as AssertedInt, expected: chosen as AssertedInt, message: "⭐ THE RELEASE NAMES THE THREAD IT LET GO, AND IT MUST BE THE ONE THAT WAS HELD. `{HeldResult}` is a selector over the SAME roster word the hold produced, so the only thread it can name is #{chosen}. {said}")
+	try Expect.equal(textOf(letGo, node: letGo.root, key: ResultKey), expected: ReleasedResult, message: "a held thread that is released must report `{ReleasedResult}`. {said}")
+
+	let holdIndex = firstIndexOfKind(events, kind: GtParkEventName)
+	let releaseIndex = firstIndexOfKind(events, kind: GtResumeEventName)
+	let endOfStream = events.count() as EventNumber
+
+	try Expect.equal(stopsOnThreadInRange(events, id: chosen, after: holdIndex, upto: releaseIndex) as AssertedInt, expected: 0, message: "⭐⭐ THE WHOLE CLAIM: a held thread is NEVER HANDED TO A MACHINE. Its sleep expires while it is held and the timer puts it on a run queue, so a scheduler that dequeues without asking the hold table runs it — and every other worker kept stopping at the same line, so a hold that quietly did nothing looks exactly like a hold that worked. #{chosen} stopped while it was held. {said}")
+	try Expect.atLeast(stopsOnThreadInRange(events, id: chosen, after: releaseIndex, upto: endOfStream) as AssertedInt, than: 1, message: "⛔ THE CONTROL FOR THE LINE ABOVE. A thread that never runs again after being released satisfies `it did not run while held` for the wrong reason: the release must actually put it back on a run queue, and the SCHEDULER is what performs that, next time any machine looks for work. #{chosen} never stopped again. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "⛔ `main` AWAITS EVERY WORKER, SO A THREAD LEFT HELD IS A PROGRAM THAT NEVER ENDS. The session must release what it held and run the program to its own end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached, so holding and releasing a worker changed what it computed. {said}")
+end 'a held green thread runs nothing until it is released, and then runs on'

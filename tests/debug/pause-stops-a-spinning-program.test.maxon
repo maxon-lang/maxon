@@ -1,0 +1,29 @@
+let PauseSpinningCaseLabel = "pause-stops-a-spinning-program"
+
+let OneSecond = 1
+let TimedOutSessionExitCode = 1
+
+test 'pause stops a program that has no breakpoint in it and never ends'
+	let staged = builtFixture(PauseSpinningCaseLabel, fixture: SpinFixtureName)
+	let oneSecondStopTimeout = "{DebugStopTimeoutOptionPrefix}{OneSecond}"
+	let commands = debugCommandLine([RunCommand, PauseCommand, BacktraceCommand, QuitCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [oneSecondStopTimeout])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 1, message: "the `{RunCommand}` over a program with nothing armed must answer one `{TimeoutEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "⭐⭐ THIS IS THE ONLY WAY INTO A PROGRAM THAT PLANTS NO TRAP OF ITS OWN. `{PauseCommand}` asks the agent to interrupt whatever the machines are running, so a session that timed out is not a session that has lost the program. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: PauseStopReason, message: "a stop the driver asked for is reported `{PauseStopReason}`, never as a breakpoint the program does not carry. {said}")
+
+	let walks = eventsOfKind(events, kind: BacktraceEventName)
+	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` after a `{PauseCommand}` stop printed no `{BacktraceEventName}` event. A pause stop is a TRAP with a register file, unlike the entry park, so the walk is answerable here. {said}")
+
+	let walked = eventAt(walks, index: 0)
+	try Expect.atLeast(childrenOf(walked, node: walked.root, key: FramesKey).count() as AssertedInt, than: 1, message: "the walk of a paused thread produced no frame at all, so the injected stop did not land on a frame the agent could start from. {said}")
+
+	try Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "⚠ THE EXIT CODE IS THE TIMEOUT'S, NOT THE PAUSE'S. The `{RunCommand}` timed out, and the driver's exit code on any timeout is {TimedOutSessionExitCode} whatever the session went on to do — so a session that recovered with `{PauseCommand}` is still a failed one, and that must not quietly become 0. {said}")
+end 'pause stops a program that has no breakpoint in it and never ends'

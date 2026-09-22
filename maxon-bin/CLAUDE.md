@@ -222,6 +222,19 @@ the breakpoint's address. And the trap thunk saves `rsi`/`rdi` by hand: Maxon's 
 as volatile (`X64PrologueEpilogue.calleeSavedOrder` is rbx and r12–r15) while Win64 requires a handler to
 preserve them, and nothing in a run reports the difference.
 
+⛔⛔ **THE AGENT IS A SECOND SUSPENDER OF THREADS, AND `__sched_preempt_ext_lock` IS WHAT MAKES THAT
+SOUND.** `__sysmon` is no longer the only party that calls `SuspendThread`: every stop suspends every
+other machine, and the agent holds that window across the whole park, so a suspend and `__gt_exit_process`
+still exclude each other. The order is the window, then `__sched_lock`, then the suspends — never the
+other way round, which is what keeps it free of a cycle with `__gt_preempt_m`. ⇒ **A THIRD SUSPENDER, OR
+A ROAD THAT BLOCKS WHILE HOLDING `__sched_lock`, BREAKS BOTH ARGUMENTS AT ONCE.**
+
+⚠ **FIVE SCHEDULER `.data` WORDS ARE LAID OUT IN EVERY x64-windows PROGRAM BECAUSE THE AGENT READS
+THEM** — `__sched_lock`, `__sched_tls_teb_offset`, `__sched_allm`, `__sched_preempt_ext_lock` and
+`__ds_base` — so their gates in `schedRuntimeGlobals` carry `usesDebugAgent` beside `usesGt`. A zero in
+the TEB-offset word is how the agent recognises a program with no scheduler, and `__ds_base` is read at
+the stop rather than at attach because `__dbg_init` runs ahead of `__ds_init`.
+
 ⛔⛔ **E3153 IS COMPLETE ON BOTH SIDES, AND THE VALUE SIDE IS COMPLETE BECAUSE IT IS ASKED OF THE VALUE
 RATHER THAN OF THE BINDING FORM.** `parseTypeReference` catches every type a runtime file WRITES.
 Everything else is caught off the parser's value type columns: `Parser.noteManagedValueInRuntimeSource` is
@@ -688,7 +701,7 @@ facts worth knowing before you get there:
 One test per file is structural, not tidiness: a file is what ONE process runs and that process has a
 5 s default deadline, so twelve compiler-spawning tests in one file report a spurious `TIMED OUT`.
 
-⚠ **`tests/debug` IS 42 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
+⚠ **`tests/debug` IS 64 CASES AND MOST OF THEM DEBUG A RUNNING PROGRAM**, which is a compile plus a
 debugged run inside one file's deadline. Run it as `maxon test tests/debug --timeout=60000`; the default
 deadline reports the corpus as timed out rather than failed.
 

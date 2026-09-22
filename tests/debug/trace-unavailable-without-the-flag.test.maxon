@@ -1,0 +1,30 @@
+let TraceNoFlagCaseLabel = "trace-unavailable-without-the-flag"
+
+let AnchorName = "after-await"
+let TracedBuildLabel = "debugstream"
+
+test 'trace in a session that was not started with --trace says so, over a program that could have answered'
+	let staged = stagedFixture(TraceNoFlagCaseLabel, fixture: TracedFixtureName)
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: TracedBuildLabel, extraArguments: [DebugStreamBuildOption])
+
+	if build.exitCode() != 0 'didNotBuild'
+		panic("{TraceNoFlagCaseLabel}: the gate could not run — the `{DebugStreamBuildOption}` build exited {build.exitCode()}: {build.stdout}{build.stderr}")
+	end 'didNotBuild'
+
+	let stopLine = anchorLine(staged, anchor: AnchorName)
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(stopLine)}", RunCommand, TraceCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.atLeast(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, than: 1, message: "the breakpoint after the await never stopped, so there is no stop to ask for a trace slice at. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let slices = eventsOfKind(events, kind: TraceEventName)
+	try Expect.equal(slices.count() as AssertedInt, expected: 1, message: "an unavailable slice is still an answer, and `{TraceCommand}` printed no `{TraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let slice = eventAt(slices, index: 0)
+	try Expect.equal(tracedEventCount(slice) as AssertedInt, expected: 0, message: "no ring was created for this session, so nothing can be decoded. It held: {tracedEventTexts(slice)}. {said}")
+	try Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: NotTracedReason, message: "⭐⭐ THIS IS THE CONTROL FOR `{NotBuiltWithDebugStreamReason}`. The SAME build that answers a full slice under `{DebugTraceOption}` answers `{NotTracedReason}` without it — so the two reasons are told apart by the one thing that differs, and a driver that blamed the build here would send its reader to rebuild a program that is already right. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")
+
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+end 'trace in a session that was not started with --trace says so, over a program that could have answered'

@@ -1441,3 +1441,41 @@ is the per-function term above, growing with the corpus's function count and not
 change:** its generated functions carry few named values, so `values x runs` is small there and the
 term removed is most of a percent rather than most of the phase. The compiler's own source, where a
 single function carries tens of locals with several live runs each, is where the A/B above reads it.
+
+### Result — 2026-09-22, the debugger's hold question is free at the dequeue
+
+`emitGtTombstoneHandback`'s `hand` block — the one place `__sched_find_runnable` and `__gt_strand_next`
+hand a dequeued green thread over to a machine — now loads `__dbg_ctl` and branches before it returns the
+candidate. With a debugger attached and holding that thread, the SCHEDULER puts the candidate back on the
+tail of the queue it came off (`__gt_enqueue` for the global queue, `__gt_coro_enqueue` for a strand),
+backs the machine off for the shortest interval the host honours, and retries; the thread never leaves the
+scheduler's own structures, so `__sched_checkdead` keeps seeing a machine running and a release needs no
+wake. With nothing attached — every program that is not being debugged — the whole gate is one load and
+one not-taken branch. The carve hook (`__gt_free_get`'s carve arm, which registers a new record on the
+agent's roster) sits behind the same load.
+
+**Interleaved A/B, 300 pairs, `service-torture` at 480,000 messages (`rounds = 40000`),
+`MAXON_MAX_PROCS=4`, alternating binary by binary so drift lands on both arms.** The control compiler is
+this tree with `emitDebugAgentHoldGate` and `emitDebugAgentCarveHook` forced down their no-agent arms and
+nothing else changed; both compilers were built by one command from one slot, and both test binaries by
+those two compilers. All 1,200 runs exited 42 and `aggregate` was identical throughout.
+
+Wall, hooked against unhooked: medians **334 ms / 333 ms** (+0.30%), means 354.9 / 358.7, minima 322 /
+319, p90 427 / 429. The hooked arm was faster in 133 of the 300 pairs.
+
+**The null control is the reading that settles it — the SAME hooked binary in both arms, 300 more pairs:**
+medians **332 ms / 331 ms** (+0.45%), minima **321 / 318**, faster in 151 of 300. The null control's
+median gap is LARGER than the real one's, and the minima differ by **+3 ms in both comparisons alike** —
+so the whole of the observed difference is the arm-order effect this harness has against itself, and the
+hook is free at this resolution. ⚠ **A run of `service-torture` is ~334 ms and carries ~139,000 steals, so
+the gate is executed on the order of a hundred thousand times per run**; what the measurement bounds is a
+load-and-branch at that rate, not the absence of one.
+
+**What it costs, stated as code rather than as a number.** One load and one not-taken branch per
+hand-over and per carve, both behind `__dbg_ctl`; and — only while a hold is actually placed — a
+re-enqueue plus a `shortSleep` per refused dequeue, which is the documented cost of holding a thread.
+⚠ **The stage also lays five `.data` words into every x64-windows program**: `__sched_tls_teb_offset`,
+`__sched_allm`, `__sched_preempt_ext_lock` and `__sched_lock`, which the agent reads to find the machines
+and to hold them still, and `__ds_base`, which it reads at a stop for the DebugStream trace mark. The first
+four were previously laid out only under `usesGt` and the fifth only under `--debugstream`, so the
+`data {` block of every golden in the corpus moves by one label; the drift is that and nothing else.

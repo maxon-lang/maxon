@@ -454,7 +454,7 @@ let MSpinningHeld = 1 as ParsedInt
 // is also on the roster — the teardown must signal and join a PARKED worker, which is the common case at
 // exit — so a single link would splice one list into the other the first time an M parked. Two lists, two
 // links, and each door names the one it threads.
-let MOffAllNext = MOffSpinning + (PointerSlotBytes as ByteOffset)
+export let MOffAllNext = MOffSpinning + (PointerSlotBytes as ByteOffset)
 
 // ⭐⭐ **`__sched_midle`'s FORWARD LINK — Go's `m.idleNode.next`.** The list is doubly linked through this
 // word and `MOffIdlePrev`, and both are written only under `__sched_lock` by the list's three doors:
@@ -1130,10 +1130,11 @@ let SchedProcsLabel = b"__sched_procs"
 // blocked M still exists**, which is more Ms than Ps — and an array sized by the processor count is
 // precisely the shape that cannot express it.
 //
-// ⭐⭐ **`underSchedLock` NAMES THE WRITES; TWO WALKS READ IT UNLOCKED AND ARE THE CLASS'S ENUMERATED
+// ⭐⭐ **`underSchedLock` NAMES THE WRITES; THE WALKS THAT READ IT UNLOCKED ARE THE CLASS'S ENUMERATED
 // EXCEPTION — see `MultiMSharing.underSchedLock`.** Every push is under the lock. `__sched_stop_workers`'s
 // JOIN walk deliberately releases first (it may not block on a thread while holding a lock that thread
-// needs), and `__sched_park_wake_count` is a program's query, which takes no lock for a reading.
+// needs), `__sched_park_wake_count` is a program's query, which takes no lock for a reading, and the debug
+// agent's pause poll walks it holding only its own stop lock.
 //
 // ⛔ **THE UNLOCKED WALKS ARE SOUND BY A PROPERTY OF THE PUSH, NOT OF THE WALK.** `emitSchedListPush`
 // stores the joining machine's `MOffAllNext` BEFORE it stores the head, so a walker that reads the head can
@@ -1142,7 +1143,7 @@ let SchedProcsLabel = b"__sched_procs"
 // racing `__sched_startm` can do is prepend a machine the walk does not see, and the teardown cannot race a
 // machine into existence at all, because `__sched_startm` reads the shutdown flag under the same lock that
 // sets it.
-let SchedAllMLabel = b"__sched_allm"
+export let SchedAllMLabel = b"__sched_allm"
 
 // ⭐⭐ **HOW MANY MACHINES ARE ON `__sched_allm` — Go's `sched.mnext - sched.nmfreed`, and the count the
 // thread limit is checked against.** Stepped by `emitSchedRegisterMLocked`, the one door onto the roster, and
@@ -1513,7 +1514,7 @@ end 'targetPreemptDelivery'
 // the timer store. Two locks would have to be held together wherever a readiness readies a thread, and two
 // locks held together have an ORDER that every file touching them would have to remember. A CRITICAL_SECTION
 // is recursive, so one lock covering all of it has no order to get wrong.
-let SchedLockLabel = b"__sched_lock"
+export let SchedLockLabel = b"__sched_lock"
 
 // ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor takes
 // `__sched_lock` and is not a machine; it runs no green thread, so the number it leaves here is read by nobody
@@ -1530,9 +1531,10 @@ let SchedLockDepthSinkLabel = b"__sched_lock_depth_sink"
 // ⚠ **PROCESS-WIDE RATHER THAN PER-MACHINE, AND THE EXIT IS WHY.** A per-machine claim would let the monitor
 // suspend machine B while machine A is inside `ExitProcess`; process exit is not a per-machine act.
 //
-// ⛔ **THERE IS NO SEPARATE `suspendLock`, BECAUSE THE MONITOR IS THE ONLY SUSPENDER.** Go needs one because
-// its `OpenThread` handle is a shared scratch slot; here each machine opens its own handle once, at birth,
-// and only `__sysmon` ever calls `__gt_preempt_m`.
+// ⛔ **IT IS ALSO WHAT MAKES A SECOND SUSPENDER SOUND.** The debug agent suspends every other machine at a
+// stop and holds this word across the park, so a suspend and an exit still exclude each other even though
+// `__sysmon` is not the only party that stops a thread. No separate `suspendLock` is needed for the handles
+// themselves: each machine opens its own once, at birth, rather than sharing a scratch slot.
 export let SchedPreemptExtLockLabel = b"__sched_preempt_ext_lock"
 
 // ⭐ **THE ONE `CONTEXT` BUFFER THE MONITOR READS A SUSPENDED THREAD'S REGISTERS INTO.** A page, because
@@ -2247,7 +2249,10 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// Written by `__sched_init_procs` and by nothing else.
 	pushRuntimeGlobal(out, label: SchedTlsIndexLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
-	if usage.usesGt 'tlsOffsetReadByTheChunks'
+	// The debug agent reads this word, `__sched_lock` and `__sched_preempt_ext_lock` in every program it
+	// ships in, so those three gates carry `usesDebugAgent` too — a zero here is how it recognises a program
+	// with no scheduler and takes its own road.
+	if usage.usesGt or usage.usesDebugAgent 'tlsOffsetReadByTheChunks'
 		pushRuntimeGlobal(out, label: SchedTlsTebOffsetLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'tlsOffsetReadByTheChunks'
 
@@ -2305,7 +2310,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
 	// The lock is `__sched_init_procs`'s like the three above; the IOCP completion loop's chunk takes it.
-	if usage.usesGt 'lockReadByTheChunks'
+	if usage.usesGt or usage.usesDebugAgent 'lockReadByTheChunks'
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'lockReadByTheChunks'
 
@@ -2325,9 +2330,9 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	end 'theMonitorExists'
 
 	// ⭐ **GATE SITE — the two words only a lane that SUSPENDS a thread has any writer for.** A signalling
-	// lane suspends nothing and reads no `CONTEXT`. Their readers are the monitor's hand-assembled sender and
-	// the trampoline, which ride `usesGt`, so the words are `declared` on it.
-	if usage.usesGt and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
+	// lane suspends nothing and reads no `CONTEXT`. Their readers are the monitor's hand-assembled sender,
+	// the trampoline and the debug agent, so the words are `declared` rather than walked.
+	if (usage.usesGt or usage.usesDebugAgent) and targetPreemptDelivery(target) == PreemptDelivery.threadSuspend 'theMonitorSuspendsThreads'
 		pushRuntimeGlobal(out, label: SchedPreemptExtLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
 		pushRuntimeGlobal(out, label: SchedPreemptContextLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'theMonitorSuspendsThreads'
@@ -4378,7 +4383,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 			osNetpoll or
 			osSocketOverlapped or
 			osSocketServe then return false
-			osDebugHost then return false
+		osDebugHost then return false
 	end 'k'
 end 'recordRunqTaintOfOp'
 
@@ -5087,7 +5092,7 @@ function buildSchedFindRunnable(module StdModule)
 	// overdue (`POffRunnext`). Storing an absolute value rather than accumulating is what makes it safe on the
 	// tombstone retry, which reaches this block again with the same `tick`.
 	emitStoreField(module, block: candidate, record: p, offset: POffSchedTick, value: emitBin(module, block: candidate, a: tick, b: inherited, opcode: StdBinOpcode.sub, ids: ids))
-	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: localPop, ids: ids)
+	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: localPop, requeue: GtEnqueueName, ids: ids)
 
 	module.functions.push(func)
 end 'buildSchedFindRunnable'
@@ -5393,8 +5398,9 @@ function buildGtFreeGet(module StdModule)
 	let carved = ids.mint()
 	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: GtStructSize, ids: ids))))
 	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
-	emitSchedLockLeave(module, block: carve, ids: ids)
-	module.setTerminator(carve, op: StdOp.ret(carved))
+	var registered = emitDebugAgentCarveHook(module, func: func, cur: carve, gt: carved, ids: ids)
+	emitSchedLockLeave(module, block: registered, ids: ids)
+	module.setTerminator(registered, op: StdOp.ret(carved))
 
 	module.functions.push(func)
 end 'buildGtFreeGet'

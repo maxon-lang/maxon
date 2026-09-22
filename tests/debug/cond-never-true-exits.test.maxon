@@ -1,0 +1,35 @@
+let CondNeverTrueCaseLabel = "cond-never-true-exits"
+
+let AnchorName = "hit-body"
+let CountedLinePrefix = "hit "
+let ConditionText = "i == 99"
+
+test 'a breakpoint whose condition is never satisfied never stops, and the program runs to its own end'
+	let staged = builtFixture(CondNeverTrueCaseLabel, fixture: ConditionFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
+
+	try Expect.atLeast(iterations as AssertedInt, than: 1, message: "the anchored line must run at least once, or this case would be about a breakpoint nothing reaches. It ran it {iterations} times.")
+
+	let commands = debugCommandLine([conditionalBreak(lineTarget(hitLine), condition: ConditionText), RunCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let armings = eventsOfKind(events, kind: BreakpointEventName)
+	try Expect.equal(armings.count() as AssertedInt, expected: 1, message: "the conditional `{BreakCommand}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(armings, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the condition is one the agent can evaluate, so the breakpoint IS armed — a condition that never holds is not a breakpoint that was refused, and the two must not read the same. {said}")
+
+	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "⛔ THE TRAP THE FIXTURE PLANTS IS TAKEN {iterations} TIMES AND EVERY ONE OF THEM MUST BE RESUMED SILENTLY. A false condition costs one trap and no stop; a session that stopped here is one that published a stop the driver never asked for. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 0, message: "a program resuming its own silent traps must still finish inside the stop timeout. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program did not reach its own end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the program answered a different exit code than the same program run with nothing attached, so resuming a false hit changed what it computed. {said}")
+	try Expect.equal(session.exitCode() as AssertedInt, expected: 0, message: "a session that completed is a successful one, whether or not anything stopped. {said}")
+end 'a breakpoint whose condition is never satisfied never stops, and the program runs to its own end'

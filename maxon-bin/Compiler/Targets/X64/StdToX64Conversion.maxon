@@ -217,6 +217,11 @@ let ProcessSynchronizeAccess = 0x00100000
 let DoNotInheritHandles = 0
 let PollingWaitTimeoutMs = 0
 
+let ThreadSuspendResumeAccess = 0x0002
+let ThreadGetContextAccess = 0x0008
+let ThreadSetContextAccess = 0x0010
+let DebugThreadAccess = ThreadSuspendResumeAccess or ThreadGetContextAccess or ThreadSetContextAccess
+
 let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child inherits the pipe write end)
 
 // ⛔⛔ **`CREATE_SUSPENDED`, AND THE WHOLE PROCESS-TREE KILL RESTS ON IT.** A child assigned to a job object
@@ -2776,6 +2781,13 @@ export type StdToX64Lowering
 			allocExecPages then self.lowerDebugHostAllocExecPages(a0Id, dstBlock: dstBlock)
 			openDriverProcess then self.lowerDebugHostOpenDriverProcess(a0Id, dstBlock: dstBlock)
 			driverExited then self.lowerDebugHostDriverExited(a0Id, dstBlock: dstBlock)
+			currentThreadId then self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetCurrentThreadId)))
+			openThread then self.lowerDebugHostOpenThread(a0Id, dstBlock: dstBlock)
+			suspendThread then self.lowerDebugHostOneHandleCall(a0Id, slot: IatSlot.SuspendThread, dstBlock: dstBlock)
+			resumeThread then self.lowerDebugHostOneHandleCall(a0Id, slot: IatSlot.ResumeThread, dstBlock: dstBlock)
+			readThreadContext then self.lowerDebugHostThreadContext(a0Id, a1Id: a1Id, slot: IatSlot.GetThreadContext, dstBlock: dstBlock)
+			writeThreadContext then self.lowerDebugHostThreadContext(a0Id, a1Id: a1Id, slot: IatSlot.SetThreadContext, dstBlock: dstBlock)
+			preemptSafe then self.lowerDebugHostPreemptSafe(a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
 		end 'verb'
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
@@ -2827,6 +2839,40 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a2Id)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualQuery)))
 	end 'lowerDebugHostQueryRegion'
+
+	function lowerDebugHostOpenThread(a0Id ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: DebugThreadAccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: DoNotInheritHandles))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.OpenThread)))
+	end 'lowerDebugHostOpenThread'
+
+	function lowerDebugHostOneHandleCall(a0Id ValueId, slot IatSlot, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
+	end 'lowerDebugHostOneHandleCall'
+
+	function lowerDebugHostThreadContext(a0Id ValueId, a1Id ValueId, slot IatSlot, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(a1Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
+	end 'lowerDebugHostThreadContext'
+
+	// A program with no scheduler has no machine, so no machine is at a safe point and the body that would
+	// judge one is not laid out. The agent never asks: it reads `__sched_tls_teb_offset` first and takes its
+	// own scheduler-less road.
+	function lowerDebugHostPreemptSafe(a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
+		if not self.usesGt 'noMachineExists'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: DebugHostVoidAnswer))
+			return
+		end 'noMachineExists'
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(0)), srcReg: TargetVReg.virtual(a0Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(1)), srcReg: TargetVReg.virtual(a1Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(2)), srcReg: TargetVReg.virtual(a2Id)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PreemptSafeName))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: x64PhysReg(X64Register.r8)))
+	end 'lowerDebugHostPreemptSafe'
 
 	function lowerDebugHostAllocExecPages(a0Id ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: VirtualAllocLetOsChooseBase))

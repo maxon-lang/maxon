@@ -20,21 +20,26 @@ export type EngineStop
 	export var reason as DebugAddress
 	export var machine as DebugAddress
 	export var greenThread as DebugAddress
+	export var traceMark as DebugAddress
 	export var pc as DebugAddress
 	export var stackPointer as DebugAddress
 	export var framePointer as DebugAddress
-	export var registers as DebugAddressArray
 	export var returnAddresses as DebugAddressArray
 	export var framePointers as DebugAddressArray
 	export var truncated as bool
 
-	export static function create(reason DebugAddress, machine DebugAddress, greenThread DebugAddress, pc DebugAddress, stackPointer DebugAddress, framePointer DebugAddress, registers DebugAddressArray, returnAddresses DebugAddressArray, framePointers DebugAddressArray, truncated bool) returns EngineStop
-		return Self{reason: reason, machine: machine, greenThread: greenThread, pc: pc, stackPointer: stackPointer, framePointer: framePointer, registers: registers, returnAddresses: returnAddresses, framePointers: framePointers, truncated: truncated}
+	export static function create(reason DebugAddress, machine DebugAddress, greenThread DebugAddress, traceMark DebugAddress, pc DebugAddress, stackPointer DebugAddress, framePointer DebugAddress, returnAddresses DebugAddressArray, framePointers DebugAddressArray, truncated bool) returns EngineStop
+		return Self{reason: reason, machine: machine, greenThread: greenThread, traceMark: traceMark, pc: pc, stackPointer: stackPointer, framePointer: framePointer, returnAddresses: returnAddresses, framePointers: framePointers, truncated: truncated}
 	end 'create'
+
+	export static function walked(returnAddresses DebugAddressArray, framePointers DebugAddressArray, truncated bool) returns EngineStop
+		return Self{reason: 0, machine: 0, greenThread: 0, traceMark: 0, pc: 0, stackPointer: 0, framePointer: 0, returnAddresses: returnAddresses, framePointers: framePointers, truncated: truncated}
+	end 'walked'
 end 'EngineStop'
 
 export union CommandOutcome
 	done
+	nothingParked
 	refused(reason String)
 	unacknowledged
 	gone(outcome TargetOutcome)
@@ -53,10 +58,14 @@ export union EngineStart
 end 'EngineStart'
 
 export let DebugUnclassifiedReason = "unclassified"
+export let DebugUnacknowledgedReason = "unacknowledged"
+export let DebugNotRunningReason = "not-running"
+let DebugNoSuchBreakpointReason = "no-such-breakpoint"
 
 let SegmentNamePrefix = "maxon_dbg_"
 
 let PollIntervalMs = 1
+let PauseAttemptBudgetMs = DbgPauseAttemptLimit * DbgParkPollIntervalMs
 
 let WordBytes = 8
 let FirstStopSeq = 1
@@ -84,8 +93,9 @@ export type DebugEngine implements DebugMemory
 	var cacheBase as DebugAddress
 	var cacheBytes as ByteArray
 	var cacheFilled as bool
+	var trace as DebugTraceState
 
-	export static function start(program FilePath, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs) returns EngineStart
+	export static function start(program FilePath, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs, traced bool) returns EngineStart
 		requireEngineBoundsMatchTheLayout()
 
 		var page = try SharedSegment.create(mintSharedSegmentName(SegmentNamePrefix), bytes: DbgSegmentBytes) otherwise 'noSegment'
@@ -106,16 +116,41 @@ export type DebugEngine implements DebugMemory
 
 		environment.upsert(DbgEnvVarName, value: page.segmentName())
 
+		let trace = openedTraceRing(program, traced: traced)
+
+		match trace 'ring'
+			untraced then break 'ring'
+			noProducer then break 'ring'
+			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
+		end 'ring'
+
 		let target = try DebugTarget.launch(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
 			page.close()
+			closeTraceRing(trace)
 
 			return EngineStart.refused("could not launch the program ({e.displayReason()})")
 		end 'noChild'
 
-		var engine = Self{page: page, target: target, stopTimeoutMs: stopTimeoutMs, commandSeq: 0, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), textBase: 0, textSize: 0, cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false}
+		var engine = Self{page: page, target: target, stopTimeoutMs: stopTimeoutMs, commandSeq: 0, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), textBase: 0, textSize: 0, cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace}
 
 		return engine.awaitAttach()
 	end 'start'
+
+	export function traceSlice(mark DebugAddress, since DebugTraceSince, limit DebugTraceTally) returns DebugTraceSlice
+		match self.trace 'ring'
+			untraced then return DebugTraceSlice.missing(DebugTraceNotRequestedReason)
+			noProducer then return DebugTraceSlice.missing(DebugTraceNoProducerReason)
+			ring(collector) then return slicedFrom(collector, mark: mark, since: since, limit: limit)
+		end 'ring'
+	end 'traceSlice'
+
+	function pumpTrace()
+		match self.trace 'ring'
+			untraced then break 'ring'
+			noProducer then break 'ring'
+			ring(collector) then collector.pump()
+		end 'ring'
+	end 'pumpTrace'
 
 	function awaitAttach() returns EngineStart
 		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
@@ -164,6 +199,7 @@ export type DebugEngine implements DebugMemory
 	export function close() returns TargetOutcome
 		let outcome = self.target.reap()
 		self.page.close()
+		closeTraceRing(self.trace)
 
 		return outcome
 	end 'close'
@@ -179,6 +215,7 @@ export type DebugEngine implements DebugMemory
 
 		match outcome 'answered'
 			done then self.rememberBreakpoint(offset)
+			nothingParked then break 'answered'
 			refused then break 'answered'
 			unacknowledged then break 'answered'
 			gone then break 'answered'
@@ -187,11 +224,73 @@ export type DebugEngine implements DebugMemory
 		return outcome
 	end 'armBreakpoint'
 
+	export function attachCondition(offset DebugAddress, record DebugConditionRecord) returns CommandOutcome
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffKind, value: record.kind)
+		self.writeSignedWord(DbgOffConditionRecord + DbgCondRecOffOperand, value: record.operand)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffWidth, value: record.width as DebugAddress)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffSigned, value: record.signedCompare)
+		self.writeWord(DbgOffConditionRecord + DbgCondRecOffOp, value: record.op)
+		self.writeSignedWord(DbgOffConditionRecord + DbgCondRecOffLiteral, value: record.literal)
+
+		return self.postCommand(DbgCmdSetCondition, arg0: offset, arg1: 0, arg2: 0)
+	end 'attachCondition'
+
+	export function listGreenThreads() returns GreenThreadListing
+		match self.postCommand(DbgCmdGtList, arg0: 0, arg1: 0, arg2: 0) 'answered'
+			done then break 'answered'
+			nothingParked then return GreenThreadListing.refused(DebugNotRunningReason)
+			refused(reason) then return GreenThreadListing.refused(reason)
+			unacknowledged then return GreenThreadListing.refused(DebugUnacknowledgedReason)
+			gone(ending) then return GreenThreadListing.gone(ending)
+		end 'answered'
+
+		var records = DebugGreenThreadArray.create()
+		let count = self.readWord(DbgOffGtCount)
+
+		for i in 0 upto count 'eachRecord'
+			let at = DbgOffGtRecords + i * DbgGtRecordStride
+			records.push(DebugGreenThread.create(self.readWord(at + DbgGtRecOffHandle), status: self.readWord(at + DbgGtRecOffStatus), entryPc: self.readWord(at + DbgGtRecOffEntryPc), savedSp: self.readWord(at + DbgGtRecOffSavedSp), savedFp: self.readWord(at + DbgGtRecOffSavedFp), parkKind: self.readWord(at + DbgGtRecOffParkKind), machine: self.readWord(at + DbgGtRecOffMachine)))
+		end 'eachRecord'
+
+		return GreenThreadListing.listed(records, truncated: self.readWord(DbgOffGtTruncated) != 0)
+	end 'listGreenThreads'
+
+	export function walkGreenThread(handle DebugAddress) returns GreenThreadWalkOutcome
+		match self.postCommand(DbgCmdGtBacktrace, arg0: handle, arg1: 0, arg2: 0) 'answered'
+			done then break 'answered'
+			nothingParked then return GreenThreadWalkOutcome.refused(DebugNotRunningReason)
+			refused(reason) then return GreenThreadWalkOutcome.refused(reason)
+			unacknowledged then return GreenThreadWalkOutcome.refused(DebugUnacknowledgedReason)
+			gone(ending) then return GreenThreadWalkOutcome.gone(ending)
+		end 'answered'
+
+		var returnAddresses = DebugAddressArray.create()
+		var framePointers = DebugAddressArray.create()
+		self.harvestFrames(returnAddresses, framePointers: framePointers)
+
+		return GreenThreadWalkOutcome.walked(EngineStop.walked(returnAddresses, framePointers: framePointers, truncated: self.readWord(DbgOffBtTruncated) != 0))
+	end 'walkGreenThread'
+
+	export function holdGreenThread(handle DebugAddress) returns CommandOutcome
+		return self.postCommand(DbgCmdGtHold, arg0: handle, arg1: 0, arg2: 0)
+	end 'holdGreenThread'
+
+	export function releaseGreenThread(handle DebugAddress) returns CommandOutcome
+		return self.postCommand(DbgCmdGtRelease, arg0: handle, arg1: 0, arg2: 0)
+	end 'releaseGreenThread'
+
+	export function requestPause() returns CommandOutcome
+		self.cacheFilled = false
+
+		return self.postCommandWithin(DbgCmdPause, arg0: 0, arg1: 0, arg2: 0, budget: self.stopTimeoutMs + PauseAttemptBudgetMs)
+	end 'requestPause'
+
 	export function clearBreakpoint(offset DebugAddress) returns CommandOutcome
 		let outcome = self.postCommand(DbgCmdClearBreakpoint, arg0: offset, arg1: 0, arg2: 0)
 
 		match outcome 'answered'
 			done then self.forgetBreakpoint(offset)
+			nothingParked then self.forgetBreakpoint(offset)
 			refused then self.forgetBreakpoint(offset)
 			unacknowledged then break 'answered'
 			gone then break 'answered'
@@ -260,6 +359,7 @@ export type DebugEngine implements DebugMemory
 		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
 			let outcome = self.target.poll()
 			self.target.pump()
+			self.pumpTrace()
 			let published = self.readWord(DbgOffStopSeq)
 
 			if published > (self.lastStopSeq as DebugAddress) 'aStopArrived'
@@ -281,9 +381,10 @@ export type DebugEngine implements DebugMemory
 
 	// ⛔ A program that ended in the last millisecond of the budget has already published everything it
 	// ever will, so the deadline is not the answer until the child has been asked once more.
-	function lastLookForAStop() returns StopWait
+	export function lastLookForAStop() returns StopWait
 		let outcome = self.target.poll()
 		self.target.pump()
+		self.pumpTrace()
 		let published = self.readWord(DbgOffStopSeq)
 
 		if published > (self.lastStopSeq as DebugAddress) 'aStopArrived'
@@ -328,16 +429,6 @@ export type DebugEngine implements DebugMemory
 		return try self.page.readWord((DbgOffRegisters + (number as DebugAddress) * WordBytes) as SegmentOffset) otherwise 0
 	end 'registerValue'
 
-	export function registersOfLastStop() returns DebugAddressArray
-		var values = DebugAddressArray.create()
-
-		for i in 0 upto DbgRegisterSlots 'eachSlot'
-			values.push(self.readWord(DbgOffRegisters + i * WordBytes))
-		end 'eachSlot'
-
-		return values
-	end 'registersOfLastStop'
-
 	export function walkStack() returns CommandOutcome
 		return self.postCommand(DbgCmdBacktrace, arg0: 0, arg1: 0, arg2: 0)
 	end 'walkStack'
@@ -372,6 +463,7 @@ export type DebugEngine implements DebugMemory
 	function fetchedInto(address DebugAddress, length DebugAddress) returns bool
 		match self.postCommand(DbgCmdReadMemory, arg0: address, arg1: length, arg2: 0) 'answered'
 			done then break 'answered'
+			nothingParked then return false
 			refused then return false
 			unacknowledged then return false
 			gone then return false
@@ -393,16 +485,17 @@ export type DebugEngine implements DebugMemory
 		var returnAddresses = DebugAddressArray.create()
 		var framePointers = DebugAddressArray.create()
 
-		if reason != DbgStopReasonEntry 'aThreadIsStopped'
+		if reason != DbgStopReasonEntry and self.readWord(DbgOffStopPc) != 0 'aThreadIsStopped'
 			match self.walkStack() 'walked'
 				done then self.harvestFrames(returnAddresses, framePointers: framePointers)
+				nothingParked then break 'walked'
 				refused then break 'walked'
 				unacknowledged then break 'walked'
 				gone then break 'walked'
 			end 'walked'
 		end 'aThreadIsStopped'
 
-		return EngineStop.create(reason, machine: self.readWord(DbgOffStopMachine), greenThread: self.readWord(DbgOffStopGreenThread), pc: self.readWord(DbgOffStopPc), stackPointer: self.readWord(DbgOffStopSp), framePointer: self.readWord(DbgOffStopFp), registers: self.registersOfLastStop(), returnAddresses: returnAddresses, framePointers: framePointers, truncated: self.readWord(DbgOffBtTruncated) != 0)
+		return EngineStop.create(reason, machine: self.readWord(DbgOffStopMachine), greenThread: self.readWord(DbgOffStopGreenThread), traceMark: self.readWord(DbgOffStopTraceMark), pc: self.readWord(DbgOffStopPc), stackPointer: self.readWord(DbgOffStopSp), framePointer: self.readWord(DbgOffStopFp), returnAddresses: returnAddresses, framePointers: framePointers, truncated: self.readWord(DbgOffBtTruncated) != 0)
 	end 'readStopRecord'
 
 	function harvestFrames(returnAddresses DebugAddressArray, framePointers DebugAddressArray)
@@ -422,6 +515,10 @@ export type DebugEngine implements DebugMemory
 	end 'rememberBreakpoint'
 
 	function postCommand(command DebugAddress, arg0 DebugAddress, arg1 DebugAddress, arg2 DebugAddress) returns CommandOutcome
+		return self.postCommandWithin(command, arg0: arg0, arg1: arg1, arg2: arg2, budget: self.stopTimeoutMs)
+	end 'postCommand'
+
+	function postCommandWithin(command DebugAddress, arg0 DebugAddress, arg1 DebugAddress, arg2 DebugAddress, budget StopTimeoutMs) returns CommandOutcome
 		self.commandSeq = self.commandSeq + 1
 		self.writeWord(DbgOffCmdArg0, value: arg0)
 		self.writeWord(DbgOffCmdArg1, value: arg1)
@@ -429,7 +526,7 @@ export type DebugEngine implements DebugMemory
 		self.writeWord(DbgOffCmd, value: command)
 		self.writeWord(DbgOffCmdSeq, value: self.commandSeq as DebugAddress)
 
-		let deadline = (Clock.nowMs() as StopTimeoutMs) + self.stopTimeoutMs
+		let deadline = (Clock.nowMs() as StopTimeoutMs) + budget
 
 		while (Clock.nowMs() as StopTimeoutMs) < deadline 'poll'
 			let outcome = self.target.poll()
@@ -447,7 +544,7 @@ export type DebugEngine implements DebugMemory
 		end 'poll'
 
 		return self.lastLookForAnAcknowledgement()
-	end 'postCommand'
+	end 'postCommandWithin'
 
 	function lastLookForAnAcknowledgement() returns CommandOutcome
 		let outcome = self.target.poll()
@@ -469,17 +566,74 @@ export type DebugEngine implements DebugMemory
 			return CommandOutcome.done
 		end 'accepted'
 
-		return CommandOutcome.refused(refusalReasonName(self.readWord(DbgOffCmdRefusal)))
+		let refusal = self.readWord(DbgOffCmdRefusal)
+
+		return CommandOutcome.nothingParked if refusal == DbgRefusalNotRunning else CommandOutcome.refused(refusalReasonName(refusal))
 	end 'acknowledgedOutcome'
 
 	function readWord(offset DebugAddress) returns DebugAddress
-		return (try self.page.readWord(offset as SegmentOffset) otherwise 0) as DebugAddress
+		let word = self.readSignedWord(offset)
+
+		return 0 if word < 0 else word as DebugAddress
 	end 'readWord'
+
+	function readSignedWord(offset DebugAddress) returns DebugWord
+		return (try self.page.readWord(offset as SegmentOffset) otherwise 0) as DebugWord
+	end 'readSignedWord'
 
 	function writeWord(offset DebugAddress, value DebugAddress)
 		try self.page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise ignore
 	end 'writeWord'
+
+	function writeSignedWord(offset DebugAddress, value DebugWord)
+		try self.page.writeWord(offset as SegmentOffset, value: value as SegmentWord) otherwise ignore
+	end 'writeSignedWord'
 end 'DebugEngine'
+
+function openedTraceRing(program FilePath, traced bool) returns DebugTraceState
+	if not traced 'nothingToTrace'
+		return DebugTraceState.untraced
+	end 'nothingToTrace'
+
+	let decoder = try DebugStreamDecoder.create(program, filter: FamilyFilter.all) otherwise (e) 'noRing'
+		return refusedTraceRing(e)
+	end 'noRing'
+
+	return DebugTraceState.ring(DebugTraceCollector.create(decoder))
+end 'openedTraceRing'
+
+function refusedTraceRing(reason DecoderError) returns DebugTraceState
+	match reason 'why'
+		nameTablesUnreadable then return DebugTraceState.noProducer
+		segmentUnavailable then return DebugTraceState.noProducer
+	end 'why'
+end 'refusedTraceRing'
+
+function closeTraceRing(trace DebugTraceState)
+	match trace 'ring'
+		untraced then break 'ring'
+		noProducer then break 'ring'
+		ring(collector) then collector.close()
+	end 'ring'
+end 'closeTraceRing'
+
+function slicedFrom(collector DebugTraceCollector, mark DebugAddress, since DebugTraceSince, limit DebugTraceTally) returns DebugTraceSlice
+	collector.pump()
+
+	return collector.slice(mark, since: since, limit: limit)
+end 'slicedFrom'
+
+export union GreenThreadListing
+	listed(records DebugGreenThreadArray, truncated bool)
+	refused(reason String)
+	gone(outcome TargetOutcome)
+end 'GreenThreadListing'
+
+export union GreenThreadWalkOutcome
+	walked(record EngineStop)
+	refused(reason String)
+	gone(outcome TargetOutcome)
+end 'GreenThreadWalkOutcome'
 
 function refusalReasonName(code DebugAddress) returns String
 	if code == DbgRefusalOutOfText 'outOfText'
@@ -499,7 +653,7 @@ function refusalReasonName(code DebugAddress) returns String
 	end 'tableFull'
 
 	if code == DbgRefusalNoSuchBreakpoint 'noSuchBreakpoint'
-		return "no-such-breakpoint"
+		return DebugNoSuchBreakpointReason
 	end 'noSuchBreakpoint'
 
 	if code == DbgRefusalUnknownCommand 'unknownCommand'
@@ -509,6 +663,26 @@ function refusalReasonName(code DebugAddress) returns String
 	if code == DbgRefusalNotStopped 'notStopped'
 		return "not-stopped"
 	end 'notStopped'
+
+	if code == DbgRefusalNoSuchThread 'noSuchThread'
+		return DebugNoSuchThreadReason
+	end 'noSuchThread'
+
+	if code == DbgRefusalHoldTableFull 'holdTableFull'
+		return "hold-table-full"
+	end 'holdTableFull'
+
+	if code == DbgRefusalThreadIsRunning 'threadIsRunning'
+		return "thread-is-running"
+	end 'threadIsRunning'
+
+	if code == DbgRefusalNotRunning 'notRunning'
+		return DebugNotRunningReason
+	end 'notRunning'
+
+	if code == DbgRefusalNotPausable 'notPausable'
+		return "not-pausable"
+	end 'notPausable'
 
 	return "refused-{code}"
 end 'refusalReasonName'

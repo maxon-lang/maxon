@@ -14,12 +14,70 @@ export function debugTextLinesFor(reply DebugReply) returns StringArray
 		value(tree) then appendRoots(lines, tree: tree, indent: "")
 		exited(code) then lines.push("the program exited with code {code}")
 		crashed(status) then lines.push("the program crashed with status {hexWord(status)}")
+		threads(roster) then appendThreads(lines, roster: roster)
+		threadWalked(walk) then appendThreadWalk(lines, walk: walk)
+		threadOutcome(outcome) then lines.push(threadOutcomeText(outcome))
+		traced(slice) then appendTrace(lines, slice: slice)
 		timedOut(waitingFor) then lines.push("timed out waiting for {waitingFor}")
 		failed(message, suggestion) then lines.push(errorText(message, suggestion: suggestion))
 	end 'which'
 
 	return lines
 end 'debugTextLinesFor'
+
+function appendThreads(lines StringArray, roster DebugThreadRoster)
+	if not roster.unavailable.isEmpty() 'nothingToList'
+		lines.push("no green-thread roster: {roster.unavailable}")
+
+		return
+	end 'nothingToList'
+
+	for row in roster.rows 'eachRow'
+		lines.push("{FrameIndent}#{row.id} {row.status} {row.functionName} at {row.file}:{row.line}")
+	end 'eachRow'
+
+	if roster.truncated 'moreThanThePageHolds'
+		lines.push("{FrameIndent}… the roster is truncated")
+	end 'moreThanThePageHolds'
+end 'appendThreads'
+
+function appendThreadWalk(lines StringArray, walk DebugThreadWalk)
+	if not walk.unavailable.isEmpty() 'nothingToWalk'
+		lines.push("no stack for {threadName(walk.thread)}: {walk.unavailable}")
+
+		return
+	end 'nothingToWalk'
+
+	lines.push("stack of {threadName(walk.thread)}:")
+	appendFrames(lines, frames: walk.frames)
+end 'appendThreadWalk'
+
+function threadOutcomeText(outcome DebugThreadOutcome) returns String
+	if outcome.reason.isEmpty() 'itWorked'
+		return "{outcome.event} {threadName(outcome.thread)}: {outcome.result}"
+	end 'itWorked'
+
+	return "{outcome.event} {threadName(outcome.thread)}: {outcome.result} ({outcome.reason})"
+end 'threadOutcomeText'
+
+function threadName(thread DebugThreadRef) returns String
+	return match thread 'named'
+		none gives "no thread"
+		id(value) gives "thread #{value}"
+	end 'named'
+end 'threadName'
+
+function appendTrace(lines StringArray, slice DebugTraceSlice)
+	if not slice.unavailable.isEmpty() 'nothingToShow'
+		lines.push("no trace: {slice.unavailable}")
+
+		return
+	end 'nothingToShow'
+
+	for event in slice.events 'eachEvent'
+		lines.push("{FrameIndent}{event.seq} {event.kind} {event.text}")
+	end 'eachEvent'
+end 'appendTrace'
 
 function appendSpoken(lines StringArray, spokenLines StringArray)
 	for spoken in spokenLines 'eachLine'
@@ -52,12 +110,20 @@ function suggestionTail(suggestion String) returns String
 end 'suggestionTail'
 
 function appendStop(lines StringArray, stop DebugStop)
-	lines.push("stopped ({stop.reason}) at {stop.file}:{stop.line} in {stop.functionName}")
+	lines.push(stopHeadline(stop))
 
 	for row in stop.source 'eachSourceLine'
 		lines.push("{"->" if row.current else "  "} {row.line}\t{row.text}")
 	end 'eachSourceLine'
 end 'appendStop'
+
+function stopHeadline(stop DebugStop) returns String
+	if stop.reason == TrapStopReasonName 'anInt3NobodyPlanted'
+		return "trap at {stop.file}:{stop.line} ({hexWord(stop.offset)})"
+	end 'anInt3NobodyPlanted'
+
+	return "stopped ({stop.reason}) at {stop.file}:{stop.line} in {stop.functionName}"
+end 'stopHeadline'
 
 function appendFrames(lines StringArray, frames DebugFrameArray)
 	for frame in frames 'eachFrame'

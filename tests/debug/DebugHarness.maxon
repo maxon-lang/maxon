@@ -1033,3 +1033,245 @@ export function requiredCodeRange(row String, what String) returns (SidecarNumbe
 		range(start, limit) then return (start, limit)
 	end 'theRange'
 end 'requiredCodeRange'
+
+export let ConditionFixtureName = "condition"
+export let WorkersFixtureName = "workers"
+export let TracedFixtureName = "traced"
+export let LiveSpinFixtureName = "livespin"
+
+export let DebugTraceOption = "--trace"
+export let DebugStreamBuildOption = "--debugstream"
+
+export let ThreadsCommand = "threads"
+export let GtBacktraceCommand = "gt-backtrace"
+export let GtSelectCommand = "gt"
+export let GtParkCommand = "gt-park"
+export let GtResumeCommand = "gt-resume"
+export let TraceCommand = "trace"
+export let PauseCommand = "pause"
+
+export let ThreadsEventName = "threads"
+export let GtBacktraceEventName = "gt-backtrace"
+export let GtSelectEventName = "gt-select"
+export let GtParkEventName = "gt-park"
+export let GtResumeEventName = "gt-resume"
+export let TraceEventName = "trace"
+
+let ThreadsKey = "threads"
+export let StatusKey = "status"
+export let TruncatedKey = "truncated"
+let IdKey = "id"
+export let ThreadKey = "thread"
+export let MachineKey = "machine"
+export let EventsKey = "events"
+export let EventsUnavailableKey = "eventsUnavailable"
+export let ResultKey = "result"
+let TextKey = "text"
+
+export let RunningThreadStatus = "running"
+export let WaitingThreadStatus = "waiting"
+export let ReadyThreadStatus = "ready"
+
+export let SelectedResult = "selected"
+export let ClearedSelectionResult = "cleared"
+export let HeldResult = "held"
+export let ReleasedResult = "released"
+export let RefusedResult = "refused"
+
+export let FinisherFixtureName = "finisher"
+export let NoSuchThreadReason = "no-such-thread"
+
+export let ConditionUnsupportedAction = "condition-unsupported"
+export let PauseStopReason = "pause"
+
+export let NotTracedReason = "not-traced"
+export let NotBuiltWithDebugStreamReason = "program-not-built-with-debugstream"
+
+export let AbsentThreadId = -1
+export let AbsentEventIndex = -1
+let SelectorFunctionSeparator = ":"
+
+export let GreenThreadPlaceholderText = "green-thread"
+export let ProgramGoneText = "no longer running"
+
+export let SpawnSchedEventText = "sched_spawn"
+export let AwaitSchedEventText = "sched_await"
+
+let ConditionWord = " if "
+
+export function conditionalBreak(target String, condition String) returns String
+	return "{BreakCommand} {target}{ConditionWord}{condition}"
+end 'conditionalBreak'
+
+export function linesStartingWith(text String, prefix String) returns EventTally
+	var tally = 0
+
+	for line in withoutCarriageReturns(text).split(LineFeed) 'eachLine'
+		tally = tally + 1 if line.startsWith(prefix) else tally
+	end 'eachLine'
+
+	return tally as EventTally
+end 'linesStartingWith'
+
+export function threadRows(doc JsonDoc) returns JsonNodeIdArray
+	return childrenOf(doc, node: doc.root, key: ThreadsKey)
+end 'threadRows'
+
+export function threadIdWithStatus(doc JsonDoc, status String, functionName String) returns EventNumber
+	for row in threadRows(doc) 'eachRow'
+		if textOf(doc, node: row, key: StatusKey) == status and textOf(doc, node: row, key: FunctionKey) == functionName 'thisRow'
+			return numberOf(doc, node: row, key: IdKey)
+		end 'thisRow'
+	end 'eachRow'
+
+	return AbsentThreadId
+end 'threadIdWithStatus'
+
+export function threadFieldOfId(doc JsonDoc, id EventNumber, key String) returns String
+	for row in threadRows(doc) 'eachRow'
+		if numberOf(doc, node: row, key: IdKey) == id 'thisRow'
+			return textOf(doc, node: row, key: key)
+		end 'thisRow'
+	end 'eachRow'
+
+	return AbsentEventText
+end 'threadFieldOfId'
+
+export function countThreadsWhere(doc JsonDoc, key String, value String) returns EventTally
+	var tally = 0
+
+	for row in threadRows(doc) 'eachRow'
+		tally = tally + 1 if textOf(doc, node: row, key: key) == value else tally
+	end 'eachRow'
+
+	return tally as EventTally
+end 'countThreadsWhere'
+
+export function renderedThreads(doc JsonDoc) returns String
+	var rows = StringArray.create()
+
+	for row in threadRows(doc) 'eachRow'
+		rows.push("#{numberOf(doc, node: row, key: IdKey)} {textOf(doc, node: row, key: StatusKey)} {textOf(doc, node: row, key: FunctionKey)}")
+	end 'eachRow'
+
+	return renderedRows(rows)
+end 'renderedThreads'
+
+export function stopsAtLine(events JsonDocArray, line SourceLine) returns EventTally
+	var tally = 0
+
+	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
+		tally = tally + 1 if numberOf(stop, node: stop.root, key: LineKey) == line as EventNumber else tally
+	end 'eachStop'
+
+	return tally as EventTally
+end 'stopsAtLine'
+
+export function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after EventNumber, upto EventNumber) returns EventTally
+	var tally = 0
+
+	for (iter, event) in events.withIterator() 'eachEvent'
+		let at = iter.index() as EventNumber
+
+		if at > after and at < upto and eventKind(event) == StopEventName and numberOf(event, node: event.root, key: ThreadKey) == id 'thisThread'
+			tally = tally + 1
+		end 'thisThread'
+	end 'eachEvent'
+
+	return tally as EventTally
+end 'stopsOnThreadInRange'
+
+export function eventsOfKindBeforeTheExit(events JsonDocArray, kind String) returns JsonDocArray
+	var matching = JsonDocArray.create()
+	let ended = firstIndexOfKind(events, kind: ExitEventName)
+
+	for (iter, event) in events.withIterator() 'eachEvent'
+		if ended != AbsentEventIndex and (iter.index() as EventNumber) > ended 'pastTheEnd'
+			break
+		end 'pastTheEnd'
+
+		if eventKind(event) == kind 'thisKind'
+			matching.push(event)
+		end 'thisKind'
+	end 'eachEvent'
+
+	return matching
+end 'eventsOfKindBeforeTheExit'
+
+export function firstIndexOfKind(events JsonDocArray, kind String) returns EventNumber
+	for (iter, event) in events.withIterator() 'eachEvent'
+		if eventKind(event) == kind 'thisKind'
+			return iter.index() as EventNumber
+		end 'thisKind'
+	end 'eachEvent'
+
+	return AbsentEventIndex
+end 'firstIndexOfKind'
+
+export function lastIndexOfKind(events JsonDocArray, kind String) returns EventNumber
+	var found = AbsentEventIndex
+
+	for (iter, event) in events.withIterator() 'eachEvent'
+		found = iter.index() as EventNumber if eventKind(event) == kind else found
+	end 'eachEvent'
+
+	return found
+end 'lastIndexOfKind'
+
+export function stopsAfterIndex(events JsonDocArray, index EventNumber) returns EventTally
+	var tally = 0
+
+	for (iter, event) in events.withIterator() 'eachEvent'
+		if (iter.index() as EventNumber) > index and eventKind(event) == StopEventName 'aLaterStop'
+			tally = tally + 1
+		end 'aLaterStop'
+	end 'eachEvent'
+
+	return tally as EventTally
+end 'stopsAfterIndex'
+
+export function innermostPhysicalFrameFunction(doc JsonDoc, key String) returns String
+	for frame in childrenOf(doc, node: doc.root, key: key) 'eachFrame'
+		if not flagOf(doc, node: frame, key: InlinedKey) 'aFrameOfItsOwn'
+			return textOf(doc, node: frame, key: FunctionKey)
+		end 'aFrameOfItsOwn'
+	end 'eachFrame'
+
+	return AbsentEventText
+end 'innermostPhysicalFrameFunction'
+
+export function tracedEventTexts(doc JsonDoc) returns String
+	var rows = StringArray.create()
+
+	for event in childrenOf(doc, node: doc.root, key: EventsKey) 'eachEvent'
+		rows.push(textOf(doc, node: event, key: TextKey))
+	end 'eachEvent'
+
+	return renderedRows(rows)
+end 'tracedEventTexts'
+
+export function tracedEventCount(doc JsonDoc) returns EventTally
+	return childrenOf(doc, node: doc.root, key: EventsKey).count() as EventTally
+end 'tracedEventCount'
+
+export function threadSelector(status String, functionName String) returns String
+	return status if functionName.isEmpty() else "{status}{SelectorFunctionSeparator}{functionName}"
+end 'threadSelector'
+
+export function selectorCommand(word String, selector String) returns String
+	return "{word} {selector}"
+end 'selectorCommand'
+
+export function reportedThreadId(doc JsonDoc) returns EventNumber
+	return numberOf(doc, node: doc.root, key: IdKey)
+end 'reportedThreadId'
+
+export function kindAfter(events JsonDocArray, index EventNumber) returns String
+	let next = try events.get(index + 1) otherwise return AbsentEventText
+
+	return eventKind(next)
+end 'kindAfter'
+
+export function reportsNoThreadId(doc JsonDoc) returns bool
+	return memberOf(doc, node: doc.root, key: IdKey).count() == 0
+end 'reportsNoThreadId'

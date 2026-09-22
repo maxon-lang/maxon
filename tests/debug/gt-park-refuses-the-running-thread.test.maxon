@@ -1,0 +1,48 @@
+let GtParkRunningCaseLabel = "gt-park-refuses-the-running-thread"
+
+let AnchorName = "worker-loop"
+let WorkerFunctionName = "worker"
+let OneProcessor = "1"
+let ContinuesPastEveryWorker = 60
+
+test 'gt-park of the thread that is running is refused by reason, and the program runs on'
+	let staged = builtFixture(GtParkRunningCaseLabel, fixture: WorkersFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let loopLine = anchorLine(staged, anchor: AnchorName)
+	let onAMachine = threadSelector(RunningThreadStatus, functionName: "")
+
+	var acting = StringArray.create()
+	acting.push("{BreakCommand} {lineTarget(loopLine)}")
+	acting.push(RunCommand)
+	acting.push(ThreadsCommand)
+	acting.push(selectorCommand(GtParkCommand, selector: onAMachine))
+
+	let commands = debugCommandLine(appendedCommands(acting, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryWorker)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [targetEnvOption(MaxProcsVariableName, value: OneProcessor)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let rosters = eventsOfKind(events, kind: ThreadsEventName)
+	try Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let roster = eventAt(rosters, index: 0)
+	try Expect.equal(countThreadsWhere(roster, key: StatusKey, value: RunningThreadStatus) as AssertedInt, expected: 1, message: "⛔ THE STOP IS STOP-THE-WORLD AND THIS RUN HAS ONE PROCESSOR, so exactly one green thread is `{RunningThreadStatus}` — the one that took the trap, which is the thread `{onAMachine}` names. The roster held: {renderedThreads(roster)}. {said}")
+
+	let holds = eventsOfKind(events, kind: GtParkEventName)
+	try Expect.equal(holds.count() as AssertedInt, expected: 1, message: "a refusal is an answer, so `{selectorCommand(GtParkCommand, selector: onAMachine)}` must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let refused = eventAt(holds, index: 0)
+	let chosen = reportedThreadId(refused)
+	try Expect.isFalse(reportsNoThreadId(refused), message: "⛔ THE SELECTOR RESOLVED TO NOTHING, so the refusal below is about no thread at all. The stop is inside a worker, so the thread that took it is running. The roster held: {renderedThreads(roster)}. {said}")
+	try Expect.equal(threadFieldOfId(roster, id: chosen, key: StatusKey), expected: RunningThreadStatus, message: "⭐ THE EVENT SAYS WHICH THREAD IT REFUSED AND THIS IS WHERE THAT IS CHECKED, IN THE SAME SESSION AND AT THE SAME STOP. #{chosen} is not the `{RunningThreadStatus}` thread. The roster held: {renderedThreads(roster)}. {said}")
+	try Expect.equal(threadFieldOfId(roster, id: chosen, key: FunctionKey), expected: WorkerFunctionName, message: "the running thread at a stop taken inside `{WorkerFunctionName}` is that worker. The roster held: {renderedThreads(roster)}. {said}")
+
+	try Expect.equal(textOf(refused, node: refused.root, key: ResultKey), expected: RefusedResult, message: "⛔ A HOLD IS APPLIED WHERE A MACHINE HANDS A THREAD OUT, AND A THREAD THAT IS ALREADY ON A MACHINE WILL NOT PASS THAT POINT AGAIN. Holding it would be a request that silently never takes effect, so it is `{RefusedResult}`. {said}")
+	try Expect.notEqual(textOf(refused, node: refused.root, key: ReasonKey), expected: AbsentEventText, message: "the refusal carries no `{ReasonKey}`, so a reader is told only that it did not work. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "a refused hold must leave the program exactly as it was, so the session still runs it to its end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+end 'gt-park of the thread that is running is refused by reason, and the program runs on'

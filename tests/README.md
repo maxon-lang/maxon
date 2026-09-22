@@ -148,6 +148,28 @@ tests/
     complete-function-names.test.maxon      a break target completes to the program's functions
     unknown-command-suggests.test.maxon     a word nothing answers to names the nearest command
     repl-script-over-stdin.test.maxon       the REPL reads stdin and answers in text, never in JSON
+    cond-int-equals.test.maxon              an integer condition stops on the one iteration that satisfies it
+    cond-bool.test.maxon                    a bool condition is one byte wide, and stops where the fixture sets it
+    cond-never-true-exits.test.maxon        a condition nothing satisfies stops nothing and costs one trap a hit
+    cond-replaced-by-unconditional.test.maxon   a plain `break` over a conditional one drops the condition
+    cond-float-refused.test.maxon           a float local is refused by name, and the breakpoint is not armed
+    cond-string-local-refused.test.maxon    a String local is refused by name, and the breakpoint is not armed
+    cond-unknown-local-refused.test.maxon   a name the stop pc has no record for is refused, never guessed
+    gt-threads-list.test.maxon              `threads` lists every green thread, exactly one of them running
+    gt-backtrace-of-a-parked-worker.test.maxon   a parked worker's stack is walked from its own saved frame
+    gt-select-reads-a-parked-workers-locals.test.maxon   `gt` selects, `locals`/`backtrace` follow it, stepping is refused
+    gt-park-resume.test.maxon               a held thread runs nothing until it is released, and then runs on
+    gt-park-refuses-the-running-thread.test.maxon   holding the thread on a machine is refused by reason
+    gt-park-of-a-finished-thread-is-refused.test.maxon   an id whose thread has completed is `no-such-thread`
+    gt-words-after-exit-answer-not-running.test.maxon   after the exit every word says the program is gone
+    stop-is-a-consistent-snapshot.test.maxon   with two processors a stop names its machine and its thread
+    pause-stops-a-spinning-program.test.maxon   `pause` is the only way into a program that plants no trap
+    timeout-leaves-the-program-running.test.maxon   a timeout leaves it running, and the session close still reaps it
+    breakpoint-set-while-running-is-hit.test.maxon   a breakpoint armed into running code is placed and hit
+    clear-while-running.test.maxon          a breakpoint cleared live fires no more, and nothing faults
+    trace-slice-at-stop.test.maxon          `trace` shows the DebugStream events committed before the stop
+    trace-unavailable-without-debugstream.test.maxon   a build with no producer says so, and answers no list
+    trace-unavailable-without-the-flag.test.maxon      the same build without `--trace` names the other reason
     fixtures/<name>/main.maxon.fixture      stored names only - see rule 1
   coverage/
     CoverageHarness.maxon                   the shared half: the spawn, the staging, the report readers
@@ -439,6 +461,61 @@ displacement position for it. A line-anchored breakpoint only ever lands on what
 statement happens to begin with, so `x64-classifies-each-instruction-class` asks the classifier directly,
 through `debug --classify=<hex>`, over a table with every class in it — including the two indirect classes
 the agent refuses and bytes this build cannot decode at all.
+
+⛔ **A CONDITION IS EVALUATED IN THE AGENT, AND THAT IS WHAT THE `cond-*` CASES MEASURE.** A driver that
+filtered hits of its own would publish every one and swallow the ones it did not want — the same picture
+to a reader and a different program — so each case pins the STOP COUNT against the number of times the
+anchored line runs undebugged. The `condition` fixture calls `hit` from two sites on purpose: a function
+the inliner splices has no local records of its own, and a condition is compiled from the record covering
+the breakpoint's pc.
+
+⛔⛔ **A GREEN-THREAD CASE NAMES ITS THREAD BY A SELECTOR, IN ONE SESSION, AND ASSERTS ON THE ID THE
+EVENT REPORTS BACK.** A roster's STATUSES are not reproducible across sessions — a worker's sleep timer
+fires before one stop and after the next — so a case that read an id out of a first session and asserted
+its status in a second was asserting a coincidence. MEASURED: 3 of 60 runs red, all of them
+`expected "waiting" received "ready"` about an id that was `waiting` when it was chosen.
+
+⇒ The case spells `waiting:worker`, `running` or `running:brief` (ruling 9's selectors), the driver
+resolves it against a roster taken at that very stop, and the event says which thread it picked. What the
+case then re-asserts is that THAT id has the status and the function the selector asked for, on the
+roster from the SAME stop — a statement about one moment rather than about two runs. The preconditions
+are made true by the fixture rather than hoped for: `workers` sleeps far longer than a stop-and-continue
+takes, so a parked worker is always there to be named, and `finisher` arms only the short-lived thread's
+line before `run`, so the first stop is necessarily inside it and `running:brief` cannot miss.
+
+⚠ **THERE IS NO CASE FOR ID STABILITY UNDER A TRUNCATED ROSTER, AND THE REASON IS THE AGENT'S ORDER.**
+The page carries 80 records and the driver keeps an identity the listing did not disprove, so an id
+survives a thread being omitted. Nothing here can make that omission happen and then undo it: `dbgGtList`
+walks the agent's roster in CARVE order and writes the first 80 LIVE records, so a live record's rank
+among live ones only ever falls as earlier ones die — once inside the window it never leaves. Present →
+absent → present is therefore unreachable, and the only present → absent is a thread that COMPLETED,
+which is genuine death and is what `gt-park-of-a-finished-thread-is-refused` already measures. A case
+built on a 100-sleeper fixture would go green under the rule it is meant to test AND under the one it
+replaced, which is a gate that cannot fail. The rule is in the driver; the channel that could measure it
+is a `gtList` with a different window, and it does not exist.
+
+⚠ **A BATCH SCRIPT IS FIXED BEFORE THE SESSION STARTS**, so no case can write `gt-park <id>` for an id
+the run produces. Every word that names a thread therefore names it by selector, and
+`gt-park-of-a-finished-thread-is-refused` asks with the same selector that resolved while the thread was
+alive — the refusal proves the word no longer answers to anything, and the event carries no id at all.
+
+A worker parks inside the `sleep` spliced into it, so the innermost frame of its walk is that spliced
+body and the one that owns the frame comes next — `innermostPhysicalFrameFunction` is what a case asks
+for.
+
+⛔ **A HANDLE IS AN ADDRESS AND IT IS VALID ONLY AT THE STOP IT WAS READ AT.** A completed green-thread
+record is zeroed and carved again for the next spawn, so an id the driver minted at one stop names a
+thread that may be gone by the next. `gt-park-of-a-finished-thread-is-refused` is the case: it holds the
+id of a thread that goes round its loop ONCE, continues until a second roster no longer lists it — with
+the long-lived thread still on that roster, so the reason it went is that it FINISHED and not that the
+program did — and then asks for it and gets `no-such-thread`.
+
+⚠ **THE `trap` STOP REASON HAS NO CASE HERE, AND CANNOT HAVE ONE.** It reports an `int3` the agent does
+not own — no breakpoint, no retired entry, no out-of-line slot, not the pause trampoline. Nothing in the
+language plants one: `OpcodeInt3` appears only as inter-function PADDING and inside two x64-linux runtime
+chunks, no `__Raw` row and no `__Builtins` spelling emits one, and the driver cannot write the debuggee's
+memory. A fixture could therefore only pretend, so the reason is stated here instead and what measures the
+agent's half is `specs/debug-agent.md`.
 
 ### `maxon monitor`
 

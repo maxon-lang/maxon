@@ -154,9 +154,11 @@ module type DecodedEvent
 	module let timestampMs as TraceTimestampMs
 	module let depth as TraceDepth
 	module let text as String
+	module let position as RingPosition
+	module let kind as String
 
-	module static function create(timestampMs TraceTimestampMs, depth TraceDepth, text String) returns DecodedEvent
-		return Self{timestampMs: timestampMs, depth: depth, text: text}
+	module static function create(timestampMs TraceTimestampMs, depth TraceDepth, text String, position RingPosition, kind String) returns DecodedEvent
+		return Self{timestampMs: timestampMs, depth: depth, text: text, position: position, kind: kind}
 	end 'create'
 end 'DecodedEvent'
 
@@ -302,6 +304,7 @@ module type DebugStreamDecoder
 			return stalledOutcome(producerExited, writeCursor: writeCursor)
 		end 'nothingReadable'
 
+		let spanStart = readCursor
 		let pending = (committedEnd - readCursor) as SpanByteCount
 		let copy = copyRingSpan(readCursor, byteCount: pending)
 
@@ -310,8 +313,12 @@ module type DebugStreamDecoder
 		readCursor = committedEnd
 		storeSegmentWord(segment, at: DsOffReadCursor as SegmentOffset, value: readCursor as SegmentWord)
 
-		return DrainOutcome.decoded(walkEntries(copy, byteCount: pending))
+		return DrainOutcome.decoded(walkEntries(copy, byteCount: pending, spanStart: spanStart))
 	end 'drain'
+
+	module function producerAttached() returns bool
+		return segmentWordAt(segment, at: DsOffFlags as SegmentOffset) != 0 or segmentWordAt(segment, at: DsOffWriteCursor as SegmentOffset) != 0
+	end 'producerAttached'
 
 	// What a drain answers when the committed prefix is empty. Three different facts, and the last is the
 	// one a naive reader hangs on.
@@ -391,7 +398,7 @@ module type DebugStreamDecoder
 	// ⚠ **ONE ADVANCE FOR THE WHOLE WALK.** Padding, the depth markers, the heartbeat and every filtered-out
 	// family step over an entry by exactly the same amount; spelling that out per branch is five chances to
 	// step by the wrong one and land the walk mid-payload.
-	function walkEntries(copy ByteArray, byteCount SpanByteCount) returns DecodedEventArray
+	function walkEntries(copy ByteArray, byteCount SpanByteCount, spanStart RingPosition) returns DecodedEventArray
 		var events = DecodedEventArray.create()
 		var offset = 0 as ByteOffset
 		let spanEnd = byteCount as ByteOffset
@@ -410,7 +417,7 @@ module type DebugStreamDecoder
 				end 'notAtRoot'
 			end 'closesALevel' else if rendersALine(eventType) and passesFilter(eventType) 'anEvent'
 				let timestampMs = ((header shr DsEntryTimestampShift) and DsEntryTimestampMask) as TraceTimestampMs
-				events.push(DecodedEvent.create(timestampMs, depth: depth, text: formatEvent(eventType, entry: copy, at: offset, tagNames: tagNames, logNames: logNames)))
+				events.push(DecodedEvent.create(timestampMs, depth: depth, text: formatEvent(eventType, entry: copy, at: offset, tagNames: tagNames, logNames: logNames), position: spanStart + (offset as RingPosition), kind: familyOf(eventType).name))
 			end 'anEvent'
 
 			offset = offset + (entrySizeOf(header, at: offset as RingPosition) as ByteOffset)

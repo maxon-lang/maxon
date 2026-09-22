@@ -1,0 +1,52 @@
+let GtThreadsListCaseLabel = "gt-threads-list"
+
+let AnchorName = "worker-loop"
+let WorkerFunctionName = "worker"
+let SpawnSpelling = "async worker("
+let OneProcessor = "1"
+let ContinuesPastEveryWorker = 60
+
+test 'threads at a stop lists every green thread the program has, with exactly one of them running'
+	let staged = builtFixture(GtThreadsListCaseLabel, fixture: WorkersFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let workers = stagedLinesContaining(staged, needle: SpawnSpelling)
+	let loopLine = anchorLine(staged, anchor: AnchorName)
+
+	try Expect.atLeast(workers as AssertedInt, than: 2, message: "this case is about a roster with several threads on it, and the fixture spawns {workers}.")
+
+	var armings = StringArray.create()
+	armings.push("{BreakCommand} {lineTarget(loopLine)}")
+	armings.push(RunCommand)
+	armings.push(ThreadsCommand)
+
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryWorker)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [targetEnvOption(MaxProcsVariableName, value: OneProcessor)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let rosters = eventsOfKind(events, kind: ThreadsEventName)
+	try Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. In stage 1 it answered an `{ErrorEventName}` saying green threads arrive later; here it must answer a roster. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let roster = eventAt(rosters, index: 0)
+	let listed = renderedThreads(roster)
+
+	try Expect.atLeast(threadRows(roster).count() as AssertedInt, than: workers as AssertedInt, message: "the fixture has {workers} workers alive at the first stop, and `main` is a green thread of its own, so the roster holds at least {workers} entries. It held: {listed}. {said}")
+	try Expect.atLeast(countThreadsWhere(roster, key: FunctionKey, value: WorkerFunctionName) as AssertedInt, than: workers as AssertedInt, message: "⭐ A ROSTER THAT NAMES NO FUNCTIONS IS A LIST OF NUMBERS. Every one of the {workers} workers is on it, each named by the function its record's entry pc is inside. It held: {listed}. {said}")
+	try Expect.equal(countThreadsWhere(roster, key: StatusKey, value: RunningThreadStatus) as AssertedInt, expected: 1, message: "⛔ THE STOP IS STOP-THE-WORLD AND THIS RUN HAS ONE PROCESSOR, so exactly one green thread is `{RunningThreadStatus}` — the one that took the trap. Two running threads is a roster read while the program was still moving. It held: {listed}. {said}")
+
+	for row in threadRows(roster) 'eachRow'
+		let status = textOf(roster, node: row, key: StatusKey)
+		let known = status == RunningThreadStatus or status == WaitingThreadStatus or status == ReadyThreadStatus or status == HeldResult
+		try Expect.isTrue(known, message: "a roster entry carries a status nothing names: '{status}'. Completed and free records are OMITTED rather than listed under a status of their own. It held: {listed}. {said}")
+	end 'eachRow'
+
+	let truncated = memberOf(roster, node: roster.root, key: TruncatedKey)
+	try Expect.equal(truncated.count() as AssertedInt, expected: 1, message: "the roster carries no `{TruncatedKey}`, so a reader cannot tell a short list from a complete one. {said}")
+	try Expect.isFalse(flagOf(roster, node: roster.root, key: TruncatedKey), message: "a fixture with {workers} workers is nowhere near the record capacity, so a roster reporting itself truncated is one that lost entries it had room for. It held: {listed}. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+end 'threads at a stop lists every green thread the program has, with exactly one of them running'

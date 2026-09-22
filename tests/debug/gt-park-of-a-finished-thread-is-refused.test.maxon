@@ -1,0 +1,63 @@
+let GtParkFinishedCaseLabel = "gt-park-of-a-finished-thread-is-refused"
+
+let BriefAnchorName = "brief-loop"
+let LastingAnchorName = "lasting-loop"
+let BriefFunctionName = "brief"
+let LastingFunctionName = "lasting"
+let OneProcessor = "1"
+let ContinuesPastTheBriefThread = 8
+let ContinuesPastEverything = 80
+
+test 'gt-park of a thread that has finished is refused by name, because its record is no longer a thread'
+	let staged = builtFixture(GtParkFinishedCaseLabel, fixture: FinisherFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let briefLine = anchorLine(staged, anchor: BriefAnchorName)
+	let lastingLine = anchorLine(staged, anchor: LastingAnchorName)
+	let theBriefThread = threadSelector(RunningThreadStatus, functionName: BriefFunctionName)
+
+	var acting = StringArray.create()
+	acting.push("{BreakCommand} {lineTarget(briefLine)}")
+	acting.push(RunCommand)
+	acting.push(ThreadsCommand)
+	acting.push(selectorCommand(GtSelectCommand, selector: theBriefThread))
+	acting.push("{BreakCommand} {lineTarget(lastingLine)}")
+
+	let pastTheBriefThread = appendedCommands(acting, rest: repeatedCommand(ContinueCommand, times: ContinuesPastTheBriefThread))
+	let asked = appendedCommands(pastTheBriefThread, rest: [ThreadsCommand, selectorCommand(GtParkCommand, selector: theBriefThread)])
+	let commands = debugCommandLine(appendedCommands(asked, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEverything)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [targetEnvOption(MaxProcsVariableName, value: OneProcessor)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let selections = eventsOfKind(events, kind: GtSelectEventName)
+	try Expect.equal(selections.count() as AssertedInt, expected: 1, message: "`{selectorCommand(GtSelectCommand, selector: theBriefThread)}` printed no `{GtSelectEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let selected = eventAt(selections, index: 0)
+	let brief = reportedThreadId(selected)
+	try Expect.equal(textOf(selected, node: selected.root, key: ResultKey), expected: SelectedResult, message: "⛔ ONLY THE SHORT-LIVED THREAD'S LINE IS ARMED WHEN THE SESSION RUNS, so the first stop is necessarily inside `{BriefFunctionName}` and that thread is the one on the machine — which is what makes `{theBriefThread}` resolve here rather than depend on a timer. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.isFalse(reportsNoThreadId(selected), message: "the selection names no thread, so there is no id to ask about after it has gone. {said}")
+
+	let rosters = eventsOfKind(events, kind: ThreadsEventName)
+	try Expect.equal(rosters.count() as AssertedInt, expected: 2, message: "the session asks for the roster twice — once while the short-lived thread is alive and once after it has gone. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let early = eventAt(rosters, index: 0)
+	try Expect.equal(threadFieldOfId(early, id: brief, key: FunctionKey), expected: BriefFunctionName, message: "⭐ THE EVENT SAYS WHICH THREAD IT SELECTED AND THIS IS WHERE THAT IS CHECKED, IN THE SAME SESSION AND AT THE SAME STOP. #{brief} is not the `{BriefFunctionName}` thread. The roster held: {renderedThreads(early)}. {said}")
+
+	let late = eventAt(rosters, index: 1)
+	try Expect.equal(threadFieldOfId(late, id: brief, key: FunctionKey), expected: AbsentEventText, message: "⭐ THE PRECONDITION OF THE WHOLE CASE. After {ContinuesPastTheBriefThread} continues the short-lived thread has gone round its loop once and returned, so a roster that still lists #{brief} is one taken before it finished and the refusal below would be about a LIVE thread. The roster held: {renderedThreads(late)}. {said}")
+	try Expect.atLeast(countThreadsWhere(late, key: FunctionKey, value: LastingFunctionName) as AssertedInt, than: 1, message: "⛔ THE CONTROL FOR THE LINE ABOVE. The long-lived thread must still be on the roster, or the reason #{brief} is absent is that the program ended rather than that one thread did. The roster held: {renderedThreads(late)}. {said}")
+
+	let holds = eventsOfKind(events, kind: GtParkEventName)
+	try Expect.equal(holds.count() as AssertedInt, expected: 1, message: "a refusal is an answer, so the hold asked after the thread finished must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let refused = eventAt(holds, index: 0)
+	try Expect.equal(textOf(refused, node: refused.root, key: ResultKey), expected: RefusedResult, message: "⭐⭐ A HANDLE IS AN ADDRESS AND A FINISHED RECORD IS NOT A THREAD. The word that named #{brief} while it was alive names a record the scheduler may hand to somebody else once it has completed, so holding it must be `{RefusedResult}` rather than a request against whatever now lives there. {said}")
+	try Expect.equal(textOf(refused, node: refused.root, key: ReasonKey), expected: NoSuchThreadReason, message: "the refusal must say `{NoSuchThreadReason}` — the word named a thread that is gone, which is a different fault from a thread that is running or a hold table with no room. It said '{textOf(refused, node: refused.root, key: ReasonKey)}'. {said}")
+	try Expect.isTrue(reportsNoThreadId(refused), message: "⛔ A REFUSAL THAT NAMED A THREAD WOULD BE ONE THAT RESOLVED THE WORD AGAINST A ROSTER ROW. Nothing answers to it any more, so the event must carry no id at all. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "a refused hold must leave the program exactly as it was, so the session still runs it to its end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+end 'gt-park of a thread that has finished is refused by name, because its record is no longer a thread'

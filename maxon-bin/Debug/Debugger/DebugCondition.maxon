@@ -1,0 +1,321 @@
+export typealias DebugConditionWidth = int(1 to 8)
+
+let ConditionWordSeparator = " "
+let ConditionPathSeparator = "."
+let ConditionWords = 3
+
+let EqualSpelling = "=="
+let NotEqualSpelling = "!="
+let LessSpelling = "<"
+let LessOrEqualSpelling = "<="
+let GreaterSpelling = ">"
+let GreaterOrEqualSpelling = ">="
+
+let TrueSpelling = "true"
+let FalseSpelling = "false"
+let TrueWord = 1 as DebugWord
+let FalseWord = 0 as DebugWord
+
+let BoolTypeSpelling = "i1"
+let DoubleTypeSpelling = "f64"
+let SingleTypeSpelling = "f32"
+
+let UnsignedCompare = 0 as DebugAddress
+let NegativeSign = "-"
+let HexLiteralPrefix = "0x"
+typealias LiteralBase = int(2 to 16)
+typealias LiteralQuotient = int(1 to i64.max)
+let HexLiteralBase = 16 as LiteralBase
+let DecimalLiteralBase = 10 as LiteralBase
+let MaxLiteralMagnitude = 9223372036854775807 as DebugWord
+
+let AsciiZero = 48
+let AsciiNine = 57
+let AsciiLowerA = 97
+let AsciiLowerF = 102
+let AsciiUpperA = 65
+let AsciiUpperF = 70
+let LetterDigitBase = 10 as DebugWord
+
+export type DebugConditionRecord
+	export let kind as DebugAddress
+	export let operand as DebugWord
+	export let width as DebugConditionWidth
+	export let signedCompare as DebugAddress
+	export let op as DebugAddress
+	export let literal as DebugWord
+
+	static function create(kind DebugAddress, operand DebugWord, width DebugConditionWidth, signedCompare DebugAddress, op DebugAddress, literal DebugWord) returns DebugConditionRecord
+		return Self{kind: kind, operand: operand, width: width, signedCompare: signedCompare, op: op, literal: literal}
+	end 'create'
+end 'DebugConditionRecord'
+
+export union DebugConditionCompile
+	compiled(record DebugConditionRecord)
+	unsupported
+	invalid
+end 'DebugConditionCompile'
+
+export union DebugConditionRequest
+	none
+	carried(record DebugConditionRecord)
+end 'DebugConditionRequest'
+
+export type DebugArmingSite
+	export let offset as DebugAddress
+	export let condition as DebugConditionRequest
+
+	export static function create(offset DebugAddress, condition DebugConditionRequest) returns DebugArmingSite
+		return Self{offset: offset, condition: condition}
+	end 'create'
+end 'DebugArmingSite'
+
+export typealias DebugArmingSiteArray = Array with DebugArmingSite
+
+export union DebugBreakRequest
+	plain(target String)
+	conditional(target String, condition String)
+end 'DebugBreakRequest'
+
+export function debugBreakRequestIn(argument String, conditionWord String) returns DebugBreakRequest
+	let pieces = argument.split(conditionWord)
+
+	if pieces.count() < 2 'noCondition'
+		return DebugBreakRequest.plain(argument.trim())
+	end 'noCondition'
+
+	return DebugBreakRequest.conditional((try pieces.get(0) otherwise "").trim(), condition: conditionTailOf(pieces, conditionWord: conditionWord))
+end 'debugBreakRequestIn'
+
+function conditionTailOf(pieces StringArray, conditionWord String) returns String
+	var tail = ""
+
+	for (iter, piece) in pieces.withIterator() 'eachPiece'
+		if iter.index() == 0 'theTarget'
+			continue
+		end 'theTarget'
+
+		tail.append(piece if tail.isEmpty() else "{conditionWord}{piece}")
+	end 'eachPiece'
+
+	return tail.trim()
+end 'conditionTailOf'
+
+export function compileDebugCondition(symbols DebugSymbols, offset DebugAddress, text String) returns DebugConditionCompile
+	let words = conditionWordsOf(text)
+
+	if words.count() != ConditionWords 'notAThreePartComparison'
+		return DebugConditionCompile.unsupported
+	end 'notAThreePartComparison'
+
+	let name = try words.get(0) otherwise panic("compileDebugCondition: a three-word comparison holds a first word")
+	let opSpelling = try words.get(1) otherwise panic("compileDebugCondition: a three-word comparison holds a second word")
+	let literalSpelling = try words.get(2) otherwise panic("compileDebugCondition: a three-word comparison holds a third word")
+
+	if name.contains(ConditionPathSeparator) 'aFieldPath'
+		return DebugConditionCompile.unsupported
+	end 'aFieldPath'
+
+	match conditionOperatorOf(opSpelling) 'known'
+		none then return DebugConditionCompile.unsupported
+		code(op) then return compiledAgainstName(symbols, offset: offset, name: name, op: op, literalSpelling: literalSpelling)
+	end 'known'
+end 'compileDebugCondition'
+
+function compiledAgainstName(symbols DebugSymbols, offset DebugAddress, name String, op DebugAddress, literalSpelling String) returns DebugConditionCompile
+	let locals = symbols.localsAt(offset)
+
+	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
+		undeclared then return DebugConditionCompile.unsupported
+		notLiveHere then return DebugConditionCompile.unsupported
+		live(local) then return compiledAgainstLocal(symbols, local: local, op: op, literalSpelling: literalSpelling)
+	end 'known'
+end 'compiledAgainstName'
+
+function compiledAgainstLocal(symbols DebugSymbols, local MxdbgLocalInfo, op DebugAddress, literalSpelling String) returns DebugConditionCompile
+	if local.isAConstant() or local.isAFoldedAggregate() or local.holdsAPointer() or local.locKind == MxdbgLocKindOptimizedOut 'nowhereTheAgentCanRead'
+		return DebugConditionCompile.unsupported
+	end 'nowhereTheAgentCanRead'
+
+	if not symbols.typeIsDescribed(local.typeId) 'noLayout'
+		return DebugConditionCompile.unsupported
+	end 'noLayout'
+
+	let record = symbols.typeRecordOf(local.typeId)
+	let typeName = symbols.typeNameOf(local.typeId)
+
+	if not comparesAsAWholeNumber(record, typeName: typeName) 'notAWholeNumber'
+		return DebugConditionCompile.unsupported
+	end 'notAWholeNumber'
+
+	match conditionWidthOf(record) 'sized'
+		none then return DebugConditionCompile.unsupported
+		bytes(width) then return compiledWithWidth(local, signedCompare: DbgCondSignedYes if record.isSigned() else UnsignedCompare, op: op, width: width, literalSpelling: literalSpelling, isABool: typeName == BoolTypeSpelling)
+	end 'sized'
+end 'compiledAgainstLocal'
+
+function compiledWithWidth(local MxdbgLocalInfo, signedCompare DebugAddress, op DebugAddress, width DebugConditionWidth, literalSpelling String, isABool bool) returns DebugConditionCompile
+	match conditionLiteralOf(literalSpelling, isABool: isABool) 'read'
+		none then return DebugConditionCompile.invalid
+		value(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal)
+	end 'read'
+end 'compiledWithWidth'
+
+function compiledWithLiteral(local MxdbgLocalInfo, signedCompare DebugAddress, op DebugAddress, width DebugConditionWidth, literal DebugWord) returns DebugConditionCompile
+	if local.locKind == MxdbgLocKindRegister 'aRegister'
+		if local.locValue < 0 or local.locValue >= DbgGprCount 'outsideTheGeneralFile'
+			return DebugConditionCompile.unsupported
+		end 'outsideTheGeneralFile'
+
+		return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindRegister, operand: local.locValue as DebugWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
+	end 'aRegister'
+
+	if local.locKind != MxdbgLocKindStackSlot 'notASlotEither'
+		return DebugConditionCompile.unsupported
+	end 'notASlotEither'
+
+	return DebugConditionCompile.compiled(DebugConditionRecord.create(DbgCondKindStackSlot, operand: local.locValue as DebugWord, width: width, signedCompare: signedCompare, op: op, literal: literal))
+end 'compiledWithLiteral'
+
+function comparesAsAWholeNumber(record MxdbgTypeInfo, typeName String) returns bool
+	if typeName == DoubleTypeSpelling or typeName == SingleTypeSpelling 'aRealNumber'
+		return false
+	end 'aRealNumber'
+
+	return record.kind == MxdbgTypeKindPrimitive or record.kind == MxdbgTypeKindIntRanged or record.kind == MxdbgTypeKindEnum
+end 'comparesAsAWholeNumber'
+
+union ConditionWidthLookup
+	none
+	bytes(value DebugConditionWidth)
+end 'ConditionWidthLookup'
+
+function conditionWidthOf(record MxdbgTypeInfo) returns ConditionWidthLookup
+	let size = record.size as DebugAddress
+
+	if size == DbgWidthByte or size == DbgWidthHalf or size == DbgWidthWord32 or size == DbgWidthWord64 'aWidthTheAgentLoads'
+		return ConditionWidthLookup.bytes(size as DebugConditionWidth)
+	end 'aWidthTheAgentLoads'
+
+	return ConditionWidthLookup.none
+end 'conditionWidthOf'
+
+union ConditionOperatorLookup
+	none
+	code(value DebugAddress)
+end 'ConditionOperatorLookup'
+
+function conditionOperatorOf(spelling String) returns ConditionOperatorLookup
+	if spelling == EqualSpelling 'equal'
+		return ConditionOperatorLookup.code(DbgCondOpEqual)
+	end 'equal'
+
+	if spelling == NotEqualSpelling 'notEqual'
+		return ConditionOperatorLookup.code(DbgCondOpNotEqual)
+	end 'notEqual'
+
+	if spelling == LessSpelling 'less'
+		return ConditionOperatorLookup.code(DbgCondOpLess)
+	end 'less'
+
+	if spelling == LessOrEqualSpelling 'lessOrEqual'
+		return ConditionOperatorLookup.code(DbgCondOpLessOrEqual)
+	end 'lessOrEqual'
+
+	if spelling == GreaterSpelling 'greater'
+		return ConditionOperatorLookup.code(DbgCondOpGreater)
+	end 'greater'
+
+	if spelling == GreaterOrEqualSpelling 'greaterOrEqual'
+		return ConditionOperatorLookup.code(DbgCondOpGreaterOrEqual)
+	end 'greaterOrEqual'
+
+	return ConditionOperatorLookup.none
+end 'conditionOperatorOf'
+
+union ConditionLiteralLookup
+	none
+	value(word DebugWord)
+end 'ConditionLiteralLookup'
+
+function conditionLiteralOf(spelling String, isABool bool) returns ConditionLiteralLookup
+	if isABool 'aFlag'
+		if spelling == TrueSpelling 'itIsTrue'
+			return ConditionLiteralLookup.value(TrueWord)
+		end 'itIsTrue'
+
+		if spelling == FalseSpelling 'itIsFalse'
+			return ConditionLiteralLookup.value(FalseWord)
+		end 'itIsFalse'
+	end 'aFlag'
+
+	let negative = spelling.startsWith(NegativeSign)
+	let digits = spelling.replaceFirst(NegativeSign, with: "") if negative else spelling
+
+	match unsignedLiteralOf(digits) 'read'
+		none then return ConditionLiteralLookup.none
+		value(magnitude) then return ConditionLiteralLookup.value(0 - magnitude if negative else magnitude)
+	end 'read'
+end 'conditionLiteralOf'
+
+function unsignedLiteralOf(spelling String) returns ConditionLiteralLookup
+	let hex = spelling.startsWith(HexLiteralPrefix)
+	let base = HexLiteralBase if hex else DecimalLiteralBase
+	let digits = spelling.replaceFirst(HexLiteralPrefix, with: "") if hex else spelling
+
+	if digits.isEmpty() 'nothingToRead'
+		return ConditionLiteralLookup.none
+	end 'nothingToRead'
+
+	var value = 0 as DebugWord
+
+	for character in digits 'eachDigit'
+		match nextLiteralValue(value, character: character, base: base) 'read'
+			none then return ConditionLiteralLookup.none
+			value(next) then value = next
+		end 'read'
+	end 'eachDigit'
+
+	return ConditionLiteralLookup.value(value)
+end 'unsignedLiteralOf'
+
+function nextLiteralValue(value DebugWord, character Character, base LiteralBase) returns ConditionLiteralLookup
+	match literalDigitOf(character, base: base) 'read'
+		none then return ConditionLiteralLookup.none
+		digit(read) then return ConditionLiteralLookup.value(value * (base as DebugWord) + read) if value <= (((MaxLiteralMagnitude - read) as LiteralQuotient) / (base as LiteralQuotient)) as DebugWord else ConditionLiteralLookup.none
+	end 'read'
+end 'nextLiteralValue'
+
+union ConditionDigitLookup
+	none
+	digit(read DebugWord)
+end 'ConditionDigitLookup'
+
+function literalDigitOf(character Character, base LiteralBase) returns ConditionDigitLookup
+	let code = try character.asciiValue() otherwise return ConditionDigitLookup.none
+	var read = 0 as DebugWord
+
+	if code >= AsciiZero and code <= AsciiNine 'aDecimalDigit'
+		read = (code - AsciiZero) as DebugWord
+	end 'aDecimalDigit' else if code >= AsciiLowerA and code <= AsciiLowerF 'aLowerCaseLetter'
+		read = ((code - AsciiLowerA) as DebugWord) + LetterDigitBase
+	end 'aLowerCaseLetter' else if code >= AsciiUpperA and code <= AsciiUpperF 'anUpperCaseLetter'
+		read = ((code - AsciiUpperA) as DebugWord) + LetterDigitBase
+	end 'anUpperCaseLetter' else 'notADigitAtAll'
+		return ConditionDigitLookup.none
+	end 'notADigitAtAll'
+
+	return ConditionDigitLookup.digit(read) if read < base else ConditionDigitLookup.none
+end 'literalDigitOf'
+
+function conditionWordsOf(text String) returns StringArray
+	var words = StringArray.create()
+
+	for piece in text.trim().split(ConditionWordSeparator) 'eachPiece'
+		if not piece.isEmpty() 'aWord'
+			words.push(piece)
+		end 'aWord'
+	end 'eachPiece'
+
+	return words
+end 'conditionWordsOf'

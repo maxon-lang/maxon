@@ -1,0 +1,105 @@
+export let DebugTraceNotRequestedReason = "not-traced"
+export let DebugTraceNoProducerReason = "program-not-built-with-debugstream"
+export let DebugTraceNoStopReason = "no-stop"
+
+export let DebugDefaultTraceEvents = 20 as DebugTraceTally
+
+export typealias DebugTraceTally = int(1 to u32.max)
+
+let HeldTraceEventCap = 8192
+let TraceEventsKeptOnOverflow = 4096 as DebugTraceTally
+
+export type DebugTraceCollector
+	var decoder as DebugStreamDecoder
+	var held as DebugTraceEventArray
+	var attached as bool
+	var open as bool
+
+	export static function create(decoder DebugStreamDecoder) returns DebugTraceCollector
+		return Self{decoder: decoder, held: DebugTraceEventArray.create(), attached: false, open: true}
+	end 'create'
+
+	export function segmentName() returns String
+		return self.decoder.segmentName()
+	end 'segmentName'
+
+	export function close()
+		if self.open 'stillMapped'
+			self.decoder.close()
+			self.open = false
+		end 'stillMapped'
+	end 'close'
+
+	export function pump()
+		if not self.open 'alreadyClosed'
+			return
+		end 'alreadyClosed'
+
+		self.attached = self.attached or self.decoder.producerAttached()
+		var draining = true
+
+		while draining 'eachBatch'
+			match self.decoder.drain(false) 'status'
+				decoded(events) then self.hold(events)
+				idle then draining = false
+				finished then draining = false
+				schemaMismatch then draining = false
+			end 'status'
+		end 'eachBatch'
+
+		self.forgetTheOldest()
+	end 'pump'
+
+	export function slice(mark DebugAddress, since DebugTraceSince, limit DebugTraceTally) returns DebugTraceSlice
+		if not self.attached 'theProgramNeverAttached'
+			return DebugTraceSlice.missing(DebugTraceNoProducerReason)
+		end 'theProgramNeverAttached'
+
+		var before = DebugTraceEventArray.create()
+
+		for event in self.held 'eachEvent'
+			if mark == 0 or event.seq < mark 'committedBeforeTheStop'
+				before.push(event)
+			end 'committedBeforeTheStop'
+		end 'eachEvent'
+
+		return DebugTraceSlice.taken(lastOf(before, limit: limit), since: since)
+	end 'slice'
+
+	function hold(events DecodedEventArray)
+		for event in events 'eachEvent'
+			self.held.push(DebugTraceEvent.create(event.position as DebugAddress, kind: event.kind, text: event.text))
+		end 'eachEvent'
+	end 'hold'
+
+	function forgetTheOldest()
+		if self.held.count() <= HeldTraceEventCap 'stillWithinTheWindow'
+			return
+		end 'stillWithinTheWindow'
+
+		self.held = lastOf(self.held, limit: TraceEventsKeptOnOverflow)
+	end 'forgetTheOldest'
+end 'DebugTraceCollector'
+
+export union DebugTraceState
+	untraced
+	noProducer
+	ring(collector DebugTraceCollector)
+end 'DebugTraceState'
+
+function lastOf(events DebugTraceEventArray, limit DebugTraceTally) returns DebugTraceEventArray
+	if (events.count() as DebugAddress) <= (limit as DebugAddress) 'shorterThanTheWindow'
+		return events
+	end 'shorterThanTheWindow'
+
+	var kept = DebugTraceEventArray.create()
+	let first = events.count() - (limit as DebugAddress)
+
+	for (iter, event) in events.withIterator() 'eachEvent'
+		if (iter.index() as DebugAddress) >= first 'insideTheWindow'
+			kept.push(event)
+		end 'insideTheWindow'
+	end 'eachEvent'
+
+	return kept
+end 'lastOf'

@@ -8,6 +8,9 @@ let ExitEventKind = "exit"
 let CrashEventKind = "crash"
 let TimeoutEventKind = "timeout"
 let ErrorEventKind = "error"
+let ThreadsEventKind = "threads"
+let GreenBacktraceEventKind = "gt-backtrace"
+let TraceEventKind = "trace"
 
 let ActionKey = "action"
 let FunctionKey = "function"
@@ -43,6 +46,18 @@ let UnavailableSuffix = "Unavailable"
 let NoSourceReason = "no-source-file"
 let NoBacktraceReason = "not-walkable"
 
+let ThreadsKey = "threads"
+let ThreadKey = "thread"
+let MachineKey = "machine"
+let IdKey = "id"
+let HandleKey = "handle"
+let TruncatedKey = "truncated"
+let ResultKey = "result"
+let ConditionKey = "condition"
+let EventsKey = "events"
+let SinceKey = "since"
+let SeqKey = "seq"
+
 export union DebugEventLine
 	none
 	line(text String)
@@ -61,6 +76,10 @@ export function debugEventLineFor(reply DebugReply) returns DebugEventLine
 		value(tree) then return DebugEventLine.line(renderedObject(doc, node: valueEventObject(doc, tree: tree)))
 		exited(code) then return DebugEventLine.line(renderedObject(doc, node: exitObject(doc, code: code)))
 		crashed(status) then return DebugEventLine.line(renderedObject(doc, node: crashObject(doc, status: status)))
+		threads(roster) then return DebugEventLine.line(renderedObject(doc, node: threadsObject(doc, roster: roster)))
+		threadWalked(walk) then return DebugEventLine.line(renderedObject(doc, node: threadWalkObject(doc, walk: walk)))
+		threadOutcome(outcome) then return DebugEventLine.line(renderedObject(doc, node: threadOutcomeObject(doc, outcome: outcome)))
+		traced(slice) then return DebugEventLine.line(renderedObject(doc, node: traceObject(doc, slice: slice)))
 		timedOut(waitingFor) then return DebugEventLine.line(renderedObject(doc, node: timeoutObject(doc, waitingFor: waitingFor)))
 		failed(message, suggestion) then return DebugEventLine.line(renderedObject(doc, node: errorObject(doc, message: message, suggestion: suggestion)))
 	end 'which'
@@ -97,8 +116,104 @@ function breakpointObject(doc JsonDoc, answer DebugBreakpointAnswer) returns Jso
 		object.addString(doc, key: ReasonKey, value: answer.reason)
 	end 'aRefusal'
 
+	if not answer.condition.isEmpty() 'aCondition'
+		object.addString(doc, key: ConditionKey, value: answer.condition)
+	end 'aCondition'
+
 	return object.build(doc)
 end 'breakpointObject'
+
+function threadsObject(doc JsonDoc, roster DebugThreadRoster) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: ThreadsEventKind)
+	addListOrAbsence(object, doc: doc, key: ThreadsKey, node: threadArray(doc, rows: roster.rows), present: roster.unavailable.isEmpty(), reason: roster.unavailable)
+	object.addBool(doc, key: TruncatedKey, value: roster.truncated)
+
+	return object.build(doc)
+end 'threadsObject'
+
+function threadArray(doc JsonDoc, rows DebugThreadRowArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for row in rows 'eachRow'
+		ids.push(threadRowObject(doc, row: row))
+	end 'eachRow'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'threadArray'
+
+function threadRowObject(doc JsonDoc, row DebugThreadRow) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addNumber(doc, key: IdKey, value: row.id as JsonFloat)
+	object.addString(doc, key: StatusKey, value: row.status)
+	object.addString(doc, key: FunctionKey, value: row.functionName)
+	object.addString(doc, key: FileKey, value: row.file)
+	object.addNumber(doc, key: LineKey, value: row.line as JsonFloat)
+	object.addString(doc, key: HandleKey, value: hexWord(row.handle))
+
+	return object.build(doc)
+end 'threadRowObject'
+
+function threadWalkObject(doc JsonDoc, walk DebugThreadWalk) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: GreenBacktraceEventKind)
+	addThreadId(object, doc: doc, key: IdKey, thread: walk.thread)
+	addListOrAbsence(object, doc: doc, key: FramesKey, node: frameArray(doc, frames: walk.frames), present: walk.unavailable.isEmpty(), reason: walk.unavailable)
+
+	return object.build(doc)
+end 'threadWalkObject'
+
+function threadOutcomeObject(doc JsonDoc, outcome DebugThreadOutcome) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: outcome.event)
+	addThreadId(object, doc: doc, key: IdKey, thread: outcome.thread)
+	object.addString(doc, key: ResultKey, value: outcome.result)
+
+	if not outcome.reason.isEmpty() 'aRefusal'
+		object.addString(doc, key: ReasonKey, value: outcome.reason)
+	end 'aRefusal'
+
+	return object.build(doc)
+end 'threadOutcomeObject'
+
+function addThreadId(object JsonObjectBuilder, doc JsonDoc, key String, thread DebugThreadRef)
+	match thread 'named'
+		none then break 'named'
+		id(value) then object.addNumber(doc, key: key, value: value as JsonFloat)
+	end 'named'
+end 'addThreadId'
+
+function traceObject(doc JsonDoc, slice DebugTraceSlice) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addString(doc, key: DebugEventKey, value: TraceEventKind)
+	addListOrAbsence(object, doc: doc, key: EventsKey, node: traceEventArray(doc, events: slice.events), present: slice.unavailable.isEmpty(), reason: slice.unavailable)
+
+	match slice.since 'previously'
+		none then break 'previously'
+		at(position) then object.addNumber(doc, key: SinceKey, value: position as JsonFloat)
+	end 'previously'
+
+	return object.build(doc)
+end 'traceObject'
+
+function traceEventArray(doc JsonDoc, events DebugTraceEventArray) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+
+	for event in events 'eachEvent'
+		ids.push(traceEventObject(doc, event: event))
+	end 'eachEvent'
+
+	return doc.add(JsonNode.arrayNode(ids))
+end 'traceEventArray'
+
+function traceEventObject(doc JsonDoc, event DebugTraceEvent) returns JsonNodeId
+	var object = JsonObjectBuilder.create()
+	object.addNumber(doc, key: SeqKey, value: event.seq as JsonFloat)
+	object.addString(doc, key: KindKey, value: event.kind)
+	object.addString(doc, key: TextKey, value: event.text)
+
+	return object.build(doc)
+end 'traceEventObject'
 
 function stopObject(doc JsonDoc, stop DebugStop) returns JsonNodeId
 	var object = JsonObjectBuilder.create()
@@ -109,6 +224,8 @@ function stopObject(doc JsonDoc, stop DebugStop) returns JsonNodeId
 	object.addNumber(doc, key: LineKey, value: stop.line as JsonFloat)
 	object.addNumber(doc, key: ColumnKey, value: stop.column as JsonFloat)
 	object.addString(doc, key: OffsetKey, value: hexWord(stop.offset))
+	object.addNumber(doc, key: MachineKey, value: stop.machine as JsonFloat)
+	addThreadId(object, doc: doc, key: ThreadKey, thread: stop.thread)
 	addListOrAbsence(object, doc: doc, key: SourceKey, node: sourceArray(doc, lines: stop.source), present: stop.source.count() > 0, reason: NoSourceReason)
 	addListOrAbsence(object, doc: doc, key: BacktraceKey, node: frameArray(doc, frames: stop.frames), present: stop.frames.count() > 0, reason: NoBacktraceReason)
 

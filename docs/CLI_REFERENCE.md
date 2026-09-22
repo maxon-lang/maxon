@@ -697,7 +697,8 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. `Scheduler.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
-`MAXON_DEBUGSTREAM` is set by `maxon monitor` to attach a `--debugstream` program to its ring, and
+`MAXON_DEBUGSTREAM` is set by `maxon monitor`, and by `maxon debug --trace`, to attach a `--debugstream`
+program to the ring the driver created; and
 `MAXON_DEBUG` is set by `maxon debug` to name the control segment its in-process agent attaches to. You
 do not set either yourself; a program that finds `MAXON_DEBUG` unset carries its agent dark and behaves
 exactly as it would without one.
@@ -985,7 +986,7 @@ Debugs a program interactively, and reads the `.mxdbg` sidecar back. The two sid
 and accept either the executable or the sidecar itself; the debugger forms launch the executable.
 
 ```bash
-maxon debug <exe> [--stop-timeout=<seconds>] [--target-env=NAME=VALUE]... [-- <program args>...]
+maxon debug <exe> [--trace] [--stop-timeout=<seconds>] [--target-env=NAME=VALUE]... [-- <program args>...]
 maxon debug --batch --commands=<cmd;cmd;...|@file> <exe> [same options]
 maxon debug --complete=<partial line> <exe>
 maxon debug --classify=<hex>[,<hex>...]
@@ -999,6 +1000,7 @@ maxon debug --symbolize <exe|.mxdbg> <codeOffset...>
 | `--commands=` | The commands `--batch` runs, separated by `;`, or `@<path>` to read them from a file |
 | `--complete=` | Print the completions for a partially typed debugger line, one per line, and run nothing |
 | `--classify=` | Classify raw x64 instruction bytes the way arming a breakpoint does, and run nothing |
+| `--trace` | Create the DebugStream ring the `trace` command reads, and name it to the debugged program |
 | `--stop-timeout=` | Seconds to wait for a stop, and the budget for one driver-walked step (default 10) |
 | `--target-env=` | Set a variable in the DEBUGGED program's environment; repeatable |
 | `--dump-info` | Print the sidecar, or only the sections named after the path |
@@ -1017,9 +1019,53 @@ another target, one built `--no-debug-agent` (reported as no agent having attach
 sidecar describes a different build.
 
 **Commands**, with their aliases: `break` (`b`) · `clear` · `run` (`r`) · `continue` (`c`) · `step` (`s`) ·
-`next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `help`
-(`?`, `commands`) · `quit` (`q`, `exit`). `threads`, `gt-backtrace`, `gt`, `gt-park`, `gt-resume` and
-`trace` are answered with an error saying they arrive with green-thread support.
+`next` (`n`) · `finish` · `until` (`u`) · `backtrace` (`bt`, `where`) · `print` (`p`) · `locals` · `pause` ·
+`threads` · `gt-backtrace` · `gt` · `gt-park` · `gt-resume` · `trace` · `help` (`?`, `commands`) ·
+`quit` (`q`, `exit`).
+
+`break <target> if <local> <op> <literal>` arms a conditional breakpoint the agent evaluates itself, so a
+hit that does not satisfy it is resumed without a stop; a condition over a float, a `String`, a field path,
+a constant or a local the breakpoint's pc has no record for is refused `condition-unsupported` and the
+breakpoint is NOT armed, and a literal that does not parse is `condition-invalid`.
+
+`pause` interrupts a program that stops on nothing and publishes a `pause` stop. `threads` lists the
+program's green threads, `gt-backtrace <id>` walks one, `gt <id>` selects the thread that `print`,
+`locals` and `backtrace` answer about (`gt` alone clears it), and `gt-park <id>` / `gt-resume <id>` hold a
+thread off every machine and let it go again. Wherever an id is taken, the selectors `running`, `ready`,
+`waiting` and `held` name the lowest-numbered thread of that status instead, and `<status>:<function>`
+narrows to the threads whose entry function has that name — a batch script cannot know an id in advance.
+`trace [N]` prints the last N DebugStream events committed before the stop (20 by default), and needs
+`--trace` on the session and `--debugstream` on the build.
+
+Stepping is refused while a `gt` selection is on, a register-located local of a selected thread reads
+`unavailable: "register-of-parked-thread"`, and an id names a thread only for as long as that thread
+lives: every word that names one re-lists the roster first, and an id whose thread has ended is
+`no-such-thread`. The other
+refusals are `hold-table-full` (16 threads may be held at once), `thread-is-running` for a thread on a
+machine, `not-pausable` for a program the agent could not interrupt, and `not-running` for a word that
+needs a stop while the program is running.
+
+A `stop` carries a `reason`: `entry` before `main`, `breakpoint`, `step`, `pause`, and `trap` for an `int3`
+the agent did not plant — a stop like any other, with a register file and a stack to walk, which
+`continue` resumes past instead of the program dying on a breakpoint nobody owns. It also carries the
+`machine` (the OS thread id that took it) and, when a green thread was running, its `thread` id.
+
+**Every stop stops the whole program.** The agent suspends every other machine before it publishes a word
+of the stop and resumes them all on `continue` or a step, so the roster, a parked thread's stack and the
+memory a `print` reads are one consistent picture. A stop of a program whose threads are all idle — a
+`pause` with nothing running user code — reports no pc: `threads` and `gt-backtrace` answer as usual,
+while a walk of the stopping thread has nothing to describe.
+
+Two costs are worth knowing. A held thread is refused each time a machine reaches it, and that machine
+pauses and looks again, so a hold is a polite spin rather than a parked thread. And a `pause` asks the
+running threads to yield at their next safe point rather than stopping them where they stand, so a
+program that reaches none within the attempt budget answers `not-pausable`.
+
+**The running state.** A `run`, `continue` or step that reaches `--stop-timeout=` answers `timeout` and
+LEAVES THE PROGRAM RUNNING. In that state `break`, `clear`, `pause`, `threads`, `gt-park` and `gt-resume`
+are serviced live by the agent's own service thread and `continue` waits again; `backtrace`, `print`,
+`locals` and the steps answer an error until something stops. The session's exit code is still 1 once
+anything has timed out, and the program is reaped when the session closes.
 
 A break target is `file.maxon:LINE`, a bare `LINE` in the file that declares `main`, or a function name
 resolved exact → `Type.method` → leaf name → word prefix. More than one match is reported as an
@@ -1035,18 +1081,21 @@ stack.
 ```text
 $ maxon debug --batch --commands="break app.maxon:12;run;locals;next;backtrace;continue" app.exe
 {"event":"breakpoint","action":"set","function":"work","file":"app.maxon","line":12,"offset":"0x7a"}
-{"event":"stop","reason":"breakpoint","function":"work","file":"app.maxon","line":12,"col":9,"offset":"0x7a","source":[…],"backtrace":[…]}
+{"event":"stop","reason":"breakpoint","function":"work","file":"app.maxon","line":12,"col":9,"offset":"0x7a","machine":5312,"thread":1,"source":[…],"backtrace":[…]}
 {"event":"locals","function":"work","locals":[{"name":"total","type":"Amount","kind":"int","display":"42"}]}
-{"event":"stop","reason":"step","function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e","source":[…],"backtrace":[…]}
+{"event":"stop","reason":"step","function":"work","file":"app.maxon","line":13,"col":3,"offset":"0x7e","machine":5312,"thread":1,"source":[…],"backtrace":[…]}
 {"event":"backtrace","frames":[{"frame":0,"function":"work","file":"app.maxon","line":13,"offset":"0x7e"}]}
 {"event":"exit","code":0}
 ```
 
 **In `--batch`** stdout is pure JSON, one object per line, and the debugged program's own stdout and
 stderr both go to this driver's stderr. The events are `breakpoint`, `stop`, `backtrace`, `locals`,
-`value`, `exit`, `crash`, `timeout` and `error`; a list that cannot be produced is `null` beside a
+`value`, `threads`, `gt-backtrace`, `gt-select`, `gt-park`, `gt-resume`, `trace`, `exit`, `crash`,
+`timeout` and `error`; a list that cannot be produced is `null` beside a
 `<name>Unavailable` reason rather than an empty array, and a value that cannot be read carries
-`unavailable` with one of `optimized-out`, `not-live-here`, `read-failed` or `layout-not-described`.
+`unavailable` with one of `optimized-out`, `not-live-here`, `read-failed` or `layout-not-described`. A
+`trace` event carries `since`, the previous stop's position in the ring, and leaves it out when there was
+no previous stop.
 The driver exits 0 when the session completed — the program's own exit code is DATA in the `exit` event —
 and 1 on a timeout, an unacknowledged command, a refused session or a crash. A command issued after the
 program has ended is an `error` and does not change that verdict.

@@ -1,0 +1,223 @@
+let DebugRunningThreadStatus = "running"
+let DebugReadyThreadStatus = "ready"
+let DebugWaitingThreadStatus = "waiting"
+let DebugHeldThreadStatus = "held"
+
+export let DebugNoSuchThreadReason = "no-such-thread"
+
+let SelectorFunctionSeparator = ":"
+let UnknownThreadStatus = "unknown"
+
+export type DebugGreenThread
+	export let handle as DebugAddress
+	export let status as DebugAddress
+	export let entryPc as DebugAddress
+	export let savedSp as DebugAddress
+	export let savedFp as DebugAddress
+	export let parkKind as DebugAddress
+	export let machine as DebugAddress
+
+	export static function create(handle DebugAddress, status DebugAddress, entryPc DebugAddress, savedSp DebugAddress, savedFp DebugAddress, parkKind DebugAddress, machine DebugAddress) returns DebugGreenThread
+		return Self{handle: handle, status: status, entryPc: entryPc, savedSp: savedSp, savedFp: savedFp, parkKind: parkKind, machine: machine}
+	end 'create'
+end 'DebugGreenThread'
+
+export typealias DebugGreenThreadArray = Array with DebugGreenThread
+
+type DebugThreadIdentity
+	export let handle as DebugAddress
+	export let entryPc as DebugAddress
+	export let id as DebugThreadId
+
+	static function create(handle DebugAddress, entryPc DebugAddress, id DebugThreadId) returns DebugThreadIdentity
+		return Self{handle: handle, entryPc: entryPc, id: id}
+	end 'create'
+end 'DebugThreadIdentity'
+
+typealias DebugThreadIdentityArray = Array with DebugThreadIdentity
+
+export type DebugThreadTable
+	var identities as DebugThreadIdentityArray
+	var rows as DebugThreadRowArray
+
+	var truncated as bool
+	var nextId as DebugThreadId
+
+	export static function create() returns DebugThreadTable
+		return Self{identities: DebugThreadIdentityArray.create(), rows: DebugThreadRowArray.create(), truncated: false, nextId: 1}
+	end 'create'
+
+	export function refresh(records DebugGreenThreadArray, wasTruncated bool, symbols DebugSymbols, textBase DebugAddress)
+		var listed = DebugThreadRowArray.create()
+		self.identities = self.identitiesOutliving(records, wasTruncated: wasTruncated)
+
+		for record in records 'eachRecord'
+			listed.push(rowFor(self.identityFor(record.handle, entryPc: record.entryPc).id, record: record, symbols: symbols, textBase: textBase))
+		end 'eachRecord'
+
+		self.rows = listed
+		self.truncated = wasTruncated
+	end 'refresh'
+
+	function identitiesOutliving(records DebugGreenThreadArray, wasTruncated bool) returns DebugThreadIdentityArray
+		var carried = DebugThreadIdentityArray.create()
+
+		for identity in self.identities 'eachIdentity'
+			if identityOutlives(identity, records: records, wasTruncated: wasTruncated) 'stillItsOwnThread'
+				carried.push(identity)
+			end 'stillItsOwnThread'
+		end 'eachIdentity'
+
+		return carried
+	end 'identitiesOutliving'
+
+	export function forgetTheListing()
+		self.rows = DebugThreadRowArray.create()
+		self.truncated = false
+	end 'forgetTheListing'
+
+	export function roster() returns DebugThreadRoster
+		return DebugThreadRoster.listed(self.rows, truncated: self.truncated)
+	end 'roster'
+
+	export function idOfHandle(handle DebugAddress) returns DebugThreadRef
+		for row in self.rows 'eachRow'
+			if row.handle == handle 'thisOne'
+				return DebugThreadRef.id(row.id)
+			end 'thisOne'
+		end 'eachRow'
+
+		return DebugThreadRef.none
+	end 'idOfHandle'
+
+	export function handleOfId(id DebugThreadId) returns DebugHandleLookup
+		for row in self.rows 'eachRow'
+			if row.id == id 'thisOne'
+				return DebugHandleLookup.at(row.handle)
+			end 'thisOne'
+		end 'eachRow'
+
+		return DebugHandleLookup.none
+	end 'handleOfId'
+
+	export function resolve(spelling String) returns DebugThreadRef
+		let trimmed = spelling.trim()
+
+		match parseDigits(trimmed, skipping: 0, base: DecimalBase) 'aNumber'
+			invalid then break 'aNumber'
+			valid(number) then return self.rowWithId(number as DebugAddress)
+		end 'aNumber'
+
+		let pieces = trimmed.split(SelectorFunctionSeparator)
+		let status = try pieces.get(0) otherwise trimmed
+		let functionName = try pieces.get(1) otherwise ""
+
+		return self.lowestMatching(status, functionName: functionName)
+	end 'resolve'
+
+	function rowWithId(number DebugAddress) returns DebugThreadRef
+		for row in self.rows 'eachRow'
+			if (row.id as DebugAddress) == number 'thisOne'
+				return DebugThreadRef.id(row.id)
+			end 'thisOne'
+		end 'eachRow'
+
+		return DebugThreadRef.none
+	end 'rowWithId'
+
+	function lowestMatching(status String, functionName String) returns DebugThreadRef
+		var found = DebugThreadRef.none
+
+		for row in self.rows 'eachRow'
+			if row.status != status 'anotherStatus'
+				continue
+			end 'anotherStatus'
+
+			if not functionName.isEmpty() and row.functionName != functionName 'anotherFunction'
+				continue
+			end 'anotherFunction'
+
+			found = lowerOf(found, candidate: row.id)
+		end 'eachRow'
+
+		return found
+	end 'lowestMatching'
+
+	function identityFor(handle DebugAddress, entryPc DebugAddress) returns DebugThreadIdentity
+		for identity in self.identities 'eachIdentity'
+			if identity.handle == handle and identity.entryPc == entryPc 'thisLife'
+				return identity
+			end 'thisLife'
+		end 'eachIdentity'
+
+		let minted = DebugThreadIdentity.create(handle, entryPc: entryPc, id: self.nextId)
+		self.nextId = self.nextId + 1
+		self.identities.push(minted)
+
+		return minted
+	end 'identityFor'
+end 'DebugThreadTable'
+
+export union DebugHandleLookup
+	none
+	at(handle DebugAddress)
+end 'DebugHandleLookup'
+
+function debugThreadStatusName(status DebugAddress) returns String
+	if status == DbgGtStatusRunning 'onAMachine'
+		return DebugRunningThreadStatus
+	end 'onAMachine'
+
+	if status == DbgGtStatusReady 'queued'
+		return DebugReadyThreadStatus
+	end 'queued'
+
+	if status == DbgGtStatusWaiting 'parked'
+		return DebugWaitingThreadStatus
+	end 'parked'
+
+	return DebugHeldThreadStatus if status == DbgGtStatusHeld else UnknownThreadStatus
+end 'debugThreadStatusName'
+
+// A life is approximated by absence, because the agent publishes no epoch: an id survives a listing that
+// did not disprove it, and is dropped when its handle comes back carrying a different entry function. Two
+// lives that share a handle and an entry function are therefore one id — the known limit of these ids.
+function identityOutlives(identity DebugThreadIdentity, records DebugGreenThreadArray, wasTruncated bool) returns bool
+	var handleWasListed = false
+
+	for record in records 'eachRecord'
+		if record.handle != identity.handle 'anotherRecord'
+			continue
+		end 'anotherRecord'
+
+		if record.entryPc == identity.entryPc 'thisVeryLife'
+			return true
+		end 'thisVeryLife'
+
+		handleWasListed = true
+	end 'eachRecord'
+
+	return false if handleWasListed else wasTruncated
+end 'identityOutlives'
+
+function lowerOf(found DebugThreadRef, candidate DebugThreadId) returns DebugThreadRef
+	match found 'soFar'
+		none then return DebugThreadRef.id(candidate)
+		id(held) then return DebugThreadRef.id(candidate) if candidate < held else found
+	end 'soFar'
+end 'lowerOf'
+
+function rowFor(id DebugThreadId, record DebugGreenThread, symbols DebugSymbols, textBase DebugAddress) returns DebugThreadRow
+	let status = debugThreadStatusName(record.status)
+
+	if record.entryPc < textBase 'noEntryInThisImage'
+		return DebugThreadRow.create(id, status: status, functionName: "", file: "", line: 0, handle: record.handle)
+	end 'noEntryInThisImage'
+
+	let offset = record.entryPc - textBase
+
+	match symbols.sourcePositionAt(offset) 'positioned'
+		none then return DebugThreadRow.create(id, status: status, functionName: symbols.functionNameAt(offset), file: "", line: 0, handle: record.handle)
+		found(row) then return DebugThreadRow.create(id, status: status, functionName: symbols.functionNameAt(offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, handle: record.handle)
+	end 'positioned'
+end 'rowFor'

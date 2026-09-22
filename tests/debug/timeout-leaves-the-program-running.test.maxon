@@ -1,0 +1,31 @@
+let TimeoutLeavesRunningCaseLabel = "timeout-leaves-the-program-running"
+
+let OneSecond = 1
+let TimedOutSessionExitCode = 1
+
+test 'a timed-out run leaves the program running, and the session close still reaps it'
+	let staged = builtFixture(TimeoutLeavesRunningCaseLabel, fixture: SpinFixtureName)
+	let oneSecondStopTimeout = "{DebugStopTimeoutOptionPrefix}{OneSecond}"
+	let commands = debugCommandLine([RunCommand, PauseCommand, QuitCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [oneSecondStopTimeout])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 1, message: "the `{RunCommand}` must answer one `{TimeoutEventName}` over a program that never stops and never ends. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a timeout is not an exit — a session that gave up waiting must not claim the program ended. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count() as AssertedInt, expected: 1, message: "⭐⭐ THE PROOF THAT THE TIMEOUT DID NOT KILL ANYTHING. A `{PauseCommand}` answered AFTER a `{TimeoutEventName}` is a live agent in a live process: the session is in its running state, where the mailbox is serviced, and `{ContinueCommand}` would re-wait. A dead debuggee answers nothing at all. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: PauseStopReason, message: "the stop after the timeout is the pause that was asked for. {said}")
+	try Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "a session that timed out at any point is a failed one. {said}")
+
+	var reaped = true
+
+	try File.delete(builtExecutable(staged)) otherwise 'stillHeld'
+		reaped = false
+	end 'stillHeld'
+
+	try Expect.isTrue(reaped, message: "⛔ LEAVING THE PROGRAM RUNNING IS FOR THE LENGTH OF THE SESSION, NOT PAST IT. The debuggee's image could not be deleted after the driver exited, so a process still holds it: a program the session left running on purpose was then never reaped when the session closed. {said}")
+end 'a timed-out run leaves the program running, and the session close still reaps it'

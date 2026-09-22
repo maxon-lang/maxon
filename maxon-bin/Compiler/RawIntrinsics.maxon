@@ -68,6 +68,12 @@ let RawDbgAttachSegmentName = b"__Raw.dbgAttachSegment"
 let RawDbgCtlAddrName = b"__Raw.dbgCtlAddr"
 let RawDbgTextBaseName = b"__Raw.dbgTextBase"
 let RawDbgTextLimitName = b"__Raw.dbgTextLimit"
+let RawDbgServiceEntryAddrName = b"__Raw.dbgServiceEntryAddr"
+let RawOsThreadCreateName = b"__Raw.osThreadCreate"
+let RawSchedTlsTebOffsetAddrName = b"__Raw.schedTlsTebOffsetAddr"
+let RawSchedAllMachinesAddrName = b"__Raw.schedAllMachinesAddr"
+let RawSchedPreemptExtLockAddrName = b"__Raw.schedPreemptExtLockAddr"
+let RawSchedLockAddrName = b"__Raw.schedLockAddr"
 let RawOwnFrameName = b"__Raw.ownFrame"
 let RawSplicedAtEverySiteName = b"__Raw.splicedAtEverySite"
 
@@ -194,6 +200,12 @@ export enum RawIntrinsic
 	dbgCtlAddr
 	dbgTextBase
 	dbgTextLimit
+	dbgServiceEntryAddr
+	osThreadCreate
+	schedTlsTebOffsetAddr
+	schedAllMachinesAddr
+	schedPreemptExtLockAddr
+	schedLockAddr
 
 	// ⭐⭐ **THE ONE ROW THAT IS A DIRECTIVE RATHER THAN AN OPERATION.** It emits no instruction; it states
 	// that the enclosing function's FRAME is its product, so nothing may splice the body away. A runtime
@@ -426,6 +438,30 @@ function rawIntrinsicLookupOf(callee ByteArray) returns RawIntrinsicLookup
 		return RawIntrinsicLookup.found(RawIntrinsic.dbgTextLimit)
 	end 'dbgTextLimit'
 
+	if callee.equals(RawDbgServiceEntryAddrName) 'dbgServiceEntryAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.dbgServiceEntryAddr)
+	end 'dbgServiceEntryAddr'
+
+	if callee.equals(RawOsThreadCreateName) 'osThreadCreate'
+		return RawIntrinsicLookup.found(RawIntrinsic.osThreadCreate)
+	end 'osThreadCreate'
+
+	if callee.equals(RawSchedTlsTebOffsetAddrName) 'schedTlsTebOffsetAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.schedTlsTebOffsetAddr)
+	end 'schedTlsTebOffsetAddr'
+
+	if callee.equals(RawSchedAllMachinesAddrName) 'schedAllMachinesAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.schedAllMachinesAddr)
+	end 'schedAllMachinesAddr'
+
+	if callee.equals(RawSchedPreemptExtLockAddrName) 'schedPreemptExtLockAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.schedPreemptExtLockAddr)
+	end 'schedPreemptExtLockAddr'
+
+	if callee.equals(RawSchedLockAddrName) 'schedLockAddr'
+		return RawIntrinsicLookup.found(RawIntrinsic.schedLockAddr)
+	end 'schedLockAddr'
+
 	if callee.equals(RawOwnFrameName) 'ownFrame'
 		return RawIntrinsicLookup.found(RawIntrinsic.ownFrame)
 	end 'ownFrame'
@@ -500,6 +536,12 @@ export function rawIntrinsicCalleeName(intrinsic RawIntrinsic) returns ByteArray
 		dbgCtlAddr gives RawDbgCtlAddrName
 		dbgTextBase gives RawDbgTextBaseName
 		dbgTextLimit gives RawDbgTextLimitName
+		dbgServiceEntryAddr gives RawDbgServiceEntryAddrName
+		osThreadCreate gives RawOsThreadCreateName
+		schedTlsTebOffsetAddr gives RawSchedTlsTebOffsetAddrName
+		schedAllMachinesAddr gives RawSchedAllMachinesAddrName
+		schedPreemptExtLockAddr gives RawSchedPreemptExtLockAddrName
+		schedLockAddr gives RawSchedLockAddrName
 		ownFrame gives RawOwnFrameName
 		splicedAtEverySite gives RawSplicedAtEverySiteName
 	end 'name'
@@ -544,9 +586,15 @@ export function rawArgShapeOf(intrinsic RawIntrinsic) returns RawArgShape
 		osDebugHost gives RawArgShape.constantThenFourWords
 		dbgEnvironmentValue gives RawArgShape.threeWords
 		dbgAttachSegment gives RawArgShape.fourWords
+		osThreadCreate gives RawArgShape.twoWords
 		dbgCtlAddr or
 			dbgTextBase or
 			dbgTextLimit or
+			dbgServiceEntryAddr or
+			schedTlsTebOffsetAddr or
+			schedAllMachinesAddr or
+			schedPreemptExtLockAddr or
+			schedLockAddr or
 			ownFrame or
 			splicedAtEverySite gives RawArgShape.nothing
 	end 'shape'
@@ -585,7 +633,13 @@ export function rawResultKindOf(intrinsic RawIntrinsic) returns RawResultKind
 			dbgAttachSegment or
 			dbgCtlAddr or
 			dbgTextBase or
-			dbgTextLimit gives RawResultKind.machineWord
+			dbgTextLimit or
+			dbgServiceEntryAddr or
+			osThreadCreate or
+			schedTlsTebOffsetAddr or
+			schedAllMachinesAddr or
+			schedPreemptExtLockAddr or
+			schedLockAddr gives RawResultKind.machineWord
 		storeWord or
 			storeByte or
 			memFill or
@@ -698,6 +752,7 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 		tlsSlotLoad gives RawHostFacility.required(HostFacility.threadLocalSlot)
 		osDebugHost gives RawHostFacility.required(HostFacility.debugAgent)
 		dbgEnvironmentValue gives RawHostFacility.required(HostFacility.debugAgent)
+		osThreadCreate gives RawHostFacility.required(HostFacility.debugAgent)
 		dbgAttachSegment gives RawHostFacility.required(HostFacility.sharedMemory)
 		scratch or
 			schedNumProcsAddr or
@@ -713,6 +768,11 @@ export function rawHostFacilityOf(intrinsic RawIntrinsic) returns RawHostFacilit
 			dbgCtlAddr or
 			dbgTextBase or
 			dbgTextLimit or
+			dbgServiceEntryAddr or
+			schedTlsTebOffsetAddr or
+			schedAllMachinesAddr or
+			schedPreemptExtLockAddr or
+			schedLockAddr or
 			loadWord or
 			storeWord or
 			loadByte or

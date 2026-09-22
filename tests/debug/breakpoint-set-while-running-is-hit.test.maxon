@@ -1,0 +1,34 @@
+let BreakWhileRunningCaseLabel = "breakpoint-set-while-running-is-hit"
+
+let AnchorName = "tick-body"
+let TickFunctionName = "tick"
+let OneSecond = 1
+let TimedOutSessionExitCode = 1
+
+test 'a breakpoint armed while the program is running is placed, and the next continue stops on it'
+	let staged = builtFixture(BreakWhileRunningCaseLabel, fixture: LiveSpinFixtureName)
+	let tickLine = anchorLine(staged, anchor: AnchorName)
+	let oneSecondStopTimeout = "{DebugStopTimeoutOptionPrefix}{OneSecond}"
+	let commands = debugCommandLine([RunCommand, "{BreakCommand} {lineTarget(tickLine)}", ContinueCommand, QuitCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [oneSecondStopTimeout])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	try Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, than: 1, message: "the `{RunCommand}` with nothing armed must answer a `{TimeoutEventName}` and leave the program running — that running program is what this case then arms a breakpoint into. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armings = eventsOfKind(events, kind: BreakpointEventName)
+	try Expect.equal(armings.count() as AssertedInt, expected: 1, message: "`{BreakCommand}` after a timeout printed no `{BreakpointEventName}` event. {said}")
+
+	let armed = eventAt(armings, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "⭐⭐ NOTHING IS PARKED, SO NOTHING IS POLLING THE MAILBOX OUT OF A PARK LOOP. A `{BreakCommand}` here is serviced by the agent's own service thread while the program's machines keep running, and it must report `{SetAction}` — a driver that answered anything else is one that can only be spoken to at a stop. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "⛔ AN ACKNOWLEDGED WRITE IS NOT A PLACED BREAKPOINT. The loop reaches the anchored line again within its own sleep interval, so a breakpoint written into running code must be HIT. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: TickFunctionName, message: "the stop does not name the function the anchored line is in. {said}")
+	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: tickLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	try Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop must be reported as a `{BreakpointStopReason}`. {said}")
+	try Expect.equal(eventsOfKind(events, kind: CrashEventName).count() as AssertedInt, expected: 0, message: "⛔ THE BYTE IS WRITTEN INTO CODE A MACHINE IS EXECUTING. A program that faulted is one whose instruction stream was cut in the middle. {said}")
+	try Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "the first `{RunCommand}` timed out, so the session is a failed one however well the rest of it went. {said}")
+end 'a breakpoint armed while the program is running is placed, and the next continue stops on it'

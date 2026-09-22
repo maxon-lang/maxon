@@ -64,7 +64,7 @@ let UnionTagBytes = 8 as DebugByteWidth
 
 let MinimumPlausibleHeapAddress = 0x10000 as DebugWord
 
-export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress) returns DebugValueTree
+export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
 	var tree = DebugValueTree.create()
 	var named = DebugNameSet.create()
 	let locals = symbols.localsAt(offset)
@@ -75,13 +75,13 @@ export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset De
 		end 'alreadyListed'
 
 		named.insert(local.name)
-		tree.roots.push(renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: local.name))
+		tree.roots.push(renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: local.name, registers: registers))
 	end 'eachLocal'
 
 	return tree
 end 'renderLocals'
 
-export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress, path String) returns DebugValueAnswer
+export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, framePointer DebugAddress, path String, registers DebugRegisterAccess) returns DebugValueAnswer
 	let pieces = path.trim().split(MemberSeparator)
 	let head = try pieces.get(0) otherwise return DebugValueAnswer.unknownName(path)
 
@@ -94,7 +94,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 	end 'known'
 
 	var tree = DebugValueTree.create()
-	var current = renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: head)
+	var current = renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: head, registers: registers)
 
 	for (iter, member) in pieces.withIterator() 'eachMember'
 		if iter.index() == 0 'theLocalItself'
@@ -123,20 +123,27 @@ function childNamed(tree DebugValueTree, parent DebugValueIndex, name String) re
 	return DebugChildLookup.none
 end 'childNamed'
 
-function renderNamedLocal(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, locals DebugLocalArray, offset DebugAddress, framePointer DebugAddress, name String) returns DebugValueIndex
+function renderNamedLocal(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, locals DebugLocalArray, offset DebugAddress, framePointer DebugAddress, name String, registers DebugRegisterAccess) returns DebugValueIndex
 	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
 		undeclared then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
 		notLiveHere then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
-		live(local) then return renderLocalRecord(tree, memory: memory, symbols: symbols, local: local, framePointer: framePointer, name: name)
+		live(local) then return renderLocalRecord(tree, memory: memory, symbols: symbols, local: local, framePointer: framePointer, name: name, registers: registers)
 	end 'known'
 end 'renderNamedLocal'
 
-function renderLocalRecord(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, local MxdbgLocalInfo, framePointer DebugAddress, name String) returns DebugValueIndex
+function renderLocalRecord(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, local MxdbgLocalInfo, framePointer DebugAddress, name String, registers DebugRegisterAccess) returns DebugValueIndex
 	let typeName = symbols.typeNameOf(local.typeId)
 
 	if local.locKind == MxdbgLocKindOptimizedOut 'nowhere'
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: "", reason: DebugOptimizedOutReason))
 	end 'nowhere'
+
+	if local.locKind == MxdbgLocKindRegister 'aRegister'
+		match registers 'available'
+			readable then break 'available'
+			unavailable(reason) then return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: "", reason: reason))
+		end 'available'
+	end 'aRegister'
 
 	if not symbols.typeIsDescribed(local.typeId) 'noLayout'
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: "", reason: DebugLayoutNotDescribedReason))

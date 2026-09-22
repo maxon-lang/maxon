@@ -1,0 +1,57 @@
+let CondIntEqualsCaseLabel = "cond-int-equals"
+
+let AnchorName = "hit-body"
+let HitFunctionName = "hit"
+let CountedLinePrefix = "hit "
+let LoopLocalName = "i"
+let ChosenIteration = "7"
+let ConditionText = "i == 7"
+let ContinuesPastEveryHit = 60
+
+test 'a breakpoint carrying an integer condition stops on the one iteration that satisfies it'
+	let staged = builtFixture(CondIntEqualsCaseLabel, fixture: ConditionFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
+
+	try Expect.atLeast(iterations as AssertedInt, than: 2, message: "the fixture must run the anchored line more than once, or a condition that fires on one iteration says nothing. It ran it {iterations} times.")
+
+	var armings = StringArray.create()
+	armings.push(conditionalBreak(lineTarget(hitLine), condition: ConditionText))
+	armings.push(RunCommand)
+	armings.push("{PrintCommand} {LoopLocalName}")
+
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let armings = eventsOfKind(events, kind: BreakpointEventName)
+	try Expect.equal(armings.count() as AssertedInt, expected: 1, message: "`{conditionalBreak(lineTarget(hitLine), condition: ConditionText)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(armings, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "an integer local compared against a literal is a condition the agent can evaluate, so the breakpoint must be ARMED. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the condition holds on one of the {iterations} iterations, so the session must stop. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.lessThan(stops.count() as AssertedInt, than: iterations as AssertedInt, message: "⭐ THE WHOLE CLAIM: the line runs {iterations} times and the condition holds on ONE of them, so the trap is taken {iterations} times and resumed silently on all but that one. A condition evaluated in the DRIVER rather than in the agent publishes every hit and swallows the ones it does not want — which is the same picture to a reader and a different program. It stopped {stops.count()} times. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: HitFunctionName, message: "the stop does not name the function the anchored line is in. {said}")
+	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: hitLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	try Expect.equal(stopsAtLine(events, line: hitLine) as AssertedInt, expected: stops.count() as AssertedInt, message: "every stop of this session must be on the anchored line; anything else is a breakpoint somewhere the case did not ask for. {said}")
+
+	let printed = eventsOfKind(events, kind: ValueEventName)
+	try Expect.equal(printed.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {LoopLocalName}` at the stop printed no `{ValueEventName}` event. {said}")
+
+	let value = eventAt(printed, index: 0)
+	let read = memberOf(value, node: value.root, key: ValueKey)
+	try Expect.equal(read.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
+	try Expect.equal(textOf(value, node: nodeAt(read, index: 0), key: DisplayKey), expected: ChosenIteration, message: "the stop is on the iteration the condition names, so the local it was written against must read {ChosenIteration} there. A condition that fired on the wrong iteration is the one wrong answer that looks exactly like a right one. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the conditionally debugged program answered a different exit code than the same program run with nothing attached. {said}")
+end 'a breakpoint carrying an integer condition stops on the one iteration that satisfies it'

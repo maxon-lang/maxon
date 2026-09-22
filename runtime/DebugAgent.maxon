@@ -51,8 +51,32 @@ let DbgOffBtFrames = 0x390
 let DbgOffReadLen = 0x790
 let DbgOffReadStatus = 0x798
 let DbgOffReadBuf = 0x7A0
+
+let DbgOffConditionRecord = 0x9A0
+let DbgCondRecOffKind = 0
+let DbgCondRecOffOperand = 8
+let DbgCondRecOffWidth = 16
+let DbgCondRecOffSigned = 24
+let DbgCondRecOffOp = 32
+let DbgCondRecOffLiteral = 40
+
+let DbgOffGtCount = 0x9E0
+let DbgOffGtTruncated = 0x9E8
+
+let DbgOffGtRecords = 0xA00
+let DbgGtRecordStride = 64
+let DbgGtRecordCapacity = 80
+let DbgGtRecOffHandle = 0
+let DbgGtRecOffStatus = 8
+let DbgGtRecOffEntryPc = 16
+let DbgGtRecOffSavedSp = 24
+let DbgGtRecOffSavedFp = 32
+let DbgGtRecOffParkKind = 40
+let DbgGtRecOffMachine = 48
+
 let DbgOffAgentPrivate = 0x1FF8
 
+let DbgRegisterSlots = 80
 let DbgMaxBacktraceFrames = 64
 let DbgBacktraceFrameWords = 2
 let DbgMaxReadLength = 512
@@ -66,6 +90,13 @@ let DbgCmdContinue = 3
 let DbgCmdBacktrace = 4
 let DbgCmdReadMemory = 5
 let DbgCmdStepInstruction = 6
+let DbgCmdSetCondition = 7
+let DbgCmdClearCondition = 8
+let DbgCmdGtList = 9
+let DbgCmdGtBacktrace = 10
+let DbgCmdGtHold = 11
+let DbgCmdGtRelease = 12
+let DbgCmdPause = 13
 
 let DbgCmdResultDone = 1
 let DbgCmdResultRefused = 0
@@ -73,6 +104,29 @@ let DbgCmdResultRefused = 0
 let DbgStopReasonEntry = 1
 let DbgStopReasonBreakpoint = 2
 let DbgStopReasonStep = 3
+let DbgStopReasonPause = 4
+let DbgStopReasonTrap = 5
+
+let DbgStopKindRunning = 0
+let DbgStopKindNoThread = 1
+let DbgStopKindThread = 2
+
+let DbgGtStatusRunning = 1
+let DbgGtStatusReady = 2
+let DbgGtStatusWaiting = 3
+let DbgGtStatusHeld = 5
+
+let DbgCondKindRegister = 1
+let DbgCondKindStackSlot = 2
+
+let DbgCondOpEqual = 1
+let DbgCondOpNotEqual = 2
+let DbgCondOpLess = 3
+let DbgCondOpLessOrEqual = 4
+let DbgCondOpGreater = 5
+let DbgCondOpGreaterOrEqual = 6
+
+let DbgCondSignedYes = 1
 
 let DbgRefusalOutOfText = 1
 let DbgRefusalInsideRuntimeSymbol = 2
@@ -81,6 +135,11 @@ let DbgRefusalTableFull = 4
 let DbgRefusalNoSuchBreakpoint = 5
 let DbgRefusalUnknownCommand = 6
 let DbgRefusalNotStopped = 7
+let DbgRefusalNoSuchThread = 8
+let DbgRefusalHoldTableFull = 9
+let DbgRefusalThreadIsRunning = 10
+let DbgRefusalNotRunning = 11
+let DbgRefusalNotPausable = 12
 
 let DbgClassPlain = 1
 let DbgClassPcRelativeData = 2
@@ -98,6 +157,7 @@ let DbgSlotBytes = 32
 
 let DbgOrphanedExitCode = 97
 let DbgParkPollIntervalMs = 5
+let DbgPauseAttemptLimit = 200
 
 let DbgVerbInstallTrapHandler = 1
 let DbgVerbProtectPages = 2
@@ -108,6 +168,13 @@ let DbgVerbProcessId = 6
 let DbgVerbAllocExecPages = 7
 let DbgVerbOpenDriverProcess = 8
 let DbgVerbDriverExited = 9
+let DbgVerbCurrentThreadId = 11
+let DbgVerbOpenThread = 12
+let DbgVerbSuspendThread = 13
+let DbgVerbResumeThread = 14
+let DbgVerbReadThreadContext = 15
+let DbgVerbWriteThreadContext = 16
+let DbgVerbPreemptSafe = 17
 
 let DbgWaitSignalled = 0
 
@@ -116,11 +183,32 @@ let DbgPrivOffAgentSp = 0x010
 let DbgPrivOffSlotPoolBase = 0x018
 let DbgPrivOffResumeAction = 0x020
 let DbgPrivOffDriverHandle = 0x028
-let DbgPrivOffBreakpoints = 0x400
-let DbgPrivBreakpointStride = 48
+let DbgPrivOffServiceThread = 0x030
+let DbgPrivOffPauseTrampoline = 0x038
+let DbgPrivOffStopThreadId = 0x040
+let DbgPrivOffMainThreadHandle = 0x048
+let DbgPrivOffMainThreadId = 0x050
+let DbgPrivOffWorldStopped = 0x058
+let DbgPrivOffRosterCount = 0x060
+let DbgPrivOffRosterTruncated = 0x068
+let DbgPrivOffPauseAttempts = 0x070
+let DbgPrivOffSchedLockHeld = 0x078
+let DbgPrivOffHold = 0x080
+let DbgPrivOffContext = 0x280
+let DbgPrivOffHoldsPlaced = 0x7F8
+let DbgPrivOffBreakpoints = 0x800
+let DbgPrivOffGtRoster = 0x2000
+let DbgPrivBreakpointStride = 96
 let DbgPrivBytes = 0x40000
 let DbgSlotPoolBytes = 4096
 let DbgAgentShadowBytes = 32
+
+let DbgHoldCapacity = 16
+let DbgHoldSlotBytes = 32
+let DbgHoldOffHandle = 0
+let DbgHoldOffFuncPtr = 8
+let DbgHoldOffStackBase = 16
+let DbgGtRosterCapacity = 4096
 
 let DbgBpOffTextOffset = 0
 let DbgBpOffOriginalByte = 8
@@ -128,6 +216,7 @@ let DbgBpOffSlotAddr = 16
 let DbgBpOffClassWord = 24
 let DbgBpOffFixup = 32
 let DbgBpOffState = 40
+let DbgBpOffCondition = 48
 
 let DbgBpStateFree = 0
 let DbgBpStateLive = 1
@@ -142,6 +231,9 @@ let DbgCtxOffGpr0 = 0x078
 let DbgCtxOffXmm0 = 0x1A0
 let DbgCtxXmmStride = 16
 let DbgCtxOffRip = 0x0F8
+let DbgCtxOffRsp = 0x098
+let DbgCtxOffFlagsRequest = 0x030
+let DbgCtxControlRequest = 0x00100001
 let DbgCtxOffEFlagsLowByte = 0x044
 let DbgCtxOffEFlagsHighByte = 0x045
 let DbgGprCount = 16
@@ -151,6 +243,8 @@ let DbgRegRbp = 5
 let DbgRegEFlags = 32
 
 let DbgBreakpointByte = 0xCC
+let DbgReturnByte = 0xC3
+let DbgPauseTrampolineBytes = 2
 let DbgJmpIndirectOpcode = 0xFF
 let DbgJmpIndirectModRm = 0x25
 let DbgJmpAbsoluteBytes = 14
@@ -186,11 +280,48 @@ let DbgSymtabColumnBytes = 4
 let DbgSymtabEntryBytes = 8
 let DbgSymtabEntryCodeOffsetMask = 0xFFFFFFFF
 
+let DbgSuspendFailed = 0xFFFFFFFF
+
+let DbgWidthByte = 1
+let DbgWidthHalf = 2
+let DbgWidthWord32 = 4
+let DbgWidthWord64 = 8
+let DbgByteSignBit = 0x80
+let DbgByteSpan = 0x100
+let DbgHalfMask = 0xFFFF
+let DbgHalfSignBit = 0x8000
+let DbgHalfSpan = 0x10000
+let DbgDwordSignBit = 0x80000000
+let DbgDwordSpan = 0x100000000
+
+let DbgDsOffWriteCursor = 24
+
+let DbgMOffCurrentGt = 0x08
+let DbgMOffAllNext = 0x1E8
+let DbgMOffOsThreadId = 0x230
+let DbgMOffPreemptThreadHandle = 0x238
+let DbgMOffSignalPending = 0x240
+
+let DbgGtOffSp = 0x00
+let DbgGtOffFp = 0x08
+let DbgGtOffStatus = 0x10
+let DbgGtOffStackBase = 0x18
+let DbgGtOffFuncPtr = 0x40
+let DbgGtOffStackGuard = 0x50
+let DbgGtOffParkKind = 0x118
+
+let DbgGtStatusCompletedWord = 2
+let DbgGtStatusWaitingWord = 3
+let DbgGtStackGuardPreempt = -1314
+
+let DbgPreemptClaimFree = 0
+let DbgPreemptClaimHeld = 1
+
 let DbgWordBytes = 8
 let DbgNothing = 0 as MachineWord
 let DbgLockFree = 0
 let DbgLockHeld = 1
-let DbgNoBreakpoint = -1
+let DbgNotFound = -1
 let DbgByteBits = 8
 let DbgByteMask = 0xFF
 let DbgLowNibbleMask = 0xF
@@ -290,15 +421,125 @@ module function __dbg_init()
 	dbgStore(base, offset: DbgOffAgentPid, value: __Raw.osDebugHost(DbgVerbProcessId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord)
 	dbgStore(base, offset: DbgOffAgentPrivate, value: private)
 
+	let mainThreadId = __Raw.osDebugHost(DbgVerbCurrentThreadId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+	dbgStore(private, offset: DbgPrivOffMainThreadId, value: mainThreadId)
+	dbgStore(private, offset: DbgPrivOffMainThreadHandle, value: __Raw.osDebugHost(DbgVerbOpenThread, a0: mainThreadId as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord)
+
+	// An `int3; ret` pair of its own, outside the image: a pause lands the interrupted thread on a byte the
+	// trap thunk recognises, and the `ret` behind it is where the resume sends it back through the return
+	// address the injection pushed.
+	let trampoline = __Raw.osDebugHost(DbgVerbAllocExecPages, a0: DbgSlotPoolBytes as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+
+	if trampoline == 0 'noTrampoline'
+		return
+	end 'noTrampoline'
+
+	dbgStoreByte(trampoline, offset: 0, value: DbgBreakpointByte)
+	dbgStoreByte(trampoline, offset: DbgOneByte, value: DbgReturnByte)
+	dbgFlushCode(trampoline, length: DbgPauseTrampolineBytes)
+	dbgStore(private, offset: DbgPrivOffPauseTrampoline, value: trampoline)
+
 	__Raw.storeWord(__Raw.dbgCtlAddr(), offset: 0, value: base as MachineWord)
 	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbInstallTrapHandler, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+
+	dbgStore(private, offset: DbgPrivOffServiceThread, value: __Raw.osThreadCreate(__Raw.dbgServiceEntryAddr(), arg: DbgNothing) as DbgWord)
+
 	dbgStore(base, offset: DbgOffFlags, value: DbgFlagAgentAlive)
 
 	if dbgLoad(base, offset: DbgOffStopAtEntry) == DbgStopAtEntryYes 'parkBeforeMain'
+		dbgTakeStopLock(private)
+		dbgStopTheWorld(private)
 		dbgPublishStop(base, reason: DbgStopReasonEntry)
-		dbgPark(base, private: private, hasThreadContext: false)
+		dbgPark(base, private: private, stopKind: DbgStopKindNoThread)
+		dbgStartTheWorld(private)
+		dbgDropStopLock(private)
 	end 'parkBeforeMain'
 end '__dbg_init'
+
+// The agent's own OS thread: not a machine, holding no TLS slot and calling no scheduler door. It is the
+// only servicer while nothing is parked, and the stop lock the park holds excludes it, so a command is
+// answered by exactly one of the two and never by both.
+module function __dbg_service_loop() returns MachineWord
+	var running = true
+
+	while running 'poll'
+		let base = dbgControlSegment()
+
+		if base == 0 'nothingAttached'
+			running = false
+			continue
+		end 'nothingAttached'
+
+		let private = dbgPrivateBlock()
+
+		if dbgLoad(private, offset: DbgPrivOffPauseAttempts) > 0 'aPauseIsInFlight'
+			dbgAdvancePause(base, private: private)
+		end 'aPauseIsInFlight' else 'theMailbox'
+			dbgServiceMailbox(base, private: private)
+		end 'theMailbox'
+
+		if __Raw.osDebugHost(DbgVerbDriverExited, a0: dbgLoad(private, offset: DbgPrivOffDriverHandle) as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord == DbgWaitSignalled 'theDriverIsGone'
+			dbgExitOrphaned(private)
+		end 'theDriverIsGone'
+
+		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+	end 'poll'
+
+	return DbgNothing
+end '__dbg_service_loop'
+
+// A record is registered by address, never by identity: the recycle doors zero it, so a life is derived at
+// every read rather than stored here. The caller holds `__sched_lock`, and the count is published last, so
+// a reader that takes no lock sees a whole entry or none of it.
+module function __dbg_gt_carved(record MachineWord)
+	let base = dbgControlSegment()
+
+	if base == 0 'dark'
+		return
+	end 'dark'
+
+	let private = dbgPrivateBlock()
+	let count = dbgLoad(private, offset: DbgPrivOffRosterCount)
+
+	if count >= DbgGtRosterCapacity 'full'
+		dbgStore(private, offset: DbgPrivOffRosterTruncated, value: 1)
+		return
+	end 'full'
+
+	dbgStore(private + DbgPrivOffGtRoster + count * DbgWordBytes, offset: 0, value: record as DbgWord)
+	dbgStore(private, offset: DbgPrivOffRosterCount, value: count + 1)
+end '__dbg_gt_carved'
+
+// This answers; it moves nothing. The scheduler is what puts a refused candidate back — see
+// `GtRuntime.emitDebugAgentHoldGate`, which owns that rule.
+module function __dbg_gt_should_hold(gt MachineWord) returns MachineWord
+	let base = dbgControlSegment()
+
+	if base == 0 'dark'
+		return DbgNothing
+	end 'dark'
+
+	let private = dbgPrivateBlock()
+
+	if dbgLoad(private, offset: DbgPrivOffHoldsPlaced) == 0 'nothingIsHeldAtAll'
+		return DbgNothing
+	end 'nothingIsHeldAtAll'
+
+	let handle = gt as DbgWord
+	let slot = dbgHoldSlotOf(private, handle: handle)
+
+	if slot == DbgNotFound 'nobodyHoldsThisAddress'
+		return DbgNothing
+	end 'nobodyHoldsThisAddress'
+
+	let at = dbgHoldSlotAddr(private, slot: slot)
+
+	if dbgLoad(at, offset: DbgHoldOffFuncPtr) != dbgLoad(handle, offset: DbgGtOffFuncPtr) or dbgLoad(at, offset: DbgHoldOffStackBase) != dbgLoad(handle, offset: DbgGtOffStackBase) 'aDifferentLifeAtTheSameAddress'
+		return DbgNothing
+	end 'aDifferentLifeAtTheSameAddress'
+
+	return 1 as MachineWord
+end '__dbg_gt_should_hold'
 
 // The one agent-owned stack, handed out under a lock spun here over the compare-and-swap the encoder
 // already emits, so serializing two stopped machines asks nothing new of it. Trap code runs on it so
@@ -306,6 +547,17 @@ end '__dbg_init'
 // `requireDebugTrapFitsItsReserve` certifies.
 module function __dbg_claim_stack() returns MachineWord
 	let private = dbgPrivateBlock()
+	dbgTakeStopLock(private)
+	return dbgLoad(private, offset: DbgPrivOffAgentSp) as MachineWord
+end '__dbg_claim_stack'
+
+module function __dbg_release_stack()
+	dbgDropStopLock(dbgPrivateBlock())
+end '__dbg_release_stack'
+
+// The same lock the service thread takes, which is what makes the two servicers one: a parked stop holds it
+// for the whole park, so the thread's poll finds it taken and answers nothing while a machine is stopped.
+function dbgTakeStopLock(private DbgWord)
 	var claimed = false
 
 	while not claimed 'spin'
@@ -316,13 +568,167 @@ module function __dbg_claim_stack() returns MachineWord
 
 		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 	end 'spin'
+end 'dbgTakeStopLock'
 
-	return dbgLoad(private, offset: DbgPrivOffAgentSp) as MachineWord
-end '__dbg_claim_stack'
+function dbgDropStopLock(private DbgWord)
+	dbgStore(private, offset: DbgPrivOffStopLock, value: DbgLockFree)
+end 'dbgDropStopLock'
 
-module function __dbg_release_stack()
-	dbgStore(dbgPrivateBlock(), offset: DbgPrivOffStopLock, value: DbgLockFree)
-end '__dbg_release_stack'
+function dbgTryStopLock(private DbgWord) returns bool
+	return __Raw.atomicCas((private + DbgPrivOffStopLock) as MachineWord, expected: DbgLockFree as MachineWord, replacement: DbgLockHeld as MachineWord) != DbgNothing
+end 'dbgTryStopLock'
+
+function dbgCurrentThreadId() returns DbgWord
+	return __Raw.osDebugHost(DbgVerbCurrentThreadId, a0: DbgNothing, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+end 'dbgCurrentThreadId'
+
+// Zero here is the whole answer to whether there is a scheduler: the slot is laid out in every program the
+// agent ships in, and only `__sched_init_procs` ever writes it.
+function dbgTlsTebOffset() returns DbgWord
+	return __Raw.loadWord(__Raw.schedTlsTebOffsetAddr(), offset: 0) as DbgWord
+end 'dbgTlsTebOffset'
+
+function dbgCurrentMachine() returns DbgWord
+	let tebOffset = dbgTlsTebOffset()
+
+	if tebOffset == 0 'noScheduler'
+		return 0
+	end 'noScheduler'
+
+	return __Raw.tlsSlotLoad(tebOffset as MachineWord) as DbgWord
+end 'dbgCurrentMachine'
+
+function dbgAllMachines() returns DbgWord
+	if dbgTlsTebOffset() == 0 'noScheduler'
+		return 0
+	end 'noScheduler'
+
+	return __Raw.loadWord(__Raw.schedAllMachinesAddr(), offset: 0) as DbgWord
+end 'dbgAllMachines'
+
+function dbgTryTakeExtLock() returns bool
+	return __Raw.atomicCas(__Raw.schedPreemptExtLockAddr(), expected: DbgPreemptClaimFree as MachineWord, replacement: DbgPreemptClaimHeld as MachineWord) != DbgNothing
+end 'dbgTryTakeExtLock'
+
+function dbgTakeExtLock()
+	while not dbgTryTakeExtLock() 'spin'
+		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+	end 'spin'
+end 'dbgTakeExtLock'
+
+function dbgDropExtLock()
+	__Raw.storeWord(__Raw.schedPreemptExtLockAddr(), offset: 0, value: DbgPreemptClaimFree as MachineWord)
+end 'dbgDropExtLock'
+
+// Zero until `__gt_init` builds it, which is also the answer to whether a machine can be born: nothing can
+// start one before the scheduler exists.
+function dbgSchedLock() returns DbgWord
+	return __Raw.loadWord(__Raw.schedLockAddr(), offset: 0) as DbgWord
+end 'dbgSchedLock'
+
+// Holding this is what makes the machine walk complete: `__sched_startm` holds `__sched_lock` across the
+// `osThreadCreate` that births a machine, so a roster read under it cannot be overtaken by a machine that
+// does not exist yet, and the monitor — the one party that starts one during a stop — waits here instead.
+//
+// Whether the lock was entered is recorded rather than re-derived at the release. The word is 0 until
+// `__gt_init` builds the mutex, so a stop that began before the scheduler existed enters nothing; asking
+// the word again at the release would leave a mutex this thread never took.
+function dbgTakeSchedLock(private DbgWord)
+	let lock = dbgSchedLock()
+	dbgStore(private, offset: DbgPrivOffSchedLockHeld, value: 0)
+
+	if lock == 0 'noSchedulerToLock'
+		return
+	end 'noSchedulerToLock'
+
+	__Raw.osLockEnter(lock as MachineWord)
+	dbgStore(private, offset: DbgPrivOffSchedLockHeld, value: 1)
+end 'dbgTakeSchedLock'
+
+function dbgDropSchedLock(private DbgWord)
+	if dbgLoad(private, offset: DbgPrivOffSchedLockHeld) == 0 'nothingWasEntered'
+		return
+	end 'nothingWasEntered'
+
+	dbgStore(private, offset: DbgPrivOffSchedLockHeld, value: 0)
+	__Raw.osLockLeave(dbgSchedLock() as MachineWord)
+end 'dbgDropSchedLock'
+
+// The preemption window must be open before the process may end: `osExit` routes through
+// `__gt_exit_process`, which takes `__sched_preempt_ext_lock` and never gives it back, so an exit from
+// inside a stop that holds the same lock spins for ever with nothing printed.
+//
+// Only the thread that owns the stop may drop its locks. `__sched_lock` is a host mutex and leaving one
+// this thread does not hold is undefined; the service thread reaches this exit while another thread is
+// parked holding both, and must let go of neither.
+function dbgExitOrphaned(private DbgWord)
+	if dbgLoad(private, offset: DbgPrivOffWorldStopped) != 0 and dbgLoad(private, offset: DbgPrivOffStopThreadId) == dbgCurrentThreadId() 'thisThreadOwnsTheStop'
+		dbgDropSchedLock(private)
+		dbgDropExtLock()
+	end 'thisThreadOwnsTheStop'
+
+	__Raw.osExit(DbgOrphanedExitCode as MachineWord)
+end 'dbgExitOrphaned'
+
+// A stop is a stop of the program, not of a thread: every machine but this one is suspended before a word
+// of the stop is published, and both locks are held across the park, so nothing runs user code while a
+// driver reads the page and no exit or preemption can begin underneath it.
+//
+// The order is the ext lock, then `__sched_lock`, then the suspends, and nothing holds those two the other
+// way round: the ext lock's only other taker is `__gt_preempt_m`, reached from `__sysmon` through
+// `__sched_retake` with `__sched_lock` released, so there is no cycle to close.
+//
+// No suspended machine can hold `__sched_lock`, because it is taken before anyone is suspended and whoever
+// holds it then is running and will release it — no road in the scheduler blocks while holding it, and the
+// idle tail and the poller both release before they wait. The stopping thread never holds it either, since
+// a breakpoint inside a runtime symbol is refused.
+function dbgStopTheWorld(private DbgWord)
+	dbgTakeExtLock()
+	dbgTakeSchedLock(private)
+
+	let me = dbgCurrentThreadId()
+	dbgStore(private, offset: DbgPrivOffStopThreadId, value: me)
+	dbgStore(private, offset: DbgPrivOffWorldStopped, value: 1)
+
+	let context = private + DbgPrivOffContext
+	var machine = dbgAllMachines()
+
+	while machine != 0 'eachMachine'
+		let handle = dbgLoad(machine, offset: DbgMOffPreemptThreadHandle)
+
+		if handle != 0 and dbgLoad(machine, offset: DbgMOffOsThreadId) != me 'notTheStoppingThread'
+			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbSuspendThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+
+			// A suspend on this host is a request, not an event: `SuspendThread` returns as soon as the count is
+			// raised and the thread runs on until the kernel gets round to it. Reading its register file is what
+			// forces the suspension to complete, so without this read the stop is published while a machine is
+			// still running and the driver is told the program is frozen when it is not.
+			dbgStore(context, offset: DbgCtxOffFlagsRequest, value: DbgCtxControlRequest)
+			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing))
+		end 'notTheStoppingThread'
+
+		machine = dbgLoad(machine, offset: DbgMOffAllNext)
+	end 'eachMachine'
+end 'dbgStopTheWorld'
+
+function dbgStartTheWorld(private DbgWord)
+	let me = dbgLoad(private, offset: DbgPrivOffStopThreadId)
+	var machine = dbgAllMachines()
+
+	while machine != 0 'eachMachine'
+		let handle = dbgLoad(machine, offset: DbgMOffPreemptThreadHandle)
+
+		if handle != 0 and dbgLoad(machine, offset: DbgMOffOsThreadId) != me 'notTheStoppingThread'
+			dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbResumeThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+		end 'notTheStoppingThread'
+
+		machine = dbgLoad(machine, offset: DbgMOffAllNext)
+	end 'eachMachine'
+
+	dbgStore(private, offset: DbgPrivOffWorldStopped, value: 0)
+	dbgDropSchedLock(private)
+	dbgDropExtLock()
+end 'dbgStartTheWorld'
 
 module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) returns MachineWord
 	let base = dbgControlSegment()
@@ -337,16 +743,31 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 
 	// Windows hands a breakpoint trap a `CONTEXT.Rip` already backed onto the `int3` — the opposite of the
 	// POSIX convention — so the pc as delivered IS the breakpoint's address and is not adjusted here.
+	if code == DbgExcCodeBreakpoint and rip == dbgLoad(private, offset: DbgPrivOffPauseTrampoline) 'aPauseLanded'
+		return dbgPauseStop(base, private: private, context: context, trampoline: rip)
+	end 'aPauseLanded'
+
 	if code == DbgExcCodeBreakpoint 'aPlantedByte'
 		let armed = dbgFindBreakpoint(private, textOffset: rip - textBase)
 
-		if armed == DbgNoBreakpoint 'notOurs'
-			return DbgVehContinueSearch as MachineWord
-		end 'notOurs'
+		// An `int3` the agent does not own is reported, never declined. Declining hands the exception to a
+		// chain that does not want it either and the process dies of `STATUS_BREAKPOINT` with the address —
+		// the one fact worth having — printed nowhere.
+		if armed == DbgNotFound 'anInt3NobodyHereOwns'
+			return dbgTrapStop(base, private: private, context: context, rip: rip)
+		end 'anInt3NobodyHereOwns'
 
 		if not dbgBreakpointIsLive(private, index: armed) 'clearedWhileWeWereReachingThisHandler'
 			return DbgVehContinueExecution as MachineWord
 		end 'clearedWhileWeWereReachingThisHandler'
+
+		// A condition is judged before a single machine is suspended and before a word is published: a hit
+		// the driver did not ask for costs one trap and the program never notices it.
+		if not dbgConditionAllows(private, index: armed, context: context) 'notThisTime'
+			dbgCaptureRegisters(base, context: context)
+			dbgResume(base, private: private, context: context, stopPc: rip, index: armed)
+			return DbgVehContinueExecution as MachineWord
+		end 'notThisTime'
 
 		reason = DbgStopReasonBreakpoint
 	end 'aPlantedByte' else if code == DbgExcCodeSingleStep 'oneInstructionDone'
@@ -360,11 +781,13 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 	var currentReason = reason
 	var settled = false
 
+	dbgStopTheWorld(private)
+
 	while not settled 'stopAndGo'
 		dbgCaptureRegisters(base, context: context)
 		dbgStore(base, offset: DbgOffStopPc, value: pc)
 		dbgPublishStop(base, reason: currentReason)
-		dbgPark(base, private: private, hasThreadContext: true)
+		dbgPark(base, private: private, stopKind: DbgStopKindThread)
 
 		let index = dbgFindBreakpoint(private, textOffset: pc - textBase)
 
@@ -380,8 +803,60 @@ module function __dbg_on_trap(contextPtr MachineWord, excCode MachineWord) retur
 		settled = true
 	end 'stopAndGo'
 
+	dbgStartTheWorld(private)
+
 	return DbgVehContinueExecution as MachineWord
 end '__dbg_on_trap'
+
+// A pause arrives on the agent's own trampoline rather than on a byte of the program, and the injection
+// pushed the interrupted pc below the thread's stack pointer. So the reported pc is that pushed word, the
+// reported sp is the one the thread really had, and the resume goes to the `ret` behind the trap — which
+// pops the word and returns the thread to the instruction it was on.
+function dbgPauseStop(base DbgWord, private DbgWord, context DbgWord, trampoline DbgWord) returns MachineWord
+	let sp = dbgLoad(context, offset: DbgCtxOffRsp)
+	let interrupted = dbgLoad(sp, offset: 0)
+
+	dbgHandBackSignalPending(dbgCurrentMachine())
+	dbgStopTheWorld(private)
+	dbgCaptureRegisters(base, context: context)
+	dbgStore(base, offset: DbgOffStopPc, value: interrupted)
+	dbgStore(base, offset: DbgOffStopSp, value: sp + DbgWordBytes)
+	dbgPublishStop(base, reason: DbgStopReasonPause)
+	dbgPark(base, private: private, stopKind: DbgStopKindThread)
+	dbgStartTheWorld(private)
+
+	dbgWriteRegistersBack(base, context: context)
+	dbgStore(context, offset: DbgCtxOffRip, value: trampoline + DbgOneByte)
+	dbgSetTrapFlag(context, armed: false)
+
+	return DbgVehContinueExecution as MachineWord
+end 'dbgPauseStop'
+
+// The agent planted no byte here, so there is nothing to displace and nothing to put back: the trap was one
+// byte wide and the resume is `rip + 1`, which is the only convention an unowned `int3` has.
+function dbgTrapStop(base DbgWord, private DbgWord, context DbgWord, rip DbgWord) returns MachineWord
+	dbgStopTheWorld(private)
+	dbgCaptureRegisters(base, context: context)
+	dbgStore(base, offset: DbgOffStopPc, value: rip)
+	dbgPublishStop(base, reason: DbgStopReasonTrap)
+	dbgPark(base, private: private, stopKind: DbgStopKindThread)
+	dbgStartTheWorld(private)
+
+	dbgWriteRegistersBack(base, context: context)
+	dbgStore(context, offset: DbgCtxOffRip, value: rip + DbgOneByte)
+	dbgSetTrapFlag(context, armed: false)
+
+	return DbgVehContinueExecution as MachineWord
+end 'dbgTrapStop'
+
+// Every road out of a claimed stop owes the claim back, or the monitor never preempts this machine again.
+function dbgHandBackSignalPending(machine DbgWord)
+	if machine == 0 'notAMachine'
+		return
+	end 'notAMachine'
+
+	dbgStore(machine, offset: DbgMOffSignalPending, value: DbgPreemptClaimFree)
+end 'dbgHandBackSignalPending'
 
 // A declared result may not be discarded (E3067), so an answer nothing reads is parked in scratch.
 function dbgSinkHostAnswer(answer MachineWord)
@@ -412,15 +887,44 @@ function dbgStoreByte(addr DbgWord, offset DbgWord, value DbgWord)
 	__Raw.storeByte((addr + offset) as MachineWord, offset: 0, value: (value and DbgByteMask) as MachineWord)
 end 'dbgStoreByte'
 
+// `stopMachine` is an OS thread id and never an index, so a driver can name it against anything else the
+// host reports. The trace mark is read here rather than at attach because `__dbg_init` runs ahead of
+// `__ds_init`.
 function dbgPublishStop(base DbgWord, reason DbgWord)
+	let machine = dbgCurrentMachine()
+
 	dbgStore(base, offset: DbgOffStopReason, value: reason)
-	dbgStore(base, offset: DbgOffStopMachine, value: 0)
-	dbgStore(base, offset: DbgOffStopGreenThread, value: 0)
-	dbgStore(base, offset: DbgOffStopTraceMark, value: 0)
+	dbgStore(base, offset: DbgOffStopMachine, value: 0 if machine == 0 else dbgCurrentThreadId())
+	dbgStore(base, offset: DbgOffStopGreenThread, value: dbgRunningGreenThread(machine))
+	dbgStore(base, offset: DbgOffStopTraceMark, value: dbgTraceMark())
 	dbgStore(base, offset: DbgOffStopSeq, value: dbgLoad(base, offset: DbgOffStopSeq) + 1)
 end 'dbgPublishStop'
 
-function dbgPark(base DbgWord, private DbgWord, hasThreadContext bool)
+function dbgRunningGreenThread(machine DbgWord) returns DbgWord
+	if machine == 0 'noMachine'
+		return 0
+	end 'noMachine'
+
+	let gt = dbgLoad(machine, offset: DbgMOffCurrentGt)
+
+	if gt == 0 'nothingRunning'
+		return 0
+	end 'nothingRunning'
+
+	return 0 if dbgLoad(gt, offset: DbgGtOffStackBase) == 0 else gt
+end 'dbgRunningGreenThread'
+
+function dbgTraceMark() returns DbgWord
+	let ring = __Raw.loadWord(__Raw.dsBaseAddr(), offset: 0) as DbgWord
+
+	if ring == 0 'noRingAttached'
+		return 0
+	end 'noRingAttached'
+
+	return dbgLoad(ring, offset: DbgDsOffWriteCursor)
+end 'dbgTraceMark'
+
+function dbgPark(base DbgWord, private DbgWord, stopKind DbgWord)
 	var lastCommand = dbgLoad(base, offset: DbgOffAckSeq)
 	let driverHandle = dbgLoad(private, offset: DbgPrivOffDriverHandle)
 	var waiting = true
@@ -431,7 +935,7 @@ function dbgPark(base DbgWord, private DbgWord, hasThreadContext bool)
 		let sequence = dbgLoad(base, offset: DbgOffCmdSeq)
 
 		if sequence != lastCommand 'aCommandArrived'
-			let leaves = dbgDispatch(base, private: private, command: dbgLoad(base, offset: DbgOffCmd), hasThreadContext: hasThreadContext)
+			let leaves = dbgDispatch(base, private: private, command: dbgLoad(base, offset: DbgOffCmd), stopKind: stopKind)
 			dbgStore(base, offset: DbgOffAckSeq, value: sequence)
 			lastCommand = sequence
 
@@ -444,24 +948,36 @@ function dbgPark(base DbgWord, private DbgWord, hasThreadContext bool)
 		// Liveness of the driver PROCESS, never a heartbeat: a user sitting at the REPL sends nothing for
 		// minutes, and a clock would read that as an abandoned debuggee and kill a healthy program.
 		if __Raw.osDebugHost(DbgVerbDriverExited, a0: driverHandle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord == DbgWaitSignalled 'theDriverIsGone'
-			__Raw.osExit(DbgOrphanedExitCode as MachineWord)
+			dbgExitOrphaned(private)
 		end 'theDriverIsGone'
 
 		dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbParkWait, a0: DbgParkPollIntervalMs as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
 	end 'poll'
 end 'dbgPark'
 
-// `hasThreadContext` is false at the entry park, where the program has not started and no thread is
-// stopped. A walk or a step is refused there rather than answered out of `__dbg_init`'s own frames.
-function dbgDispatch(base DbgWord, private DbgWord, command DbgWord, hasThreadContext bool) returns bool
+// The two refusals a command that needs a stop can earn are different facts, and a driver reports them
+// differently. `notRunning` says nothing is stopped at all and the service thread is answering.
+// `notStopped` says a stop is in progress but no thread's registers were captured at it: the entry park,
+// and a pause the service thread declared over machines that were all idle.
+function dbgDispatch(base DbgWord, private DbgWord, command DbgWord, stopKind DbgWord) returns bool
 	if command == DbgCmdContinue 'resume'
+		if stopKind == DbgStopKindRunning 'nothingIsParked'
+			dbgRefuse(base, reason: DbgRefusalNotRunning)
+			return false
+		end 'nothingIsParked'
+
 		dbgStore(private, offset: DbgPrivOffResumeAction, value: DbgResumeContinue)
 		dbgAnswerDone(base)
 		return true
 	end 'resume'
 
 	if command == DbgCmdStepInstruction 'stepOne'
-		if not hasThreadContext 'noThreadIsStopped'
+		if stopKind == DbgStopKindRunning 'nothingIsParked'
+			dbgRefuse(base, reason: DbgRefusalNotRunning)
+			return false
+		end 'nothingIsParked'
+
+		if stopKind != DbgStopKindThread 'noThreadIsStopped'
 			dbgRefuse(base, reason: DbgRefusalNotStopped)
 			return false
 		end 'noThreadIsStopped'
@@ -482,7 +998,12 @@ function dbgDispatch(base DbgWord, private DbgWord, command DbgWord, hasThreadCo
 	end 'disarm'
 
 	if command == DbgCmdBacktrace 'walk'
-		if not hasThreadContext 'noFrameToWalk'
+		if stopKind == DbgStopKindRunning 'nothingIsParked'
+			dbgRefuse(base, reason: DbgRefusalNotRunning)
+			return false
+		end 'nothingIsParked'
+
+		if stopKind != DbgStopKindThread 'noFrameToWalk'
 			dbgRefuse(base, reason: DbgRefusalNotStopped)
 			return false
 		end 'noFrameToWalk'
@@ -492,9 +1013,55 @@ function dbgDispatch(base DbgWord, private DbgWord, command DbgWord, hasThreadCo
 	end 'walk'
 
 	if command == DbgCmdReadMemory 'read'
-		dbgReadMemory(base)
+		dbgReadMemory(base, private: private)
 		return false
 	end 'read'
+
+	if command == DbgCmdSetCondition 'attachACondition'
+		dbgSetCondition(base, private: private)
+		return false
+	end 'attachACondition'
+
+	if command == DbgCmdClearCondition 'dropACondition'
+		dbgClearCondition(base, private: private)
+		return false
+	end 'dropACondition'
+
+	if command == DbgCmdGtList 'roster'
+		dbgGtList(base, private: private, stopKind: stopKind)
+		return false
+	end 'roster'
+
+	// A parked thread's walk needs no stopped thread, but it does need a stop: its registers are in its own
+	// record, which the thread itself is writing while the program runs, so a walk taken then would chase a
+	// moving chain.
+	if command == DbgCmdGtBacktrace 'walkAParkedThread'
+		if stopKind == DbgStopKindRunning 'nothingIsParked'
+			dbgRefuse(base, reason: DbgRefusalNotRunning)
+			return false
+		end 'nothingIsParked'
+
+		dbgGtBacktrace(base, private: private, stopKind: stopKind)
+		return false
+	end 'walkAParkedThread'
+
+	if command == DbgCmdGtHold 'hold'
+		dbgGtHold(base, private: private)
+		return false
+	end 'hold'
+
+	if command == DbgCmdGtRelease 'release'
+		dbgGtRelease(base, private: private)
+		return false
+	end 'release'
+
+	// A pause reaching the park loop is a pause of a program that is already stopped, which it already is —
+	// and the request in flight on the service thread is over, because this is the answer it was waiting for.
+	if command == DbgCmdPause 'alreadyStopped'
+		dbgStore(private, offset: DbgPrivOffPauseAttempts, value: 0)
+		dbgAnswerDone(base)
+		return false
+	end 'alreadyStopped'
 
 	dbgRefuse(base, reason: DbgRefusalUnknownCommand)
 	return false
@@ -525,13 +1092,16 @@ function dbgFindBreakpoint(private DbgWord, textOffset DbgWord) returns DbgWord
 		end 'taken'
 	end 'eachSlot'
 
-	return DbgNoBreakpoint
+	return DbgNotFound
 end 'dbgFindBreakpoint'
 
+// The index can come from a driver-named entry, so it is bounded here: an index past the table reads the
+// roster behind it, and a word there that happens to equal the live state would arm a condition on memory
+// nobody owns.
 function dbgBreakpointIsLive(private DbgWord, index DbgWord) returns bool
-	if index == DbgNoBreakpoint 'nothingIsArmedThere'
+	if index < 0 or index >= DbgBreakpointCapacity 'outsideTheTable'
 		return false
-	end 'nothingIsArmedThere'
+	end 'outsideTheTable'
 
 	return dbgLoad(dbgBreakpointEntry(private, index: index), offset: DbgBpOffState) == DbgBpStateLive
 end 'dbgBreakpointIsLive'
@@ -543,7 +1113,7 @@ function dbgFreeBreakpointSlot(private DbgWord) returns DbgWord
 		end 'free'
 	end 'eachSlot'
 
-	return DbgNoBreakpoint
+	return DbgNotFound
 end 'dbgFreeBreakpointSlot'
 
 function dbgSetBreakpoint(base DbgWord, private DbgWord)
@@ -578,13 +1148,14 @@ function dbgSetBreakpoint(base DbgWord, private DbgWord)
 	let existing = dbgFindBreakpoint(private, textOffset: textOffset)
 
 	if dbgBreakpointIsLive(private, index: existing) 'alreadyArmed'
+		dbgStore(dbgBreakpointEntry(private, index: existing), offset: DbgBpOffCondition + DbgCondRecOffKind, value: 0)
 		dbgAnswerDone(base)
 		return
 	end 'alreadyArmed'
 
-	let index = existing if existing != DbgNoBreakpoint else dbgFreeBreakpointSlot(private)
+	let index = existing if existing != DbgNotFound else dbgFreeBreakpointSlot(private)
 
-	if index == DbgNoBreakpoint 'noRoom'
+	if index == DbgNotFound 'noRoom'
 		dbgRefuse(base, reason: DbgRefusalTableFull)
 		return
 	end 'noRoom'
@@ -605,27 +1176,37 @@ function dbgSetBreakpoint(base DbgWord, private DbgWord)
 		end 'outOfReach'
 	end 'anOperandTheSlotMustStillReach'
 
-	dbgFillSlot(slot, address: address, length: length, instructionClass: instructionClass, classWord: classWord, fixup: fixup)
+	// A retired entry re-armed at its own address already holds exactly these bytes, and a thread sent out of
+	// line by an earlier hit may be inside the slot at this instant. Rewriting it would change code under a
+	// running thread for no gain.
+	if dbgLoad(entry, offset: DbgBpOffState) != DbgBpStateRetired or dbgLoad(entry, offset: DbgBpOffClassWord) != classWord 'theSlotDoesNotAlreadyHoldThis'
+		dbgFillSlot(slot, private: private, textBase: textBase, address: address, length: length, instructionClass: instructionClass, classWord: classWord, fixup: fixup)
+	end 'theSlotDoesNotAlreadyHoldThis'
 
 	dbgStore(entry, offset: DbgBpOffTextOffset, value: textOffset)
 	dbgStore(entry, offset: DbgBpOffOriginalByte, value: dbgLoadByte(address, offset: 0))
 	dbgStore(entry, offset: DbgBpOffSlotAddr, value: slot)
 	dbgStore(entry, offset: DbgBpOffClassWord, value: classWord)
 	dbgStore(entry, offset: DbgBpOffFixup, value: fixup)
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffKind, value: 0)
 	dbgStore(entry, offset: DbgBpOffState, value: DbgBpStateLive)
 
 	dbgPatchCode(address, value: DbgBreakpointByte)
 	dbgAnswerDone(base)
 end 'dbgSetBreakpoint'
 
-function dbgFillSlot(slot DbgWord, address DbgWord, length DbgWord, instructionClass DbgWord, classWord DbgWord, fixup DbgWord)
+// The displaced bytes are read through the breakpoint table, never raw. One line can resolve to several
+// offsets inside one instruction's span, so what this displaces may already carry a neighbouring
+// breakpoint's `0xCC`; copied verbatim, that trap would fire from inside the slot pool, at an address no
+// breakpoint entry claims.
+function dbgFillSlot(slot DbgWord, private DbgWord, textBase DbgWord, address DbgWord, length DbgWord, instructionClass DbgWord, classWord DbgWord, fixup DbgWord)
 	if instructionClass == DbgClassDirectCall 'aDisplacedCallIsSynthesized'
 		dbgFillCallSlot(slot, returnAddress: address + length, target: fixup)
 		return
 	end 'aDisplacedCallIsSynthesized'
 
 	for position in 0 upto length 'eachByte'
-		dbgStoreByte(slot, offset: position as DbgWord, value: dbgLoadByte(address, offset: position as DbgWord))
+		dbgStoreByte(slot, offset: position as DbgWord, value: dbgProgramByteAt(private, textBase: textBase, address: address + (position as DbgWord)))
 	end 'eachByte'
 
 	if instructionClass == DbgClassPcRelativeData 'rebasedOperand'
@@ -644,6 +1225,18 @@ function dbgFillSlot(slot DbgWord, address DbgWord, length DbgWord, instructionC
 	dbgWriteWord(slot, offset: length + DbgJmpAbsoluteBytes - DbgWordBytes, value: address + length)
 	dbgFlushCode(slot, length: DbgSlotBytes)
 end 'dbgFillSlot'
+
+// The byte the program has at this address, which is not always the byte in memory: a live breakpoint has
+// replaced its own first byte, and the entry remembers what stood there.
+function dbgProgramByteAt(private DbgWord, textBase DbgWord, address DbgWord) returns DbgWord
+	let index = dbgFindBreakpoint(private, textOffset: address - textBase)
+
+	if dbgBreakpointIsLive(private, index: index) 'oneOfOurOwnTrapsStandsHere'
+		return dbgLoad(dbgBreakpointEntry(private, index: index), offset: DbgBpOffOriginalByte)
+	end 'oneOfOurOwnTrapsStandsHere'
+
+	return dbgLoadByte(address, offset: 0)
+end 'dbgProgramByteAt'
 
 // A displaced call is rebuilt as a push of its return address and a jump, rather than simulated: the
 // handler cannot write the debuggee's stack itself, since Win64 has no red zone and the dispatcher's own
@@ -720,6 +1313,12 @@ function dbgCaptureRegisters(base DbgWord, context DbgWord)
 	dbgStore(base, offset: DbgOffStopSp, value: dbgRegister(base, number: DbgRegRsp))
 	dbgStore(base, offset: DbgOffStopFp, value: dbgRegister(base, number: DbgRegRbp))
 end 'dbgCaptureRegisters'
+
+function dbgClearRegisters(base DbgWord)
+	for index in 0 upto DbgRegisterSlots 'eachSlot'
+		dbgSetRegister(base, number: index as DbgWord, value: 0)
+	end 'eachSlot'
+end 'dbgClearRegisters'
 
 function dbgRegister(base DbgWord, number DbgWord) returns DbgWord
 	return dbgLoad(base, offset: DbgOffRegisters + number * DbgWordBytes)
@@ -917,16 +1516,32 @@ function dbgRegisterFlagsHigh(base DbgWord) returns DbgWord
 end 'dbgRegisterFlagsHigh'
 
 function dbgBacktrace(base DbgWord)
-	var frame = dbgLoad(base, offset: DbgOffStopFp)
+	dbgWalkFrames(base, frame: dbgLoad(base, offset: DbgOffStopFp))
+end 'dbgBacktrace'
+
+// A frame whose return address is not code ends the walk. A parked green thread's chain is seeded from a
+// record rather than from a register file, so the first word that is not a saved frame is indistinguishable
+// from one, and a walk that kept going would answer whatever it found as a caller.
+function dbgWalkFrames(base DbgWord, frame DbgWord)
+	let textBase = dbgLoad(base, offset: DbgOffTextBase)
+	let textLimit = textBase + dbgLoad(base, offset: DbgOffTextSize)
+	var cursor = frame
 	var count = 0 as DbgWord
 	var truncated = 0 as DbgWord
 	var walking = true
 
 	while walking 'eachFrame'
-		if frame == 0 or not dbgRegionIsReadable(frame, length: DbgWordBytes * DbgBacktraceFrameWords) 'chainEnds'
+		if cursor == 0 or not dbgRegionIsReadable(cursor, length: DbgWordBytes * DbgBacktraceFrameWords) 'chainEnds'
 			walking = false
 			continue
 		end 'chainEnds'
+
+		let returnPc = dbgLoad(cursor, offset: DbgWordBytes)
+
+		if returnPc < textBase or returnPc >= textLimit 'notAReturnIntoThisImage'
+			walking = false
+			continue
+		end 'notAReturnIntoThisImage'
 
 		if count >= DbgMaxBacktraceFrames 'capped'
 			truncated = 1
@@ -935,28 +1550,33 @@ function dbgBacktrace(base DbgWord)
 		end 'capped'
 
 		let slot = DbgOffBtFrames + count * DbgBacktraceFrameWords * DbgWordBytes
-		dbgStore(base, offset: slot, value: dbgLoad(frame, offset: DbgWordBytes))
-		dbgStore(base, offset: slot + DbgWordBytes, value: frame)
+		dbgStore(base, offset: slot, value: returnPc)
+		dbgStore(base, offset: slot + DbgWordBytes, value: cursor)
 		count = count + 1
 
-		let next = dbgLoad(frame, offset: 0)
+		let next = dbgLoad(cursor, offset: 0)
 
-		if next <= frame 'notAnAscendingChain'
+		if next <= cursor 'notAnAscendingChain'
 			walking = false
 			continue
 		end 'notAnAscendingChain'
 
-		frame = next
+		cursor = next
 	end 'eachFrame'
 
 	dbgStore(base, offset: DbgOffBtCount, value: count)
 	dbgStore(base, offset: DbgOffBtTruncated, value: truncated)
 	dbgAnswerDone(base)
-end 'dbgBacktrace'
+end 'dbgWalkFrames'
 
-function dbgReadMemory(base DbgWord)
+// A driver disassembling what comes back must see the program's own instructions, so a read inside the
+// image answers through the breakpoint table. Outside it there is no table to consult and the memory is
+// the answer.
+function dbgReadMemory(base DbgWord, private DbgWord)
 	let address = dbgLoad(base, offset: DbgOffCmdArg0)
 	let length = dbgLoad(base, offset: DbgOffCmdArg1)
+	let textBase = dbgLoad(base, offset: DbgOffTextBase)
+	let textLimit = textBase + dbgLoad(base, offset: DbgOffTextSize)
 
 	if length < 0 or length > DbgMaxReadLength or not dbgRegionIsReadable(address, length: length) 'notReadable'
 		dbgStore(base, offset: DbgOffReadLen, value: 0)
@@ -966,7 +1586,8 @@ function dbgReadMemory(base DbgWord)
 	end 'notReadable'
 
 	for position in 0 upto length 'eachByte'
-		dbgStoreByte(base, offset: DbgOffReadBuf + (position as DbgWord), value: dbgLoadByte(address, offset: position as DbgWord))
+		let at = address + (position as DbgWord)
+		dbgStoreByte(base, offset: DbgOffReadBuf + (position as DbgWord), value: dbgLoadByte(at, offset: 0) if at < textBase or at >= textLimit else dbgProgramByteAt(private, textBase: textBase, address: at))
 	end 'eachByte'
 
 	dbgStore(base, offset: DbgOffReadLen, value: length)
@@ -1035,3 +1656,607 @@ function dbgInsideRuntimeSymbol(textOffset DbgWord) returns bool
 
 	return dbgLoadByte(name, offset: 0) == DbgCharM and dbgLoadByte(name, offset: 1) == DbgCharR and dbgLoadByte(name, offset: 2) == DbgCharT and dbgLoadByte(name, offset: 3) == DbgCharUnderscore
 end 'dbgInsideRuntimeSymbol'
+
+// A command posted while a machine is parked finds the stop lock taken and is left for the park loop; one
+// posted while the program runs is answered here.
+function dbgServiceMailbox(base DbgWord, private DbgWord)
+	let sequence = dbgLoad(base, offset: DbgOffCmdSeq)
+
+	if sequence == dbgLoad(base, offset: DbgOffAckSeq) 'nothingPosted'
+		return
+	end 'nothingPosted'
+
+	if not dbgTryStopLock(private) 'aMachineOwnsTheMailbox'
+		return
+	end 'aMachineOwnsTheMailbox'
+
+	let command = dbgLoad(base, offset: DbgOffCmd)
+
+	// A pause is not answered here, only started: the thread it is aimed at has to reach a point where a stop
+	// can be delivered, so whichever later poll lands it acknowledges it.
+	if command == DbgCmdPause 'startAPause'
+		dbgStore(private, offset: DbgPrivOffPauseAttempts, value: 1)
+		dbgDropStopLock(private)
+		return
+	end 'startAPause'
+
+	// Nothing is parked on this thread, so a dispatch asking to leave a park means a resume slipped past the
+	// `notRunning` refusals above; the answer is that refusal rather than a resume of nothing.
+	if dbgDispatch(base, private: private, command: command, stopKind: DbgStopKindRunning) 'aResumeWithNothingParked'
+		dbgRefuse(base, reason: DbgRefusalNotRunning)
+	end 'aResumeWithNothingParked'
+
+	dbgStore(base, offset: DbgOffAckSeq, value: sequence)
+	dbgDropStopLock(private)
+end 'dbgServiceMailbox'
+
+// A pause has two roads and the program's state at the poll picks between them. A machine running user code
+// is interrupted where it stands, which is the only road that can report a pc inside the program. A program
+// whose machines are all idle has no instruction to interrupt, so the service thread takes the stop itself
+// and the roster and the parked threads' saved registers are all such a stop can say.
+//
+// With no scheduler there is no second road: the one thread is the program, so a stop the service thread
+// declared would leave it running and say otherwise. That is what `notPausable` refuses, and a scheduler
+// program still on a green thread when the budget runs out is refused for the same reason.
+function dbgAdvancePause(base DbgWord, private DbgWord)
+	if not dbgTryStopLock(private) 'aStopOwnsTheMailbox'
+		return
+	end 'aStopOwnsTheMailbox'
+
+	dbgPauseAttempt(base, private: private)
+	dbgDropStopLock(private)
+end 'dbgAdvancePause'
+
+function dbgPauseAttempt(base DbgWord, private DbgWord)
+	let machines = dbgAllMachines()
+
+	if machines != 0 and not dbgSomeMachineRunsUserCode(machines) 'nothingIsRunning'
+		dbgServiceStop(base, private: private)
+		return
+	end 'nothingIsRunning'
+
+	if dbgTryInject(base, private: private) 'landed'
+		dbgFinishPause(base, private: private, result: DbgCmdResultDone, reason: 0)
+		return
+	end 'landed'
+
+	let attempts = dbgLoad(private, offset: DbgPrivOffPauseAttempts) + 1
+
+	if attempts <= DbgPauseAttemptLimit 'tryAgainOnTheNextPoll'
+		dbgStore(private, offset: DbgPrivOffPauseAttempts, value: attempts)
+		return
+	end 'tryAgainOnTheNextPoll'
+
+	let stillRunning = dbgAllMachines()
+
+	if stillRunning == 0 or dbgSomeMachineRunsUserCode(stillRunning) 'noSafePointWasEverReached'
+		dbgFinishPause(base, private: private, result: DbgCmdResultRefused, reason: DbgRefusalNotPausable)
+		return
+	end 'noSafePointWasEverReached'
+
+	dbgServiceStop(base, private: private)
+end 'dbgPauseAttempt'
+
+function dbgRequestYield(machine DbgWord)
+	if machine == 0 'notAMachine'
+		return
+	end 'notAMachine'
+
+	let gt = dbgLoad(machine, offset: DbgMOffCurrentGt)
+
+	if gt == 0 or dbgLoad(gt, offset: DbgGtOffStackBase) == 0 'nothingToAsk'
+		return
+	end 'nothingToAsk'
+
+	dbgStore(gt, offset: DbgGtOffStackGuard, value: DbgGtStackGuardPreempt)
+end 'dbgRequestYield'
+
+function dbgMachineRunsUserCode(machine DbgWord) returns bool
+	let gt = dbgLoad(machine, offset: DbgMOffCurrentGt)
+
+	return gt != 0 and dbgLoad(gt, offset: DbgGtOffStackBase) != 0
+end 'dbgMachineRunsUserCode'
+
+function dbgSomeMachineRunsUserCode(machines DbgWord) returns bool
+	var machine = machines
+
+	while machine != 0 'eachMachine'
+		if dbgMachineRunsUserCode(machine) 'aRealThreadIsOnIt'
+			return true
+		end 'aRealThreadIsOnIt'
+
+		machine = dbgLoad(machine, offset: DbgMOffAllNext)
+	end 'eachMachine'
+
+	return false
+end 'dbgSomeMachineRunsUserCode'
+
+// The page reports no pc, sp or fp: no thread of the program was at an instruction anyone asked about. The
+// pause is acknowledged before the park, so the driver can post the commands this stop exists to answer.
+function dbgServiceStop(base DbgWord, private DbgWord)
+	dbgStopTheWorld(private)
+
+	// No thread of the program is stopped at an instruction, so there are no registers to report; a file
+	// still holding the previous stop's would be read as this one's.
+	dbgClearRegisters(base)
+	dbgStore(base, offset: DbgOffStopPc, value: 0)
+	dbgStore(base, offset: DbgOffStopSp, value: 0)
+	dbgStore(base, offset: DbgOffStopFp, value: 0)
+	dbgPublishStop(base, reason: DbgStopReasonPause)
+	dbgFinishPause(base, private: private, result: DbgCmdResultDone, reason: 0)
+
+	dbgPark(base, private: private, stopKind: DbgStopKindNoThread)
+	dbgStartTheWorld(private)
+end 'dbgServiceStop'
+
+function dbgFinishPause(base DbgWord, private DbgWord, result DbgWord, reason DbgWord)
+	dbgStore(private, offset: DbgPrivOffPauseAttempts, value: 0)
+	dbgStore(base, offset: DbgOffCmdRefusal, value: reason)
+	dbgStore(base, offset: DbgOffCmdResult, value: result)
+	dbgStore(base, offset: DbgOffAckSeq, value: dbgLoad(base, offset: DbgOffCmdSeq))
+end 'dbgFinishPause'
+
+function dbgTryInject(base DbgWord, private DbgWord) returns bool
+	let machines = dbgAllMachines()
+
+	if machines == 0 'noSchedulerToAsk'
+		return dbgInjectThread(base, private: private, machine: 0, handle: dbgLoad(private, offset: DbgPrivOffMainThreadHandle))
+	end 'noSchedulerToAsk'
+
+	var machine = machines
+
+	while machine != 0 'eachMachineTried'
+		if dbgMachineRunsUserCode(machine) 'itIsOnAGreenThreadRightNow'
+			if dbgInjectThread(base, private: private, machine: machine, handle: dbgLoad(machine, offset: DbgMOffPreemptThreadHandle)) 'landedHere'
+				return true
+			end 'landedHere'
+		end 'itIsOnAGreenThreadRightNow'
+
+		machine = dbgLoad(machine, offset: DbgMOffAllNext)
+	end 'eachMachineTried'
+
+	return false
+end 'dbgTryInject'
+
+function dbgInjectThread(base DbgWord, private DbgWord, machine DbgWord, handle DbgWord) returns bool
+	if handle == 0 'nothingSuspendable'
+		return false
+	end 'nothingSuspendable'
+
+	if machine != 0 and __Raw.atomicCas((machine + DbgMOffSignalPending) as MachineWord, expected: DbgPreemptClaimFree as MachineWord, replacement: DbgPreemptClaimHeld as MachineWord) == DbgNothing 'aStopIsAlreadyInFlight'
+		return false
+	end 'aStopIsAlreadyInFlight'
+
+	if not dbgTryTakeExtLock() 'aThreadOfThisProcessIsLeavingIt'
+		dbgHandBackSignalPending(machine)
+		return false
+	end 'aThreadOfThisProcessIsLeavingIt'
+
+	let suspended = __Raw.osDebugHost(DbgVerbSuspendThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing) as DbgWord
+
+	if (suspended and DbgDwordMask) == DbgSuspendFailed 'theThreadIsGone'
+		dbgDropExtLock()
+		dbgHandBackSignalPending(machine)
+		return false
+	end 'theThreadIsGone'
+
+	// The request is written while the thread is suspended, and that order is what makes a pause land.
+	// `__gt_preempt_safe` requires the guard word to carry the request, but the request is also what makes
+	// the thread yield at its next prologue, and a switch-in restores the word — so a request written before
+	// the suspend is consumed before the instant is judged. Suspended, the thread cannot reach a prologue,
+	// so the conjunct holds by construction and every other one is judged on an instant that cannot move.
+	dbgRequestYield(machine)
+
+	let context = private + DbgPrivOffContext
+	dbgStore(context, offset: DbgCtxOffFlagsRequest, value: DbgCtxControlRequest)
+
+	var injected = false
+
+	if __Raw.osDebugHost(DbgVerbReadThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing 'theInstantIsReadable'
+		let pc = dbgLoad(context, offset: DbgCtxOffRip)
+		let sp = dbgLoad(context, offset: DbgCtxOffRsp)
+
+		if dbgPauseIsSafe(base, machine: machine, pc: pc, sp: sp) 'aSafePoint'
+			let landing = sp - DbgWordBytes
+			dbgStore(landing, offset: 0, value: pc)
+			dbgStore(context, offset: DbgCtxOffRsp, value: landing)
+			dbgStore(context, offset: DbgCtxOffRip, value: dbgLoad(private, offset: DbgPrivOffPauseTrampoline))
+			injected = __Raw.osDebugHost(DbgVerbWriteThreadContext, a0: handle as MachineWord, a1: context as MachineWord, a2: DbgNothing, a3: DbgNothing) != DbgNothing
+		end 'aSafePoint'
+	end 'theInstantIsReadable'
+
+	dbgSinkHostAnswer(__Raw.osDebugHost(DbgVerbResumeThread, a0: handle as MachineWord, a1: DbgNothing, a2: DbgNothing, a3: DbgNothing))
+	dbgDropExtLock()
+
+	if not injected 'nothingWillClearTheClaim'
+		dbgHandBackSignalPending(machine)
+	end 'nothingWillClearTheClaim'
+
+	return injected
+end 'dbgInjectThread'
+
+// With a scheduler the six conjuncts of `__gt_preempt_safe` are the answer. Without one there is no machine
+// and no green-thread stack to judge, and what is left is the pc: inside the image's own code, and outside
+// the runtime's band, which is where a stop would land on a frame no walk can describe.
+function dbgPauseIsSafe(base DbgWord, machine DbgWord, pc DbgWord, sp DbgWord) returns bool
+	if machine != 0 'askTheScheduler'
+		return __Raw.osDebugHost(DbgVerbPreemptSafe, a0: machine as MachineWord, a1: pc as MachineWord, a2: sp as MachineWord, a3: DbgNothing) != DbgNothing
+	end 'askTheScheduler'
+
+	let textBase = dbgLoad(base, offset: DbgOffTextBase)
+
+	if pc < textBase or pc >= textBase + dbgLoad(base, offset: DbgOffTextSize) 'notThisProgramsCode'
+		return false
+	end 'notThisProgramsCode'
+
+	return not dbgInsideRuntimeSymbol(pc - textBase)
+end 'dbgPauseIsSafe'
+
+function dbgSetCondition(base DbgWord, private DbgWord)
+	let index = dbgFindBreakpoint(private, textOffset: dbgLoad(base, offset: DbgOffCmdArg0))
+
+	if not dbgBreakpointIsLive(private, index: index) 'nothingArmedThere'
+		dbgRefuse(base, reason: DbgRefusalNoSuchBreakpoint)
+		return
+	end 'nothingArmedThere'
+
+	let entry = dbgBreakpointEntry(private, index: index)
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffOperand, value: dbgLoad(base, offset: DbgOffConditionRecord + DbgCondRecOffOperand))
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffWidth, value: dbgLoad(base, offset: DbgOffConditionRecord + DbgCondRecOffWidth))
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffSigned, value: dbgLoad(base, offset: DbgOffConditionRecord + DbgCondRecOffSigned))
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffOp, value: dbgLoad(base, offset: DbgOffConditionRecord + DbgCondRecOffOp))
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffLiteral, value: dbgLoad(base, offset: DbgOffConditionRecord + DbgCondRecOffLiteral))
+
+	// The kind goes last because it is what arms the test, so a trap taken on another machine mid-write reads
+	// a whole record or none of it.
+	dbgStore(entry, offset: DbgBpOffCondition + DbgCondRecOffKind, value: dbgLoad(base, offset: DbgOffConditionRecord + DbgCondRecOffKind))
+	dbgAnswerDone(base)
+end 'dbgSetCondition'
+
+function dbgClearCondition(base DbgWord, private DbgWord)
+	let index = dbgFindBreakpoint(private, textOffset: dbgLoad(base, offset: DbgOffCmdArg0))
+
+	if not dbgBreakpointIsLive(private, index: index) 'nothingArmedThere'
+		dbgRefuse(base, reason: DbgRefusalNoSuchBreakpoint)
+		return
+	end 'nothingArmedThere'
+
+	dbgStore(dbgBreakpointEntry(private, index: index), offset: DbgBpOffCondition + DbgCondRecOffKind, value: 0)
+	dbgAnswerDone(base)
+end 'dbgClearCondition'
+
+// A condition the agent cannot evaluate admits the stop. An unknown width, operator or kind, an operand
+// outside the register file and an unmapped slot all describe something the driver got wrong, and an extra
+// stop is visible where a dropped hit is not.
+function dbgConditionAllows(private DbgWord, index DbgWord, context DbgWord) returns bool
+	let entry = dbgBreakpointEntry(private, index: index)
+	let kind = dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffKind)
+
+	if kind == 0 'unconditional'
+		return true
+	end 'unconditional'
+
+	let width = dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffWidth)
+	let op = dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffOp)
+
+	if not dbgWidthIsKnown(width) or op < DbgCondOpEqual or op > DbgCondOpGreaterOrEqual 'aRecordTheAgentCannotEvaluate'
+		return true
+	end 'aRecordTheAgentCannotEvaluate'
+
+	let operand = dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffOperand)
+	var raw = 0 as DbgWord
+
+	if kind == DbgCondKindRegister 'aRegister'
+		if operand < 0 or operand >= DbgGprCount 'outsideTheGeneralFile'
+			return true
+		end 'outsideTheGeneralFile'
+
+		raw = dbgLoad(context, offset: DbgCtxOffGpr0 + operand * DbgWordBytes)
+	end 'aRegister' else if kind == DbgCondKindStackSlot 'aFrameSlot'
+		let at = dbgLoad(context, offset: DbgCtxOffGpr0 + DbgRegRbp * DbgWordBytes) + operand
+
+		if not dbgRegionIsReadable(at, length: DbgWordBytes) 'nothingMappedThere'
+			return true
+		end 'nothingMappedThere'
+
+		raw = dbgLoad(at, offset: 0)
+	end 'aFrameSlot' else 'aKindTheAgentDoesNotEvaluate'
+		return true
+	end 'aKindTheAgentDoesNotEvaluate'
+
+	let signed = dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffSigned) == DbgCondSignedYes
+
+	return dbgConditionCompare(dbgNarrowToWidth(raw, width: width, signed: signed), literal: dbgLoad(entry, offset: DbgBpOffCondition + DbgCondRecOffLiteral), op: op, signed: signed)
+end 'dbgConditionAllows'
+
+function dbgWidthIsKnown(width DbgWord) returns bool
+	return width == DbgWidthByte or width == DbgWidthHalf or width == DbgWidthWord32 or width == DbgWidthWord64
+end 'dbgWidthIsKnown'
+
+// The four widths are spelled out rather than shifted: a variable shift is a guarded construct, and one here
+// would mint a panic string into the `.rdata` of every program this compiler builds.
+function dbgNarrowToWidth(value DbgWord, width DbgWord, signed bool) returns DbgWord
+	if width == DbgWidthByte 'oneByte'
+		return dbgSignExtend(value and DbgByteMask, signBit: DbgByteSignBit, span: DbgByteSpan, signed: signed)
+	end 'oneByte'
+
+	if width == DbgWidthHalf 'twoBytes'
+		return dbgSignExtend(value and DbgHalfMask, signBit: DbgHalfSignBit, span: DbgHalfSpan, signed: signed)
+	end 'twoBytes'
+
+	if width == DbgWidthWord32 'fourBytes'
+		return dbgSignExtend(value and DbgDwordMask, signBit: DbgDwordSignBit, span: DbgDwordSpan, signed: signed)
+	end 'fourBytes'
+
+	return value
+end 'dbgNarrowToWidth'
+
+function dbgSignExtend(masked DbgWord, signBit DbgWord, span DbgWord, signed bool) returns DbgWord
+	if not signed or (masked and signBit) == 0 'positiveOrUnsigned'
+		return masked
+	end 'positiveOrUnsigned'
+
+	return masked - span
+end 'dbgSignExtend'
+
+function dbgConditionCompare(value DbgWord, literal DbgWord, op DbgWord, signed bool) returns bool
+	if op == DbgCondOpEqual 'equal'
+		return value == literal
+	end 'equal'
+
+	if op == DbgCondOpNotEqual 'notEqual'
+		return value != literal
+	end 'notEqual'
+
+	if op == DbgCondOpLess 'less'
+		return dbgIsBelow(value, b: literal, signed: signed)
+	end 'less'
+
+	if op == DbgCondOpLessOrEqual 'lessOrEqual'
+		return not dbgIsBelow(literal, b: value, signed: signed)
+	end 'lessOrEqual'
+
+	if op == DbgCondOpGreater 'greater'
+		return dbgIsBelow(literal, b: value, signed: signed)
+	end 'greater'
+
+	return not dbgIsBelow(value, b: literal, signed: signed)
+end 'dbgConditionCompare'
+
+// An unsigned compare built from the signed one: two words whose sign bits differ order by that bit alone,
+// and the rest is the ordinary compare. Spelling it this way needs no bias constant.
+function dbgIsBelow(a DbgWord, b DbgWord, signed bool) returns bool
+	if signed 'signedOrder'
+		return a < b
+	end 'signedOrder'
+
+	if (a < 0) != (b < 0) 'oneOfThemHasTheTopBit'
+		return b < 0
+	end 'oneOfThemHasTheTopBit'
+
+	return a < b
+end 'dbgIsBelow'
+
+function dbgRosterEntry(private DbgWord, index DbgWord) returns DbgWord
+	return __Raw.loadWord((private + DbgPrivOffGtRoster + index * DbgWordBytes) as MachineWord, offset: 0) as DbgWord
+end 'dbgRosterEntry'
+
+function dbgRosterHolds(private DbgWord, handle DbgWord) returns bool
+	if handle == 0 'noHandle'
+		return false
+	end 'noHandle'
+
+	let count = dbgLoad(private, offset: DbgPrivOffRosterCount)
+	var index = 0 as DbgWord
+
+	while index < count 'eachRecord'
+		if dbgRosterEntry(private, index: index) == handle 'itIsThisOne'
+			return true
+		end 'itIsThisOne'
+
+		index = index + 1
+	end 'eachRecord'
+
+	return false
+end 'dbgRosterHolds'
+
+// Nothing stores `running`: a green thread is running exactly when some machine names it as the one it is
+// on, so the answer is a walk of the machine roster rather than a word in the record.
+function dbgMachineRunning(gt DbgWord) returns DbgWord
+	var machine = dbgAllMachines()
+
+	while machine != 0 'eachMachine'
+		if dbgLoad(machine, offset: DbgMOffCurrentGt) == gt 'thisMachineIsOnIt'
+			return machine
+		end 'thisMachineIsOnIt'
+
+		machine = dbgLoad(machine, offset: DbgMOffAllNext)
+	end 'eachMachine'
+
+	return 0
+end 'dbgMachineRunning'
+
+// A zero handle marks an empty slot and is never a thread, so searching for one would answer "held" for
+// every thread the table has no room for.
+function dbgHoldSlotOf(private DbgWord, handle DbgWord) returns DbgWord
+	if handle == 0 'noHandle'
+		return DbgNotFound
+	end 'noHandle'
+
+	for slot in 0 upto DbgHoldCapacity 'eachSlot'
+		if dbgHoldSlot(private, slot: slot as DbgWord) == handle 'itIsThisOne'
+			return slot as DbgWord
+		end 'itIsThisOne'
+	end 'eachSlot'
+
+	return DbgNotFound
+end 'dbgHoldSlotOf'
+
+function dbgFreeHoldSlot(private DbgWord) returns DbgWord
+	for slot in 0 upto DbgHoldCapacity 'eachSlot'
+		if dbgHoldSlot(private, slot: slot as DbgWord) == 0 'free'
+			return slot as DbgWord
+		end 'free'
+	end 'eachSlot'
+
+	return DbgNotFound
+end 'dbgFreeHoldSlot'
+
+function dbgHoldSlotAddr(private DbgWord, slot DbgWord) returns DbgWord
+	return private + DbgPrivOffHold + slot * DbgHoldSlotBytes
+end 'dbgHoldSlotAddr'
+
+function dbgHoldSlot(private DbgWord, slot DbgWord) returns DbgWord
+	return dbgLoad(dbgHoldSlotAddr(private, slot: slot), offset: DbgHoldOffHandle)
+end 'dbgHoldSlot'
+
+function dbgGtList(base DbgWord, private DbgWord, stopKind DbgWord)
+	let count = dbgLoad(private, offset: DbgPrivOffRosterCount)
+	let stopThread = dbgLoad(private, offset: DbgPrivOffStopThreadId)
+	var truncated = dbgLoad(private, offset: DbgPrivOffRosterTruncated)
+	var written = 0 as DbgWord
+	var index = 0 as DbgWord
+
+	while index < count 'eachRecord'
+		let gt = dbgRosterEntry(private, index: index)
+		index = index + 1
+
+		if not dbgGtIsLive(gt) 'notAThreadAnyoneCanAskAbout'
+			continue
+		end 'notAThreadAnyoneCanAskAbout'
+
+		if written >= DbgGtRecordCapacity 'thePageIsFull'
+			truncated = 1
+			continue
+		end 'thePageIsFull'
+
+		let machine = dbgMachineRunning(gt)
+		let status = dbgLoad(gt, offset: DbgGtOffStatus)
+
+		let record = base + DbgOffGtRecords + written * DbgGtRecordStride
+		dbgStore(record, offset: DbgGtRecOffHandle, value: gt)
+		dbgStore(record, offset: DbgGtRecOffStatus, value: dbgReportedStatus(private, gt: gt, machine: machine, status: status))
+		dbgStore(record, offset: DbgGtRecOffEntryPc, value: dbgLoad(gt, offset: DbgGtOffFuncPtr))
+		dbgStore(record, offset: DbgGtRecOffParkKind, value: dbgLoad(gt, offset: DbgGtOffParkKind))
+		dbgStore(record, offset: DbgGtRecOffMachine, value: 0 if machine == 0 else dbgLoad(machine, offset: DbgMOffOsThreadId))
+
+		// A thread another machine is running has its registers in that machine and nowhere this agent can
+		// read, so it reports none rather than the stale pair its record still carries.
+		if machine == 0 'parked'
+			dbgStore(record, offset: DbgGtRecOffSavedSp, value: dbgLoad(gt, offset: DbgGtOffSp))
+			dbgStore(record, offset: DbgGtRecOffSavedFp, value: dbgLoad(gt, offset: DbgGtOffFp))
+		end 'parked' else if stopKind == DbgStopKindThread and dbgLoad(machine, offset: DbgMOffOsThreadId) == stopThread 'theStoppingMachine'
+			dbgStore(record, offset: DbgGtRecOffSavedSp, value: dbgLoad(base, offset: DbgOffStopSp))
+			dbgStore(record, offset: DbgGtRecOffSavedFp, value: dbgLoad(base, offset: DbgOffStopFp))
+		end 'theStoppingMachine' else 'runningElsewhere'
+			dbgStore(record, offset: DbgGtRecOffSavedSp, value: 0)
+			dbgStore(record, offset: DbgGtRecOffSavedFp, value: 0)
+		end 'runningElsewhere'
+
+		written = written + 1
+	end 'eachRecord'
+
+	dbgStore(base, offset: DbgOffGtCount, value: written)
+	dbgStore(base, offset: DbgOffGtTruncated, value: truncated)
+	dbgAnswerDone(base)
+end 'dbgGtList'
+
+// The one test for a thread anyone can ask about, shared by the three commands that ask: `gtList` omitting
+// a record while `gtHold` accepted it is how a driver comes to name a thread that no longer exists. A
+// record with no stack is a machine's own scheduler context or a reply cell, and a completed one is a life
+// that has ended; the roster keeps both, because it registers an address and the address outlives every
+// thread that occupies it.
+function dbgGtIsLive(gt DbgWord) returns bool
+	if gt == 0 or dbgLoad(gt, offset: DbgGtOffStackBase) == 0 'notAGreenThread'
+		return false
+	end 'notAGreenThread'
+
+	return dbgLoad(gt, offset: DbgGtOffStatus) != DbgGtStatusCompletedWord
+end 'dbgGtIsLive'
+
+function dbgReportedStatus(private DbgWord, gt DbgWord, machine DbgWord, status DbgWord) returns DbgWord
+	if machine != 0 'onAMachine'
+		return DbgGtStatusRunning
+	end 'onAMachine'
+
+	if dbgHoldSlotOf(private, handle: gt) != DbgNotFound 'theDriverIsHoldingIt'
+		return DbgGtStatusHeld
+	end 'theDriverIsHoldingIt'
+
+	return DbgGtStatusWaiting if status == DbgGtStatusWaitingWord else DbgGtStatusReady
+end 'dbgReportedStatus'
+
+function dbgGtBacktrace(base DbgWord, private DbgWord, stopKind DbgWord)
+	let handle = dbgLoad(base, offset: DbgOffCmdArg0)
+
+	if not dbgRosterHolds(private, handle: handle) or not dbgGtIsLive(handle) 'nobodyCarvedThatOrItIsOver'
+		dbgRefuse(base, reason: DbgRefusalNoSuchThread)
+		return
+	end 'nobodyCarvedThatOrItIsOver'
+
+	let machine = dbgMachineRunning(handle)
+
+	if machine == 0 'parked'
+		dbgWalkFrames(base, frame: dbgLoad(handle, offset: DbgGtOffFp))
+		return
+	end 'parked'
+
+	// The stopping machine's own thread has its registers on the page; any other machine's are in a
+	// suspended register file this walk has no seed from.
+	if stopKind != DbgStopKindThread or dbgLoad(machine, offset: DbgMOffOsThreadId) != dbgLoad(private, offset: DbgPrivOffStopThreadId) 'anotherMachineIsOnIt'
+		dbgRefuse(base, reason: DbgRefusalThreadIsRunning)
+		return
+	end 'anotherMachineIsOnIt'
+
+	dbgWalkFrames(base, frame: dbgLoad(base, offset: DbgOffStopFp))
+end 'dbgGtBacktrace'
+
+function dbgGtHold(base DbgWord, private DbgWord)
+	let handle = dbgLoad(base, offset: DbgOffCmdArg0)
+
+	if not dbgRosterHolds(private, handle: handle) or not dbgGtIsLive(handle) 'nobodyCarvedThatOrItIsOver'
+		dbgRefuse(base, reason: DbgRefusalNoSuchThread)
+		return
+	end 'nobodyCarvedThatOrItIsOver'
+
+	if dbgMachineRunning(handle) != 0 'itIsRunningRightNow'
+		dbgRefuse(base, reason: DbgRefusalThreadIsRunning)
+		return
+	end 'itIsRunningRightNow'
+
+	if dbgHoldSlotOf(private, handle: handle) != DbgNotFound 'alreadyHeld'
+		dbgAnswerDone(base)
+		return
+	end 'alreadyHeld'
+
+	let free = dbgFreeHoldSlot(private)
+
+	if free == DbgNotFound 'noRoom'
+		dbgRefuse(base, reason: DbgRefusalHoldTableFull)
+		return
+	end 'noRoom'
+
+	// The two witnesses are what make a hold lapse instead of catching a stranger: a recycle zeroes the record
+	// and the next spawn writes its own entry function and stack at the same address.
+	let at = dbgHoldSlotAddr(private, slot: free)
+	dbgStore(at, offset: DbgHoldOffFuncPtr, value: dbgLoad(handle, offset: DbgGtOffFuncPtr))
+	dbgStore(at, offset: DbgHoldOffStackBase, value: dbgLoad(handle, offset: DbgGtOffStackBase))
+	dbgStore(at, offset: DbgHoldOffHandle, value: handle)
+	dbgStore(private, offset: DbgPrivOffHoldsPlaced, value: dbgLoad(private, offset: DbgPrivOffHoldsPlaced) + 1)
+	dbgAnswerDone(base)
+end 'dbgGtHold'
+
+function dbgGtRelease(base DbgWord, private DbgWord)
+	let slot = dbgHoldSlotOf(private, handle: dbgLoad(base, offset: DbgOffCmdArg0))
+
+	if slot == DbgNotFound 'nothingHeldThere'
+		dbgRefuse(base, reason: DbgRefusalNoSuchThread)
+		return
+	end 'nothingHeldThere'
+
+	// Nothing is enqueued and nobody is woken: the thread never left the scheduler's structures, so the
+	// next dequeue that comes round to it simply stops being refused.
+	dbgStore(dbgHoldSlotAddr(private, slot: slot), offset: DbgHoldOffHandle, value: 0)
+	dbgStore(private, offset: DbgPrivOffHoldsPlaced, value: dbgLoad(private, offset: DbgPrivOffHoldsPlaced) - 1)
+	dbgAnswerDone(base)
+end 'dbgGtRelease'

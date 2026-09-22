@@ -7,6 +7,16 @@ export let DbgOnTrapName = b"__dbg_on_trap"
 export let DebugClaimStackName = b"__dbg_claim_stack"
 export let DebugReleaseStackName = b"__dbg_release_stack"
 
+// The service thread's entry. `__dbg_init` takes its address through `__Raw.dbgServiceEntryAddr()`, which
+// is the edge that keeps it alive, so it needs no root of its own.
+export let DbgServiceLoopName = b"__dbg_service_loop"
+
+// The two the scheduler calls, both behind a `__dbg_ctl` test it emits: the carve's roster append and the
+// hand-over's hold question. Those calls are minted long after the reach walk, so
+// `StdlibSource.runtimeTierFileIsTheDebugAgent` is what credits them reached.
+export let DbgGtCarvedName = b"__dbg_gt_carved"
+export let DbgGtShouldHoldName = b"__dbg_gt_should_hold"
+
 export function debugAgentRuntimeGlobals(usage RuntimeUsage) returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
@@ -29,9 +39,28 @@ export function checkDebugAgentGeometry(signatures ProgramSignatures, tierPath F
 		panic("debug agent: {DbgMaxBacktraceFrames} backtrace frames at {DbgOffBtFrames} run past the read header at {DbgOffReadLen}")
 	end 'framesOverrunTheReadHeader'
 
-	if DbgOffReadBuf + DbgReadBufBytes > DbgOffAgentPrivate 'readBufferOverrunsThePrivateWord'
-		panic("debug agent: a {DbgReadBufBytes}-byte read buffer at {DbgOffReadBuf} runs past the agent's private word at {DbgOffAgentPrivate}")
-	end 'readBufferOverrunsThePrivateWord'
+	if DbgOffReadBuf + DbgReadBufBytes > DbgOffConditionRecord 'readBufferOverrunsTheConditionRecord'
+		panic("debug agent: a {DbgReadBufBytes}-byte read buffer at {DbgOffReadBuf} runs past the condition record at {DbgOffConditionRecord}")
+	end 'readBufferOverrunsTheConditionRecord'
+
+	if DbgOffConditionRecord + DbgConditionRecordWords * DbgWordBytes > DbgOffGtCount 'conditionRecordOverrunsTheTallies'
+		panic("debug agent: a {DbgConditionRecordWords}-word condition record at {DbgOffConditionRecord} runs past the green-thread count at {DbgOffGtCount}")
+	end 'conditionRecordOverrunsTheTallies'
+
+	// These two words belong to a spec program and the agent never writes them: a case that needs the parent
+	// and the child to name one word has nowhere else to put it, since a spec program cannot take the address
+	// of its own variable and the mapped base of a `SharedSegment` is private to the stdlib.
+	if DbgOffGtTruncated + DbgWordBytes > DbgOffSpecScratch or DbgOffSpecScratch + DbgSpecScratchWords * DbgWordBytes > DbgOffGtRecords 'theSpecBandIsNotWhereItWasReserved'
+		panic("debug agent: the {DbgSpecScratchWords} words reserved for a spec program at {DbgOffSpecScratch} do not lie between the green-thread tallies ending at {DbgOffGtTruncated + DbgWordBytes} and the record array at {DbgOffGtRecords}")
+	end 'theSpecBandIsNotWhereItWasReserved'
+
+	if DbgOffGtRecords + DbgGtRecordCapacity * DbgGtRecordStride > DbgOffAgentPrivate 'recordsOverrunThePrivateWord'
+		panic("debug agent: {DbgGtRecordCapacity} green-thread records of {DbgGtRecordStride} bytes at {DbgOffGtRecords} run past the agent's private word at {DbgOffAgentPrivate}")
+	end 'recordsOverrunThePrivateWord'
+
+	if DbgGtRecOffMachine + DbgWordBytes > DbgGtRecordStride 'aRecordDoesNotFitItsStride'
+		panic("debug agent: a green-thread record's machine field at {DbgGtRecOffMachine} runs past its own {DbgGtRecordStride}-byte stride")
+	end 'aRecordDoesNotFitItsStride'
 
 	if DbgOffAgentPrivate + DbgWordBytes > DbgSegmentBytes 'privateWordOutsideTheSegment'
 		panic("debug agent: the agent's private word at {DbgOffAgentPrivate} lies outside a {DbgSegmentBytes}-byte segment")
@@ -39,9 +68,37 @@ export function checkDebugAgentGeometry(signatures ProgramSignatures, tierPath F
 
 	requireTierGeometryAgrees(debugAgentSymbolTablePins(), signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Targets/Shared/BacktraceFormat.maxon", layer: "debug agent")
 
-	if DbgPrivOffBreakpoints + DbgBreakpointCapacity * DbgPrivBreakpointStride > DbgPrivStackBase 'breakpointsOverrunTheAgentStack'
-		panic("debug agent: {DbgBreakpointCapacity} breakpoint entries at {DbgPrivOffBreakpoints} run past the agent stack at {DbgPrivStackBase}")
-	end 'breakpointsOverrunTheAgentStack'
+	if DbgPrivOffHold + DbgHoldCapacity * DbgHoldSlotBytes > DbgPrivOffContext 'theHoldTableOverrunsTheContextBuffer'
+		panic("debug agent: {DbgHoldCapacity} hold slots of {DbgHoldSlotBytes} bytes at {DbgPrivOffHold} run past the CONTEXT buffer at {DbgPrivOffContext}")
+	end 'theHoldTableOverrunsTheContextBuffer'
+
+	if DbgHoldOffStackBase + DbgWordBytes > DbgHoldSlotBytes 'aHoldsEpochOverrunsItsSlot'
+		panic("debug agent: a hold's stack-base witness at {DbgHoldOffStackBase} runs past the {DbgHoldSlotBytes}-byte slot it lives in")
+	end 'aHoldsEpochOverrunsItsSlot'
+
+	if DbgPrivOffContext + DbgCtxBytes > DbgPrivOffHoldsPlaced 'theContextBufferOverrunsThePlacedHoldCount'
+		panic("debug agent: a {DbgCtxBytes}-byte CONTEXT at {DbgPrivOffContext} runs past the placed-hold count at {DbgPrivOffHoldsPlaced}")
+	end 'theContextBufferOverrunsThePlacedHoldCount'
+
+	if DbgPrivOffHoldsPlaced + DbgWordBytes > DbgPrivOffBreakpoints 'thePlacedHoldCountOverrunsTheBreakpoints'
+		panic("debug agent: the placed-hold count at {DbgPrivOffHoldsPlaced} runs past the breakpoint table at {DbgPrivOffBreakpoints}")
+	end 'thePlacedHoldCountOverrunsTheBreakpoints'
+
+	if DbgBpOffCondition + DbgCondRecOffLiteral + DbgWordBytes > DbgPrivBreakpointStride 'theConditionOverrunsTheEntry'
+		panic("debug agent: a breakpoint's condition literal at {DbgBpOffCondition + DbgCondRecOffLiteral} runs past the {DbgPrivBreakpointStride}-byte entry it lives in")
+	end 'theConditionOverrunsTheEntry'
+
+	if DbgPrivOffBreakpoints + DbgBreakpointCapacity * DbgPrivBreakpointStride > DbgPrivOffGtRoster 'breakpointsOverrunTheRoster'
+		panic("debug agent: {DbgBreakpointCapacity} breakpoint entries at {DbgPrivOffBreakpoints} run past the green-thread roster at {DbgPrivOffGtRoster}")
+	end 'breakpointsOverrunTheRoster'
+
+	if DbgPrivOffGtRoster + DbgGtRosterCapacity * DbgWordBytes > DbgPrivStackBase 'theRosterOverrunsTheAgentStack'
+		panic("debug agent: a {DbgGtRosterCapacity}-entry roster at {DbgPrivOffGtRoster} runs past the agent stack at {DbgPrivStackBase}")
+	end 'theRosterOverrunsTheAgentStack'
+
+	if DbgPrivStackBase >= DbgPrivBytes - DbgAgentShadowBytes 'noStackLeft'
+		panic("debug agent: the agent stack's floor at {DbgPrivStackBase} leaves no room below the top of a {DbgPrivBytes}-byte private block")
+	end 'noStackLeft'
 
 	if DbgBreakpointCapacity * DbgSlotBytes > DbgSlotPoolBytes 'slotsOverrunThePool'
 		panic("debug agent: {DbgBreakpointCapacity} slots of {DbgSlotBytes} bytes do not fit a {DbgSlotPoolBytes}-byte pool")
@@ -140,6 +197,7 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the read buffer's offset", here: DbgOffReadBuf, named: "DbgOffReadBuf"))
 	out.push(TierGeometryPin.create("the agent's private word offset", here: DbgOffAgentPrivate, named: "DbgOffAgentPrivate"))
 
+	out.push(TierGeometryPin.create("the register file's slots", here: DbgRegisterSlots, named: "DbgRegisterSlots"))
 	out.push(TierGeometryPin.create("the backtrace cap", here: DbgMaxBacktraceFrames, named: "DbgMaxBacktraceFrames"))
 	out.push(TierGeometryPin.create("a backtrace frame's words", here: DbgBacktraceFrameWords, named: "DbgBacktraceFrameWords"))
 	out.push(TierGeometryPin.create("the read cap", here: DbgMaxReadLength, named: "DbgMaxReadLength"))
@@ -268,6 +326,126 @@ function debugAgentTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the env name buffer's bytes", here: DbgEnvNameBufferBytes, named: "DbgEnvNameBufferBytes"))
 	out.push(TierGeometryPin.create("the env name's first word", here: debugEnvNameWord(0), named: "DbgEnvNameWord0"))
 	out.push(TierGeometryPin.create("the env name's second word", here: debugEnvNameWord(1), named: "DbgEnvNameWord1"))
+
+	out.push(TierGeometryPin.create("the condition record's offset", here: DbgOffConditionRecord, named: "DbgOffConditionRecord"))
+	out.push(TierGeometryPin.create("a condition's kind field", here: DbgCondRecOffKind, named: "DbgCondRecOffKind"))
+	out.push(TierGeometryPin.create("a condition's operand field", here: DbgCondRecOffOperand, named: "DbgCondRecOffOperand"))
+	out.push(TierGeometryPin.create("a condition's width field", here: DbgCondRecOffWidth, named: "DbgCondRecOffWidth"))
+	out.push(TierGeometryPin.create("a condition's signedness field", here: DbgCondRecOffSigned, named: "DbgCondRecOffSigned"))
+	out.push(TierGeometryPin.create("a condition's operator field", here: DbgCondRecOffOp, named: "DbgCondRecOffOp"))
+	out.push(TierGeometryPin.create("a condition's literal field", here: DbgCondRecOffLiteral, named: "DbgCondRecOffLiteral"))
+
+	out.push(TierGeometryPin.create("the green-thread count's offset", here: DbgOffGtCount, named: "DbgOffGtCount"))
+	out.push(TierGeometryPin.create("the green-thread truncation flag's offset", here: DbgOffGtTruncated, named: "DbgOffGtTruncated"))
+	out.push(TierGeometryPin.create("the green-thread record array's offset", here: DbgOffGtRecords, named: "DbgOffGtRecords"))
+	out.push(TierGeometryPin.create("a green-thread record's stride", here: DbgGtRecordStride, named: "DbgGtRecordStride"))
+	out.push(TierGeometryPin.create("the green-thread record capacity", here: DbgGtRecordCapacity, named: "DbgGtRecordCapacity"))
+	out.push(TierGeometryPin.create("a green-thread record's handle field", here: DbgGtRecOffHandle, named: "DbgGtRecOffHandle"))
+	out.push(TierGeometryPin.create("a green-thread record's status field", here: DbgGtRecOffStatus, named: "DbgGtRecOffStatus"))
+	out.push(TierGeometryPin.create("a green-thread record's entry pc field", here: DbgGtRecOffEntryPc, named: "DbgGtRecOffEntryPc"))
+	out.push(TierGeometryPin.create("a green-thread record's saved sp field", here: DbgGtRecOffSavedSp, named: "DbgGtRecOffSavedSp"))
+	out.push(TierGeometryPin.create("a green-thread record's saved fp field", here: DbgGtRecOffSavedFp, named: "DbgGtRecOffSavedFp"))
+	out.push(TierGeometryPin.create("a green-thread record's park kind field", here: DbgGtRecOffParkKind, named: "DbgGtRecOffParkKind"))
+	out.push(TierGeometryPin.create("a green-thread record's machine field", here: DbgGtRecOffMachine, named: "DbgGtRecOffMachine"))
+
+	out.push(TierGeometryPin.create("the set-condition command", here: DbgCmdSetCondition, named: "DbgCmdSetCondition"))
+	out.push(TierGeometryPin.create("the clear-condition command", here: DbgCmdClearCondition, named: "DbgCmdClearCondition"))
+	out.push(TierGeometryPin.create("the green-thread list command", here: DbgCmdGtList, named: "DbgCmdGtList"))
+	out.push(TierGeometryPin.create("the green-thread backtrace command", here: DbgCmdGtBacktrace, named: "DbgCmdGtBacktrace"))
+	out.push(TierGeometryPin.create("the green-thread hold command", here: DbgCmdGtHold, named: "DbgCmdGtHold"))
+	out.push(TierGeometryPin.create("the green-thread release command", here: DbgCmdGtRelease, named: "DbgCmdGtRelease"))
+	out.push(TierGeometryPin.create("the pause command", here: DbgCmdPause, named: "DbgCmdPause"))
+
+	out.push(TierGeometryPin.create("the pause stop reason", here: DbgStopReasonPause, named: "DbgStopReasonPause"))
+	out.push(TierGeometryPin.create("the unowned-trap stop reason", here: DbgStopReasonTrap, named: "DbgStopReasonTrap"))
+
+	out.push(TierGeometryPin.create("the no-such-thread refusal", here: DbgRefusalNoSuchThread, named: "DbgRefusalNoSuchThread"))
+	out.push(TierGeometryPin.create("the hold-table-full refusal", here: DbgRefusalHoldTableFull, named: "DbgRefusalHoldTableFull"))
+	out.push(TierGeometryPin.create("the thread-is-running refusal", here: DbgRefusalThreadIsRunning, named: "DbgRefusalThreadIsRunning"))
+	out.push(TierGeometryPin.create("the not-running refusal", here: DbgRefusalNotRunning, named: "DbgRefusalNotRunning"))
+	out.push(TierGeometryPin.create("the not-pausable refusal", here: DbgRefusalNotPausable, named: "DbgRefusalNotPausable"))
+
+	out.push(TierGeometryPin.create("the running green-thread status", here: DbgGtStatusRunning, named: "DbgGtStatusRunning"))
+	out.push(TierGeometryPin.create("the ready green-thread status", here: DbgGtStatusReady, named: "DbgGtStatusReady"))
+	out.push(TierGeometryPin.create("the waiting green-thread status", here: DbgGtStatusWaiting, named: "DbgGtStatusWaiting"))
+	out.push(TierGeometryPin.create("the held green-thread status", here: DbgGtStatusHeld, named: "DbgGtStatusHeld"))
+
+	out.push(TierGeometryPin.create("the register condition kind", here: DbgCondKindRegister, named: "DbgCondKindRegister"))
+	out.push(TierGeometryPin.create("the stack-slot condition kind", here: DbgCondKindStackSlot, named: "DbgCondKindStackSlot"))
+	out.push(TierGeometryPin.create("the equality operator", here: DbgCondOpEqual, named: "DbgCondOpEqual"))
+	out.push(TierGeometryPin.create("the inequality operator", here: DbgCondOpNotEqual, named: "DbgCondOpNotEqual"))
+	out.push(TierGeometryPin.create("the less-than operator", here: DbgCondOpLess, named: "DbgCondOpLess"))
+	out.push(TierGeometryPin.create("the less-or-equal operator", here: DbgCondOpLessOrEqual, named: "DbgCondOpLessOrEqual"))
+	out.push(TierGeometryPin.create("the greater-than operator", here: DbgCondOpGreater, named: "DbgCondOpGreater"))
+	out.push(TierGeometryPin.create("the greater-or-equal operator", here: DbgCondOpGreaterOrEqual, named: "DbgCondOpGreaterOrEqual"))
+	out.push(TierGeometryPin.create("the signed-compare request", here: DbgCondSignedYes, named: "DbgCondSignedYes"))
+	out.push(TierGeometryPin.create("a one-byte operand", here: DbgWidthByte, named: "DbgWidthByte"))
+	out.push(TierGeometryPin.create("a two-byte operand", here: DbgWidthHalf, named: "DbgWidthHalf"))
+	out.push(TierGeometryPin.create("a four-byte operand", here: DbgWidthWord32, named: "DbgWidthWord32"))
+	out.push(TierGeometryPin.create("an eight-byte operand", here: DbgWidthWord64, named: "DbgWidthWord64"))
+
+	out.push(TierGeometryPin.create("the pause attempt limit", here: DbgPauseAttemptLimit, named: "DbgPauseAttemptLimit"))
+
+	out.push(TierGeometryPin.create("the current-thread-id verb", here: debugHostVerbCode(DebugHostVerb.currentThreadId), named: "DbgVerbCurrentThreadId"))
+	out.push(TierGeometryPin.create("the open-thread verb", here: debugHostVerbCode(DebugHostVerb.openThread), named: "DbgVerbOpenThread"))
+	out.push(TierGeometryPin.create("the suspend-thread verb", here: debugHostVerbCode(DebugHostVerb.suspendThread), named: "DbgVerbSuspendThread"))
+	out.push(TierGeometryPin.create("the resume-thread verb", here: debugHostVerbCode(DebugHostVerb.resumeThread), named: "DbgVerbResumeThread"))
+	out.push(TierGeometryPin.create("the read-thread-context verb", here: debugHostVerbCode(DebugHostVerb.readThreadContext), named: "DbgVerbReadThreadContext"))
+	out.push(TierGeometryPin.create("the write-thread-context verb", here: debugHostVerbCode(DebugHostVerb.writeThreadContext), named: "DbgVerbWriteThreadContext"))
+	out.push(TierGeometryPin.create("the preempt-safe verb", here: debugHostVerbCode(DebugHostVerb.preemptSafe), named: "DbgVerbPreemptSafe"))
+
+	out.push(TierGeometryPin.create("the service thread's private offset", here: DbgPrivOffServiceThread, named: "DbgPrivOffServiceThread"))
+	out.push(TierGeometryPin.create("the pause trampoline's private offset", here: DbgPrivOffPauseTrampoline, named: "DbgPrivOffPauseTrampoline"))
+	out.push(TierGeometryPin.create("the stopping thread id's private offset", here: DbgPrivOffStopThreadId, named: "DbgPrivOffStopThreadId"))
+	out.push(TierGeometryPin.create("the main thread handle's private offset", here: DbgPrivOffMainThreadHandle, named: "DbgPrivOffMainThreadHandle"))
+	out.push(TierGeometryPin.create("the main thread id's private offset", here: DbgPrivOffMainThreadId, named: "DbgPrivOffMainThreadId"))
+	out.push(TierGeometryPin.create("the world-stopped flag's private offset", here: DbgPrivOffWorldStopped, named: "DbgPrivOffWorldStopped"))
+	out.push(TierGeometryPin.create("the roster count's private offset", here: DbgPrivOffRosterCount, named: "DbgPrivOffRosterCount"))
+	out.push(TierGeometryPin.create("the roster truncation flag's private offset", here: DbgPrivOffRosterTruncated, named: "DbgPrivOffRosterTruncated"))
+	out.push(TierGeometryPin.create("the pause attempt count's private offset", here: DbgPrivOffPauseAttempts, named: "DbgPrivOffPauseAttempts"))
+	out.push(TierGeometryPin.create("the scheduler-lock-held flag's private offset", here: DbgPrivOffSchedLockHeld, named: "DbgPrivOffSchedLockHeld"))
+	out.push(TierGeometryPin.create("the hold table's private offset", here: DbgPrivOffHold, named: "DbgPrivOffHold"))
+	out.push(TierGeometryPin.create("the context buffer's private offset", here: DbgPrivOffContext, named: "DbgPrivOffContext"))
+	out.push(TierGeometryPin.create("the placed-hold count's private offset", here: DbgPrivOffHoldsPlaced, named: "DbgPrivOffHoldsPlaced"))
+	out.push(TierGeometryPin.create("the green-thread roster's private offset", here: DbgPrivOffGtRoster, named: "DbgPrivOffGtRoster"))
+	out.push(TierGeometryPin.create("the hold table's capacity", here: DbgHoldCapacity, named: "DbgHoldCapacity"))
+	out.push(TierGeometryPin.create("a hold slot's bytes", here: DbgHoldSlotBytes, named: "DbgHoldSlotBytes"))
+	out.push(TierGeometryPin.create("a hold's handle field", here: DbgHoldOffHandle, named: "DbgHoldOffHandle"))
+	out.push(TierGeometryPin.create("a hold's entry-function witness", here: DbgHoldOffFuncPtr, named: "DbgHoldOffFuncPtr"))
+	out.push(TierGeometryPin.create("a hold's stack-base witness", here: DbgHoldOffStackBase, named: "DbgHoldOffStackBase"))
+	out.push(TierGeometryPin.create("the green-thread roster's capacity", here: DbgGtRosterCapacity, named: "DbgGtRosterCapacity"))
+	out.push(TierGeometryPin.create("a breakpoint's condition field", here: DbgBpOffCondition, named: "DbgBpOffCondition"))
+
+	out.push(TierGeometryPin.create("the CONTEXT's stack pointer", here: DbgCtxOffRsp, named: "DbgCtxOffRsp"))
+	out.push(TierGeometryPin.create("the CONTEXT's request field", here: DbgCtxOffFlagsRequest, named: "DbgCtxOffFlagsRequest"))
+	out.push(TierGeometryPin.create("the CONTEXT's control request", here: DbgCtxControlRequest, named: "DbgCtxControlRequest"))
+
+	out.push(TierGeometryPin.create("the return byte", here: DbgReturnByte, named: "DbgReturnByte"))
+	out.push(TierGeometryPin.create("the pause trampoline's bytes", here: DbgPauseTrampolineBytes, named: "DbgPauseTrampolineBytes"))
+	out.push(TierGeometryPin.create("a failed suspend", here: DbgSuspendFailed, named: "DbgSuspendFailed"))
+	out.push(TierGeometryPin.create("the DebugStream ring's write cursor", here: DbgDsOffWriteCursor, named: "DbgDsOffWriteCursor"))
+
+	// The scheduler's own geometry, and every one of these offsets is a running sum over the fields before
+	// it: adding a field to the machine or the green-thread record moves them, and the agent would then read
+	// a neighbouring word with nothing else failing.
+	out.push(TierGeometryPin.create("the machine's current green thread", here: MOffCurrentGt as ParsedInt, named: "DbgMOffCurrentGt"))
+	out.push(TierGeometryPin.create("the machine roster's link", here: MOffAllNext as ParsedInt, named: "DbgMOffAllNext"))
+	out.push(TierGeometryPin.create("the machine's OS thread id", here: MOffOsThreadId as ParsedInt, named: "DbgMOffOsThreadId"))
+	out.push(TierGeometryPin.create("the machine's suspendable handle", here: MOffPreemptThreadHandle as ParsedInt, named: "DbgMOffPreemptThreadHandle"))
+	out.push(TierGeometryPin.create("the machine's signal claim", here: MOffSignalPending as ParsedInt, named: "DbgMOffSignalPending"))
+
+	out.push(TierGeometryPin.create("a green thread's saved stack pointer", here: GtOffSp, named: "DbgGtOffSp"))
+	out.push(TierGeometryPin.create("a green thread's saved frame pointer", here: GtOffFp, named: "DbgGtOffFp"))
+	out.push(TierGeometryPin.create("a green thread's status word", here: GtOffStatus, named: "DbgGtOffStatus"))
+	out.push(TierGeometryPin.create("a green thread's stack base", here: GtOffStackBase, named: "DbgGtOffStackBase"))
+	out.push(TierGeometryPin.create("a green thread's entry function", here: GtOffFuncPtr, named: "DbgGtOffFuncPtr"))
+	out.push(TierGeometryPin.create("a green thread's stack guard", here: GtOffStackGuard, named: "DbgGtOffStackGuard"))
+	out.push(TierGeometryPin.create("a green thread's park kind", here: GtOffParkKind, named: "DbgGtOffParkKind"))
+	out.push(TierGeometryPin.create("the completed status", here: GtStatusCompleted, named: "DbgGtStatusCompletedWord"))
+	out.push(TierGeometryPin.create("the waiting status", here: GtStatusWaiting, named: "DbgGtStatusWaitingWord"))
+	out.push(TierGeometryPin.create("the cooperative preemption request", here: GtStackGuardPreempt, named: "DbgGtStackGuardPreempt"))
+	out.push(TierGeometryPin.create("a free signal claim", here: PreemptClaimFree, named: "DbgPreemptClaimFree"))
+	out.push(TierGeometryPin.create("a held signal claim", here: PreemptClaimHeld, named: "DbgPreemptClaimHeld"))
 
 	return out
 end 'debugAgentTierPins'

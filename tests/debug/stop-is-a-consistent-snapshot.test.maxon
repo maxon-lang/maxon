@@ -1,0 +1,46 @@
+let ConsistentSnapshotCaseLabel = "stop-is-a-consistent-snapshot"
+
+let AnchorName = "worker-loop"
+let WorkerFunctionName = "worker"
+let TwoProcessors = "2"
+let ContinuesPastEveryWorker = 60
+
+test 'a stop with two processors running is a snapshot: one thread runs, and the stop names it and its machine'
+	let staged = builtFixture(ConsistentSnapshotCaseLabel, fixture: WorkersFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let loopLine = anchorLine(staged, anchor: AnchorName)
+
+	var armings = StringArray.create()
+	armings.push("{BreakCommand} {lineTarget(loopLine)}")
+	armings.push(RunCommand)
+	armings.push(ThreadsCommand)
+
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryWorker)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [targetEnvOption(MaxProcsVariableName, value: TwoProcessors)])
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "nothing stopped, so there is no snapshot to ask about. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	try Expect.notEqual(numberOf(stopped, node: stopped.root, key: MachineKey) as AssertedInt, expected: 0, message: "⭐ WITH TWO PROCESSORS THE TRAP IS TAKEN ON ONE OF THEM AND THE STOP MUST SAY WHICH. A `{MachineKey}` of 0 is the answer for a program with no scheduler, and this one has two machines. {said}")
+
+	let rosters = eventsOfKind(events, kind: ThreadsEventName)
+	try Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` at the stop printed no `{ThreadsEventName}` event. {said}")
+
+	let roster = eventAt(rosters, index: 0)
+	let listed = renderedThreads(roster)
+
+	try Expect.equal(countThreadsWhere(roster, key: StatusKey, value: RunningThreadStatus) as AssertedInt, expected: 1, message: "⛔⛔ THIS IS WHAT STOP-THE-WORLD MEANS AND THE ONLY PLACE THE CORPUS CAN SEE IT. One machine trapped; the other was suspended where it stood, and the green thread it was running is no longer RUNNING anywhere. Two running threads is a roster taken while a second machine was still executing user code — a picture of the program that was never true at any instant. It held: {listed}. {said}")
+
+	let runningId = threadIdWithStatus(roster, status: RunningThreadStatus, functionName: WorkerFunctionName)
+	try Expect.notEqual(runningId as AssertedInt, expected: AbsentThreadId as AssertedInt, message: "the one running thread is not inside `{WorkerFunctionName}`, and the breakpoint that stopped the program is. It held: {listed}. {said}")
+	try Expect.equal(numberOf(stopped, node: stopped.root, key: ThreadKey) as AssertedInt, expected: runningId as AssertedInt, message: "the stop names a different green thread than the one the roster shows running, so the two answers describe different moments. It held: {listed}. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end with two processors. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+end 'a stop with two processors running is a snapshot: one thread runs, and the stop names it and its machine'

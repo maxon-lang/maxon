@@ -110,22 +110,34 @@ export type DebugSymbols
 		return completionsFor(partial, pool: self.functionNamePool())
 	end 'completionPool'
 
-	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress) returns DebugStop
+	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef) returns DebugStop
 		let frames = self.frameListFor(stop, textBase: textBase)
 		let offset = stop.pc - textBase
 
 		match self.reader.pcToLine(offset as MxdbgCodeOffset) 'positioned'
-			none then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames)
-			found(row) then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(row.file, line: row.line as DebugLineNumber), frames: frames)
+			none then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: "", line: 0, column: 0, offset: offset, source: DebugSourceLineArray.create(), frames: frames, machine: stop.machine, thread: thread)
+			found(row) then return DebugStop.create(reason, functionName: self.innermostName(frames, offset: offset), file: baseNameOf(row.file), line: row.line as DebugLineNumber, column: row.column as DebugColumnNumber, offset: offset, source: self.sourceWindow(row.file, line: row.line as DebugLineNumber), frames: frames, machine: stop.machine, thread: thread)
 		end 'positioned'
 	end 'stopRecordFor'
 
 	export function frameListFor(stop EngineStop, textBase DebugAddress) returns DebugFrameArray
+		return self.walkedFrames(stop, textBase: textBase, mayStartOutsideTheProgram: false)
+	end 'frameListFor'
+
+	export function parkedFrameListFor(stop EngineStop, textBase DebugAddress) returns DebugFrameArray
+		return self.walkedFrames(stop, textBase: textBase, mayStartOutsideTheProgram: true)
+	end 'parkedFrameListFor'
+
+	// A parked green thread's chain starts inside the switch that parked it, which is runtime code no frame
+	// of this program covers, so its walk may cross frames before the first one it can name. A stopped
+	// thread's may not: there the first uncovered frame is the end of the program's own stack.
+	function walkedFrames(stop EngineStop, textBase DebugAddress, mayStartOutsideTheProgram bool) returns DebugFrameArray
 		var frames = DebugFrameArray.create()
 		self.appendFramesFor(frames, pc: stop.pc, framePointer: stop.framePointer, textBase: textBase, biased: false)
+		var entered = frames.count() > 0
 
 		for (iter, returnAddress) in stop.returnAddresses.withIterator() 'eachCaller'
-			if frames.count() == 0 'theWalkAlreadyEnded'
+			if not entered and not mayStartOutsideTheProgram 'theWalkAlreadyEnded'
 				break
 			end 'theWalkAlreadyEnded'
 
@@ -133,13 +145,18 @@ export type DebugSymbols
 			let before = frames.count()
 			self.appendFramesFor(frames, pc: returnAddress, framePointer: framePointer, textBase: textBase, biased: true)
 
-			if frames.count() == before 'pastTheProgramsOwnCode'
+			if frames.count() > before 'insideTheProgramsOwnCode'
+				entered = true
+				continue
+			end 'insideTheProgramsOwnCode'
+
+			if entered 'pastTheProgramsOwnCode'
 				break
 			end 'pastTheProgramsOwnCode'
 		end 'eachCaller'
 
 		return frames
-	end 'frameListFor'
+	end 'walkedFrames'
 
 	export function offsetIsTheProgramsOwn(offset DebugAddress) returns bool
 		return match self.reader.functionContaining(offset as MxdbgCodeOffset) 'enclosing'
@@ -476,7 +493,7 @@ function wholeNumberIn(spelling String) returns DebugWholeNumber
 	end 'read'
 end 'wholeNumberIn'
 
-function baseNameOf(path String) returns String
+export function baseNameOf(path String) returns String
 	let components = pathComponentsOf(path)
 
 	return try components.get(components.count() - 1) otherwise path

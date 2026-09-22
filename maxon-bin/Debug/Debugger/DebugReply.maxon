@@ -5,12 +5,110 @@ export typealias DebugColumnNumber = int(0 to u32.max)
 export typealias DebugFrameNumber = int(0 to u32.max)
 export typealias DebugTally = int(0 to u32.max)
 export typealias DebugExitCode = int(i64.min to i64.max)
+
 // Signed, although a debuggee word is not: the range is what the debuggee's own `int(0 to u64.max)` is
 // stored in, and a word with its top bit set fails the check on the way into an unsigned alias.
 export typealias DebugWord = int(i64.min to i64.max)
 
 export let DebugNoSuggestion = ""
 let DebugNoUnavailability = ""
+
+export typealias DebugThreadId = int(1 to u32.max)
+
+export union DebugRegisterAccess
+	readable
+	unavailable(reason String)
+end 'DebugRegisterAccess'
+
+export union DebugThreadRef
+	none
+	id(value DebugThreadId)
+end 'DebugThreadRef'
+
+export type DebugThreadRow
+	export var id as DebugThreadId
+	export var status as String
+	export var functionName as String
+	export var file as String
+	export var line as DebugLineNumber
+	export var handle as DebugAddress
+
+	export static function create(id DebugThreadId, status String, functionName String, file String, line DebugLineNumber, handle DebugAddress) returns DebugThreadRow
+		return Self{id: id, status: status, functionName: functionName, file: file, line: line, handle: handle}
+	end 'create'
+end 'DebugThreadRow'
+
+export typealias DebugThreadRowArray = Array with DebugThreadRow
+
+export type DebugThreadRoster
+	export var rows as DebugThreadRowArray
+	export var truncated as bool
+	export var unavailable as String
+
+	export static function listed(rows DebugThreadRowArray, truncated bool) returns DebugThreadRoster
+		return Self{rows: rows, truncated: truncated, unavailable: DebugNoUnavailability}
+	end 'listed'
+
+	export static function missing(reason String) returns DebugThreadRoster
+		return Self{rows: DebugThreadRowArray.create(), truncated: false, unavailable: reason}
+	end 'missing'
+end 'DebugThreadRoster'
+
+export type DebugThreadOutcome
+	export var event as String
+	export var thread as DebugThreadRef
+	export var result as String
+	export var reason as String
+
+	export static function create(event String, thread DebugThreadRef, result String, reason String) returns DebugThreadOutcome
+		return Self{event: event, thread: thread, result: result, reason: reason}
+	end 'create'
+end 'DebugThreadOutcome'
+
+export type DebugThreadWalk
+	export var thread as DebugThreadRef
+	export var frames as DebugFrameArray
+	export var unavailable as String
+
+	export static function walked(thread DebugThreadRef, frames DebugFrameArray) returns DebugThreadWalk
+		return Self{thread: thread, frames: frames, unavailable: DebugNoUnavailability}
+	end 'walked'
+
+	export static function missing(thread DebugThreadRef, reason String) returns DebugThreadWalk
+		return Self{thread: thread, frames: DebugFrameArray.create(), unavailable: reason}
+	end 'missing'
+end 'DebugThreadWalk'
+
+export type DebugTraceEvent
+	export var seq as DebugAddress
+	export var kind as String
+	export var text as String
+
+	export static function create(seq DebugAddress, kind String, text String) returns DebugTraceEvent
+		return Self{seq: seq, kind: kind, text: text}
+	end 'create'
+end 'DebugTraceEvent'
+
+export typealias DebugTraceEventArray = Array with DebugTraceEvent
+
+export union DebugTraceSince
+	none
+	at(position DebugAddress)
+end 'DebugTraceSince'
+
+export type DebugTraceSlice
+	export var events as DebugTraceEventArray
+	export var since as DebugTraceSince
+	export var unavailable as String
+
+	export static function taken(events DebugTraceEventArray, since DebugTraceSince) returns DebugTraceSlice
+		return Self{events: events, since: since, unavailable: DebugNoUnavailability}
+	end 'taken'
+
+	export static function missing(reason String) returns DebugTraceSlice
+		return Self{events: DebugTraceEventArray.create(), since: DebugTraceSince.none, unavailable: reason}
+	end 'missing'
+end 'DebugTraceSlice'
 
 export type DebugSourceLine
 	export var line as DebugLineNumber
@@ -49,9 +147,11 @@ export type DebugStop
 	export var offset as DebugAddress
 	export var source as DebugSourceLineArray
 	export var frames as DebugFrameArray
+	export var machine as DebugAddress
+	export var thread as DebugThreadRef
 
-	export static function create(reason String, functionName String, file String, line DebugLineNumber, column DebugColumnNumber, offset DebugAddress, source DebugSourceLineArray, frames DebugFrameArray) returns DebugStop
-		return Self{reason: reason, functionName: functionName, file: file, line: line, column: column, offset: offset, source: source, frames: frames}
+	export static function create(reason String, functionName String, file String, line DebugLineNumber, column DebugColumnNumber, offset DebugAddress, source DebugSourceLineArray, frames DebugFrameArray, machine DebugAddress, thread DebugThreadRef) returns DebugStop
+		return Self{reason: reason, functionName: functionName, file: file, line: line, column: column, offset: offset, source: source, frames: frames, machine: machine, thread: thread}
 	end 'create'
 end 'DebugStop'
 
@@ -115,9 +215,10 @@ export type DebugBreakpointAnswer
 	export var candidates as StringArray
 	export var suggestion as String
 	export var reason as String
+	export var condition as String
 
-	export static function create(action String, target String, functionName String, file String, line DebugLineNumber, offset DebugAddress, offsets DebugAddressArray, candidates StringArray, suggestion String, reason String) returns DebugBreakpointAnswer
-		return Self{action: action, target: target, functionName: functionName, file: file, line: line, offset: offset, offsets: offsets, candidates: candidates, suggestion: suggestion, reason: reason}
+	export static function create(action String, target String, functionName String, file String, line DebugLineNumber, offset DebugAddress, offsets DebugAddressArray, candidates StringArray, suggestion String, reason String, condition String = "") returns DebugBreakpointAnswer
+		return Self{action: action, target: target, functionName: functionName, file: file, line: line, offset: offset, offsets: offsets, candidates: candidates, suggestion: suggestion, reason: reason, condition: condition}
 	end 'create'
 end 'DebugBreakpointAnswer'
 
@@ -129,6 +230,10 @@ export union DebugReply
 	value(tree DebugValueTree)
 	exited(code DebugExitCode)
 	crashed(status DebugAddress)
+	threads(roster DebugThreadRoster)
+	threadWalked(walk DebugThreadWalk)
+	threadOutcome(outcome DebugThreadOutcome)
+	traced(slice DebugTraceSlice)
 	timedOut(waitingFor String)
 	failed(message String, suggestion String)
 	spoken(lines StringArray)

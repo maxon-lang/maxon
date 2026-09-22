@@ -700,7 +700,8 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A number from 1 up sets it exactly; a larger number is capped at the machine's count; a value that is not a positive number is ignored. `Scheduler.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
 
-`MAXON_DEBUGSTREAM` is set by `maxon monitor` to attach a `--debugstream` program to its ring, and
+`MAXON_DEBUGSTREAM` is set by `maxon monitor`, and by `maxon debug --trace`, to attach a `--debugstream`
+program to the ring the driver created; and
 `MAXON_DEBUG` is set by `maxon debug` to name the control segment its in-process agent attaches to. You
 do not set either yourself; a program that finds `MAXON_DEBUG` unset carries its agent dark and behaves
 exactly as it would without one.
