@@ -1,7 +1,7 @@
 ---
 feature: stdlib-loading
 status: stable
-keywords: [stdlib, loader, Internals, Clock, WallClock, dead-function-elimination, runtime-floor]
+keywords: [stdlib, loader, Clock, WallClock, dead-function-elimination, runtime-floor]
 category: system
 ---
 
@@ -10,9 +10,8 @@ category: system
 ## Documentation
 
 The stdlib loader enumerates every `.maxon` file under the checkout's `stdlib/`, top level and
-subdirectories alike — and loads all of them. Exactly ONE file
-is held back: `stdlib/Internals.maxon`, excluded permanently by user ruling and named once in
-`Compiler/StdlibLoader.maxon`. This spec deliberately does not restate what `stdlib/` CONTAINS:
+subdirectories alike — and loads all of them. NO file is held back: the loader carries no exclusion,
+by name or by filter. This spec deliberately does not restate what `stdlib/` CONTAINS:
 nothing would keep a prose copy of that inventory agreeing with the directory, and the same argument
 is made below about the bare-builtin roster, where both prose copies had already drifted.
 

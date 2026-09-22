@@ -1,0 +1,203 @@
+let CaseLabel = "published-scheduler-words"
+
+let SchedPhaseLabel = "__sched_phase"
+let SchedLastPollLabel = "__sched_lastpoll"
+let SchedPollUntilLabel = "__sched_poll_until"
+let GtTimerWhenLabel = "__gt_timer_when"
+let NetpollWaitersLabel = "__np_waiters"
+
+let RunnerDoneName = "__gt_runner_done"
+let OwnerDoneName = "__gt_owner_done"
+let CheckDeadName = "__sched_checkdead"
+let InitProcsName = "__sched_init_procs"
+let WorkerLoopName = "__sched_worker_loop"
+let MainLoopName = "__sched_main_loop"
+let SysmonName = "__sysmon"
+let WakePollerName = "__sched_wake_poller"
+let WakeNetpollerName = "__sched_wake_netpoller"
+let TimerAddName = "__gt_timer_add"
+let TimerCheckName = "__gt_timer_check"
+let PdReadyOneName = "__np_pd_ready_one"
+let PdCommitName = "__np_pd_commit"
+let PdExpireName = "__np_pd_expire"
+let GroupUnhookName = "__np_group_unhook"
+
+let GlobalAddressPrefix = "arm64.leaGlobal "
+
+let PublicationReason = "Every one of these words is written from under `__sched_lock` on one OS thread and observed on another that holds no lock in common with it — `__gt_owner_done`, `__sched_wake_poller`, `__sched_wake_netpoller` and `__sysmon` all read one off-lock, and `__sched_lock` serialises nothing against a reader that never takes it. A plain `str` orders nothing before itself and a plain `ldr` nothing after, so armv8 may make the announcement visible ahead of the data it announces: `__gt_runner_done` stores `__sched_phase` to say `main` completed, and a reader that sees that store may still be served `main`'s status and result from a line fetched before they were written — the program then reports an exit status the finished `main` never produced. The store is `StdOp.storeRelease`, which is `stlr` on both arm64 lanes, and the load `StdOp.loadAcquire`, which is `ldar`; both are the same plain `mov` on x64, where TSO already supplies the edge."
+
+typealias SiteTally = int(0 to 65535)
+
+test 'the scheduler words published from under the lock are stored with a release and loaded with an acquire'
+	let staged = stagedProgram(CaseLabel)
+
+	var findings = StringArray.create()
+	notePublishedWords(findings, staged: staged, target: MacosTargetName)
+	notePublishedWords(findings, staged: staged, target: LinuxTargetName)
+
+	try Expect.isTrue(findings.isEmpty(), message: "an emitted runtime body reaches a `.data` word another OS thread reads without the ordering that word is published with:{renderedFindings(findings)}\n\n  {PublicationReason}")
+end 'the scheduler words published from under the lock are stored with a release and loaded with an acquire'
+
+function notePublishedWords(findings StringArray, staged FilePath, target String)
+	let lines = irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: emittedBodies()))
+
+	notePhase(findings, lines: lines, target: target)
+	noteLastPoll(findings, lines: lines, target: target)
+	notePollUntil(findings, lines: lines, target: target)
+	noteTimerWhen(findings, lines: lines, target: target)
+	noteWaiters(findings, lines: lines, target: target)
+end 'notePublishedWords'
+
+function notePhase(findings StringArray, lines StringArray, target String)
+	noteWord(findings, lines: lines, target: target, label: SchedPhaseLabel, functionName: RunnerDoneName, publishes: true, observes: false)
+	noteWord(findings, lines: lines, target: target, label: SchedPhaseLabel, functionName: CheckDeadName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedPhaseLabel, functionName: OwnerDoneName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedPhaseLabel, functionName: MainLoopName, publishes: false, observes: true)
+end 'notePhase'
+
+function noteLastPoll(findings StringArray, lines StringArray, target String)
+	noteWord(findings, lines: lines, target: target, label: SchedLastPollLabel, functionName: InitProcsName, publishes: true, observes: false)
+	noteWord(findings, lines: lines, target: target, label: SchedLastPollLabel, functionName: WorkerLoopName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedLastPollLabel, functionName: MainLoopName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedLastPollLabel, functionName: SysmonName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedLastPollLabel, functionName: WakePollerName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedLastPollLabel, functionName: WakeNetpollerName, publishes: false, observes: true)
+end 'noteLastPoll'
+
+function notePollUntil(findings StringArray, lines StringArray, target String)
+	noteWord(findings, lines: lines, target: target, label: SchedPollUntilLabel, functionName: WorkerLoopName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedPollUntilLabel, functionName: MainLoopName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: SchedPollUntilLabel, functionName: WakeNetpollerName, publishes: false, observes: true)
+end 'notePollUntil'
+
+function noteTimerWhen(findings StringArray, lines StringArray, target String)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: TimerAddName, publishes: true, observes: false)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: TimerCheckName, publishes: true, observes: false)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: PdReadyOneName, publishes: true, observes: false)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: WorkerLoopName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: MainLoopName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: SysmonName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: GtTimerWhenLabel, functionName: WakePollerName, publishes: false, observes: true)
+end 'noteTimerWhen'
+
+function noteWaiters(findings StringArray, lines StringArray, target String)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: PdCommitName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: PdExpireName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: PdReadyOneName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: GroupUnhookName, publishes: true, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: CheckDeadName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: WorkerLoopName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: MainLoopName, publishes: false, observes: true)
+	noteWord(findings, lines: lines, target: target, label: NetpollWaitersLabel, functionName: WakePollerName, publishes: false, observes: true)
+end 'noteWaiters'
+
+function noteWord(findings StringArray, lines StringArray, target String, label String, functionName String, publishes bool, observes bool)
+	let body = functionBody(lines, functionName: functionName, target: target)
+	let materialisation = "{ArgumentSeparator}{label}"
+
+	var sites = 0 as SiteTally
+	var releases = 0 as SiteTally
+	var acquires = 0 as SiteTally
+	var plainStores = StringArray.create()
+	var plainLoads = StringArray.create()
+
+	for (iter, text) in body.withIterator() 'eachLine'
+		if not text.startsWith(GlobalAddressPrefix) or not text.endsWith(materialisation) 'anotherLine'
+			continue
+		end 'anotherLine'
+
+		sites = sites + 1
+
+		let register = try destinationRegisterOf(text) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` materialises the address of `{label}` with `{text}`, and no destination register could be read off that line. Every demand this case makes of that word is attributed through the register the address lands in.")
+		let access = try accessThrough(body, site: iter.index() as LineIndex, register: register) otherwise panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` materialises the address of `{label}` into `{register}` with `{text}` and then reaches nothing through `{register}` before overwriting it. A materialisation this case cannot attribute an access to leaves the absences below true for the reason that they address nothing.")
+
+		if access.use == RegisterUse.plainStore 'aPlainStore'
+			plainStores.push(access.line)
+			continue
+		end 'aPlainStore'
+
+		if access.use == RegisterUse.plainLoad 'aPlainLoad'
+			plainLoads.push(access.line)
+			continue
+		end 'aPlainLoad'
+
+		if access.use == RegisterUse.releaseStore 'aReleaseStore'
+			releases = releases + 1
+			continue
+		end 'aReleaseStore'
+
+		if access.use == RegisterUse.acquireLoad 'anAcquireLoad'
+			acquires = acquires + 1
+			continue
+		end 'anAcquireLoad'
+
+		panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` reaches `{label}` through `{register}` with `{access.line}`, which is none of the four shapes this case can read: `{PlainStorePrefix.trim()}`, `{PlainLoadPrefix.trim()}`, `{ReleaseStoreMnemonic}` or `{AcquireLoadMnemonic}`. An access it cannot classify would satisfy both absences below by being neither.")
+	end 'eachLine'
+
+	if sites == 0 'neverNamed'
+		panic("emitted-runtime tests: the gate could not run — on {target}, the emitted `{functionName}` holds no `{GlobalAddressPrefix.trim()} …{materialisation}` line, so that body never names `{label}` and every demand made of the pair here would be satisfied by a body that does none of this work.")
+	end 'neverNamed'
+
+	for line in plainStores 'eachPlainStore'
+		findings.push("on {target}, `{functionName}` still publishes `{label}` with a plain store — `{line}`")
+	end 'eachPlainStore'
+
+	for line in plainLoads 'eachPlainLoad'
+		findings.push("on {target}, `{functionName}` still observes `{label}` with a plain load — `{line}`")
+	end 'eachPlainLoad'
+
+	if publishes and releases == 0 'noReleaseStore'
+		findings.push("on {target}, `{functionName}` writes `{label}` and carries no `{ReleaseStoreMnemonic}` to it — {sites} materialisation(s) of that word's address in the body and not one release store through any of them")
+	end 'noReleaseStore'
+
+	if observes and acquires == 0 'noAcquireLoad'
+		findings.push("on {target}, `{functionName}` reads `{label}` and carries no `{AcquireLoadMnemonic}` of it — {sites} materialisation(s) of that word's address in the body and not one acquire load through any of them")
+	end 'noAcquireLoad'
+end 'noteWord'
+
+function accessThrough(body StringArray, site LineIndex, register String) returns RegisterEvent throws IrScanError
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.index <= site 'atOrBeforeTheMaterialisation'
+			continue
+		end 'atOrBeforeTheMaterialisation'
+
+		if event.use == RegisterUse.copiedOut 'carriedElsewhere'
+			continue
+		end 'carriedElsewhere'
+
+		if event.use == RegisterUse.untouched 'overwritten'
+			throw IrScanError.noSuchLine
+		end 'overwritten'
+
+		return event
+	end 'eachEvent'
+
+	throw IrScanError.noSuchLine
+end 'accessThrough'
+
+function emittedBodies() returns String
+	var names = StringArray.create()
+	names.push(RunnerDoneName)
+	names.push(OwnerDoneName)
+	names.push(CheckDeadName)
+	names.push(InitProcsName)
+	names.push(WorkerLoopName)
+	names.push(MainLoopName)
+	names.push(SysmonName)
+	names.push(WakePollerName)
+	names.push(WakeNetpollerName)
+	names.push(TimerAddName)
+	names.push(TimerCheckName)
+	names.push(PdReadyOneName)
+	names.push(PdCommitName)
+	names.push(PdExpireName)
+	names.push(GroupUnhookName)
+
+	var spelled = ""
+
+	for name in names 'eachName'
+		spelled = name if spelled.isEmpty() else "{spelled}{EmittedNameSeparator}{name}"
+	end 'eachName'
+
+	return spelled
+end 'emittedBodies'

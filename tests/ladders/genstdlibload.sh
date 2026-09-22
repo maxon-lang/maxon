@@ -4,8 +4,8 @@
 #     Does `phase:parse` cost O(user corpus x modules loaded), or O(user corpus) + O(modules)?
 #
 # ⭐ **WHY IT MATTERS FAR MORE THAN TODAY'S NUMBER.** The compiler loads ALL of `stdlib/` — every `.maxon`
-# file in this checkout, less the one named exclusion (`StdlibLoader.SupersededRuntimeModule`,
-# `Internals.maxon`) — on EVERY compile, whether or not the program names any of them. If a per-compile
+# file in this checkout, with no exclusion at all — on EVERY compile, whether or not the program names
+# any of them. If a per-compile
 # cost is proportional to the PRODUCT of corpus size and modules loaded, that is a genuine superlinearity
 # every user of the compiler pays. ⚠ **THIS LADDER WAS WRITTEN (2026-07-28) WHILE THE LOADER STILL
 # CARRIED A WHITELIST** that named 3, then 16, of those files one widening rung at a time, and the
@@ -123,9 +123,9 @@
 #   interned some of what the module wants — the only cross term that exists, and it has the wrong
 #   SIGN to be a hazard: an extra module gets marginally CHEAPER as the program grows.
 #
-#   ⇒ **THE LOADER'S END STATE IS SAFE ON THIS AXIS — and that end state is now what SHIPS.** The 51
-#   modules loaded today (52 on disk less the permanently-excluded `Internals.maxon`) cost the SUM of
-#   51 modules' own parses, at any program size. What each module costs is its own file's size; what it
+#   ⇒ **THE LOADER'S END STATE IS SAFE ON THIS AXIS — and that end state is now what SHIPS.** Every
+#   module on disk under `stdlib/` is loaded, and they cost the SUM of
+#   their own parses, at any program size. What each module costs is its own file's size; what it
 #   costs per unit of user code is ZERO.
 #
 #   ⚠ **WHAT DID GROW IN THAT RUNG'S DELTA COLUMN WAS NOT THE STDLIB LOAD**, and the three-binary split

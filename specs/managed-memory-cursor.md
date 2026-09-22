@@ -27,7 +27,7 @@ as `IterationError`.
 reference to the source record, and releases it when the cursor is dropped. Without that
 retain the source's textual last use is the `createCursor()` call itself, the record is
 freed there, and the cursor reads through a reclaimed allocation — a measured SIGSEGV
-(`stdlib/Internals.maxon:3027-3050`).
+(`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, the `__ManagedMemoryCursor` section).
 
 ⚠ **IT HOLDS THE RECORD, NOT THE RECORD'S FIELDS.** `length` and `element_size` are read
 LIVE on every access rather than snapshotted at creation, so a cursor cannot come to

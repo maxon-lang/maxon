@@ -73,7 +73,7 @@ let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 // scheduler and never calls `__gt_spawn`, so pruning that one function (correctly) would turn the chunk
 // gate off and the link would fail on `__gt_context_switch`. The fact is written down ONCE, where it is
 // decided, and read here.
-export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, userGlobals DataSectionEntryArray) returns CodeResult throws CompileError
+export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, dataSection DataSectionEntryArray) returns CodeResult throws CompileError
 	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
 	assertNoSugarOps(stdModule)
 	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
@@ -135,7 +135,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// and refuses a run registered after it, and the point COUNT has been final since the merge.
 	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
 	reserveCoverageImage(project)
-	globalData.layOut(dataSectionRoster(userGlobals, usage: usage, target: target), referenced: survivors.referencedGlobals)
+	globalData.layOut(dataSection, referenced: survivors.referencedGlobals)
 	globalData.requireLaidOutCoversReferences(survivors.referencedGlobals)
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
@@ -156,7 +156,7 @@ end 'buildBackend'
 // stub that reads it, and asks the TARGET too where the answer depends on both (`DataReach`,
 // `pushRuntimeGlobal`). ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT** — its host read takes FRAME
 // scratch, which is what a multi-M runtime requires.
-function dataSectionRoster(userGlobals DataSectionEntryArray, usage RuntimeUsage, target Target) returns DataSectionEntryArray
+export function dataSectionRoster(userGlobals DataSectionEntryArray, usage RuntimeUsage, target Target) returns DataSectionEntryArray
 	var roster = DataSectionEntryArray.create()
 	appendDataSectionEntries(roster, entries: userGlobals)
 	appendDataSectionEntries(roster, entries: gtRuntimeGlobals(usage, target: target))

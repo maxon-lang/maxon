@@ -158,7 +158,7 @@ the value folds and a folded in-range cast emits nothing either way.
 ⚠ **A RUNTIME OPERAND DOES DISCRIMINATE, so only the CONSTANT one needs this case's argument.**
 Every stdlib alias this loader lists is a checked QUANTITY, whose door refuses a value that arrived
 from a signed domain — so `x as Milliseconds` emits a guard where `x as NoSuchName` cannot, and the
-two are told apart by the emitted code. `stdlib/Internals.maxon`'s roster names the aliases that
+two are told apart by the emitted code. `stdlib/Builtins.maxon`'s roster names the aliases that
 are raw PATTERNS instead, and those are the ones that would emit nothing.
 
 What discriminates HERE is still the DIAGNOSTIC, and it is the stronger half in any case: a guard

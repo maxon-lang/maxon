@@ -19,7 +19,7 @@ fourth, so the whole growable-array surface rests on them.
   `length`; throws `indexOutOfBounds`. **No teardown runs**: the element is HANDED OUT, so
   its `+1` leaves with it. The vacated top slot must still be erased, because it holds a
   duplicate of a pointer this record no longer owns (see THE CAPACITY-SLOT INVARIANT in
-  `stdlib/Internals.maxon`).
+  `maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`).
 - `shiftRight(index, count)` — slide the `count` elements at `[index, index+count)` UP one
   slot, then ZERO the slot at `index` the slide vacated. The zeroing is what lets the
   caller's following `set(index, …)` overwrite rather than decref the stale duplicate the

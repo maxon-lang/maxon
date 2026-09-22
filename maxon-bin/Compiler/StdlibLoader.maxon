@@ -1,17 +1,14 @@
 // The stdlib LOADER — it enumerates every `.maxon` file under the checkout's `stdlib/`, top level and
 // subdirectories alike, and registers each one into the query database exactly as a user source is.
 //
-// ⭐ **IT LOADS ALL OF `stdlib/`, WITH ONE NAMED EXCLUSION** — `stdlib/Internals.maxon`, stated
-// beside the loader below. It is a permanent decision about one file, not a filter with a lifetime.
+// ⭐ **IT LOADS ALL OF `stdlib/`, WITH NO EXCLUSION AT ALL** — every file the walk finds is registered.
 //
-// ⚠ **NOTHING OUTSIDE THIS FILE MAY KNOW WHAT THE LOADER SKIPS — and that includes owning a type, a
-// constant or an error case on its behalf.** That rule outlived the filter and still binds the
-// exclusion: the directory walk is `Compiler.collectMaxonSources`, the user walk's own, and the path
+// ⚠ **NOTHING OUTSIDE THIS FILE MAY OWN A TYPE, A CONSTANT OR AN ERROR CASE ABOUT WHICH FILES THE
+// LOADER TAKES.** The directory walk is `Compiler.collectMaxonSources`, the user walk's own, and the path
 // array is `MaxonSourcePathArray`, declared beside it. Everything downstream deals in two durable facts
 // — "is this function STDLIB source or USER source?" and "is it reachable from `main`?" — computed in
-// `StdlibSource.maxon`. Both were true while the filter stood and both are true now, which is why the
-// deletion touched no pass: a pass that had reasoned in terms of "whitelisted" would have had to be
-// rewritten that day, and none did.
+// `StdlibSource.maxon`, so no pass anywhere reasons about which files the loader chose, and narrowing or
+// widening the set here reaches nothing that would have to be rewritten with it.
 //
 // ⭐ HOW A LOADED MODULE REACHES USER CODE. Each file is registered into the query database
 // (`fileChanged`) exactly like a user source, so it flows through the SAME tokenize → signature-index →
@@ -227,47 +224,6 @@
 //     ⇒ CHECKING IT is a build, not a reading: compile a program that declares its own `Byte` as a wide
 //     range and calls NOTHING in the module. If the module appears in the output, this clause has been hit.
 
-// ⛔ **THE ONE FILE UNDER `stdlib/` THIS LOADER DOES NOT LOAD**, by USER RULING: `stdlib/Internals.maxon`
-// is a slab allocator and refcount runtime, 98 raw runtime functions written over the privileged
-// `__Internals.*` namespace. This compiler's runtime is not a stdlib module at all — it is Std-tier IR
-// the compiler emits itself (`Compiler/Runtime/MmRuntime.maxon`) — so loading this file would put a
-// SECOND allocator, with its own heap and its own refcounts, into every program compiled.
-//
-// ⭐ **IT NEEDS NO TEST OF ITS OWN, BECAUSE IT FAILS CLOSED IN BOTH DIRECTIONS OF DRIFT — LOUDLY, ON
-// EVERY COMPILE IN THE TREE.** Delete the exclusion and the file is loaded: its declarations carry the
-// reserved `__` prefix and `Internals.maxon` is NOT one of the modules `Queries.declaresCompilerInternalNames`
-// exempts, so `Parser.requireUnreservedName` refuses its first `__mm_incref` declaration with `E2051`
-// and nothing compiles. RENAME the file and this constant stops matching — the file is loaded under its
-// new name and the same E2051 refuses it. Neither drift can leave the compiler quietly carrying two
-// allocators, which is why the exclusion is one comparison and not a mechanism with a spec behind it.
-//
-// ⭐ **SABOTAGE-MEASURED at the deletion, not asserted**: with this constant pointed at a name no file
-// bears — which simulates BOTH drift directions at once — the very next compile of
-// `function main() returns ExitCode / return 7` answered
-// `error E2051: stdlib\Internals.maxon:140:10: identifier '__mm_incref' is reserved`, against exit 7 and
-// 1,592 code bytes intact. ⚠ **NO LINE NUMBER IS QUOTED IN THE RULE ABOVE, DELIBERATELY**: the ruling of
-// 2026-08-05 recorded this refusal at `:26:10` and it is at `:140:10` today — the file moved underneath
-// the citation, which is exactly what a line number into another file does. The DIAGNOSTIC is the
-// durable fact; the position is not.
-let SupersededRuntimeModule = "Internals.maxon"
-
-// ⭐ **THE LOADER ANSWERS "WHICH PATH DO YOU SKIP?" — IT DOES NOT PUBLISH THE NAME.** The header's rule is
-// that nothing outside this file may OWN a copy of what the loader skips; a caller that asks and is told
-// owns nothing, and the day the exclusion changes it changes here alone.
-//
-// It exists because the spec runner's `--- stdlib-overlay:` machinery stages a COPY of `stdlib/` and then
-// refuses an overlay naming *"not a file the compiler loads"* — a guard it was enforcing by asking whether
-// the file was in the copy, which is a different question. `Testing/SpecTestRunner.copyStdlibSources` now
-// skips this path when staging, so the two questions coincide again and the refusal means what it says.
-//
-// ⚠ Returns the PATH, not the name, so the caller hoists ONE `join` out of its own walk exactly as
-// `loadLibraryRoot` does. A `contains`-style predicate taking a path would have to rebuild that `join`
-// per file, which is the allocation this file's own header measured and rejected.
-export function supersededRuntimeModulePath(stdlibDir FilePath) returns FilePath
-	// Interpolated for the E3007 reason stated at the call site in `loadLibraryRoot`.
-	return stdlibDir.join("{SupersededRuntimeModule}")
-end 'supersededRuntimeModulePath'
-
 // ⭐ **THE LOADER.** Enumerate BOTH library roots — `stdlib/` and its sibling `runtime/` — and register
 // each module, in the order the walk found them (see the header on why it does not sort). Called by
 // `loadProject` AFTER the user's own sources are loaded (so a directory build's output name still
@@ -335,21 +291,7 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 		return false
 	end 'contributedNothing'
 
-	// Built off the root the walk above enumerated, so both sides of the comparison come out of the same
-	// `join` and a `/`-spelled constant matches an enumerated `\` path on Windows. ⚠ It is the PROJECT's
-	// directory and NOT a checkout constant deliberately: the spec runner aims a compile at a STAGED copy
-	// (`stdlibDirOverride`), and a hardcoded path would silently stop excluding there. Hoisted out of the
-	// loop — one `join` per root, not one per file. (`supersededRuntimeModulePath` interpolates because a
-	// bare module-`let` literal stays untyped and matches BOTH `FilePath.join` overloads, String and
-	// FilePath — an E3007 ambiguity, the same reason `StdlibSource.locateStdlibDir` interpolates
-	// `StdlibDirName`.) A root with no such file simply never matches it.
-	let supersededByTheCompilersOwnRuntime = supersededRuntimeModulePath(root)
-
 	for path in found 'each'
-		if path.equals(supersededByTheCompilersOwnRuntime) 'superseded'
-			continue
-		end 'superseded'
-
 		if usersOwn.contains(path) 'theUsersOwnFile'
 			continue
 		end 'theUsersOwnFile'

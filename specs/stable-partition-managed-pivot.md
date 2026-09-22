@@ -18,7 +18,7 @@ let pv = try managed.get(pivotIndex) otherwise panic("…")   // a BORROW of man
 ```
 
 Under the self-hosted ownership model an element read is a **borrow** and `managed.set` **releases
-the occupant it displaces** (`Internals.__managed_mem_set`), so the moment the compaction cursor
+the occupant it displaces** (`__managed_mem_set`), so the moment the compaction cursor
 `w` arrives at `pivotIndex` the record `pv` is still comparing against is freed. Nothing else holds
 it: the store takes its own reference through `retainFunc@64`, which for a byte record is
 `__str_clone` — a DEEP CLONE — so the copy the buffer or the lower slot receives is a *different*

@@ -1196,15 +1196,12 @@ export function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteAr
 	return emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
 end 'emitLoadGlobalWord'
 
-// `emitLoadField` with ACQUIRE ordering, for a word read without the lock that guards its writers — each
-// such reader states at its own site why a stale answer is safe, and what the reads after it rely on seeing.
 export function emitLoadAcquireField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.loadAcquire(v, addrId: record, offset: offset, valueType: StdType.i64))
 	return v
 end 'emitLoadAcquireField'
 
-// `emitLoadGlobalWord` with ACQUIRE ordering — see `emitLoadAcquireField`.
 export function emitLoadAcquireGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))

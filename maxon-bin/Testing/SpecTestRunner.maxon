@@ -3120,10 +3120,6 @@ type StagedSourceTiers
 	end 'create'
 end 'StagedSourceTiers'
 
-// The files under a tier that the compiler does NOT load, keyed by the path spelling the walk hands
-// back. EMPTY for a tier every file of which is loaded — the literal count of such files, not a sentinel.
-typealias UnloadedPathSet = Set with String
-
 // ⭐⭐ **A CASE'S PRIVATE SOURCE TIERS — the fixture that makes `<stdlibDir>/Builtins.maxon`'s OWN rules
 // and the `runtime/` tier's privileges testable, and the reason it has to exist rather than being a spec
 // someone forgot to write.**
@@ -3178,11 +3174,8 @@ function stageSourceTiers(tempDir FilePath, test SpecTest, sourceStdlib FilePath
 	let stagedStdlib = tierRoot.join("{StdlibDirName}")
 	let stagedRuntime = try runtimeDirBeside(stagedStdlib) otherwise throw TierStagingError.refused("could not derive the staged runtime tier beside {stagedStdlib.toString()}")
 
-	var unloadedInStdlib = UnloadedPathSet.create()
-	unloadedInStdlib.insert(supersededRuntimeModulePath(sourceStdlib).toString())
-
-	try copySourceTier(sourceStdlib, into: stagedStdlib, written: written, notLoaded: unloadedInStdlib)
-	try copySourceTier(sourceRuntime, into: stagedRuntime, written: written, notLoaded: UnloadedPathSet.create())
+	try copySourceTier(sourceStdlib, into: stagedStdlib, written: written)
+	try copySourceTier(sourceRuntime, into: stagedRuntime, written: written)
 	try applyOverlaySections(test, stagedStdlib: stagedStdlib, sourceStdlib: sourceStdlib, paths: paths)
 	try writeRuntimeFileSections(test, stagedRuntime: stagedRuntime, sourceRuntime: sourceRuntime, paths: paths, written: written)
 
@@ -3199,21 +3192,16 @@ end 'stageSourceTiers'
 // copy inherited it for free), and the drift would show up as a case compiling against a tier subtly
 // unlike the one the same compiler loads everywhere else.
 //
-// ⚠ **STAGE WHAT THE COMPILER LOADS, NOT WHAT THE WALK FINDS, AND THE DIFFERENCE IS THE TIER'S OWN** —
-// which is why `notLoaded` is the caller's to supply. The two guards below cannot tell the sets apart on
-// their own: `applyOverlaySections` refuses an overlay naming "not a file the compiler loads from
+// ⚠ **WHAT THE WALK FINDS IS EXACTLY WHAT THE COMPILER LOADS, AND THE TWO GUARDS BELOW REST ON THAT
+// COINCIDENCE.** `applyOverlaySections` refuses an overlay naming "not a file the compiler loads from
 // <stdlib>" and `writeRuntimeFileSections` refuses a name that IS one, and both enforce that by asking
-// whether the name is in THIS copy. A file copied here but not loaded by the compiler passes the first
-// and trips the second, either way delivering an answer about a file nothing reads.
-function copySourceTier(from FilePath, into FilePath, written FilePathArray, notLoaded UnloadedPathSet) throws TierStagingError
+// whether the name is in THIS copy. A file copied here but not loaded by the compiler would pass the
+// first and trip the second, either way delivering an answer about a file nothing reads.
+function copySourceTier(from FilePath, into FilePath, written FilePathArray) throws TierStagingError
 	var sources = MaxonSourcePathArray.create()
 	_ = try collectMaxonSources(from, into: sources, selection: SourceSelection.libraryTier) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
 
 	for source in sources 'eachSource'
-		if notLoaded.contains(source.toString()) 'notLoadedSoNotStaged'
-			continue
-		end 'notLoadedSoNotStaged'
-
 		let relative = try source.relativeTo(from) otherwise throw TierStagingError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
 
 		let destination = into.join(relative)

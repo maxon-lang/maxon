@@ -38,9 +38,12 @@
 // (E2045, not a constant expression); a reference cycle is refused outright (E4014, `recursive type
 // references are not allowed`); a top-level managed container held to process exit exits **0**; and a
 // `Promise` pushed into an array and never awaited exits **0**. The fifth route is shut by
-// declaration rather than by measurement: `__Internals.*` is the only raw allocation the tree has,
-// and `stdlib/Internals.maxon`'s own header states that the lowering pass rejects a call to it from
-// any other source file. That is the
+// declaration rather than by measurement: the only raw allocation the tree has is the compiler's own
+// reserved runtime entries (`__mm_alloc`, `__slab_alloc`), and ANY source file naming one earns
+// E3004 at `Parser.requireCalleeIsNotReservedName` — the reserved-space exemption is conjoined with
+// `signatures.declaresCallee`, and no Maxon source declares either name (the compiler synthesizes both
+// bodies), so `stdlib/Builtins.maxon` and `stdlib/Testing.maxon` cannot call one either. Only `runtime/`
+// allocates raw at all, through the `__Raw` rows `parseCallNamed` lowers ahead of this door. That is the
 // language's own design rather than a gap in this corpus — `specs/leak-checker.md` states it
 // outright, *"leaks indicate a compiler bug rather than a user error"* — so the ONLY fixture that
 // could pin LEAKED would be one built on a LIVE COMPILER DEFECT. Such a gate goes green the day the

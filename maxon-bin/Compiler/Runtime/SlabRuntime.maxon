@@ -2922,26 +2922,25 @@ end 'SpanOwnerAccessCensus'
 function assertSpanOwnerAccessIsOrdered(module StdModule, firstFuncIndex FuncIndex)
 	var census = SpanOwnerAccessCensus.create()
 	var opIndices = OpIndexArray.create()
-	var load = StdLoadOperands.create()
+	var access = StdAccessOperands.create()
 
 	for index in firstFuncIndex upto module.funcCount() as FuncIndex 'eachFunc'
-		requireOrderedSpanOwnerAccessIn(module, func: module.getFunc(index), census: census, opIndices: opIndices, load: load)
+		requireOrderedSpanOwnerAccessIn(module, func: module.getFunc(index), census: census, opIndices: opIndices, access: access)
 	end 'eachFunc'
 
 	requireSpanOwnerCensusIsComplete(census)
 end 'assertSpanOwnerAccessIsOrdered'
 
-function requireOrderedSpanOwnerAccessIn(module StdModule, func IrFunction, census SpanOwnerAccessCensus, opIndices OpIndexArray, load StdLoadOperands)
+function requireOrderedSpanOwnerAccessIn(module StdModule, func IrFunction, census SpanOwnerAccessCensus, opIndices OpIndexArray, access StdAccessOperands)
 	module.collectLiveOpIndices(func, into: opIndices)
 
 	var reads = false
 	var publishes = false
 
 	for opIdx in opIndices 'eachOp'
-		let op = liveRuntimeOpAt(module, opIdx: opIdx, reader: SpanOwnerCheckName)
-		requireNoPlainSpanOwnerRead(op, func: func, load: load)
+		classifyAccessOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: SpanOwnerCheckName), access: access)
 
-		match spanOwnerAccessOfOp(op, func: func) 'access'
+		match spanOwnerAccessOf(access, func: func) 'access'
 			none then break 'access'
 			orderedRead then reads = true
 			orderedPublication then publishes = true
@@ -2951,153 +2950,38 @@ function requireOrderedSpanOwnerAccessIn(module StdModule, func IrFunction, cens
 	census.noteFunction(func.name, reads: reads, publishes: publishes)
 end 'requireOrderedSpanOwnerAccessIn'
 
-function requireNoPlainSpanOwnerRead(op StdOp, func IrFunction, load StdLoadOperands)
-	classifyLoadOperands(op, load: load)
-
-	if not load.isLoad() 'notAPlainLoad'
-		return
-	end 'notAPlainLoad'
-
-	if load.offset != MspanOwningPOffset 'notTheOwnerWord'
-		return
-	end 'notTheOwnerWord'
-
-	panic("{SpanOwnerCheckName}: '{String.from(func.name)}' reads a span's owning-P word at offset {MspanOwningPOffset} with a PLAIN load. Another OS thread publishes that word with a release store — the P that evicts an exhausted span, the refill that installs one, the relist that hands it back — and a plain load carries no ordering edge to it, so the span's free-list head and free count read after it may be satisfied from before the publication and this thread links a slot ahead of one already handed out. Read it through `emitLoadAcquireField`")
-end 'requireNoPlainSpanOwnerRead'
-
-function spanOwnerAccessOfOp(op StdOp, func IrFunction) returns SpanOwnerAccess
-	match op 'k'
-		storeIndirect(_, offset, _, _) then return refuseSpanOwnerPlainStore(func, offset: offset)
-		loadAcquire(_, _, offset, _) then return spanOwnerOrderedAccessAt(offset, ordered: SpanOwnerAccess.orderedRead)
-		storeRelease(_, offset, _, _) then return spanOwnerOrderedAccessAt(offset, ordered: SpanOwnerAccess.orderedPublication)
-		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketError or
-			osSocketSend or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osEnvBlock or
-			osEnvBlockFree or
-			osHandleFileType or
-			osCreateNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostSample or
-			osNetpoll or
-			osSocketOverlapped or
-			osSocketServe then return SpanOwnerAccess.none
+function spanOwnerAccessOf(access StdAccessOperands, func IrFunction) returns SpanOwnerAccess
+	match access.shape 'k'
+		load then return spanOwnerReadOf(access, func: func)
+		store then return spanOwnerWriteOf(access, func: func)
+		neither or
+			constant or
+			globalAddress or
+			atomic then return SpanOwnerAccess.none
 	end 'k'
-end 'spanOwnerAccessOfOp'
+end 'spanOwnerAccessOf'
 
-function spanOwnerOrderedAccessAt(offset ByteOffset, ordered SpanOwnerAccess) returns SpanOwnerAccess
-	if offset != MspanOwningPOffset 'notTheOwnerWord'
+function spanOwnerReadOf(access StdAccessOperands, func IrFunction) returns SpanOwnerAccess
+	if access.offset != MspanOwningPOffset 'notTheOwnerWord'
 		return SpanOwnerAccess.none
 	end 'notTheOwnerWord'
 
-	return ordered
-end 'spanOwnerOrderedAccessAt'
+	match access.ordering 'ordered'
+		plain then panic("{SpanOwnerCheckName}: '{String.from(func.name)}' reads a span's owning-P word at offset {MspanOwningPOffset} with a PLAIN load. Another OS thread publishes that word with a release store — the P that evicts an exhausted span, the refill that installs one, the relist that hands it back — and a plain load carries no ordering edge to it, so the span's free-list head and free count read after it may be satisfied from before the publication and this thread links a slot ahead of one already handed out. Read it through `emitLoadAcquireField`")
+		ordered then return SpanOwnerAccess.orderedRead
+	end 'ordered'
+end 'spanOwnerReadOf'
 
-function refuseSpanOwnerPlainStore(func IrFunction, offset ByteOffset) returns SpanOwnerAccess
-	if offset != MspanOwningPOffset 'notTheOwnerWord'
+function spanOwnerWriteOf(access StdAccessOperands, func IrFunction) returns SpanOwnerAccess
+	if access.offset != MspanOwningPOffset 'notTheOwnerWord'
 		return SpanOwnerAccess.none
 	end 'notTheOwnerWord'
 
-	panic("{SpanOwnerCheckName}: '{String.from(func.name)}' publishes a span's owning-P word at offset {MspanOwningPOffset} with a PLAIN store. Another OS thread reads that word with an acquire load and then walks the span's free list, and a plain store gives it no edge to the list and count writes that precede it — so the reader can observe the new owner and a stale list. Emit it through `StdOp.storeRelease`")
-end 'refuseSpanOwnerPlainStore'
+	match access.ordering 'ordered'
+		plain then panic("{SpanOwnerCheckName}: '{String.from(func.name)}' publishes a span's owning-P word at offset {MspanOwningPOffset} with a PLAIN store. Another OS thread reads that word with an acquire load and then walks the span's free list, and a plain store gives it no edge to the list and count writes that precede it — so the reader can observe the new owner and a stale list. Emit it through `StdOp.storeRelease`")
+		ordered then return SpanOwnerAccess.orderedPublication
+	end 'ordered'
+end 'spanOwnerWriteOf'
 
 function requireSpanOwnerCensusIsComplete(census SpanOwnerAccessCensus)
 	requireSpanOwnerSiteWasSeen(census.freeReads, funcName: SlabFreeName, ordering: "acquire load")

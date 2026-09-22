@@ -582,17 +582,20 @@ directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`
 
 ## `emitted-runtime/` — the ORDERING an emitted runtime body reads another thread's word with
 
-Two cases, and each one's subject is a body no author wrote: one the back end synthesizes into every
-program that spawns, and two it synthesizes into every program that allocates. Both build the same
-two-line `spawn` fixture for `arm64-macos` and for `arm64-linux` with
-`--emit-ir-runtime=<function>`, cut `func @<function>` out of the printed Target IR, and ask how that
-body reads a word another thread published: with `ldar`, or with a plain `ldr`. The shared half — the
-staging, the spawn, the cut, the line scan and the plain-load reading — lives in
-`EmittedRuntimeHarness.maxon`; see the note under `debug/`. Every demand either case makes is one of
-three scans of the cut body, and neither case walks it itself: `firstLineIndex` where an ORDER is
+Three cases, and each one's subject is a body no author wrote: one the back end synthesizes into every
+program that spawns, two into every program that allocates, and fifteen scheduler, timer and poller
+bodies for the `.data` words published from under `__sched_lock`. All three build the same two-line
+`spawn` fixture for `arm64-macos` and for `arm64-linux` with `--emit-ir-runtime=`, cut
+`func @<function>` out of the printed Target IR, and ask how that body reads a word another thread
+published — with `ldar` or with a plain `ldr` — and how it writes one, with `stlr` or a plain `str`.
+The shared half — the staging, the spawn, the cut, the line scan and the plain-access reading — lives
+in `EmittedRuntimeHarness.maxon`; see the note under `debug/`. Every demand a case makes is one of
+three scans of the cut body, and no case walks it itself: `firstLineIndex` where an ORDER is
 demanded and `bodyLineCount` where a TALLY is, both selecting a line by the op it starts with, an
-operand it contains and an operand it ends with; and `firstWriteOfRegister`, which asks each line for
-its destination operand rather than knowing which ops write.
+operand it contains and an operand it ends with; and `registerEvents`, the one scan that FOLLOWS a
+register, which reads off each line both what it does through that register and whether it overwrites
+it — two facts rather than one, because `ldr x1, [x1 + 48]` is both. `firstWriteOfRegister` and
+`registerHoldingArgument` are readings of that one scan rather than scans of their own.
 
 **`steal-reads-the-victim-ring-with-acquire-loads`** — `__sched_steal`, the green-thread scheduler's
 thief, and the victim's `runqHead`, `runqTail` and `runnext`.
@@ -614,6 +617,19 @@ ahead of the `bl` writes `x1`, read off each line's destination operand rather t
 the ops that write. Failing both panics rather than passing, because a body that does none of this
 work satisfies an absence demand by holding nothing, and a register the span is not addressed through
 satisfies it the same way.
+
+**`published-scheduler-words-are-stored-with-release-and-loaded-with-acquire`** — the five `.data` words
+classed `MultiMSharing.publishedFromTheLock` (`__sched_phase`, `__sched_lastpoll`, `__sched_poll_until`,
+`__gt_timer_when`, `__np_waiters`), over the fifteen emitted bodies that write or read one. Each word is
+written under `__sched_lock` and read on an OS thread that holds no lock in common with the writer, so
+the lock orders nothing for that reader and the edge has to travel on the accesses themselves: `stlr` at
+every store, `ldar` at every load, the locked sites included. The case walks each body for the
+`leaGlobal … , <label>` lines that materialise a word's address, follows the register the address lands
+in to the first thing done through it, and tallies the four shapes it can read. A table of body against
+word says which of publishing and observing each body owes. ⛔ **ITS SELF-PROOFS PANIC RATHER THAN
+PASS**: a body that never names the word, a materialisation whose destination register cannot be read,
+one whose register is overwritten before it reaches anything, and an access matching none of the four
+shapes each leave the absence demands true for the reason that they address nothing.
 
 ⭐⭐ **THE TARGET IR IS THE ONLY PLACE THE ANSWER IS.** The victim publishes its tail with a
 read-modify-write and claims a head with a compare-and-swap, so the WRITER's half of the pair is
@@ -651,15 +667,18 @@ this gate is one a `/land` battery or a contributor runs by name —
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory under `temp/emitted-runtime/`, named for the CASE, because `maxon test` runs files
 concurrently and one fixture staged twice would be two runs over one tree), and it keeps rule 5 at the
-budget `parallel-compile/` prices: one spawning `test` per file, and one compile per body per lane —
-two for the steal case, four for the relist doors. That is the thinnest margin in this corpus:
-MEASURED at 2.9 s of the 5,000 ms deadline on a Windows host, so a body added to either case is a
+budget `parallel-compile/` prices: one spawning `test` per file, then one compile per BODY per lane for
+the two cases that ask for one body at a time — two for the steal case, four for the relist doors —
+against one compile per LANE for the published words, whose fifteen bodies are named in a single
+comma-separated `--emit-ir-runtime=`. That is the thinnest margin in this corpus: the widest case
+MEASURED at 2.7 s of the 5,000 ms deadline on a Windows host, so a body added to a per-body case is a
 `--timeout=` away from needing one.
 
-⚠ **ONE COMPILE PER BODY, THOUGH `--emit-ir-runtime=` TAKES A COMMA-SEPARATED LIST.** A name this
-program contains nothing of PANICS the build (`TargetPrinter.requireEveryNameRendered`), so a list
-would take the bodies named beside it down with it and report nothing about any of them — which is
-exactly the state a door being ADDED is in while it is being added.
+⚠ **A COMMA-SEPARATED `--emit-ir-runtime=` COSTS ONE COMPILE AND TAKES ITS WHOLE LIST DOWN WITH ANY ONE
+NAME.** A name this program contains nothing of PANICS the build
+(`TargetPrinter.requireEveryNameRendered`), so a list reports nothing about any of the bodies on it —
+which is exactly the state a door being ADDED is in while it is being added. A case naming a settled set
+of bodies takes the single compile; one being extended asks for its bodies one at a time.
 
 ## `examples/` — every program in `examples/`, and every complete program the docs show, still builds and still computes its known answer
 
@@ -765,9 +784,8 @@ on a copy costs a file write rather than 25 s, and the whole corpus therefore ru
 
 One case, and it spawns nothing: it reads every top-level `stdlib/*.maxon` and `docs/STDLIB_REFERENCE.md`, and
 fails listing, file by file, each `public` declaration name the document does not contain as a whole word.
-`stdlib/Builtins.maxon` and `stdlib/Internals.maxon` are excluded with their reasons in the case, and
-`stdlib/helpers/` is not descended into; a name in the `__` band, and everything declared inside one, is
-compiler machinery and is left out.
+`stdlib/Builtins.maxon` is excluded with its reason in the case, and `stdlib/helpers/` is not descended
+into; a name in the `__` band, and everything declared inside one, is compiler machinery and is left out.
 
 ⛔ **A `public` LINE WHOSE NAME THE SCANNER CANNOT READ PANICS**, naming its file and line. A shape it
 skipped would drop out of the roster and read exactly like a documented name.

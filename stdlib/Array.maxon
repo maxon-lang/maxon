@@ -9,7 +9,7 @@ public enum ArrayError implements Error
 end 'ArrayError'
 
 // The backing `__ManagedMemory` takes lengths and indices as a SIGNED `BufferCoordinate`
-// (Internals.maxon), so an array holds at most `i64.max` elements and no index names a slot above it.
+// (runtime/Word.maxon), so an array holds at most `i64.max` elements and no index names a slot above it.
 // The upper bound is not tighter than that because a caller's own `reserve(n)` sets the capacity, and
 // nothing in this type bounds `n` further.
 //
@@ -334,7 +334,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// those, a payload-free enum. That holds whether the new slots are fresh capacity or slots this
 	/// array used before and gave up: the buffer's slots above `length` are always zero, because
 	/// every operation that vacates a slot (`clear`, `remove`/`pop`, and a shrinking `resize`)
-	/// erases it on the way out. See THE CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon.
+	/// erases it on the way out. See THE CAPACITY-SLOT INVARIANT in maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon.
 	///
 	/// ⚠ A MANAGED element — a struct, a `String`, a nested container, a boxed union — lives in the
 	/// buffer as a refcounted POINTER, so a zeroed slot there is NULL: an absence, not a value. Maxon
@@ -395,7 +395,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// than `resize`: the added entries need a MEANING, not merely a defined bit pattern.
 	///
 	/// The entries it lands on always read zero beforehand, whether they are fresh capacity or slots
-	/// this array used before and gave up — see THE CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon
+	/// this array used before and gave up — see THE CAPACITY-SLOT INVARIANT in maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon
 	/// (verified: `push` × 4, `clear()`, `resize(4)` reads back 0 0 0 0, not the previous occupants).
 	/// So a caller filling with ZERO is
 	/// paying for a fill it does not need; that is the only cost of using this uniformly, and it is

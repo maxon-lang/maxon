@@ -32,7 +32,7 @@ test 'both locked relist doors re-read the span owner word with an acquire load'
 end 'both locked relist doors re-read the span owner word with an acquire load'
 
 function noteOwnerRead(findings StringArray, staged FilePath, target String, functionName String)
-	let body = functionBody(irLines(buildStagedProgram(staged, target: target, functionName: functionName)), functionName: functionName, target: target)
+	let body = functionBody(irLines(buildStagedProgram(staged, caseLabel: CaseLabel, target: target, functionName: functionName)), functionName: functionName, target: target)
 	let span = spanRegister(body, target: target, functionName: functionName)
 
 	notePlainFieldLoad(findings, body: body, target: target, register: span, offset: OwnerWordOffset, functionName: functionName, field: "the span's owner word (mspan+{OwnerWordOffset})")
@@ -62,9 +62,19 @@ function requireSpanAddressesTheFreeToSpanCall(body StringArray, target String, 
 end 'requireSpanAddressesTheFreeToSpanCall'
 
 function spanIsMovedBack(body StringArray, before LineIndex, span String) returns bool
-	let handoff = try firstLineIndex(body, startingWith: "{RegisterMovePrefix}{SpanArgumentRegister}{ArgumentSeparator}", containing: NoFurtherDemand, endingWith: "{ArgumentSeparator}{span}") otherwise return false
+	for event in registerEvents(body, register: span) 'eachEvent'
+		if event.use != RegisterUse.copiedOut 'notACopy'
+			continue
+		end 'notACopy'
 
-	return handoff < before
+		let destination = try destinationRegisterOf(event.line) otherwise continue
+
+		if destination == SpanArgumentRegister 'theHandoff'
+			return event.index < before
+		end 'theHandoff'
+	end 'eachEvent'
+
+	return false
 end 'spanIsMovedBack'
 
 function registerIsWritten(body StringArray, before LineIndex, register String) returns bool

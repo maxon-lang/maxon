@@ -201,7 +201,7 @@ The `parent_ptr` field is `0` for owned and rdata buffers. For slices, it holds 
 
 ### `parent_ptr` sentinels and small-array inline storage
 
-The runtime (`stdlib/Internals.maxon`) keys teardown on the
+The runtime (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`) keys teardown on the
 `parent_ptr` field (not `capacity`, which always holds the real slot count) via a
 small set of sentinels: `-1` root (owns an external buffer), `-2` rdata-backed,
 `-3` inline (see below), `0` uninitialized, and any other value a live slice

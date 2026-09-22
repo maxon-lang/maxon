@@ -838,7 +838,7 @@ end 'main'
 <!-- test: byte-at-stops-at-the-live-length -->
 
 `byteAt`'s bound is `length · element_size` — the LIVE length, not the capacity that `setByte` is bounded by.
-The asymmetry is deliberate (`stdlib/Internals.maxon:3485-3530`): a write stages bytes into
+The asymmetry is deliberate (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, `ManagedMemSetName`): a write stages bytes into
 allocated slots BEFORE a length publishes them, a read has nothing to see there. This asks for the byte at
 exactly the limit.
 ```maxon
@@ -857,7 +857,7 @@ end 'main'
 
 `grow` raises the capacity to EXACTLY what it is asked for. Asked for what it already has it is a no-op;
 asked to LOWER it, it throws `invalidCapacity` rather than silently keeping the larger buffer — which is the
-one thing that separates it from `reserve` (`stdlib/Internals.maxon:3463-3503`).
+one thing that separates it from `reserve` (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, `buildManagedMemGrow`).
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
@@ -964,7 +964,7 @@ error E2015: <fragment>:10:12: Unsupported: `Array` member 'setByte' — P1.7 pr
 length.** The sources disagreed. The `setByte` line of the Documentation above (`panics if index >= length *
 elementSize`) says LENGTH; `stdlib/File.maxon:117-127` behaves as though it did, doing `setLength(len+1)`
 before `setByte(len, 0)` and commenting *"at the length boundary, so temporarily extend length to allow
-setByte at that index"*; and `stdlib/Internals.maxon:3505-3530` says CAPACITY, in a comment that gives the
+setByte at that index"*; and `maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`'s `ManagedMemSetName` says CAPACITY, in a comment that gives the
 reason (*"Byte writes are bounded by CAPACITY (the allocated region), NOT length — mirroring
 `__managed_mem_set`"*). **The ruling is CAPACITY, and the `setByte` documentation line above is treated as
 stale — do not "fix" the compiler back toward it.**

@@ -2058,6 +2058,47 @@ typealias HalfRadix = int(1 to 8)
 // A digit of any base this renders, before it becomes a character.
 typealias RadixDigit = int(0 to 15)
 
+// ⭐⭐ **THE `bits(64)` ROSTER — EVERY RAW BIT PATTERN IN `stdlib/`, AND WHY EACH ONE IS ONE.**
+//
+// `bits(n)` is a PATTERN: it admits every value n bits can hold, so its door is guarded by the WIDTH
+// alone — vacuously at 64 — and every ordering comparison on it reads UNSIGNED. An `int(...)` alias is
+// a QUANTITY: its door refuses a value that arrived from a signed domain, because a negative is not a
+// quantity. The five names below are patterns; everything else in `stdlib/` is a quantity.
+//
+// ⇒ **`grep -rnE '^\s*(public )?typealias .* = bits\(' stdlib/` must return exactly the FIVE declarations
+// below** — anchored at a declaration so this line is not its own sixth hit. The spelling is
+// the whole of the claim: an alias that wants an unguarded door has to say `bits`, and one that says
+// `int` gets a checked one whatever its bounds. A sixth is an alias nobody justified.
+//
+//   • `RenderedPattern`      (this file, below)               — the 64 bits `"{n:x}"` and its siblings
+//     render. A formatted integer is the pattern whatever bit 63 holds, and this is the step that says
+//     so before `RenderedMagnitude` reads it as a magnitude.
+//   • `HashDigest`           (`Hasher.maxon`)                — an FNV-1a digest. The offset basis is
+//     `14695981039346656037`, above `i64.max` BEFORE anything is hashed, and the mixing multiply is
+//     defined to wrap.
+//   • `HashMixWord`          (`Interfaces.maxon`)            — a hash avalanche's bit pattern. The
+//     multiply and the shifts are defined on all 64 bits; a "negative" mixed word is meaningless.
+//   • `GraphemeStateBits`    (`helpers/string/grapheme.maxon`) — a packed UAX #29 break-state
+//     bitfield, read by masking, never ordered as a magnitude.
+//   • `NodePowerWord`        (`helpers/sort/driftsort.maxon`)     — `nodePowerBetween`'s scale
+//     arithmetic: `scale * x` is designed to reach ~2^63 without wrapping, and the leading-zero scan
+//     builds the top bit as `2^62 * 2`. ⚠ **IT IS SCOPED TO THAT ONE FORMULA, AND THAT IS THE POINT.**
+//     `SortIndex` and `SortRunIndex` beside it type every `lo`, `hi`, `pivotIndex`, `scratchCap` and
+//     run coordinate in the sort, and those are array COORDINATES: a checked quantity, which is what
+//     an index is. Typing them by the one formula that needs the top bit would make patterns of all
+//     of them.
+//
+// Full-range SIGNED aliases are deliberate too and do NOT appear in that grep, so none of them is
+// evidence about the rule above. Each admits a NEGATIVE because a negative MEANS something to it:
+// `ParsedInt` here, and `Array.ReportedCapacity` — an integer literal's own value, and the flag a
+// non-owned buffer answers instead of a capacity.
+// A range that must admit a sentinel is honest only by admitting it; the rule is not "narrow
+// everything", it is "say what the value can be".
+//
+// ⚠ **THE RUNTIME TIER KEEPS ITS OWN ROSTER AND IS NOT COVERED BY THIS ONE** —
+// `runtime/Word.maxon`'s header, whose `MachineWord` is a `bits(64)` outside `stdlib/` and therefore
+// outside the grep.
+
 // ⭐ **THE TWO-STEP CAST THROUGH THESE IS THE ONE BINDING DOOR THAT MAKES THE DIGIT LOOP'S DIVIDE
 // UNSIGNED, AND BOTH STEPS ARE LOAD-BEARING.** `ParsedInt` is signed, so `bits(64)` is the only spelling
 // that reinterprets a set bit 63 without a check, and `int(0 to u64.max)` is the only one that then makes

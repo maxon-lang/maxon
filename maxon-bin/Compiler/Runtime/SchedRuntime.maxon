@@ -138,11 +138,10 @@
 // answer instead — a slot that nobody has classified is not a slot the compiler will build, because the call
 // that creates it does not compile without one.
 //
-// ⚠ **THIS IS DELIBERATELY NOT A ROSTER + A CHECKER.** A table keyed by label would be a SECOND list of the
-// slots, kept in step with the producers by nothing, and its checker would have to run somewhere and could be
-// forgotten. The classification travels ON the slot's own creation, which is the shape `StdOpMeta` uses one
-// tier up — *"a new variant cannot be added without declaring all of it"* — and it has that shape's property:
-// there is no state at which the fact is missing, so there is nothing to check.
+// ⚠ **THE CLASSIFICATION IS NEVER A ROSTER.** A table keyed by label would be a SECOND list of the slots,
+// kept in step with the producers by nothing. It travels ON the slot's own creation, which is the shape
+// `StdOpMeta` uses one tier up — *"a new variant cannot be added without declaring all of it"* — and it
+// rides the `DataSectionEntry` from there, so a check that reads a class reads the slot that claimed it.
 export enum MultiMSharing
 	// Every mutation is `StdOp.atomicRmw` or `StdOp.atomicCas`. The scheduler's counters
 	// (`MmRuntime.emitGlobalAccumulate`) and the claim words are here; every one of them is built only
@@ -164,24 +163,16 @@ export enum MultiMSharing
 	// `emitSchedAnyRunnable`'s global-tier peek (reached from `buildSchedLoop`'s `widlefire`, which chooses between
 	// searching again and parking, and from `__sched_handoffp` and `__sched_retake`, which choose whether a
 	// processor is worth handing on); `__sched_find_runnable`'s 61-schedule fairness peek (`frfairpeek`); its
-	// global-batch peek (`frglobalpeek`); and `__sched_any_work`. Three read `__sched_npidle`:
+	// global-batch peek (`frglobalpeek`); and `__sched_any_work`. ⚠ All four TEST that head and none FOLLOWS
+	// it, which is the load-bearing half: a node is linked into that queue with a PLAIN store, so an unlocked
+	// walk from this word could reach a node whose link is unwritten. Three read `__sched_npidle`:
 	// `__sched_find_runnable`'s spinner cap (`frspincap`), which chooses whether this machine may join the search —
 	// a stale answer costs one spinner too many or one search left to the spinners the cap counted, which is Go's
 	// own reading of the same word (`sched.npidle.Load()`) — and, beside `__sched_nmspinning`, `__sched_retake`'s
 	// retake rule (`rtrule`) and `__sched_handoffp`'s spinning arm (`hopspin`), each of which chooses between two
 	// arms that are both correct, as Go's reading of the same pair does. One reads `__sched_midle`'s head:
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
-	// machine, and whose stale "empty" that function argues. The published earliest deadline (`__gt_timer_when`) is
-	// read through the one door `GtRuntime.emitGtLoadTimerWhen` by every due test — `buildSchedLoop`'s
-	// `wchecktimers`, the polls `GtRuntime.emitGtPollStores` makes for `widlepoll`, `wpolled` and the strand runner's
-	// yield, and `__sysmon`'s overdue-timer peek (`smontimer`) — and by the owed-poller test (`emitSchedPollerOwed`).
-	// A stale answer costs one needless look or one look deferred to the next, and the locked walks behind them
-	// decide what fires; `GtTimerWhenLabel` argues why a deferred fire is not a lost one. The poller's claim and
-	// deadline (`__sched_lastpoll`, `__sched_poll_until`) are read by `__sched_wake_netpoller`, by the owed-poller
-	// test and by `__sysmon`'s stale-poll peek, each of which argues its two arms at its own site. One reads
-	// `__sched_phase`: the main machine's loop-top exit test (`emitSchedLoopExitTest`), whose stale answer costs one
-	// more lap before the locked test at `wstoptest` sees it. `GtRuntime.__gt_owner_done` reads it too, but that read
-	// is half of a Dekker pair and carries its own argument.
+	// machine, and whose stale "empty" that function argues.
 	//
 	// ⭐ **FOUR MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**: `__sched_idle_processor_count`
 	// answers `__sched_npidle`, `__sched_gt_records_carved` answers `__gt_records_carved`,
@@ -196,6 +187,20 @@ export enum MultiMSharing
 	//
 	// A further site is not covered by any of this: it needs its own argument at its own line, or the lock.
 	underSchedLock
+
+	// Mutated only inside `__sched_lock`, and read on OS threads that hold no lock in common with the writer
+	// — so for those readers the lock orders nothing, and the ordering has to travel on the accesses
+	// themselves: every store a release, every load an acquire.
+	//
+	// ⚠ **ARMv8 ORDERS NOTHING AROUND A PLAIN STORE, AND THE COST IS A WRONG ANSWER RATHER THAN A CRASH.**
+	// `__gt_runner_done` moves `__sched_phase` to say `main` completed; a reader served that store from a
+	// line fetched before `main`'s status and result were written reports an exit status the finished `main`
+	// never produced. x64 and wasm lower both spellings to the plain `mov` they already had.
+	//
+	// The LOCKED accesses pay it too: `assertPublishedWordAccessIsOrdered` walks ops and cannot tell a site
+	// inside the lock from one outside it, so one discipline covers every site — and it refuses any other
+	// use of such a word's address at build time.
+	publishedFromTheLock
 
 	// Written before any worker M can exist, and never after. Bring-up is single-threaded BY CONSTRUCTION and
 	// not by convention: the first `__gt_init` is reached by the only thread there is, because
@@ -221,7 +226,7 @@ export enum MultiMSharing
 	// ⛔ **THE ANSWER `pushRuntimeGlobal` REFUSES, and the reason it is a member rather than an omission is
 	// that "I do not know" is the answer a new slot arrives with.** A shared word with no discipline is the
 	// failure this whole rung exists to remove — a lost update nothing reproduces on demand — so a slot that
-	// wants this class is not a slot that may be added: fix it (one of the four above), or take the surface
+	// wants this class is not a slot that may be added: fix it (one of the classes above), or take the surface
 	// it belongs to as its own rung and put the slot in a file that owns it.
 	unclassified
 end 'MultiMSharing'
@@ -247,13 +252,14 @@ export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sh
 	match sharing 'classified'
 		atomicStep or
 			underSchedLock or
+			publishedFromTheLock or
 			sealedBeforeWorkers or
 			monotoneApproximation or
 			lastWriterWins then break 'classified'
-		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
+		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), publishedFromTheLock (mutated only inside `__sched_lock`, every store a release and every load an acquire, so any thread may read it without the lock), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
 	end 'classified'
 
-	out.push(DataSectionEntry.create(String.from(label), valueType: valueType, value: seed, reach: reach))
+	out.push(DataSectionEntry.create(String.from(label), valueType: valueType, value: seed, reach: reach, sharing: sharing))
 end 'pushRuntimeGlobal'
 
 // One machine word — the stride of the `P*` array `__sched_procs` points at, the width of every scalar field
@@ -1257,9 +1263,6 @@ let SchedNmidleLabel = b"__sched_nmidle"
 let SchedMainMLabel = b"__sched_main_m"
 
 // ⭐⭐⭐ **WHERE THE PROCESS IS IN ITS LIFE (`SchedPhase`) — THE ONE WORD `__sched_checkdead` DECIDES BY.**
-// `underSchedLock`: every write is under the lock (`emitSchedEnterPhaseLocked`). Two reads are unlocked, both
-// with acquire (`emitLoadAcquireGlobalWord`): the main machine's loop-top exit test, an enumerated arm-picking read
-// (`MultiMSharing`), and `GtRuntime.__gt_owner_done`'s last debit, whose argument is at that function.
 let SchedPhaseLabel = b"__sched_phase"
 
 export enum SchedPhase
@@ -1391,16 +1394,11 @@ let SchedTimerStartsLabel = b"__sched_timer_starts"
 // idle tail claims the poller by finding this non-zero and storing 0; the machine that claimed it stores the
 // clock when its wait ends. So *"is anybody polling?"* is one load, and at most one machine blocks in the
 // poller at a time. Seeded with the clock at bring-up, because 0 would read as *"somebody is polling"*.
-//
-// `underSchedLock`: every write is inside the lock — the claim and the release in the idle tail, and the
-// monitor's stale-poll claim. The unlocked reads pick an arm and are enumerated at
-// `MultiMSharing.underSchedLock`.
 let SchedLastPollLabel = b"__sched_lastpoll"
 
 // ⭐⭐ **THE DEADLINE THE BLOCKED POLLER WILL WAKE AT — Go's `sched.pollUntil`**, published with the claim and
 // cleared when the wait ends. A deadline armed earlier than it breaks the poller's wait
 // (`__sched_wake_netpoller`); one armed later needs nothing, because the poller will look again when it wakes.
-// `underSchedLock`, for `__sched_lastpoll`'s reason.
 let SchedPollUntilLabel = b"__sched_poll_until"
 
 // ⭐ **THE MACHINES WAITING FOR A PROCESSOR TO RESUME THE GREEN THREAD THEY HOLD** — back from a kernel call
@@ -2283,12 +2281,12 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// The main machine, written once before any worker exists, and the process phase the deadlock check and
 	// the exit drain decide by.
 	pushRuntimeGlobal(out, label: SchedMainMLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: SchedPhaseLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedPhaseLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 
 	// The poller's claim and deadline, the machines waiting to regain a processor, and the poller itself.
 	// Each word's own declaration argues its class.
-	pushRuntimeGlobal(out, label: SchedLastPollLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: SchedPollUntilLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedLastPollLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedPollUntilLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedRegainHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
 	for entry in netpollRuntimeGlobals() 'poller'
@@ -3011,7 +3009,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// The poller, before any machine can go idle and claim it, and a last poll of "now": 0 would read as a
 	// machine blocked in it. Single-threaded, like the rest of bring-up.
 	module.appendOp(adopt, op: StdOp.call(ids.mint(), callee: NetpollInitName, args: ValueIdArray.create()))
-	emitStoreGlobalWord(module, block: adopt, label: SchedLastPollLabel, value: emitGtNowNs(module, block: adopt, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: adopt, label: SchedLastPollLabel, value: emitGtNowNs(module, block: adopt, ids: ids), ids: ids)
 	module.setTerminator(adopt, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3953,11 +3951,11 @@ end 'runqWordNameOf'
 
 let RunQueueCheckName = "assertRunQueueObservationIsOrdered"
 
-function pushCalleeName(column ByteArrayArray, callee ByteArray)
-	var name = ByteArray.create()
-	name.append(callee)
-	column.push(name)
-end 'pushCalleeName'
+function pushNameCopy(column ByteArrayArray, name ByteArray)
+	var copied = ByteArray.create()
+	copied.append(name)
+	column.push(copied)
+end 'pushNameCopy'
 
 function isMachineLinkOffset(offset ByteOffset) returns bool
 	return offset == MOffAllNext or offset == MOffIdleNext or offset == MOffIdlePrev or offset == MOffRegainNext
@@ -4030,7 +4028,7 @@ type RunqTaintChannel
 			return false
 		end 'alreadyKnown'
 
-		pushCalleeName(self.argCallees, callee: callee)
+		pushNameCopy(self.argCallees, name: callee)
 		self.argIndices.push(index)
 		self.crossedAFunction = true
 		return true
@@ -4041,7 +4039,7 @@ type RunqTaintChannel
 			return false
 		end 'alreadyKnown'
 
-		pushCalleeName(self.returningCallees, callee: callee)
+		pushNameCopy(self.returningCallees, name: callee)
 		self.crossedAFunction = true
 		return true
 	end 'noteReturn'
@@ -4486,6 +4484,232 @@ function requireOrderedRingReadsIn(module StdModule, func IrFunction, taint Runq
 		end 'readsARingWordThroughItsAddress'
 	end 'eachOp'
 end 'requireOrderedRingReadsIn'
+
+let PublishedWordCheckName = "assertPublishedWordAccessIsOrdered"
+
+export function assertPublishedWordAccessIsOrdered(module StdModule, entries DataSectionEntryArray, firstFuncIndex FuncIndex)
+	let labels = publishedFromTheLockLabels(entries)
+
+	if labels.isEmpty() 'noSlotClaimsTheClass'
+		return
+	end 'noSlotClaimsTheClass'
+
+	var present = BoolArray.create()
+	var releases = BoolArray.create()
+	var acquires = BoolArray.create()
+
+	for _ in labels 'eachWord'
+		present.push(false)
+		releases.push(false)
+		acquires.push(false)
+	end 'eachWord'
+
+	var opIndices = OpIndexArray.create()
+	var access = StdAccessOperands.create()
+	var opUses = StdValueUseSet.createTrackingRepeats()
+
+	for index in firstFuncIndex upto module.funcCount() as FuncIndex 'eachFunc'
+		requireOrderedPublishedAccessIn(module, func: module.getFunc(index), labels: labels, present: present, releases: releases, acquires: acquires, opIndices: opIndices, access: access, opUses: opUses)
+	end 'eachFunc'
+
+	requireEveryPublishedWordWasSeen(labels, present: present, releases: releases, acquires: acquires)
+end 'assertPublishedWordAccessIsOrdered'
+
+function publishedFromTheLockLabels(entries DataSectionEntryArray) returns ByteArrayArray
+	var out = ByteArrayArray.create()
+
+	for entry in entries 'eachSlot'
+		if entryIsPublishedFromTheLock(entry) 'itClaimsTheClass'
+			var label = ByteArray.create()
+
+			for labelByte in entry.label.bytes() 'eachByte'
+				label.push(labelByte)
+			end 'eachByte'
+
+			out.push(label)
+		end 'itClaimsTheClass'
+	end 'eachSlot'
+
+	return out
+end 'publishedFromTheLockLabels'
+
+function entryIsPublishedFromTheLock(entry DataSectionEntry) returns bool
+	return match entry.sharing 'classified'
+		publishedFromTheLock gives true
+		atomicStep or
+			underSchedLock or
+			sealedBeforeWorkers or
+			monotoneApproximation or
+			lastWriterWins or
+			unclassified gives false
+	end 'classified'
+end 'entryIsPublishedFromTheLock'
+
+function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labels ByteArrayArray, present BoolArray, releases BoolArray, acquires BoolArray, opIndices OpIndexArray, access StdAccessOperands, opUses StdValueUseSet)
+	module.collectLiveOpIndices(func, into: opIndices)
+
+	var addrValues = ValueIdArray.create()
+	var addrWords = ByteArrayArray.create()
+
+	for opIdx in opIndices 'eachAddress'
+		classifyAccessOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: PublishedWordCheckName), access: access)
+
+		if access.shape == StdAccessShape.globalAddress and noteWordSeenIfPublished(present, labels: labels, label: access.label) 'aPublishedWordsAddress'
+			addrValues.push(access.resultId)
+			pushNameCopy(addrWords, name: access.label)
+		end 'aPublishedWordsAddress'
+	end 'eachAddress'
+
+	if addrValues.isEmpty() 'namesNoPublishedWord'
+		return
+	end 'namesNoPublishedWord'
+
+	for opIdx in opIndices 'eachAccess'
+		let op = liveRuntimeOpAt(module, opIdx: opIdx, reader: PublishedWordCheckName)
+		opUses.clear()
+		collectStdOpUses(op, referenced: opUses)
+		classifyAccessOperands(op, access: access)
+		judgePublishedWordAccess(access, func: func, opUses: opUses, addrValues: addrValues, addrWords: addrWords, labels: labels, releases: releases, acquires: acquires)
+	end 'eachAccess'
+
+	requireNoPublishedWordCrossesABlockEdge(module, func: func, addrValues: addrValues, addrWords: addrWords)
+end 'requireOrderedPublishedAccessIn'
+
+function noteWordSeenIfPublished(column BoolArray, labels ByteArrayArray, label ByteArray) returns bool
+	for i in 0 upto labels.count() 'eachWord'
+		let published = try labels.get(i) otherwise panic("{PublishedWordCheckName}: labels.get OOB at {i}, inside a loop bounded by its own count")
+
+		if published == label 'itIsOne'
+			try column.set(i, value: true) otherwise panic("{PublishedWordCheckName}: the tally column holds {column.count()} entries against a roster of {labels.count()}")
+			return true
+		end 'itIsOne'
+	end 'eachWord'
+
+	return false
+end 'noteWordSeenIfPublished'
+
+function noteWordSeen(column BoolArray, labels ByteArrayArray, label ByteArray)
+	if noteWordSeenIfPublished(column, labels: labels, label: label) 'oneOfTheWords'
+		return
+	end 'oneOfTheWords'
+
+	panic("{PublishedWordCheckName}: '{String.from(label)}' was attributed an access and the roster derived from the `.data` slots does not name it, so the address column carries a label the roster it was filtered against does not hold")
+end 'noteWordSeen'
+
+function judgePublishedWordAccess(access StdAccessOperands, func IrFunction, opUses StdValueUseSet, addrValues ValueIdArray, addrWords ByteArrayArray, labels ByteArrayArray, releases BoolArray, acquires BoolArray)
+	for i in 0 upto addrValues.count() 'eachAddress'
+		let addr = try addrValues.get(i) otherwise panic("{PublishedWordCheckName}: addrValues.get OOB at {i}, inside a loop bounded by its own count")
+
+		if not opUses.contains(addr) 'thisOpDoesNotReadIt'
+			continue
+		end 'thisOpDoesNotReadIt'
+
+		let label = try addrWords.get(i) otherwise panic("{PublishedWordCheckName}: addrWords.get OOB at {i} against the value column it is parallel to")
+
+		if opUses.containsRepeat(addr) 'twiceInOneOp'
+			refusePublishedWordEscape(func, label: label)
+		end 'twiceInOneOp'
+
+		judgeAccessOfPublishedWord(access, func: func, addr: addr, label: label, labels: labels, releases: releases, acquires: acquires)
+		return
+	end 'eachAddress'
+end 'judgePublishedWordAccess'
+
+function judgeAccessOfPublishedWord(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, releases BoolArray, acquires BoolArray)
+	match access.shape 'anAccess'
+		load then judgePublishedWordRead(access, func: func, addr: addr, label: label, labels: labels, acquires: acquires)
+		store then judgePublishedWordWrite(access, func: func, addr: addr, label: label, labels: labels, releases: releases)
+		atomic then judgePublishedWordAtomic(access, func: func, addr: addr, label: label, labels: labels, releases: releases, acquires: acquires)
+		neither or
+			constant or
+			globalAddress then refusePublishedWordEscape(func, label: label)
+	end 'anAccess'
+end 'judgeAccessOfPublishedWord'
+
+function judgePublishedWordRead(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, acquires BoolArray)
+	requirePublishedWordIsTheWholeAccess(access, func: func, addr: addr, label: label)
+
+	match access.ordering 'ordered'
+		plain then panic("{PublishedWordCheckName}: '{String.from(func.name)}' reads `{String.from(label)}` with a PLAIN load. That word is `MultiMSharing.publishedFromTheLock`: it is written inside `__sched_lock` and read on OS threads that hold no lock in common with its writers, so a plain load carries no edge to the writes the store announced and this thread can be served the announcement with stale data behind it. Read it through `MmRuntime.emitLoadAcquireGlobalWord`")
+		ordered then noteWordSeen(acquires, labels: labels, label: label)
+	end 'ordered'
+end 'judgePublishedWordRead'
+
+function judgePublishedWordWrite(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, releases BoolArray)
+	requirePublishedWordIsTheWholeAccess(access, func: func, addr: addr, label: label)
+
+	match access.ordering 'ordered'
+		plain then panic("{PublishedWordCheckName}: '{String.from(func.name)}' publishes `{String.from(label)}` with a PLAIN store. That word is `MultiMSharing.publishedFromTheLock`: another OS thread reads it without the lock this store is made under, and a plain store orders nothing before itself — the announcement can become visible ahead of the data it announces, which is a wrong answer rather than a crash. Emit it through `MmRuntime.emitStoreReleaseGlobalWord`")
+		ordered then noteWordSeen(releases, labels: labels, label: label)
+	end 'ordered'
+end 'judgePublishedWordWrite'
+
+function judgePublishedWordAtomic(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, releases BoolArray, acquires BoolArray)
+	requirePublishedWordIsTheWholeAccess(access, func: func, addr: addr, label: label)
+
+	noteWordSeen(releases, labels: labels, label: label)
+	noteWordSeen(acquires, labels: labels, label: label)
+end 'judgePublishedWordAtomic'
+
+function requirePublishedWordIsTheWholeAccess(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray)
+	if access.addrId != addr 'reachedAsAValueRatherThanAsAnAddress'
+		refusePublishedWordEscape(func, label: label)
+	end 'reachedAsAValueRatherThanAsAnAddress'
+
+	if access.offset != 0 'pastTheWord'
+		panic("{PublishedWordCheckName}: '{String.from(func.name)}' reaches `{String.from(label)}` at displacement {access.offset} from its own address. A `MultiMSharing.publishedFromTheLock` slot is ONE machine word, so anything past byte 0 of it is a neighbouring `.data` slot addressed through this word's label — whose own sharing class this check cannot speak for. Address that slot through its own `globalAddr`")
+	end 'pastTheWord'
+end 'requirePublishedWordIsTheWholeAccess'
+
+function refusePublishedWordEscape(func IrFunction, label ByteArray)
+	panic("{PublishedWordCheckName}: '{String.from(func.name)}' hands the address of `{String.from(label)}` to an op that is not an ordered access of it — a call argument, a block-edge argument, an arithmetic operand, a stored value or a second use inside one op. That word is `MultiMSharing.publishedFromTheLock`, and this check can only prove the discipline it claims while every access stands at the address itself: once the address travels, a plain load or store through it is invisible here and the check stays green over an unordered publication. Read and write the word at its `globalAddr` through `MmRuntime.emitLoadAcquireGlobalWord` / `emitStoreReleaseGlobalWord`")
+end 'refusePublishedWordEscape'
+
+function requireNoPublishedWordCrossesABlockEdge(module StdModule, func IrFunction, addrValues ValueIdArray, addrWords ByteArrayArray)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				refusePublishedWordOnAnEdge(func, argId: argId, addrValues: addrValues, addrWords: addrWords)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+end 'requireNoPublishedWordCrossesABlockEdge'
+
+function refusePublishedWordOnAnEdge(func IrFunction, argId ValueId, addrValues ValueIdArray, addrWords ByteArrayArray)
+	for i in 0 upto addrValues.count() 'eachAddress'
+		let addr = try addrValues.get(i) otherwise panic("{PublishedWordCheckName}: addrValues.get OOB at {i}, inside a loop bounded by its own count")
+
+		if addr == argId 'theAddressTravels'
+			let label = try addrWords.get(i) otherwise panic("{PublishedWordCheckName}: addrWords.get OOB at {i} against the value column it is parallel to")
+
+			refusePublishedWordEscape(func, label: label)
+		end 'theAddressTravels'
+	end 'eachAddress'
+end 'refusePublishedWordOnAnEdge'
+
+function requireEveryPublishedWordWasSeen(labels ByteArrayArray, present BoolArray, releases BoolArray, acquires BoolArray)
+	for i in 0 upto labels.count() 'eachWord'
+		let label = try labels.get(i) otherwise panic("{PublishedWordCheckName}: labels.get OOB at {i}, inside a loop bounded by its own count")
+
+		let named = try present.get(i) otherwise panic("{PublishedWordCheckName}: the presence column holds {present.count()} entries against a roster of {labels.count()}")
+		let published = try releases.get(i) otherwise panic("{PublishedWordCheckName}: the release column holds {releases.count()} entries against a roster of {labels.count()}")
+		let read = try acquires.get(i) otherwise panic("{PublishedWordCheckName}: the acquire column holds {acquires.count()} entries against a roster of {labels.count()}")
+
+		if not named 'noBodyNamesIt'
+			continue
+		end 'noBodyNamesIt'
+
+		if not published 'noReleaseStore'
+			panic("{PublishedWordCheckName}: the functions this check walks name `{String.from(label)}` and none of them publishes it with a release store, so the check refused nothing about that word and a module that has lost the word's publication ordering reads exactly like one that keeps it. Either the writer moved to a spelling this walk does not recognise, or the word is no longer written where the check can see it")
+		end 'noReleaseStore'
+
+		if not read 'noAcquireLoad'
+			panic("{PublishedWordCheckName}: the functions this check walks name `{String.from(label)}` and none of them reads it with an acquire load, so the check refused nothing about that word's readers and a module that reads it plainly everywhere reads exactly like one that reads it with acquire. Either the readers moved to a spelling this walk does not recognise, or the word is no longer read where the check can see it")
+		end 'noAcquireLoad'
+	end 'eachWord'
+end 'requireEveryPublishedWordWasSeen'
 
 // ==========================================================================
 // `__sched_find_runnable`
@@ -5694,11 +5918,11 @@ export function emitSchedSignalMainMachine(module StdModule, block IrBlock, ids 
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create()))
 end 'emitSchedSignalMainMachine'
 
-// ⭐⭐ **MOVE THE PROCESS TO `phase` AND WAKE THE MAIN MACHINE, WHOSE LOOP DECIDES BY IT.** `__sched_lock` held,
-// which is what orders the move against every locked read of the word. EXPORTED for `GtRuntime.__gt_runner_done`,
+// ⭐⭐ **MOVE THE PROCESS TO `phase` AND WAKE THE MAIN MACHINE, WHOSE LOOP DECIDES BY IT.** `__sched_lock`
+// held. EXPORTED for `GtRuntime.__gt_runner_done`,
 // which moves it when `main` completes; `__sched_checkdead` is the other mover.
 export function emitSchedEnterPhaseLocked(module StdModule, block IrBlock, phase SchedPhase, ids ValueMinter)
-	emitStoreGlobalWord(module, block: block, label: SchedPhaseLabel, value: emitConst(module, block: block, value: phase.rawValue as ParsedInt, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: block, label: SchedPhaseLabel, value: emitConst(module, block: block, value: phase.rawValue as ParsedInt, ids: ids), ids: ids)
 	emitSchedSignalMainMachine(module, block: block, ids: ids)
 end 'emitSchedEnterPhaseLocked'
 
@@ -5776,7 +6000,7 @@ function buildSchedCheckdead(module StdModule)
 	let somethingPending = emitGtStoresPending(module, block: nobodyRunning, ids: ids)
 	module.setTerminator(nobodyRunning, op: StdOp.condBranch(somethingPending, thenBlockId: doneBlock.id, elseBlockId: nothingPending.id))
 
-	let phase = emitLoadGlobalWord(module, block: nothingPending, label: SchedPhaseLabel, ids: ids)
+	let phase = emitLoadAcquireGlobalWord(module, block: nothingPending, label: SchedPhaseLabel, ids: ids)
 	let mainRunning = emitSchedPhaseIs(module, block: nothingPending, phase: phase, want: SchedPhase.mainRunning, ids: ids)
 	module.setTerminator(nothingPending, op: StdOp.condBranch(mainRunning, thenBlockId: deadlocked.id, elseBlockId: notMainRunning.id))
 	emitRuntimeAbort(module, func: func, block: deadlocked, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
@@ -6063,7 +6287,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let storesPending = emitGtStoresPending(module, block: idleTail, ids: ids)
 	module.setTerminator(idleTail, op: StdOp.condBranch(storesPending, thenBlockId: claimPoller.id, elseBlockId: parkJoin.id))
 
-	let lastPoll = emitLoadGlobalWord(module, block: claimPoller, label: SchedLastPollLabel, ids: ids)
+	let lastPoll = emitLoadAcquireGlobalWord(module, block: claimPoller, label: SchedLastPollLabel, ids: ids)
 	let somebodyPolls = emitCmp(module, block: claimPoller, a: lastPoll, b: emitConst(module, block: claimPoller, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(claimPoller, op: StdOp.condBranch(somebodyPolls, thenBlockId: breakCheck.id, elseBlockId: pollDeadline.id))
 
@@ -6071,10 +6295,10 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let deadline = ids.mint()
 	var publishDeadline = module.addBlock(func, label: b"wpollpublish", heat: BlockHeat.normal)
 	publishDeadline.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
-	emitStoreGlobalWord(module, block: pollDeadline, label: SchedLastPollLabel, value: emitConst(module, block: pollDeadline, value: 0, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: pollDeadline, label: SchedLastPollLabel, value: emitConst(module, block: pollDeadline, value: 0, ids: ids), ids: ids)
 	emitSchedPollDeadline(module, cur: pollDeadline, cont: publishDeadline, ids: ids)
 
-	emitStoreGlobalWord(module, block: publishDeadline, label: SchedPollUntilLabel, value: deadline, ids: ids)
+	emitStoreReleaseGlobalWord(module, block: publishDeadline, label: SchedPollUntilLabel, value: deadline, ids: ids)
 	emitSchedLockLeave(module, block: publishDeadline, ids: ids)
 	let pollStart = emitGtNowNs(module, block: publishDeadline, ids: ids)
 	let alreadyDue = emitCmp(module, block: publishDeadline, a: deadline, b: pollStart, pred: StdCmpPred.le, ids: ids)
@@ -6096,8 +6320,8 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// `SlabRuntime.emitSlabResolveShard` routes it to the raw row under the slab's own lock. The walks take
 	// `__sched_lock` again, recursively.
 	emitSchedLockEnter(module, block: polled, ids: ids)
-	emitStoreGlobalWord(module, block: polled, label: SchedLastPollLabel, value: emitGtNowNs(module, block: polled, ids: ids), ids: ids)
-	emitStoreGlobalWord(module, block: polled, label: SchedPollUntilLabel, value: emitConst(module, block: polled, value: 0, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: polled, label: SchedLastPollLabel, value: emitGtNowNs(module, block: polled, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: polled, label: SchedPollUntilLabel, value: emitConst(module, block: polled, value: 0, ids: ids), ids: ids)
 	emitGtPollStores(module, func: func, cur: polled, cont: polledStores, ids: ids)
 	polledStores.blockArgs.push(IrBlockArg.create(ids.mint(), argType: StdType.i64))
 	module.setTerminator(polledStores, op: StdOp.branch(parkCheck.id))
@@ -6110,7 +6334,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	compareDeadline.blockArgs.push(IrBlockArg.create(otherDeadline, argType: StdType.i64))
 	emitSchedPollDeadline(module, cur: breakCheck, cont: compareDeadline, ids: ids)
 
-	let pollUntil = emitLoadGlobalWord(module, block: compareDeadline, label: SchedPollUntilLabel, ids: ids)
+	let pollUntil = emitLoadAcquireGlobalWord(module, block: compareDeadline, label: SchedPollUntilLabel, ids: ids)
 	let pollerLate = emitSchedPollerLate(module, block: compareDeadline, pollUntil: pollUntil, when: otherDeadline, ids: ids)
 	module.setTerminator(compareDeadline, op: StdOp.condBranch(pollerLate, thenBlockId: breakPoller.id, elseBlockId: parkJoin.id))
 
@@ -6214,14 +6438,10 @@ function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBloc
 	module.setTerminator(poller, op: StdOp.branch(cont.id))
 end 'emitSchedHandOnTheLooking'
 
-// 1 when a timer or a poll source is pending and no machine is blocked in the poller, else 0 — read unlocked,
-// and every read picks an arm (`MultiMSharing.underSchedLock`): a stale "somebody polls" means that poller has
-// just given the role back and looks again itself, and a stale "nothing pending" misses only a deadline whose
-// adder calls `__sched_wake_netpoller` itself.
 function emitSchedPollerOwed(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	let timerPending = emitCmp(module, block: block, a: emitGtLoadTimerWhen(module, block: block, ids: ids), b: emitConst(module, block: block, value: TimerWhenEmpty, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let sourcePending = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
+	let sourcePending = emitCmp(module, block: block, a: emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
 	let pending = emitBin(module, block: block, a: timerPending, b: sourcePending, opcode: StdBinOpcode.bitOr, ids: ids)
 	let nobodyPolls = emitCmp(module, block: block, a: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
 	return emitBin(module, block: block, a: pending, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -6808,7 +7028,7 @@ function buildSchedHandoffP(module StdModule)
 	// the lock their writers hold.
 	let othersIdle = emitBin(module, block: lastProc, a: emitLoadGlobalWord(module, block: lastProc, label: SchedNumProcsLabel, ids: ids), b: emitConst(module, block: lastProc, value: OneMore, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	let isLastProc = emitCmp(module, block: lastProc, a: emitLoadGlobalWord(module, block: lastProc, label: SchedNpidleLabel, ids: ids), b: othersIdle, pred: StdCmpPred.eq, ids: ids)
-	let nobodyPolls = emitCmp(module, block: lastProc, a: emitLoadGlobalWord(module, block: lastProc, label: SchedLastPollLabel, ids: ids), b: recheckZero, pred: StdCmpPred.ne, ids: ids)
+	let nobodyPolls = emitCmp(module, block: lastProc, a: emitLoadAcquireGlobalWord(module, block: lastProc, label: SchedLastPollLabel, ids: ids), b: recheckZero, pred: StdCmpPred.ne, ids: ids)
 	let needsPoller = emitBin(module, block: lastProc, a: isLastProc, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids)
 	module.setTerminator(lastProc, op: StdOp.condBranch(needsPoller, thenBlockId: lockedStart.id, elseBlockId: idleIt.id))
 
@@ -7469,10 +7689,10 @@ function buildSysmon(module StdModule, target Target)
 	module.setTerminator(afterNap, op: StdOp.condBranch(emitSchedPollIsStale(module, block: afterNap, lastPoll: peeked, now: now, ids: ids), thenBlockId: claimPoll.id, elseBlockId: timerArm.id))
 
 	emitSchedLockEnter(module, block: claimPoll, ids: ids)
-	let lastPoll = emitLoadGlobalWord(module, block: claimPoll, label: SchedLastPollLabel, ids: ids)
+	let lastPoll = emitLoadAcquireGlobalWord(module, block: claimPoll, label: SchedLastPollLabel, ids: ids)
 	module.setTerminator(claimPoll, op: StdOp.condBranch(emitSchedPollIsStale(module, block: claimPoll, lastPoll: lastPoll, now: now, ids: ids), thenBlockId: stalePoll.id, elseBlockId: notStale.id))
 
-	emitStoreGlobalWord(module, block: stalePoll, label: SchedLastPollLabel, value: now, ids: ids)
+	emitStoreReleaseGlobalWord(module, block: stalePoll, label: SchedLastPollLabel, value: now, ids: ids)
 	emitSchedLockLeave(module, block: stalePoll, ids: ids)
 	module.appendOp(stalePoll, op: StdOp.call(ids.mint(), callee: NetpollPollName, args: argsOf(emitConst(module, block: stalePoll, value: 0, ids: ids))))
 	module.setTerminator(stalePoll, op: StdOp.branch(timerArm.id))
@@ -7489,7 +7709,7 @@ function buildSysmon(module StdModule, target Target)
 
 	emitSchedLockEnter(module, block: timerOverdue, ids: ids)
 	let anyIdle = emitCmp(module, block: timerOverdue, a: emitLoadGlobalWord(module, block: timerOverdue, label: SchedNpidleLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let nobodyPolls = emitCmp(module, block: timerOverdue, a: emitLoadGlobalWord(module, block: timerOverdue, label: SchedLastPollLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let nobodyPolls = emitCmp(module, block: timerOverdue, a: emitLoadAcquireGlobalWord(module, block: timerOverdue, label: SchedLastPollLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(timerOverdue, op: StdOp.condBranch(emitBin(module, block: timerOverdue, a: anyIdle, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids), thenBlockId: timerStart.id, elseBlockId: timerNoStart.id))
 
 	emitSchedStepLockedCount(module, block: timerStart, label: SchedTimerStartsLabel, delta: OneMore, ids: ids)

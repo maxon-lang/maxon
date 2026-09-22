@@ -1637,10 +1637,10 @@ let GtTimerHeapBaseLabel = b"__gt_timer_heap_base"
 //
 // ⭐⭐ **IT IS WHAT LETS A SCHEDULE ASK "IS A TIMER DUE?" WITHOUT THE LOCK.** The root itself cannot be read
 // unlocked — a grow frees the region it sits in — but this word is a copy, so every due test reads it with
-// acquire and takes the lock only when `now` has reached it (`emitGtBranchOnTimerDue`). An enumerated
-// arm-picking read (`SchedRuntime.MultiMSharing.underSchedLock`): a stale value later than the truth delays a
-// fire to the next look, and the machine that armed the earlier deadline reads its own write at its next one;
-// a stale value earlier than the truth costs one lock that `__gt_timer_check` finds nothing due under.
+// acquire and takes the lock only when `now` has reached it (`emitGtBranchOnTimerDue`). A stale value later
+// than the truth delays a fire to the next look, and the machine that armed the earlier deadline reads its own
+// write at its next one; a stale value earlier than the truth costs one lock that `__gt_timer_check` finds
+// nothing due under.
 let GtTimerWhenLabel = b"__gt_timer_when"
 
 // How many entries the timer store can hold RIGHT NOW. A runtime word rather than `TimerHeapCapacity` itself,
@@ -2183,7 +2183,7 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 	pushRuntimeGlobal(out, label: GtTimerHeapBaseLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtTimerCapacityLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtTimerSeqLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtTimerWhenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked, seed: TimerWhenEmpty)
+	pushRuntimeGlobal(out, label: GtTimerWhenLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked, seed: TimerWhenEmpty)
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It counts GREEN
@@ -3405,10 +3405,10 @@ function emitGtPublishTimerWhen(module StdModule, func IrFunction, cur IrBlock, 
 	let isEmpty = emitCmp(module, block: cur, a: count, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(isEmpty, thenBlockId: noRoot.id, elseBlockId: hasRoot.id))
 
-	emitStoreGlobalWord(module, block: hasRoot, label: GtTimerWhenLabel, value: emitLoadField(module, block: hasRoot, record: heapBase, offset: TimerOffDeadline, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: hasRoot, label: GtTimerWhenLabel, value: emitLoadField(module, block: hasRoot, record: heapBase, offset: TimerOffDeadline, ids: ids), ids: ids)
 	module.setTerminator(hasRoot, op: StdOp.branch(published.id))
 
-	emitStoreGlobalWord(module, block: noRoot, label: GtTimerWhenLabel, value: emitConst(module, block: noRoot, value: TimerWhenEmpty, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: noRoot, label: GtTimerWhenLabel, value: emitConst(module, block: noRoot, value: TimerWhenEmpty, ids: ids), ids: ids)
 	module.setTerminator(noRoot, op: StdOp.branch(published.id))
 	return published
 end 'emitGtPublishTimerWhen'
@@ -4347,9 +4347,12 @@ function assertOneFuncPublishesInOrder(module StdModule, func IrFunction)
 	let opIndices = module.liveOpIndices(func)
 	var completedConsts = ValueIdArray.create()
 	var plainStatusLoads = ValueIdArray.create()
+	var access = StdAccessOperands.create()
+	var arith = StdArithOperands.create()
 
 	for opIdx in opIndices 'collect'
-		collectCompletedWordDefs(liveRuntimeOpAt(module, opIdx: opIdx, reader: CompletedPublicationCheckName), completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+		classifyAccessOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: CompletedPublicationCheckName), access: access)
+		collectCompletedWordDefs(access, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
 	end 'collect'
 
 	// Nothing in this function names the constant, so neither pairing can exist in it — every `__gt_subp_`
@@ -4359,7 +4362,11 @@ function assertOneFuncPublishesInOrder(module StdModule, func IrFunction)
 	end 'namesNoCompletedWord'
 
 	for opIdx in opIndices 'check'
-		requireOrderedCompletedAccess(liveRuntimeOpAt(module, opIdx: opIdx, reader: CompletedPublicationCheckName), func: func, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+		let op = liveRuntimeOpAt(module, opIdx: opIdx, reader: CompletedPublicationCheckName)
+
+		classifyAccessOperands(op, access: access)
+		classifyArithOperands(op, operands: arith)
+		requireOrderedCompletedAccess(access, arith: arith, func: func, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
 	end 'check'
 end 'assertOneFuncPublishesInOrder'
 
@@ -4370,126 +4377,14 @@ export function liveRuntimeOpAt(module StdModule, opIdx OpIndex, reader String) 
 	return try module.ops.get(opIdx) otherwise panic("{reader}: opIdx {opIdx} from the live-op walk is not in module.ops")
 end 'liveRuntimeOpAt'
 
-// Pass one: the two id sets. Exhaustive over `StdOp` with no bare `default`, so an op appended to the union
-// has to be classified here rather than silently escaping the check.
-function collectCompletedWordDefs(op StdOp, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
-	match op 'k'
-		const(resultId, value, _) then pushIfCompletedConst(completedConsts, resultId: resultId, value: value)
-		binOp or
-			unaryOp then break 'k'
-		cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr then break 'k'
-		loadIndirect(resultId, _, offset, _) then pushIfStatusOffset(plainStatusLoads, resultId: resultId, offset: offset)
-		storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease then break 'k'
-
-		// The terminal question defines a file-type word, never the `completed` constant and never a load
-		// of the status word.
-		osHandleFileType then break 'k'
-		osCreateNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostSample or
-			osNetpoll or
-			osSocketOverlapped or
-			osSocketServe then break 'k'
+function collectCompletedWordDefs(access StdAccessOperands, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+	match access.shape 'k'
+		constant then pushIfCompletedConst(completedConsts, resultId: access.resultId, value: access.constValue)
+		load then pushIfPlainStatusLoad(plainStatusLoads, access: access)
+		neither or
+			globalAddress or
+			store or
+			atomic then break 'k'
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4499,133 +4394,38 @@ function pushIfCompletedConst(completedConsts ValueIdArray, resultId ValueId, va
 	end 'meansCompleted'
 end 'pushIfCompletedConst'
 
-function pushIfStatusOffset(plainStatusLoads ValueIdArray, resultId ValueId, offset ByteOffset)
-	if offset == GtOffStatus 'readsTheStatusWord'
-		plainStatusLoads.push(resultId)
+function pushIfPlainStatusLoad(plainStatusLoads ValueIdArray, access StdAccessOperands)
+	if access.ordering == StdAccessOrdering.ordered 'alreadyOrdered'
+		return
+	end 'alreadyOrdered'
+
+	if access.offset == GtOffStatus 'readsTheStatusWord'
+		plainStatusLoads.push(access.resultId)
 	end 'readsTheStatusWord'
-end 'pushIfStatusOffset'
+end 'pushIfPlainStatusLoad'
 
-// Pass two: the two refusals. Exhaustive for `collectCompletedWordDefs`' reason.
-function requireOrderedCompletedAccess(op StdOp, func IrFunction, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
-	match op 'k'
-		const or
-			binOp or
-			unaryOp then break 'k'
-		cmp(_, lhs, rhs, pred, _) then requireOrderedObservation(func, lhs: lhs, rhs: rhs, pred: pred, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
-		binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect then break 'k'
-		storeIndirect(_, offset, valueId, _) then requireOrderedPublication(func, offset: offset, valueId: valueId, completedConsts: completedConsts)
-		osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease then break 'k'
+function requireOrderedCompletedAccess(access StdAccessOperands, arith StdArithOperands, func IrFunction, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
+	if arith.isComparison() 'aCompare'
+		requireOrderedObservation(func, lhs: arith.lhs, rhs: arith.rhs, pred: arith.pred, completedConsts: completedConsts, plainStatusLoads: plainStatusLoads)
+	end 'aCompare'
 
-		// The terminal question is neither a compare nor a store, so it can be neither the observation nor
-		// the publication this pass refuses an unordered form of.
-		osHandleFileType then break 'k'
-		osCreateNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostSample or
-			osNetpoll or
-			osSocketOverlapped or
-			osSocketServe then break 'k'
+	match access.shape 'k'
+		store then requireOrderedCompletedStore(access, func: func, completedConsts: completedConsts)
+		neither or
+			constant or
+			globalAddress or
+			load or
+			atomic then break 'k'
 	end 'k'
 end 'requireOrderedCompletedAccess'
+
+function requireOrderedCompletedStore(access StdAccessOperands, func IrFunction, completedConsts ValueIdArray)
+	if access.ordering == StdAccessOrdering.ordered 'alreadyOrdered'
+		return
+	end 'alreadyOrdered'
+
+	requireOrderedPublication(func, offset: access.offset, valueId: access.valueId, completedConsts: completedConsts)
+end 'requireOrderedCompletedStore'
 
 function requireOrderedPublication(func IrFunction, offset ByteOffset, valueId ValueId, completedConsts ValueIdArray)
 	if offset != GtOffStatus 'notTheStatusWord'
@@ -5706,12 +5506,15 @@ end 'emitGtExecute'
 // `__sched_lock` held. EXPORTED for `SchedRuntime`: the idle tail claims the poller on it, and
 // `__sched_checkdead` counts a pending entry as a wakeup source.
 //
+// ⚠ The two words are read differently on purpose: `__np_waiters` is `MultiMSharing.publishedFromTheLock`
+// and owes an acquire at every site, while every reader of `__gt_timer_count` holds the lock.
+//
 // ⭐ **A SOURCE WAIT IS PENDING WORK AND IS THE ONLY KIND WITH NO DEADLINE OF ITS OWN.** A process whose sole
 // outstanding wait is a read — or a child — has no timer at all, so without that count the idle tail would
 // never enter the poller and `__sched_checkdead` would declare a program that is merely waiting to be
 // deadlocked.
 export function emitGtStoresPending(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let anyStore = emitBin(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtTimerCountLabel, ids: ids), b: emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	let anyStore = emitBin(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtTimerCountLabel, ids: ids), b: emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
 	return emitCmp(module, block: block, a: anyStore, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 end 'emitGtStoresPending'
 

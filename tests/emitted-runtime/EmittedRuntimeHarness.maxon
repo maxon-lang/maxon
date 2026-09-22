@@ -11,6 +11,7 @@ let BuildCommandName = "build"
 let OutputOptionPrefix = "--output="
 let TargetOptionPrefix = "--target="
 let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+export let EmittedNameSeparator = ","
 let OutputStem = "out"
 let IrFileSuffix = ".ir"
 
@@ -21,14 +22,17 @@ let FunctionHeaderPrefix = "func @"
 let FunctionHeaderSuffix = " \{"
 let FunctionBodyEndLine = "\}"
 
-let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
+export let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
+export let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
 export let AcquireLoadMnemonic = "arm64.ldar.word64"
+export let ReleaseStoreMnemonic = "arm64.stlr.word64"
 export let RegisterMovePrefix = "arm64.movRegReg "
 export let ArgumentSeparator = ", "
 export let NoFurtherDemand = ""
 let WordSeparator = " "
 let OperandSeparator = ","
 let LineSeparator = "\n"
+let DisplacedAddressInfix = " + "
 let DestinationWordIndex = 1
 
 export typealias FieldOffset = int(0 to 65535)
@@ -41,6 +45,29 @@ export enum IrScanError implements Error
 	noDestinationRegister
 end 'IrScanError'
 
+export enum RegisterUse
+	plainLoad
+	plainStore
+	acquireLoad
+	releaseStore
+	otherAccess
+	copiedOut
+	untouched
+end 'RegisterUse'
+
+export type RegisterEvent
+	export let use as RegisterUse
+	export let overwrites as bool
+	export let line as String
+	export let index as LineIndex
+
+	export static function create(use RegisterUse, overwrites bool, line String, index LineIndex) returns RegisterEvent
+		return Self{use: use, overwrites: overwrites, line: line, index: index}
+	end 'create'
+end 'RegisterEvent'
+
+export typealias RegisterEventArray = Array with RegisterEvent
+
 export function stagedProgram(caseLabel String) returns FilePath
 	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
 	clearStagedFiles(staged)
@@ -52,9 +79,9 @@ export function stagedProgram(caseLabel String) returns FilePath
 	return staged
 end 'stagedProgram'
 
-export function buildStagedProgram(staged FilePath, target String, functionName String) returns FilePath
-	let executable = staged.join("{OutputStem}-{functionName}-{target}")
-	let ir = staged.join("{OutputStem}-{functionName}-{target}{IrFileSuffix}")
+export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String) returns FilePath
+	let executable = staged.join("{OutputStem}-{caseLabel}-{target}")
+	let ir = staged.join("{OutputStem}-{caseLabel}-{target}{IrFileSuffix}")
 
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
@@ -135,26 +162,80 @@ export function firstLineIndex(body StringArray, startingWith String, containing
 	throw IrScanError.noSuchLine
 end 'firstLineIndex'
 
-// The first line whose destination operand is `register`, read off the line itself rather than off a roster
-// of the ops that write. A line that merely carries the register there — a compare — reads as a write, and
-// that is the direction that costs a caller a refusal rather than a pass it did not earn.
-export function firstWriteOfRegister(body StringArray, register String) returns LineIndex throws IrScanError
-	for (iter, text) in body.withIterator() 'eachLine'
-		let written = try destinationRegisterOf(text) otherwise continue
+// Every line that touches `register`, in body order, carrying TWO facts about each: what the line does
+// through the register, and whether it overwrites it. `ldr x1, [x1 + 48]` is both, and an event that had to
+// pick one would hide the other from whichever caller wanted it.
+export function registerEvents(body StringArray, register String) returns RegisterEventArray
+	var events = RegisterEventArray.create()
 
-		if written == register 'theWrite'
-			return iter.index()
-		end 'theWrite'
+	for (iter, text) in body.withIterator() 'eachLine'
+		let use = registerUseIn(text, register: register)
+		let overwrites = writesRegister(text, register: register)
+
+		if use == RegisterUse.untouched and not overwrites 'anotherLine'
+			continue
+		end 'anotherLine'
+
+		events.push(RegisterEvent.create(use, overwrites: overwrites, line: text, index: iter.index() as LineIndex))
 	end 'eachLine'
+
+	return events
+end 'registerEvents'
+
+function registerUseIn(text String, register String) returns RegisterUse
+	if text.startsWith(RegisterMovePrefix) and text.endsWith("{ArgumentSeparator}{register}") 'aCopy'
+		return RegisterUse.copiedOut
+	end 'aCopy'
+
+	if not text.contains("[{register}{DisplacedAddressInfix}") and not text.contains("[{register}]") 'untouched'
+		return RegisterUse.untouched
+	end 'untouched'
+
+	if text.startsWith(PlainLoadPrefix) 'aPlainLoad'
+		return RegisterUse.plainLoad
+	end 'aPlainLoad'
+
+	if text.startsWith(PlainStorePrefix) 'aPlainStore'
+		return RegisterUse.plainStore
+	end 'aPlainStore'
+
+	if text.startsWith(AcquireLoadMnemonic) 'anAcquireLoad'
+		return RegisterUse.acquireLoad
+	end 'anAcquireLoad'
+
+	if text.startsWith(ReleaseStoreMnemonic) 'aReleaseStore'
+		return RegisterUse.releaseStore
+	end 'aReleaseStore'
+
+	return RegisterUse.otherAccess
+end 'registerUseIn'
+
+function writesRegister(text String, register String) returns bool
+	let written = try destinationRegisterOf(text) otherwise return false
+
+	return written == register
+end 'writesRegister'
+
+export function firstWriteOfRegister(body StringArray, register String) returns LineIndex throws IrScanError
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.overwrites 'theWrite'
+			return event.index
+		end 'theWrite'
+	end 'eachEvent'
 
 	throw IrScanError.noSuchLine
 end 'firstWriteOfRegister'
 
 export function registerHoldingArgument(body StringArray, argument String) returns String throws IrScanError
-	let moveSuffix = "{ArgumentSeparator}{argument}"
-	let index = try firstLineIndex(body, startingWith: RegisterMovePrefix, containing: NoFurtherDemand, endingWith: moveSuffix)
+	for event in registerEvents(body, register: argument) 'eachEvent'
+		if event.use != RegisterUse.copiedOut 'notACopy'
+			continue
+		end 'notACopy'
 
-	return try destinationRegisterOf(lineAt(body, index: index))
+		return try destinationRegisterOf(event.line)
+	end 'eachEvent'
+
+	throw IrScanError.noSuchLine
 end 'registerHoldingArgument'
 
 export function notePlainFieldLoad(findings StringArray, body StringArray, target String, register String, offset FieldOffset, functionName String, field String)
@@ -190,7 +271,10 @@ function lineAt(body StringArray, index LineIndex) returns String
 	return try body.get(index) otherwise panic("emitted-runtime tests: the gate could not run — line {index} was read out of a body of {body.count()} lines that a scan of that same body had just found it in.")
 end 'lineAt'
 
-function destinationRegisterOf(text String) returns String throws IrScanError
+// The destination is read off the line's own second word rather than off a roster of the ops that write, so
+// a line that merely CARRIES the register there — a compare — reads as a write. That is the direction that
+// costs a caller a refusal rather than a pass it did not earn.
+export function destinationRegisterOf(text String) returns String throws IrScanError
 	let spelled = try text.split(WordSeparator).get(DestinationWordIndex) otherwise throw IrScanError.noDestinationRegister
 
 	return try spelled.split(OperandSeparator).get(0) otherwise throw IrScanError.noDestinationRegister

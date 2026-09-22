@@ -117,7 +117,7 @@ export function netpollRuntimeGlobals() returns DataSectionEntryArray
 	// The poll-descriptor table's base and capacity — see that band's header for why both move in one hold.
 	pushRuntimeGlobal(out, label: NetpollPdTableLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: NetpollPdCapLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: NetpollWaitersLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: NetpollWaitersLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 
 	// The completion-port lane's source-key allocator — see `PdOffNextFreeKey`. Both words move inside ONE hold
 	// of `__sched_lock`, exactly as the table's base and capacity do.
@@ -963,11 +963,9 @@ function emitNetpollSettleHold(module StdModule, func IrFunction, cur IrBlock, g
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.netpollHoldLost, ids: ids)
 end 'emitNetpollSettleHold'
 
-// Step the published-waiter count. `__sched_lock` held by every site, which is why a plain load/add/store is
-// the whole of it.
 function emitNetpollStepWaiters(module StdModule, block IrBlock, delta ParsedInt, ids ValueMinter)
-	let waiters = emitLoadGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids)
-	emitStoreGlobalWord(module, block: block, label: NetpollWaitersLabel, value: emitBin(module, block: block, a: waiters, b: emitConst(module, block: block, value: delta, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
+	let waiters = emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids)
+	emitStoreReleaseGlobalWord(module, block: block, label: NetpollWaitersLabel, value: emitBin(module, block: block, a: waiters, b: emitConst(module, block: block, value: delta, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
 end 'emitNetpollStepWaiters'
 
 // The `(fd, mode)` pair a netpoll park carries in `GtOffParkArg`. A descriptor is non-negative, so the low bit

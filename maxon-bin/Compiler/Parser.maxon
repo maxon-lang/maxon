@@ -35870,15 +35870,10 @@ export type Parser
 		// and `stdlib/Testing.maxon` since W72, which reach the parser as exempt files as well as loaded
 		// ones), ZERO declare a binding named `self`.
 		//
-		// ⛔ **AND THE FILE THAT WOULD — `stdlib/Internals.maxon`, 24 of them,
-		// `__destruct___ManagedMemory(self MachineWord)` and its siblings — IS NOT EXEMPT IN the compiler AND
-		// MUST NOT BE ASSUMED TO BE.** `declaresCompilerInternalNames` is an identity compare against
-		// `Builtins.maxon` and `Testing.maxon` only. `StdlibLoader.SupersededRuntimeModule` names
-		// `Internals.maxon` as the ONE file the loader skips, so the compiler never parses it and the gap costs
-		// nothing today — but whoever deletes that exclusion starts from nothing: the file goes red on
-		// the `__` rule first (every one of those function NAMES is `__`-prefixed), and widening the
-		// exemption is what that day's work is. This rule rides along with that decision; it does not
-		// depend on it.
+		// ⛔ **A FILE DECLARING BINDINGS NAMED `self` WOULD HAVE TO BE EXEMPT IN THE COMPILER AND MUST NOT BE
+		// ASSUMED TO BE.** `declaresCompilerInternalNames` is an identity compare against
+		// `Builtins.maxon` and `Testing.maxon` only, and `runtime/` is exempt by containment; anything else
+		// goes red on the `__` rule first. This rule rides along with that decision; it does not depend on it.
 		if namespaceShadowsTheReceiver(bindsInto) and declaredName.equals(ReceiverSourceSpelling) 'theImplicitReceiversName'
 			throw ParseError.reservedReceiverName(nameTok.line, column: nameTok.column)
 		end 'theImplicitReceiversName'
@@ -57992,7 +57987,7 @@ export type Parser
 	// carry a negative sentinel is narrowed to a range it actually keeps — `Map.findSlot` THROWS instead of
 	// encoding a miss, and the index/count aliases stop at `i64.max` — so a value outside one is refused at
 	// that alias's own door (`Range check failed: value outside typealias 'X'`) instead of arriving intact.
-	// The aliases still declared `int(0 to u64.max)` are rostered at `stdlib/Internals.maxon`, with the
+	// The aliases that are raw PATTERNS instead are rostered at `stdlib/Builtins.maxon`, with the
 	// `grep` that keeps the roster honest, and none of them has a negative to decode. ⚠ The COUNT of them is
 	// deliberately not repeated here: it is the roster written twice, and the copy over here goes stale
 	// first. A sentinel is written in a range that ADMITS it (`int(-1 to 4095)`), and this rule reads that

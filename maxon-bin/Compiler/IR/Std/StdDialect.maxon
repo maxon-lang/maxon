@@ -3805,68 +3805,107 @@ module function requireArithOpIsPure(op StdOp, reader String)
 	end 'impure'
 end 'requireArithOpIsPure'
 
-// The operands of a `loadIndirect`, written into a caller-owned record — what `StdArithOperands` is for
-// the arithmetic band, for the ONE memory op a pass may want to move.
-//
-// ⭐ **IT LIVES HERE AND NOT IN THE PASS, for the reason the arithmetic roster does.** A `match` over
-// `StdOp` inside a pass is a roster that can drift from the union; here the arms name the union's
-// variants, so a variant no arm names fails to compile rather than being classified as "not a load".
-//
-// ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isLoad` SAYS THE RECORD WAS FILLED**, and none may be read as a
-// sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
-export type StdLoadOperands
-	var load as bool
-	export var resultId as ValueId
+export enum StdAccessShape
+	neither
+	constant
+	globalAddress
+	load
+	store
+	atomic
+end 'StdAccessShape'
 
-	// The ADDRESS the load reads through. `offset` is a field displacement from it, never a separate
-	// value — which is what lets a reader compare two loads through one address by offset alone.
+export enum StdAccessOrdering
+	plain
+	ordered
+end 'StdAccessOrdering'
+
+export enum StdAtomicKind
+	readModifyWrite
+	compareAndSwap
+end 'StdAtomicKind'
+
+export type StdAccessOperands
+	export var shape as StdAccessShape
+	export var ordering as StdAccessOrdering
+	export var atomicKind as StdAtomicKind
+	export var resultId as ValueId
 	export var addrId as ValueId
 	export var offset as ByteOffset
 	export var valueType as StdType
+	export var constValue as ParsedInt
+	export var valueId as ValueId
+	export var label as ByteArray
 
-	export static function create() returns StdLoadOperands
-		return Self{load: false, resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64}
+	export static function create() returns StdAccessOperands
+		return Self{shape: StdAccessShape.neither, ordering: StdAccessOrdering.plain, atomicKind: StdAtomicKind.readModifyWrite, resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64, constValue: 0, valueId: 0, label: ByteArray.create()}
 	end 'create'
 
-	export function isLoad() returns bool
-		return self.load
-	end 'isLoad'
+	function recordNeither()
+		self.shape = StdAccessShape.neither
+	end 'recordNeither'
 
-	// How far past `addrId` this load reads — `offset` plus the width it transfers. The number a
-	// dereferenceability argument is made in: a load the program performs proves the object at `addrId`
-	// spans at least this many bytes.
-	export function coverage() returns LoadCoverage
-		if not self.load 'notALoad'
-			panic("StdLoadOperands.coverage: this record does not describe a load — ask `isLoad` first")
-		end 'notALoad'
+	function recordConstant(defined ValueId, literal ParsedInt, readType StdType)
+		self.shape = StdAccessShape.constant
+		self.resultId = defined
+		self.constValue = literal
+		self.valueType = readType
+	end 'recordConstant'
 
-		let endByte = self.offset + (stdTypeStorageBytes(self.valueType) as ByteOffset)
-		return endByte as LoadCoverage
-	end 'coverage'
+	function recordGlobalAddress(defined ValueId, name ByteArray)
+		self.shape = StdAccessShape.globalAddress
+		self.resultId = defined
+		self.label.clear()
+		self.label.append(name)
+	end 'recordGlobalAddress'
 
-	function recordNotALoad()
-		self.load = false
-	end 'recordNotALoad'
-
-	function recordLoad(defined ValueId, address ValueId, displacement ByteOffset, readType StdType)
-		self.load = true
+	function recordLoad(defined ValueId, address ValueId, displacement ByteOffset, readType StdType, howOrdered StdAccessOrdering)
+		self.shape = StdAccessShape.load
+		self.ordering = howOrdered
 		self.resultId = defined
 		self.addrId = address
 		self.offset = displacement
 		self.valueType = readType
 	end 'recordLoad'
-end 'StdLoadOperands'
 
-// How many bytes past its address a load reads — an ordinary non-negative byte count, named because
-// `ByteOffset` is where the read STARTS and this is where it ENDS.
-module typealias LoadCoverage = int(0 to u64.max)
+	function recordStore(address ValueId, displacement ByteOffset, stored ValueId, writtenType StdType, howOrdered StdAccessOrdering)
+		self.shape = StdAccessShape.store
+		self.ordering = howOrdered
+		self.addrId = address
+		self.offset = displacement
+		self.valueId = stored
+		self.valueType = writtenType
+	end 'recordStore'
 
-// Fill `load` with the memory operands `op` carries, or with "not a load". Exhaustive over StdOp, no
-// bare `default` — see `StdLoadOperands` for why the arms name what they name.
-export function classifyLoadOperands(op StdOp, load StdLoadOperands)
-	match op 'l'
-		const or
-			binOp or
+	function recordAtomic(defined ValueId, address ValueId, kind StdAtomicKind)
+		self.shape = StdAccessShape.atomic
+		self.ordering = StdAccessOrdering.ordered
+		self.atomicKind = kind
+		self.resultId = defined
+		self.addrId = address
+		self.offset = 0
+	end 'recordAtomic'
+end 'StdAccessOperands'
+
+// Fill `access` with the memory operands `op` carries, or with the shape that says it touches none.
+//
+// ⭐ **IT LIVES IN THE DIALECT AND NOT IN ITS READERS, for the reason the arithmetic roster does.** A `match`
+// over `StdOp` inside a pass or a runtime check is a roster that can drift from the union; here the arms name
+// the union's variants, so a variant no arm names fails to compile rather than being classified as touching
+// no memory — which in a checker is a refusal that silently stops refusing.
+//
+// ⚠ **THE FIELDS ARE MEANINGLESS EXCEPT AS `shape` SAYS THEY WERE FILLED**, and none may be read as a
+// sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
+export function classifyAccessOperands(op StdOp, access StdAccessOperands)
+	match op 'a'
+		const(resultId, value, valueType) then access.recordConstant(resultId, literal: value, readType: valueType)
+		globalAddr(resultId, label) then access.recordGlobalAddress(resultId, name: label)
+		loadIndirect(resultId, addrId, offset, valueType) then access.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType, howOrdered: StdAccessOrdering.plain)
+		loadAcquire(resultId, addrId, offset, valueType) then access.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType, howOrdered: StdAccessOrdering.ordered)
+		storeIndirect(addrId, offset, valueId, valueType) then access.recordStore(addrId, displacement: offset, stored: valueId, writtenType: valueType, howOrdered: StdAccessOrdering.plain)
+		storeRelease(addrId, offset, valueId, valueType) then access.recordStore(addrId, displacement: offset, stored: valueId, writtenType: valueType, howOrdered: StdAccessOrdering.ordered)
+		atomicRmw(resultId, addrId, _, _) then access.recordAtomic(resultId, address: addrId, kind: StdAtomicKind.readModifyWrite)
+		atomicCas(resultId, addrId, _, _) then access.recordAtomic(resultId, address: addrId, kind: StdAtomicKind.compareAndSwap)
+		binOp or
 			unaryOp or
 			cmp or
 			binOpImm or
@@ -3879,9 +3918,6 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			param or
 			call or
 			retVoid or
-			globalAddr then load.recordNotALoad()
-		loadIndirect(resultId, addrId, offset, valueType) then load.recordLoad(resultId, address: addrId, displacement: offset, readType: valueType)
-		storeIndirect or
 			osAllocPages or
 			osWriteStdout or
 			rdataAddr or
@@ -3956,47 +3992,108 @@ export function classifyLoadOperands(op StdOp, load StdLoadOperands)
 			memFill or
 			osCommitPages or
 			osReservePages or
-			atomicCas or
-			atomicRmw or
 			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
 			osSetEvent or
-			osEnterBackgroundPriority then load.recordNotALoad()
-		osFileOpenWriteExecutable then load.recordNotALoad()
-		osEnvBlock or
-			osEnvBlockFree then load.recordNotALoad()
-
-		// ⛔⛔ **AN ACQUIRE LOAD IS `recordNotALoad`, AND THAT IS THE WHOLE POINT OF IT.** This classifier's
-		// one reader is `loopInvariantCodeMotion`, which HOISTS a load whose address the loop does not
-		// write. A green thread's status word is written by another OS THREAD, never by the loop that spins
-		// on it, so the hoist test would answer "invariant" and the drive loop would read one stale word for
-		// ever. That is precisely the reordering `loadAcquire` exists to forbid, so it must not be offered
-		// to the pass as a hoistable load at all. `storeRelease` is not a load in the first place.
-		loadAcquire or
-			storeRelease then load.recordNotALoad()
-		osHandleFileType then load.recordNotALoad()
-		osCreateNamedSegment or
+			osEnterBackgroundPriority or
+			osFileOpenWriteExecutable or
+			osEnvBlock or
+			osEnvBlockFree or
+			osHandleFileType or
+			osCreateNamedSegment or
 			osUnmapNamedSegment or
 			osUnpublishNamedSegment or
 			covPoint or
 			osHostSample or
 			osNetpoll or
 			osSocketOverlapped or
-			osSocketServe then load.recordNotALoad()
-	end 'l'
+			osSocketServe then access.recordNeither()
+	end 'a'
+end 'classifyAccessOperands'
+
+// The operands of a `loadIndirect`, written into a caller-owned record — what `StdArithOperands` is for
+// the arithmetic band, for the ONE memory op a pass may want to move.
+//
+// ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isLoad` SAYS THE RECORD WAS FILLED**, and none may be read as a
+// sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
+export type StdLoadOperands
+	var load as bool
+	export var access as StdAccessOperands
+	export var resultId as ValueId
+
+	// The ADDRESS the load reads through. `offset` is a field displacement from it, never a separate
+	// value — which is what lets a reader compare two loads through one address by offset alone.
+	export var addrId as ValueId
+	export var offset as ByteOffset
+	export var valueType as StdType
+
+	export static function create() returns StdLoadOperands
+		return Self{load: false, access: StdAccessOperands.create(), resultId: 0, addrId: 0, offset: 0, valueType: StdType.i64}
+	end 'create'
+
+	export function isLoad() returns bool
+		return self.load
+	end 'isLoad'
+
+	// How far past `addrId` this load reads — `offset` plus the width it transfers. The number a
+	// dereferenceability argument is made in: a load the program performs proves the object at `addrId`
+	// spans at least this many bytes.
+	export function coverage() returns LoadCoverage
+		if not self.load 'notALoad'
+			panic("StdLoadOperands.coverage: this record does not describe a load — ask `isLoad` first")
+		end 'notALoad'
+
+		let endByte = self.offset + (stdTypeStorageBytes(self.valueType) as ByteOffset)
+		return endByte as LoadCoverage
+	end 'coverage'
+
+	function recordNotALoad()
+		self.load = false
+	end 'recordNotALoad'
+
+	function recordLoad(defined ValueId, address ValueId, displacement ByteOffset, readType StdType)
+		self.load = true
+		self.resultId = defined
+		self.addrId = address
+		self.offset = displacement
+		self.valueType = readType
+	end 'recordLoad'
+end 'StdLoadOperands'
+
+// How many bytes past its address a load reads — an ordinary non-negative byte count, named because
+// `ByteOffset` is where the read STARTS and this is where it ENDS.
+module typealias LoadCoverage = int(0 to u64.max)
+
+// Fill `load` with the memory operands `op` carries, or with "not a load" — the plain-load view of
+// `classifyAccessOperands`, which is where the enumeration over `StdOp` is written.
+//
+// ⛔⛔ **AN ACQUIRE LOAD IS NOT A LOAD HERE, AND THAT IS THE WHOLE POINT OF IT.** The readers that move code
+// — `loopInvariantCodeMotion` and `unswitchInvariantGuards` — HOIST a load whose address the loop does not
+// write. A green thread's status word is written by another OS THREAD, never by the loop that spins
+// on it, so the hoist test would answer "invariant" and the drive loop would read one stale word for
+// ever. That is precisely the reordering `loadAcquire` exists to forbid, so it must not be offered
+// to a pass as a hoistable load at all.
+export function classifyLoadOperands(op StdOp, load StdLoadOperands)
+	classifyAccessOperands(op, access: load.access)
+
+	if load.access.shape == StdAccessShape.load and load.access.ordering == StdAccessOrdering.plain 'aPlainLoad'
+		load.recordLoad(load.access.resultId, address: load.access.addrId, displacement: load.access.offset, readType: load.access.valueType)
+		return
+	end 'aPlainLoad'
+
+	load.recordNotALoad()
 end 'classifyLoadOperands'
 
 // The operands of a `storeIndirect`, written into a caller-owned record — `StdLoadOperands`' twin for
-// the one memory op a pass that reasons about what a loop WRITES has to read. It lives here for the
-// load classifier's reason: the arms name the union's variants, so a variant no arm names fails to
-// compile rather than being classified as "not a store".
+// the one memory op a pass that reasons about what a loop WRITES has to read.
 //
 // ⚠ **THE FIELDS ARE MEANINGLESS UNTIL `isStore` SAYS THE RECORD WAS FILLED**, and none may be read as
 // a sentinel — ValueId 0, offset 0 and `StdType.i64` are all real. Same discipline as `StdArithOperands`.
 module type StdStoreOperands
 	var store as bool
+	export var access as StdAccessOperands
 
 	// The ADDRESS the store writes through, and the field displacement from it.
 	export var addrId as ValueId
@@ -4005,7 +4102,7 @@ module type StdStoreOperands
 	export var valueType as StdType
 
 	module static function create() returns StdStoreOperands
-		return Self{store: false, addrId: 0, offset: 0, valueId: 0, valueType: StdType.i64}
+		return Self{store: false, access: StdAccessOperands.create(), addrId: 0, offset: 0, valueId: 0, valueType: StdType.i64}
 	end 'create'
 
 	export function isStore() returns bool
@@ -4030,121 +4127,14 @@ end 'StdStoreOperands'
 // the dialect's `isStore` flag beside this, which is what keeps the two from disagreeing about a variant
 // that writes memory through some other shape.
 module function classifyStoreOperands(op StdOp, store StdStoreOperands)
-	match op 's'
-		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect then store.recordNotAStore()
-		storeIndirect(addrId, offset, valueId, valueType) then store.recordStore(addrId, displacement: offset, written: valueId, writeType: valueType)
-		osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease or
-			osHandleFileType or
-			osCreateNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostSample or
-			osNetpoll or
-			osSocketOverlapped or
-			osSocketServe then store.recordNotAStore()
-	end 's'
+	classifyAccessOperands(op, access: store.access)
+
+	if store.access.shape == StdAccessShape.store and store.access.ordering == StdAccessOrdering.plain 'aPlainStore'
+		store.recordStore(store.access.addrId, displacement: store.access.offset, written: store.access.valueId, writeType: store.access.valueType)
+		return
+	end 'aPlainStore'
+
+	store.recordNotAStore()
 end 'classifyStoreOperands'
 
 // The two DIRECT-call shapes — `call` and `tryCall`, the ones that name a callee a pass can look up —
