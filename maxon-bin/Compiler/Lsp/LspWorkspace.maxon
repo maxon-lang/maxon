@@ -157,6 +157,9 @@ let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000 as DurationMs
 
+let ProjectLoadingMethod = "maxon/projectLoading"
+let ProjectLoadingKey = "loading"
+
 var heldProjects = HeldProjectMap.create()
 var heldProjectKeys = HeldProjectKeyArray.create()
 
@@ -386,6 +389,16 @@ function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FileP
 		return held.corpusFor(root, readerPath: readerPath)
 	end 'alreadySeenThisRoot'
 
+	writeProjectLoadingNotification(key, loading: true)
+	let corpus = builtWorkspace(root, compileRoot: compileRoot, key: key, tiers: tiers, readerPath: readerPath)
+	writeProjectLoadingNotification(key, loading: false)
+
+	return corpus
+end 'sweptWorkspace'
+
+// Every return here passes through the one `loading: false` in `sweptWorkspace`; a return that
+// skipped it would leave the client showing this project as loading for the rest of the session.
+function builtWorkspace(root WorkspaceRoot, compileRoot FilePath, key String, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
 	let project = try libraryTierProject(compileRoot, tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
 	var fresh = HeldWorkspace.create(project, sweep: sourcesUnder(root), sweptAtMs: Clock.nowMs())
 
@@ -397,7 +410,16 @@ function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FileP
 	end 'outcome'
 
 	return corpus
-end 'sweptWorkspace'
+end 'builtWorkspace'
+
+function writeProjectLoadingNotification(rootPath String, loading bool)
+	var doc = JsonDoc.create()
+	var params = LspJsonObject.create(doc)
+	params.put(LspRootPathKey, value: JsonNode.stringNode(rootPath))
+	params.put(ProjectLoadingKey, value: JsonNode.boolNode(loading))
+
+	writeLspNotification(doc, method: ProjectLoadingMethod, params: params.finish())
+end 'writeProjectLoadingNotification'
 
 function rememberProject(key String, held HeldWorkspace)
 	heldProjects.upsert(key, value: held)

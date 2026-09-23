@@ -58,32 +58,17 @@ public type Process
 	/// The value of `name` in this process's own environment, or `variableUnset` when nothing carries
 	/// it. Throws `environmentUnreadable` when the environment cannot be read at all.
 	///
-	/// ⭐ It reads the environment through the SAME walk `Subprocess` builds a child's block from
+	/// It reads the environment through the same walk `Subprocess` builds a child's block from
 	/// (`currentEnvironmentEntries`), so this process has one reading of its own environment rather
 	/// than two free to disagree about what is set.
 	///
-	/// ⚠ **THE NAME IS FOLDED ON WINDOWS AND MATCHED EXACTLY UNDER POSIX**, because that is what the
-	/// two platforms mean by a variable name: Windows spells its search path `Path` and answers to
-	/// `PATH`, while under POSIX two names differing in case are two variables. A byte-exact match
-	/// everywhere would report `variableUnset` on Windows for variables that are plainly set.
-	///
+	/// The name is matched through `envNameKey`: ignoring case on Windows, exactly under POSIX.
 	public static function environmentVariable(name String) returns String throws ProcessIntrospectionError
-		#if os(Windows)
-			let wanted = name.toLower()
-		#else
-			let wanted = name
-		#endif
-
+		let wanted = envNameKey(name)
 		let entries = try currentEnvironmentEntries()
 
 		for entry in entries 'eachEntry'
-			#if os(Windows)
-				let candidate = envEntryName(entry).toLower()
-			#else
-				let candidate = envEntryName(entry)
-			#endif
-
-			if candidate == wanted 'thisOne'
+			if envNameKey(envEntryName(entry)) == wanted 'thisOne'
 				return envEntryValue(entry)
 			end 'thisOne'
 		end 'eachEntry'
@@ -130,6 +115,18 @@ public type Process
 
 		return envEntryBytes(bytes, from: 0, to: envEntrySeparatorAt(bytes))
 	end 'envEntryName'
+
+	/// The key an environment variable name is compared by: lowercased on Windows, `name` as given
+	/// under POSIX. Two names with equal keys are one variable. That is what each platform means by a
+	/// variable name: Windows spells its search path `Path` and answers to `PATH`, while under POSIX
+	/// two names differing in case are two variables.
+	public static function envNameKey(name String) returns String
+		#if os(Windows)
+			return name.toLower()
+		#else
+			return name
+		#endif
+	end 'envNameKey'
 
 	/// The VALUE half of one `NAME=VALUE` entry — everything past its first `=`, or the empty String when
 	/// it holds none.

@@ -360,7 +360,14 @@ stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP 
 6. **The manual copies nothing checks**, when the change touches them: `examples/*.maxon` →
    `website/src/examples/`, and `vscode-extension/syntaxes/maxon.tmLanguage.json` →
    `website/src/grammars/`. `MAINTAINING.md` lists the install-script fan-out.
-7. ⛔ **`CHANGELOG.md` is NOT touched.** `docs/RELEASING.md` makes it a release-time artifact, written
+7. ⛔ **DOCS STATE WHAT THE SOFTWARE DOES — NOT WHAT IT USED TO DO, AND NOT WHAT IT DOESN'T DO** (user
+   ruling). No history: "no longer", "as before", "instead of <what it did>", "used to", "now". No
+   negatives: "never shows", "does not pop up", "is not reported", "sends neither", "rather than X".
+   Say where a thing goes and when it happens, and stop there. Grep every doc file you touched for those
+   words before reporting, and rewrite a hit in a paragraph you touched, whoever wrote it. The records
+   whose purpose IS history — `docs/optimization-log.md`, a release's changelog entry, a commit
+   message — are the exception.
+8. ⛔ **`CHANGELOG.md` is NOT touched.** `docs/RELEASING.md` makes it a release-time artifact, written
    at the cut with the whole release in view — never appended to per change.
 
 ## Verification — a recompile, and nothing else

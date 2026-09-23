@@ -7,20 +7,19 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - Language Server Protocol support (completion, diagnostics, go-to-definition, etc.) from the compiler's own `maxon lsp-server`
 - **Go to definition and hover across files, and into their members**: F12 on a name declared in another
   file of your project, or in the standard library, opens that file, and hovering one renders its
-  declaration — a field or method of such a type included, not only its top-level declarations. The
-  project is the nearest directory above the file that holds a `build.maxon`, searched no higher than the
-  workspace folder that contains the file; failing that, that folder itself. In a multi-root window every
-  folder is a root of its own, and a folder added to the window starts working without restarting the
-  editor. Hover and completion also resolve a receiver
-  typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a `for … in`
-  loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
+  declaration, whether top-level or a field or method of such a type. The project is the nearest
+  directory above the file that holds a `project.maxon`, searched up to the workspace folder that
+  contains the file; failing that, that folder itself. In a multi-root window every folder is a root of
+  its own, and a folder added to the window is served at once. Hover and completion also resolve a
+  receiver typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a
+  `for … in` loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
   an element taken out of a generic container, or by a service handle, which offers its service's messages
   plus `shutdown` and `clone`.
-- **Diagnostics that know about your other files**: the server no longer reports a name as undeclared
-  when a sibling file of the project declares it. Checking is still done per buffer, so an error only the
-  whole program could raise is not reported; and while a file is unsaved, errors about its own text are
-  published immediately while name-dependent ones wait until you save. It needs a workspace folder that
-  contains the file — with none open, diagnostics are per buffer as before.
+- **Diagnostics that know about your other files**: a name a sibling file of the project declares
+  counts as declared. Each buffer is checked on its own, so errors that span the whole program are the
+  build's to report; while a file is unsaved, errors about its own text are published immediately and
+  name-dependent ones once you save. This needs a workspace folder that contains the file — with none
+  open, each buffer is checked alone.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default
 - **Compiler Explorer**: View the Target IR the compiler lowers a program to
@@ -69,12 +68,16 @@ npm install
 npm run compile
 ```
 
-3. Install the packaged extension (optional):
+3. Package and install it, from the repository root:
 
 ```powershell
-npm run package       # creates a .vsix file
-npm run install-extension
+./maxon-bin/.maxon/maxon run buildExtension     # vscode-extension/maxon-lsp-client.vsix
+./maxon-bin/.maxon/maxon run installExtension   # packages it, then installs it into VS Code
 ```
+
+Both run `npm install` first. `installExtension` installs with the `code` command, replacing any
+installed copy; VS Code puts `code` on `PATH` (on macOS, through **Shell Command: Install 'code' command
+in PATH**).
 
 ## Usage
 - Open a `.maxon` file in VS Code. If the LSP server binary is available and runs correctly, you should get diagnostics, code completion, and basic navigation features.
@@ -94,7 +97,8 @@ npm run watch
 ### Extension build and packaging
 - `npm run compile` — compile TypeScript to JavaScript (output is `out/`)
 - `npm run package` — build a `.vsix` package using `vsce`
-- `npm run install-extension` — installs the generated `.vsix` locally
+- `maxon run buildExtension` and `maxon run installExtension`, at the repository root — package the
+  extension, and package then install it into VS Code
 
 ## Testing
 - The extension uses `@vscode/test-electron` for integration tests and `mocha` for unit testing.
@@ -229,8 +233,13 @@ Licensed under either of:
 at your option.
 
 ## Notes and Troubleshooting
-- If the language server fails to start, the **Maxon Language Server** output channel says which compiler
-  it found, or that it found none. See [Finding the compiler](#finding-the-compiler).
+- Language server errors are written to the **Maxon Language Server** output channel, and the status bar
+  item turns red while the server is stopped. If the server fails to start, that channel says which
+  compiler it found, or that it found none. See [Finding the compiler](#finding-the-compiler).
+- The status bar item turns yellow while the server loads a project, which happens the first time a
+  hover, definition, completion or diagnostic needs that project's other files. Its tooltip lists the
+  projects loading and loaded, and ends with **Restart** and **Show Output** links (also the commands
+  **Maxon: Restart Language Server** and **Maxon: Show Language Server Output**).
 - For LSP server issues, the embedded server code is in `maxon-bin/Compiler/Lsp/`.
 
 ---

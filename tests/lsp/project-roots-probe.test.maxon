@@ -200,7 +200,7 @@ export function soleProject(result ListProjectsResult, note String) returns Proj
 end 'soleProject'
 
 export function requireProjectRootedAtADirectory(project ProjectEntry, expectedTail String, note String) throws TestFailure
-	let folded = foldedRootPath(project)
+	let folded = foldedRootPath(project.rootPath)
 
 	try Expect.isFalse(project.rootPath.startsWith(ProjectRootsFileUriPrefix), message: "{note} The rootPath is a URI, and the status bar shows a path: {project.rootPath}")
 	try Expect.isFalse(folded.endsWith(ProjectRootsMaxonExtension), message: "{note} The rootPath names a SOURCE FILE rather than a project directory: {project.rootPath}. A project is a tree, and a status bar naming a `.maxon` file is telling the author that every buffer is its own program.")
@@ -212,7 +212,7 @@ export function projectsRootedAt(result ListProjectsResult, expectedTail String)
 	var found = 0 as AssertedInt
 
 	for project in result.projects 'eachProject'
-		if foldedRootPath(project).endsWith(expectedTail) 'thisOne'
+		if foldedRootPath(project.rootPath).endsWith(expectedTail) 'thisOne'
 			found = found + 1
 		end 'thisOne'
 	end 'eachProject'
@@ -220,6 +220,6 @@ export function projectsRootedAt(result ListProjectsResult, expectedTail String)
 	return found
 end 'projectsRootedAt'
 
-export function foldedRootPath(project ProjectEntry) returns String
-	return project.rootPath.replace(ProjectRootsBackslash, with: ProjectRootsSlash)
+export function foldedRootPath(rootPath String) returns String
+	return rootPath.replace(ProjectRootsBackslash, with: ProjectRootsSlash)
 end 'foldedRootPath'

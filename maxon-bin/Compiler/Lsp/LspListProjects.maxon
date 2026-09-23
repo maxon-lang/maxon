@@ -1,12 +1,12 @@
-// `maxon/listProjects` — the VS Code status bar's request: the projects the open documents sit in, one
-// entry per distinct root `LspWorkspace.maxon`'s ladder resolves a document to.
+// `maxon/listProjects` — the VS Code status bar's request: the projects the open documents sit in,
+// one entry per distinct root `LspWorkspace.maxon`'s ladder resolves a document to.
 //
-// ⚠ A file count is read off a HELD corpus and this request sweeps for none: the status bar asks again
-// on every editor switch, so a sweep here would put a directory walk and a lex of every source behind a
-// keystroke. A root nothing has built yet is answered `0`, which the next hover or definition corrects.
+// ⚠ A file count is read off a HELD corpus and this request sweeps for none: the status bar asks
+// again on every editor switch, so a sweep here would put a directory walk and a lex of every
+// source behind a keystroke. A root nothing has built yet is answered `0`, which the next request
+// that loads that project corrects.
 
 let ProjectsKey = "projects"
-let RootPathKey = "rootPath"
 let IsSingleFileKey = "isSingleFile"
 let FileCountKey = "fileCount"
 
@@ -49,7 +49,7 @@ module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExte
 
 	for entry in listed 'eachProject'
 		var project = LspJsonObject.create(doc)
-		project.put(RootPathKey, value: JsonNode.stringNode(entry.rootPath.toString()))
+		project.put(LspRootPathKey, value: JsonNode.stringNode(entry.rootPath.toString()))
 		project.put(IsSingleFileKey, value: JsonNode.boolNode(entry.isSingleFile))
 		project.put(FileCountKey, value: JsonNode.numberNode(entry.fileCount as JsonFloat))
 		projects.push(project.finish())

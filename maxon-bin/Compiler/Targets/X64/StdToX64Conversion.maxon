@@ -1125,13 +1125,10 @@ export type StdToX64Lowering
 			osPipePeek gives win64OutgoingArgBytes(PeekPipeStackArgWords)
 			osHandleSetInherit gives 0
 
-			// ⚠ **THIS ARM COVERS TWELVE OPS.** `osEnvRead` and `osProcessTerminate` finish the attached-subprocess band, then the eight
-			// `ws2_32` socket ops follow, then `osCpuCount` and `osThreadCpuTicks` close it. All twelve are
-			// register-only because the widest Win64 call any of them marshals takes FOUR arguments —
-			// `getaddrinfo`, `send` and `recv`
-			// — which is exactly the register file's capacity, so nothing overflows onto the stack.
-			// ⛔ A ws2_32 call with a fifth argument (`WSARecv`, `WSASend`) would belong on its OWN arm with
-			// a reserved slot count, never in here.
+			// Every op on this arm is register-only: the widest Win64 call any of them marshals takes four
+			// arguments (`getaddrinfo`, `send`, `recv`, `GetFullPathNameA`), the register file's capacity.
+			// ⚠ A call with a fifth argument (`WSARecv`, `WSASend`) belongs on its own arm with a reserved
+			// slot count.
 			osEnvRead or
 				osProcessTerminate or
 				osSocketStartup or
@@ -1142,6 +1139,7 @@ export type StdToX64Lowering
 				osSocketSend or
 				osSocketRecv or
 				osSocketClose or
+				osPathQuery or
 				osSocketServe or
 				osDebugHost or
 				osCpuCount or
@@ -1542,6 +1540,7 @@ export type StdToX64Lowering
 			osSocketRecv(resultId, sockId, bufPtrId, lenId) then self.lowerOsSocketRecv(resultId, sockId: sockId, bufPtrId: bufPtrId, lenId: lenId, dstBlock: dstBlock)
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
 			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstBlock: dstBlock)
+			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
 			osDebugHost(resultId, verb, a0Id, a1Id, a2Id, a3Id) then self.lowerOsDebugHost(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, a3Id: a3Id, dstBlock: dstBlock)
 
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
@@ -1793,6 +1792,7 @@ export type StdToX64Lowering
 			osHostSample then panic("StdToX64Lowering: an `osHostSample` op appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
 			osNetpoll then panic("StdToX64Lowering: an `osNetpoll` op appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 			osSocketOverlapped then panic("StdToX64Lowering: an `osSocketOverlapped` op appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
+			osPathQuery then panic("StdToX64Lowering: an `osPathQuery` op appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -4120,6 +4120,28 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsSocketServe'
 
+	function lowerOsPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsPathQueryWin64(verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
+			syscall then panic("lowerOsPathQuery: `osPathQuery` asks Win32 for a system directory or a full path, and a raw-syscall lane has no such call — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
+		end 'route'
+
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsPathQuery'
+
+	function lowerOsPathQueryWin64(verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstBlock IrBlock)
+		match verb 'v'
+			systemDirectory then self.lowerOsWin64Call2(IatSlot.GetSystemDirectoryA, arg0: a0Id, arg1: a1Id, dstBlock: dstBlock)
+			windowsDirectory then self.lowerOsWin64Call2(IatSlot.GetWindowsDirectoryA, arg0: a0Id, arg1: a1Id, dstBlock: dstBlock)
+			fullPath then self.lowerOsFullPathWin64(a0Id, bufLenId: a1Id, bufPtrId: a2Id, dstBlock: dstBlock)
+		end 'v'
+	end 'lowerOsPathQueryWin64'
+
+	function lowerOsFullPathWin64(pathPtrId ValueId, bufLenId ValueId, bufPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.lowerOsWin64Call3(IatSlot.GetFullPathNameA, arg0: pathPtrId, arg1: bufLenId, arg2: bufPtrId, dstBlock: dstBlock)
+	end 'lowerOsFullPathWin64'
+
 	function lowerOsSocketServeWin64(resultId ValueId, verb SocketServeVerb, operands ValueIdArray, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(socketServeOperand(operands, index: 0))))
 
@@ -5696,6 +5718,7 @@ export type StdToX64Lowering
 				covPoint or
 				osHostSample or
 				osNetpoll or
+				osPathQuery or
 				osSocketOverlapped or
 				osSocketServe gives false
 			osDebugHost gives false
@@ -5951,6 +5974,7 @@ export type StdToX64Lowering
 			osHostSample panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osHostSample`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osNetpoll panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osNetpoll`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osSocketOverlapped panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osSocketOverlapped`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osPathQuery panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPathQuery`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

@@ -91,8 +91,9 @@ every comment anyone touches:
   "renamed", "now that we…", "this was a workaround for…", no dated narration of an edit, no reference
   to a former name. **Git holds the history; a comment holds the present.** The reason a guard exists
   is a *why* and belongs — but state the constraint that still binds ("callers may hand this an
-  unsorted list"), never the edit that introduced it. *(This bans history in SOURCE COMMENTS. Docs and
-  commit messages are where a measurement, an incident and a correction get recorded.)*
+  unsorted list"), never the edit that introduced it. *(Documentation follows the same rule: it states what
+  the software does — not what it used to do, and not what it doesn't do. Commit messages, `docs/optimization-log.md` and a
+  release's changelog entry are where a measurement, an incident and a correction get recorded.)*
 - **Editing a comment means REWRITING it to conform** — or deleting it. Never leave a conforming edit
   inside a non-conforming comment.
 

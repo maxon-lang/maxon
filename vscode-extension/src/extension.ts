@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import {
 	LanguageClient,
 	LanguageClientOptions,
+	RevealOutputChannelOn,
 	ServerOptions,
 	State
 } from 'vscode-languageclient/node';
@@ -21,7 +22,18 @@ interface ExtensionState {
 
 let state: ExtensionState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
-let stateSubscription: vscode.Disposable | undefined;
+let clientSubscriptions: vscode.Disposable[] = [];
+
+const ProjectLoadingNotification = 'maxon/projectLoading';
+const RestartLanguageServerCommand = 'maxon.restartLanguageServer';
+const ShowLanguageServerOutputCommand = 'maxon.showLanguageServerOutput';
+
+interface ProjectLoadingParams {
+	rootPath: string;
+	loading: boolean;
+}
+
+const loadingProjectRoots = new Set<string>();
 
 const isWindows = os.platform() === 'win32';
 const binaryName = isWindows ? 'maxon.exe' : 'maxon';
@@ -51,7 +63,8 @@ let projectRefreshTimer: NodeJS.Timeout | undefined;
 
 function buildTooltip(): vscode.MarkdownString {
 	const md = new vscode.MarkdownString(undefined, true);
-	md.isTrusted = false;
+	// Root paths are interpolated into this Markdown, so trust covers these two command links alone.
+	md.isTrusted = { enabledCommands: [RestartLanguageServerCommand, ShowLanguageServerOutputCommand] };
 	md.supportThemeIcons = true;
 
 	const stateLabel =
@@ -60,26 +73,43 @@ function buildTooltip(): vscode.MarkdownString {
 		'$(error) Stopped';
 	md.appendMarkdown(`**Maxon Language Server** — ${stateLabel}\n\n`);
 
-	if (lastClientState !== State.Running) {
-		return md;
+	if (lastClientState === State.Running) {
+		appendProjects(md);
 	}
+
+	md.appendMarkdown('\n\n---\n\n');
+	md.appendMarkdown(`[$(debug-restart) Restart](command:${RestartLanguageServerCommand} "Restart the Maxon Language Server")`);
+	md.appendMarkdown(' · ');
+	md.appendMarkdown(`[$(output) Show Output](command:${ShowLanguageServerOutputCommand} "Open the Maxon Language Server output")`);
+	return md;
+}
+
+function appendProjects(md: vscode.MarkdownString) {
+	if (loadingProjectRoots.size > 0) {
+		md.appendMarkdown('**Loading projects**\n\n');
+		for (const root of loadingProjectRoots) {
+			md.appendMarkdown(`- $(sync~spin) \`${root}\`\n`);
+		}
+		md.appendMarkdown('\n');
+	}
+
 	switch (projectsView.kind) {
 		case 'loading':
 			md.appendMarkdown('_Loading projects…_');
-			return md;
+			return;
 		case 'unavailable':
 			md.appendMarkdown('_Could not list the loaded projects:_ ');
 			md.appendText(projectsView.reason);
-			return md;
+			return;
 		case 'loaded':
 			break;
 		default:
-			throw new Error(`buildTooltip: unhandled projects view ${JSON.stringify(projectsView)}`);
+			throw new Error(`appendProjects: unhandled projects view ${JSON.stringify(projectsView)}`);
 	}
 
 	if (projectsView.projects.length === 0) {
 		md.appendMarkdown('_No projects loaded_');
-		return md;
+		return;
 	}
 
 	md.appendMarkdown('**Loaded projects**\n\n');
@@ -88,7 +118,6 @@ function buildTooltip(): vscode.MarkdownString {
 		const fileText = p.fileCount === 1 ? '1 file' : `${p.fileCount} files`;
 		md.appendMarkdown(`- \`${p.rootPath}\` _(${kind}, ${fileText})_\n`);
 	}
-	return md;
 }
 
 function updateStatusBar() {
@@ -96,7 +125,9 @@ function updateStatusBar() {
 	switch (lastClientState) {
 		case State.Running:
 			statusBarItem.text = '$(maxon-logo)';
-			statusBarItem.backgroundColor = undefined;
+			statusBarItem.backgroundColor = loadingProjectRoots.size > 0
+				? new vscode.ThemeColor('statusBarItem.warningBackground')
+				: undefined;
 			break;
 		case State.Starting:
 			statusBarItem.text = '$(sync~spin)';
@@ -106,6 +137,8 @@ function updateStatusBar() {
 			statusBarItem.text = '$(maxon-logo)';
 			statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
 			break;
+		default:
+			throw new Error(`updateStatusBar: unhandled client state ${lastClientState}`);
 	}
 	statusBarItem.tooltip = buildTooltip();
 }
@@ -135,23 +168,49 @@ function scheduleProjectRefresh() {
 	projectRefreshTimer = setTimeout(() => refreshProjects(), 500);
 }
 
-function subscribeToClientState(client: LanguageClient) {
-	stateSubscription?.dispose();
-	lastClientState = client.state;
+function disposeClientSubscriptions() {
+	for (const subscription of clientSubscriptions) {
+		subscription.dispose();
+	}
+	clientSubscriptions = [];
+}
+
+function subscribeToClient(client: LanguageClient) {
+	disposeClientSubscriptions();
+	loadingProjectRoots.clear();
+	applyClientState(client.state);
+	clientSubscriptions.push(
+		client.onDidChangeState((e) => applyClientState(e.newState)),
+		client.onNotification(ProjectLoadingNotification, onProjectLoading)
+	);
+}
+
+function applyClientState(newState: State) {
+	lastClientState = newState;
+	if (newState !== State.Running) {
+		projectsView = { kind: 'loading' };
+		loadingProjectRoots.clear();
+	}
 	updateStatusBar();
-	if (client.state === State.Running) {
+	if (newState === State.Running) {
 		scheduleProjectRefresh();
 	}
-	stateSubscription = client.onDidChangeState((e) => {
-		lastClientState = e.newState;
-		if (e.newState !== State.Running) {
-			projectsView = { kind: 'loading' };
-		}
+}
+
+function onProjectLoading(params: ProjectLoadingParams) {
+	if (typeof params?.rootPath !== 'string' || typeof params?.loading !== 'boolean') {
+		throw new Error(`${ProjectLoadingNotification}: malformed params ${JSON.stringify(params)}`);
+	}
+
+	if (params.loading) {
+		loadingProjectRoots.add(params.rootPath);
 		updateStatusBar();
-		if (e.newState === State.Running) {
-			scheduleProjectRefresh();
-		}
-	});
+		return;
+	}
+
+	loadingProjectRoots.delete(params.rootPath);
+	updateStatusBar();
+	scheduleProjectRefresh();
 }
 
 /**
@@ -200,6 +259,24 @@ function serverOptionsFor(compilerExecutable: string): ServerOptions {
 		command: compilerExecutable,
 		args: ['lsp-server']
 	};
+}
+
+// `revealOutputChannelOn: Never` quiets only the client's ordinary error notifications. A start
+// failure, a crash with no restart left and a failed restart pass `'force'`, which ignores that
+// setting.
+class QuietLanguageClient extends LanguageClient {
+	public override error(message: string, data?: any, _showNotification?: boolean | 'force'): void {
+		super.error(message, data, false);
+	}
+}
+
+function createClient(compilerExecutable: string, clientOptions: LanguageClientOptions): LanguageClient {
+	return new QuietLanguageClient(
+		'maxonLanguageServer',
+		'Maxon Language Server',
+		serverOptionsFor(compilerExecutable),
+		clientOptions
+	);
 }
 
 /**
@@ -381,7 +458,6 @@ export async function restartClient(): Promise<void> {
 
 	log('Restarting LSP client...');
 
-	// Stop existing client if running
 	try {
 		log('Stopping existing LSP client');
 		await state.client.stop();
@@ -390,15 +466,9 @@ export async function restartClient(): Promise<void> {
 		log(`Error stopping client: ${error}`);
 	}
 
-	state.client = new LanguageClient(
-		'maxonLanguageServer',
-		'Maxon Language Server',
-		serverOptionsFor(state.compilerExecutable),
-		state.clientOptions
-	);
-	subscribeToClientState(state.client);
+	state.client = createClient(state.compilerExecutable, state.clientOptions);
+	subscribeToClient(state.client);
 
-	// Start the client
 	try {
 		await state.client.start();
 		log('LSP client restarted successfully');
@@ -409,7 +479,6 @@ export async function restartClient(): Promise<void> {
 }
 
 export async function activate(ctx: vscode.ExtensionContext) {
-	// Create output channel for debugging
 	const outputChannel = vscode.window.createOutputChannel('Maxon Language Server');
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
@@ -426,9 +495,9 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	let compilerExecutable = await findCompiler(ctx);
 
-	// ⭐ NOT FOUND IS AN OFFER, NOT A DEAD END. Someone who installs this extension from the
-	// marketplace has, very often, no compiler at all — and an error message naming directories they
-	// have never heard of leaves them with nothing to do. See `offerToInstall`.
+	// Someone who installs this extension from the marketplace often has no compiler at all, and an
+	// error naming directories they have never heard of leaves them nothing to do. See
+	// `offerToInstall`.
 	if (!compilerExecutable) {
 		compilerExecutable = await offerToInstall(ctx);
 	}
@@ -450,11 +519,16 @@ export async function activate(ctx: vscode.ExtensionContext) {
 			configurationSection: 'maxon'
 		},
 		outputChannel: outputChannel,
+		revealOutputChannelOn: RevealOutputChannelOn.Never,
+		// Without a handler the client shows a failed `initialize` with `window.showErrorMessage`.
+		initializationFailedHandler: (error) => {
+			log(`Server initialization failed: ${error instanceof Error ? error.message : JSON.stringify(error)}`);
+			return false;
+		},
 		middleware: {
 			provideDocumentFormattingEdits: async (document, options, token, next) => {
 				log('Formatting requested for ' + document.uri.toString());
 
-				// Override options with Maxon-specific settings
 				const config = vscode.workspace.getConfiguration('maxon.formatting');
 				const insertSpaces = config.get<boolean>('insertSpaces', false);
 				const tabSize = config.get<number>('tabSize', 2);
@@ -470,20 +544,14 @@ export async function activate(ctx: vscode.ExtensionContext) {
 				const edits = result || [];
 				log(`Received ${edits.length} edits from server`);
 
-				// Note: We can't use TextEdit.setEndOfLine here because it creates an edit
-				// with a `newEol` property that's not compatible with the LSP protocol.
-				// The formatter already normalizes to LF line endings.
+				// `TextEdit.setEndOfLine` would add a `newEol` property LSP does not carry; the formatter
+				// already writes LF line endings.
 				return edits;
 			}
 		}
 	};
 
-	const client = new LanguageClient(
-		'maxonLanguageServer',
-		'Maxon Language Server',
-		serverOptionsFor(compilerExecutable),
-		clientOptions
-	);
+	const client = createClient(compilerExecutable, clientOptions);
 
 	state = {
 		client,
@@ -491,13 +559,27 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		clientOptions
 	};
 
-	// Status bar item showing LSP state. Hover for the loaded project list.
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	statusBarItem.show();
 	ctx.subscriptions.push(statusBarItem);
-	ctx.subscriptions.push({ dispose: () => stateSubscription?.dispose() });
+	ctx.subscriptions.push({ dispose: disposeClientSubscriptions });
 	ctx.subscriptions.push({ dispose: () => { if (projectRefreshTimer) clearTimeout(projectRefreshTimer); } });
-	subscribeToClientState(client);
+	subscribeToClient(client);
+
+	// Registered before `client.start()` is awaited: the tooltip links to these commands while the
+	// server is still starting.
+	ctx.subscriptions.push(
+		vscode.commands.registerCommand(RestartLanguageServerCommand, async () => {
+			log('Restart language server command invoked');
+			try {
+				await restartClient();
+				vscode.window.showInformationMessage('Maxon Language Server restarted successfully');
+			} catch (error) {
+				log(`Restart command failed: ${error}`);
+			}
+		}),
+		vscode.commands.registerCommand(ShowLanguageServerOutputCommand, () => outputChannel.show(true))
+	);
 
 	// Refresh the loaded-project list when the active editor changes (a new
 	// project may have been opened) or when a file is saved (project files
@@ -509,33 +591,13 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		vscode.workspace.onDidCloseTextDocument(scheduleProjectRefresh)
 	);
 
-	// Start the client and await completion
 	try {
 		await client.start();
 		log('LSP client started successfully');
 	} catch (error) {
 		log(`LSP client start failed: ${error}`);
-		vscode.window.showErrorMessage(`Maxon Language Server failed to start: ${error}`);
 	}
 
-	// Register restart command
-	const restartCommand = vscode.commands.registerCommand(
-		'maxon.restartLanguageServer',
-		async () => {
-			log('Restart language server command invoked');
-			try {
-				await restartClient();
-				vscode.window.showInformationMessage('Maxon Language Server restarted successfully');
-			} catch (error) {
-				log(`Restart command failed: ${error}`);
-				vscode.window.showErrorMessage(`Failed to restart language server: ${error}`);
-			}
-		}
-	);
-
-	ctx.subscriptions.push(restartCommand);
-
-	// Register the compiler explorer webview view provider (lives in the activity bar)
 	const compilerExplorerProvider = new CompilerExplorerViewProvider(
 		ctx.extensionUri,
 		() => state?.client
@@ -547,7 +609,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		)
 	);
 
-	// Command opens the activity bar view
 	const compilerExplorerCommand = vscode.commands.registerCommand(
 		'maxon.openCompilerExplorer',
 		async () => {
@@ -558,7 +619,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 	ctx.subscriptions.push(compilerExplorerCommand);
 
-	// Register commands for testing - these allow tests to call LSP methods via VS Code commands
 	const generateIRCommand = vscode.commands.registerCommand(
 		'maxon.generateIR',
 		async (params: { source: string; filename: string; }) => {
@@ -570,8 +630,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	);
 	ctx.subscriptions.push(generateIRCommand);
 
-	// ⛔ A REBUILT COMPILER RESTARTS THE SERVER. A server still running from the renamed-away `.previous`
-	// answers from the old compiler, and it keeps that file on disk until it exits.
+	// A rebuilt compiler restarts the server: one still running from the renamed-away `.previous`
+	// answers from the old compiler, and keeps that file on disk until it exits.
 	const serverDir = path.dirname(compilerExecutable);
 	const serverFile = path.basename(compilerExecutable);
 	const watcher = vscode.workspace.createFileSystemWatcher(
@@ -594,9 +654,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	watcher.onDidChange(autoRestart);
 	watcher.onDidCreate(autoRestart);
 	ctx.subscriptions.push(watcher);
-
-	// Add client to subscriptions for cleanup
-	ctx.subscriptions.push(client);
 
 	log('Maxon extension activated successfully');
 

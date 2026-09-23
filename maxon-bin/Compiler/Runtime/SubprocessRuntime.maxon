@@ -280,34 +280,55 @@ let EnvPointerStride = 8 as ParsedInt
 // failure `StdDialect`'s `osProcessSpawn` note says the design exists to prevent.
 let EnvSourceParent = 1 as ParsedInt
 
-// ⭐ **THE PATH WALK'S STATE, IN MEMORY.** Two nested lists — the directories of `PATH` and the extensions of
-// `PATHEXT` — plus a synthetic empty member at the head of each, which is what makes "the name exactly as
-// given" and "the name with no extension added" ordinary iterations rather than special cases before the loop.
 let RpName = 0 as ByteOffset
 let RpNameLen = 8 as ByteOffset
 let RpPath = 16 as ByteOffset  // the PATH value, NUL-terminated
 let RpExts = 24 as ByteOffset  // the PATHEXT value, NUL-terminated
-let RpDirStart = 32 as ByteOffset  // cursor into PATH; the head iteration uses the empty directory instead
+let RpDirStart = 32 as ByteOffset  // cursor into PATH
 let RpDirLen = 40 as ByteOffset
-let RpDirIsHead = 48 as ByteOffset  // 1 while the synthetic "no directory" member is being tried
+let RpSearchesCwd = 48 as ByteOffset
 let RpExtStart = 56 as ByteOffset
 let RpExtLen = 64 as ByteOffset
-let RpExtIsHead = 72 as ByteOffset  // 1 while the synthetic "no extension" member is being tried
+let RpExtIsHead = 72 as ByteOffset  // 1 while the name is tried with no extension added
 let RpCand = 80 as ByteOffset  // the candidate path buffer, reused across every combination
 let RpCandLen = 88 as ByteOffset
-let RpBytes = 96 as ParsedInt
+let RpTryAsGiven = 96 as ByteOffset
+let RpNameScan = 104 as ByteOffset
+let RpDirPtr = 112 as ByteOffset
+let RpRungAt = 120 as ByteOffset
+let RpRungCount = 128 as ByteOffset
+let RpRungBytes = 136 as ByteOffset
+let RpNameHasPath = 144 as ByteOffset
+let RpExeDir = 152 as ByteOffset
+let RpExeDirLen = 160 as ByteOffset
+let RpSystemDir = 168 as ByteOffset
+let RpSystemDirLen = 176 as ByteOffset
+let RpWindowsDir = 184 as ByteOffset
+let RpWindowsDirLen = 192 as ByteOffset
+let RpLegacySystemDir = 200 as ByteOffset
+let RpLegacySystemDirLen = 208 as ByteOffset
+// `emitSubpWindowsSearchRungs` pushes at most five rungs; a sixth would overwrite `RpRungLens`.
+let SearchRungsMax = 5 as ParsedInt
+let RungSlotBytes = 8 as ParsedInt
+let RpRungDirs = 216 as ByteOffset
+let RpRungLens = ((RpRungDirs as ParsedInt) + SearchRungsMax * RungSlotBytes) as ByteOffset
+let RpBytes = (RpRungLens as ParsedInt) + SearchRungsMax * RungSlotBytes
 
 // The environment variables the PATH walk reads, and each platform's separator between their members and
 // between a directory and a file name. `PathSearchShape` chooses the pair.
 let PathVarName = b"PATH"
 let PathExtVarName = b"PATHEXT"
+let NoCurrentDirectorySearchVarName = b"NoDefaultCurrentDirectoryInExePath"
+let LegacySystemSubdirectory = b"System"
+let ExtensionDotByte = 46 as ParsedInt
+let DriveColonByte = 58 as ParsedInt
+let DriveColonIndex = 1 as ParsedInt
+let DriveSpecBytes = 2 as ParsedInt
 let WindowsPathListSeparatorByte = 59 as ParsedInt  // ';'
 let WindowsDirSeparatorByte = 92 as ParsedInt  // '\'
 let PosixPathListSeparatorByte = 58 as ParsedInt  // ':'
 let PosixDirSeparatorByte = 47 as ParsedInt  // '/'
 
-// POSIX has no `PATHEXT`, so its extension list is empty: only the synthetic "no extension" member is tried,
-// which is the name exactly as given.
 let PosixNoExtensions = b""
 
 // ⚠ **THE FALLBACK `PATHEXT`, USED ONLY WHEN THE VARIABLE IS UNSET.** Windows always sets it, so this is the
@@ -316,10 +337,8 @@ let PosixNoExtensions = b""
 // only would fail to find `git` while reporting nothing.
 let PathExtDefault = b".COM;.EXE;.BAT;.CMD"
 
-// The first guess at an environment variable's size. `PATH` is routinely longer than this, and the read
-// RETRIES at exactly the size Win32 names — `GetEnvironmentVariableA` answers the size it NEEDS when the
-// buffer is too small, so one retry is provably enough (`__md_current_path`'s straight-line retry, not
-// `__proc_exe_path`'s doubling loop).
+// The first guess at an environment variable's size. `PATH` is routinely longer than this, and
+// `emitSubpReadEnvInto` then retries at exactly the size Win32 names.
 let EnvFirstGuessBytes = 512 as ParsedInt
 
 // The prefix `subprocessLastErrorMessage()` puts in front of the error number `osLastError` answers. That
@@ -435,16 +454,16 @@ function spawnEnvironmentShape(target Target) returns SpawnEnvironmentShape
 	end 'os'
 end 'spawnEnvironmentShape'
 
-// ⭐⭐ **HOW A BARE NAME IS FOUND ON THIS PLATFORM's `PATH` — the fourth fork in this family.** The Linux
-// spawn is raw `execve`, which takes a path and searches nothing, so the search `posix_spawnp` would do
-// happens here or not at all; the spawn's own header says as much. The two platforms differ in four ways
-// and every one of them is an ABI fact:
+// How an executable name is found on this platform — the fourth fork in this family. The Linux
+// spawn is raw `execve`, which takes a path and searches nothing, so the search `posix_spawnp`
+// would do happens here or not at all. Every difference between the two shapes is an ABI fact:
 //
 //   * `PATH` separates its directories with `;` on Windows and `:` on POSIX;
 //   * a directory joins its file with `\` on Windows and `/` on POSIX;
-//   * Windows retries each candidate with every extension of `PATHEXT`; POSIX has no such list;
-//   * ⛔ Windows searches the working directory, so trying the name "as given" first is its behaviour. POSIX
-//     does not — and trying it there lets a file in the working directory shadow the real tool.
+//   * Windows searches `CreateProcessA`'s own directories ahead of `PATH` and applies its name
+//     rules (`emitSubpWindowsSearchRungs`, `emitSubpWindowsNameRules`);
+//   * POSIX searches `PATH` alone and tries the name as given. It never searches the working
+//     directory, where a file would shadow the real tool.
 enum PathSearchShape
 	windowsPathExt
 	posix
@@ -473,13 +492,6 @@ function pathDirSeparator(shape PathSearchShape) returns ParsedInt
 		posix gives PosixDirSeparatorByte
 	end 'shape'
 end 'pathDirSeparator'
-
-function searchesWorkingDirectory(shape PathSearchShape) returns bool
-	return match shape 'shape'
-		windowsPathExt gives true
-		posix gives false
-	end 'shape'
-end 'searchesWorkingDirectory'
 
 // ⭐ **THE COMMAND A `runProcess(cmd)`-SHAPED ENTRY BUILDS.** Two entry points hand the spawn a whole
 // COMMAND LINE a user wrote rather than an argv blob — `__gt_process_run` and the one-shot read probe — and
@@ -2653,26 +2665,23 @@ function emitSubpReleaseEnvSnapshot(module StdModule, block IrBlock, state Value
 	emitSlabFree(module, block: block, ptr: state, ids: ids)
 end 'emitSubpReleaseEnvSnapshot'
 
-// ⭐⭐ `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`: the
-// `PATH` walk that turns a bare tool name into a path the spawn can launch. `shape` decides the separators,
-// whether `PATHEXT` is consulted, and whether the working directory is searched — see `PathSearchShape`.
+// `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`:
+// the search that turns an executable name into a path the spawn can launch. `shape` decides where
+// it looks and how a candidate is spelled — see `PathSearchShape`.
 //
-// ⭐ **THE WALK IS ONE DOUBLE LOOP WITH A SYNTHETIC HEAD MEMBER ON EACH LIST**, which is what makes "the name
-// with no directory" and "the name with no extension" ordinary iterations rather than special cases in front
-// of it. The directory head is Windows' working-directory search, so POSIX starts past it.
-//
-// ⚠⚠ **IT NEVER ANSWERS NULL, AND THAT IS FORCED BY STATIC OWNERSHIP.** The result is an OWNED
+// ⚠ It never answers NULL, and that is forced by static ownership. The result is an owned
 // `__ManagedMemory`, so its `let` binding is dropped at scope exit through `__mm_decref`, which
-// dereferences the record header — a NULL would fault. Making `__mm_decref` null-tolerant would put a test
-// on every drop in every program to serve one caller, so a miss answers the BARE NAME instead. On POSIX,
-// where the working-directory head is never tried, a hit always carries a `/` and a miss never does — which
-// is how `stdlib/Subprocess.maxon` tells them apart there.
+// dereferences the record header — a NULL would fault. Making `__mm_decref` null-tolerant would put
+// a test on every drop in every program to serve one caller, so a miss answers the name it was
+// given. On POSIX, where every candidate joins a `PATH` member, a hit always carries a `/` and a
+// miss never does — which is how `stdlib/Subprocess.maxon` tells them apart there.
 function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	var func = IrFunction.createFromStd(SubpResolvePathName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var dirHdr = module.addBlock(func, label: b"rpdirhdr", heat: BlockHeat.normal)
+	var rungDir = module.addBlock(func, label: b"rprungdir", heat: BlockHeat.normal)
 	var dirMeasure = module.addBlock(func, label: b"rpdirmeas", heat: BlockHeat.normal)
 	var extInit = module.addBlock(func, label: b"rpextinit", heat: BlockHeat.normal)
 	var extHdr = module.addBlock(func, label: b"rpexthdr", heat: BlockHeat.normal)
@@ -2681,6 +2690,8 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	var testCand = module.addBlock(func, label: b"rptest", heat: BlockHeat.normal)
 	var extNext = module.addBlock(func, label: b"rpextnext", heat: BlockHeat.normal)
 	var dirNext = module.addBlock(func, label: b"rpdirnext", heat: BlockHeat.normal)
+	var nextRung = module.addBlock(func, label: b"rpnextrung", heat: BlockHeat.normal)
+	var nextPathMember = module.addBlock(func, label: b"rpnextmember", heat: BlockHeat.normal)
 	var hit = module.addBlock(func, label: b"rphit", heat: BlockHeat.normal)
 	var miss = module.addBlock(func, label: b"rpmiss", heat: BlockHeat.normal)
 
@@ -2694,34 +2705,35 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	emitStoreField(module, block: measuredName, record: state, offset: RpNameLen, value: nameLen)
 	var afterPath = emitSubpReadEnvInto(module, func: func, ids: ids, cur: measuredName, state: state, varName: PathVarName, outOffset: RpPath, fallback: EmptyPathFallback)
 	var afterExts = emitSubpExtensionsInto(module, func: func, ids: ids, cur: afterPath, state: state, shape: shape)
+	var afterRules = emitSubpNameRulesInto(module, func: func, ids: ids, cur: afterExts, state: state, shape: shape)
+	var afterRungs = emitSubpSearchRungsInto(module, func: func, ids: ids, cur: afterRules, state: state, shape: shape)
 
-	// The candidate buffer is sized for the longest combination that can exist: any directory of PATH, a
-	// separator, the name and any extension of PATHEXT, plus a terminator. One allocation for the whole walk.
-	let pathV = emitLoadField(module, block: afterExts, record: state, offset: RpPath, ids: ids)
+	let pathV = emitLoadField(module, block: afterRungs, record: state, offset: RpPath, ids: ids)
 	let pathLen = ids.mint()
-	var measuredPath = emitCStringLength(module, func: func, cur: afterExts, cstr: pathV, length: pathLen, ids: ids)
+	var measuredPath = emitCStringLength(module, func: func, cur: afterRungs, cstr: pathV, length: pathLen, ids: ids)
 	let extsV = emitLoadField(module, block: measuredPath, record: state, offset: RpExts, ids: ids)
 	let extsLen = ids.mint()
 	var measuredExts = emitCStringLength(module, func: func, cur: measuredPath, cstr: extsV, length: extsLen, ids: ids)
 	let nameLen2 = emitLoadField(module, block: measuredExts, record: state, offset: RpNameLen, ids: ids)
+	let rungBytes = emitLoadField(module, block: measuredExts, record: state, offset: RpRungBytes, ids: ids)
 	let sumA = emitBin(module, block: measuredExts, a: pathLen, b: extsLen, opcode: StdBinOpcode.add, ids: ids)
 	let sumB = emitBin(module, block: measuredExts, a: sumA, b: nameLen2, opcode: StdBinOpcode.add, ids: ids)
+	let sumC = emitBin(module, block: measuredExts, a: sumB, b: rungBytes, opcode: StdBinOpcode.add, ids: ids)
 	let slackConst = emitConst(module, block: measuredExts, value: CandidateSlackBytes, ids: ids)
-	let candSize = emitBin(module, block: measuredExts, a: sumB, b: slackConst, opcode: StdBinOpcode.add, ids: ids)
+	let candSize = emitBin(module, block: measuredExts, a: sumC, b: slackConst, opcode: StdBinOpcode.add, ids: ids)
 	let candBuf = ids.mint()
 	module.appendOp(measuredExts, op: StdOp.call(candBuf, callee: SlabAllocName, args: argsOf(candSize)))
 	emitStoreField(module, block: measuredExts, record: state, offset: RpCand, value: candBuf)
-	let headFlag = emitConst(module, block: measuredExts, value: 1 if searchesWorkingDirectory(shape) else 0, ids: ids)
-	emitStoreField(module, block: measuredExts, record: state, offset: RpDirIsHead, value: headFlag)
 	module.setTerminator(measuredExts, op: StdOp.branch(dirHdr.id))
 
-	// dirHdr: the synthetic head member where the platform searches the working directory, then each member
-	// of PATH.
 	var dirReal = module.addBlock(func, label: b"rpdirreal", heat: BlockHeat.normal)
-	let isHead = emitLoadField(module, block: dirHdr, record: state, offset: RpDirIsHead, ids: ids)
-	let zeroH = emitConst(module, block: dirHdr, value: 0, ids: ids)
-	let atHead = emitCmp(module, block: dirHdr, a: isHead, b: zeroH, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(dirHdr, op: StdOp.condBranch(atHead, thenBlockId: extInit.id, elseBlockId: dirReal.id))
+	let onRung = emitSubpOnRung(module, block: dirHdr, ids: ids, state: state)
+	module.setTerminator(dirHdr, op: StdOp.condBranch(onRung, thenBlockId: rungDir.id, elseBlockId: dirReal.id))
+
+	let rungSlot = emitSubpRungSlot(module, block: rungDir, ids: ids, state: state, indexOffset: RpRungAt)
+	emitStoreField(module, block: rungDir, record: state, offset: RpDirPtr, value: emitLoadField(module, block: rungDir, record: rungSlot, offset: RpRungDirs, ids: ids))
+	emitStoreField(module, block: rungDir, record: state, offset: RpDirLen, value: emitLoadField(module, block: rungDir, record: rungSlot, offset: RpRungLens, ids: ids))
+	module.setTerminator(rungDir, op: StdOp.branch(extInit.id))
 
 	let pathD = emitLoadField(module, block: dirReal, record: state, offset: RpPath, ids: ids)
 	let startD = emitLoadField(module, block: dirReal, record: state, offset: RpDirStart, ids: ids)
@@ -2731,6 +2743,9 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	module.setTerminator(dirReal, op: StdOp.condBranch(pathSpent, thenBlockId: miss.id, elseBlockId: dirMeasure.id))
 
 	var measuredDir = emitSubpMemberLength(module, func: func, ids: ids, cur: dirMeasure, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, separator: pathListSeparator(shape))
+	let pathM = emitLoadField(module, block: measuredDir, record: state, offset: RpPath, ids: ids)
+	let startM = emitLoadField(module, block: measuredDir, record: state, offset: RpDirStart, ids: ids)
+	emitStoreField(module, block: measuredDir, record: state, offset: RpDirPtr, value: emitBin(module, block: measuredDir, a: pathM, b: startM, opcode: StdBinOpcode.add, ids: ids))
 
 	// ⛔ **AN EMPTY `PATH` MEMBER IS SKIPPED, ON EVERY PLATFORM.** `PATH=:/usr/bin` or `;C:\bin` would
 	// otherwise join nothing and a separator onto the name — `/git`, `\git` — and search the ROOT of the
@@ -2740,17 +2755,14 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	let emptyMember = emitCmp(module, block: measuredDir, a: dirLenM, b: zeroM, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(measuredDir, op: StdOp.condBranch(emptyMember, thenBlockId: dirNext.id, elseBlockId: extInit.id))
 
-	// extInit: reset the extension list to its own synthetic head for this directory.
 	let zeroE = emitConst(module, block: extInit, value: 0, ids: ids)
 	emitStoreField(module, block: extInit, record: state, offset: RpExtStart, value: zeroE)
-	let oneE = emitConst(module, block: extInit, value: 1, ids: ids)
-	emitStoreField(module, block: extInit, record: state, offset: RpExtIsHead, value: oneE)
+	let tryAsGiven = emitLoadField(module, block: extInit, record: state, offset: RpTryAsGiven, ids: ids)
+	emitStoreField(module, block: extInit, record: state, offset: RpExtIsHead, value: tryAsGiven)
 	module.setTerminator(extInit, op: StdOp.branch(extHdr.id))
 
 	var extReal = module.addBlock(func, label: b"rpextreal", heat: BlockHeat.normal)
-	let extHead = emitLoadField(module, block: extHdr, record: state, offset: RpExtIsHead, ids: ids)
-	let zeroEh = emitConst(module, block: extHdr, value: 0, ids: ids)
-	let atExtHead = emitCmp(module, block: extHdr, a: extHead, b: zeroEh, pred: StdCmpPred.ne, ids: ids)
+	let atExtHead = emitSubpFieldIsSet(module, block: extHdr, ids: ids, state: state, offset: RpExtIsHead)
 	module.setTerminator(extHdr, op: StdOp.condBranch(atExtHead, thenBlockId: buildCand.id, elseBlockId: extReal.id))
 
 	let extsR = emitLoadField(module, block: extReal, record: state, offset: RpExts, ids: ids)
@@ -2775,65 +2787,129 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	module.setTerminator(testCand, op: StdOp.condBranch(nothingThere, thenBlockId: extNext.id, elseBlockId: attrOk.id))
 
 	// A DIRECTORY of the right name is not an executable — the one attribute bit this walk reads.
-	let attrs2 = ids.mint()
-	let candT2 = emitLoadField(module, block: attrOk, record: state, offset: RpCand, ids: ids)
-	module.appendOp(attrOk, op: StdOp.osFileAttributes(attrs2, pathPtrId: candT2))
 	let dirBit = emitConst(module, block: attrOk, value: FileAttributeDirectory, ids: ids)
-	let masked = emitBin(module, block: attrOk, a: attrs2, b: dirBit, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let masked = emitBin(module, block: attrOk, a: attrs, b: dirBit, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let zeroB = emitConst(module, block: attrOk, value: 0, ids: ids)
 	let isDirectory = emitCmp(module, block: attrOk, a: masked, b: zeroB, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(attrOk, op: StdOp.condBranch(isDirectory, thenBlockId: extNext.id, elseBlockId: hit.id))
 
-	var afterExtStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: extNext, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen, headOffset: RpExtIsHead, separator: pathListSeparator(shape))
+	var extStep = module.addBlock(func, label: b"rpextstep", heat: BlockHeat.normal)
+	let triedAsGiven = emitSubpFieldIsSet(module, block: extNext, ids: ids, state: state, offset: RpExtIsHead)
+	module.setTerminator(extNext, op: StdOp.condBranch(triedAsGiven, thenBlockId: dirNext.id, elseBlockId: extStep.id))
+
+	var afterExtStep = emitSubpStepPastMember(module, func: func, ids: ids, cur: extStep, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen, separator: pathListSeparator(shape))
 	module.setTerminator(afterExtStep, op: StdOp.branch(extHdr.id))
 
-	var afterDirStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: dirNext, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, headOffset: RpDirIsHead, separator: pathListSeparator(shape))
+	let stillOnRung = emitSubpOnRung(module, block: dirNext, ids: ids, state: state)
+	module.setTerminator(dirNext, op: StdOp.condBranch(stillOnRung, thenBlockId: nextRung.id, elseBlockId: nextPathMember.id))
+
+	emitSubpBumpField(module, block: nextRung, ids: ids, record: state, offset: RpRungAt)
+	module.setTerminator(nextRung, op: StdOp.branch(dirHdr.id))
+
+	var afterDirStep = emitSubpStepPastMember(module, func: func, ids: ids, cur: nextPathMember, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, separator: pathListSeparator(shape))
 	module.setTerminator(afterDirStep, op: StdOp.branch(dirHdr.id))
 
-	let candH = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
-	let hitRecord = ids.mint()
-	var hitBuilt = emitCStringToManaged(module, func: func, cur: hit, cstr: candH, record: hitRecord, ids: ids)
-	emitSubpReleasePathWalk(module, block: hitBuilt, state: state, ids: ids)
-	module.setTerminator(hitBuilt, op: StdOp.ret(hitRecord))
+	emitSubpAnswerHit(module, func: func, ids: ids, hit: hit, miss: miss, state: state, shape: shape)
 
 	let nameM = emitLoadField(module, block: miss, record: state, offset: RpName, ids: ids)
 	let missRecord = ids.mint()
 	var missBuilt = emitCStringToManaged(module, func: func, cur: miss, cstr: nameM, record: missRecord, ids: ids)
-	emitSubpReleasePathWalk(module, block: missBuilt, state: state, ids: ids)
+	emitSubpReleasePathWalk(module, block: missBuilt, state: state, ids: ids, shape: shape)
 	module.setTerminator(missBuilt, op: StdOp.ret(missRecord))
 
 	module.functions.push(func)
 end 'buildSubpResolvePath'
 
-// Everything the walk took once its answer is copied out: the three buffers its state names — each holds
-// exactly one region on every road that filled it — and the state itself. The name is the caller's.
-function emitSubpReleasePathWalk(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
+function emitSubpOnRung(module StdModule, block IrBlock, ids ValueMinter, state ValueId) returns ValueId
+	let at = emitLoadField(module, block: block, record: state, offset: RpRungAt, ids: ids)
+	let count = emitLoadField(module, block: block, record: state, offset: RpRungCount, ids: ids)
+	return emitCmp(module, block: block, a: at, b: count, pred: StdCmpPred.lt, ids: ids)
+end 'emitSubpOnRung'
+
+function emitSubpRungSlot(module StdModule, block IrBlock, ids ValueMinter, state ValueId, indexOffset ByteOffset) returns ValueId
+	let index = emitLoadField(module, block: block, record: state, offset: indexOffset, ids: ids)
+	let stride = emitConst(module, block: block, value: RungSlotBytes, ids: ids)
+	let scaled = emitBin(module, block: block, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: state, b: scaled, opcode: StdBinOpcode.add, ids: ids)
+end 'emitSubpRungSlot'
+
+function emitSubpAnswerHit(module StdModule, func IrFunction, ids ValueMinter, hit IrBlock, miss IrBlock, state ValueId, shape PathSearchShape)
+	match shape 'shape'
+		windowsPathExt then emitSubpAnswerFullPath(module, func: func, ids: ids, hit: hit, miss: miss, state: state)
+		posix then emitSubpAnswerCandidate(module, func: func, ids: ids, hit: hit, state: state)
+	end 'shape'
+end 'emitSubpAnswerHit'
+
+function emitSubpAnswerCandidate(module StdModule, func IrFunction, ids ValueMinter, hit IrBlock, state ValueId)
+	let cand = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
+	let record = ids.mint()
+	var built = emitCStringToManaged(module, func: func, cur: hit, cstr: cand, record: record, ids: ids)
+	emitSubpReleasePathWalk(module, block: built, state: state, ids: ids, shape: PathSearchShape.posix)
+	module.setTerminator(built, op: StdOp.ret(record))
+end 'emitSubpAnswerCandidate'
+
+// A hit is answered absolute: `CreateProcessA` searches a relative name again, from the
+// application's directory first, and could run a different file than the one the walk found.
+function emitSubpAnswerFullPath(module StdModule, func IrFunction, ids ValueMinter, hit IrBlock, miss IrBlock, state ValueId)
+	var attempt = module.addBlock(func, label: b"rpfull", heat: BlockHeat.normal)
+	var fitTest = module.addBlock(func, label: b"rpfullfit", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"rpfullgrow", heat: BlockHeat.normal)
+	var resolved = module.addBlock(func, label: b"rpfullok", heat: BlockHeat.normal)
+	var unresolved = module.addBlock(func, label: b"rpfullnone", heat: BlockHeat.normal)
+
+	let cand = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
+	let (fullPath, _) = emitGrowingPathFill(module, cur: hit, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.fullPath(cand), whenRefused: unresolved, whenFits: resolved, ids: ids)
+
+	let record = ids.mint()
+	var built = emitCStringToManaged(module, func: func, cur: resolved, cstr: fullPath, record: record, ids: ids)
+	emitRawFree(module, block: built, ptr: fullPath, ids: ids)
+	emitSubpReleasePathWalk(module, block: built, state: state, ids: ids, shape: PathSearchShape.windowsPathExt)
+	module.setTerminator(built, op: StdOp.ret(record))
+
+	emitRawFree(module, block: unresolved, ptr: fullPath, ids: ids)
+	module.setTerminator(unresolved, op: StdOp.branch(miss.id))
+end 'emitSubpAnswerFullPath'
+
+// Each buffer the state names holds exactly one region on every road out, a refused Windows
+// directory query included, so each is freed unconditionally. The name is the caller's.
+function emitSubpReleasePathWalk(module StdModule, block IrBlock, state ValueId, ids ValueMinter, shape PathSearchShape)
 	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpCand, ids: ids), ids: ids)
 	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpPath, ids: ids), ids: ids)
 	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpExts, ids: ids), ids: ids)
+
+	match shape 'shape'
+		windowsPathExt then emitSubpReleaseSearchDirectories(module, block: block, state: state, ids: ids)
+		posix then break 'shape'
+	end 'shape'
+
 	emitSlabFree(module, block: block, ptr: state, ids: ids)
 end 'emitSubpReleasePathWalk'
 
-// The empty `PATH` fallback — a variable that is not set leaves nothing to walk, and the walk must still find
-// the synthetic head member. A one-byte NUL is what "no directories" looks like to `emitSubpMemberLength`.
+function emitSubpReleaseSearchDirectories(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
+	emitRawFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpExeDir, ids: ids), ids: ids)
+	emitRawFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpSystemDir, ids: ids), ids: ids)
+	emitRawFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpWindowsDir, ids: ids), ids: ids)
+	emitRawFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpLegacySystemDir, ids: ids), ids: ids)
+end 'emitSubpReleaseSearchDirectories'
+
 let EmptyPathFallback = b""
 
-// Room for the separator between a directory and the name, and for the candidate's terminator, on top of the
-// three lengths the buffer is sized from. Four rather than two so a future separator or suffix cannot make
-// the bound tight without anyone noticing.
+// Room for the separator between a directory and the name, and for the candidate's terminator, on
+// top of the lengths the buffer is sized from. Four rather than two so a future separator or suffix
+// cannot make the bound tight without anyone noticing.
 let CandidateSlackBytes = 4 as ParsedInt
 
-// Read an environment variable into a fresh NUL-terminated slab buffer, falling back to a literal when it is
-// unset. `GetEnvironmentVariableA` answers the size it NEEDS when the buffer is too small, so one retry at
-// exactly that size is provably enough and a second failure would be the OS contradicting itself
-// (`__md_current_path`'s straight-line retry, and not `__proc_exe_path`'s doubling loop).
+// Read an environment variable into a fresh NUL-terminated slab buffer, falling back to a literal
+// when it is unset. `GetEnvironmentVariableA` answers the size it needs when the buffer is too
+// small, so one retry at exactly that size is provably enough and a second failure would be the OS
+// contradicting itself.
 //
-// ⚠ **THE SAME THREE-ANSWER CONTRACT IS DECODED TWICE MORE IN `SchedRuntime`, EACH WITH A DIFFERENT POLICY,
-// AND THE DIFFERENCE IS THE POINT.** A `PATH` legitimately overflows any guess, so this one RETRIES; a
-// processor count that overflows 32 bytes is not a processor count, so `emitResolveMaxProcs` DECLINES to the
-// default; a preemption switch has no default a malformed value can safely fall to, so
-// `emitResolvePreemptSwitch` ABORTS. What the three share is the decoding — 0 means unset, `>= size` means too
-// small — and they name each other so a change to that reading is made in all of them.
+// ⚠ The same three-answer contract is decoded twice more in `SchedRuntime`, each with a different
+// policy. A `PATH` legitimately overflows any guess, so this one retries; a processor count that
+// overflows 32 bytes is not a processor count, so `emitResolveMaxProcs` declines to the default; a
+// preemption switch has no default a malformed value can safely fall to, so
+// `emitResolvePreemptSwitch` aborts. The three share the decoding — 0 means unset, `>= size` means
+// too small — and name each other so a change to that reading is made in all of them.
 function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, varName ByteArray, outOffset ByteOffset, fallback ByteArray) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpenvretry", heat: BlockHeat.normal)
 	var useFallback = module.addBlock(func, label: b"rpenvnone", heat: BlockHeat.normal)
@@ -2878,8 +2954,8 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	return cont
 end 'emitSubpReadEnvInto'
 
-// The extensions each directory's candidate is retried with. ⚠ **POSIX NEVER READS `PATHEXT`**, even when
-// something has set it: the variable is a Windows convention, and honouring a stray one would make `git`
+// The extensions a name without one is tried with. POSIX reads no `PATHEXT`, even when something
+// has set it: the variable is a Windows convention, and honouring a stray one would make `git`
 // resolve to a `git.EXE` that no POSIX spawn could run.
 function emitSubpExtensionsInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, shape PathSearchShape) returns IrBlock
 	return match shape 'shape'
@@ -2893,6 +2969,253 @@ function emitSubpStoreLiteralInto(module StdModule, block IrBlock, ids ValueMint
 	emitStoreField(module, block: block, record: state, offset: outOffset, value: literal)
 	return block
 end 'emitSubpStoreLiteralInto'
+
+function emitSubpNameRulesInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, shape PathSearchShape) returns IrBlock
+	return match shape 'shape'
+		windowsPathExt gives emitSubpWindowsNameRules(module, func: func, ids: ids, cur: cur, state: state)
+		posix gives emitSubpPosixNameRules(module, block: cur, ids: ids, state: state)
+	end 'shape'
+end 'emitSubpNameRulesInto'
+
+function emitSubpPosixNameRules(module StdModule, block IrBlock, ids ValueMinter, state ValueId) returns IrBlock
+	emitSubpStoreFlag(module, block: block, ids: ids, state: state, offset: RpTryAsGiven, set: true)
+	return block
+end 'emitSubpPosixNameRules'
+
+// `CreateProcessA`'s name rules, decided once before the walk.
+//
+// A name whose final component has an extension is tried as given and only as given; one without is
+// tried with each `PATHEXT` extension only. Windows runs no extensionless file by name
+// (`CreateProcessA` appends `.exe`), and tools such as npm ship an extensionless POSIX shim beside
+// `npm.cmd` that the walk would otherwise answer and the spawn fail to run (os error 193).
+//
+// A name carrying a path (a separator anywhere, or a drive colon at index 1) is tried in that one
+// place: `CreateProcessA` searches only "if the file name does not contain a directory path".
+// ⚠ This test and `resolveByName`'s in `stdlib/Subprocess.maxon` must agree. That side anchors a
+// path-carrying name to the child's working directory, so a name it leaves bare and this test calls
+// a path resolves against the parent's working directory.
+//
+// The working directory is searched only while `NoDefaultCurrentDirectoryInExePath` is undefined,
+// which is `CreateProcessA`'s `NeedCurrentDirectoryForExePath` rule.
+function emitSubpWindowsNameRules(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var scanHdr = module.addBlock(func, label: b"rpnamehdr", heat: BlockHeat.normal)
+	var scanByte = module.addBlock(func, label: b"rpnamebyte", heat: BlockHeat.normal)
+	var markExtension = module.addBlock(func, label: b"rpnameext", heat: BlockHeat.normal)
+	var notDot = module.addBlock(func, label: b"rpnamenodot", heat: BlockHeat.normal)
+	var markDirectory = module.addBlock(func, label: b"rpnamedir", heat: BlockHeat.normal)
+	var scanStep = module.addBlock(func, label: b"rpnamestep", heat: BlockHeat.normal)
+	var scanned = module.addBlock(func, label: b"rpnamedone", heat: BlockHeat.normal)
+	var driveCheck = module.addBlock(func, label: b"rpnamedrive", heat: BlockHeat.normal)
+	var driveByte = module.addBlock(func, label: b"rpnamecolon", heat: BlockHeat.normal)
+	var markHasPath = module.addBlock(func, label: b"rpnamepath", heat: BlockHeat.normal)
+	var cwdRule = module.addBlock(func, label: b"rpnamecwdrule", heat: BlockHeat.normal)
+	var searchCwd = module.addBlock(func, label: b"rpnamecwd", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"rpnamerules", heat: BlockHeat.normal)
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	emitStoreField(module, block: cur, record: state, offset: RpNameScan, value: zero)
+	emitStoreField(module, block: cur, record: state, offset: RpTryAsGiven, value: zero)
+	emitStoreField(module, block: cur, record: state, offset: RpSearchesCwd, value: zero)
+	emitStoreField(module, block: cur, record: state, offset: RpNameHasPath, value: zero)
+	module.setTerminator(cur, op: StdOp.branch(scanHdr.id))
+
+	let scanH = emitLoadField(module, block: scanHdr, record: state, offset: RpNameScan, ids: ids)
+	let nameLenH = emitLoadField(module, block: scanHdr, record: state, offset: RpNameLen, ids: ids)
+	let atEnd = emitCmp(module, block: scanHdr, a: scanH, b: nameLenH, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: scanned.id, elseBlockId: scanByte.id))
+
+	let dotConst = emitConst(module, block: scanByte, value: ExtensionDotByte, ids: ids)
+	let isDot = emitCmp(module, block: scanByte, a: emitSubpScannedNameByte(module, block: scanByte, ids: ids, state: state), b: dotConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanByte, op: StdOp.condBranch(isDot, thenBlockId: markExtension.id, elseBlockId: notDot.id))
+
+	emitSubpStoreFlag(module, block: markExtension, ids: ids, state: state, offset: RpTryAsGiven, set: true)
+	module.setTerminator(markExtension, op: StdOp.branch(scanStep.id))
+
+	emitSubpBranchOnDirSeparator(module, func: func, ids: ids, cur: notDot, byte: emitSubpScannedNameByte(module, block: notDot, ids: ids, state: state), whenSeparator: markDirectory, otherwise: scanStep)
+
+	emitSubpStoreFlag(module, block: markDirectory, ids: ids, state: state, offset: RpTryAsGiven, set: false)
+	emitSubpStoreFlag(module, block: markDirectory, ids: ids, state: state, offset: RpNameHasPath, set: true)
+	module.setTerminator(markDirectory, op: StdOp.branch(scanStep.id))
+
+	emitSubpBumpField(module, block: scanStep, ids: ids, record: state, offset: RpNameScan)
+	module.setTerminator(scanStep, op: StdOp.branch(scanHdr.id))
+
+	let separated = emitSubpFieldIsSet(module, block: scanned, ids: ids, state: state, offset: RpNameHasPath)
+	module.setTerminator(scanned, op: StdOp.condBranch(separated, thenBlockId: cont.id, elseBlockId: driveCheck.id))
+
+	let nameLenC = emitLoadField(module, block: driveCheck, record: state, offset: RpNameLen, ids: ids)
+	let driveSpecBytes = emitConst(module, block: driveCheck, value: DriveSpecBytes, ids: ids)
+	let longEnough = emitCmp(module, block: driveCheck, a: nameLenC, b: driveSpecBytes, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(driveCheck, op: StdOp.condBranch(longEnough, thenBlockId: driveByte.id, elseBlockId: cwdRule.id))
+
+	let colonAt = emitConst(module, block: driveByte, value: DriveColonIndex, ids: ids)
+	let colonConst = emitConst(module, block: driveByte, value: DriveColonByte, ids: ids)
+	let isDrive = emitCmp(module, block: driveByte, a: emitSubpNameByteAt(module, block: driveByte, ids: ids, state: state, index: colonAt), b: colonConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(driveByte, op: StdOp.condBranch(isDrive, thenBlockId: markHasPath.id, elseBlockId: cwdRule.id))
+
+	emitSubpStoreFlag(module, block: markHasPath, ids: ids, state: state, offset: RpNameHasPath, set: true)
+	module.setTerminator(markHasPath, op: StdOp.branch(cont.id))
+
+	let varName = emitLiteralCString(module, block: cwdRule, ids: ids, text: NoCurrentDirectorySearchVarName)
+	let noBuffer = emitConst(module, block: cwdRule, value: 0, ids: ids)
+	let needed = ids.mint()
+	module.appendOp(cwdRule, op: StdOp.osEnvRead(needed, namePtrId: varName, bufPtrId: noBuffer, bufLenId: noBuffer))
+	emitSlabFree(module, block: cwdRule, ptr: varName, ids: ids)
+	let zeroS = emitConst(module, block: cwdRule, value: 0, ids: ids)
+	let cwdSearched = emitCmp(module, block: cwdRule, a: needed, b: zeroS, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cwdRule, op: StdOp.condBranch(cwdSearched, thenBlockId: searchCwd.id, elseBlockId: cont.id))
+
+	emitSubpStoreFlag(module, block: searchCwd, ids: ids, state: state, offset: RpSearchesCwd, set: true)
+	module.setTerminator(searchCwd, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpWindowsNameRules'
+
+function emitSubpBranchOnDirSeparator(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, byte ValueId, whenSeparator IrBlock, otherwise IrBlock)
+	var notBackslash = module.addBlock(func, label: b"rpnamenobs", heat: BlockHeat.normal)
+
+	let backslashConst = emitConst(module, block: cur, value: WindowsDirSeparatorByte, ids: ids)
+	let isBackslash = emitCmp(module, block: cur, a: byte, b: backslashConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isBackslash, thenBlockId: whenSeparator.id, elseBlockId: notBackslash.id))
+
+	let slashConst = emitConst(module, block: notBackslash, value: PosixDirSeparatorByte, ids: ids)
+	let isSlash = emitCmp(module, block: notBackslash, a: byte, b: slashConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notBackslash, op: StdOp.condBranch(isSlash, thenBlockId: whenSeparator.id, elseBlockId: otherwise.id))
+end 'emitSubpBranchOnDirSeparator'
+
+function emitSubpNameByteAt(module StdModule, block IrBlock, ids ValueMinter, state ValueId, index ValueId) returns ValueId
+	let name = emitLoadField(module, block: block, record: state, offset: RpName, ids: ids)
+	return emitLoadByte(module, block: block, base: name, index: index, ids: ids)
+end 'emitSubpNameByteAt'
+
+function emitSubpScannedNameByte(module StdModule, block IrBlock, ids ValueMinter, state ValueId) returns ValueId
+	return emitSubpNameByteAt(module, block: block, ids: ids, state: state, index: emitLoadField(module, block: block, record: state, offset: RpNameScan, ids: ids))
+end 'emitSubpScannedNameByte'
+
+function emitSubpSearchRungsInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, shape PathSearchShape) returns IrBlock
+	return match shape 'shape'
+		windowsPathExt gives emitSubpWindowsSearchRungs(module, func: func, ids: ids, cur: cur, state: state)
+		posix gives cur
+	end 'shape'
+end 'emitSubpSearchRungsInto'
+
+// The directories `CreateProcessA` searches ahead of `PATH`, in its order, so that the file the
+// walk names is the file that runs. A directory whose query fails is skipped, never pushed empty: a
+// zero-length rung is the working directory's (see `emitSubpBuildCandidate`).
+function emitSubpWindowsSearchRungs(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var afterExe = emitSubpFillDirectory(module, func: func, ids: ids, cur: cur, state: state, fill: PathFill.executablePath, bufferOffset: RpExeDir, lengthOffset: RpExeDirLen)
+	var exeTrimmed = emitSubpTrimToDirectory(module, func: func, ids: ids, cur: afterExe, state: state)
+	var afterSystem = emitSubpFillDirectory(module, func: func, ids: ids, cur: exeTrimmed, state: state, fill: PathFill.systemDirectory, bufferOffset: RpSystemDir, lengthOffset: RpSystemDirLen)
+	var afterWindows = emitSubpFillDirectory(module, func: func, ids: ids, cur: afterSystem, state: state, fill: PathFill.windowsDirectory, bufferOffset: RpWindowsDir, lengthOffset: RpWindowsDirLen)
+	var afterLegacy = emitSubpBuildLegacySystemDir(module, func: func, ids: ids, cur: afterWindows, state: state)
+
+	var pathOnly = module.addBlock(func, label: b"rppathonly", heat: BlockHeat.normal)
+	var searched = module.addBlock(func, label: b"rpsearched", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"rprungsdone", heat: BlockHeat.normal)
+
+	let hasPath = emitSubpFieldIsSet(module, block: afterLegacy, ids: ids, state: state, offset: RpNameHasPath)
+	module.setTerminator(afterLegacy, op: StdOp.condBranch(hasPath, thenBlockId: pathOnly.id, elseBlockId: searched.id))
+
+	let pathOnlyZero = emitConst(module, block: pathOnly, value: 0, ids: ids)
+	emitSubpPushRung(module, block: pathOnly, ids: ids, state: state, dir: pathOnlyZero, length: pathOnlyZero)
+	let path = emitLoadField(module, block: pathOnly, record: state, offset: RpPath, ids: ids)
+	emitStoreByte(module, block: pathOnly, base: path, index: pathOnlyZero, value: pathOnlyZero, ids: ids)
+	module.setTerminator(pathOnly, op: StdOp.branch(done.id))
+
+	var afterExeRung = emitSubpPushDirectoryRung(module, func: func, ids: ids, cur: searched, state: state, bufferOffset: RpExeDir, lengthOffset: RpExeDirLen, presenceOffset: RpExeDirLen)
+	let searchesCwd = emitSubpFieldIsSet(module, block: afterExeRung, ids: ids, state: state, offset: RpSearchesCwd)
+	let noDirectory = emitConst(module, block: afterExeRung, value: 0, ids: ids)
+	var afterCwdRung = emitSubpPushRungWhen(module, func: func, ids: ids, cur: afterExeRung, state: state, when: searchesCwd, dir: noDirectory, length: noDirectory)
+	var afterSystemRung = emitSubpPushDirectoryRung(module, func: func, ids: ids, cur: afterCwdRung, state: state, bufferOffset: RpSystemDir, lengthOffset: RpSystemDirLen, presenceOffset: RpSystemDirLen)
+	var afterLegacyRung = emitSubpPushDirectoryRung(module, func: func, ids: ids, cur: afterSystemRung, state: state, bufferOffset: RpLegacySystemDir, lengthOffset: RpLegacySystemDirLen, presenceOffset: RpWindowsDirLen)
+	var afterWindowsRung = emitSubpPushDirectoryRung(module, func: func, ids: ids, cur: afterLegacyRung, state: state, bufferOffset: RpWindowsDir, lengthOffset: RpWindowsDirLen, presenceOffset: RpWindowsDirLen)
+	module.setTerminator(afterWindowsRung, op: StdOp.branch(done.id))
+	return done
+end 'emitSubpWindowsSearchRungs'
+
+function emitSubpFillDirectory(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, fill PathFill, bufferOffset ByteOffset, lengthOffset ByteOffset) returns IrBlock
+	var attempt = module.addBlock(func, label: b"rpfill", heat: BlockHeat.normal)
+	var fitTest = module.addBlock(func, label: b"rpfillfit", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"rpfillgrow", heat: BlockHeat.normal)
+	var filled = module.addBlock(func, label: b"rpfilled", heat: BlockHeat.normal)
+
+	let (buffer, written) = emitGrowingPathFill(module, cur: cur, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: filled, whenFits: filled, ids: ids)
+	emitStoreField(module, block: filled, record: state, offset: bufferOffset, value: buffer)
+	emitStoreField(module, block: filled, record: state, offset: lengthOffset, value: written)
+	return filled
+end 'emitSubpFillDirectory'
+
+function emitSubpTrimToDirectory(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var scanHdr = module.addBlock(func, label: b"rpexehdr", heat: BlockHeat.normal)
+	var scanByte = module.addBlock(func, label: b"rpexebyte", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"rpexedir", heat: BlockHeat.normal)
+	module.setTerminator(cur, op: StdOp.branch(scanHdr.id))
+
+	let lenH = emitLoadField(module, block: scanHdr, record: state, offset: RpExeDirLen, ids: ids)
+	let zeroH = emitConst(module, block: scanHdr, value: 0, ids: ids)
+	let atStart = emitCmp(module, block: scanHdr, a: lenH, b: zeroH, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atStart, thenBlockId: cont.id, elseBlockId: scanByte.id))
+
+	let lenB = emitLoadField(module, block: scanByte, record: state, offset: RpExeDirLen, ids: ids)
+	let oneB = emitConst(module, block: scanByte, value: 1, ids: ids)
+	let last = emitBin(module, block: scanByte, a: lenB, b: oneB, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: scanByte, record: state, offset: RpExeDirLen, value: last)
+	let exe = emitLoadField(module, block: scanByte, record: state, offset: RpExeDir, ids: ids)
+	let byte = emitLoadByte(module, block: scanByte, base: exe, index: last, ids: ids)
+	let separator = emitConst(module, block: scanByte, value: WindowsDirSeparatorByte, ids: ids)
+	let atSeparator = emitCmp(module, block: scanByte, a: byte, b: separator, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanByte, op: StdOp.condBranch(atSeparator, thenBlockId: cont.id, elseBlockId: scanHdr.id))
+	return cont
+end 'emitSubpTrimToDirectory'
+
+function emitSubpBuildLegacySystemDir(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	let subdirectory = emitLiteralCString(module, block: cur, ids: ids, text: LegacySystemSubdirectory)
+	let subdirectoryLen = ids.mint()
+	var measured = emitCStringLength(module, func: func, cur: cur, cstr: subdirectory, length: subdirectoryLen, ids: ids)
+
+	let windowsLen = emitLoadField(module, block: measured, record: state, offset: RpWindowsDirLen, ids: ids)
+	let separatorBytes = emitConst(module, block: measured, value: 1, ids: ids)
+	let prefixLen = emitBin(module, block: measured, a: windowsLen, b: separatorBytes, opcode: StdBinOpcode.add, ids: ids)
+	let legacyLen = emitBin(module, block: measured, a: prefixLen, b: subdirectoryLen, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: measured, record: state, offset: RpLegacySystemDirLen, value: legacyLen)
+	let legacy = emitRawAlloc(module, block: measured, byteCount: legacyLen, ids: ids)
+	emitStoreField(module, block: measured, record: state, offset: RpLegacySystemDir, value: legacy)
+	let windows = emitLoadField(module, block: measured, record: state, offset: RpWindowsDir, ids: ids)
+	var afterWindows = emitForwardCopy(module, func: func, cur: measured, dest: legacy, src: windows, byteCount: windowsLen, ids: ids)
+
+	let separator = emitConst(module, block: afterWindows, value: WindowsDirSeparatorByte, ids: ids)
+	emitStoreByte(module, block: afterWindows, base: legacy, index: windowsLen, value: separator, ids: ids)
+	let subdirectoryDst = emitBin(module, block: afterWindows, a: legacy, b: prefixLen, opcode: StdBinOpcode.add, ids: ids)
+	var afterSubdirectory = emitForwardCopy(module, func: func, cur: afterWindows, dest: subdirectoryDst, src: subdirectory, byteCount: subdirectoryLen, ids: ids)
+	emitSlabFree(module, block: afterSubdirectory, ptr: subdirectory, ids: ids)
+	return afterSubdirectory
+end 'emitSubpBuildLegacySystemDir'
+
+function emitSubpPushDirectoryRung(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, bufferOffset ByteOffset, lengthOffset ByteOffset, presenceOffset ByteOffset) returns IrBlock
+	let dir = emitLoadField(module, block: cur, record: state, offset: bufferOffset, ids: ids)
+	let length = emitLoadField(module, block: cur, record: state, offset: lengthOffset, ids: ids)
+	let present = emitSubpFieldIsSet(module, block: cur, ids: ids, state: state, offset: presenceOffset)
+	return emitSubpPushRungWhen(module, func: func, ids: ids, cur: cur, state: state, when: present, dir: dir, length: length)
+end 'emitSubpPushDirectoryRung'
+
+function emitSubpPushRungWhen(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, when ValueId, dir ValueId, length ValueId) returns IrBlock
+	var push = module.addBlock(func, label: b"rprungpush", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"rprungnext", heat: BlockHeat.normal)
+	module.setTerminator(cur, op: StdOp.condBranch(when, thenBlockId: push.id, elseBlockId: cont.id))
+
+	emitSubpPushRung(module, block: push, ids: ids, state: state, dir: dir, length: length)
+	module.setTerminator(push, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpPushRungWhen'
+
+function emitSubpPushRung(module StdModule, block IrBlock, ids ValueMinter, state ValueId, dir ValueId, length ValueId)
+	let slot = emitSubpRungSlot(module, block: block, ids: ids, state: state, indexOffset: RpRungCount)
+	emitStoreField(module, block: block, record: slot, offset: RpRungDirs, value: dir)
+	emitStoreField(module, block: block, record: slot, offset: RpRungLens, value: length)
+	emitSubpBumpField(module, block: block, ids: ids, record: state, offset: RpRungCount)
+	let bytes = emitLoadField(module, block: block, record: state, offset: RpRungBytes, ids: ids)
+	let grown = emitBin(module, block: block, a: bytes, b: length, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: state, offset: RpRungBytes, value: grown)
+end 'emitSubpPushRung'
 
 // The length of the member of `list` that starts at `start` — up to the next `separator` or the
 // terminator, whichever comes first. Shared by the PATH walk and the PATHEXT walk, which are the same list
@@ -2930,46 +3253,43 @@ function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter
 	return cont
 end 'emitSubpMemberLength'
 
-// Step one list on: leave the synthetic head member if that is where the walk stands, else advance past this
-// member and its separator. The two lists take exactly this step, which is why it is one helper.
-function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, headOffset ByteOffset, separator ParsedInt) returns IrBlock
-	var leaveHead = module.addBlock(func, label: b"rpadvhead", heat: BlockHeat.normal)
-	var pastMember = module.addBlock(func, label: b"rpadvsep", heat: BlockHeat.normal)
+function emitSubpFieldIsSet(module StdModule, block IrBlock, ids ValueMinter, state ValueId, offset ByteOffset) returns ValueId
+	let field = emitLoadField(module, block: block, record: state, offset: offset, ids: ids)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: field, b: zero, pred: StdCmpPred.ne, ids: ids)
+end 'emitSubpFieldIsSet'
+
+function emitSubpStoreFlag(module StdModule, block IrBlock, ids ValueMinter, state ValueId, offset ByteOffset, set bool)
+	let value = FlagSetWord if set else FlagClearWord
+	emitStoreField(module, block: block, record: state, offset: offset, value: emitConst(module, block: block, value: value, ids: ids))
+end 'emitSubpStoreFlag'
+
+let FlagSetWord = 1 as ParsedInt
+let FlagClearWord = 0 as ParsedInt
+
+// Past this member; a separator at the cursor is consumed too, and the terminator simply leaves the cursor
+// on it, which is what the loop header reads as "the list is spent".
+function emitSubpStepPastMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator ParsedInt) returns IrBlock
+	var skipSep = module.addBlock(func, label: b"rpadvskip", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rpadvdone", heat: BlockHeat.normal)
 
-	let head = emitLoadField(module, block: cur, record: state, offset: headOffset, ids: ids)
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let atHead = emitCmp(module, block: cur, a: head, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(atHead, thenBlockId: leaveHead.id, elseBlockId: pastMember.id))
-
-	// Leaving the synthetic head costs nothing but clearing the flag: the real list has not been entered yet.
-	// ⚠ These two blocks were named `realStep`/`pastSep` — `realStep` for the arm that takes NO step through
-	// the real list, and `pastSep` for the one that steps past a MEMBER and only then maybe a separator. Each
-	// was the other's job.
-	let zeroH = emitConst(module, block: leaveHead, value: 0, ids: ids)
-	emitStoreField(module, block: leaveHead, record: state, offset: headOffset, value: zeroH)
-	module.setTerminator(leaveHead, op: StdOp.branch(cont.id))
-
-	// Past this member; a separator at the cursor is consumed too, and the terminator simply leaves the cursor
-	// on it, which is what the loop header reads as "the list is spent".
-	var skipSep = module.addBlock(func, label: b"rpadvskip", heat: BlockHeat.normal)
-	let start = emitLoadField(module, block: pastMember, record: state, offset: startOffset, ids: ids)
-	let len = emitLoadField(module, block: pastMember, record: state, offset: lenOffset, ids: ids)
-	let next = emitBin(module, block: pastMember, a: start, b: len, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: pastMember, record: state, offset: startOffset, value: next)
-	let list = emitLoadField(module, block: pastMember, record: state, offset: listOffset, ids: ids)
-	let ch = emitLoadByte(module, block: pastMember, base: list, index: next, ids: ids)
-	let sepConst = emitConst(module, block: pastMember, value: separator, ids: ids)
-	let onSeparator = emitCmp(module, block: pastMember, a: ch, b: sepConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pastMember, op: StdOp.condBranch(onSeparator, thenBlockId: skipSep.id, elseBlockId: cont.id))
+	let start = emitLoadField(module, block: cur, record: state, offset: startOffset, ids: ids)
+	let len = emitLoadField(module, block: cur, record: state, offset: lenOffset, ids: ids)
+	let next = emitBin(module, block: cur, a: start, b: len, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: cur, record: state, offset: startOffset, value: next)
+	let list = emitLoadField(module, block: cur, record: state, offset: listOffset, ids: ids)
+	let ch = emitLoadByte(module, block: cur, base: list, index: next, ids: ids)
+	let sepConst = emitConst(module, block: cur, value: separator, ids: ids)
+	let onSeparator = emitCmp(module, block: cur, a: ch, b: sepConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(onSeparator, thenBlockId: skipSep.id, elseBlockId: cont.id))
 
 	emitSubpBumpField(module, block: skipSep, ids: ids, record: state, offset: startOffset)
 	module.setTerminator(skipSep, op: StdOp.branch(cont.id))
 	return cont
-end 'emitSubpAdvanceMember'
+end 'emitSubpStepPastMember'
 
-// Assemble `<dir><dirSeparator><name><ext>` into the reused candidate buffer, NUL-terminated. The head
-// members contribute nothing, so a head candidate is the name verbatim.
+// Assemble `<dir><dirSeparator><name><ext>` into the reused candidate buffer, NUL-terminated.
+// A zero-length directory adds neither itself nor a separator: its candidate is the name as given.
 function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, dirSeparator ParsedInt) returns IrBlock
 	var withDir = module.addBlock(func, label: b"rpcdir", heat: BlockHeat.normal)
 	var afterDirJoin = module.addBlock(func, label: b"rpcdirj", heat: BlockHeat.normal)
@@ -2978,15 +3298,12 @@ function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMint
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	emitStoreField(module, block: cur, record: state, offset: RpCandLen, value: zero)
-	let head = emitLoadField(module, block: cur, record: state, offset: RpDirIsHead, ids: ids)
-	let zeroH = emitConst(module, block: cur, value: 0, ids: ids)
-	let noDir = emitCmp(module, block: cur, a: head, b: zeroH, pred: StdCmpPred.ne, ids: ids)
+	let dirLenH = emitLoadField(module, block: cur, record: state, offset: RpDirLen, ids: ids)
+	let noDir = emitCmp(module, block: cur, a: dirLenH, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(noDir, thenBlockId: afterDirJoin.id, elseBlockId: withDir.id))
 
 	let cand = emitLoadField(module, block: withDir, record: state, offset: RpCand, ids: ids)
-	let path = emitLoadField(module, block: withDir, record: state, offset: RpPath, ids: ids)
-	let dirStart = emitLoadField(module, block: withDir, record: state, offset: RpDirStart, ids: ids)
-	let dirSrc = emitBin(module, block: withDir, a: path, b: dirStart, opcode: StdBinOpcode.add, ids: ids)
+	let dirSrc = emitLoadField(module, block: withDir, record: state, offset: RpDirPtr, ids: ids)
 	let dirLen = emitLoadField(module, block: withDir, record: state, offset: RpDirLen, ids: ids)
 	var afterDir = emitForwardCopy(module, func: func, cur: withDir, dest: cand, src: dirSrc, byteCount: dirLen, ids: ids)
 	let dirLen2 = emitLoadField(module, block: afterDir, record: state, offset: RpDirLen, ids: ids)
@@ -3004,9 +3321,7 @@ function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMint
 	let nameLenA = emitLoadField(module, block: afterName, record: state, offset: RpNameLen, ids: ids)
 	let withNameLen = emitBin(module, block: afterName, a: candLenA, b: nameLenA, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: afterName, record: state, offset: RpCandLen, value: withNameLen)
-	let extHead = emitLoadField(module, block: afterName, record: state, offset: RpExtIsHead, ids: ids)
-	let zeroX = emitConst(module, block: afterName, value: 0, ids: ids)
-	let noExt = emitCmp(module, block: afterName, a: extHead, b: zeroX, pred: StdCmpPred.ne, ids: ids)
+	let noExt = emitSubpFieldIsSet(module, block: afterName, ids: ids, state: state, offset: RpExtIsHead)
 	module.setTerminator(afterName, op: StdOp.condBranch(noExt, thenBlockId: cont.id, elseBlockId: withExt.id))
 
 	let candE = emitLoadField(module, block: withExt, record: state, offset: RpCand, ids: ids)

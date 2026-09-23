@@ -792,6 +792,9 @@ export type StdToArm64Lowering
 			// the day the lane grows a sampling mechanism, and a named arm is what makes that a visible edit.
 			osHostSample gives 0
 
+			// Emitted only by the x64-windows executable search, so a path query reaches no frame here.
+			osPathQuery gives 0
+
 			// Every poller chunk takes at most four arguments, all inside x0..x7.
 			osNetpoll or
 				osSocketOverlapped gives 0
@@ -1121,6 +1124,7 @@ export type StdToArm64Lowering
 			osHostSample then panic("StdToArm64Lowering: `osHostSample` has no arm64 lowering — process sampling is `HostFacility.processSampling`, which no arm64 lane provides, so SemanticCheck refuses such a program at its own source span (E3104) and this is the backstop for a compiler bug that got one past that gate")
 			osNetpoll(resultId, verb, a0Id, a1Id, a2Id, a3Id, a4Id) then self.lowerOsNetpoll(resultId, verb: verb, operands: fiveArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id, fifth: a4Id), dstRef: dstRef)
 			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
+			osPathQuery then panic("StdToArm64Lowering: `osPathQuery` asks Win32 for a system directory or a full path and this lane has none — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")
 
 			// One op, no operand, no register: the encoder reaches the counter through the reserved x16/x17
 			// scratch pair, which is outside the allocatable pool.
@@ -1360,6 +1364,7 @@ export type StdToArm64Lowering
 			osHostSample then panic("StdToArm64Lowering: an `osHostSample` appeared as a block terminator (lowering bug — a host sample call produces a value and does not terminate)")
 			osNetpoll then panic("StdToArm64Lowering: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 			osSocketOverlapped then panic("StdToArm64Lowering: an `osSocketOverlapped` appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
+			osPathQuery then panic("StdToArm64Lowering: an `osPathQuery` appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

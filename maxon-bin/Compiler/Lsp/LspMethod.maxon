@@ -1,37 +1,32 @@
-// ⭐⭐ **THE METHOD REGISTRY — THE SEAM EVERY HANDLER FILE PLUGS INTO.**
+// The method registry: the seam every handler file plugs into.
 //
-// Bringing a language method area live in `maxon lsp-server` edits **that area's own file and
-// nothing else**. Every method LSP defines for this server is already wired, whether or not anything
-// answers it yet:
+// Every method LSP defines for this server is already wired, whether or not anything answers it
+// yet:
 //
 //   * a case in `LspMethod` below,
-//   * its protocol spellings in `lspMethodSpelling` — the wire name, and the capability key this server
-//     answers `initialize` with,
+//   * its wire name and the capability key `initialize` advertises, in `lspMethodSpelling`,
 //   * an arm in `lspMethodArea` naming the file that owns it,
-//   * and a line in that file's `…ServedMethods`, saying whether it answers the method TODAY.
+//   * and a line in that file's `…ServedMethods`, saying whether it answers the method.
 //
-// ⇒ **An area goes live by returning its methods from `…ServedMethods` and answering them in
-// `…Answer`.** Until it does, the dispatcher refuses the method with `-32601` and `initialize` does not
-// advertise it — a capability is a promise, and promising a method that answers `-32601` is a broken
-// session rather than a missing feature.
+// So an area goes live by editing its own file alone: returning its methods from `…ServedMethods`
+// and answering them in `…Answer`. Until it does, the dispatcher refuses the method with `-32601`
+// and `initialize` does not advertise it, because a client acts on an advertised capability and
+// promising a method that answers `-32601` breaks the session.
 //
-// ⛔ **`…ServedMethods` IS THE ONLY PLACE THAT FACT IS WRITTEN, AND BOTH READERS OF IT GO THROUGH
-// `LspServer.maxon`'s `servedMethods` — nothing else may narrow either one.** Routing and advertising
-// ask that one question, so a server that answers a method it never promised, or promises one it
-// refuses, is unspellable.
+// `…ServedMethods` is the only place that fact is written. Routing and advertising both read it
+// through `LspServer.maxon`'s `servedMethods`, and nothing else may narrow either, or the server
+// could answer a method it never promised or promise one it refuses.
 //
-// ⛔⛔ **THIS REGISTRY IS FOR REQUESTS ONLY, AND A NOTIFICATION MUST NOT BE ADDED TO IT.**
-// `textDocument/publishDiagnostics` is server-initiated: no client ever asks for it, so it has no id to
-// answer and LSP's push model gives it no `*Provider` capability key to advertise. An entry here would
-// have to invent one — and `tests/lsp/capability-agreement.test.maxon` asserts that every entry's
-// advertised capability is one the server answers, so the invention would go red. It lives in
-// `LspDiagnostics.maxon` and is written straight to the wire.
+// The registry is for requests only. The server's own notifications,
+// `textDocument/publishDiagnostics` and the Maxon-only `maxon/projectLoading`, have no id to answer
+// and no `*Provider` capability key, so an entry here would have to invent one, and
+// `tests/lsp/capability-agreement.test.maxon` fails on an advertised capability the server does not
+// answer. They are written straight to the wire.
 //
-// ⛔ **A MAXON-ONLY REQUEST IS NOT AN `LspMethod` EITHER — it is an `LspExtensionMethod`.** Every
-// `LspMethod` is a `textDocument/*` request that names an open document and has a capability to advertise;
-// an extension request such as `maxon/generateIR` or `maxon/listProjects` names no document and has no
-// capability in LSP's vocabulary, so it would falsify both halves of the seam above. It is routed beside the registry, never
-// advertised, and its answer is `LspServer.maxon`'s `answerExtension`.
+// A Maxon-only request such as `maxon/generateIR` or `maxon/listProjects` is an
+// `LspExtensionMethod`: it names no document and has no capability in LSP's vocabulary, where every
+// `LspMethod` is a `textDocument/*` request with both. It is routed beside the registry, never
+// advertised, and answered by `LspServer.maxon`'s `answerExtension`.
 
 // Every LSP request this server routes. A method belongs here once it has a home; whether it has an
 // ANSWER is a separate question, and `LspServer.maxon`'s `servedMethods` is the one that asks it.

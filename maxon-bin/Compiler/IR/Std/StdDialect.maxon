@@ -1131,6 +1131,17 @@ export enum SocketServeVerb
 	localName
 end 'SocketServeVerb'
 
+export enum PathQueryVerb
+	// `(buffer, capacity, unused)`. `GetSystemDirectoryA(buffer, capacity)`.
+	systemDirectory
+
+	// `(buffer, capacity, unused)`. `GetWindowsDirectoryA(buffer, capacity)`.
+	windowsDirectory
+
+	// `(path, capacity, buffer)`. `GetFullPathNameA(path, capacity, buffer, NULL)`.
+	fullPath
+end 'PathQueryVerb'
+
 export union StdOp
 	// --- band: arith ---
 	// Materialize a constant into a virtual register (`resultId`). `valueType`
@@ -3029,6 +3040,11 @@ export union StdOp
 	// would read the block before it was filled.
 	osSocketServe(resultId ValueId, verb SocketServeVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
+	// A Win32 path query answering the count `ManagedDirectoryRuntime.emitFilledBufferVerdict`
+	// classifies. x64-windows only: its one producer is the Windows executable search in
+	// `SubprocessRuntime`.
+	osPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
 	osDebugHost(resultId ValueId, verb DebugHostVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, a3Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
@@ -3200,6 +3216,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// across a window that accepts four connections.
 		osSocketServe gives SyscallClass.schedulerBound
 		osDebugHost gives SyscallClass.schedulerBound
+		osPathQuery gives SyscallClass.schedulerBound
 
 		// The PAGE band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages gives SyscallClass.schedulerBound
@@ -3377,6 +3394,7 @@ export function stdOpNamesAGlobalLabel(op StdOp) returns bool
 			osSocketSend or
 			osSocketRecv or
 			osSocketClose or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe or
 			osDebugHost or
@@ -3853,6 +3871,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then operands.recordNeither()
 		osDebugHost then operands.recordNeither()
@@ -4083,6 +4102,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe or
 			osDebugHost then access.recordNeither()
@@ -4401,6 +4421,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then call.recordOther()
 		osDebugHost then call.recordOther()
@@ -4925,6 +4946,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osNetpoll(_, _, a0, a1, a2, a3, a4) then insertUseQuint(referenced, a: a0, b: a1, c: a2, d: a3, e: a4)
 		osSocketOverlapped(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osSocketServe(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
+		osPathQuery(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
 		osDebugHost(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osFileSize(_, handle, sizeOutPtr) then insertUsePair(referenced, a: handle, b: sizeOutPtr)
 		osFileDelete(_, pathPtr) then referenced.insert(pathPtr)
@@ -5244,6 +5266,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osNetpoll(resultId, _, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketOverlapped(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketServe(resultId, _, _, _, _) then def.recordOne(resultId)
+		osPathQuery(resultId, _, _, _, _) then def.recordOne(resultId)
 		osDebugHost(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
 		osFileDelete(resultId, _) then def.recordOne(resultId)
@@ -5539,6 +5562,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osNetpoll(resultId, verb, a0, a1, a2, a3, a4) gives StdOp.osNetpoll(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst), a4Id: remappedValue(a4, subst: subst))
 		osSocketOverlapped(resultId, verb, a0, a1, a2, a3) gives StdOp.osSocketOverlapped(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osSocketServe(resultId, verb, a0, a1, a2) gives StdOp.osSocketServe(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
+		osPathQuery(resultId, verb, a0, a1, a2) gives StdOp.osPathQuery(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
 		osDebugHost(resultId, verb, a0, a1, a2, a3) gives StdOp.osDebugHost(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
@@ -5899,6 +5923,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 			covPoint or
 			osHostSample or
 			osNetpoll or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe gives refuseUnclonable(op)
 		osDebugHost gives refuseUnclonable(op)
@@ -6440,6 +6465,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 			covPoint or
 			osHostSample or
 			osNetpoll or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then break 'term'
 		osDebugHost then break 'term'
@@ -6635,6 +6661,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 			covPoint or
 			osHostSample or
 			osNetpoll or
+			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then out.recordOther()
 		osDebugHost then out.recordOther()

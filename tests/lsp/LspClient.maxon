@@ -1,44 +1,38 @@
-// LspClient.maxon — a Language Server Protocol client for tests: it spawns a real `lsp-server`, speaks
-// `Content-Length`-framed JSON-RPC 2.0 over its pipes, and hands each language request back as a typed
-// result.
+// LspClient.maxon — a Language Server Protocol client for tests: it spawns a real `lsp-server`,
+// speaks `Content-Length`-framed JSON-RPC 2.0 over its pipes, and hands each language request back
+// as a typed result.
 //
-// ⭐⭐ **THE RUNNER AND THE SUBJECT ARE THE SAME BINARY, AND NOTHING OUTSIDE CLOSES THAT.** `maxon test
-// tests/lsp` both runs these tests and provides the `lsp-server` they spawn (named by
-// `TestedCompilerStem` below and by nothing else), so a runner broken badly enough to report green
-// having run nothing cannot detect itself. READ THE PASS COUNT — that is what the circularity leaves.
+// The runner and the subject are the same binary: `maxon test tests/lsp` both runs these tests and
+// provides the `lsp-server` they spawn (named by `TestedCompilerStem` below and by nothing else),
+// so a runner broken badly enough to report green having run nothing cannot detect itself. Read the
+// pass count.
 //
-// ⛔⛔ **THE WORKING DIRECTORY IS A CONTRACT, AND IT IS THE CHECKOUT ROOT.** A test binary inherits the
-// working directory of the `maxon test` process that launched it, and that command never changes
-// directory — so `TestedCompilerStem` is spelled from the root, and a run started anywhere else fails
-// LOUDLY in `start()` rather than quietly finding no server.
+// The working directory is the checkout root. A test binary inherits the working directory of the
+// `maxon test` process that launched it, and that command never changes directory, so
+// `TestedCompilerStem` is spelled from the root and a run started anywhere else fails loudly in
+// `start()` rather than quietly finding no server.
 //
-// ⚠ **THREE HAZARDS, ALL THREE REAL, ALL THREE ANSWERED HERE:**
+// Three hazards, each answered here:
 //
-// 1. **`release()` OR IT LEAKS.** `StreamingSubprocess` leaks its handle if it is not released and a
-//    leak is process exit 101 — which a test reports as a failure of the run, not of an assertion. One
-//    client per test, and the client is released before anything is asserted (see the smoke test's
-//    shape): an `Expect` that throws must not be able to skip the release.
+// 1. `release()` or it leaks. `StreamingSubprocess` leaks its handle if it is not released, and a
+//    leak is process exit 101, which a test reports as a failure of the run rather than of an
+//    assertion. One client per test, released before anything is asserted, so an `Expect` that
+//    throws cannot skip the release.
 //
-// 2. **A STDERR WRITE CAN DEADLOCK BOTH PROCESSES.** Nothing here drains the server's stderr, and
-//    nothing can: stdlib's readers block, this client has no threads, and a blocking drain would simply
-//    hang somewhere else. That is SAFE ONLY BECAUSE THE SERVER IS QUIET — `LspServer.failOnBrokenStream`
-//    writes ONE line, ONCE, and only on the path that ends the session, which is far below any pipe
-//    buffer. It is not an assumption of silence: a server that becomes chatty (or panics with a long
-//    stack trace) fills the buffer and both sides then wait on each other for ever. The symptom is a
-//    hang that `maxon test`'s shard deadline reports as TIMED OUT, and the cure is a drain in the
-//    server's direction, not here.
-//    ⚠ **THE SERVER RUNS A WHOLE COMPILE PER `didOpen` AND PER `maxon/generateIR`, AND EVERY DIAGNOSTIC
-//    IT REPORTS WOULD GO TO STDERR.** `LspDiagnostics.compileBufferCaptured` runs both inside a
-//    `beginDiagnosticCapture` for exactly this reason.
+// 2. A stderr write can deadlock both processes. Nothing here drains the server's stderr, and
+//    nothing can: stdlib's readers block and this client has no threads. That is safe only while
+//    the server is quiet: `LspServer.failOnBrokenStream` writes one line, once, on the path that
+//    ends the session, and `LspDiagnostics.compileBufferCaptured` captures the diagnostics of the
+//    whole compile the server runs per `didOpen` and per `maxon/generateIR`. A server that becomes
+//    chatty, or panics with a long stack trace, fills the pipe and both sides wait for ever, which
+//    `maxon test`'s shard deadline reports as timed out. The cure is a drain on the server's side.
 //
-// 3. **A NOTIFICATION CAN ARRIVE BEFORE THE RESPONSE.** The server publishes diagnostics on every
-//    `didOpen`, so a `publishDiagnostics` notification arrives ahead of the reply to every request sent
-//    after one in this suite. Correlation is
-//    therefore STRICT on the integer `id`; a message carrying somebody else's id is dropped, and one
-//    carrying no id is STASHED for `awaitPublishedDiagnostics` rather than discarded.
+// 3. A notification can arrive before the response. The server publishes diagnostics on every
+//    `didOpen`, and announces a project load ahead of the reply to the request that caused it, so
+//    correlation is strict on the integer `id`: a message carrying another id is dropped, and one
+//    carrying no id is stashed for `awaitPublishedDiagnostics` and `takeProjectLoadingNotices`.
 //
-// ⛔ No JSON parser and no serializer live here: `stdlib/Json.maxon` is a full RFC 8259 pair, and a
-// second one would be this project's signature bug written down again.
+// JSON is parsed and serialized by `stdlib/Json.maxon`, not here.
 
 // ============================================================================================
 // THE SUBJECT
@@ -104,6 +98,7 @@ public typealias SemanticTokenValueArray = Array with SemanticTokenValue
 public typealias PublishedDiagnosticArray = Array with PublishedDiagnostic
 public typealias GenerateIrErrorArray = Array with GenerateIrError
 public typealias ProjectEntryArray = Array with ProjectEntry
+public typealias ProjectLoadingNoticeArray = Array with ProjectLoadingNotice
 public typealias WorkspaceFolderRootArray = Array with FilePath
 
 // A span of a document, flat rather than nested. LSP nests it as `{start: {…}, end: {…}}`, but `end` is
@@ -358,6 +353,18 @@ public type ListProjectsResult
 	end 'of'
 end 'ListProjectsResult'
 
+public type ProjectLoadingNotice
+	public var rootPath as String
+	public var loading as bool
+
+	static function create(rootPath String, loading bool) returns ProjectLoadingNotice
+		return Self{rootPath: rootPath, loading: loading}
+	end 'create'
+end 'ProjectLoadingNotice'
+
+typealias StashedNotificationArray = Array with JsonDoc
+typealias StashedNotificationTest = function(JsonDoc) returns bool
+
 // Whether a stashed publish for the asked-about uri was there to take.
 union StashedPublish
 	found(published PublishedDiagnostics)
@@ -404,11 +411,9 @@ public type LspClient
 	var server as StreamingSubprocess
 	var nextRequestId as LspRequestIdNumber
 
-	// ⭐⭐ **EVERY SERVER-INITIATED NOTIFICATION THIS CLIENT HAS SEEN AND NOT YET BEEN ASKED FOR, AS RAW
-	// FRAME BODIES IN ARRIVAL ORDER.** `publishDiagnostics` arrives ahead of the next reply, so an
-	// `awaitReply` that discarded what is not addressed to its request would make the one message this
-	// suite must assert on the one message no test could reach. Held raw and parsed on demand, because
-	// most of them are never asked for.
+	// Every server-initiated notification seen and not yet taken, in arrival order. They arrive ahead
+	// of the next reply, so an `awaitReply` that discarded them would leave the messages tests assert
+	// on out of every test's reach.
 	var notifications as StringArray
 
 	// Spawn this checkout's `lsp-server` with pipes on all three streams.
@@ -598,7 +603,7 @@ public type LspClient
 	end 'closeDocument'
 
 	// ----------------------------------------------------------------------------------------
-	// Diagnostics — pushed by the server, never asked for
+	// Notifications — pushed by the server, never asked for
 	// ----------------------------------------------------------------------------------------
 
 	// The next `textDocument/publishDiagnostics` for `uri`: taken from the stash if one has already
@@ -630,16 +635,39 @@ public type LspClient
 	// The most recent stashed publish for `uri`, removed from the stash along with every earlier one for
 	// the same document. A stale publish left behind would be indistinguishable from a fresh one.
 	function takeStashedPublish(uri String) returns StashedPublish throws LspClientError
-		var kept = StringArray.create()
 		var taken = StashedPublish.none
+
+		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri)) 'eachPublish'
+			taken = StashedPublish.found(try readPublishedDiagnostics(doc, uri: uri))
+		end 'eachPublish'
+
+		return taken
+	end 'takeStashedPublish'
+
+	// Reads the stash alone. A load's notices arrive ahead of the reply to the request that caused it,
+	// and a request served from a held project sends none, so a read off the wire would wait for
+	// nothing.
+	public function takeProjectLoadingNotices() returns ProjectLoadingNoticeArray throws LspClientError
+		var notices = ProjectLoadingNoticeArray.create()
+
+		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isNotificationOf(candidate, method: MethodProjectLoading)) 'eachNotice'
+			notices.push(try readProjectLoadingNotice(doc))
+		end 'eachNotice'
+
+		return notices
+	end 'takeProjectLoadingNotices'
+
+	function takeStashedWhere(wanted StashedNotificationTest) returns StashedNotificationArray throws LspClientError
+		var kept = StringArray.create()
+		var taken = StashedNotificationArray.create()
 
 		for body in self.notifications 'eachStashed'
 			let doc = try Json.parse(body) otherwise 'notJson'
 				throw LspClientError.malformedResponse("a stashed notification body is not valid JSON: {body}")
 			end 'notJson'
 
-			if publishesFor(doc, uri: uri) 'ours'
-				taken = StashedPublish.found(try readPublishedDiagnostics(doc, uri: uri))
+			if wanted(doc) 'ours'
+				taken.push(doc)
 			end 'ours' else 'somebodyElse'
 				kept.push(body.clone())
 			end 'somebodyElse'
@@ -647,7 +675,7 @@ public type LspClient
 
 		self.notifications = kept
 		return taken
-	end 'takeStashedPublish'
+	end 'takeStashedWhere'
 
 	// ----------------------------------------------------------------------------------------
 	// Language features
@@ -1424,18 +1452,27 @@ function readRange(doc JsonDoc, id JsonNodeId) returns LspRange throws LspClient
 	return LspRange.create(startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: try coordinateMember(doc, of: finish, key: CharacterKey))
 end 'readRange'
 
-// Is this message a `textDocument/publishDiagnostics` naming `uri`? Both halves are asked, because a
-// publish for ANOTHER document is a message this client must keep rather than hand back.
+// The uri is compared too: a publish for another document stays stashed for whoever asks about it.
 function publishesFor(doc JsonDoc, uri String) returns bool
-	let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise return false
-
-	if method != MethodPublishDiagnostics 'anotherNotification'
+	if not isNotificationOf(doc, method: MethodPublishDiagnostics) 'anotherNotification'
 		return false
 	end 'anotherNotification'
 
 	let params = try doc.getChild(doc.root, key: JsonRpcParamsKey) otherwise return false
 	return (try doc.getString(params, key: UriKey) otherwise "") == uri
 end 'publishesFor'
+
+function isNotificationOf(doc JsonDoc, method String) returns bool
+	let named = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise return false
+	return named == method
+end 'isNotificationOf'
+
+function readProjectLoadingNotice(doc JsonDoc) returns ProjectLoadingNotice throws LspClientError
+	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
+	let rootPath = try stringMember(doc, of: params, key: RootPathKey)
+
+	return ProjectLoadingNotice.create(rootPath, loading: try boolMember(doc, of: params, key: LoadingKey))
+end 'readProjectLoadingNotice'
 
 function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiagnostics throws LspClientError
 	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
@@ -1616,8 +1653,8 @@ let DocumentStart = 0 as LspCoordinate
 // for a server's own extensions, so it cannot collide with anything the specification adds.
 let MethodNeverServed = "maxon/aMethodNoServerServes"
 
-// The one message the SERVER starts. It is a notification, so it carries no id and gets no reply.
 let MethodPublishDiagnostics = "textDocument/publishDiagnostics"
+let MethodProjectLoading = "maxon/projectLoading"
 
 let CapabilitiesKey = "capabilities"
 let TextDocumentKey = "textDocument"
@@ -1693,6 +1730,7 @@ let ProjectsKey = "projects"
 let RootPathKey = "rootPath"
 let IsSingleFileKey = "isSingleFile"
 let FileCountKey = "fileCount"
+let LoadingKey = "loading"
 let EventKey = "event"
 let AddedKey = "added"
 let RemovedKey = "removed"

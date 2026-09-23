@@ -1426,7 +1426,9 @@ Explorer and a Test Explorer.
 
 If none is found, the extension offers to **Install** Maxon with the install script or to **Locate…** a
 compiler, which it saves to `maxon.serverPath`. When the compiler binary changes on disk (for example
-after an upgrade or a rebuild), the extension restarts the language server.
+after an upgrade or a rebuild), the extension restarts the language server. Language server errors are
+written to the **Maxon Language Server** output channel. The status bar item turns red while the server
+is stopped and yellow while it loads a project, and its tooltip links to **Restart** and **Show Output**.
 
 **Settings:**
 
@@ -1444,6 +1446,7 @@ on format-on-save and semantic highlighting for Maxon files by default.
 | Command | What it does |
 |---------|--------------|
 | **Maxon: Restart Language Server** | Restart `maxon lsp-server` |
+| **Maxon: Show Language Server Output** | Open the **Maxon Language Server** output channel |
 | **Maxon: Open Compiler Explorer** | Focus the Compiler Explorer view |
 
 **Compiler Explorer.** A view in the Maxon activity-bar container with a **Source** pane and a
@@ -1584,15 +1587,26 @@ two files of one project are one entry, and two sibling projects are two:
 { "projects": [ { "rootPath": "/home/me/app", "isSingleFile": false, "fileCount": 12 } ] }
 ```
 
-`rootPath` is that root directory. `isSingleFile` is true only where the ladder gives a document no
-project — a file inside `stdlib/` or `runtime/`, or one sitting at a volume root — and then `rootPath` is
-the document's own file. A document whose uri spells no filesystem path, or whose path has no directory
-above it, resolves to no root at all and contributes no entry, so the list can name fewer projects than
-there are open documents. `fileCount` is the number of `.maxon` sources under that root — `*.test.maxon`
-and the manifest aside — and is **0** for a root whose corpus the server has not built yet; the request
-never sweeps for one, so any hover,
-definition or completion in that project is what builds it and the next answer carries the real count.
-`rootPath` is a filesystem path, not a URI, and the projects are listed in path order.
+`rootPath` is that root directory, as a filesystem path. `isSingleFile` is true where the ladder roots a
+document at its own file — a file inside `stdlib/` or `runtime/`, or one sitting at a volume root — and
+then `rootPath` is that file. A document resolves to a root only when its uri spells a filesystem path
+with a directory above it, so the list can name fewer projects than there are open documents.
+`fileCount` is the number of `.maxon` sources under that root — `*.test.maxon` and the manifest aside —
+and is **0** for a root whose corpus the server has yet to build. This request reads only the projects
+already built; the first hover, definition, completion or diagnostic that needs a project builds it, and
+the next answer carries the real count. The projects are listed in path order.
+
+**`maxon/projectLoading`** is a Maxon-specific notification the server sends around each build of a
+project: `loading: true` immediately before the build and `loading: false` immediately after it, on
+every outcome, and each `true` is followed by its `false` before the next build begins. A project is
+built the first time a hover, definition, completion or diagnostic needs it, and again once it has left
+the held projects; a build that yields no project is repeated by each request that needs it. `rootPath`
+is spelled exactly as `maxon/listProjects` reports that root. The VS Code status bar turns yellow while
+any project is loading.
+
+```json
+{ "rootPath": "/home/me/app", "loading": true }
+```
 
 ### Other editors
 

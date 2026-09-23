@@ -294,9 +294,10 @@ and WASI, matching what each platform can report.
 |--------|---------|--------|-------------|
 | `Process.executablePath()` | `FilePath` | `ProcessIntrospectionError.pathUnavailable` | Absolute path of the running executable. |
 | `Process.environmentVariable(name String)` | `String` | `ProcessIntrospectionError.variableUnset`, `.environmentUnreadable` | The variable's value. Names are case-insensitive on Windows (`Path` answers to `PATH`) and exact elsewhere. An unset variable throws; a variable set to `""` returns `""`. |
-| `Process.currentEnvironmentEntries()` | `StringArray` | `ProcessIntrospectionError.environmentUnreadable` | Every `NAME=VALUE` entry, in the order the OS reports them. Throws when the OS cannot hand the environment over, rather than answering a partial list. |
+| `Process.currentEnvironmentEntries()` | `StringArray` | `ProcessIntrospectionError.environmentUnreadable` | Every `NAME=VALUE` entry, in the order the OS reports them. Throws when the OS fails to hand the environment over. |
 | `Process.envEntryName(entry String)` | `String` | — | The text before the first `=` (searching from the second byte, so Windows' `=C:=C:\dir` entries keep their name). |
 | `Process.envEntryValue(entry String)` | `String` | — | The text after that `=`, or `""`. |
+| `Process.envNameKey(name String)` | `String` | — | The key a variable name is compared by: lower-cased on Windows, `name` as given elsewhere. Two names with equal keys are one variable. |
 | `EnvNameValueSeparator` | `Byte` | — | The separator byte, `=` (61). |
 
 ```maxon
@@ -366,9 +367,16 @@ union Executable
 end 'Executable'
 ```
 
-`name` is looked up on `PATH` (with `PATHEXT` on Windows) when the child is spawned; `path` is used as
-given. A relative `path` is relative to the child's `workingDirectory` on every OS, and to the parent's
-working directory when none is set.
+`name` is searched for when the child is spawned; `path` is used as given. A relative `path` is relative
+to the child's `workingDirectory` on every OS, and to the parent's working directory when none is set. A
+`name` that carries a directory part (`sub/tool`, `./tool`, or on Windows `C:tool`) is anchored the same
+way and looked for in that one directory.
+
+On POSIX a `name` is searched for on `PATH` alone. On Windows the search follows `CreateProcessA`'s
+order: the directory the running program was loaded from, this program's working directory while
+`NoDefaultCurrentDirectoryInExePath` is unset, the system directory, the 16-bit system directory, the
+Windows directory, then `PATH`. On Windows a name with an extension is tried as given, and a name without
+one is tried with each `PATHEXT` extension in turn.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -433,7 +441,10 @@ end 'OutputDestination'
 | `inheritUpdating(overrides)` | This process's environment with `overrides` applied |
 | `custom(vars)` | Exactly `vars` |
 
-`EnvMap` is `Map with String, String`.
+`EnvMap` is `Map with String, String`. On Windows variable names compare as `Process.envNameKey` folds
+them, ignoring case: an override replaces the inherited variable of any spelling and the child sees the
+override's spelling, and a map that names one variable in two spellings makes the spawn throw
+`SubprocessError.spawnFailed`.
 
 | InputSource | The child's stdin |
 |-------------|-------------------|

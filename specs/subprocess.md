@@ -506,6 +506,316 @@ end 'main'
 0
 ```
 
+<!-- test: subprocess-environment-names-fold-case-on-windows -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+⭐ **ON WINDOWS AN OVERRIDE REPLACES THE INHERITED VARIABLE UNDER ANY SPELLING.** Windows reads an
+environment variable name without regard to case, so `MAXON_SPEC_ENV_FOLD` and `Maxon_Spec_Env_Fold` are
+one variable. `Environment.inheritUpdating` compares an override's name with each inherited name the same
+way: the override's entry takes the inherited one's place, and the child's environment carries that
+variable once, under the override's spelling. Two names in one `inheritUpdating` or `custom` map that are
+one variable to Windows leave no single value to give it, and the spawn is refused as `spawnFailed`.
+
+The program runs itself three deep. The outer run gives the middle one the variable as
+`Maxon_Spec_Env_Fold`; the middle run overrides it as `MAXON_SPEC_ENV_FOLD`, and the innermost run prints
+every entry of its own environment whose name is that variable's.
+
+Only Windows runs it: POSIX names are case-sensitive, and there two spellings are two variables.
+```maxon
+function outcomeOf(role String, environment Environment) returns String
+	let me = try Process.executablePath() otherwise panic("the running program has a path")
+	var argv = StringArray.create()
+	argv.push(role)
+	var config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	config.environment = environment
+
+	var outcome = ""
+	if let result = try config.run() 'ran'
+		outcome = result.stdout
+	end 'ran' else (e) 'refused'
+		outcome = "{e.displayReason()}\n"
+	end 'refused'
+	return outcome
+end 'outcomeOf'
+
+function printFoldedEntries() returns ExitCode
+	let entries = try Process.currentEnvironmentEntries() otherwise return 2
+	for entry in entries 'each'
+		if Process.envEntryName(entry).toLower() == "maxon_spec_env_fold" 'folded'
+			print("{entry}\n")
+		end 'folded'
+	end 'each'
+	return 0
+end 'printFoldedEntries'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	if args.count() == 1 'outer'
+		print(outcomeOf("middle", environment: Environment.inheritUpdating(["Maxon_Spec_Env_Fold": "inherited"])))
+		return 0
+	end 'outer'
+
+	let role = try args.get(1) otherwise return 3
+	if role == "inner" 'inner'
+		return printFoldedEntries()
+	end 'inner'
+
+	print(outcomeOf("inner", environment: Environment.inheritUpdating(["MAXON_SPEC_ENV_FOLD": "overridden"])))
+	print(outcomeOf("inner", environment: Environment.inheritUpdating(["MAXON_SPEC_ENV_FOLD": "a", "maxon_spec_env_fold": "b"])))
+	print(outcomeOf("inner", environment: Environment.custom(["MAXON_SPEC_ENV_FOLD": "a", "maxon_spec_env_fold": "b"])))
+	return 0
+end 'main'
+```
+```stdout
+MAXON_SPEC_ENV_FOLD=overridden
+spawn failed: two names in the environment are the variable 'maxon_spec_env_fold', and Windows reads a variable name without regard to case
+spawn failed: two names in the environment are the variable 'maxon_spec_env_fold', and Windows reads a variable name without regard to case
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-pathext-shim-a-name-with-no-extension-is-tried-only-with-pathext -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+⭐ **ON WINDOWS A NAME WITH NO EXTENSION IS TRIED ONLY WITH EACH `PATHEXT` EXTENSION.** Windows never runs
+an extensionless file by name: `CreateProcessA` appends `.exe` to a name that has no extension, and `cmd`'s
+search tries only the `PATHEXT` extensions. Tools such as `npm`, `npx` and `yarn` install an extensionless
+POSIX shell script beside their `.cmd`, and that script is no Windows executable — a spawn of it fails with
+`ERROR_BAD_EXE_FORMAT` (193). So the bare name here reaches the `.cmd` beside the script, which exits 7. A
+name that already carries an extension is tried exactly as given, so naming the `.cmd` reaches it too, and
+naming a `.bat` that is not there finds nothing, though the same name with `.cmd` added sits beside it.
+
+The pair sits in a directory of its own at the head of a child's `PATH`, and the child resolves both names.
+A `PATH` directory is searched on every Windows host, where the working directory is not: a host that
+defines `NoDefaultCurrentDirectoryInExePath` leaves it out of the search. The child inherits every other
+variable, and its `PATH` is the parent's with that directory in front.
+
+Only Windows runs it: `PATHEXT` is that platform's convention, and POSIX tries a name only as given.
+```maxon
+function outcomeOf(name String) returns String
+	var outcome = ""
+	if let result = try Subprocess.run(Executable.name(name), arguments: StringArray.create()) 'ran'
+		outcome = "exit {result.exitCode()}"
+	end 'ran' else (e) 'failed'
+		outcome = e.displayReason()
+	end 'failed'
+	return outcome
+end 'outcomeOf'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("bare name: {outcomeOf("maxon-spec-pathext-shim")}, name with its extension: {outcomeOf("maxon-spec-pathext-shim.cmd")}\n")
+		print("name with another extension: {outcomeOf("maxon-spec-pathext-shim.bat")}\n")
+		return 0
+	end 'childMode'
+
+	let shimDir = Directory.currentPath().join("maxon-spec-pathext-shim-dir")
+	_ = Directory.create(shimDir)
+	let shim = shimDir.join("maxon-spec-pathext-shim")
+	let batch = shimDir.join("maxon-spec-pathext-shim.cmd")
+	let extended = shimDir.join("maxon-spec-pathext-shim.bat.cmd")
+	try File.writeText(shim, content: "#!/bin/sh\nexit 99\n") otherwise return 2
+	try File.writeText(batch, content: "@exit /b 7\r\n") otherwise return 2
+	try File.writeText(extended, content: "@exit /b 9\r\n") otherwise return 2
+
+	let inheritedPath = try Process.environmentVariable("PATH") otherwise return 3
+	var overrides = EnvMap.create()
+	overrides.upsert("PATH", value: "{shimDir.path};{inheritedPath}")
+
+	var config = Configuration.create(Executable.path(try Process.executablePath() otherwise return 4))
+	var argv = StringArray.create()
+	argv.push("resolve")
+	config.arguments = argv
+	config.environment = Environment.inheritUpdating(overrides)
+	let result = try config.run() otherwise return 5
+
+	try File.delete(shim) otherwise return 6
+	try File.delete(batch) otherwise return 6
+	try File.delete(extended) otherwise return 6
+	try Directory.delete(shimDir) otherwise return 6
+
+	print(result.stdout)
+	return result.exitCode() as ExitCode
+end 'main'
+```
+```stdout
+bare name: exit 7, name with its extension: exit 7
+name with another extension: executable not found: maxon-spec-pathext-shim.bat
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+⭐⭐ **ON WINDOWS A BARE NAME IS SEARCHED IN `CreateProcessA`'s ORDER, AND THE ANSWER IS AN ABSOLUTE PATH TO
+THE FILE THAT RUNS.** `CreateProcessA` looks for a name with no path in the directory the application
+loaded from, then the working directory, the 32-bit system directory, the 16-bit system directory
+(`System` under the Windows directory), the Windows directory, and last each directory of `PATH`. The
+walk behind `Executable.name` searches the same directories in the same order, so the file it resolves is
+the file `CreateProcessA` would find, and it hands the spawn that file's absolute path, which no later
+search and no working directory can reinterpret. A name that carries a path — `sub\tool`, `.\tool`,
+`\tool`, `C:\bin\tool`, `C:tool` — is searched for nowhere: it is tried only where it points, and a relative
+one points into the child's working directory, exactly as a relative `Executable.path` does.
+
+The program runs itself with a working directory and a `PATH` directory of its own. Probes that exit with
+distinct codes sit in the application directory, the working directory and the `PATH` directory, and a
+`PATH` directory probe shadows `hostname`, which lives in the system directory, and `regedit`, which lives in
+the Windows directory. Each line names the probe's exit code and whether `subprocessResolveOnPath` answered
+the absolute path of the file expected to win. A probe under `sub\` sits in the application directory, the
+working directory and the `PATH` directory, and in a second working directory the grandchild is given; named
+as `sub\…` it runs from the working directory each time. A probe in the working directory and the second one,
+named drive-relative (`C:…`, with the working directory's drive), runs from the second. The last probe sits only in the `PATH` directory and is
+named from the root of the drive, where no such file is, so it is not found. The child's environment is this process's with that
+directory at the head of `PATH` and without `NoDefaultCurrentDirectoryInExePath`, whose presence takes the
+working directory out of the search for a name with no path.
+
+Only Windows runs it: POSIX searches `PATH` alone, and `subprocess-bare-name-is-never-found-in-the-working-directory`
+pins the working directory POSIX leaves out.
+```maxon
+typealias FilePathArray = Array with FilePath
+
+function writeProbe(dir FilePath, name String, code ExitCode, placed FilePathArray)
+	let probe = dir.join("{name}.cmd")
+	try File.writeText(probe, content: "@exit /b {code}\r\n") otherwise panic("the probe's directory is writable")
+	placed.push(probe)
+end 'writeProbe'
+
+function resolvesTo(name String, expected FilePath) returns bool
+	let resolved = String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+	return resolved.toLower() == expected.path.toLower()
+end 'resolvesTo'
+
+function makeDirectory(dir FilePath, made FilePathArray)
+	_ = Directory.create(dir)
+	made.push(dir)
+end 'makeDirectory'
+
+function exitOf(name String, workingDirectory FilePath) returns String
+	var config = Configuration.create(Executable.name(name))
+	config.workingDirectory = workingDirectory
+	var outcome = ""
+	if let result = try config.run() 'ran'
+		outcome = "exit {result.exitCode()}"
+	end 'ran' else (e) 'failed'
+		outcome = e.displayReason()
+	end 'failed'
+	return outcome
+end 'exitOf'
+
+function report(pathDir FilePath) returns ExitCode
+	let appDir = try (try Process.executablePath() otherwise return 2).parent() otherwise return 2
+	let workingDir = Directory.currentPath()
+	let windowsDir = try FilePath.from(try Process.environmentVariable("SystemRoot") otherwise return 3) otherwise return 3
+	let systemDir = windowsDir.join("System32")
+	let inherited = FilePath.empty()
+
+	print("first: {exitOf("maxon-spec-order-first", workingDirectory: inherited)}, application directory: {resolvesTo("maxon-spec-order-first", expected: appDir.join("maxon-spec-order-first.cmd"))}\n")
+	print("second: {exitOf("maxon-spec-order-second", workingDirectory: inherited)}, working directory: {resolvesTo("maxon-spec-order-second", expected: workingDir.join("maxon-spec-order-second.cmd"))}\n")
+	print("hostname: {exitOf("hostname", workingDirectory: inherited)}, system directory: {resolvesTo("hostname", expected: systemDir.join("hostname.exe"))}\n")
+	print("regedit: windows directory: {resolvesTo("regedit", expected: windowsDir.join("regedit.exe"))}\n")
+	print("third: {exitOf("maxon-spec-order-third", workingDirectory: inherited)}, PATH directory: {resolvesTo("maxon-spec-order-third", expected: pathDir.join("maxon-spec-order-third.cmd"))}\n")
+	print("relative: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: inherited)}, working directory: {resolvesTo("sub\\maxon-spec-order-relative", expected: workingDir.join("sub").join("maxon-spec-order-relative.cmd"))}\n")
+	print("relative in a given working directory: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: workingDir.join("elsewhere"))}\n")
+	let drive = try workingDir.path.split(":").get(0) otherwise return 2
+	print("drive-relative in a given working directory: {exitOf("{drive}:maxon-spec-order-drive", workingDirectory: workingDir.join("elsewhere"))}\n")
+	print("rooted: {exitOf("\\maxon-spec-order-rooted", workingDirectory: inherited)}\n")
+	return 0
+end 'report'
+
+function childEnvironment(pathDir FilePath) returns Environment
+	let entries = try Process.currentEnvironmentEntries() otherwise panic("this process's environment is readable")
+	let pathKey = Process.envNameKey("PATH")
+	let noCwdSearchKey = Process.envNameKey("NoDefaultCurrentDirectoryInExePath")
+	var vars = EnvMap.create()
+
+	for entry in entries 'each'
+		let name = Process.envEntryName(entry)
+		let key = Process.envNameKey(name)
+
+		if key == pathKey 'path'
+			vars.upsert(name, value: "{pathDir.path};{Process.envEntryValue(entry)}")
+		end 'path' else if key != noCwdSearchKey 'kept'
+			vars.upsert(name, value: Process.envEntryValue(entry))
+		end 'kept'
+	end 'each'
+
+	return Environment.custom(vars)
+end 'childEnvironment'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	if args.count() > 1 'child'
+		let pathDir = try FilePath.from(try args.get(1) otherwise return 2) otherwise return 2
+		return report(pathDir)
+	end 'child'
+
+	let me = try Process.executablePath() otherwise return 4
+	let appDir = try me.parent() otherwise return 4
+	let workingDir = Directory.currentPath().join("maxon-spec-order-cwd")
+	let pathDir = Directory.currentPath().join("maxon-spec-order-path")
+	let elsewhere = workingDir.join("elsewhere")
+	var made = FilePathArray.create()
+	makeDirectory(workingDir, made: made)
+	makeDirectory(pathDir, made: made)
+	makeDirectory(elsewhere, made: made)
+	makeDirectory(appDir.join("sub"), made: made)
+	makeDirectory(workingDir.join("sub"), made: made)
+	makeDirectory(pathDir.join("sub"), made: made)
+	makeDirectory(elsewhere.join("sub"), made: made)
+
+	var placed = FilePathArray.create()
+	writeProbe(appDir.join("sub"), name: "maxon-spec-order-relative", code: 68, placed: placed)
+	writeProbe(workingDir.join("sub"), name: "maxon-spec-order-relative", code: 66, placed: placed)
+	writeProbe(pathDir.join("sub"), name: "maxon-spec-order-relative", code: 67, placed: placed)
+	writeProbe(elsewhere.join("sub"), name: "maxon-spec-order-relative", code: 77, placed: placed)
+	writeProbe(appDir, name: "maxon-spec-order-first", code: 11, placed: placed)
+	writeProbe(workingDir, name: "maxon-spec-order-first", code: 12, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-first", code: 13, placed: placed)
+	writeProbe(workingDir, name: "maxon-spec-order-second", code: 22, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-second", code: 23, placed: placed)
+	writeProbe(pathDir, name: "hostname", code: 44, placed: placed)
+	writeProbe(pathDir, name: "regedit", code: 45, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-rooted", code: 55, placed: placed)
+	writeProbe(workingDir, name: "maxon-spec-order-drive", code: 88, placed: placed)
+	writeProbe(elsewhere, name: "maxon-spec-order-drive", code: 99, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-third", code: 33, placed: placed)
+
+	var config = Configuration.create(Executable.path(me))
+	var argv = StringArray.create()
+	argv.push(pathDir.path)
+	config.arguments = argv
+	config.workingDirectory = workingDir
+	config.environment = childEnvironment(pathDir)
+	let result = try config.run() otherwise return 5
+
+	for probe in placed 'each'
+		try File.delete(probe) otherwise return 6
+	end 'each'
+	while made.count() > 0 'unmake'
+		let dir = try made.pop() otherwise return 6
+		try Directory.delete(dir) otherwise return 6
+	end 'unmake'
+
+	print(result.stdout)
+	return result.exitCode() as ExitCode
+end 'main'
+```
+```stdout
+first: exit 11, application directory: true
+second: exit 22, working directory: true
+hostname: exit 0, system directory: true
+regedit: windows directory: true
+third: exit 33, PATH directory: true
+relative: exit 66, working directory: true
+relative in a given working directory: exit 77
+drive-relative in a given working directory: exit 99
+rooted: executable not found: \maxon-spec-order-rooted
+```
+```exitcode
+0
+```
+
 <!-- test: subprocess-not-found -->
 <!-- unsupported-targets: wasm32-wasi -->
 ⭐ **A MISSING BINARY IS `executableNotFound` ON EVERY OS.** POSIX's spawn searches nothing, so a bare name
@@ -637,9 +947,13 @@ disagree on whether a launch path is read before or after the child enters its d
 library launches the path joined onto the working directory made absolute, which reads the same either
 way. A file that is only in the parent's directory is `executableNotFound` everywhere, and a RELATIVE
 working directory is anchored once, to the parent's directory, rather than applied twice by a child that
-has already entered it.
+has already entered it. An `Executable.name` that carries a directory part names a place rather than
+something to search for, so it is resolved exactly as the same relative `Executable.path` is, and the second
+line answers what the first does.
 ```maxon
-function verdictOf(config Configuration) returns String
+function verdictOf(executable Executable, workingDirectory FilePath) returns String
+	var config = Configuration.create(executable)
+	config.workingDirectory = workingDirectory
 	var verdict = "ran"
 	try config.run() otherwise (e) 'handler'
 		match e 'kind'
@@ -663,16 +977,17 @@ function placeTool(dir FilePath, name String)
 	#endif
 end 'placeTool'
 
-function runRelative(name String, workingDirectory FilePath) returns String
+function dotRelative(name String) returns String
 	#if os(Windows)
-	let relative = try FilePath.from(".\\{name}") otherwise panic("a dot-relative file name is a well-formed path")
+	return ".\\{name}"
 	#else
-	let relative = try FilePath.from("./{name}") otherwise panic("a dot-relative file name is a well-formed path")
+	return "./{name}"
 	#endif
-	var config = Configuration.create(Executable.path(relative))
-	config.workingDirectory = workingDirectory
-	return verdictOf(config)
-end 'runRelative'
+end 'dotRelative'
+
+function pathTo(name String) returns Executable
+	return Executable.path(try FilePath.from(dotRelative(name)) otherwise panic("a dot-relative file name is a well-formed path"))
+end 'pathTo'
 
 function main() returns ExitCode
 	let parentDir = Directory.currentPath()
@@ -692,7 +1007,8 @@ function main() returns ExitCode
 	placeTool(parentDir, name: parentOnly)
 	placeTool(childDir, name: childOnly)
 
-	print("parent-cwd-only={runRelative(parentOnly, workingDirectory: childDir)} child-cwd-only={runRelative(childOnly, workingDirectory: childDir)} relative-directory={runRelative(childOnly, workingDirectory: relativeChildDir)}\n")
+	print("parent-cwd-only={verdictOf(pathTo(parentOnly), workingDirectory: childDir)} child-cwd-only={verdictOf(pathTo(childOnly), workingDirectory: childDir)} relative-directory={verdictOf(pathTo(childOnly), workingDirectory: relativeChildDir)}\n")
+	print("name parent-cwd-only={verdictOf(Executable.name(dotRelative(parentOnly)), workingDirectory: childDir)} name child-cwd-only={verdictOf(Executable.name(dotRelative(childOnly)), workingDirectory: childDir)} name relative-directory={verdictOf(Executable.name(dotRelative(childOnly)), workingDirectory: relativeChildDir)}\n")
 
 	try File.delete(parentDir.join(parentOnly)) otherwise panic("the parent-side tool can be removed")
 	try File.delete(childDir.join(childOnly)) otherwise panic("the child-side tool can be removed")
@@ -704,6 +1020,7 @@ end 'main'
 ```
 ```stdout
 parent-cwd-only=executableNotFound child-cwd-only=ran relative-directory=ran
+name parent-cwd-only=executableNotFound name child-cwd-only=ran name relative-directory=ran
 ```
 
 <!-- test: subprocess-a-missing-working-directory-is-spawn-failed -->

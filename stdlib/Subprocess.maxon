@@ -118,26 +118,24 @@ public enum ExecutableError implements Error
 	notFound
 end 'ExecutableError'
 
-/// What to run. Either a bare name (`"git"`, looked up through PATH on the
-/// host) or an explicit `FilePath`, which when relative is relative to the
-/// child's working directory.
+/// What to run. Either a name (`"git"`, searched for on the host when the
+/// child is spawned) or an explicit `FilePath`, which when relative is
+/// relative to the child's working directory.
 public union Executable
 	name(value String)
 	path(value FilePath)
 
-	/// Wrap either arm as a `FilePath`, WITHOUT resolving anything. For
-	/// `.path(p)` this is `p` unchanged; for `.name(n)` it is the bare name as
-	/// a path. The PATH search happens at the spawn, in `resolveByName` — see
-	/// there for why Windows and POSIX differ.
+	/// Wrap either arm as a `FilePath`, without resolving anything. For
+	/// `.path(p)` this is `p` unchanged; for `.name(n)` it is the name as
+	/// a path, and the search for it happens at the spawn.
 	/// Throws `ExecutableError.notFound` only if `n` is not a well-formed path
 	/// string; a name that is simply absent from PATH resolves fine here and
 	/// fails later, at the spawn.
 	///
-	/// ⚠ THIS IS NOT A PATH LOOKUP AND CANNOT BE USED AS AN EXISTENCE CHECK.
-	/// The `subprocessResolveOnPath` helper is called by `resolveByName`
-	/// during `runConfiguration`, not here. "Is this tool installed?" built on
-	/// `resolve()` answers a confident `notFound` for a tool that is plainly on
-	/// PATH. To probe for a tool, SPAWN it.
+	/// ⚠ This is not a path lookup and cannot be used as an existence check.
+	/// "Is this tool installed?" built on `resolve()` answers a confident
+	/// `notFound` for a tool that is plainly on PATH. To probe for a tool,
+	/// spawn it.
 	public function resolve() returns FilePath throws ExecutableError
 		return match self 'r'
 			name(n) gives try FilePath.from(n) otherwise throw ExecutableError.notFound
@@ -591,7 +589,7 @@ end 'StdioRuntimeTriple'
 /// Resolve `Executable.name(n)` to a launchable path, and `Executable.path(p)` to the path the child runs.
 function resolveExecutablePath(executable Executable, workingDirectory FilePath) returns String throws SubprocessError
 	return match executable 'r'
-		name(n) gives try resolveByName(n)
+		name(n) gives try resolveByName(n, workingDirectory: workingDirectory)
 		path(p) gives launchPathInWorkingDirectory(p, workingDirectory: workingDirectory)
 	end 'r'
 end 'resolveExecutablePath'
@@ -611,26 +609,28 @@ function launchPathInWorkingDirectory(executablePath FilePath, workingDirectory 
 	return executablePath.resolve(anchoredDirectory).path
 end 'launchPathInWorkingDirectory'
 
-// ⭐⭐ **WINDOWS AND POSIX RESOLVE A NAME DIFFERENTLY, AND THE DIFFERENCE IS WHERE THE SEARCH HAPPENS.**
+// A name carrying a directory is anchored to the child's working directory, as `Executable.path`
+// is, and looked for there alone. ⚠ This test and `SubprocessRuntime.emitSubpWindowsNameRules`'s
+// must agree on which names carry a directory: the walk tries such a name only as given, so one
+// this side leaves unanchored resolves against the parent's working directory.
 //
-// On Windows the runtime's miss answers the bare name and `CreateProcessA` searches again — its own
-// directory, the working directory, the system directories — so a miss here is not yet "not found".
-//
-// On POSIX the spawn is raw `execve`, which searches NOTHING: the runtime's walk is the only search there is.
-// So a name containing `/` is a path and is used as written, and a bare name the walk did not find is not
-// found. ⛔ **HANDING THAT BARE NAME TO `execve` ANYWAY WOULD RUN A FILE OF THAT NAME IN THE WORKING
-// DIRECTORY**, since `execve` reads a slash-less path relative to it — the one place POSIX never looks.
-function resolveByName(name String) returns String throws SubprocessError
+// On POSIX a bare name the walk misses is not found: `execve` reads a slash-less path against the
+// working directory, and would run a file there that shadows the tool.
+function resolveByName(name String, workingDirectory FilePath) returns String throws SubprocessError
+	let asPath = try FilePath.from(name) otherwise throw SubprocessError.executableNotFound(name)
+	let carriesADirectory = asPath.rootByteLength() > 0 or asPath.filename() != asPath.path
+	let lookup = launchPathInWorkingDirectory(asPath, workingDirectory: workingDirectory) if carriesADirectory else name
+
 	#if os(Windows)
-		return String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+		return String.init(__Builtins.subprocessResolveOnPath(lookup.cstr()))
 	#else
 		let dirSeparator = "/"
 
-		if name.contains(dirSeparator) 'isAPath'
-			return name
+		if carriesADirectory 'isAPath'
+			return lookup
 		end 'isAPath'
 
-		let resolved = String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+		let resolved = String.init(__Builtins.subprocessResolveOnPath(lookup.cstr()))
 
 		// The walk never answers the working directory on POSIX, so a hit always carries a directory.
 		if not resolved.contains(dirSeparator) 'notOnPath'
@@ -692,7 +692,7 @@ function spawnEnvironmentFor(env Environment) returns SpawnEnvironment throws Su
 	match env 'e'
 		inherit then return SpawnEnvironment.create(emptyEnvBlock(), source: EnvSource.parent.rawValue)
 		inheritUpdating(overrides) then try appendInheritedEntries(out, overrides: overrides)
-		custom(vars) then appendEnvEntries(out, vars: vars)
+		custom(vars) then appendEnvEntries(out, vars: vars, names: try namesByKey(vars))
 	end 'e'
 
 	out.push(BlobTokenTerminator)
@@ -708,51 +708,52 @@ function emptyEnvBlock() returns String
 	return String.from(out)
 end 'emptyEnvBlock'
 
-/// This process's own entries, with a named entry's VALUE replaced where the caller supplied one, and
-/// the overrides that named nothing already present appended after them.
+/// This process's own entries, each one an override names (under any spelling `Process.envNameKey`
+/// folds together) replaced by the override's name and value, then the overrides that named nothing
+/// inherited.
 ///
-/// ⭐ THE INHERITED ORDER IS PRESERVED RATHER THAN REBUILT FROM A MAP, deliberately: the block a child
-/// receives is then byte-identical to this process's own except at the names the caller actually
-/// named. Windows reports its block sorted and CreateProcess documents wanting a sorted one; a map's
-/// iteration order would answer neither, and the platform's own `=X:=X:\dir` drive entries — which
-/// must come first — would move.
+/// The inherited order is preserved rather than rebuilt from a map: the block a child receives is
+/// then byte-identical to this process's own except at the names the caller named. Windows reports
+/// its block sorted and CreateProcess documents wanting a sorted one; a map's iteration order would
+/// answer neither, and would move the platform's own `=X:=X:\dir` drive entries, which come first.
 function appendInheritedEntries(out ByteArray, overrides EnvMap) throws SubprocessError
-	// The overrides not yet spent on an inherited entry. A copy, because deciding which ones are left
-	// over is exactly what the walk below does and the caller's map is not ours to empty.
-	var pending = EnvMap.create()
-
-	for (name, value) in overrides 'eachOverride'
-		pending.upsert(name, value: value)
-	end 'eachOverride'
-
+	var pending = try namesByKey(overrides)
 	let inherited = try Process.currentEnvironmentEntries() otherwise throw SubprocessError.spawnFailed("this process's environment could not be read, so no child can inherit it")
 
 	for entry in inherited 'eachInherited'
-		let name = Process.envEntryName(entry)
+		let key = Process.envNameKey(Process.envEntryName(entry))
 
-		if let replacement = try pending.get(name) 'overridden'
-			// The entry is rebuilt rather than patched, and the REMOVE comes after it: what is left in
-			// `pending` at the end is exactly the overrides that named nothing inherited.
-			appendEnvEntry(out, name: name, value: replacement)
-			_ = pending.remove(name)
+		if let name = try pending.get(key) 'overridden'
+			appendEnvEntry(out, vars: overrides, name: name)
+			_ = pending.remove(key)
 		end 'overridden' else 'kept'
 			appendNulTerminated(out, source: entry)
 		end 'kept'
 	end 'eachInherited'
 
-	appendEnvEntries(out, vars: pending)
+	appendEnvEntries(out, vars: overrides, names: pending)
 end 'appendInheritedEntries'
 
-/// Every pair of `vars` as its own entry. The whole of `Environment.custom`, and the tail of
-/// `inheritUpdating` — an override that matched no inherited name is a new variable and nothing else.
-function appendEnvEntries(out ByteArray, vars EnvMap)
-	for (name, value) in vars 'eachVar'
-		appendEnvEntry(out, name: name, value: value)
+// Two spellings of one Windows variable are refused: which one Windows would keep is undefined.
+function namesByKey(vars EnvMap) returns EnvMap throws SubprocessError
+	var names = EnvMap.create()
+
+	for (name, _) in vars 'eachVar'
+		let key = Process.envNameKey(name)
+		try names.insert(key, value: name) otherwise throw SubprocessError.spawnFailed("two names in the environment are the variable '{key}', and Windows reads a variable name without regard to case")
 	end 'eachVar'
+
+	return names
+end 'namesByKey'
+
+function appendEnvEntries(out ByteArray, vars EnvMap, names EnvMap)
+	for (_, name) in names 'eachName'
+		appendEnvEntry(out, vars: vars, name: name)
+	end 'eachName'
 end 'appendEnvEntries'
 
-/// One `NAME=VALUE` entry and its terminator.
-function appendEnvEntry(out ByteArray, name String, value String)
+function appendEnvEntry(out ByteArray, vars EnvMap, name String)
+	let value = try vars.get(name) otherwise panic("appendEnvEntry: '{name}' was read out of the very map it is looked up in")
 	appendBytesOf(out, source: name)
 	out.push(EnvNameValueSeparator)
 	appendNulTerminated(out, source: value)

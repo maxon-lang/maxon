@@ -1,0 +1,2405 @@
+// Test: subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows
+typealias FilePathArray = Array with FilePath
+
+function writeProbe(dir FilePath, name String, code ExitCode, placed FilePathArray)
+	let probe = dir.join("{name}.cmd")
+	try File.writeText(probe, content: "@exit /b {code}\r\n") otherwise panic("the probe's directory is writable")
+	placed.push(probe)
+end 'writeProbe'
+
+function resolvesTo(name String, expected FilePath) returns bool
+	let resolved = String.init(__Builtins.subprocessResolveOnPath(name.cstr()))
+	return resolved.toLower() == expected.path.toLower()
+end 'resolvesTo'
+
+function makeDirectory(dir FilePath, made FilePathArray)
+	_ = Directory.create(dir)
+	made.push(dir)
+end 'makeDirectory'
+
+function exitOf(name String, workingDirectory FilePath) returns String
+	var config = Configuration.create(Executable.name(name))
+	config.workingDirectory = workingDirectory
+	var outcome = ""
+	if let result = try config.run() 'ran'
+		outcome = "exit {result.exitCode()}"
+	end 'ran' else (e) 'failed'
+		outcome = e.displayReason()
+	end 'failed'
+	return outcome
+end 'exitOf'
+
+function report(pathDir FilePath) returns ExitCode
+	let appDir = try (try Process.executablePath() otherwise return 2).parent() otherwise return 2
+	let workingDir = Directory.currentPath()
+	let windowsDir = try FilePath.from(try Process.environmentVariable("SystemRoot") otherwise return 3) otherwise return 3
+	let systemDir = windowsDir.join("System32")
+	let inherited = FilePath.empty()
+
+	print("first: {exitOf("maxon-spec-order-first", workingDirectory: inherited)}, application directory: {resolvesTo("maxon-spec-order-first", expected: appDir.join("maxon-spec-order-first.cmd"))}\n")
+	print("second: {exitOf("maxon-spec-order-second", workingDirectory: inherited)}, working directory: {resolvesTo("maxon-spec-order-second", expected: workingDir.join("maxon-spec-order-second.cmd"))}\n")
+	print("hostname: {exitOf("hostname", workingDirectory: inherited)}, system directory: {resolvesTo("hostname", expected: systemDir.join("hostname.exe"))}\n")
+	print("regedit: windows directory: {resolvesTo("regedit", expected: windowsDir.join("regedit.exe"))}\n")
+	print("third: {exitOf("maxon-spec-order-third", workingDirectory: inherited)}, PATH directory: {resolvesTo("maxon-spec-order-third", expected: pathDir.join("maxon-spec-order-third.cmd"))}\n")
+	print("relative: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: inherited)}, working directory: {resolvesTo("sub\\maxon-spec-order-relative", expected: workingDir.join("sub").join("maxon-spec-order-relative.cmd"))}\n")
+	print("relative in a given working directory: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: workingDir.join("elsewhere"))}\n")
+	let drive = try workingDir.path.split(":").get(0) otherwise return 2
+	print("drive-relative in a given working directory: {exitOf("{drive}:maxon-spec-order-drive", workingDirectory: workingDir.join("elsewhere"))}\n")
+	print("rooted: {exitOf("\\maxon-spec-order-rooted", workingDirectory: inherited)}\n")
+	return 0
+end 'report'
+
+function childEnvironment(pathDir FilePath) returns Environment
+	let entries = try Process.currentEnvironmentEntries() otherwise panic("this process's environment is readable")
+	let pathKey = Process.envNameKey("PATH")
+	let noCwdSearchKey = Process.envNameKey("NoDefaultCurrentDirectoryInExePath")
+	var vars = EnvMap.create()
+
+	for entry in entries 'each'
+		let name = Process.envEntryName(entry)
+		let key = Process.envNameKey(name)
+
+		if key == pathKey 'path'
+			vars.upsert(name, value: "{pathDir.path};{Process.envEntryValue(entry)}")
+		end 'path' else if key != noCwdSearchKey 'kept'
+			vars.upsert(name, value: Process.envEntryValue(entry))
+		end 'kept'
+	end 'each'
+
+	return Environment.custom(vars)
+end 'childEnvironment'
+
+function main() returns ExitCode
+	let args = CommandLine.args()
+	if args.count() > 1 'child'
+		let pathDir = try FilePath.from(try args.get(1) otherwise return 2) otherwise return 2
+		return report(pathDir)
+	end 'child'
+
+	let me = try Process.executablePath() otherwise return 4
+	let appDir = try me.parent() otherwise return 4
+	let workingDir = Directory.currentPath().join("maxon-spec-order-cwd")
+	let pathDir = Directory.currentPath().join("maxon-spec-order-path")
+	let elsewhere = workingDir.join("elsewhere")
+	var made = FilePathArray.create()
+	makeDirectory(workingDir, made: made)
+	makeDirectory(pathDir, made: made)
+	makeDirectory(elsewhere, made: made)
+	makeDirectory(appDir.join("sub"), made: made)
+	makeDirectory(workingDir.join("sub"), made: made)
+	makeDirectory(pathDir.join("sub"), made: made)
+	makeDirectory(elsewhere.join("sub"), made: made)
+
+	var placed = FilePathArray.create()
+	writeProbe(appDir.join("sub"), name: "maxon-spec-order-relative", code: 68, placed: placed)
+	writeProbe(workingDir.join("sub"), name: "maxon-spec-order-relative", code: 66, placed: placed)
+	writeProbe(pathDir.join("sub"), name: "maxon-spec-order-relative", code: 67, placed: placed)
+	writeProbe(elsewhere.join("sub"), name: "maxon-spec-order-relative", code: 77, placed: placed)
+	writeProbe(appDir, name: "maxon-spec-order-first", code: 11, placed: placed)
+	writeProbe(workingDir, name: "maxon-spec-order-first", code: 12, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-first", code: 13, placed: placed)
+	writeProbe(workingDir, name: "maxon-spec-order-second", code: 22, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-second", code: 23, placed: placed)
+	writeProbe(pathDir, name: "hostname", code: 44, placed: placed)
+	writeProbe(pathDir, name: "regedit", code: 45, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-rooted", code: 55, placed: placed)
+	writeProbe(workingDir, name: "maxon-spec-order-drive", code: 88, placed: placed)
+	writeProbe(elsewhere, name: "maxon-spec-order-drive", code: 99, placed: placed)
+	writeProbe(pathDir, name: "maxon-spec-order-third", code: 33, placed: placed)
+
+	var config = Configuration.create(Executable.path(me))
+	var argv = StringArray.create()
+	argv.push(pathDir.path)
+	config.arguments = argv
+	config.workingDirectory = workingDir
+	config.environment = childEnvironment(pathDir)
+	let result = try config.run() otherwise return 5
+
+	for probe in placed 'each'
+		try File.delete(probe) otherwise return 6
+	end 'each'
+	while made.count() > 0 'unmake'
+		let dir = try made.pop() otherwise return 6
+		try Directory.delete(dir) otherwise return 6
+	end 'unmake'
+
+	print(result.stdout)
+	return result.exitCode() as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_run_queue_head@8 = i64 0
+  __gt_run_queue_tail@16 = i64 0
+  __gt_timer_count@24 = i64 0
+  __gt_timer_heap_base@32 = i64 0
+  __gt_timer_capacity@40 = i64 0
+  __gt_timer_seq@48 = i64 0
+  __gt_timer_when@56 = i64 9223372036854775807
+  __gt_live_count@64 = i64 0
+  __gt_seed_bytes@72 = i64 8192
+  __gt_stack_bytes_sum@80 = i64 0
+  __gt_stack_bytes_count@88 = i64 0
+  __gt_seed_sum_seen@96 = i64 0
+  __gt_seed_count_seen@104 = i64 0
+  __gt_keeps_cpu_clock@112 = i64 0
+  __sched_active_workers@120 = i64 1
+  __sched_max_active_workers@128 = i64 1
+  __sched_tls_index@136 = i64 0
+  __sched_tls_teb_offset@144 = i64 0
+  __sched_procs@152 = i64 0
+  __sched_allm@160 = i64 0
+  __sched_midle@168 = i64 0
+  __sched_pidle@176 = i64 0
+  __gt_gfree_head@184 = i64 0
+  __sched_arena_cursor@192 = i64 0
+  __sched_arena_limit@200 = i64 0
+  __gt_records_carved@208 = i64 0
+  __sched_npidle@216 = i64 0
+  __sched_runq_size@224 = i64 0
+  __sched_global_pushes@232 = i64 0
+  __sched_timer_scan_steps@240 = i64 0
+  __sched_mcount@248 = i64 0
+  __sched_nmidle@256 = i64 0
+  __sched_main_m@264 = i64 0
+  __sched_phase@272 = i64 0
+  __sched_lastpoll@280 = i64 0
+  __sched_poll_until@288 = i64 0
+  __sched_regain_head@296 = i64 0
+  __np_poller@304 = i64 0
+  __np_break@312 = i64 0
+  __np_wake_sig@320 = i64 0
+  __np_pd_table@328 = i64 0
+  __np_pd_cap@336 = i64 0
+  __np_waiters@344 = i64 0
+  __np_src_key_free@352 = i64 0
+  __np_src_key_high@360 = i64 0
+  __sched_num_procs@368 = i64 0
+  __sched_shutdown_flag@376 = i64 0
+  __sched_lock@384 = i64 0
+  __sched_lock_depth_sink@392 = i64 0
+  __sched_nmspinning@400 = i64 0
+  __sched_needspinning@408 = i64 0
+  __sched_sysmon_event@416 = i64 0
+  __sched_sysmon_wait@424 = i64 0
+  __sched_timer_starts@432 = i64 0
+  __sched_preempt_ext_lock@440 = i64 0
+  __sched_preempt_context@448 = i64 0
+  __io_pipe_seq@456 = i64 0
+  __subp_table@464 = i64 0
+  __subp_last_error@472 = i64 0
+  __slab_arena_list@480 = i64 0
+  __slab_arena_map_l1@488 = i64 0
+  __slab_state@496 = i64 0
+  __ds_base@504 = i64 0
+  __dbg_ctl@512 = i64 0
+  __mrt_console_probe_stdin@520 = i8 0
+  __mrt_console_probe_stdout@521 = i8 0
+  __mrt_console_probe_stderr@522 = i8 0
+}
+
+func @writeProbe {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 120
+    x64.storeSlotReg slot4, rcx
+    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot0, r9
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rcx, 4294967295
+    x64.cmpRegReg rax, rcx
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.loadRegBaseDisp.word64 rbx, [rdx + 0]
+    x64.loadRegBaseDisp.word64 r12, [rdx + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_82]  ; ".cmd"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, r12, r14
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot8, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot8
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot4
+    x64.movRegReg rdx, rbx
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot1, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_83]  ; "@exit /b "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.loadRegSlot rcx, slot2
+    x64.movRegReg rdx, r13
+    x64.callDirect __uint_to_string
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rax, [rip + __str_rec_84]  ; "\x0d\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot9, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rax + 0], r15
+    x64.loadRegSlot rcx, slot3
+    x64.storeBaseDispReg.word64 [rax + 8], rcx
+    x64.movRegImm rcx, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rax + 16], rcx
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [rax + 24], rcx
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+  __il_body:
+    x64.movRegImm32 rax, 0
+  __il_cont:
+    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect File.writeText
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_own
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rax, r8
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_257]  ; "panic at subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_85]  ; "panic at subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows.test:6: the probe's directory is writable\x0a"
+    x64.callDirect mrt_panic
+    x64.epilogue 120
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @resolvesTo {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.callDirect String.cstr
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_subp_resolve_path
+    x64.movRegReg rcx, r8
+    x64.callDirect String.init
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect String.toLower
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect String.toLower
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.callDirect __str_eq
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @makeDirectory {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect Directory.create
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_own
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @exitOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 200
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 8], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect Configuration.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.loadRegBaseDisp.word64 r13, [rbx + 16]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_own
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.storeBaseDispReg.word64 [rbx + 16], r12
+    x64.leaRegRdata rax, [rip + __str_rec_86]  ; ""
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot2, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect Configuration.run
+    x64.storeSlotReg slot4, r8
+    x64.movRegReg rax, r10
+    x64.storeSlotReg slot1, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, __il_body#5
+  ran:
+    x64.leaRegRdata rax, [rip + __str_rec_87]  ; "exit "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+  __il_body#14:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+  __il_body#16:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#17:
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.jmp __il_cont#13
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead#19
+  matcharm#18:
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+  __il_cont#13:
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __uint_to_string
+    x64.storeSlotReg slot19, r8
+    x64.leaRegRegReg rax, r12, r8
+    x64.storeSlotReg slot9, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot14, r8
+    x64.leaRegRegImm32 r13, r8, 56
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r13, r12
+    x64.loadRegSlot rax, slot19
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot19
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot14
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.loadRegSlot rax, slot9
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_CollectedOutput
+    x64.jmp ifcont
+  matchdead#19:
+  ifelse:
+  __il_body#5:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.jumpTable rcx, default=matchdead#11 [[0]=matcharm#6, [1]=matcharm#7, [2]=matcharm#8, [3]=matcharm#9, [4]=matcharm#10] @__jumptable_393
+  matchdead#11:
+  matcharm#6:
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.storeSlotReg slot8, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __str_rec_220]  ; "executable not found: "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegReg rax, r13, rbx
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot18, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
+    x64.loadRegSlot rbx, slot18
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot13
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __str_decref
+    x64.jmp __il_cont#4
+  matcharm#7:
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.storeSlotReg slot7, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __str_rec_221]  ; "spawn failed: "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegReg rax, r13, rbx
+    x64.storeSlotReg slot12, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot17, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
+    x64.loadRegSlot rbx, slot17
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot12
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __str_decref
+    x64.jmp __il_cont#4
+  matcharm#8:
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.storeSlotReg slot6, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __str_rec_222]  ; "I/O failed: "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegReg rax, r13, rbx
+    x64.storeSlotReg slot11, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot16, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r12, rbx
+    x64.loadRegSlot rbx, slot16
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot11
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __str_decref
+    x64.jmp __il_cont#4
+  matcharm#9:
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_223]  ; "timed out after "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_224]  ; "ms, and the kill was sent to the child's whole process tree"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot15, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot10, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.loadRegSlot rax, slot10
+    x64.loadRegSlot rdx, slot15
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot10
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot5
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.jmp __il_cont#4
+  matcharm#10:
+    x64.leaRegRdata rcx, [rip + __str_rec_225]  ; "stdin payload too large"
+    x64.callDirect __str_retain
+    x64.movRegReg rbx, r8
+  __il_cont#4:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_SubprocessError
+  ifcont:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Configuration
+    x64.movRegReg r8, rbx
+    x64.epilogue 200
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @childEnvironment {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 152
+    x64.movRegReg rbx, rcx
+    x64.callDirect Process.currentEnvironmentEntries
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.leaRegRdata rcx, [rip + __str_rec_121]  ; "PATH"
+    x64.callDirect Process.envNameKey
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rcx, [rip + __str_rec_122]  ; "NoDefaultCurrentDirectoryInExePath"
+    x64.callDirect Process.envNameKey
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRdata rcx, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rdx, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String.Equatable]
+    x64.callDirect Map.create
+    x64.storeSlotReg slot4, r8
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  each:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.loadRegBaseIndexScale.word64 r14, [rcx + rax*8 + 0]
+  __im_cont:
+    x64.movRegReg rcx, r14
+    x64.callDirect Process.envEntryName
+    x64.storeSlotReg slot5, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect Process.envNameKey
+    x64.storeSlotReg slot2, r8
+    x64.movRegReg rcx, r8
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifelse
+  path:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot11, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot13, rax
+    x64.leaRegRdata rax, [rip + __str_rec_124]  ; ";"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot10, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.storeSlotReg slot12, r15
+    x64.movRegReg rcx, r14
+    x64.callDirect Process.envEntryValue
+    x64.storeSlotReg slot3, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot9, rax
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeSlotReg slot8, rax
+    x64.loadRegSlot r14, slot13
+    x64.leaRegRegReg rcx, r14, r15
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot11
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r14, r15, r14
+    x64.loadRegSlot rdx, slot10
+    x64.loadRegSlot rax, slot12
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot12
+    x64.leaRegRegReg r14, r14, rax
+    x64.loadRegSlot rax, slot8
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot8
+    x64.leaRegRegReg rax, r14, rax
+    x64.loadRegSlot r14, slot7
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_retain
+    x64.leaRegRdata r9, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rsi, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_String.Equatable]
+    x64.loadRegSlot rcx, slot4
+    x64.movRegReg rdx, r8
+    x64.movRegReg rax, r14
+    x64.callDirect Map.upsert
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __str_decref
+    x64.jmp ifcont
+  ifelse:
+    x64.loadRegSlot rdx, slot1
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_eq
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, ifcont
+  kept:
+    x64.movRegReg rcx, r14
+    x64.callDirect Process.envEntryValue
+    x64.movRegReg r14, r8
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_retain
+    x64.leaRegRdata r9, [rip + __layout_Map_String_String]
+    x64.leaRegRdata rsi, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rdi, [rip + __witness_String.Equatable]
+    x64.loadRegSlot rcx, slot4
+    x64.movRegReg rdx, r8
+    x64.movRegReg rax, r14
+    x64.callDirect Map.upsert
+  ifcont:
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __str_decref
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr:
+    x64.storeSlotReg slot0, rax
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, each
+  forexit:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.leaRegFunc rdx, [rip + __clone_Map_String_String]
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __mm_own_deep
+    x64.storeBaseDispReg.word64 [rbx + 8], r8
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_Map_String_String
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_123]  ; "panic at subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows.test:53: this process's environment is readable\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 840
+  __il_body#32:
+    x64.callDirect __cl_count
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot20, r12
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr#33
+  loop:
+    x64.movRegReg rcx, r13
+    x64.callDirect __cl_arg
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_retain
+    x64.movRegReg rcx, r8
+    x64.callDirect String.init
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+  forstep#35:
+    x64.leaRegRegImm32 r13, r13, 1
+  forhdr#33:
+    x64.cmpRegReg r13, rbx
+    x64.jcc less, loop
+  __il_cont#31:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc lessEqual, ifcont
+  child:
+    x64.movRegImm32 rdx, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 8]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc belowEqual, __im_slow#27
+  __im_load#28:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rsi, [r12 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#64
+  __im_empty#29:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, __im_slow#27
+  critsplit#65:
+    x64.movRegReg r10, rax
+    x64.jmp __im_cont#26
+  critsplit#64:
+    x64.movRegReg r10, rax
+  __im_cont#26:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#2
+  tryerr#3:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#2:
+    x64.callDirect FilePath.from
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, __il_body#38
+  tryerr#5:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __il_body#38:
+    x64.callDirect Process.executablePath
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#39
+  tryerr#40:
+    x64.movRegImm32 rbx, 2
+    x64.jmp __il_cont#37
+  tryok#39:
+    x64.movRegReg rcx, r12
+    x64.callDirect FilePath.parent
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot1, r13
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#41
+  tryerr#42:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.jmp __il_cont#37
+  tryok#41:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.callDirect Directory.currentPath
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot4, r12
+    x64.leaRegRdata rcx, [rip + __str_rec_88]  ; "SystemRoot"
+    x64.callDirect Process.environmentVariable
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#43
+  tryerr#44:
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.jmp __il_cont#37
+  tryok#43:
+    x64.movRegReg rcx, r14
+    x64.callDirect FilePath.from
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot2, r15
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#45
+  tryerr#46:
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.jmp __il_cont#37
+  tryok#45:
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.leaRegRdata rdx, [rip + __str_rec_89]  ; "System32"
+    x64.movRegReg rcx, r15
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot3, r8
+  __il_body#54:
+    x64.leaRegRdata r12, [rip + __str_rec_86]  ; ""
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot5, r14
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+  __il_cont#53:
+    x64.leaRegRdata rax, [rip + __str_rec_90]  ; "first: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot81, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_91]  ; "maxon-spec-order-first"
+    x64.movRegReg rdx, r14
+    x64.callDirect exitOf
+    x64.storeSlotReg slot6, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot69, rax
+    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_92]  ; ", application directory: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot58, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot95, rax
+    x64.leaRegRdata r15, [rip + __str_rec_91]  ; "maxon-spec-order-first"
+    x64.leaRegRdata rdx, [rip + __str_rec_93]  ; "maxon-spec-order-first.cmd"
+    x64.movRegReg rcx, r13
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot10, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect resolvesTo
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot90, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot48, r8
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot38, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot28, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.loadRegSlot r13, slot95
+    x64.leaRegRegReg rcx, rcx, r13
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot15, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot22, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot81
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rdx, slot69
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rdx, slot58
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rax, slot48
+    x64.loadRegSlot rdx, slot90
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot48
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot28
+    x64.loadRegSlot rdx, slot38
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot28
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot22
+    x64.storeBaseDispReg.word64 [r12 + 0], r15
+    x64.loadRegSlot rax, slot15
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot90
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot10
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_95]  ; "second: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot82, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_96]  ; "maxon-spec-order-second"
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect exitOf
+    x64.storeSlotReg slot7, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot70, rax
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_97]  ; ", working directory: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot59, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRdata r15, [rip + __str_rec_96]  ; "maxon-spec-order-second"
+    x64.leaRegRdata rdx, [rip + __str_rec_98]  ; "maxon-spec-order-second.cmd"
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot11, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect resolvesTo
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot91, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot49, r8
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot39, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot29, rax
+    x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot16, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot23, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot82
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rdx, slot70
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rdx, slot59
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot49
+    x64.loadRegSlot rdx, slot91
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot49
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot29
+    x64.loadRegSlot rdx, slot39
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot29
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot23
+    x64.storeBaseDispReg.word64 [r12 + 0], r15
+    x64.loadRegSlot rax, slot16
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot91
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot11
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_99]  ; "hostname: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot83, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_100]  ; "hostname"
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect exitOf
+    x64.storeSlotReg slot8, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot71, rax
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_101]  ; ", system directory: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot60, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRdata r15, [rip + __str_rec_100]  ; "hostname"
+    x64.leaRegRdata rdx, [rip + __str_rec_102]  ; "hostname.exe"
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot12, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect resolvesTo
+    x64.movRegReg r15, r8
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot92, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot50, r8
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot40, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot30, rax
+    x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot17, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot24, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot83
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r12
+    x64.loadRegSlot rdx, slot71
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rdx, slot60
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot50
+    x64.loadRegSlot rdx, slot92
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot50
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot30
+    x64.loadRegSlot rdx, slot40
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot30
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot24
+    x64.storeBaseDispReg.word64 [r12 + 0], r15
+    x64.loadRegSlot rax, slot17
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.loadRegSlot rcx, slot92
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot12
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_103]  ; "regedit: windows directory: "
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRdata r14, [rip + __str_rec_104]  ; "regedit"
+    x64.leaRegRdata rdx, [rip + __str_rec_105]  ; "regedit.exe"
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot41, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect resolvesTo
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot96, r8
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot84, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot72, rax
+    x64.leaRegRegReg rcx, r13, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot51, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot61, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r14, r13
+    x64.loadRegSlot rax, slot96
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot96
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot72
+    x64.loadRegSlot rdx, slot84
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot72
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot61
+    x64.storeBaseDispReg.word64 [r12 + 0], r14
+    x64.loadRegSlot rax, slot51
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot41
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rax, [rip + __str_rec_106]  ; "third: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot97, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_107]  ; "maxon-spec-order-third"
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect exitOf
+    x64.storeSlotReg slot13, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot85, rax
+    x64.loadRegBaseDisp.word64 r13, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_108]  ; ", PATH directory: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot73, rcx
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRdata r15, [rip + __str_rec_107]  ; "maxon-spec-order-third"
+    x64.leaRegRdata rdx, [rip + __str_rec_109]  ; "maxon-spec-order-third.cmd"
+    x64.movRegReg rcx, rbx
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot18, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r8
+    x64.callDirect resolvesTo
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot62, r8
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot52, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot42, rax
+    x64.leaRegRegReg rcx, r12, r13
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot25, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot31, r8
+    x64.leaRegRegImm32 rbx, r8, 56
+    x64.loadRegSlot rdx, slot97
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, rbx, r12
+    x64.loadRegSlot rdx, slot85
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r13
+    x64.loadRegSlot rdx, slot73
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r12, r14
+    x64.loadRegSlot rax, slot62
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot62
+    x64.leaRegRegReg r12, r12, rax
+    x64.loadRegSlot rax, slot42
+    x64.loadRegSlot rdx, slot52
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot42
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegSlot r12, slot31
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.loadRegSlot rax, slot25
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r12 + 24], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect print
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot18
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot13
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_110]  ; "relative: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot98, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_111]  ; "sub\\maxon-spec-order-relative"
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect exitOf
+    x64.storeSlotReg slot9, r8
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.storeSlotReg slot86, rax
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_97]  ; ", working directory: "
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot74, rcx
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRdata r14, [rip + __str_rec_111]  ; "sub\\maxon-spec-order-relative"
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot14, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_113]  ; "maxon-spec-order-relative.cmd"
+    x64.movRegReg rcx, r8
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot19, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect resolvesTo
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot63, r8
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot53, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot43, rax
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg rcx, rcx, r13
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot26, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot32, r8
+    x64.leaRegRegImm32 r14, r8, 56
+    x64.loadRegSlot rdx, slot98
+    x64.movRegReg rcx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, rbx
+    x64.loadRegSlot rdx, slot86
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rdx, slot74
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rax, slot63
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot63
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot43
+    x64.loadRegSlot rdx, slot53
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot43
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot32
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.loadRegSlot rax, slot26
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot19
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot14
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot9
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_114]  ; "relative in a given working directory: "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata r13, [rip + __str_rec_111]  ; "sub\\maxon-spec-order-relative"
+    x64.leaRegRdata rdx, [rip + __str_rec_115]  ; "elsewhere"
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot44, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r8
+    x64.callDirect exitOf
+    x64.storeSlotReg slot54, r8
+    x64.loadRegBaseDisp.word64 r13, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot99, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot87, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot64, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot75, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot87
+    x64.loadRegSlot rdx, slot99
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot87
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot75
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot64
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot54
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot44
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rax, slot4
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_116]  ; ":"
+    x64.callDirect String.split
+    x64.storeSlotReg slot21, r8
+    x64.movRegImm32 rdx, 0
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc belowEqual, __im_slow#50
+  __im_load#51:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
+    x64.movRegImm32 rcx, 0
+    x64.loadRegBaseDisp.word64 rsi, [r8 + 40]
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc equal, critsplit#66
+  __im_empty#52:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, __im_slow#50
+  critsplit#67:
+    x64.movRegReg r10, rcx
+    x64.jmp __im_cont#49
+  critsplit#66:
+    x64.movRegReg r10, rcx
+  __im_cont#49:
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#47
+  tryerr#48:
+    x64.movRegImm32 rbx, 2
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+    x64.jmp __il_cont#37
+  tryok#47:
+    x64.leaRegRdata rcx, [rip + __str_rec_117]  ; "drive-relative in a given working directory: "
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.storeSlotReg slot56, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.storeSlotReg slot67, rcx
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_118]  ; ":maxon-spec-order-drive"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot93, rax
+    x64.leaRegRegReg rax, r12, rax
+    x64.storeSlotReg slot79, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot27, r14
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.loadRegSlot rax, slot93
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot93
+    x64.leaRegRegReg rax, rbx, rax
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.loadRegSlot rax, slot79
+    x64.storeBaseDispReg.word64 [r14 + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rdx, [rip + __str_rec_115]  ; "elsewhere"
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect FilePath.join
+    x64.storeSlotReg slot37, r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r8
+    x64.callDirect exitOf
+    x64.storeSlotReg slot46, r8
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot89, rax
+    x64.loadRegSlot r14, slot67
+    x64.leaRegRegReg rcx, r14, r12
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot66, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot77, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.loadRegSlot rdx, slot56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r14, r15, r14
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r14, r12
+    x64.loadRegSlot rax, slot89
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot89
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot77
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot66
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot46
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot37
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot27
+    x64.callDirect __str_decref
+    x64.leaRegRdata rax, [rip + __str_rec_119]  ; "rooted: "
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRdata rcx, [rip + __str_rec_120]  ; "\\maxon-spec-order-rooted"
+    x64.loadRegSlot rdx, slot5
+    x64.callDirect exitOf
+    x64.storeSlotReg slot47, r8
+    x64.loadRegBaseDisp.word64 r13, [r8 + 0]
+    x64.loadRegBaseDisp.word64 r14, [r8 + 8]
+    x64.leaRegRdata rax, [rip + __str_rec_94]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot94, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot80, rax
+    x64.leaRegRegReg rcx, r12, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot57, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot68, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot80
+    x64.loadRegSlot rdx, slot94
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot80
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rbx, slot68
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot57
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot47
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot21
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot4
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_FilePath
+  __il_cont#37:
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.callDirect Process.executablePath
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot36, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#7
+  tryerr#8:
+    x64.movRegImm32 rbx, 4
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.movRegReg rcx, rbx
+    x64.callDirect FilePath.parent
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot45, r12
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#9
+  tryerr#10:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.callDirect Directory.currentPath
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_125]  ; "maxon-spec-order-cwd"
+    x64.movRegReg rcx, rbx
+    x64.callDirect FilePath.join
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot88, r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.callDirect Directory.currentPath
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_126]  ; "maxon-spec-order-path"
+    x64.movRegReg rcx, rbx
+    x64.callDirect FilePath.join
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot76, r14
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_115]  ; "elsewhere"
+    x64.movRegReg rcx, r13
+    x64.callDirect FilePath.join
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot55, rbx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_FilePath]
+    x64.callDirect __managed_create
+    x64.movRegReg r15, r8
+    x64.storeSlotReg slot65, r15
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.movRegReg rcx, r12
+    x64.callDirect FilePath.join
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect FilePath.join
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect FilePath.join
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.movRegReg rcx, rbx
+    x64.callDirect FilePath.join
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect makeDirectory
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_FilePath
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_FilePath]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot78, r13
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.movRegReg rcx, r12
+    x64.callDirect FilePath.join
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_127]  ; "maxon-spec-order-relative"
+    x64.movRegImm32 rax, 68
+    x64.movRegReg rcx, r14
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect FilePath.join
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_127]  ; "maxon-spec-order-relative"
+    x64.movRegImm32 rax, 66
+    x64.movRegReg rcx, r14
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect FilePath.join
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_127]  ; "maxon-spec-order-relative"
+    x64.movRegImm32 rax, 67
+    x64.movRegReg rcx, r14
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_112]  ; "sub"
+    x64.movRegReg rcx, rbx
+    x64.callDirect FilePath.join
+    x64.movRegReg r14, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_127]  ; "maxon-spec-order-relative"
+    x64.movRegImm32 rax, 77
+    x64.movRegReg rcx, r14
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.leaRegRdata rdx, [rip + __str_rec_91]  ; "maxon-spec-order-first"
+    x64.movRegImm32 rax, 11
+    x64.movRegReg rcx, r12
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_91]  ; "maxon-spec-order-first"
+    x64.movRegImm32 rax, 12
+    x64.loadRegSlot rcx, slot88
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_91]  ; "maxon-spec-order-first"
+    x64.movRegImm32 rax, 13
+    x64.loadRegSlot rcx, slot76
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_96]  ; "maxon-spec-order-second"
+    x64.movRegImm32 rax, 22
+    x64.loadRegSlot rcx, slot88
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_96]  ; "maxon-spec-order-second"
+    x64.movRegImm32 rax, 23
+    x64.loadRegSlot rcx, slot76
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_100]  ; "hostname"
+    x64.movRegImm32 rax, 44
+    x64.loadRegSlot rcx, slot76
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_104]  ; "regedit"
+    x64.movRegImm32 rax, 45
+    x64.loadRegSlot rcx, slot76
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_128]  ; "maxon-spec-order-rooted"
+    x64.movRegImm32 rax, 55
+    x64.loadRegSlot rcx, slot76
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_129]  ; "maxon-spec-order-drive"
+    x64.movRegImm32 rax, 88
+    x64.loadRegSlot rcx, slot88
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_129]  ; "maxon-spec-order-drive"
+    x64.movRegImm32 rax, 99
+    x64.movRegReg rcx, rbx
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.leaRegRdata rdx, [rip + __str_rec_107]  ; "maxon-spec-order-third"
+    x64.movRegImm32 rax, 33
+    x64.loadRegSlot rcx, slot76
+    x64.movRegReg r9, r13
+    x64.callDirect writeProbe
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __mm_own
+    x64.storeBaseDispReg.word64 [rbx + 8], r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Configuration.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.loadRegSlot r13, slot76
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_retain
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __managed_decref
+    x64.storeBaseDispReg.word64 [rbx + 8], r15
+    x64.loadRegBaseDisp.word64 r14, [rbx + 16]
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect __mm_own
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_FilePath
+    x64.storeBaseDispReg.word64 [rbx + 16], r15
+    x64.movRegReg rcx, r13
+    x64.callDirect childEnvironment
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.callDirect __destruct_Environment
+    x64.storeBaseDispReg.word64 [rbx + 24], r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect Configuration.run
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#11
+  tryerr#12:
+    x64.movRegImm32 r13, 5
+    x64.movRegReg rcx, r10
+    x64.callDirect __destruct_SubprocessError
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Configuration
+    x64.loadRegSlot rcx, slot78
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot65
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot55
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot45
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#11:
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr#13
+  each:
+    x64.loadRegSlot rcx, slot78
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseIndexScale.word64 rcx, [rcx + rax*8 + 0]
+  __im_cont#30:
+    x64.callDirect File.delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, forstep#15
+  tryerr#18:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Configuration
+    x64.loadRegSlot rcx, slot78
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot65
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot55
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot45
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 6
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  forstep#15:
+    x64.loadRegSlot rax, slot34
+    x64.leaRegRegImm32 rax, rax, 1
+  forhdr#13:
+    x64.storeSlotReg slot34, rax
+    x64.loadRegSlot rcx, slot78
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, each
+    x64.jmp whilehdr
+  unmake:
+    x64.leaRegRdata rdx, [rip + __layout_Array_FilePath]
+    x64.loadRegSlot rcx, slot65
+    x64.callDirect Array.pop
+    x64.storeSlotReg slot33, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#22
+  tryerr#23:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Configuration
+    x64.loadRegSlot rcx, slot78
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot65
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot55
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot45
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 6
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#22:
+    x64.movRegReg rcx, r8
+    x64.callDirect Directory.delete
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok#24
+  tryerr#25:
+    x64.loadRegSlot rcx, slot33
+    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Configuration
+    x64.loadRegSlot rcx, slot78
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot65
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot55
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot45
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 6
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#24:
+    x64.loadRegSlot rcx, slot33
+    x64.callDirect __destruct_FilePath
+  whilehdr:
+    x64.loadRegSlot rax, slot65
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greater, unmake
+  whileexit:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 8]
+    x64.callDirect print
+  __il_body#56:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+  __il_body#58:
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matchnext
+  matcharm#59:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc notEqual, matchdead
+  matcharm#60:
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+  matchcont:
+    x64.storeSlotReg slot35, rax
+  __il_cont#55:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_CollectedOutput
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Configuration
+    x64.loadRegSlot rcx, slot78
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot65
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot55
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot76
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot88
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot45
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot36
+    x64.callDirect __destruct_FilePath
+    x64.loadRegSlot rcx, slot20
+    x64.callDirect __managed_decref
+    x64.loadRegSlot r8, slot35
+    x64.epilogue 840
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  __im_slow#27:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get
+    x64.movRegReg rcx, r8
+    x64.jmp __im_cont#26
+  __im_slow#50:
+    x64.storeSlotReg slot100, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_get
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot100
+    x64.jmp __im_cont#49
+}

@@ -131,28 +131,12 @@ export let ErrorDirNotEmpty = 145 as ParsedInt
 // must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
 export let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
 
-// ⭐ **`MAX_PATH` — THE FIRST BUFFER EVERY Win32 PATH FILL IN THIS COMPILER ASKS FOR.** `GetCurrentDirectoryA(n, buf)`
-// answers three different things: `0` is failure, `< n` is "written, NUL included", and `>= n` is "too
-// small — and this is the size it needs, NUL included", in which case the buffer's contents are UNDEFINED.
-// So the first attempt uses `MAX_PATH` and a second attempt uses exactly what the OS asked for. A THIRD attempt
-// cannot be needed: the second buffer is the size the OS itself named.
-//
-// ⚠ EXPORTED for `ProcessRuntime` (W5 review), whose `GetModuleFileNameA` walk starts at the same 260 for
-// the same reason. It briefly held its own `FirstPathAttemptBytes = 260`, which is ONE Win32 constant
-// written down twice: the day a measurement says a bigger first attempt is right, one of the two would move
-// and nothing would make the other follow. The two loops differ in their RETRY POLICY, not in what
-// `MAX_PATH` is.
+// `MAX_PATH`, the first buffer `emitGrowingPathFill` offers. It fits every path a program is
+// normally installed at, so the common case is one call and one allocation; a larger start would
+// cost twice the allocation on every ordinary path to save one doubling on a long one.
 export let MaxPathBytes = 260 as ParsedInt
 
-// ⭐ **THE OTHER HALF OF THAT POLICY: HOW MUCH BIGGER THE NEXT ATTEMPT IS.** A left shift of one — the
-// buffer doubles — which bounds the number of attempts at log₂(path length / 260) and the wasted bytes at
-// under one buffer's worth.
-//
-// ⚠ It lived in `ProcessRuntime` while only `__proc_exe_path` grew. `__md_current_path` grows too since
-// MAC5 (`getcwd` cannot name a required size — see that builder), so it moved beside `MaxPathBytes`: the
-// first attempt's size and the growth step are ONE policy, and this file is where the first half already
-// was.
-export let PathGrowthShift = 1 as ParsedInt
+let PathGrowthShift = 1 as ParsedInt
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the
@@ -798,30 +782,12 @@ function buildManagedDirectoryDelete(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryDelete'
 
-// ⭐⭐ **`__md_current_path() -> (arrRec, flag)` — THE WORKING DIRECTORY, THROUGH A GROW-AND-RETRY LOOP.**
+// `__md_current_path() -> (arrRec, flag)`: the working directory, through `emitGrowingPathFill`. A
+// refused fill throws `currentPathFailed`.
 //
-// The API's answer means three different things (see `MaxPathBytes`), so the body is: try `MAX_PATH`; if it
-// fits, copy out; if it did not, DOUBLE and try again; if any attempt answers 0, free and throw
-// `currentPathFailed`.
-//
-// ⛔⛔ **IT WAS A STRAIGHT-LINE PAIR OF ATTEMPTS AND IT COULD NOT STAY ONE, BECAUSE THE SECOND ATTEMPT'S
-// SIZE HAS NO POSIX SOURCE (MAC5).** `GetCurrentDirectoryA` answers the REQUIRED size when the buffer is
-// too small, which is what made two attempts provably enough — the second buffer was the size the OS
-// itself named. `getcwd(buf, n)` names nothing: it answers the buffer or NULL with `ERANGE`, and there is
-// no call that reports the length of a working directory. So a lane serving this op can only report "too
-// small", and a retry at a size nobody named must come from the CALLER doubling. Two honest places to put
-// that doubling existed and this is the one the op's own contract demands: `StdOp.osDirCurrentPath` states
-// that the retry lives in Std *precisely so a backend does not own a buffer policy*, so hiding a doubling
-// loop inside the Darwin chunk would be the backend growing an allocation strategy the Std tier is holding
-// for it.
-//
-// ⭐ It is now `ProcessRuntime.buildProcessExecutablePath`'s loop exactly — same carried pair, same shared
-// three-way verdict, same doubling constant — and the two differ only in what "unavailable" means: an
-// executable path answers the empty string, a working directory THROWS. That convergence is the point:
-// there was one retry policy written two ways, and the Win32-only half of the difference has gone.
-//
-// ⚠ The raw cstring buffer is a scratch allocation this function owns end to end: it is freed before EVERY
-// exit, the throwing one included, and what the caller receives is the independent `__ManagedMemory` copy.
+// The raw cstring buffer is a scratch allocation this function owns end to end: it is freed before
+// every exit, the throwing one included, and what the caller receives is the independent
+// `__ManagedMemory` copy.
 function buildManagedDirectoryCurrentPath(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryCurrentPathName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0, throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(0)
@@ -833,31 +799,7 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
 	var copyOut = module.addBlock(func, label: b"mdcopy", heat: BlockHeat.normal)
 
-	// The buffer and its capacity are the loop's carried pair — the phi model is the only way a value
-	// crosses a merge at this tier, and `attempt` is the only block with more than one predecessor.
-	let buffer = ids.mint()
-	let capacity = ids.mint()
-	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
-
-	let firstSize = emitConst(module, block: entry, value: MaxPathBytes, ids: ids)
-	let firstBuf = emitRawAlloc(module, block: entry, byteCount: firstSize, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(attempt.id))
-	entry.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(firstBuf, second: firstSize)))
-
-	// ⚠ `fitTest`, `grow`, `failed` and `copyOut` carry NO block args and take no edge arguments: `attempt`
-	// dominates all four, so `buffer`, `capacity` and `written` are simply in scope.
-	let written = ids.mint()
-	emitIoPark(module, block: attempt, operation: GtIoOperation.fileExists, ids: ids)
-	module.appendOp(attempt, op: StdOp.osDirCurrentPath(written, bufLenId: capacity, bufPtrId: buffer))
-	emitFilledBufferVerdict(module, block: attempt, check: fitTest, written: written, capacity: capacity, whenRefused: failed, whenFits: copyOut, whenTooSmall: grow, ids: ids)
-
-	// Too small: release this attempt's buffer, double the capacity and go round again.
-	emitRawFree(module, block: grow, ptr: buffer, ids: ids)
-	let shift = emitConst(module, block: grow, value: PathGrowthShift, ids: ids)
-	let grownCapacity = emitBin(module, block: grow, a: capacity, b: shift, opcode: StdBinOpcode.shl, ids: ids)
-	let grownBuf = emitRawAlloc(module, block: grow, byteCount: grownCapacity, ids: ids)
-	module.setTerminator(grow, op: StdOp.branch(attempt.id))
-	grow.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(grownBuf, second: grownCapacity)))
+	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.currentDirectory, whenRefused: failed, whenFits: copyOut, ids: ids)
 
 	emitRawFree(module, block: failed, ptr: buffer, ids: ids)
 	emitErrorReturn(module, block: failed, flag: ManagedDirectoryCurrentPathFailedFlag, ids: ids)
@@ -870,26 +812,11 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	module.functions.push(func)
 end 'buildManagedDirectoryCurrentPath'
 
-// ⭐⭐ **ONE ATTEMPT'S THREE-WAY VERDICT FOR A Win32 CALL THAT FILLS A CALLER'S BUFFER AND ANSWERS A COUNT.**
-// `0` is a failure; `< capacity` means the answer is in the buffer, NUL included; anything else means the
-// buffer was too small. Three answers, one classification, and the callers differ only in where each of
-// the three goes.
-//
-// ⚠⚠ **THE `written == 0` TEST IS FIRST AND IT HAS TO BE: a 0 also satisfies `< capacity`**, so the fit test
-// alone would route a failure into the copy and read a buffer the OS never wrote. That ordering is the ONE
-// fact this function exists to hold — and it was written down TWICE, here and inline in `ProcessRuntime`'s
-// `GetModuleFileNameA` loop, until the W5 review folded them together. Nothing made the two agree, and what
-// a divergence produces is a read of undefined memory rather than a diagnostic.
-//
-// ⭐ **WHAT IT DOES NOT OWN IS THE MERGE ARGUMENTS, AND THAT IS THE HONEST SEAM.** `__md_current_path`
-// carries each attempt's buffer into all three exits as a block arg, because its two attempts reach ONE
-// `copyOut`/`failed` pair from different blocks; `__proc_exe_path`'s exits are all dominated by its loop
-// header, so its buffer is simply in scope and its edges carry nothing. The classification is one fact; the
-// phi shape is two, so the caller pushes its own `branchEdges`.
-//
-// ⚠ The `check` block is the CALLER's to create, so each builder keeps its own block ORDER and its own
-// label. It is the only block this verdict needs beyond the ones the caller already names.
-export function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
+// One attempt's three-way verdict for a call that fills a caller's buffer and answers a count: `0`
+// is a failure, `< capacity` means the answer is in the buffer with its NUL, anything else means
+// the buffer was too small. ⚠ The `written == 0` test comes first because a 0 also satisfies
+// `< capacity`: the fit test alone would copy out a buffer the OS never wrote.
+function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	let refused = emitCmp(module, block: block, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(refused, thenBlockId: whenRefused.id, elseBlockId: check.id))
@@ -897,6 +824,62 @@ export function emitFilledBufferVerdict(module StdModule, block IrBlock, check I
 	let fits = emitCmp(module, block: check, a: written, b: capacity, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(check, op: StdOp.condBranch(fits, thenBlockId: whenFits.id, elseBlockId: whenTooSmall.id))
 end 'emitFilledBufferVerdict'
+
+export union PathFill
+	executablePath
+	currentDirectory
+	systemDirectory
+	windowsDirectory
+	fullPath(source ValueId)
+end 'PathFill'
+
+// The one grow-and-retry path fill. Each too-small attempt doubles the buffer, because two of the
+// fills name no size to retry at: `GetModuleFileNameA` answers the size it was given on truncation,
+// and `getcwd` answers NULL with `ERANGE`. The retry lives in Std so no backend owns a buffer
+// policy. The buffer is still allocated on both exits, the refused one included, and the caller
+// frees it.
+export function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlock, fitTest IrBlock, grow IrBlock, fill PathFill, whenRefused IrBlock, whenFits IrBlock, ids ValueMinter) returns (ValueId, ValueId)
+	let buffer = ids.mint()
+	let capacity = ids.mint()
+	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
+
+	let firstSize = emitConst(module, block: cur, value: MaxPathBytes, ids: ids)
+	let firstBuf = emitRawAlloc(module, block: cur, byteCount: firstSize, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(attempt.id))
+	cur.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(firstBuf, second: firstSize)))
+
+	let written = ids.mint()
+	emitPathFillOp(module, block: attempt, fill: fill, written: written, buffer: buffer, capacity: capacity, ids: ids)
+	emitFilledBufferVerdict(module, block: attempt, check: fitTest, written: written, capacity: capacity, whenRefused: whenRefused, whenFits: whenFits, whenTooSmall: grow, ids: ids)
+
+	emitRawFree(module, block: grow, ptr: buffer, ids: ids)
+	let shift = emitConst(module, block: grow, value: PathGrowthShift, ids: ids)
+	let grownCapacity = emitBin(module, block: grow, a: capacity, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let grownBuf = emitRawAlloc(module, block: grow, byteCount: grownCapacity, ids: ids)
+	module.setTerminator(grow, op: StdOp.branch(attempt.id))
+	grow.branchEdges.push(BranchEdge.create(attempt.id, argIds: twoArgs(grownBuf, second: grownCapacity)))
+	return (buffer, written)
+end 'emitGrowingPathFill'
+
+function emitPathFillOp(module StdModule, block IrBlock, fill PathFill, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
+	match fill 'fill'
+		executablePath then module.appendOp(block, op: StdOp.osExecutablePath(written, bufLenId: capacity, bufPtrId: buffer))
+		currentDirectory then emitParkedCurrentDirectoryFill(module, block: block, written: written, buffer: buffer, capacity: capacity, ids: ids)
+		systemDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.systemDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
+		windowsDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.windowsDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
+		fullPath(source) then module.appendOp(block, op: StdOp.osPathQuery(written, verb: PathQueryVerb.fullPath, a0Id: source, a1Id: capacity, a2Id: buffer))
+	end 'fill'
+end 'emitPathFillOp'
+
+function emitParkedCurrentDirectoryFill(module StdModule, block IrBlock, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
+	emitIoPark(module, block: block, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(block, op: StdOp.osDirCurrentPath(written, bufLenId: capacity, bufPtrId: buffer))
+end 'emitParkedCurrentDirectoryFill'
+
+function emitDirectoryQuery(module StdModule, block IrBlock, verb PathQueryVerb, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
+	let unused = emitConst(module, block: block, value: 0, ids: ids)
+	module.appendOp(block, op: StdOp.osPathQuery(written, verb: verb, a0Id: buffer, a1Id: capacity, a2Id: unused))
+end 'emitDirectoryQuery'
 
 // ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedFileRuntime` for its stated
 // reason: the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places,

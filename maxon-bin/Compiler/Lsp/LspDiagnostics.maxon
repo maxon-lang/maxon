@@ -1,15 +1,10 @@
-// `textDocument/publishDiagnostics` — the compiler's own diagnostics, PUSHED to the editor.
+// `textDocument/publishDiagnostics` — the compiler's own diagnostics, pushed to the editor. It is a
+// server-initiated notification, so it has no `LspMethod` case; `LspMethod.maxon`'s header says
+// why.
 //
-// ⛔⛔ **A SERVER-INITIATED NOTIFICATION, NOT A REQUEST, SO IT IS DELIBERATELY ABSENT FROM `LspMethod`
-// AND FROM `servedMethods()`.** Every other feature here answers something a client asked for; this one
-// is written the moment a document changes and is never addressed to a request id. LSP's push model
-// gives it no `*Provider` capability key at all, and `servedMethods()` drives BOTH the routing table
-// and the `initialize` advertisement — so an entry there would have to name a capability that does not
-// exist, which `tests/lsp/capability-agreement.test.maxon` asserts cannot happen.
-//
-// ⭐ **AN EMPTY ARRAY IS AN ANSWER, AND IT IS THE ONE THAT CLEARS THE SQUIGGLES.** A document with no
-// problems, and a document that has just been closed, both publish `[]`. A server that publishes
-// nothing in those cases leaves the last errors it reported standing in the editor for ever.
+// An empty array is the answer that clears the squiggles. A document with no problems, and a
+// document that has just been closed, both publish `[]`; a server that published nothing in those
+// cases would leave the last errors it reported standing in the editor.
 
 let PublishDiagnosticsMethod = "textDocument/publishDiagnostics"
 

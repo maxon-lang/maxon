@@ -82,6 +82,10 @@ module let LspNewTextKey = "newText"
 // `SymbolInformation` all carry one, and the protocol never renames a member.
 module let LspKindKey = "kind"
 
+// A Maxon extension member, not an LSP one: `maxon/listProjects` and `maxon/projectLoading` both
+// name a project's root under it, spelled alike, so a client can match one to the other.
+module let LspRootPathKey = "rootPath"
+
 /// The `Range` a byte span occupies. ⚠ Every byte offset becomes protocol coordinates through
 /// `LspLineIndex.positionOf`, so the UTF-16 conversion cannot be skipped by one reader and applied by
 /// another.
@@ -156,9 +160,6 @@ module function writeLspResult(doc JsonDoc, id LspRequestId, result JsonNodeId)
 	writeLspResponse(doc, id: id, memberKey: JsonRpcResultKey, payload: result)
 end 'writeLspResult'
 
-// ⭐ **A SERVER-INITIATED NOTIFICATION: `method` and `params`, and NO `id`.** JSON-RPC forbids a reply
-// to one, which is exactly what makes it the shape LSP pushes `publishDiagnostics` in — nothing asked
-// for it, so there is no request to address it to.
 module function writeLspNotification(doc JsonDoc, method String, params JsonNodeId)
 	var envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
