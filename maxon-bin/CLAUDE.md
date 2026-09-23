@@ -684,8 +684,9 @@ facts worth knowing before you get there:
   ```
   ./maxon-bin/.maxon/maxon.exe test tests/test-command
   ```
-  ⚠ **Nothing runs these automatically** — `/land`'s battery is where they belong, beside the suite
-  and the self-compile.
+  ⚠ **CI runs four of them** — `tests/lsp`, `tests/fmt`, `tests/spec-harness` and `tests/ladders` — and
+  `/land`'s battery runs the last three beside the suite and the self-compile. Every other corpus runs
+  only when someone names it.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing
@@ -720,13 +721,14 @@ root `fmt` rewrites `website/src/examples/*.maxon` in place and walks every dire
 and it is silently reformatted. The marker is a FLAG whose contents are never read, and both walks
 honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
-⚠ **THE FORMATTER SELF-TEST RIDES `spec-test`** (`requireFormatterPreservesItsCorpus`, called from
-`SpecWorkerPool`) and REDDENS THE SUITE if formatting loses a comment, duplicates one, writes a
-lexer-error sentinel into a file, or stops being idempotent. There is no `fmt-selftest` command.
-It carries 8 comment shapes + 4 unlexable sources, with `UrlInPlainString` and `NoMultilineLiteral`
-as controls that must stay GREEN. Three separate silent
-source-corrupting defects reached the tree before it existed; a preservation check phrased as
-*presence* passes duplication, so it asserts **multiplicity**.
+⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.test.maxon`, NOT `spec-test`.** It formats
+the 28 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
+goes red if an answer differs from its `.expected`, a comment is lost or duplicated, a lexer-error
+sentinel is written into a file, or a second run moves anything. `UrlInPlainString`,
+`NoMultilineLiteral` and `PlainStringNoInterpolation` are negative controls that must stay GREEN.
+Three separate silent source-corrupting defects reached the tree before the formatter had a gate; a
+preservation check phrased as *presence* passes duplication, so it asserts **multiplicity**. Run it with
+`maxon test tests/fmt`.
 
 ## ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe through `head`/`tail`/`grep`.
 
@@ -765,8 +767,9 @@ no doc comment, which is how it finds them.
 - **A duplicate NAME does not compile**, and `ErrorCode.Foo` does not compile unless the enum declares
   it — both are structural, so neither needs a checker.
 - **A duplicate NUMBER is neither**: two cases may carry one `"E3099"` and the program is well-formed.
-  `Testing/ErrorCodeSelfTest.maxon` walks `allCases`/`allCaseNames` on every `spec-test` and refuses
-  one, naming BOTH claimants.
+  `website/scripts/sync-docs.mjs` refuses one while it reads the registry, naming BOTH lines —
+  `website.yml` runs it on every change to the registry, and `/land`'s battery runs it too. `spec-test`
+  does not check this.
 - **The stage is derived from the leading digit** (1xxx lexer … 9xxx internal) and is never written
   down, so it cannot disagree.
 - **NEVER REFERENCE A CODE BY ITS NUMBER OUTSIDE THE REGISTRY.** Use the generated member

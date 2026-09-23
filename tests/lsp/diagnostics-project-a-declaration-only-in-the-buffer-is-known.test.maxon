@@ -13,7 +13,7 @@
 // compiles — so a red here cannot mean the fixture is broken. The session, the staging and the assertions
 // are `diagnostics-project-probe.test.maxon`'s.
 
-let ProjectUnsavedTypeDirName = "maxon-tests-lsp-diagnostics-project-unsaved-type"
+let ProjectUnsavedTypeDirName = "diagnostics-project-unsaved-type"
 let ProjectUnsavedTypeFileName = "main.maxon"
 let ProjectUnsavedTypeSavedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let ProjectUnsavedTypeBufferSource = "type ProjectUnsavedWidget\n\texport let width as ExitCode\n\n\tstatic function create(width ExitCode) returns ProjectUnsavedWidget\n\t\treturn Self\{width: width\}\n\tend 'create'\nend 'ProjectUnsavedWidget'\n\nfunction main() returns ExitCode\n\tlet widget = ProjectUnsavedWidget.create(0)\n\treturn widget.width\nend 'main'\n"
@@ -23,6 +23,8 @@ test 'a declaration only the buffer holds is a name the buffer may use'
 	writeCorpusFile(root, fileName: ProjectUnsavedTypeFileName, content: ProjectUnsavedTypeSavedSource)
 
 	let probe = probeProjectDiagnostics(root, fileName: ProjectUnsavedTypeFileName, content: ProjectUnsavedTypeBufferSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(probe, note: "`ProjectUnsavedWidget` is declared and used in the OPEN BUFFER, and the copy of this same file on disk declares no such thing. Typing a declaration and then using it is the most ordinary minute of editing there is; a server that answers out of the saved corpus alone reports the author's own new type as unknown until they press save.")
 end 'a declaration only the buffer holds is a name the buffer may use'

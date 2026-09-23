@@ -9,11 +9,11 @@
 # writes a notice instead. It becomes real the moment a release is published, with no edit here.
 
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
-# `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts; the jobs read `specs/` and
-# `tests/lsp/`. Everything excluded below is read by none of them — prose, editor and agent config,
-# and projects with workflows of their own. `tests/` and `examples/` are excluded because no job
-# here runs them, so a run on their change reports on code it never touched; `tests/lsp/**` is
-# re-included because the LSP job does run it.
+# `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts; the jobs read `specs/` and the
+# four `tests/` corpora they run. Everything excluded below is read by none of them — prose, editor and
+# agent config, and projects with workflows of their own. `tests/` and `examples/` are excluded because
+# no job here runs the rest of them, so a run on their change reports on code it never touched; the
+# four corpora are re-included because a job does run them.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
 # directory therefore runs CI until someone decides it need not, rather than being skipped silently
@@ -49,6 +49,9 @@ on:
       - '!bench/**'
       - '!tests/**'
       - 'tests/lsp/**'
+      - 'tests/fmt/**'
+      - 'tests/ladders/**'
+      - 'tests/spec-harness/**'
       - '!examples/**'
       - '!.github/**'
       - '.github/workflows/ci.yml'
@@ -115,8 +118,6 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/build-from-seed.sh
 
-      # The formatter's own gate and the duplicate-error-code check both ride inside `spec-test`, so
-      # this one command is the whole battery.
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon spec-test
@@ -128,6 +129,20 @@ jobs:
       - name: LSP corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/lsp
+
+      # These three are tree-level gates `spec-test` does not run.
+      - name: Formatter corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/fmt
+
+      # Its drift gate runs `spec-test` three times, within a second of the 5 s default deadline.
+      - name: Spec harness corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/spec-harness --timeout=15000
+
+      - name: Ladder index
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/ladders
 
       # ⭐ THE FIXPOINT IS THE ONE CHECK A GREEN SUITE CANNOT STAND IN FOR. Every stage shares the
       # compiler's logic, so the suite exercises the same behaviour whichever stage ran it; only the

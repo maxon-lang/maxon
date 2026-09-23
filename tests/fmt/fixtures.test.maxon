@@ -1,6 +1,6 @@
-// fixtures.test.maxon — the shared half of `maxon fmt`'s gate: where the corpus is, how one case is
-// staged and run, and the two things asked of the corpus itself. The per-case `test` declarations are
-// the files beside this one, named for the PROPERTY each case gates.
+// fixtures.test.maxon — `maxon fmt`'s fixture corpus: where it is, how one case is staged and run,
+// and the two things asked of the corpus itself. `engine-cases.test.maxon` beside it shares the
+// staging, the spawn and the run checks declared here.
 //
 // ⭐⭐ **WHAT THIS PROJECT PROVES: `fmt`'s product is a REPORT *and* A TREE, and neither one alone is
 // the answer.** stdout says which files were written; it never says what. A run that reports
@@ -28,11 +28,9 @@
 // relative program path resolves against the child's new working directory on POSIX and against the
 // parent's on Windows, and a gate must not depend on which.
 //
-// ⛔⛔ **ONE SPAWNING `test` PER FILE, AND THAT IS STRUCTURAL RATHER THAN TIDINESS.** A test FILE is
-// the unit one process runs (`TestExecutor.shardsOf` puts a whole file in one launch) and that process
-// has a 5000 ms default deadline. Every test here spawns the compiler TWICE — once for the answer and
-// once for idempotence — so a file holding several of them reports a spurious TIMED OUT. Splitting by
-// case makes each process hold one case, which no deadline can catch.
+// ⚠ A test file is the unit one process runs (`TestExecutor.shardsOf` puts a whole file in one
+// launch), so every test here shares one 5000 ms default deadline. Each case formats a tiny staged
+// tree, which is what keeps the file inside it; `tests/README.md`'s rule 5 holds the budget.
 //
 // ⚠ **NOTHING IS STAGED UNDER `tests/`.** The corpus is inert on disk on purpose (rule 1: no stored
 // file is a live `.maxon`), and staging a runnable copy beside it would hand `maxon fmt` over the
@@ -97,7 +95,7 @@ let ProjectProductsDirName = ".maxon"
 // go first). A divergence between the two is silent: every pin would be minted in a shape this file
 // never produces.
 let CarriageReturn = "\r"
-let LineFeed = "\n"
+export let LineFeed = "\n"
 let PortablePathSeparator = "/"
 let StagingTreeToken = "<TREE>"
 
@@ -124,8 +122,8 @@ let SuccessExitCode = 0
 // Which of a case's two runs a message is about. A tree comparison happens twice and the two failures
 // mean different things: the first says `fmt` wrote the wrong bytes, the second says a re-run touched
 // a tree it had already finished with.
-let FirstRunLabel = "the first run"
-let SecondRunLabel = "the second run"
+export let FirstRunLabel = "the first run"
+export let SecondRunLabel = "the second run"
 
 // What each of a case's three required pins holds, said in the words a reader would need in order to
 // mint a missing one.
@@ -140,11 +138,11 @@ typealias RunExitCode = int(i64.min to i64.max)
 // A file count as the summary line states it. FULL WIDTH deliberately: it is parsed out of text, so
 // the value is whatever the report said, and narrowing it here would turn a wrong report into a range
 // trap instead of the assertion failure a reader can act on.
-typealias FileTally = int(i64.min to i64.max)
+export typealias FileTally = int(i64.min to i64.max)
 
 // A list of paths one directory walk produced. Declared HERE rather than reached for: stdlib's own
 // `FilePathArray` is a member of `Directory` and has no file-scope spelling.
-typealias FixturePathArray = Array with FilePath
+export typealias FixturePathArray = Array with FilePath
 
 // The relative paths one tree holds, asked as a membership question rather than read as a list.
 typealias RelativePathSet = Set with String
@@ -218,8 +216,7 @@ end 'no fixture is stored as a source maxon fmt would rewrite'
 // nothing else depends on, so it asks the two things that hold whatever the wording is: it must NOT
 // succeed, and it must NOT have written anything.
 test 'an option ahead of the command word is still refused'
-	let staged = writableDir("{StagingRootDirName}/option-ahead-of-command")
-	purgeFilesIn(staged)
+	let staged = freshStagingDir("{StagingRootDirName}/option-ahead-of-command")
 	copyStagedTree(readableDir("{FixturesDirName}/flag-refused-implemented-option/{InputDirName}"), into: staged)
 
 	let before = fileBody(staged.join("Ugly.maxon"))
@@ -244,8 +241,7 @@ end 'an option ahead of the command word is still refused'
 // ⭐ `1 changed, 0 unchanged` is the load-bearing half, for `build-manifest-case-folded`'s reason: the
 // library file was visited and the manifest never was.
 test 'a library tier formats its Build.maxon and a project still skips its manifest'
-	let staged = writableDir("{StagingRootDirName}/library-tier-build-source")
-	purgeFilesIn(staged)
+	let staged = freshStagingDir("{StagingRootDirName}/library-tier-build-source")
 
 	let compilerDir = writableDir("{StagingRootDirName}/library-tier-build-source/maxon-bin/.maxon")
 	let stagedCompiler = compilerDir.join("{testedCompilerPath().filename()}")
@@ -295,8 +291,7 @@ type FixtureCase
 	// staging root by hand after removing one.
 	static function stage(caseName String) returns FixtureCase
 		let caseDir = readableDir("{FixturesDirName}/{caseName}")
-		let staged = writableDir("{StagingRootDirName}/{caseName}")
-		purgeFilesIn(staged)
+		let staged = freshStagingDir("{StagingRootDirName}/{caseName}")
 		copyStagedTree(readableDir("{FixturesDirName}/{caseName}/{InputDirName}"), into: staged)
 
 		return FixtureCase{name: caseName, dir: caseDir, staged: staged, tree: portableSpelling(staged)}
@@ -635,6 +630,13 @@ function storedPathToReal(stored String) returns String
 	return real
 end 'storedPathToReal'
 
+export function freshStagingDir(spelled String) returns FilePath
+	let dir = writableDir(spelled)
+	purgeFilesIn(dir)
+
+	return dir
+end 'freshStagingDir'
+
 // Delete every file under a directory, leaving the directories themselves. The same shape, for the
 // same reason, as `SpecTestRunner.purgeFilesIn`.
 function purgeFilesIn(dir FilePath)
@@ -669,7 +671,7 @@ function treeReport(missing StringArray, different StringArray, unexpected Strin
 end 'treeReport'
 
 // One heading and its paths, or nothing at all when there are none.
-function listedUnder(paths StringArray, heading String) returns String
+export function listedUnder(paths StringArray, heading String) returns String
 	if paths.isEmpty() 'nothingToSay'
 		return ""
 	end 'nothingToSay'
@@ -717,7 +719,7 @@ end 'joinRelative'
 
 // One file's bytes as text. A file that cannot be read is the instrument being broken: both trees are
 // on this machine and one of them was written moments ago.
-function fileBody(path FilePath) returns String
+export function fileBody(path FilePath) returns String
 	return try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {path.toString()} while comparing a case's tree.")
 end 'fileBody'
 
@@ -728,7 +730,7 @@ end 'fileBody'
 // A directory this file's paths name, refused loudly when it is not there. ONE speller, because every
 // such refusal is really the same one — the working-directory contract in the header was not met — and
 // each site repeating it is how the sentence explaining it comes to exist in only some of them.
-function readableDir(spelled String) returns FilePath
+export function readableDir(spelled String) returns FilePath
 	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
 
 	if not Directory.isDirectory(path) 'notThere'
@@ -813,7 +815,7 @@ end 'liveSourcesUnder'
 
 // The paths a refusal lists, one per line — empty when there are none, which is what makes the
 // assertions above an `isEmpty` on the very text a reader has to act on.
-function listedLines(paths StringArray) returns String
+export function listedLines(paths StringArray) returns String
 	var listed = ""
 
 	for path in paths 'eachPath'
@@ -825,7 +827,7 @@ end 'listedLines'
 
 // What one directory holds. A listing that fails is the instrument being broken — the corpus is
 // checked into this repository, and the staging tree was written by this process moments ago.
-function listing(dir FilePath) returns FixturePathArray
+export function listing(dir FilePath) returns FixturePathArray
 	return try Directory.list(dir) otherwise panic("fmt-fixtures.test: the gate could not run — could not list {dir.toString()}")
 end 'listing'
 
@@ -1156,12 +1158,16 @@ let CensusStagingDirName = "temp/fmt-census"
 // The path `fmt` is given: the staging directory it is already running in. Explicit rather than
 // relying on the no-argument default, which is a case of its own (`no-argument-defaults-to-cwd`) and
 // not what is being asked here.
-let CensusStagingDirArgument = "."
+let StagedTreeArgument = "."
 
-// The two comment markers the census counts. They are NOT disjoint — a `///` line contains `//` and is
-// counted by both — and that is the point: a doc comment demoted to a plain comment moves one count
-// and not the other, where a census of "comment lines" alone would read the swap as no change at all.
-let CommentMarker = "//"
+let CensusSpawnName = "the real-sources census"
+let CensusTreeDescription = "the real sources staged from the tree"
+
+// The two comment markers the census counts; `engine-cases.test.maxon` finds comments by the first
+// too. They are NOT disjoint — a `///` line contains `//` and is counted by both — and that is the
+// point: a doc comment demoted to a plain comment moves one count and not the other, where a census
+// of "comment lines" alone would read the swap as no change at all.
+export let CommentMarker = "//"
 let DocCommentMarker = "///"
 
 // What a staged file is called: the source's path with its separators folded into one name, so a flat
@@ -1169,11 +1175,6 @@ let DocCommentMarker = "///"
 // guarantees no staged file is named `project.maxon`, which the walk skips by name
 // (`build-manifest-skipped`).
 let StagedNameSeparator = "_"
-
-// Which of the census test's two runs a message is about. The two failures mean different things: the
-// first says `fmt` mangled a real source, the second says a re-run touched a tree it had finished with.
-let CensusFirstRunLabel = "the first run"
-let CensusSecondRunLabel = "the second run"
 
 // How many lines of one kind a file holds. Named for what it measures rather than for the loop.
 typealias LineTally = int(0 to u64.max)
@@ -1249,8 +1250,8 @@ typealias CensusSourceArray = Array with CensusSource
 test 'formatting real sources keeps every comment, every doc comment and every line of code'
 	let sources = stageEveryCensusSource()
 
-	let firstRun = spawnFmtOverCensusTree()
-	try requireCensusRunSucceeded(firstRun, runLabel: CensusFirstRunLabel)
+	let firstRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
+	try requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: CensusTreeDescription)
 
 	for source in sources 'eachSource'
 		try source.requireNothingWasLost()
@@ -1263,20 +1264,16 @@ test 'formatting real sources keeps every comment, every doc comment and every l
 	// The prediction goes through `summaryLine` — the ONE grammar this file parses the fixtures' first
 	// run with and predicts their second run with — rather than a substring: what the second run must
 	// say is exactly `0 changed` over every file the walk found, and the walk found what was staged.
-	let secondRun = spawnFmtOverCensusTree()
-	try requireCensusRunSucceeded(secondRun, runLabel: CensusSecondRunLabel)
-
-	let observedStdout = secondRun.stdout.replace(CarriageReturn, with: "")
-	let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: sources.count())}{LineFeed}"
-	try Expect.equal(observedStdout, expected: expectedStdout, message: "a second `{TestedCommandName}` over the tree the first one left did not report that it had nothing to do. Formatting a formatted file must be a fixed point; anything else means the tool moves a real source a little further every time it is run over it.")
+	let secondRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
+	try requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: CensusTreeDescription)
+	try requireSecondRunFoundNothingToDo(secondRun, stagedCount: sources.count(), over: CensusTreeDescription)
 end 'formatting real sources keeps every comment, every doc comment and every line of code'
 
 // ⛔ **AN EMPTY ROSTER IS A PANIC, NOT A PASS.** A test that formatted nothing reports exactly what a
 // test that formatted everything and agreed reports — and unlike every case above, this one has no
 // stored expectation whose absence would give it away.
 function stageEveryCensusSource() returns CensusSourceArray
-	let stagingRoot = writableDir(CensusStagingDirName)
-	purgeFilesIn(stagingRoot)
+	let stagingRoot = freshStagingDir(CensusStagingDirName)
 
 	var staged = CensusSourceArray.create()
 
@@ -1334,24 +1331,18 @@ function stagedCensusNameFor(origin String) returns String
 	return origin.replace(PortablePathSeparator, with: StagedNameSeparator)
 end 'stagedCensusNameFor'
 
-// Spawn the compiler under test over the census staging tree.
-function spawnFmtOverCensusTree() returns CollectedOutput
+export function spawnFmtOverStagedTree(stagingDirName String, what String) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(TestedCommandName)
-	arguments.push(CensusStagingDirArgument)
+	arguments.push(StagedTreeArgument)
 
-	return spawnCompiler(arguments, workingDirectory: writableDir(CensusStagingDirName), what: "the real-sources census")
-end 'spawnFmtOverCensusTree'
+	return spawnCompiler(arguments, workingDirectory: writableDir(stagingDirName), what: what)
+end 'spawnFmtOverStagedTree'
 
-// ⛔⛔ **THE ONE SPAWN, AND EVERY CALLER GOES THROUGH IT.** Three of them — a fixture case, the
-// option-ahead-of-command probe, and the real-sources census — and what they share is not the six
-// lines: it is the CONTRACT that a missing binary or a spawn that never happened is the GATE being
-// broken, never `fmt` answering wrongly. Three copies of that judgement would drift into three
-// different verdicts about the same non-event, and a reader sent looking for a formatter defect would
-// find nothing there. What actually differs between the callers is the argv, the directory and the
-// noun a message names, so those are the parameters and nothing else is.
-//
-// ⛔ It PANICS rather than failing an assertion, for that reason.
+// Every spawn in this corpus goes through here, because what the callers share is the contract that
+// a missing binary or a spawn that never happened is the gate being broken, never `fmt` answering
+// wrongly. It panics rather than failing an assertion for that reason: a reader sent looking for a
+// formatter defect would find nothing there.
 function spawnCompiler(arguments StringArray, workingDirectory FilePath, what String) returns CollectedOutput
 	let binary = testedCompilerPath()
 
@@ -1364,10 +1355,15 @@ function spawnCompiler(arguments StringArray, workingDirectory FilePath, what St
 	end 'spawnFailed'
 end 'spawnCompiler'
 
-// A run that REFUSED wrote nothing, so every census would agree and a `fmt` that failed outright would
-// pass as a green. The status is therefore asked before anything is compared.
-function requireCensusRunSucceeded(run CollectedOutput, runLabel String) throws TestFailure
+// Asked before anything the run left is compared, for the reason its message gives.
+export function requireFmtRunSucceeded(run CollectedOutput, runLabel String, over String) throws TestFailure
 	let observed = run.exitCode() as AssertedInt
 	let expected = SuccessExitCode
-	try Expect.equal(observed, expected: expected, message: "`{TestedCommandName}` did not succeed on {runLabel} over the real sources staged from the tree. A run that refused wrote nothing, so every census this test takes would agree and the failure would read as a pass. It wrote to stderr: {run.stderr}")
-end 'requireCensusRunSucceeded'
+	try Expect.equal(observed, expected: expected, message: "`{TestedCommandName}` did not succeed on {runLabel} over {over}. A run that refused wrote nothing, so every property asked of what it left would hold and the failure would read as a pass. It wrote to stderr: {run.stderr}")
+end 'requireFmtRunSucceeded'
+
+export function requireSecondRunFoundNothingToDo(run CollectedOutput, stagedCount FileTally, over String) throws TestFailure
+	let observedStdout = run.stdout.replace(CarriageReturn, with: "")
+	let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: stagedCount)}{LineFeed}"
+	try Expect.equal(observedStdout, expected: expectedStdout, message: "a second `{TestedCommandName}` over the tree the first one left in {over} did not report that it had nothing to do. Formatting a formatted file must be a fixed point; anything else means the tool moves a source a little further every time it is run over it.")
+end 'requireSecondRunFoundNothingToDo'

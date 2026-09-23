@@ -11,15 +11,12 @@
 // declarations of one bare name — E3095's shape — and the server answers nothing rather than picking.
 // Rooting at the client's root sees only the one. So the case discriminates on the ANSWER, not on a
 // timing, and it is the decoy that makes it discriminate at all.
-//
-// The staging is `stagedDirectoryOutsideTheCheckout`'s, for the reason that function states, and the
-// session and the assertions are `definition-corpus-probe.test.maxon`'s.
 
-let RootCapOuterDirName = "maxon-tests-lsp-root-cap"
-let RootCapDecoyDirName = "maxon-tests-lsp-root-cap/decoy"
-let RootCapInnerDirName = "maxon-tests-lsp-root-cap/inner"
-let RootCapReaderDirName = "maxon-tests-lsp-root-cap/inner/a"
-let RootCapHelperDirName = "maxon-tests-lsp-root-cap/inner/b"
+let RootCapOuterDirName = "root-cap"
+let RootCapDecoyDirName = "decoy"
+let RootCapInnerDirName = "inner"
+let RootCapReaderDirName = "a"
+let RootCapHelperDirName = "b"
 
 let RootCapManifestFileName = "project.maxon"
 let RootCapManifestSource = "export function build() returns ExitCode\n\treturn 0\nend 'build'\n"
@@ -33,17 +30,16 @@ let RootCapHelperSource = "export function capHelper() returns ExitCode\n\tretur
 let RootCapReaderFileName = "main.maxon"
 let RootCapReaderSource = "function main() returns ExitCode\n\treturn capHelper()\nend 'main'\n"
 
-let RootCapHelperTail = "maxon-tests-lsp-root-cap/inner/b/helper.maxon"
 let RootCapCallLine = 1 as LspCoordinate
 let RootCapCallCharacter = 11 as LspCoordinate
 let RootCapDeclarationLine = 0 as LspCoordinate
 
 test 'definition does not root above the client root'
-	let outer = stagedDirectoryOutsideTheCheckout(RootCapOuterDirName)
-	let decoyDirectory = stagedDirectoryOutsideTheCheckout(RootCapDecoyDirName)
-	let inner = stagedDirectoryOutsideTheCheckout(RootCapInnerDirName)
-	let readerDirectory = stagedDirectoryOutsideTheCheckout(RootCapReaderDirName)
-	let helperDirectory = stagedDirectoryOutsideTheCheckout(RootCapHelperDirName)
+	let outer = freshOutsideCheckoutDir(RootCapOuterDirName)
+	let decoyDirectory = createdStagingDirectory(RootCapDecoyDirName, under: outer)
+	let inner = createdStagingDirectory(RootCapInnerDirName, under: outer)
+	let readerDirectory = createdStagingDirectory(RootCapReaderDirName, under: inner)
+	let helperDirectory = createdStagingDirectory(RootCapHelperDirName, under: inner)
 
 	writeCorpusFile(outer, fileName: RootCapManifestFileName, content: RootCapManifestSource)
 	writeCorpusFile(decoyDirectory, fileName: RootCapDecoyFileName, content: RootCapDecoySource)
@@ -53,5 +49,7 @@ test 'definition does not root above the client root'
 	let uri = fileUriOf(readerDirectory.join(RootCapReaderFileName))
 	let probe = probeCorpusDefinitionWithRoot(CorpusSessionRoot.clientRoot(inner), uri: uri, content: RootCapReaderSource, line: RootCapCallLine, character: RootCapCallCharacter)
 
-	try expectDefinitionInFile(probe, fileTail: RootCapHelperTail, startLine: RootCapDeclarationLine, note: "a call to `capHelper` did not resolve to the declaration inside the root the client named. A manifest sits one directory ABOVE that root with a second `export function capHelper` beside it, so a walk that climbs past the client's root puts both in one program and answers nothing rather than choosing.")
+	discardOutsideCheckoutDir(outer)
+
+	try expectDefinitionInFile(probe, fileTail: "{outsideCheckoutDirName(RootCapOuterDirName)}/{RootCapInnerDirName}/{RootCapHelperDirName}/{RootCapHelperFileName}", startLine: RootCapDeclarationLine, note: "a call to `capHelper` did not resolve to the declaration inside the root the client named. A manifest sits one directory ABOVE that root with a second `export function capHelper` beside it, so a walk that climbs past the client's root puts both in one program and answers nothing rather than choosing.")
 end 'definition does not root above the client root'

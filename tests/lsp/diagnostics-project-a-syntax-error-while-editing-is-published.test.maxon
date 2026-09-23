@@ -1,4 +1,4 @@
-let ProjectSyntaxWhileEditingDirName = "maxon-tests-lsp-diagnostics-project-syntax-while-editing"
+let ProjectSyntaxWhileEditingDirName = "diagnostics-project-syntax-while-editing"
 let ProjectSyntaxWhileEditingDeclaringFileName = "slot.maxon"
 let ProjectSyntaxWhileEditingBufferFileName = "main.maxon"
 let ProjectSyntaxWhileEditingDeclaringSource = "export typealias SyntaxWhileEditingSlot = int(0 to u64.max)\n"
@@ -12,6 +12,8 @@ test 'a structural error the author types is published while the buffer is modif
 	writeCorpusFile(root, fileName: ProjectSyntaxWhileEditingBufferFileName, content: ProjectSyntaxWhileEditingSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectSyntaxWhileEditingBufferFileName, content: ProjectSyntaxWhileEditingSavedSource, editedContent: ProjectSyntaxWhileEditingTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, which `maxon build` of the staged project compiles. This publish is the CONTROL.")
 

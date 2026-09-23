@@ -1,4 +1,4 @@
-let ProjectSiblingCallDirName = "maxon-tests-lsp-diagnostics-project-sibling-call"
+let ProjectSiblingCallDirName = "diagnostics-project-sibling-call"
 let ProjectSiblingCallDeclaringFileName = "helper.maxon"
 let ProjectSiblingCallBufferFileName = "main.maxon"
 let ProjectSiblingCallDeclaringSource = "module function projectSiblingCallHelper() returns ExitCode\n\treturn 0\nend 'projectSiblingCallHelper'\n"
@@ -10,6 +10,8 @@ test 'a call into a sibling file is not an undefined function'
 	writeCorpusFile(root, fileName: ProjectSiblingCallBufferFileName, content: ProjectSiblingCallBufferSource)
 
 	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingCallBufferFileName, content: ProjectSiblingCallBufferSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(probe, note: "`projectSiblingCallHelper` is a `module function` the sibling file of this project declares, and a `maxon build` of the staged project EXITS 0. ⛔ THE BUFFER PARSES CLEANLY, so the refusal is POST-PARSE — `SemanticCheck.validateCall` raises E3004 against a callee registry folded over this buffer ALONE. A rule that corrects only the PARSE leaves every cross-file call in the project wearing `call to undefined function`.")
 end 'a call into a sibling file is not an undefined function'

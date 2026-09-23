@@ -1,4 +1,4 @@
-let DocumentProjectDirName = "maxon-tests-lsp-projects-one-document"
+let DocumentProjectDirName = "projects-one-document"
 let DocumentProjectFileName = "main.maxon"
 let DocumentProjectSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
@@ -10,6 +10,8 @@ test 'project roots: one document is answered as the project it sits in'
 	let uri = fileUriOf(root.join("{DocumentProjectFileName}"))
 	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: projectRootsDocument(uri, content: DocumentProjectSource))
 
+	discardOutsideCheckoutDir(root)
+
 	match probe 'probe'
 		answered(result) then try requireTheProjectTheDocumentSitsIn(result, uri: uri)
 		unanswered(reason) then try Expect.fail(reason)
@@ -19,5 +21,5 @@ end 'project roots: one document is answered as the project it sits in'
 function requireTheProjectTheDocumentSitsIn(result ListProjectsResult, uri String) throws TestFailure
 	let project = try soleProject(result, note: "one document ({uri}) was opened inside a staged `project.maxon` root the client also named as its workspace folder.")
 
-	try requireProjectRootedAtADirectory(project, expectedTail: DocumentProjectDirName, note: "one document ({uri}) was opened inside a staged `project.maxon` root.")
+	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(DocumentProjectDirName), note: "one document ({uri}) was opened inside a staged `project.maxon` root.")
 end 'requireTheProjectTheDocumentSitsIn'

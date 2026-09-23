@@ -1,14 +1,19 @@
-let RemovedFolderFirstDirName = "maxon-tests-lsp-removed-folder-one"
-let RemovedFolderSecondDirName = "maxon-tests-lsp-removed-folder-two"
+let RemovedFolderFirstDirName = "removed-folder-one"
+let RemovedFolderSecondDirName = "removed-folder-two"
 
 test 'project roots: a removed workspace folder stops being a root'
-	let first = stagedDirectoryOutsideTheCheckout(RemovedFolderFirstDirName)
+	let first = freshOutsideCheckoutDir(RemovedFolderFirstDirName)
 	let second = stagedCrossDirectoryRoot(RemovedFolderSecondDirName)
 
 	writeCorpusFile(first, fileName: ProjectRootsFillerFileName, content: ProjectRootsFillerSource)
 
 	let uri = crossDirectoryReaderUri(second)
-	let probes = try definitionsAcrossAWorkspaceFolderRemoval(projectRootsFolderPair(first, second: second), removedFolders: projectRootsFolders(second), documents: projectRootsDocument(uri, content: ProjectRootsReaderSource), position: WorkspaceFolderProbePosition.create(uri, line: ProjectRootsCallLine, character: ProjectRootsCallCharacter))
+	let outcome = definitionsAcrossWorkspaceFolders(projectRootsFolderPair(first, second: second), addedFolders: WorkspaceFolderRootArray.create(), removedFolders: projectRootsFolders(second), documents: projectRootsDocument(uri, content: ProjectRootsReaderSource), positions: projectRootsPosition(WorkspaceFolderProbePosition.create(uri, line: ProjectRootsCallLine, character: ProjectRootsCallCharacter)))
+
+	discardOutsideCheckoutDir(first)
+	discardOutsideCheckoutDir(second)
+
+	let probes = try probesAnswered(outcome)
 
 	let beforeRemoval = try probes.get(0) otherwise panic("project roots: one position was probed on each side of the removal and the session answered {probes.count()} probes")
 	let afterRemoval = try probes.get(1) otherwise panic("project roots: one position was probed on each side of the removal and the session answered {probes.count()} probes")

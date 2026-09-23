@@ -44,12 +44,9 @@
 // takes nothing. That distinction is what keeps the suite's thousands of child `build … --output=…`
 // compiles free of it, and it is the ⛔ that would otherwise be a deadlock rather than a lock.
 //
-// ⚠ **THE OTHER NESTED CASE IS THE HARNESS SELF-TEST, and it is excluded by the path it is GIVEN, not
-// by a flag.** `requireHarnessRefusalsFire` proves the harness's refusals by SPAWNING this harness at
-// a fixture case directory; that sub-run reaches `runSpecTest` like any other and would refuse against
-// its own parent. `isHarnessFixtureSubRun` answers it from the spec dir — the same predicate the
-// self-test already uses to recognise itself, and for the reason its header gives: *a flag is a second
-// way of saying which directory this is, and the directory already says it.*
+// `tests/spec-harness` runs `spec-test` at fixtures it copies under the host temp directory,
+// outside any checkout, so those runs take nothing and never contend with each other or with a
+// developer's own suite.
 //
 // ============================================================================================
 // LIVENESS IS A HEARTBEAT, NOT A PID PROBE. THIS IS A DELIBERATE DIVERGENCE.
@@ -127,9 +124,8 @@ let AcquireVerifyDelayMs = 20
 // the refusal prints and what the abandonment window compares against.
 typealias LockSeconds = int(0 to u64.max)
 
-// The lock this process WROTE. It is not "the lock this process is running under": a run that found no
-// checkout above its operand, and a harness fixture sub-run whose parent holds the tree, both own
-// nothing — there is nothing for either to keep alive and nothing for either to remove.
+// The lock this process wrote. A run that found no checkout above its operand owns nothing: there
+// is nothing for it to keep alive and nothing for it to remove.
 type OwnedLock
 	export let path as FilePath
 	export let token as String

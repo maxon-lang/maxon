@@ -1,4 +1,4 @@
-let ProjectSiblingConstDirName = "maxon-tests-lsp-diagnostics-project-sibling-constant"
+let ProjectSiblingConstDirName = "diagnostics-project-sibling-constant"
 let ProjectSiblingConstDeclaringFileName = "base.maxon"
 let ProjectSiblingConstBufferFileName = "main.maxon"
 let ProjectSiblingConstDeclaringSource = "export let ProjectSiblingConstBase = 0 as ExitCode\n"
@@ -11,6 +11,8 @@ test 'a constant a sibling file exports is not an undefined constant'
 	writeCorpusFile(root, fileName: ProjectSiblingConstBufferFileName, content: ProjectSiblingConstSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectSiblingConstBufferFileName, content: ProjectSiblingConstSavedSource, editedContent: ProjectSiblingConstTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and `ProjectSiblingConstBase` is `export let` in the sibling file. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
 

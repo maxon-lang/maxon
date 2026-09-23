@@ -356,6 +356,15 @@ if [ "$mode" = "package" ]; then
 			"$maxon" spec-test > "$DIST/spec-test-$host.log" 2>&1 \
 				|| { echo "release.sh: the suite FAILED on $host — see $DIST/spec-test-$host.log; nothing packaged" >&2; exit 1; }
 			grep -E "passed, .* failed" "$DIST/spec-test-$host.log" | tail -1
+
+			# The tree-level gates `spec-test` does not run. The timeout is `spec-harness`'s: its drift
+			# gate runs `spec-test` three times, within a second of the 5 s default.
+			for corpus in fmt spec-harness ladders; do
+				log="$DIST/test-$corpus-$host.log"
+				"$maxon" test "tests/$corpus" --timeout=15000 > "$log" 2>&1 \
+					|| { echo "release.sh: tests/$corpus FAILED on $host — see $log; nothing packaged" >&2; exit 1; }
+				grep -E "^ *[0-9]+ fail" "$log" | tail -1
+			done
 		fi
 		package_one "$host" 1
 	else

@@ -1,0 +1,149 @@
+let DriftGateSpecName = "drift-gate"
+let DriftGateDriftedCase = "drift-gate.pinned"
+let DriftGateSecondDriftedCase = "drift-gate.also-pinned"
+let DriftGateIntactCase = "drift-gate.intact"
+let DriftGateGoldenCount = 3
+let DriftGateCorruptedLine = "// planted by the drifted-golden gate and put back by it; a deliberate mismatch"
+let DriftGateHeadline = "DRIFTED from what the compiler emits"
+
+typealias DriftTally = int(0 to u64.max)
+
+type DriftGoldenBackup
+	export let path as FilePath
+	export let caseName as String
+	export let emitted as String
+
+	static function create(path FilePath, caseName String, emitted String) returns DriftGoldenBackup
+		return Self{path: path, caseName: caseName, emitted: emitted}
+	end 'create'
+end 'DriftGoldenBackup'
+
+typealias DriftGoldenBackupArray = Array with DriftGoldenBackup
+
+test 'a committed golden that contradicts the compiler is named, counted and quoted, and moves no verdict'
+	let staged = stagedGateFixture()
+
+	let mint = runSpecTest(staged, includeNetwork: false)
+	let minted = driftGoldensIn(staged)
+
+	try Expect.equal(minted.count() as AssertedInt, expected: DriftGateGoldenCount, message: "the fixture's mint run left {minted.count()} golden(s), not {DriftGateGoldenCount}. Its cases must PASS and pin emitted code, or there is nothing to corrupt. The mint run said:\n{everythingSaid(mint)}") otherwise (failure) 'mintedTheWrongCount'
+		discardStaging(staged)
+		throw failure
+	end 'mintedTheWrongCount'
+
+	var corruptedGoldens = DriftGoldenBackupArray.create()
+
+	for caseName in [DriftGateDriftedCase, DriftGateSecondDriftedCase] 'eachDrifted'
+		let path = mintedGoldenOf(minted, caseName: caseName)
+		let emitted = try File.readText(path) otherwise panic("spec-harness tests: the gate could not run - could not read the minted golden {path.toString()}.")
+		corruptedGoldens.push(DriftGoldenBackup.create(path, caseName: caseName, emitted: emitted))
+		writeDriftGolden(path, content: "{DriftGateCorruptedLine}\n")
+	end 'eachDrifted'
+
+	let corrupted = runSpecTest(staged, includeNetwork: false)
+
+	for backup in corruptedGoldens 'eachRestore'
+		writeDriftGolden(backup.path, content: backup.emitted)
+	end 'eachRestore'
+
+	let restored = everythingSaid(runSpecTest(staged, includeNetwork: false))
+	discardStaging(staged)
+
+	let onStdout = corrupted.stdout
+	let onStderr = corrupted.stderr
+	let said = everythingSaid(corrupted)
+
+	var broken = StringArray.create()
+
+	for backup in corruptedGoldens 'eachAssertion'
+		let label = testLabel(DriftGateSpecName, testName: backup.caseName)
+		let driftedEntry = resultNoteEntry(label)
+
+		if not onStderr.contains(driftedEntry) 'didNotNameTheCase'
+			broken.push("the trailer did NOT name '{backup.caseName}', whose golden was corrupted. Expected it to contain:\n{driftedEntry}and the run said:\n{said}\n")
+		end 'didNotNameTheCase'
+
+		if not onStderr.contains(backup.path.toString()) 'didNotNameTheFile'
+			broken.push("the trailer named '{backup.caseName}' but not the FILE. Expected '{backup.path.toString()}', and the run said:\n{said}\n")
+		end 'didNotNameTheFile'
+
+		let passVerdict = passVerdictLine(label)
+
+		if not onStdout.contains(passVerdict) 'driftMovedTheVerdict'
+			broken.push("'{backup.caseName}' is no longer reported as PASSING. A golden is REFERENCE, NOT A GATE. Expected '{passVerdict}', and the run said:\n{said}\n")
+		end 'driftMovedTheVerdict'
+	end 'eachAssertion'
+
+	if not onStderr.contains(DriftGateCorruptedLine) 'showedNoDifference'
+		broken.push("the trailer named the drifted goldens but did not show what DIFFERS: the line written into them never appears. It said:\n{said}\n")
+	end 'showedNoDifference'
+
+	let summary = driftSummary(corruptedGoldens.count())
+
+	if not onStdout.contains(summary) 'summaryStayedSilent'
+		broken.push("the run's SUMMARY, on STDOUT, says nothing about the {corruptedGoldens.count()} drifted goldens. Expected '{summary}', and the run said:\n{said}\n")
+	end 'summaryStayedSilent'
+
+	if corrupted.exitCode() != SuccessExitCode 'driftMovedTheExitCode'
+		broken.push("a run whose only finding was {corruptedGoldens.count()} drifted goldens exited {corrupted.exitCode()}. A golden is REFERENCE, NOT A GATE.\n")
+	end 'driftMovedTheExitCode'
+
+	let intactEntry = resultNoteEntry(testLabel(DriftGateSpecName, testName: DriftGateIntactCase))
+
+	if onStderr.contains(intactEntry) 'namedAGoldenThatMatched'
+		broken.push("the trailer NAMED '{DriftGateIntactCase}', whose golden was compared and MATCHED. It said:\n{said}\n")
+	end 'namedAGoldenThatMatched'
+
+	if restored.contains(DriftGateHeadline) 'reportedAMatchingGolden'
+		broken.push("the SAME fixture, with the goldens put back, still printed the drift report. It said:\n{restored}\n")
+	end 'reportedAMatchingGolden'
+
+	try requireNothingBroken(broken, headline: "the golden-drift report")
+end 'a committed golden that contradicts the compiler is named, counted and quoted, and moves no verdict'
+
+function driftSummary(drifted DriftTally) returns String
+	return "{drifted} committed golden(s) OF THE CASES THIS RUN COMPARED {DriftGateHeadline} — GOLDENS ARE REFERENCE, NOT A GATE: nothing failed on this and the exit code is unaffected (the note on stderr has the differences)"
+end 'driftSummary'
+
+function driftGoldensIn(staged FilePath) returns PathArray
+	var found = PathArray.create()
+	let fragmentsRoot = staged.join(FragmentsDirName)
+
+	if not Directory.exists(fragmentsRoot) 'nothingMinted'
+		return found
+	end 'nothingMinted'
+
+	for lane in driftListing(fragmentsRoot) 'eachLane'
+		for specGoldens in driftListing(lane) 'eachSpec'
+			for golden in driftListing(specGoldens) 'eachGolden'
+				if golden.fileExtension() == GoldenExtension 'isAGolden'
+					found.push(golden)
+				end 'isAGolden'
+			end 'eachGolden'
+		end 'eachSpec'
+	end 'eachLane'
+
+	return found
+end 'driftGoldensIn'
+
+function driftListing(dir FilePath) returns PathArray
+	if not Directory.isDirectory(dir) 'aStrayFile'
+		panic("spec-harness tests: the gate could not run - {dir.toString()} is a file where the mint run lays out only directories.")
+	end 'aStrayFile'
+
+	return listing(dir)
+end 'driftListing'
+
+function mintedGoldenOf(minted PathArray, caseName String) returns FilePath
+	for path in minted 'eachGolden'
+		if path.stem() == caseName 'isTheOne'
+			return path
+		end 'isTheOne'
+	end 'eachGolden'
+
+	panic("spec-harness tests: the gate could not run - the fixture minted no golden for `{caseName}`, so there is nothing to make drift out of.")
+end 'mintedGoldenOf'
+
+function writeDriftGolden(path FilePath, content String)
+	try File.writeText(path, content: content) otherwise panic("spec-harness tests: the gate could not run - could not write the golden {path.toString()}.")
+end 'writeDriftGolden'

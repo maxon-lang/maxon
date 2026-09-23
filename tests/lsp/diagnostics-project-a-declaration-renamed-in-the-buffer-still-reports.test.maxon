@@ -1,4 +1,4 @@
-let ProjectRenamedDeclDirName = "maxon-tests-lsp-diagnostics-project-renamed-decl"
+let ProjectRenamedDeclDirName = "diagnostics-project-renamed-decl"
 let ProjectRenamedDeclFileName = "slot.maxon"
 let ProjectRenamedDeclSavedSource = "public typealias ProjectRenamedSlot = int(0 to u64.max)\n\nfunction main() returns ExitCode\n\tlet n = 1 as ProjectRenamedSlot\n\treturn n as ExitCode\nend 'main'\n"
 let ProjectRenamedDeclTypedSource = "public typealias ProjectRenamedLine = int(0 to u64.max)\n\nfunction main() returns ExitCode\n\tlet n = 1 as ProjectRenamedSlot\n\treturn n as ExitCode\nend 'main'\n"
@@ -10,6 +10,8 @@ test 'a declaration renamed in the buffer still reports the use left behind'
 	writeCorpusFile(root, fileName: ProjectRenamedDeclFileName, content: ProjectRenamedDeclSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectRenamedDeclFileName, content: ProjectRenamedDeclSavedSource, editedContent: ProjectRenamedDeclTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
 

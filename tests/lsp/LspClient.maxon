@@ -1038,6 +1038,69 @@ function lastUriSegment(uri String) returns String
 	return name
 end 'lastUriSegment'
 
+let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-lsp"
+let PosixPathSeparator = "/"
+
+#if os(Windows)
+	let HostTempVariable = "TEMP"
+#else
+	let HostTempVariable = "TMPDIR"
+	let PosixLastResortTempDir = "/tmp"
+#endif
+
+// Named per process, because two runs on one machine sharing a name would delete each other's
+// directories mid-run. A case discards its directory once its session is a value, before it
+// asserts; one that panics leaves it behind.
+export function outsideCheckoutDirName(caseDirName String) returns String
+	if caseDirName.contains(PosixPathSeparator) or caseDirName.contains(WindowsPathSeparator) 'nested'
+		panic("LspClient: the test could not run — '{caseDirName}' names a nested path. A case's staging directory is ONE directory directly under the host temp area; stage anything below it inside that directory.")
+	end 'nested'
+
+	return "{OutsideCheckoutStagingDirNamePrefix}-{__Builtins.currentProcessId()}-{caseDirName}"
+end 'outsideCheckoutDirName'
+
+// Outside the checkout, which a case about a project's root needs: this checkout holds a
+// `project.maxon` at its own root, so a tree staged under it has a manifest above it whatever the
+// case writes, and the manifest rung would decide the root before the client's ever came up.
+export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
+	let dir = hostTempDir().join(outsideCheckoutDirName(caseDirName))
+
+	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
+		discardOutsideCheckoutDir(dir)
+	end 'leftByAnEndedProcess'
+
+	if not Directory.create(dir) 'couldNotCreate'
+		panic("LspClient: the test could not run — could not create {dir.toString()}, where a case stages outside the checkout.")
+	end 'couldNotCreate'
+
+	return dir
+end 'freshOutsideCheckoutDir'
+
+export function discardOutsideCheckoutDir(dir FilePath)
+	let entries = try Directory.list(dir) otherwise panic("LspClient: the test could not run — could not list {dir.toString()}, where a case staged outside the checkout.")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			discardOutsideCheckoutDir(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("LspClient: the test could not run — could not remove the staged file {entry.toString()}.")
+	end 'eachEntry'
+
+	try Directory.delete(dir) otherwise panic("LspClient: the test could not run — could not remove {dir.toString()}, where a case staged outside the checkout.")
+end 'discardOutsideCheckoutDir'
+
+function hostTempDir() returns FilePath
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("LspClient: the test could not run — {HostTempVariable} is not set, and it names the only area outside this checkout a case can stage in.")
+	#else
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("LspClient: the test could not run — the host temp area '{spelled}' is not a spellable path")
+end 'hostTempDir'
+
 // ============================================================================================
 // BUILDING A MESSAGE
 // ============================================================================================

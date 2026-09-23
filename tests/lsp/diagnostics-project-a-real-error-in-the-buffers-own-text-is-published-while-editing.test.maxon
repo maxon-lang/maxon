@@ -1,4 +1,4 @@
-let ProjectOwnTextErrorDirName = "maxon-tests-lsp-diagnostics-project-own-text-error"
+let ProjectOwnTextErrorDirName = "diagnostics-project-own-text-error"
 let ProjectOwnTextErrorDeclaringFileName = "slot.maxon"
 let ProjectOwnTextErrorBufferFileName = "main.maxon"
 let ProjectOwnTextErrorDeclaringSource = "export typealias OwnTextErrorSlot = int(0 to u64.max)\n"
@@ -12,6 +12,8 @@ test 'an error in the buffers own text is published while the buffer is modified
 	writeCorpusFile(root, fileName: ProjectOwnTextErrorBufferFileName, content: ProjectOwnTextErrorSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectOwnTextErrorBufferFileName, content: ProjectOwnTextErrorSavedSource, editedContent: ProjectOwnTextErrorTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, which `maxon build` of the staged project compiles. This publish is the CONTROL.")
 

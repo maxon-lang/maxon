@@ -132,9 +132,9 @@ let CaseCacheDirName = "cache"
 let CachedProgramFileName = "cached.maxon"
 let CachedProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
-// Where a case that must stage OUTSIDE the checkout goes, under the host's temp area. The variable naming
+// A case that must stage outside the checkout goes under the host's temp area. The variable naming
 // that area is `HostTempVariable`, which the driver's cache reads too.
-let OutsideCheckoutStagingDirName = "maxon-tests-cli"
+let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-cli"
 let VendorDirName = "vendor"
 
 // A path component that climbs out of the directory it is joined under.
@@ -142,6 +142,7 @@ let ParentComponent = ".."
 
 // The separator this file's own paths are spelled with, folded into the host's by `FilePath`.
 let PathSeparator = "/"
+let WindowsPathSeparator = "\\"
 
 // How the reference is laid out, and the whole of what these cases read it by. A COMMAND SECTION sits at
 // the left margin of `maxon help`; a LABEL — a command under `Commands:`, an option under its section — is
@@ -325,11 +326,7 @@ end 'stageCompiler'
 // A case's own staging directory, absolute, with the previous run's files cleared so a rerun starts from
 // the same tree.
 export function freshCaseDir(caseDirName String) returns FilePath
-	requireStaysInStaging(caseDirName)
-
-	if caseDirName.isEmpty() or caseDirName.contains(PathSeparator) 'notOneDirectory'
-		panic("CliHarness: the gate could not run - '{caseDirName}' is not one directory name. Every case stages under a directory of its own, and this is the one whose files are cleared.")
-	end 'notOneDirectory'
+	requireOneCaseDirName(caseDirName)
 
 	let dir = stagingDir(caseRelative(caseDirName, relative: CaseDirItself))
 	clearStagedFiles(dir)
@@ -379,56 +376,78 @@ export function expectALibraryFileBesideAProgramIsReadOnce(caseDirName String, l
 	try Expect.isTrue(File.exists(built.executable), message: "the build exited 0 and wrote no executable. {said}")
 end 'expectALibraryFileBesideAProgramIsReadOnce'
 
-// ⭐ **A CASE DIRECTORY OUTSIDE THE CHECKOUT**, under the host's temp area, for a child that must find
-// NOTHING the checkout holds above its working directory — `vendor/` above all, which the driver walks up
-// to from there. Refused loudly when that premise does not hold, because a `vendor/` above it would let
-// the case pass or fail about a toolchain it was built to be without.
-export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
-	requireStaysInStaging(caseDirName)
+// An interface rather than a closure, because a closure may not throw a `TestFailure` (E3101).
+export interface OutsideCheckoutCase
+	function requireHeldIn(dir FilePath) throws TestFailure
+end 'OutsideCheckoutCase'
 
-	let root = hostTempDir().join(OutsideCheckoutStagingDirName)
-	let dir = root.join(caseDirName)
+export function requireHeldOutsideCheckout(caseDirName String, check OutsideCheckoutCase) throws TestFailure
+	try requireHeldThenDiscard(freshOutsideCheckoutDir(caseDirName), check: check)
+end 'requireHeldOutsideCheckout'
 
-	if not Directory.create(dir) and not Directory.isDirectory(dir) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {dir.toString()}, where a case stages outside the checkout.")
-	end 'couldNotCreate'
-
-	clearStagedFiles(dir)
-	requireNoVendorAbove(dir)
-	return dir
-end 'freshOutsideCheckoutDir'
-
-// **AN INSTALL-SHAPED COPY OF THE COMPILER UNDER TEST, OUTSIDE THE CHECKOUT**: `<dir>/bin/maxon` beside a
-// full `<dir>/stdlib/` and `<dir>/runtime/`, copied from the checkout, so it compiles real programs and
-// nothing it walks to — from its own image or from a working directory under `<dir>` — is the checkout.
-export function stageInstallOutsideCheckout(caseDirName String) returns FilePath
+// An install-shaped copy of the compiler under test: `<dir>/bin/maxon` beside a full
+// `<dir>/stdlib/` and `<dir>/runtime/`, copied from the checkout, so it compiles real programs and
+// nothing it walks to — from its own image or from a working directory under `<dir>` — is the
+// checkout.
+export function requireHeldInAnInstallOutsideCheckout(caseDirName String, check OutsideCheckoutCase) throws TestFailure
 	let dir = freshOutsideCheckoutDir(caseDirName)
 
 	for library in [StdlibDirName, RuntimeDirName] 'eachLibrary'
 		copyTree(checkoutDir(library), into: dir.join(library))
 	end 'eachLibrary'
 
-	let binDir = dir.join(ScriptInstallBinDirName)
+	_ = createdStagedDirectory(dir.join(ScriptInstallBinDirName))
+	copyFile(testedCompilerPath(), into: installedCompilerIn(dir), mode: FilePermission.executable)
 
-	if not Directory.create(binDir) and not Directory.isDirectory(binDir) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {binDir.toString()}.")
+	try requireHeldThenDiscard(dir, check: check)
+end 'requireHeldInAnInstallOutsideCheckout'
+
+export function installedCompilerIn(installDir FilePath) returns FilePath
+	return installDir.join(ScriptInstallBinDirName).join("{CompilerBaseName}{executableSuffix()}")
+end 'installedCompilerIn'
+
+export function createdStagedDirectory(path FilePath) returns FilePath
+	if not Directory.create(path) 'couldNotCreate'
+		panic("CliHarness: the gate could not run - could not create {path.toString()}.")
 	end 'couldNotCreate'
 
-	let staged = binDir.join("{CompilerBaseName}{executableSuffix()}")
-	copyFile(testedCompilerPath(), into: staged, mode: FilePermission.executable)
-	return staged
-end 'stageInstallOutsideCheckout'
+	return path
+end 'createdStagedDirectory'
+
+// For a child that must find nothing the checkout holds above its working directory — `vendor/`
+// above all, which the driver walks up to from there — so a `vendor/` above it is refused rather
+// than let the case pass or fail about a toolchain it was built to be without. Named per process,
+// because two runs on one machine sharing a name would clear each other's directories mid-run.
+// Private, so no case stages here without the removal `requireHeldThenDiscard` makes; a case that
+// panics or times out still leaves its directory behind.
+function freshOutsideCheckoutDir(caseDirName String) returns FilePath
+	requireOneCaseDirName(caseDirName)
+
+	let dir = createdStagedDirectory(hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}-{__Builtins.currentProcessId()}-{caseDirName}"))
+
+	clearStagedFiles(dir)
+	requireNoVendorAbove(dir)
+	return dir
+end 'freshOutsideCheckoutDir'
+
+function requireHeldThenDiscard(dir FilePath, check OutsideCheckoutCase) throws TestFailure
+	try check.requireHeldIn(dir) otherwise (failure) 'failed'
+		discardOutsideCheckoutDir(dir)
+		throw failure
+	end 'failed'
+
+	discardOutsideCheckoutDir(dir)
+end 'requireHeldThenDiscard'
+
+function discardOutsideCheckoutDir(dir FilePath)
+	clearStagedFiles(dir)
+	try Directory.delete(dir) otherwise panic("CliHarness: the gate could not run - could not remove {dir.toString()}, where a case staged outside the checkout.")
+end 'discardOutsideCheckoutDir'
 
 // The cache root a case hands the driver: a directory under the case's own staging directory, so nothing
 // here reads the developer's real cache or writes into it.
 export function cacheRootIn(dir FilePath) returns FilePath
-	let root = dir.join(CaseCacheDirName)
-
-	if not Directory.create(root) and not Directory.isDirectory(root) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {root.toString()}, the cache root a case points the driver at.")
-	end 'couldNotCreate'
-
-	return root
+	return createdStagedDirectory(dir.join(CaseCacheDirName))
 end 'cacheRootIn'
 
 // ⭐ **WHERE THE DRIVER CACHES UNDER A HOME DIRECTORY.** Respelled here for the reason the variables above
@@ -453,11 +472,7 @@ export function rosterWithHighestRootBlocked(dir FilePath) returns EnvMap
 	let blocked = blockedHighestRoot(dir)
 	blockCacheRootAt(blocked)
 
-	let fallThrough = dir.join(FallThroughRootDirName)
-
-	if not Directory.create(fallThrough) and not Directory.isDirectory(fallThrough) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {fallThrough.toString()}, the writable root a case leaves for the driver to fall through to.")
-	end 'couldNotCreate'
+	let fallThrough = createdStagedDirectory(dir.join(FallThroughRootDirName))
 
 	var naming = EnvMap.create()
 	naming.upsert(HomeDirectoryVariable, value: blocked.toString())
@@ -615,13 +630,7 @@ end 'foldedVariable'
 // A directory of the case's own for one candidate variable. Created, because a child handed a temp area
 // that is not there can fail at something other than the cache.
 function privateRootFor(dir FilePath, variable String) returns FilePath
-	let root = dir.join("{PrivateRootPrefix}{variable}")
-
-	if not Directory.create(root) and not Directory.isDirectory(root) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {root.toString()}, the directory {variable} names in a case's child.")
-	end 'couldNotCreate'
-
-	return root
+	return createdStagedDirectory(dir.join("{PrivateRootPrefix}{variable}"))
 end 'privateRootFor'
 
 // ⭐ **A CACHE WITH A REAL BUILD IN IT, PUT THERE BY THE DRIVER.** Only the driver knows the layout it
@@ -768,9 +777,7 @@ function checkoutDir(spelled String) returns FilePath
 end 'checkoutDir'
 
 function copyTree(from FilePath, into FilePath)
-	if not Directory.create(into) and not Directory.isDirectory(into) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {into.toString()}.")
-	end 'couldNotCreate'
+	_ = createdStagedDirectory(into)
 
 	let entries = try Directory.list(from) otherwise panic("CliHarness: the gate could not run - could not list {from.toString()}")
 
@@ -793,9 +800,17 @@ end 'copyFile'
 
 function requireStaysInStaging(component String)
 	if component.contains(ParentComponent) 'climbsOut'
-		panic("CliHarness: the gate could not run - '{component}' climbs out of {StagingRootDirName}, and a staging call clears files under what it names.")
+		panic("CliHarness: the gate could not run - '{component}' climbs out of the staging directory it names, and a staging call clears files under what it names.")
 	end 'climbsOut'
 end 'requireStaysInStaging'
+
+function requireOneCaseDirName(caseDirName String)
+	requireStaysInStaging(caseDirName)
+
+	if caseDirName.isEmpty() or caseDirName.contains(PathSeparator) or caseDirName.contains(WindowsPathSeparator) 'notOneDirectory'
+		panic("CliHarness: the gate could not run - '{caseDirName}' is not one directory name. Every case stages under a directory of its own, and this is the one whose files are cleared.")
+	end 'notOneDirectory'
+end 'requireOneCaseDirName'
 
 // A case's staging directory, or a directory under it, spelled from the checkout root.
 function caseRelative(caseDirName String, relative String) returns String
@@ -823,11 +838,11 @@ function clearStagedFiles(dir FilePath)
 	for entry in entries 'eachEntry'
 		if Directory.isDirectory(entry) 'aDirectory'
 			clearStagedFiles(entry)
-			try Directory.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear {entry.toString()}, a directory a previous run staged.")
+			try Directory.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear the staged directory {entry.toString()}.")
 			continue
 		end 'aDirectory'
 
-		try File.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear {entry.toString()} from a previous run's staging.")
+		try File.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear the staged file {entry.toString()}.")
 	end 'eachEntry'
 end 'clearStagedFiles'
 

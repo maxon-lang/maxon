@@ -12,24 +12,29 @@ let TallyHeadline = "allocations by tag"
 let UntracedSentence = "carries no tags"
 
 test 'the allocation tally is printed only when it is asked for'
-	let dir = freshOutsideCheckoutDir(CaseDirName)
-	let app = dir.join(AppDirName)
-
-	if not Directory.create(app) and not Directory.isDirectory(app) 'couldNotCreate'
-		panic("allocations-by-tag: the gate could not run - could not create {app.toString()}")
-	end 'couldNotCreate'
-
-	try File.writeText(app.join("{MainSourceStem}{SourceExtension}"), content: MainSource) otherwise panic("allocations-by-tag: the gate could not run - could not write the fixture source")
-
-	let plain = runDriver([BuildCommandWord, AppDirName, DebugLogFlag], workingDirectory: dir)
-	let plainSaid = "It wrote to stderr: {plain.stderr}"
-	try Expect.equal(plain.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {DebugLogFlag}. {plainSaid}")
-	try Expect.isTrue(plain.stderr.contains(MemoryHeadline), message: "{DebugLogFlag} printed no memory table, so this case cannot tell the tally apart from it. {plainSaid}")
-	try Expect.isFalse(plain.stderr.contains(TallyHeadline), message: "a build without {AllocationsByTagFlag} printed the tally anyway. {plainSaid}")
-
-	let tallied = runDriver([BuildCommandWord, AppDirName, DebugLogFlag, AllocationsByTagFlag], workingDirectory: dir)
-	let said = "It wrote to stderr: {tallied.stderr}"
-	try Expect.equal(tallied.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {AllocationsByTagFlag}. {said}")
-	try Expect.isTrue(tallied.stderr.contains(TallyHeadline), message: "{AllocationsByTagFlag} printed no tally headline. {said}")
-	try Expect.isTrue(tallied.stderr.contains(UntracedSentence), message: "this compiler carries no tags, so the tally owed the sentence that says so. {said}")
+	try requireHeldOutsideCheckout(CaseDirName, check: TallyOnlyWhenAskedFor.create())
 end 'the allocation tally is printed only when it is asked for'
+
+type TallyOnlyWhenAskedFor implements OutsideCheckoutCase
+	static function create() returns TallyOnlyWhenAskedFor
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = createdStagedDirectory(dir.join(AppDirName))
+
+		try File.writeText(app.join("{MainSourceStem}{SourceExtension}"), content: MainSource) otherwise panic("allocations-by-tag: the gate could not run - could not write the fixture source")
+
+		let plain = runDriver([BuildCommandWord, AppDirName, DebugLogFlag], workingDirectory: dir)
+		let plainSaid = "It wrote to stderr: {plain.stderr}"
+		try Expect.equal(plain.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {DebugLogFlag}. {plainSaid}")
+		try Expect.isTrue(plain.stderr.contains(MemoryHeadline), message: "{DebugLogFlag} printed no memory table, so this case cannot tell the tally apart from it. {plainSaid}")
+		try Expect.isFalse(plain.stderr.contains(TallyHeadline), message: "a build without {AllocationsByTagFlag} printed the tally anyway. {plainSaid}")
+
+		let tallied = runDriver([BuildCommandWord, AppDirName, DebugLogFlag, AllocationsByTagFlag], workingDirectory: dir)
+		let said = "It wrote to stderr: {tallied.stderr}"
+		try Expect.equal(tallied.exitCode() as AssertedInt, expected: 0, message: "a one-file directory did not build under {AllocationsByTagFlag}. {said}")
+		try Expect.isTrue(tallied.stderr.contains(TallyHeadline), message: "{AllocationsByTagFlag} printed no tally headline. {said}")
+		try Expect.isTrue(tallied.stderr.contains(UntracedSentence), message: "this compiler carries no tags, so the tally owed the sentence that says so. {said}")
+	end 'requireHeldIn'
+end 'TallyOnlyWhenAskedFor'

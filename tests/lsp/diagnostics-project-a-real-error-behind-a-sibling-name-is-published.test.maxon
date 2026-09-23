@@ -1,4 +1,4 @@
-let ProjectRealErrorBehindDirName = "maxon-tests-lsp-diagnostics-project-real-error-behind"
+let ProjectRealErrorBehindDirName = "diagnostics-project-real-error-behind"
 let ProjectRealErrorBehindDeclaringFileName = "slot.maxon"
 let ProjectRealErrorBehindBufferFileName = "main.maxon"
 let ProjectRealErrorBehindDeclaringSource = "export typealias ProjectRealErrorBehindSlot = int(0 to u64.max)\n"
@@ -12,6 +12,8 @@ test 'a real error behind a sibling name is the one that is published'
 	writeCorpusFile(root, fileName: ProjectRealErrorBehindBufferFileName, content: ProjectRealErrorBehindBufferSource)
 
 	let probe = probeProjectDiagnostics(root, fileName: ProjectRealErrorBehindBufferFileName, content: ProjectRealErrorBehindBufferSource)
+
+	discardOutsideCheckoutDir(root)
 
 	let reported = try onlyProjectDiagnostic(probe, note: "the buffer names the sibling's `ProjectRealErrorBehindSlot` on an EARLY line and the undeclared `ProjectRealErrorBehindNowhere` on a LATER one, and a `maxon build` of this very project reports the later one and nothing else.")
 

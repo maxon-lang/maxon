@@ -1,4 +1,4 @@
-let ProjectSiblingCascadeDirName = "maxon-tests-lsp-diagnostics-project-sibling-cascade"
+let ProjectSiblingCascadeDirName = "diagnostics-project-sibling-cascade"
 let ProjectSiblingCascadeDeclaringFileName = "slot.maxon"
 let ProjectSiblingCascadeBufferFileName = "main.maxon"
 let ProjectSiblingCascadeDeclaringSource = "export typealias SiblingCascadeSlot = int(0 to u64.max)\nexport typealias SiblingCascadeSlotArray = Array with SiblingCascadeSlot\n"
@@ -11,6 +11,8 @@ test 'a refusal derived from a sibling name is withheld while the buffer is modi
 	writeCorpusFile(root, fileName: ProjectSiblingCascadeBufferFileName, content: ProjectSiblingCascadeSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectSiblingCascadeBufferFileName, content: ProjectSiblingCascadeSavedSource, editedContent: ProjectSiblingCascadeTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, which `maxon build` of the staged project compiles. This publish is the CONTROL.")
 

@@ -27,7 +27,7 @@ export union ProjectRootsSession
 	unrooted
 end 'ProjectRootsSession'
 
-union WorkspaceFolderDefinitionOutcome
+export union WorkspaceFolderDefinitionOutcome
 	answered(probes CorpusDefinitionProbeArray)
 	broke(detail String)
 end 'WorkspaceFolderDefinitionOutcome'
@@ -77,9 +77,9 @@ export function projectRootsDocument(uri String, content String) returns Workspa
 end 'projectRootsDocument'
 
 export function stagedCrossDirectoryRoot(dirName String) returns FilePath
-	let root = stagedDirectoryOutsideTheCheckout(dirName)
-	let readerDirectory = stagedDirectoryOutsideTheCheckout("{dirName}{ProjectRootsSlash}{ProjectRootsReaderDirName}")
-	let helperDirectory = stagedDirectoryOutsideTheCheckout("{dirName}{ProjectRootsSlash}{ProjectRootsHelperDirName}")
+	let root = freshOutsideCheckoutDir(dirName)
+	let readerDirectory = createdStagingDirectory(ProjectRootsReaderDirName, under: root)
+	let helperDirectory = createdStagingDirectory(ProjectRootsHelperDirName, under: root)
 
 	writeCorpusFile(helperDirectory, fileName: ProjectRootsHelperFileName, content: ProjectRootsHelperSource)
 	writeCorpusFile(readerDirectory, fileName: ProjectRootsReaderFileName, content: ProjectRootsReaderSource)
@@ -92,7 +92,7 @@ export function crossDirectoryReaderUri(root FilePath) returns String
 end 'crossDirectoryReaderUri'
 
 export function crossDirectoryHelperTail(dirName String) returns String
-	return "{dirName}{ProjectRootsSlash}{ProjectRootsHelperDirName}{ProjectRootsSlash}{ProjectRootsHelperFileName}"
+	return "{outsideCheckoutDirName(dirName)}{ProjectRootsSlash}{ProjectRootsHelperDirName}{ProjectRootsSlash}{ProjectRootsHelperFileName}"
 end 'crossDirectoryHelperTail'
 
 export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
@@ -128,18 +128,14 @@ function openProjectRootsSession(client LspClient, session ProjectRootsSession) 
 	end 'session'
 end 'openProjectRootsSession'
 
-export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions WorkspaceFolderProbePositionArray) returns CorpusDefinitionProbeArray throws TestFailure
-	return try probesAnswered(collectDefinitionsAcrossWorkspaceFolders(initialFolders, addedFolders: addedFolders, removedFolders: WorkspaceFolderRootArray.create(), documents: documents, positions: positions))
-end 'definitionsAcrossWorkspaceFolders'
-
-export function definitionsAcrossAWorkspaceFolderRemoval(initialFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, position WorkspaceFolderProbePosition) returns CorpusDefinitionProbeArray throws TestFailure
+export function projectRootsPosition(position WorkspaceFolderProbePosition) returns WorkspaceFolderProbePositionArray
 	var positions = WorkspaceFolderProbePositionArray.create()
 	positions.push(position)
 
-	return try probesAnswered(collectDefinitionsAcrossWorkspaceFolders(initialFolders, addedFolders: WorkspaceFolderRootArray.create(), removedFolders: removedFolders, documents: documents, positions: positions))
-end 'definitionsAcrossAWorkspaceFolderRemoval'
+	return positions
+end 'projectRootsPosition'
 
-function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbeArray throws TestFailure
+export function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbeArray throws TestFailure
 	match outcome 'outcome'
 		answered(probes) then return probes
 		broke(detail) then try Expect.fail(detail)
@@ -148,7 +144,7 @@ function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns Corpus
 	panic("project roots: the `broke` arm always throws, so this line is unreachable")
 end 'probesAnswered'
 
-function collectDefinitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions WorkspaceFolderProbePositionArray) returns WorkspaceFolderDefinitionOutcome
+export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions WorkspaceFolderProbePositionArray) returns WorkspaceFolderDefinitionOutcome
 	var client = LspClient.start()
 	var probes = CorpusDefinitionProbeArray.create()
 	var outcome = WorkspaceFolderDefinitionOutcome.broke(ProjectRootsUnreportedSession)
@@ -189,16 +185,13 @@ function collectDefinitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolder
 	client.release()
 
 	return outcome
-end 'collectDefinitionsAcrossWorkspaceFolders'
+end 'definitionsAcrossWorkspaceFolders'
 
-export function definitionAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, position WorkspaceFolderProbePosition) returns CorpusDefinitionProbe throws TestFailure
-	var positions = WorkspaceFolderProbePositionArray.create()
-	positions.push(position)
-
-	let probes = try definitionsAcrossWorkspaceFolders(initialFolders, addedFolders: addedFolders, documents: documents, positions: positions)
+export function soleProbeAnswered(outcome WorkspaceFolderDefinitionOutcome) returns CorpusDefinitionProbe throws TestFailure
+	let probes = try probesAnswered(outcome)
 
 	return try probes.get(0) otherwise panic("project roots: one position was probed and the session answered {probes.count()} probes")
-end 'definitionAcrossWorkspaceFolders'
+end 'soleProbeAnswered'
 
 export function soleProject(result ListProjectsResult, note String) returns ProjectEntry throws TestFailure
 	try Expect.equal(result.projects.count() as AssertedInt, expected: 1, message: "{note} The server answered {result.projects.count()} projects instead of one, which is what it does when it files every OPEN DOCUMENT as a project of its own instead of asking which project each document belongs to.")

@@ -1,0 +1,281 @@
+let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+let CorpusDirName = "tests/spec-harness"
+module let RefusalsDirName = "refusals"
+module let GatesDirName = "gates"
+module let TestSourceSuffix = ".test.maxon"
+module let ExpectedRefusalFileName = "expected-refusal.txt"
+module let FixtureSpecExtension = ".md"
+
+let SpecTestCommandWord = "spec-test"
+let NetworkFlag = "--network"
+module let SuccessExitCode = 0
+
+let StagingDirNamePrefix = "maxon-tests-spec-harness"
+let CheckoutMarkerDirName = "stdlib"
+
+let CallerPathSeparator = "/"
+let CarriageReturn = "\r"
+let LineFeed = "\n"
+let BrokenCheckIndent = "\n  "
+
+module let ResultNoteIndent = "  "
+module let FragmentsDirName = "fragments"
+module let GoldenExtension = ".test"
+
+#if os(Windows)
+	let HostTempVariable = "TEMP"
+	let ExecutableSuffix = ".exe"
+#else
+	let HostTempVariable = "TMPDIR"
+	let PosixLastResortTempDir = "/tmp"
+	let ExecutableSuffix = ""
+#endif
+
+module typealias PathArray = Array with FilePath
+
+type HarnessFixture
+	export let kind as String
+	export let caseName as String
+	export let dir as FilePath
+
+	static function create(kind String, caseName String, dir FilePath) returns HarnessFixture
+		return Self{kind: kind, caseName: caseName, dir: dir}
+	end 'create'
+end 'HarnessFixture'
+
+module function requireRefusalFires(caller String = __file__) throws TestFailure
+	let fixture = fixtureOf(caller, kind: RefusalsDirName)
+	let expected = expectedRefusalIn(fixture)
+	let run = runOnceThenDiscard(stagedCopyOf(fixture))
+	let said = everythingSaid(run)
+
+	try Expect.notEqual(run.exitCode() as AssertedInt, expected: SuccessExitCode, message: "'{fixture.caseName}' was ACCEPTED (exit {SuccessExitCode}). It is a deliberately-malformed spec, and the refusal that should have caught it, the one that says '{expected}', did not fire. It said:\n{said}")
+	try Expect.isTrue(said.contains(expected), message: "'{fixture.caseName}' failed (exit {run.exitCode()}) but for the WRONG REASON. Expected the output to contain '{expected}', and it said:\n{said}")
+end 'requireRefusalFires'
+
+module function stagedGateFixture(caller String = __file__) returns FilePath
+	return stagedCopyOf(fixtureOf(caller, kind: GatesDirName))
+end 'stagedGateFixture'
+
+module function saidByOneGateRun(caller String = __file__) returns String
+	return everythingSaid(runOnceThenDiscard(stagedGateFixture(caller)))
+end 'saidByOneGateRun'
+
+module function requireMarkerShapeRan(label String, caller String = __file__) throws TestFailure
+	let said = saidByOneGateRun(caller)
+	let ranVerdict = failVerdictPrefix(label)
+
+	try Expect.isTrue(said.contains(ranVerdict), message: "the fixture did NOT run '{label}': the compiler no longer reads this marker shape the way the reference does, and the case is simply GONE. Expected '{ranVerdict}', and it said:\n{said}")
+end 'requireMarkerShapeRan'
+
+module function runSpecTest(staged FilePath, includeNetwork bool) returns CollectedOutput
+	let binary = testedCompilerPath()
+
+	if not File.exists(binary) 'noBinary'
+		panic("spec-harness tests: the gate could not run - there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	var arguments = StringArray.create()
+	arguments.push(SpecTestCommandWord)
+	arguments.push(staged.toString())
+
+	if includeNetwork 'wantsLiveNetwork'
+		arguments.push(NetworkFlag)
+	end 'wantsLiveNetwork'
+
+	var config = Configuration.create(Executable.path(binary))
+	config.arguments = arguments
+	config.workingDirectory = staged
+
+	let run = try config.run() otherwise (e) 'spawnFailed'
+		panic("spec-harness tests: the gate could not run - could not spawn `{SpecTestCommandWord}` at {staged.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	return CollectedOutput.create(run.status, stdout: withoutCarriageReturns(run.stdout), stderr: withoutCarriageReturns(run.stderr), pid: run.pid, durationMs: run.durationMs)
+end 'runSpecTest'
+
+function runOnceThenDiscard(staged FilePath) returns CollectedOutput
+	let run = runSpecTest(staged, includeNetwork: false)
+	discardStaging(staged)
+	return run
+end 'runOnceThenDiscard'
+
+module function everythingSaid(run CollectedOutput) returns String
+	return "{run.stdout}{LineFeed}{run.stderr}"
+end 'everythingSaid'
+
+module function testLabel(specName String, testName String) returns String
+	return "{specName}/{testName}"
+end 'testLabel'
+
+module function failVerdictPrefix(label String) returns String
+	return "FAIL {label}: "
+end 'failVerdictPrefix'
+
+module function passVerdictLine(label String) returns String
+	return "PASS {label}"
+end 'passVerdictLine'
+
+module function resultNoteEntry(label String) returns String
+	return "{ResultNoteIndent}{label}{LineFeed}"
+end 'resultNoteEntry'
+
+module function requireNothingBroken(broken StringArray, headline String) throws TestFailure
+	if broken.isEmpty() 'everyCheckHeld'
+		return
+	end 'everyCheckHeld'
+
+	var report = StringBuilder.create()
+
+	for item in broken 'eachBroken'
+		report.append("{BrokenCheckIndent}{item}")
+	end 'eachBroken'
+
+	try Expect.fail("{broken.count()} check(s) FAILED: {headline}{report.build()}")
+end 'requireNothingBroken'
+
+module function corpusDir(kind String) returns FilePath
+	let spelled = "{CorpusDirName}{CallerPathSeparator}{kind}"
+	let relative = try FilePath.from(spelled) otherwise panic("spec-harness tests: the gate could not run - '{spelled}' is not a spellable path")
+	let dir = relative.resolve(Directory.currentPath())
+
+	if not Directory.isDirectory(dir) 'notThere'
+		panic("spec-harness tests: the gate could not run - there is no {dir.toString()}. This corpus's paths are relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+	end 'notThere'
+
+	return dir
+end 'corpusDir'
+
+module function caseNameOf(testFileName String) returns String
+	if not testFileName.endsWith(TestSourceSuffix) 'notATestSource'
+		panic("spec-harness tests: '{testFileName}' is not a `{TestSourceSuffix}` file, so it names no fixture.")
+	end 'notATestSource'
+
+	let parts = testFileName.split(TestSourceSuffix)
+
+	if parts.count() != 2 'suffixInsideTheName'
+		panic("spec-harness tests: '{testFileName}' carries `{TestSourceSuffix}` more than once, so which fixture it names is ambiguous.")
+	end 'suffixInsideTheName'
+
+	return try parts.get(0) otherwise panic("spec-harness tests: '{testFileName}' split into two parts and has no first one")
+end 'caseNameOf'
+
+function fixtureOf(caller String, kind String) returns HarnessFixture
+	let components = caller.split(CallerPathSeparator)
+	let depth = components.count()
+
+	if depth < 2 'noCorpusDirectory'
+		panic("spec-harness tests: '{caller}' does not sit in a `{kind}/` directory, so it names no fixture there.")
+	end 'noCorpusDirectory'
+
+	let fileName = try components.get(depth - 1) otherwise panic("spec-harness tests: '{caller}' has no last component")
+	let dirName = try components.get(depth - 2) otherwise panic("spec-harness tests: '{caller}' has no parent component")
+
+	if dirName != kind 'wrongCorpus'
+		panic("spec-harness tests: '{caller}' asked for a `{kind}` fixture from outside `{kind}/`.")
+	end 'wrongCorpus'
+
+	let caseName = caseNameOf(fileName)
+	let dir = corpusDir(kind).join(caseName)
+
+	if not Directory.isDirectory(dir) 'noFixture'
+		panic("spec-harness tests: '{caller}' names the fixture {dir.toString()}, and there is no such directory.")
+	end 'noFixture'
+
+	return HarnessFixture.create(kind, caseName: caseName, dir: dir)
+end 'fixtureOf'
+
+function expectedRefusalIn(fixture HarnessFixture) returns String
+	let path = fixture.dir.join(ExpectedRefusalFileName)
+	let text = try File.readText(path) otherwise panic("spec-harness tests: the gate could not run - could not read {path.toString()}, which says what the '{fixture.caseName}' refusal must print.")
+	let expected = text.trimEnd(CharacterSet.newlines())
+
+	if expected.isEmpty() 'saysNothing'
+		panic("spec-harness tests: {path.toString()} names no text, so nothing says WHICH refusal '{fixture.caseName}' is about.")
+	end 'saysNothing'
+
+	if expected.contains(LineFeed) or expected.contains(CarriageReturn) 'spansLines'
+		panic("spec-harness tests: {path.toString()} holds more than one line. It is ONE substring of the refusal's message.")
+	end 'spansLines'
+
+	return expected
+end 'expectedRefusalIn'
+
+function stagedCopyOf(fixture HarnessFixture) returns FilePath
+	let staged = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{fixture.kind}-{fixture.caseName}").resolve(Directory.currentPath())
+	requireNoCheckoutAbove(staged)
+
+	if Directory.isDirectory(staged) 'leftByAnEndedProcess'
+		discardStaging(staged)
+	end 'leftByAnEndedProcess'
+
+	if not Directory.create(staged) 'couldNotCreate'
+		panic("spec-harness tests: the gate could not run - could not create {staged.toString()}.")
+	end 'couldNotCreate'
+
+	for entry in listing(fixture.dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aSubdirectory'
+			panic("spec-harness tests: the fixture {fixture.dir.toString()} holds a directory, {entry.filename()}. A fixture is flat: its spec files and nothing a run leaves behind.")
+		end 'aSubdirectory'
+
+		let bytes = try File.readBinary(entry) otherwise panic("spec-harness tests: the gate could not run - could not read {entry.toString()}.")
+		try File.writeBinary(staged.join(entry.filename()), content: bytes) otherwise panic("spec-harness tests: the gate could not run - could not stage {entry.filename()} into {staged.toString()}.")
+	end 'eachEntry'
+
+	return staged
+end 'stagedCopyOf'
+
+module function discardStaging(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			discardStaging(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("spec-harness tests: the gate could not run - could not remove the staged file {entry.toString()}.")
+	end 'eachEntry'
+
+	try Directory.delete(dir) otherwise panic("spec-harness tests: the gate could not run - could not remove the staging directory {dir.toString()}.")
+end 'discardStaging'
+
+function requireNoCheckoutAbove(dir FilePath)
+	var level = dir
+
+	while true 'eachLevel'
+		let marker = level.join(CheckoutMarkerDirName)
+
+		if Directory.isDirectory(marker) 'checkoutFound'
+			panic("spec-harness tests: the gate could not run - {marker.toString()} sits above {dir.toString()}, so a `{SpecTestCommandWord}` there would take that checkout's tree lock and every concurrent case would be refused.")
+		end 'checkoutFound'
+
+		let above = try level.parent() otherwise break
+
+		level = above
+	end 'eachLevel'
+end 'requireNoCheckoutAbove'
+
+function hostTempDir() returns FilePath
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("spec-harness tests: the gate could not run - {HostTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
+	#else
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("spec-harness tests: the gate could not run - the host temp area '{spelled}' is not a spellable path")
+end 'hostTempDir'
+
+function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{ExecutableSuffix}"
+	let relative = try FilePath.from(spelled) otherwise panic("spec-harness tests: the gate could not run - '{spelled}' is not a spellable path")
+
+	return relative.resolve(Directory.currentPath())
+end 'testedCompilerPath'
+
+module function listing(dir FilePath) returns PathArray
+	return try Directory.list(dir) otherwise panic("spec-harness tests: the gate could not run - could not list {dir.toString()}")
+end 'listing'
+
+function withoutCarriageReturns(text String) returns String
+	return text.replace(CarriageReturn, with: "")
+end 'withoutCarriageReturns'

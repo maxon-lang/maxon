@@ -277,8 +277,8 @@ known, so this is a simple lookup — no analysis required.
 
 **Slice 5 — Diagnostics.** `maxon-bin/Compiler/ErrorCodeRegistry.maxon` IS the registry and it is
 AUTHORED: take the next free number in the right band, add a case, write the code that emits it. Do not
-pick a number that is already claimed — `Testing/ErrorCodeSelfTest.maxon` refuses a duplicate on every
-`spec-test`, naming both claimants, because two agents once took E3099 the same day. **Never reference a
+pick a number that is already claimed — `website/scripts/sync-docs.mjs` refuses a duplicate, naming
+both lines, because two agents once took E3099 the same day. **Never reference a
 code by its number outside the registry**; use the generated member. Semantic band: `SemanticNoContextProvider`, `SemanticAmbiguousContextProvider`, an interface-clause-mismatch
 code, and `SemanticContextAcrossAsyncBoundary` (ruling 7). Parser band: non-interface requirement type and
 the restriction set above.
@@ -342,7 +342,7 @@ All start as `disabled-test`, enabled one at a time.
 ## Verification
 
 1. `scripts/build.sh` — exit 0, **zero warnings**.
-2. The error-code self-test passes (it runs as part of every `spec-test`).
+2. `node website/scripts/sync-docs.mjs --check` passes — it refuses a duplicate error-code number.
 3. `mcp__maxon__run_spec_test` with `filter: "context-parameters"` — walk the disabled tests green one
    at a time.
 4. **Full suite neutral** — no regression against a pre-change baseline established first-hand; never

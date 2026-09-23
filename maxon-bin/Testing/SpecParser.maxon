@@ -1325,8 +1325,8 @@ end 'extractTests'
 // `extractTests` routes `<!-- disabled-test: … -->` here too, and the two must not come to disagree
 // about what a well-formed marker line is.
 //
-// It PANICS in the parent, before a worker exists, exactly as this file's other spec-authoring
-// refusals do; `HarnessSelfTest`'s `unterminated-test-marker` fixture is what proves it still fires.
+// It panics in the parent, before a worker exists, as this file's other spec-authoring refusals do;
+// `tests/spec-harness/refusals/unterminated-test-marker` is what proves it still fires.
 function refuseUnterminatedTestMarker(markerLine String, marker String, markerIndex LineIndex, specPath FilePath)
 	// ⛔ **ASKED OF THIS MARKER'S OWN OPENING, NOT OF THE LINE.** A `markerLine.contains` on
 	// `<!-- note --> <!-- test: foo` is satisfied by the OTHER comment's closer while the test
@@ -2122,10 +2122,6 @@ end 'pushSection'
 // " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`, or the target list out of
 // `<!-- unsupported-targets: k1, k2 -->`. It reads any `<!-- key: value -->` marker, because the two share one
 // grammar; a target key holds no ": ", so the first separator is always the marker's own.
-//
-// EXPORTED because the harness self-test's fixtures carry a marker in that same grammar
-// (`<!-- expect-refusal: … -->`, HarnessSelfTest). A second reader of one marker syntax is exactly
-// the drift this file's other shared constants exist to prevent.
 export function markerValue(line String) returns String
 	for opening in markerOpeningsIn(line) 'eachOpening'
 		let body = markerBodyOf(opening)
@@ -2244,9 +2240,8 @@ function openingsCarryFlag(openings StringArray, flag String) returns bool
 end 'openingsCarryFlag'
 
 // The one-shot door: does `line` carry `marker`? For callers that ask about a single family, where
-// computing the openings and asking are one act — `SpecTestRunner`'s two line walks, and the harness
-// self-test's fixture reader. The scanners in this file hoist the openings instead, because they ask
-// once per family per line.
+// computing the openings and asking are one act, as in `SpecTestRunner`'s two line walks. The
+// scanners in this file hoist the openings instead, because they ask once per family per line.
 export function carriesMarker(line String, marker String) returns bool
 	return openingsCarry(markerOpeningsIn(line), marker: marker)
 end 'carriesMarker'

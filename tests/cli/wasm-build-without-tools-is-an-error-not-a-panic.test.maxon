@@ -18,24 +18,27 @@ let MissingToolWording = "wasm-tools"
 let PanicWording = "panic"
 
 test 'a wasm build without wasm-tools is an error, not a panic'
-	let binary = stageInstallOutsideCheckout(CaseDirName)
-	let binDir = try binary.parent() otherwise panic("wasm-build-without-tools: the staged compiler sits in a directory")
-	let installDir = try binDir.parent() otherwise panic("wasm-build-without-tools: the staged bin directory sits in the install")
-	let work = installDir.join(WorkDirName)
-
-	if not Directory.create(work) and not Directory.isDirectory(work) 'couldNotCreate'
-		panic("wasm-build-without-tools: the gate could not run - could not create {work.toString()}")
-	end 'couldNotCreate'
-
-	let sourcePath = work.join(SourceFileName)
-	try File.writeText(sourcePath, content: Source) otherwise panic("wasm-build-without-tools: the gate could not run - could not write {sourcePath.toString()}")
-
-	let output = work.join(OutputStem)
-	let build = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{output.toString()}", WasmTargetOption], binary: binary, workingDirectory: work)
-	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
-
-	try Expect.equal(build.exitCode() as AssertedInt, expected: 1, message: "a wasm build with no `wasm-tools` anywhere exited {build.exitCode()}, where an ordinary error exits 1. {said}")
-	try Expect.contains(build.stderr, needle: MissingToolWording, message: "a wasm build with no `wasm-tools` did not name what is missing. {said}")
-	try Expect.isFalse(build.stderr.toLower().contains(PanicWording), message: "a wasm build with no `wasm-tools` panicked; a missing tool is the environment, not a compiler fault. {said}")
-	try Expect.isFalse(File.exists(work.join("{OutputStem}{WasmExtension}")), message: "a wasm build with no `wasm-tools` still wrote a module. {said}")
+	try requireHeldInAnInstallOutsideCheckout(CaseDirName, check: AnErrorNotAPanic.create())
 end 'a wasm build without wasm-tools is an error, not a panic'
+
+type AnErrorNotAPanic implements OutsideCheckoutCase
+	static function create() returns AnErrorNotAPanic
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let work = createdStagedDirectory(dir.join(WorkDirName))
+
+		let sourcePath = work.join(SourceFileName)
+		try File.writeText(sourcePath, content: Source) otherwise panic("wasm-build-without-tools: the gate could not run - could not write {sourcePath.toString()}")
+
+		let output = work.join(OutputStem)
+		let build = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{output.toString()}", WasmTargetOption], binary: installedCompilerIn(dir), workingDirectory: work)
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+		try Expect.equal(build.exitCode() as AssertedInt, expected: 1, message: "a wasm build with no `wasm-tools` anywhere exited {build.exitCode()}, where an ordinary error exits 1. {said}")
+		try Expect.contains(build.stderr, needle: MissingToolWording, message: "a wasm build with no `wasm-tools` did not name what is missing. {said}")
+		try Expect.isFalse(build.stderr.toLower().contains(PanicWording), message: "a wasm build with no `wasm-tools` panicked; a missing tool is the environment, not a compiler fault. {said}")
+		try Expect.isFalse(File.exists(work.join("{OutputStem}{WasmExtension}")), message: "a wasm build with no `wasm-tools` still wrote a module. {said}")
+	end 'requireHeldIn'
+end 'AnErrorNotAPanic'

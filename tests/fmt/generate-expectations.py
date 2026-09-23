@@ -115,38 +115,38 @@ def write_stream(path, text, tree):
         handle.write(body)
 
 
-SELFTEST = os.path.join(HERE, "selftest-cases")
+ENGINE_CASES = os.path.join(HERE, "engine-cases")
 
 
-def generate_selftest_expectations(exe):
+def generate_engine_case_expectations(exe):
     """Mint `<Case>.expected` beside every `<Case>.in` by formatting it.
 
-    These pin LAYOUT byte-exact, where `FormatterSelfTest`'s own invariants (comment
-    multiplicity, idempotence) deliberately pin none. The two catch different things
-    and both are kept: a golden says "the layout moved", the invariants say
-    "something was destroyed", and the second reads far better when it fires.
+    These pin LAYOUT byte-exact. `tests/fmt/engine-cases.test.maxon` compares
+    them, and also asks invariants that pin no layout (comment multiplicity,
+    idempotence): a golden says "the layout moved", the invariants say "something
+    was destroyed", and the second reads far better when it fires.
 
     A case the lexer REJECTS mints an `.expected` identical to its `.in` -- that is
     the contract for an unformattable source, not an accident.
     """
-    if not os.path.isdir(SELFTEST):
+    if not os.path.isdir(ENGINE_CASES):
         return
     work = tempfile.mkdtemp()
     try:
-        names = sorted(n for n in os.listdir(SELFTEST) if n.endswith(".in"))
+        names = sorted(n for n in os.listdir(ENGINE_CASES) if n.endswith(".in"))
         for name in names:
             stem = name[: -len(".in")]
-            shutil.copy2(os.path.join(SELFTEST, name),
+            shutil.copy2(os.path.join(ENGINE_CASES, name),
                          os.path.join(work, stem + ".maxon"))
         subprocess.run([exe, "fmt", "."], cwd=work, capture_output=True, text=True)
         for name in names:
             stem = name[: -len(".in")]
             with open(os.path.join(work, stem + ".maxon"), encoding="utf-8") as h:
                 body = h.read()
-            with open(os.path.join(SELFTEST, stem + ".expected"), "w",
+            with open(os.path.join(ENGINE_CASES, stem + ".expected"), "w",
                       encoding="utf-8", newline=chr(10)) as h:
                 h.write(body)
-        print("%-32s %d cases" % ("selftest-cases", len(names)))
+        print("%-32s %d cases" % ("engine-cases", len(names)))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -160,7 +160,7 @@ def main():
         sys.exit("no compiler under " + slot + " -- run scripts/build.sh")
 
     if not sys.argv[1:]:
-        generate_selftest_expectations(exe)
+        generate_engine_case_expectations(exe)
 
     for case in sys.argv[1:] or sorted(os.listdir(FIXTURES)):
         case_dir = os.path.join(FIXTURES, case)

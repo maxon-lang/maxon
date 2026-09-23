@@ -1897,8 +1897,7 @@ function requireWorkerExitDecodeHolds()
 		return
 	end 'everyRowHeld'
 
-	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is built
-	// as text and INTERPOLATED. Same constraint `SpecVerdictSelfTest` and `LadderIndex` document.
+	// `panic` takes a string literal (a `let`-bound String is rejected), so the list is interpolated.
 	let report = indentedList(broken, indent: BrokenExitRowIndent)
 	panic("SpecWorkerPool: {broken.count()} row(s) of the worker exit-status decode no longer hold. A worker that dies leaves its exit code and nothing else, so a decode that has stopped agreeing with the OS turns every death into the same unattributable wall of FAILs.{report}")
 end 'requireWorkerExitDecodeHolds'
@@ -2116,85 +2115,16 @@ end 'takeDispatchableJob'
 // is compiled in process) the compiler under test as well. See `spawnNoWait` for why that is one
 // parameter again and not two.
 export function runSpecPool(harnessExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, effectiveTarget Target, includeNetwork bool) returns PoolRun throws CompileError
-	// ⭐ **THE TREND LOG'S OWN REFUSALS, PROVEN TO FIRE.** `ScaleHistory` reads a document a human edits
-	// and refuses around thirty ways it can be edited into a lie; nothing in the tree ran one of them.
-	// It is wired here rather than into `scale-test` because a gate only the instrument's own command
-	// reaches is a gate nobody runs on the way to a merge — and unlike the harness fixtures below, this
-	// one spawns nothing: those refusals are catchable throws, so this is a few hundred string
-	// comparisons.
-	//
-	// ⚠ **IT GOES FIRST, AND THAT ORDER IS LOAD-BEARING.** The harness self-test below drives its
-	// fixtures by SPAWNING this harness, and a sub-run reaches this same function — so a broken trend
-	// refusal panics inside EVERY sub-run (one per fixture directory, plus the network gate's two), and the
-	// parent reads each fixture one as a harness fixture that "failed for the WRONG REASON". Measured when
-	// there were eight fixtures: the suite's headline became `8 of 8 harness refusals did not fire`, which
-	// was false, with the real cause buried eight times in the body.
-	// Asking this question before any sub-run exists means the parent panics on its own terms and says
-	// exactly what broke. (A green run still answers it once per sub-run, which is string work on a
-	// document of a few hundred bytes.)
+	// Asked here rather than in `scale-test`: a gate only the instrument's own command reaches is one
+	// nobody runs on the way to a merge.
 	requireScaleHistoryRefusalsFire()
 
-	// ⭐ **AND THAT `fmt` STILL REPRODUCES THE ANSWERS THE BOOTSTRAP GAVE FOR ITS ENGINE CORPUS.** The
-	// other gate in this slot that spawns nothing, and the only one about a COMMAND rather than about
-	// the harness: `maxon fmt` rewrites source in place, and it once destroyed 338 comments in one file
-	// with exit 0 while nothing in the tree could have noticed. A spec case cannot reach it — the
-	// formatter lives in `Compiler/`, where the corpus's vocabulary does not go — so it is asked here,
-	// of every run. It is `format` over twenty-odd sources of a few lines each plus three string
-	// comparisons per case; see `FormatterSelfTest` for what each of the three catches.
-	//
-	// ⚠ **IT GOES ABOVE THE SPAWNING GATES FOR THE REASON STATED DIRECTLY ABOVE, AND THAT ORDER IS
-	// LOAD-BEARING.** MEASURED, with one `.expected` deliberately swapped for its `.in`: placed after
-	// `requireHarnessRefusalsFire`, the panic fires inside every fixture sub-run instead, and the parent
-	// reads each one as a fixture that failed for the WRONG REASON — headline `11 of 11 harness refusals
-	// did not fire`, which is false, with the real cause buried eleven times in the body. Asked here, the
-	// parent panics on its own terms and names the cases.
-	requireFormatterPreservesItsCorpus()
-
-	// ⭐ **AND THAT `IrFunction.createFromStd` STILL GIVES EVERY FUNCTION ITS OWN PLACEHOLDER BOXES.** The
-	// third gate in this slot that spawns nothing, and asked here for the reason directly above: a spec
-	// case cannot reach `IrFunction`. See `IrFunctionSelfTest` for what a shared one costs.
+	// A spec case cannot reach `IrFunction`; see `IrFunctionSelfTest` for what a shared placeholder
+	// costs.
 	requireWorkerFunctionPlaceholdersAreFresh()
 
-	// ⭐ **AND THAT A DEAD WORKER'S EXIT STATUS STILL DECODES TO WHAT THE OS MEANT BY IT.** The fourth
-	// gate in this slot that spawns nothing, and asked here for the reason directly above: a worker
-	// death is not reproducible on demand, so the mapping is what can be gated and the crash is not.
-	// See `requireWorkerExitDecodeHolds` for what an undecoded code costs a reader.
+	// A worker death is not reproducible on demand, so the exit-status decode is what can be gated.
 	requireWorkerExitDecodeHolds()
-
-	// ⭐ **AND THE HARNESS'S OWN REFUSALS, BEFORE THE HARNESS IS TRUSTED TO JUDGE ANYTHING ELSE.** It
-	// runs here rather than in `Main` because this is the one function only the PARENT of a pool reaches
-	// (a worker goes to `runPersistentWorker`), and it runs ahead of `buildPlans`, which is itself one of
-	// the things under test — so a `--filter`ed run gets the same door an unfiltered one does. See
-	// `HarnessSelfTest` for why a committed malformed spec cannot do this job.
-	requireHarnessRefusalsFire(harnessExe, specDir: specDir)
-
-	// ⭐ **AND THAT THE LIVE-NETWORK GATE STILL GATES**, in the same slot and driven the same way. It is
-	// the other half of "the harness selects what it says it selects": the sweep above proves the harness
-	// REFUSES what it must, this proves it LEAVES OUT what it must — and says so. Ahead of `buildPlans`
-	// for that function's reason: the selection it checks is the one about to be made.
-	requireNetworkGateHolds(harnessExe, specDir: specDir)
-
-	// ⭐ **AND THAT AN `alone` CASE STILL RUNS WITH NOTHING BESIDE IT** — the other scheduling promise a
-	// marker makes, driven the same way. See `HarnessSelfTest`.
-	requireAloneCasesRunWithNothingBeside(harnessExe, specDir: specDir)
-
-	// ⭐ **AND THAT A GOLDEN NOTHING COMPARES IS STILL NAMED.** The third gate driven the same way, in
-	// the same slot: the two above are about which cases the harness runs, this one is about the files it
-	// leaves behind. It plants orphaned goldens in its own fixture, requires the run to report them, then
-	// removes them and requires the run to be silent — see `HarnessSelfTest`.
-	requireOrphanedGoldensAreReported(harnessExe, specDir: specDir)
-
-	// ⭐ **AND THAT A GOLDEN WHICH CONTRADICTS THE COMPILER IS STILL NAMED.** The census above finds a
-	// reference nothing reads; this finds one that IS read and disagrees — the other half of the same
-	// question. It clears its fixture's goldens, mints them, corrupts two, requires the run to report both
-	// and stay green, then puts them back and requires silence — see `HarnessSelfTest`.
-	requireDriftedGoldensAreReported(harnessExe, specDir: specDir)
-
-	// ⭐ **AND THAT THE COMPILER STILL READS A MARKER LINE THE WAY THE REFERENCE DOES.** Driven the same way as the
-	// gates above, and the one of them that is about the CORPUS FORMAT rather than about this harness's own
-	// behaviour: a marker shape the two parsers disagree about makes one `.md` mean two things, and the
-	// half that goes quiet reads exactly like a case nobody wrote — see `HarnessSelfTest`.
-	requireReferenceMarkerShapesParse(harnessExe, specDir: specDir)
 
 	let suitePlan = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	let plans = suitePlan.plans

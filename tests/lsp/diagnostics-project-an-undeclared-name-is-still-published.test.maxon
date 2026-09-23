@@ -11,7 +11,7 @@
 // name; `maxon build` of it reports this one diagnostic and no other. The session, the staging and the
 // assertions are `diagnostics-project-probe.test.maxon`'s.
 
-let ProjectUndeclaredNameDirName = "maxon-tests-lsp-diagnostics-project-undeclared-name"
+let ProjectUndeclaredNameDirName = "diagnostics-project-undeclared-name"
 let ProjectUndeclaredNameHelperFileName = "helper.maxon"
 let ProjectUndeclaredNameBufferFileName = "main.maxon"
 let ProjectUndeclaredNameHelperSource = "export function projectUndeclaredHelper() returns ExitCode\n\treturn 0\nend 'projectUndeclaredHelper'\n"
@@ -24,6 +24,8 @@ test 'a name no file of the project declares is still published'
 	writeCorpusFile(root, fileName: ProjectUndeclaredNameBufferFileName, content: ProjectUndeclaredNameBufferSource)
 
 	let probe = probeProjectDiagnostics(root, fileName: ProjectUndeclaredNameBufferFileName, content: ProjectUndeclaredNameBufferSource)
+
+	discardOutsideCheckoutDir(root)
 
 	let reported = try onlyProjectDiagnostic(probe, note: "`ProjectUndeclaredNowhere` is declared nowhere — not in the buffer, not in the sibling file, not in `stdlib/`. A `maxon build` of this very project reports it and nothing else.")
 

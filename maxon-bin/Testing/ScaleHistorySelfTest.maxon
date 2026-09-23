@@ -1,29 +1,22 @@
 // Testing/ScaleHistorySelfTest.maxon — the gate over `ScaleHistory`'S OWN REFUSALS.
 //
-// ⭐⭐ **A REFUSAL NOTHING RUNS IS A CLAIM, NOT A DOOR** — the rule `HarnessSelfTest` states, applied to
-// the OTHER file in this suite that reads a hand-edited document. `ScaleHistory` carries around thirty
-// throws describing precisely how `docs/optimization-log.md` can be edited into a lie: a missing marker,
-// a deleted separator, a renamed column, a ragged row, three tables that no longer describe one run.
-// Nothing else in the tree reaches them — no spec case, no other self-test — and a refusal written,
-// reviewed and never observed to fire is exactly how one of them came to print two byte-identical
-// descriptors and tell the reader they described different runs (see `ScaleHistory.assertSameRun`).
+// A refusal nothing runs is a claim, not a door. `ScaleHistory` carries around thirty throws
+// describing how `docs/optimization-log.md` can be edited into a lie: a missing marker, a deleted
+// separator, a renamed column, a ragged row, three tables that no longer describe one run. Nothing
+// else in the tree reaches them.
 //
 // ⚠ **AN ORDINARY SPEC CASE STRUCTURALLY CANNOT PIN THESE.** A spec case compiles a Maxon program; the
 // trend log is read by `scale-test`, which no spec case runs, and there is no route from a `.md` in
 // `specs/` to a damaged trend log. The refusals are therefore unreachable from the suite's normal
 // vocabulary however many cases are written.
 //
-// ⇒ **THE SHAPE IS DELIBERATELY NOT `HarnessSelfTest`'S.** That file SPAWNS a sub-process per fixture,
-// because the refusals it gates are `panic`s raised in the suite's parent while it parses its own
-// corpus — a panic cannot be caught, so the only way to observe one is to watch a process die. These
-// refusals are `throws ScaleError`, which is CATCHABLE, so each fixture here is a document handed to
-// the parser in process and an error caught. A spawning harness would be a far heavier mechanism than
-// the problem needs, and twenty sub-processes on every suite run is a real cost paid for nothing.
+// These refusals are `throws ScaleError`, which is catchable, so each fixture is a document handed
+// to the parser in process. `tests/spec-harness` spawns a process per fixture only because the spec
+// harness's refusals are panics, observable solely as a process dying.
 //
-// ⚠ **AND WHAT IS COMPARED IS A SUBSTRING OF THE MESSAGE**, chosen to name the refusal and to contain no
-// file, no line and no stack frame — `HarnessSelfTest`'s rule and its reason: an expectation carrying a
-// whole diagnostic goes red on every edit that moves a line above it, which is a false-red generator
-// wired to an unrelated property.
+// What is compared is a substring of the message that names the refusal and holds no file, line or
+// stack frame: an expectation carrying a whole diagnostic goes red on every edit that moves a line
+// above it.
 //
 // ⚠ **THE FIXTURES ARE NOT `docs/optimization-log.md`, AND NOTHING HERE WRITES A FILE.** The log is the
 // project's trend record; a self-test that damaged it to prove a refusal would be worse than the silence
@@ -97,12 +90,9 @@ let ValidSeparatorRow = "| --- | --- | --- | ---: | ---: |"
 // line trims to the empty string), so the fixture would trip a refusal about the wrong line.
 let DeletedMarkerStandIn = "<!-- this table's marker, deleted by hand -->"
 
-// ⭐ **PROVE EVERY TREND-LOG REFUSAL STILL FIRES.** Called ONCE, by the spec suite's parent process,
-// beside `requireHarnessRefusalsFire` and for its reason: this is a property of the TREE rather than of
-// any one test, so there is no test to fail and nothing downstream that could act on it. It PANICS,
-// naming every fixture whose refusal did not fire — all of them together, because one edit routinely
-// breaks several and a report naming the first sends the reader back for another sweep per remaining
-// fixture.
+// Called once, by the spec suite's parent process: this is a property of the tree rather than of
+// any one test, so there is no test to fail. It names every fixture whose refusal did not fire,
+// because one edit routinely breaks several.
 export function requireScaleHistoryRefusalsFire()
 	let trend = validFixtureTrend()
 	let fixtures = scaleHistoryFixtures(trend)
@@ -127,8 +117,7 @@ export function requireScaleHistoryRefusalsFire()
 		return
 	end 'everyRefusalFired'
 
-	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is built
-	// as text and INTERPOLATED. The same constraint `HarnessSelfTest` and `LadderIndex` both document.
+	// `panic` takes a string literal (a `let`-bound String is rejected), so the list is interpolated.
 	let report = indentedList(broken, indent: BrokenFixtureIndent)
 	panic("ScaleHistorySelfTest: {broken.count()} of {fixtures.count()} trend-log refusals did not fire on the document written to trip them. A refusal nothing runs is a claim, not a door.{report}")
 end 'requireScaleHistoryRefusalsFire'

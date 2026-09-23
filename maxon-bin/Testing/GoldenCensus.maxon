@@ -13,9 +13,8 @@
 // wrong because nothing reads it. This enumeration is the only thing that finds them, and they
 // accumulate in quantity: a hand review of the corpus turned up 58 at once.
 //
-// **It rides the suite because the suite is the one thing every rung runs**, exactly as
-// `requireLadderIndexComplete` and `requireHarnessRefusalsFire` do for their tree-level properties. A
-// `scripts/` gate would be a second thing to remember to run.
+// It rides the suite because the suite is what every change runs; a `scripts/` gate would be a
+// second thing to remember to run.
 //
 // ⛔ **THE PREDICATE IS THE SPEC'S OWN ROSTER AND THE LANE'S NAME — NEVER WHAT THIS RUN EXECUTED.** A
 // `--filter` run executes a handful of cases; keyed on "did this case run", this would scream on every
@@ -38,8 +37,8 @@
 // ⚠ A finding is NOT always "delete the file": a case may have been RENAMED, in which case the golden
 // should be renamed with it, so **the count is also a lower bound on renames nobody noticed.**
 
-// Where a spec directory's goldens live — and whether it has any at all. A spec directory that pins no
-// codegen (every harness fixture sub-run, for one) owes this census nothing.
+// Where a spec directory's goldens live — and whether it has any at all. A spec directory that pins
+// no codegen owes this census nothing.
 union GoldenRoot
 	at(root FilePath)
 	none
@@ -331,23 +330,16 @@ function collectGoldensOfVanishedSpecs(lanes GoldenLaneArray, declaredSpecs Spec
 	end 'eachLane'
 end 'collectGoldensOfVanishedSpecs'
 
-// ⭐ **ONE ENTRY OF THE CENSUS, AND THE ONE PLACE ITS TEXT IS SPELLED.** A path a reader can act on,
-// then why nothing reads it, at `ResultNoteIndent` — the depth every other trailer in this suite puts a
-// case at, because a reader takes the trailers as one column.
-//
-// EXPORTED, with `UncomparedReason` and `UncomparedHeadline`, because `HarnessSelfTest`'s orphan gate
-// asserts on these exact lines. It builds its expectations by CALLING this, the way
-// `requireNetworkGateHolds` builds its own from `verdictLine` and `resultNoteEntry`: a gate that spelled
-// the sentence itself would be one fact written twice, and the half that drifts is always the one
-// nothing renders.
-export function uncomparedEntry(relPath String, reason UncomparedReason) returns String
+// At `ResultNoteIndent`, the depth every other trailer in this suite puts a case at: a reader takes
+// the trailers as one column. `tests/spec-harness/gates/orphan-golden.test.maxon` spells this line
+// and three of `uncomparedReasonText`'s sentences as literals, so rewording either fails that
+// corpus, which `spec-test` does not run.
+function uncomparedEntry(relPath String, reason UncomparedReason) returns String
 	return "{ResultNoteIndent}{relPath} — {uncomparedReasonText(reason)}\n"
 end 'uncomparedEntry'
 
-// Every way a golden on disk can be one that nothing compares. A closed union rather than a String built
-// at each site: the gate one level up asserts that three of these arms actually fire, and it can only do
-// that against a set something enumerates.
-export union UncomparedReason
+// Every way a golden on disk can be one that nothing compares.
+union UncomparedReason
 	// The spec is there and active; it declares no case by that name. Rename debris, or a deletion.
 	noSuchCase(specName String, caseName String)
 
@@ -368,8 +360,6 @@ export union UncomparedReason
 	strayUnderLane
 end 'UncomparedReason'
 
-// The sentence each arm reads as. Split from the union so the arms carry the data and this carries the
-// wording — and so a gate can name an arm without quoting a sentence.
 function uncomparedReasonText(reason UncomparedReason) returns String
 	return match reason 'reason'
 		noSuchCase(specName, caseName) gives "{specName} declares no case named `{caseName}`"
@@ -386,9 +376,9 @@ function uncomparedReasonText(reason UncomparedReason) returns String
 	end 'reason'
 end 'uncomparedReasonText'
 
-// The words the census's headline is recognised by — its one spelling, shared with the gate that
-// asserts a tree with nothing to report prints NO such headline.
-export let UncomparedHeadline = "are COMPARED BY NOTHING"
+// The words the census's headline is recognised by, spelled as a literal by the corpus
+// `uncomparedEntry` names.
+let UncomparedHeadline = "are COMPARED BY NOTHING"
 
 // A part of the tree the census could NOT read. Reported inside the same list rather than swallowed:
 // "we chose not to look" must never read as "we looked".

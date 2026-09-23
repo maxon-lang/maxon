@@ -5,14 +5,12 @@
 // are `TestDispatcher`, execution is `TestExecutor`, and both faces of the report are `TestRender`. What
 // lives here is the command line, where the staged tree goes, and the exit code.
 //
-// ⛔⛔ **A TEST RUN TAKES NO TREE LOCK, AND THAT IS A REQUIREMENT RATHER THAN AN OMISSION.** Under
-// `Main.acquireBuildTreeLock`'s rule a project build with no `--output=`, inside a checkout with a
-// `stdlib/` above it, locks the whole checkout — and every case under `tests/test-fixtures/` IS such
-// a build, spawned from a `test` that is ITSELF running inside a build of this kind
-// (`tests/test-command/`). It would come back as exit 2 with an EMPTY stdout, nine times over. This
-// command never goes through `runBuild`: it calls `Compiler.compileToProduct` directly, which locks
-// nothing, and it names its own output. That is the same exemption `spec-test` buys with
-// `isHarnessFixtureSubRun`, obtained here by not being a lock-taking shape at all.
+// ⛔ A test run takes no tree lock, and that is a requirement. Under `Main.acquireBuildTreeLock`'s
+// rule a project build with no `--output=`, inside a checkout with a `stdlib/` above it, locks the
+// whole checkout, and every case under `tests/test-fixtures/` is such a build, spawned from a
+// `test` that is itself running inside one (`tests/test-command/`); each would come back as exit 2
+// with an empty stdout. This command never goes through `runBuild`: it calls
+// `Compiler.compileToProduct` directly, which locks nothing, and it names its own output.
 
 // The command's own name — the word every message in this file uses for what failed, and the token
 // `MaxonArgs.parse` matches. One spelling, so a renamed command cannot keep announcing the old one.

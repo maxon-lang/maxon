@@ -1671,10 +1671,11 @@ export function tallyResults(results SpecTestResultArray) returns ResultTally
 	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere, drifted: driftedGoldens, compared: comparedGoldens)
 end 'tallyResults'
 
-// The words the golden-drift report is recognised by — its ONE spelling, carried by both channels the
-// report reaches a reader through (the summary line on stdout and the trailer on stderr) so that the gate
-// asserting a clean run prints NO such report has one thing to look for rather than two.
-export let GoldenDriftHeadline = "DRIFTED from what the compiler emits"
+// The words the golden-drift report is recognised by, carried by both the stdout summary and the
+// stderr trailer. `tests/spec-harness/gates/drifted-golden.test.maxon` spells them, and
+// `goldenDriftSummary`'s whole sentence, as literals, so rewording either fails that corpus, which
+// `spec-test` does not run.
+let GoldenDriftHeadline = "DRIFTED from what the compiler emits"
 
 // The summary line's drift clause, beside `N passed, M failed` — the "same breath" `GoldenDrift`'s header
 // asks for, and the one place it is spelled.
@@ -1722,12 +1723,11 @@ export function reportGoldenDrift(results SpecTestResultArray)
 	reportResultNote(entries, headline: headline)
 end 'reportGoldenDrift'
 
-// ⭐ **THE ENTRIES, SPLIT FROM THE PRINTING SO A SELF-TEST CAN ASSERT ON THEM.** The one thing neither the
-// spec corpus nor a fixture sub-run can reach is a `notRunHere` result, because a sub-run executes on the
-// host lane where every case runs — and that is exactly the case this walk must not narrow away. On a lane
-// this host cannot execute, the golden comparison is the ONLY verification a case gets
-// (`TestOutcome.pinsEmittedCode`), so a reporter keyed on `isPass()` would go silent on the lane that has
-// nothing else. `SpecVerdictSelfTest` synthesizes one and requires it named.
+// Split from the printing so `SpecVerdictSelfTest` can assert on it. Neither the spec corpus nor
+// `tests/spec-harness` can produce a `notRunHere` result, because both run on the host lane, where
+// every case runs. On a lane this host cannot execute, the golden comparison is the only
+// verification a case gets (`TestOutcome.pinsEmittedCode`), so a walk keyed on `isPass()` would go
+// silent exactly there.
 export function goldenDriftEntries(results SpecTestResultArray) returns StringArray
 	var entries = StringArray.create()
 
@@ -1956,22 +1956,13 @@ end 'specTempRootDir'
 // The cwd every test binary is spawned with — `<checkoutRoot>/temp/`. See `RunWorkingSubdirName` for
 // why the corpus, and not this runner, decides where that is.
 //
-// ⚠ **THE CHECKOUT ROOT IS THE PROCESS CWD, AND THAT IS THIS HARNESS'S EXISTING CONTRACT RATHER THAN A
-// NEW ASSUMPTION** — the same fact `HarnessSelfTest.FixturesRelativeDir`, `LadderIndex` and
-// `Main.DefaultSpecDir` are all already built on ("Run the suite from the repo root", which one of them
-// says in a panic).
+// The checkout root is the process cwd, the contract `Main.DefaultSpecDir` is built on too. It is
+// not `specDir.parent()`: `spec-test <dir>` may name any directory, and a run's spec directory says
+// which specs to read, not which tree it stands in.
 //
-// ⛔ It is deliberately NOT `specDir.parent()`, which is the obvious reading and is WRONG — MEASURED,
-// by `HarnessSelfTest` failing the moment it was tried. A harness FIXTURE SUB-RUN is this same harness
-// relaunched with `specDir` pointing at `tests/harness-fixtures/<case>`, so the parent of
-// its spec directory is the fixture CORPUS, not the checkout — and the sub-run promptly created a
-// `temp/` inside it, which the next sweep read as a fixture case holding zero specs. A run's spec
-// directory says which specs to read; it does not say which tree it is standing in.
-//
-// ⚠ Exported for `specTempRootDir`'s reason, which is the same reason: BOTH HALVES OF THE POOL ASK IT,
-// in different processes. The parent creates it once (`prepareSharedDirs`), each worker spawns into it.
-// A second copy in either is a copy that can disagree — and this one would disagree SILENTLY, as a
-// wrong answer from a test rather than as a missing directory.
+// Exported because both halves of the pool ask it, in different processes: the parent creates it
+// once (`prepareSharedDirs`) and each worker spawns into it. A second copy could disagree silently,
+// as a wrong answer from a test rather than a missing directory.
 export function specRunWorkingDir() returns FilePath
 	let runSub = try FilePath.from(RunWorkingSubdirName) otherwise panic("SpecTestRunner: RunWorkingSubdirName '{RunWorkingSubdirName}' must be a valid relative path")
 	return Directory.currentPath().join(runSub)

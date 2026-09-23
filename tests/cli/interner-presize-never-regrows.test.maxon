@@ -19,39 +19,44 @@ function writeInternerFixture(directory FilePath, name String, content String)
 end 'writeInternerFixture'
 
 test 'the type-name interner is pre-sized and never regrows'
-	let dir = freshOutsideCheckoutDir(InternerCaseDirName)
-	let app = dir.join(InternerAppDirName)
-
-	if not Directory.create(app) and not Directory.isDirectory(app) 'couldNotCreate'
-		panic("interner-presize: the gate could not run - could not create {app.toString()}")
-	end 'couldNotCreate'
-
-	writeInternerFixture(app, name: InternerMainFileName, content: InternerMainSource)
-	writeInternerFixture(app, name: InternerShapeFileName, content: InternerShapeSource)
-	writeInternerFixture(app, name: InternerLabelFileName, content: InternerLabelSource)
-
-	let built = runDriver([BuildCommandWord, InternerAppDirName, InternerLogFlag], workingDirectory: dir)
-	let said = "It wrote to stderr: {built.stderr}"
-
-	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "a three-file directory did not build under {InternerLogFlag}. {said}")
-
-	var seen = 0
-	var regrown = ""
-
-	for rawLine in built.stderr.split("\n") 'eachLine'
-		let line = rawLine.trimEnd()
-
-		if not line.startsWith(InternerLinePrefix) 'notOurs'
-			continue
-		end 'notOurs'
-
-		seen = seen + 1
-
-		if not line.endsWith(InternerNoRegrowthsSuffix) 'regrew'
-			regrown.append("\n{line}")
-		end 'regrew'
-	end 'eachLine'
-
-	try Expect.isTrue(seen >= 3, message: "{InternerLogFlag} printed {seen} lines starting `{InternerLinePrefix}`, and a three-file project interns type names in every one of its files, so there must be at least one per file. {said}")
-	try Expect.isTrue(regrown.isEmpty(), message: "the type-name interner regrew for these files, so its pre-size heuristic did not hold: {regrown}")
+	try requireHeldOutsideCheckout(InternerCaseDirName, check: InternerNeverRegrows.create())
 end 'the type-name interner is pre-sized and never regrows'
+
+type InternerNeverRegrows implements OutsideCheckoutCase
+	static function create() returns InternerNeverRegrows
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = createdStagedDirectory(dir.join(InternerAppDirName))
+
+		writeInternerFixture(app, name: InternerMainFileName, content: InternerMainSource)
+		writeInternerFixture(app, name: InternerShapeFileName, content: InternerShapeSource)
+		writeInternerFixture(app, name: InternerLabelFileName, content: InternerLabelSource)
+
+		let built = runDriver([BuildCommandWord, InternerAppDirName, InternerLogFlag], workingDirectory: dir)
+		let said = "It wrote to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "a three-file directory did not build under {InternerLogFlag}. {said}")
+
+		var seen = 0
+		var regrown = ""
+
+		for rawLine in built.stderr.split("\n") 'eachLine'
+			let line = rawLine.trimEnd()
+
+			if not line.startsWith(InternerLinePrefix) 'notOurs'
+				continue
+			end 'notOurs'
+
+			seen = seen + 1
+
+			if not line.endsWith(InternerNoRegrowthsSuffix) 'regrew'
+				regrown.append("\n{line}")
+			end 'regrew'
+		end 'eachLine'
+
+		try Expect.isTrue(seen >= 3, message: "{InternerLogFlag} printed {seen} lines starting `{InternerLinePrefix}`, and a three-file project interns type names in every one of its files, so there must be at least one per file. {said}")
+		try Expect.isTrue(regrown.isEmpty(), message: "the type-name interner regrew for these files, so its pre-size heuristic did not hold: {regrown}")
+	end 'requireHeldIn'
+end 'InternerNeverRegrows'

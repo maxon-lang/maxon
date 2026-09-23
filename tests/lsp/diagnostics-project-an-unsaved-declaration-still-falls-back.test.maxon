@@ -40,7 +40,7 @@
 // name in it would redden this case for a reason that has nothing to do with the declaration. The session,
 // the staging and the assertions are `diagnostics-project-probe.test.maxon`'s.
 
-let ProjectUnsavedEditDirName = "maxon-tests-lsp-diagnostics-project-unsaved-edit"
+let ProjectUnsavedEditDirName = "diagnostics-project-unsaved-edit"
 let ProjectUnsavedEditDeclaringFileName = "slot.maxon"
 let ProjectUnsavedEditBufferFileName = "main.maxon"
 let ProjectUnsavedEditDeclaringSource = "export typealias ProjectUnsavedEditSlot = int(0 to u64.max)\n"
@@ -53,6 +53,8 @@ test 'a didChange that declares a type the index never swept still falls back'
 	writeCorpusFile(root, fileName: ProjectUnsavedEditBufferFileName, content: ProjectUnsavedEditSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectUnsavedEditBufferFileName, content: ProjectUnsavedEditSavedSource, editedContent: ProjectUnsavedEditTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and `ProjectUnsavedEditSlot` is `export typealias`ed by the sibling file, so the project view is taken and nothing is published. This publish is the CONTROL: a diagnostic here is the project view failing at `didOpen`, before any edit, and says nothing about the edit below.")
 

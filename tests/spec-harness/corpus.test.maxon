@@ -1,0 +1,72 @@
+typealias CorpusTally = int(0 to u64.max)
+
+test 'every fixture has its test file, every test file its fixture, and every refusal fixture one spec and its expected refusal'
+	var broken = StringArray.create()
+
+	collectUnpaired(RefusalsDirName, broken: broken)
+	collectUnpaired(GatesDirName, broken: broken)
+	collectMalformedRefusals(broken)
+
+	try requireNothingBroken(broken, headline: "the spec-harness corpus")
+end 'every fixture has its test file, every test file its fixture, and every refusal fixture one spec and its expected refusal'
+
+function collectUnpaired(kind String, broken StringArray)
+	var fixtures = StringArray.create()
+	var testFiles = StringArray.create()
+
+	for entry in listing(corpusDir(kind)) 'eachEntry'
+		let name = entry.filename()
+
+		if Directory.isDirectory(entry) 'isAFixture'
+			fixtures.push(name)
+		end 'isAFixture' else if name.endsWith(TestSourceSuffix) 'isATestFile'
+			testFiles.push(caseNameOf(name))
+		end 'isATestFile' else 'isAStray'
+			broken.push("{kind}/{name} is neither a fixture directory nor a `{TestSourceSuffix}` file.")
+		end 'isAStray'
+	end 'eachEntry'
+
+	if fixtures.isEmpty() 'noFixtures'
+		broken.push("{kind}/ holds no fixture directories, so not one of its checks was proven to hold.")
+	end 'noFixtures'
+
+	for fixture in fixtures 'eachFixture'
+		if not testFiles.contains(fixture) 'noTestFile'
+			broken.push("{kind}/{fixture}/ has no {fixture}{TestSourceSuffix} beside it, so nothing runs it and it proves nothing.")
+		end 'noTestFile'
+	end 'eachFixture'
+
+	for testFile in testFiles 'eachTestFile'
+		if not fixtures.contains(testFile) 'noFixture'
+			broken.push("{kind}/{testFile}{TestSourceSuffix} names no fixture directory {kind}/{testFile}/ beside it.")
+		end 'noFixture'
+	end 'eachTestFile'
+end 'collectUnpaired'
+
+function collectMalformedRefusals(broken StringArray)
+	for entry in listing(corpusDir(RefusalsDirName)) 'eachEntry'
+		if not Directory.isDirectory(entry) 'notAFixture'
+			continue
+		end 'notAFixture'
+
+		var specs = 0 as CorpusTally
+		var expectations = 0 as CorpusTally
+		var others = StringArray.create()
+
+		for stored in listing(entry) 'eachStored'
+			let name = stored.filename()
+
+			if name == ExpectedRefusalFileName 'isTheExpectation'
+				expectations = expectations + 1
+			end 'isTheExpectation' else if stored.fileExtension() == FixtureSpecExtension and not Directory.isDirectory(stored) 'isASpec'
+				specs = specs + 1
+			end 'isASpec' else 'isSomethingElse'
+				others.push(name)
+			end 'isSomethingElse'
+		end 'eachStored'
+
+		if specs != 1 or expectations != 1 or not others.isEmpty() 'notOneOfEach'
+			broken.push("{RefusalsDirName}/{entry.filename()}/ holds {specs} `{FixtureSpecExtension}` file(s), {expectations} {ExpectedRefusalFileName} and {others.count()} other entry(ies). A refusal fixture is ONE malformed spec and the substring its refusal prints: a second spec is never reached, because the first refusal ends the run.")
+		end 'notOneOfEach'
+	end 'eachEntry'
+end 'collectMalformedRefusals'

@@ -55,11 +55,7 @@ end 'a snippet staged under the cache root is not counted as a build'
 // A snippet where the MCP server stages one: its own directory under the root Maxon owns, and one source
 // file in it.
 function stageSnippetUnder(owned FilePath)
-	let staged = owned.join(SnippetStem)
-
-	if not Directory.create(staged) and not Directory.isDirectory(staged) 'couldNotCreate'
-		panic("{CaseDirName}: the gate could not run - could not create {staged.toString()}, where the MCP server stages an inline snippet.")
-	end 'couldNotCreate'
+	let staged = createdStagedDirectory(owned.join(SnippetStem))
 
 	let file = staged.join("{SnippetStem}{SnippetExtension}")
 	try File.writeText(file, content: SnippetSource) otherwise panic("{CaseDirName}: the gate could not run - could not write {file.toString()}, the snippet source a staged tool call leaves under the cache root.")

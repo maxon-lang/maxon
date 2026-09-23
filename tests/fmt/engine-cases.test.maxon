@@ -1,0 +1,243 @@
+let EngineCasesDirName = "tests/fmt/engine-cases"
+let EngineStagingDirName = "temp/fmt-engine-cases"
+
+let EngineSpawnName = "the engine corpus"
+let EngineTreeDescription = "the engine corpus's staged copies"
+
+let CaseSourceExtension = ".in"
+let CaseExpectedExtension = ".expected"
+let StagedSourceExtension = ".maxon"
+
+let UnlexableCasePrefix = "Unterminated"
+let ShebangMarker = "#!"
+
+typealias CommentOccurrenceTally = int(0 to u64.max)
+typealias FormattedTextMap = Map with (String, String)
+
+type EngineCorpus
+	export let sources as StringArray
+	export let expectations as StringArray
+
+	static function read() returns EngineCorpus
+		var sources = StringArray.create()
+		var expectations = StringArray.create()
+
+		for entry in listing(readableDir(EngineCasesDirName)) 'eachEntry'
+			let storedExtension = entry.fileExtension()
+
+			if storedExtension == CaseSourceExtension 'aSource'
+				sources.push(entry.stem())
+			end 'aSource' else if storedExtension == CaseExpectedExtension 'anExpectation'
+				expectations.push(entry.stem())
+			end 'anExpectation'
+		end 'eachEntry'
+
+		return Self{sources: sources, expectations: expectations}
+	end 'read'
+
+	function pairedCases() returns StringArray
+		var paired = StringArray.create()
+
+		for caseName in self.sources 'eachSource'
+			if self.expectations.contains(caseName) 'paired'
+				paired.push(caseName)
+			end 'paired'
+		end 'eachSource'
+
+		return paired
+	end 'pairedCases'
+
+	function caseText(caseName String, storedExtension String) returns String
+		return fileBody(readableDir(EngineCasesDirName).join("{caseName}{storedExtension}"))
+	end 'caseText'
+end 'EngineCorpus'
+
+type StagedEngineCase
+	export let name as String
+	export let path as FilePath
+	export let source as String
+
+	static function create(name String, path FilePath, source String) returns StagedEngineCase
+		return Self{name: name, path: path, source: source}
+	end 'create'
+end 'StagedEngineCase'
+
+typealias StagedEngineCaseArray = Array with StagedEngineCase
+
+test 'every engine case has both its source and its oracle'
+	let corpus = EngineCorpus.read()
+	var halfStored = StringArray.create()
+
+	for caseName in corpus.sources 'eachSource'
+		if not corpus.expectations.contains(caseName) 'noOracle'
+			halfStored.push("{caseName}{CaseSourceExtension} has no {caseName}{CaseExpectedExtension}")
+		end 'noOracle'
+	end 'eachSource'
+
+	for caseName in corpus.expectations 'eachExpectation'
+		if not corpus.sources.contains(caseName) 'noSource'
+			halfStored.push("{caseName}{CaseExpectedExtension} has no {caseName}{CaseSourceExtension}")
+		end 'noSource'
+	end 'eachExpectation'
+
+	try Expect.isEmpty(listedLines(halfStored), message: "these engine cases under {EngineCasesDirName} are half-stored. A source with no oracle is compared against nothing and reads exactly like a case that passed: mint its oracle with `python tests/fmt/generate-expectations.py`. An oracle with no source judges a case that has left the corpus: remove it, or restore the source it judges.")
+end 'every engine case has both its source and its oracle'
+
+test 'the engine corpus holds a paired case'
+	let corpus = EngineCorpus.read()
+	try Expect.isFalse(corpus.pairedCases().isEmpty(), message: "{EngineCasesDirName} holds no paired case, so not one formatter answer is compared against an oracle. Each case is a `<Name>{CaseSourceExtension}` and the `<Name>{CaseExpectedExtension}` the formatter must produce for it.")
+end 'the engine corpus holds a paired case'
+
+test 'the engine corpus keeps its three negative controls'
+	let corpus = EngineCorpus.read()
+	var absent = StringArray.create()
+
+	for control in negativeControlCases() 'eachControl'
+		if not corpus.sources.contains(control) 'missing'
+			absent.push(control)
+		end 'missing'
+	end 'eachControl'
+
+	try Expect.isEmpty(listedLines(absent), message: "these NEGATIVE CONTROLS are no longer in {EngineCasesDirName}. Each is the case beside a real defect that passed throughout that defect's whole lifetime; without it nothing tells a reader that the neighbouring green is not evidence.")
+end 'the engine corpus keeps its three negative controls'
+
+test 'an unlexable engine case is its own oracle'
+	let corpus = EngineCorpus.read()
+	var unlexable = StringArray.create()
+	var rewritten = StringArray.create()
+
+	for caseName in corpus.pairedCases() 'eachCase'
+		if not caseName.startsWith(UnlexableCasePrefix) 'lexes'
+			continue
+		end 'lexes'
+
+		unlexable.push(caseName)
+
+		if corpus.caseText(caseName, storedExtension: CaseExpectedExtension) != corpus.caseText(caseName, storedExtension: CaseSourceExtension) 'oracleRewrites'
+			rewritten.push(caseName)
+		end 'oracleRewrites'
+	end 'eachCase'
+
+	try Expect.isFalse(unlexable.isEmpty(), message: "{EngineCasesDirName} holds no paired `{UnlexableCasePrefix}*` case. This rule is keyed on that name prefix, so a corpus without one checks nothing about a source the lexer rejects.")
+	try Expect.isEmpty(listedLines(rewritten), message: "these cases are sources the lexer REJECTS, so each {CaseExpectedExtension} must be byte-identical to its {CaseSourceExtension}: `fmt` leaves such a source untouched, and the alternative is writing the lexer's error text into somebody's file. These oracles say the formatter should CHANGE them.")
+end 'an unlexable engine case is its own oracle'
+
+// One test, because every property here reads the same two `fmt` runs, and the file's 5 s deadline
+// fits two spawns where a test per property would need more.
+test 'formatting the engine corpus reproduces every oracle, keeps every comment and is a fixed point'
+	let corpus = EngineCorpus.read()
+	let staged = stageEngineCases(corpus)
+
+	let firstRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
+	try requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: EngineTreeDescription)
+
+	var firstPass = FormattedTextMap.create()
+	var diverged = StringArray.create()
+	var miscounted = StringArray.create()
+
+	for engineCase in staged 'eachCase'
+		let formatted = fileBody(engineCase.path)
+		firstPass.upsert(engineCase.name, value: formatted)
+
+		if corpus.expectations.contains(engineCase.name) 'hasOracle'
+			let expected = corpus.caseText(engineCase.name, storedExtension: CaseExpectedExtension)
+
+			if formatted != expected 'divergedFromTheOracle'
+				diverged.push("{engineCase.name}: its {CaseExpectedExtension} holds{LineFeed}{expected}and `fmt` wrote{LineFeed}{formatted}")
+			end 'divergedFromTheOracle'
+		end 'hasOracle'
+
+		for comment in commentTextsIn(engineCase.source) 'eachComment'
+			let before = occurrencesOf(engineCase.source, needle: comment)
+			let after = occurrencesOf(formatted, needle: comment)
+
+			if after != before 'countMoved'
+				miscounted.push("{engineCase.name}: '{comment}' occurs {before} time(s) before formatting and {after} after")
+			end 'countMoved'
+		end 'eachComment'
+	end 'eachCase'
+
+	let secondRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
+	try requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: EngineTreeDescription)
+
+	var movedAgain = StringArray.create()
+
+	for engineCase in staged 'eachCase'
+		let once = try firstPass.get(engineCase.name) otherwise panic("engine-cases.test: the gate could not run — '{engineCase.name}' was staged and has no first-run text, though every staged case recorded one.")
+		let twice = fileBody(engineCase.path)
+
+		if twice != once 'notAFixedPoint'
+			movedAgain.push("{engineCase.name}: {FirstRunLabel} wrote{LineFeed}{once}and {SecondRunLabel} wrote{LineFeed}{twice}")
+		end 'notAFixedPoint'
+	end 'eachCase'
+
+	var report = ""
+	report.append(listedUnder(diverged, heading: "PARITY (formatted differently from its {CaseExpectedExtension})"))
+	report.append(listedUnder(miscounted, heading: "COMMENT MULTIPLICITY (a comment or shebang occurs a different number of times)"))
+	report.append(listedUnder(movedAgain, heading: "IDEMPOTENCE (a second run changed it again)"))
+
+	try Expect.isEmpty(report, message: "`fmt` over {EngineTreeDescription} broke the engine corpus. PARITY compares against the committed oracle; COMMENT MULTIPLICITY counts every `//`-bearing text and a line-1 shebang, so a DUPLICATED comment is as red as a lost one; IDEMPOTENCE holds whoever re-mints an oracle.")
+	try requireSecondRunFoundNothingToDo(secondRun, stagedCount: staged.count(), over: EngineTreeDescription)
+end 'formatting the engine corpus reproduces every oracle, keeps every comment and is a fixed point'
+
+function negativeControlCases() returns StringArray
+	return ["NoMultilineLiteral", "PlainStringNoInterpolation", "UrlInPlainString"]
+end 'negativeControlCases'
+
+function stageEngineCases(corpus EngineCorpus) returns StagedEngineCaseArray
+	let stagingDir = freshStagingDir(EngineStagingDirName)
+	var staged = StagedEngineCaseArray.create()
+
+	for caseName in corpus.sources 'eachSource'
+		let source = corpus.caseText(caseName, storedExtension: CaseSourceExtension)
+		let target = stagingDir.join("{caseName}{StagedSourceExtension}")
+		try File.writeText(target, content: source) otherwise panic("engine-cases.test: the gate could not run — could not stage {caseName}{CaseSourceExtension} at {target.toString()}.")
+
+		staged.push(StagedEngineCase.create(caseName, path: target, source: source))
+	end 'eachSource'
+
+	return staged
+end 'stageEngineCases'
+
+function commentTextsIn(source String) returns StringArray
+	var found = StringArray.create()
+	var onLineOne = true
+
+	for rawLine in source.split(LineFeed) 'eachLine'
+		if onLineOne 'lineOne'
+			onLineOne = false
+
+			if rawLine.startsWith(ShebangMarker) 'shebang'
+				found.push(rawLine.trimEnd())
+				continue
+			end 'shebang'
+		end 'lineOne'
+
+		let at = try rawLine.findFirst(CommentMarker) otherwise continue
+		let text = rawLine.slice(at, endIndex: rawLine.endIndex()).trimEnd()
+
+		if found.contains(text) 'alreadyListed'
+			continue
+		end 'alreadyListed'
+
+		found.push(text)
+	end 'eachLine'
+
+	return found
+end 'commentTextsIn'
+
+function occurrencesOf(haystack String, needle String) returns CommentOccurrenceTally
+	var seen = 0 as CommentOccurrenceTally
+	var atFirstPiece = true
+
+	for _ in haystack.split(needle) 'eachPiece'
+		if atFirstPiece 'firstPiece'
+			atFirstPiece = false
+			continue
+		end 'firstPiece'
+
+		seen = seen + 1
+	end 'eachPiece'
+
+	return seen
+end 'occurrencesOf'

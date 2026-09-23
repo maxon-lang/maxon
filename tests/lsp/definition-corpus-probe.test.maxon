@@ -4,13 +4,6 @@
 // never reaches the filesystem, and the uri is what a cross-file answer is judged by. Release discipline —
 // why every session is driven into a VALUE before anything is asserted — is `LspClient.maxon`'s hazard 1.
 
-#if os(Windows)
-	let CorpusTempVariable = "TEMP"
-#else
-	let CorpusTempVariable = "TMPDIR"
-	let CorpusPosixLastResortTempDir = "/tmp"
-#endif
-
 let CorpusBuildFileName = "project.maxon"
 let CorpusBuildFileContent = ""
 let CorpusBackslash = "\\"
@@ -70,15 +63,7 @@ export function stagedCorpusDirectory(dirName String) returns FilePath
 	return resolved
 end 'stagedCorpusDirectory'
 
-// Staging OUTSIDE the checkout, which a case about a project's ROOT needs. This checkout holds a
-// `project.maxon` at its own root, so a tree staged under it has a manifest somewhere above it
-// whatever the case writes — and the manifest rung would decide the root before the client's ever
-// came up.
-export function stagedDirectoryOutsideTheCheckout(dirName String) returns FilePath
-	return createdStagingDirectory(dirName, under: corpusHostTempArea())
-end 'stagedDirectoryOutsideTheCheckout'
-
-function createdStagingDirectory(dirName String, under FilePath) returns FilePath
+export function createdStagingDirectory(dirName String, under FilePath) returns FilePath
 	let directory = try FilePath.from(dirName) otherwise panic("definition corpus: '{dirName}' is not a spellable path")
 	let resolved = directory.resolve(under)
 
@@ -88,16 +73,6 @@ function createdStagingDirectory(dirName String, under FilePath) returns FilePat
 
 	return resolved
 end 'createdStagingDirectory'
-
-function corpusHostTempArea() returns FilePath
-	#if os(Windows)
-		let spelled = try Process.environmentVariable(CorpusTempVariable) otherwise panic("definition corpus: the test could not run — {CorpusTempVariable} is not set, and it names the only area outside this checkout a case can stage in.")
-	#else
-		let spelled = try Process.environmentVariable(CorpusTempVariable) otherwise CorpusPosixLastResortTempDir
-	#endif
-
-	return try FilePath.from(spelled) otherwise panic("definition corpus: the host temp area '{spelled}' is not a spellable path")
-end 'corpusHostTempArea'
 
 export function writeCorpusFile(directory FilePath, fileName String, content String)
 	let file = directory.join(fileName)

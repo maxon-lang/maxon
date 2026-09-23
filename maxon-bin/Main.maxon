@@ -1092,17 +1092,10 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// writes. A drifted layout is a silent misread, so it is checked before any case writes one.
 	requireMxdbgRoundTrip()
 
-	// A duplicate error-code number is the one registry defect the language cannot refuse for itself;
-	// see `ErrorCodeSelfTest`.
-	requireErrorCodesUnique()
-
-	// Rides the suite because the suite is what already runs; see `LadderIndex`.
-	requireLadderIndexComplete()
-
 	// Two suites share `<specDir>/.spec-tmp`, so one would delete what the other is compiling, and a
 	// build running alongside replaces the binary this run draws verdicts from. Asked after every free
 	// check, so a refusal is instant and precedes any worker.
-	let lockExit = acquireSuiteTreeLock(specDir)
+	let lockExit = acquireTreeLock(specDir)
 
 	if lockExit != 0 'busyTree'
 		return lockExit
@@ -1215,15 +1208,6 @@ function joinedWith(values SourcePathSpellingArray, separator String) returns St
 
 	return out.build()
 end 'joinedWith'
-
-// Taken for every suite run except a fixture sub-run, whose parent suite holds it.
-function acquireSuiteTreeLock(specDir FilePath) returns ExitCode
-	if isHarnessFixtureSubRun(specDir) 'parentHoldsIt'
-		return 0
-	end 'parentHoldsIt'
-
-	return acquireTreeLock(specDir)
-end 'acquireSuiteTreeLock'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
 function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target) returns ExitCode

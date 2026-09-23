@@ -1,0 +1,39 @@
+let NetworkGateSpecName = "network-gate"
+let NetworkGateTestName = "network-gate.live"
+let NetworkMarker = "<!-- network:"
+
+test 'a live-network case is left out of a default run, named there, and run under --network'
+	let staged = stagedGateFixture()
+	let label = testLabel(NetworkGateSpecName, testName: NetworkGateTestName)
+	let ranVerdict = failVerdictPrefix(label)
+	let censusEntry = resultNoteEntry(label)
+
+	var broken = StringArray.create()
+
+	let byDefault = everythingSaid(runSpecTest(staged, includeNetwork: false))
+
+	if byDefault.contains(ranVerdict) 'defaultRanIt'
+		broken.push("a DEFAULT run RAN '{label}', which is marked `{NetworkMarker} live -->`. It said:\n{byDefault}\n")
+	end 'defaultRanIt'
+
+	if not byDefault.contains(censusEntry) 'defaultSaidNothing'
+		broken.push("a DEFAULT run left '{label}' out and did not NAME it. Expected:\n{censusEntry}and it said:\n{byDefault}\n")
+	end 'defaultSaidNothing'
+
+	if not byDefault.contains(NetworkMarker) 'defaultGaveNoReason'
+		broken.push("a DEFAULT run named the case it left out but not the REASON: nothing mentions `{NetworkMarker}`. It said:\n{byDefault}\n")
+	end 'defaultGaveNoReason'
+
+	let withNetwork = everythingSaid(runSpecTest(staged, includeNetwork: true))
+	discardStaging(staged)
+
+	if not withNetwork.contains(ranVerdict) 'flagDidNotIncludeIt'
+		broken.push("a `--network` run did NOT run '{label}'. Expected '{ranVerdict}', and it said:\n{withNetwork}\n")
+	end 'flagDidNotIncludeIt'
+
+	if withNetwork.contains(censusEntry) 'flagStillExcludedIt'
+		broken.push("a `--network` run reported '{label}' as EXCLUDED. It said:\n{withNetwork}\n")
+	end 'flagStillExcludedIt'
+
+	try requireNothingBroken(broken, headline: "the live-network gate")
+end 'a live-network case is left out of a default run, named there, and run under --network'

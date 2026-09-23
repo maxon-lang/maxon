@@ -19,7 +19,7 @@
 // The staged project is a REAL one and so is the edited text: both build, so a red here cannot mean the
 // fixture is broken. The session, the staging and the assertions are `diagnostics-project-probe.test.maxon`'s.
 
-let ProjectBodyEditDirName = "maxon-tests-lsp-diagnostics-project-body-edit"
+let ProjectBodyEditDirName = "diagnostics-project-body-edit"
 let ProjectBodyEditDeclaringFileName = "slot.maxon"
 let ProjectBodyEditBufferFileName = "main.maxon"
 let ProjectBodyEditDeclaringSource = "export typealias ProjectBodyEditSlot = int(0 to u64.max)\n"
@@ -32,6 +32,8 @@ test 'an edit inside a function body publishes no error about a sibling name'
 	writeCorpusFile(root, fileName: ProjectBodyEditBufferFileName, content: ProjectBodyEditSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectBodyEditBufferFileName, content: ProjectBodyEditSavedSource, editedContent: ProjectBodyEditTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and `ProjectBodyEditSlot` is `export typealias`ed by the sibling file. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
 

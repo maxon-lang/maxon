@@ -1,0 +1,131 @@
+let LaddersDirName = "tests/ladders"
+let LadderIndexFileName = "README.md"
+let LadderScriptExtension = ".sh"
+
+let TableCellSeparator = "|"
+let CodeQuote = "`"
+let UsageArgumentSeparator = " "
+let LineFeed = "\n"
+let ListedNameIndent = "\n  "
+
+union IndexedRow
+	named(script String)
+	notARow
+end 'IndexedRow'
+
+test 'every ladder script has a row in the index'
+	let scripts = ladderScriptNames()
+	try Expect.isFalse(scripts.isEmpty(), message: "{LaddersDirName} holds no `*{LadderScriptExtension}` script, so the index is compared against nothing.")
+
+	let unindexed = namesMissingFrom(scripts, other: indexedScriptNames())
+	try Expect.isEmpty(listedNames(unindexed), message: "these ladder scripts have no row in {LaddersDirName}/{LadderIndexFileName}. A ladder nobody can find is a measurement nobody will re-run: add a row giving its SHAPE and the QUESTION IT ANSWERS, read out of the script's own header.")
+end 'every ladder script has a row in the index'
+
+test 'every row in the ladder index names a script on disk'
+	let indexed = indexedScriptNames()
+	try Expect.isFalse(indexed.isEmpty(), message: "{LaddersDirName}/{LadderIndexFileName} has no row whose first cell opens with a backticked `*{LadderScriptExtension}` name, so no script is compared against it.")
+
+	let stale = namesMissingFrom(indexed, other: ladderScriptNames())
+	try Expect.isEmpty(listedNames(stale), message: "{LaddersDirName}/{LadderIndexFileName} has rows naming these scripts, and none of them is in {LaddersDirName}. A reader is sent after a generator that was renamed or deleted: move the row with it, or delete it.")
+end 'every row in the ladder index names a script on disk'
+
+test 'no ladder script is named by two rows of the index'
+	let repeated = namesRepeatedIn(indexedScriptNames())
+	try Expect.isEmpty(listedNames(repeated), message: "{LaddersDirName}/{LadderIndexFileName} names each of these scripts in more than one row: two descriptions of one ladder, free to disagree. Merge them.")
+end 'no ladder script is named by two rows of the index'
+
+function laddersDir() returns FilePath
+	return try FilePath.from(LaddersDirName) otherwise panic("ladder-index.test: the gate could not run — '{LaddersDirName}' is not a spellable path")
+end 'laddersDir'
+
+function ladderScriptNames() returns StringArray
+	let entries = try Directory.list(laddersDir()) otherwise panic("ladder-index.test: the gate could not run — could not list {LaddersDirName}. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+
+	var names = StringArray.create()
+
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+
+		if name.endsWith(LadderScriptExtension) 'isScript'
+			names.push(name)
+		end 'isScript'
+	end 'eachEntry'
+
+	return names
+end 'ladderScriptNames'
+
+function indexedScriptNames() returns StringArray
+	let indexFile = try FilePath.from(LadderIndexFileName) otherwise panic("ladder-index.test: the gate could not run — '{LadderIndexFileName}' is not a spellable path component")
+	let text = try File.readText(laddersDir().join(indexFile)) otherwise panic("ladder-index.test: the gate could not run — could not read {LaddersDirName}/{LadderIndexFileName}. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+
+	var names = StringArray.create()
+
+	for line in text.split(LineFeed) 'eachLine'
+		match rowScriptName(line) 'row'
+			notARow then continue
+			named(name) then names.push(name)
+		end 'row'
+	end 'eachLine'
+
+	return names
+end 'indexedScriptNames'
+
+function rowScriptName(line String) returns IndexedRow
+	if not line.startsWith(TableCellSeparator) 'notATableRow'
+		return IndexedRow.notARow
+	end 'notATableRow'
+
+	let cells = line.split(TableCellSeparator)
+	let firstCell = try cells.get(1) otherwise return IndexedRow.notARow
+
+	let quoted = firstCell.split(CodeQuote)
+	let usage = try quoted.get(1) otherwise return IndexedRow.notARow
+
+	let name = try usage.split(UsageArgumentSeparator).get(0) otherwise return IndexedRow.notARow
+
+	if not name.endsWith(LadderScriptExtension) 'notAScriptName'
+		return IndexedRow.notARow
+	end 'notAScriptName'
+
+	return IndexedRow.named(name)
+end 'rowScriptName'
+
+function namesMissingFrom(names StringArray, other StringArray) returns StringArray
+	var missing = StringArray.create()
+
+	for name in names 'eachName'
+		if not other.contains(name) 'absent'
+			missing.push(name)
+		end 'absent'
+	end 'eachName'
+
+	return missing
+end 'namesMissingFrom'
+
+function namesRepeatedIn(names StringArray) returns StringArray
+	var seen = StringArray.create()
+	var repeated = StringArray.create()
+
+	for name in names 'eachName'
+		if not seen.contains(name) 'firstTime'
+			seen.push(name)
+			continue
+		end 'firstTime'
+
+		if not repeated.contains(name) 'notYetReported'
+			repeated.push(name)
+		end 'notYetReported'
+	end 'eachName'
+
+	return repeated
+end 'namesRepeatedIn'
+
+function listedNames(names StringArray) returns String
+	var listed = ""
+
+	for name in names 'eachName'
+		listed.append("{ListedNameIndent}{name}")
+	end 'eachName'
+
+	return listed
+end 'listedNames'

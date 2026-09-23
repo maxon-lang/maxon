@@ -6,26 +6,25 @@ reach `stdlib/` and nothing else. **A DRIVER COMMAND is not that** (user ruling,
 a fixture project and asserting what it reports. This directory is where those
 fixtures live.
 
-Twenty-one corpora live here, one directory each, every path into one spelled from the CHECKOUT
+Twenty corpora live here, one directory each, every path into one spelled from the CHECKOUT
 ROOT — the working directory every driver inherits, and the contract
-`SpecTestRunner.maxon:1649` states, along with why it is deliberately not `specDir.parent()`.
+`SpecTestRunner.specRunWorkingDir` states, along with why it is deliberately not `specDir.parent()`.
 
 The last column names the constant each corpus is reached through. Two are not one constant
-naming a directory, and both say so in the row: `fmt/`'s is written twice because its
-generator MINTS what its test file reads, and `lsp/` has no constant for itself at all —
+naming a directory, and both say so in the row: `fmt/`'s is written three times because its
+generator MINTS what its two test files read, and `lsp/` has no constant for itself at all —
 `maxon test` is pointed at that directory on the command line — so its constant names the
 SERVER its tests spawn.
 
 | corpus | read by | the constant it is reached through |
 |---|---|---|
-| `fmt/` | its own `fixtures.test.maxon` | `generate-expectations.py` + that file |
+| `fmt/` | its own `fixtures.test.maxon` and `engine-cases.test.maxon` | `generate-expectations.py` + those two files |
 | `test-fixtures/` | `test-command/fixtures.test.maxon` | `FixturesDir` |
 | `test-command/` | `maxon test`, under the compiler | `ProjectDir` |
-| `harness-fixtures/` | `spec-test` → `HarnessSelfTest` | `FixturesRelativeDir` |
-| `harness-gates/` | `spec-test` → `HarnessSelfTest` | `GatesRelativeDir` |
+| `spec-harness/` | `maxon test`, under the compiler | `TestedCompilerStem` in `SpecHarness.maxon` — the binary it spawns: the compiler under test, which is also the `spec-test` harness whose refusals and gates are under test |
 | `lsp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
 | `mcp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
-| `ladders/` | `spec-test` → `requireLadderIndexComplete` | `LaddersRelativeDir` |
+| `ladders/` | `maxon test`, under the compiler | `LaddersDirName` in `index.test.maxon` |
 | `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
@@ -47,17 +46,18 @@ names the former path in every row minted before 2026-09-02 — a dated record, 
 rows stay as written.
 
 ⚠ **The six rules below are the `fmt/` corpus's**, and each is written against the
-command `fmt` is. They are not automatically true of the other eighteen: `test-fixtures/`
+command `fmt` is. They are not automatically true of the other nineteen: `test-fixtures/`
 deliberately stores LIVE `*.test.maxon` sources, because the command under test compiles
 them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
 ```
 tests/
   fmt/
-    fixtures.test.maxon          EVERYTHING: the harness, the guards, and all 26 tests
+    fixtures.test.maxon          the fixture corpus: the harness, the guards and 29 tests
+    engine-cases.test.maxon      the engine corpus: 5 tests, on the staging and spawn the file above exports
     generate-expectations.py     mints every expectation BY RUNNING THE COMPILER
     census-sources.txt           the real compiler files the scale case formats
-    selftest-cases/<Name>.in     formatter engine cases, with .expected beside them
+    engine-cases/<Name>.in       formatter engine cases, with .expected beside them
     fixtures/<case>/
       input/                     stored names only  — see rule 1
       expected-tree/             stored names only  — see rule 1
@@ -68,12 +68,18 @@ tests/
   test-fixtures/<case>/
     <name>.test.maxon            a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
-  harness-fixtures/<case>/       malformed specs the harness must REFUSE
-  harness-gates/<case>/          well-formed specs it must ACCEPT, then REPORT something about
+  spec-harness/
+    SpecHarness.maxon            the shared half: the staging outside the checkout, the spawn, the report literals
+    corpus.test.maxon            every fixture has its test file, and every test file its fixture
+    refusals/<case>.test.maxon   one malformed spec `spec-test` must REFUSE, found through `__file__`
+    refusals/<case>/             refusal.md  expected-refusal.txt
+    gates/<case>.test.maxon      a well-formed spec it must ACCEPT, then REPORT something about
+    gates/<case>/                the gate's one or two `.md`
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1
     <area>.test.maxon            one LSP method area per file
   ladders/                       hand-built scaling generators + the README indexing them
+    index.test.maxon             the README's rows against the scripts beside it
   parallel-compile/
     parallel.test.maxon          the shared half: the spawn, the staging, the counts
     <contract>.test.maxon        ONE contract per file - see its README section
@@ -295,7 +301,7 @@ Two independent reasons, and the second is the one that bites:
 drivers.** `lsp/LspClient.maxon` is an ordinary source — a 1,200-line JSON-RPC client the
 `lsp/` tests import — and `debug/DebugHarness.maxon`, `coverage/CoverageHarness.maxon`,
 `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`, `cli/CliHarness.maxon`,
-`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon`, `emitted-runtime/EmittedRuntimeHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
+`define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`, `examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon`, `emitted-runtime/EmittedRuntimeHarness.maxon`, `spec-harness/SpecHarness.maxon` and `mcp/McpHarness.maxon` are each their corpus's shared half,
 named so the runner does not take them for test files. That is fine and is not an exception being
 smuggled in: the hazard above is `fmt` rewriting an ORACLE, and none of these corpora keeps one on disk —
 `lsp/`'s are `b"…"` byte literals inside its test files, `examples/`'s are string constants inside its
@@ -334,16 +340,21 @@ because a regression makes `fmt` fall back to the current directory and rewrite 
 place — **run from the checkout root, the fixture that gates that incident would
 reproduce it.**
 
-### 5. One file, and the per-file deadline is the only thing that would change that
+### 5. Two files, one per corpus, and the per-file deadline is the only thing that would split them further
 
 `test-command/` puts each spawning `test` in its own file because a file is what
 ONE process runs, under a 5,000 ms deadline, and its fixtures each compile a project. These format a
-tiny staged tree. **Measured merged: 26 tests, 2,718 ms — 1.8x headroom**, of which the real-sources
-census is about half. A split would only buy back process startups, which are not where the time
-goes; if a corpus here ever does approach the deadline, shorten its slowest case or pass `--timeout=`.
+tiny staged tree. `fixtures.test.maxon` holds the fixture corpus and the real-sources census (29
+tests), and `engine-cases.test.maxon` the engine corpus (5 tests); **both files together measured
+about 1.9 s**. A split would only buy back process startups, which are not where the time goes; if a
+corpus here ever does approach the deadline, shorten its slowest case or pass `--timeout=`.
 
-One file also makes duplication impossible rather than merely discouraged: shared constants and
-helpers can only be declared once, because a second declaration collides.
+The engine corpus's parity, comment-multiplicity and idempotence checks share ONE test, because each
+reads the same two `fmt` runs, and two spawns fit the deadline where a test per property would not.
+
+The engine file declares no staging, spawning or run check of its own: it calls the ones
+`fixtures.test.maxon` exports, and a second copy of a free function in this directory would not
+compile (see the note under `debug/`).
 
 ### 6. Expectations are GENERATED, never hand-written
 
@@ -377,6 +388,76 @@ Written down because a limit nobody states gets mistaken for coverage.
 - **`unchanged` is two different facts.** A file the lexer rejects is reported exactly
   like one that was already perfect. One fixture pins that for one file; nothing tells
   you it is happening to two hundred.
+
+## Staging outside the checkout — `spec-harness/`, `cli/` and `lsp/`
+
+Three corpora stage under the host temp area (`TEMP` on Windows; `TMPDIR`, else `/tmp`, elsewhere)
+rather than under `temp/`, each for a premise the checkout would falsify: `spec-harness/` runs
+`spec-test` where no tree lock is taken, `cli/` needs a working directory with no `vendor/` above it,
+and `lsp/` a tree with no `project.maxon` above it.
+
+⛔ **A CASE STAGES INTO ONE FLAT DIRECTORY NAMED `<prefix>-<pid>-<case>`** (`__Builtins.currentProcessId()`),
+cleared first and removed when the case finishes, pass or fail. A name without the pid would let two runs
+on one machine — two checkouts, or two sessions — delete each other's directories mid-run: in-tree
+staging is covered by the checkout's tree lock, and the host temp area has nothing of the kind. A case
+that panics or times out still leaves its `<pid>` directory behind.
+
+In `cli/` the removal lives once, in `CliHarness.maxon`: a case is an `OutsideCheckoutCase` handed to
+`requireHeldOutsideCheckout` (or `requireHeldInAnInstallOutsideCheckout`), which removes the directory
+whether the case passed or threw. The staging function itself is private, so no case can stage outside
+the checkout without that removal. An interface rather than a closure, because a closure may not throw
+(E3101). In `lsp/` each case discards its directory once its session is a value, before it asserts.
+
+## `spec-harness/` — the spec harness's own refusals and gates
+
+`spec-test` refuses a malformed spec by PANICKING while it parses its own corpus, so a refusal is
+observable only from outside the process: every case here spawns `spec-test` at a fixture and reads its
+exit code and output. The shared half is `SpecHarness.maxon`.
+
+- **`refusals/<case>/`** holds ONE malformed `refusal.md` and `expected-refusal.txt`, a substring the
+  refusal must print. Trailing line terminators are trimmed from it, and it must then be non-empty and
+  a single line: the part of the message that names the refusal, never the `<file>:<line>` a panic
+  prints in front of it, which moves with every edit above it. The run must exit non-zero AND print it —
+  a fixture that fails for some other reason proves nothing about its refusal.
+- **`gates/<case>/`** holds well-formed specs the harness must accept and then report something about:
+  a live-network case left out of a default run and named, an `alone` case run with nothing beside it, an
+  orphaned golden named by the census, a drifted golden named and counted, and the two marker shapes the
+  reference grammar reads. Each fixture's own preamble says what its test asserts.
+- **`corpus.test.maxon`** holds the pairing: every fixture directory has its `<case>.test.maxon` beside
+  it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.
+
+⭐ **A TEST FILE FINDS ITS FIXTURE THROUGH `__file__`.** `refusals/<case>.test.maxon` is one call to
+`requireRefusalFires()`, whose defaulted argument is the calling file's path, so a test file cannot name
+the wrong fixture.
+
+⛔ **EVERY FIXTURE IS COPIED UNDER THE HOST TEMP AREA BEFORE IT RUNS.** `TreeLock` takes no lock for a
+spec directory with no `stdlib/` above it, so concurrent test files and a developer's own `spec-test`
+never contend, the compiler needs no exemption for these runs, and nothing a run writes — `fragments/`,
+`.spec-tmp/`, `temp/` — lands in `tests/`. `SpecHarness` refuses to stage anywhere a `stdlib/` sits
+above, and refuses a fixture holding a subdirectory, so every run starts from the fixture's spec files
+and nothing else.
+
+⚠ **THE COMPILER'S REPORT TEXT IS SPELLED HERE AS LITERALS.** A test program cannot import compiler
+source, so the verdict line, the result-note entry, the census entry and its headline, and the drift
+summary are written out in `SpecHarness.maxon` and the gate files. A rewording in `GoldenCensus` or
+`SpecTestRunner` fails this corpus, which `spec-test` does not run.
+
+⭐ **EVERY GATE KEEPS ITS CONTROL.** The orphan gate plants a golden its lane CAN compare and requires it
+unnamed, and requires the census headline PRESENT while orphans are planted — otherwise its clean-run
+check for the headline's absence would pass on a reworded headline. The drift gate corrupts TWO goldens,
+so "counted" is distinguishable from "noticed", and leaves a third intact that must not be named.
+
+⚠ **THE ORPHAN GATE PLANTS ON `x64-windows` ON EVERY HOST.** The census covers every lane, not the
+run's, so a fixed lane makes the same planted golden unreadable everywhere.
+
+⚠ **RUN IT AS `maxon test tests/spec-harness --timeout=15000`.** The drift gate runs `spec-test` three
+times, about 4.1 s, which leaves the 5,000 ms default no margin.
+
+## `ladders/` — the index and the scripts it indexes
+
+`index.test.maxon` holds `README.md` against the `*.sh` beside it in three directions — a script with
+no row, a row naming no script, a script named by two rows — and fails when either side is empty,
+because a comparison against nothing passes. It spawns nothing and runs at the default deadline.
 
 ## `parallel-compile/` — the compiler's worker pools
 
@@ -800,8 +881,9 @@ what makes the absences a reading rather than a search that found nothing.
 is the other reason each case demands a presence beside its absences: the acquire COUNT in the steal
 case, and an acquire ahead of the first slab call in the other.
 
-⚠ **NOTHING IN `ci.yml` RUNS THIS CORPUS**: that workflow runs `spec-test` and `tests/lsp` only, so
-this gate is one a `/land` battery or a contributor runs by name —
+⚠ **NOTHING IN `ci.yml` RUNS THIS CORPUS**: that workflow runs `spec-test`, `tests/lsp`, `tests/fmt`,
+`tests/spec-harness` and `tests/ladders` only, so this gate is one a `/land` battery or a contributor
+runs by name —
 `maxon test tests/emitted-runtime`.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging

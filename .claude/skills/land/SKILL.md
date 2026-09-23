@@ -340,7 +340,7 @@ deliverable stays one chunk and one commit.)*
   that is expected, and it is how §6 finds them. Take the next free number in the band by reading the enum
   (1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx emitter, 6xxx PE writer, 9xxx internal): a
   duplicate NAME does not compile, and a duplicate NUMBER is structural in neither direction and is
-  caught only by `requireErrorCodesUnique()`, which runs as part of `spec-test`. Never write a bare
+  caught only by `website/scripts/sync-docs.mjs`, which §8's documentation row runs. Never write a bare
   `"E3010"` in source — a diagnostic names `ErrorCode.<case>`.
   ⛔ **`docs/error-codes.txt` and `maxon error-codes generate` DO NOT EXIST** — no such file was ever
   tracked in git and `MaxonCommand` has no such case. Stale citations of both survive in
@@ -489,6 +489,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
 | **SELF-COMPILE** — `maxon-bin/.maxon/maxon.exe build maxon-bin --output=temp/land-selfcompile` | exit 0, ~5 min. Output discarded; only the exit code matters. The tree binary is stage-2, so this is its stage-3 build and it is slower than the seed's |
+| **The tree corpora** — `maxon test tests/fmt`, `maxon test tests/spec-harness --timeout=15000`, `maxon test tests/ladders` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, and the ladder index — tree-level gates `spec-test` does not run. CI runs the same three on every lane |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Golden drift staged, as it is** | `git add -A specs/` — whatever the runs minted, modified or deleted, with no further thought. See the box below |
 | **§1's count check** on the final tree | markers == ran, none disabled, no name spelled twice |

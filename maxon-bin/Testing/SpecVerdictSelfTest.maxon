@@ -12,19 +12,18 @@
 // for EVERY supported target: the attempted-and-failed launch must be a FAIL everywhere, including on
 // a lane whose other cases are legitimately unrun.
 //
-// ⚠ **NO SPEC CASE CAN REACH ANY OF THIS**: a spec case is Maxon source the runner compiles, it
-// cannot ask which host it is on, and a case that could would be red on some machine and green on
-// another. So the assertions are made against SYNTHESIZED values — no compile, no spawn, no
-// filesystem — and they ride the SUITE, in the parent, beside the other tree-level guards
-// (`requireRunnerAvailable`, `requireLadderIndexComplete`). A check nobody runs is a claim.
+// No spec case can reach any of this: a spec case cannot ask which host it is on, and one that
+// could would be red on some machine and green on another. So the assertions are made against
+// synthesized values (no compile, no spawn, no filesystem) and ride the suite's parent, beside
+// `requireRunnerAvailable`.
 
 // A synthesized case's names. They never reach a file: every row below is a pure function of a
 // `TestOutcome`, a `GoldenDrift` or a `Target`.
 let SelfTestSpecName = "self-test"
 let SelfTestName = "verdict-mapping"
 
-// How deep one failing row sits under the sentence that introduces it — `HarnessSelfTest`'s depth, for
-// its reason: a reader takes the two panics as one shape.
+// The depth every tree-level self-test's panic indents its rows to: a reader takes them as one
+// shape.
 let BrokenVerdictRowIndent = "\n  "
 
 // ⭐ **PROVE THE NOT-RUN VERDICT IS STILL COUNTED, REASONED AND NOT GREEN.** Called ONCE by the suite's
@@ -44,8 +43,7 @@ export function requireSpecVerdictMapping()
 		return
 	end 'everyRowHeld'
 
-	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is
-	// built as text and INTERPOLATED. Same constraint `HarnessSelfTest` and `LadderIndex` document.
+	// `panic` takes a string literal (a `let`-bound String is rejected), so the list is interpolated.
 	let report = indentedList(broken, indent: BrokenVerdictRowIndent)
 	panic("SpecVerdictSelfTest: {broken.count()} row(s) of the not-run verdict mapping no longer hold. A lane whose whole job is reporting what it did NOT run is one simplification away from reporting that it passed.{report}")
 end 'requireSpecVerdictMapping'

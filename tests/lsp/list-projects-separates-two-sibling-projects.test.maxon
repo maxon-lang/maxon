@@ -1,5 +1,5 @@
-let SiblingProjectsFirstDirName = "maxon-tests-lsp-projects-sibling-one"
-let SiblingProjectsSecondDirName = "maxon-tests-lsp-projects-sibling-two"
+let SiblingProjectsFirstDirName = "projects-sibling-one"
+let SiblingProjectsSecondDirName = "projects-sibling-two"
 let SiblingProjectsFileName = "main.maxon"
 let SiblingProjectsFirstSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let SiblingProjectsSecondSource = "function main() returns ExitCode\n\treturn 1\nend 'main'\n"
@@ -18,6 +18,9 @@ test 'project roots: two sibling projects are two projects'
 
 	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolderPair(first, second: second)), documents: documents)
 
+	discardOutsideCheckoutDir(first)
+	discardOutsideCheckoutDir(second)
+
 	match probe 'probe'
 		answered(result) then try requireTwoSiblingProjects(result)
 		unanswered(reason) then try Expect.fail(reason)
@@ -33,10 +36,12 @@ function requireTwoSiblingProjects(result ListProjectsResult) throws TestFailure
 		try Expect.isFalse(project.isSingleFile, message: "the project at {project.rootPath} was answered as a single file, although it is one of the two `project.maxon` roots the client named.")
 	end 'eachProject'
 
-	let atFirst = projectsRootedAt(result, expectedTail: SiblingProjectsFirstDirName)
-	let atSecond = projectsRootedAt(result, expectedTail: SiblingProjectsSecondDirName)
+	let firstTail = outsideCheckoutDirName(SiblingProjectsFirstDirName)
+	let secondTail = outsideCheckoutDirName(SiblingProjectsSecondDirName)
+	let atFirst = projectsRootedAt(result, expectedTail: firstTail)
+	let atSecond = projectsRootedAt(result, expectedTail: secondTail)
 
-	try Expect.equal(atFirst, expected: SiblingProjectsOneEach, message: "{atFirst} of the answered projects are rooted at {SiblingProjectsFirstDirName}, and exactly one must be — so the first of the two sibling roots is either missing from the answer or claimed twice.")
+	try Expect.equal(atFirst, expected: SiblingProjectsOneEach, message: "{atFirst} of the answered projects are rooted at {firstTail}, and exactly one must be — so the first of the two sibling roots is either missing from the answer or claimed twice.")
 
-	try Expect.equal(atSecond, expected: SiblingProjectsOneEach, message: "{atSecond} of the answered projects are rooted at {SiblingProjectsSecondDirName}, and exactly one must be. The user ruling for this work is that projects are SIBLINGS, so two roots beside each other must stay two entries and never fold into one.")
+	try Expect.equal(atSecond, expected: SiblingProjectsOneEach, message: "{atSecond} of the answered projects are rooted at {secondTail}, and exactly one must be. The user ruling for this work is that projects are SIBLINGS, so two roots beside each other must stay two entries and never fold into one.")
 end 'requireTwoSiblingProjects'

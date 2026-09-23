@@ -32,7 +32,7 @@ in the file. A diagnostic on line 4 of a file with a shebang says line 4 — whi
 editor's jump-to-error land on the right line in a script.
 
 Every consumer of the lexer inherits this: the compiler, the LSP server, and `maxon fmt` (which
-preserves the line verbatim — see `tests/fmt/selftest-cases/ShebangFirstLine.in`).
+preserves the line verbatim — see `tests/fmt/engine-cases/ShebangFirstLine.in`).
 
 ⛔ **WHAT THESE CASES DO AND DO NOT PROVE.** They prove the LEXER ignores the line, on every target
 this suite runs. They CANNOT prove a kernel will exec such a file: this harness compiles a program and

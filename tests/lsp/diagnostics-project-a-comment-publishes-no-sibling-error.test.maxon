@@ -15,7 +15,7 @@
 // The staged project is a REAL one and so is the commented text: both build, so a red here cannot mean the
 // fixture is broken. The session, the staging and the assertions are `diagnostics-project-probe.test.maxon`'s.
 
-let ProjectCommentEditDirName = "maxon-tests-lsp-diagnostics-project-comment-edit"
+let ProjectCommentEditDirName = "diagnostics-project-comment-edit"
 let ProjectCommentEditDeclaringFileName = "slot.maxon"
 let ProjectCommentEditBufferFileName = "main.maxon"
 let ProjectCommentEditDeclaringSource = "export typealias ProjectCommentEditSlot = int(0 to u64.max)\n"
@@ -28,6 +28,8 @@ test 'a comment the author types publishes no error about a sibling name'
 	writeCorpusFile(root, fileName: ProjectCommentEditBufferFileName, content: ProjectCommentEditSavedSource)
 
 	let probes = probeProjectDiagnosticsAcrossAnEdit(root, fileName: ProjectCommentEditBufferFileName, content: ProjectCommentEditSavedSource, editedContent: ProjectCommentEditTypedSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and `ProjectCommentEditSlot` is `export typealias`ed by the sibling file. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the comment below.")
 

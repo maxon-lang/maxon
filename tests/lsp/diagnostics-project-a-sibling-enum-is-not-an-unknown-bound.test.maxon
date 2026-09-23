@@ -11,7 +11,7 @@
 // The staged project is a REAL one: it builds, so a red here cannot mean the fixture is broken. The
 // session, the staging and the assertions are `diagnostics-project-probe.test.maxon`'s.
 
-let ProjectSiblingEnumDirName = "maxon-tests-lsp-diagnostics-project-sibling-enum"
+let ProjectSiblingEnumDirName = "diagnostics-project-sibling-enum"
 let ProjectSiblingEnumDeclaringFileName = "phase.maxon"
 let ProjectSiblingEnumBufferFileName = "main.maxon"
 let ProjectSiblingEnumDeclaringSource = "export enum ProjectSiblingPhase\n\tload\n\tcheck\nend 'ProjectSiblingPhase'\n\nexport function projectSiblingPhaseCode(phase ProjectSiblingPhase) returns ExitCode\n\tlet code = match phase 'phase'\n\t\tload gives 0\n\t\tcheck gives 1\n\tend 'phase'\n\n\treturn code as ExitCode\nend 'projectSiblingPhaseCode'\n"
@@ -23,6 +23,8 @@ test 'an enum a sibling file declares is not an unknown ranged bound'
 	writeCorpusFile(root, fileName: ProjectSiblingEnumBufferFileName, content: ProjectSiblingEnumBufferSource)
 
 	let probe = probeProjectDiagnostics(root, fileName: ProjectSiblingEnumBufferFileName, content: ProjectSiblingEnumBufferSource)
+
+	discardOutsideCheckoutDir(root)
 
 	try expectNoProjectDiagnostics(probe, note: "`ProjectSiblingPhase.load` names an `enum` the sibling file of this project declares, and a `maxon build` of the staged project compiles it. The buffer alone cannot see the declaration, so the parser reaches its last-resort ranged-bound arm and invents a complaint about `min or max` — a red squiggle in the editor on a line that is correct.")
 end 'an enum a sibling file declares is not an unknown ranged bound'
