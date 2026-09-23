@@ -1,0 +1,141 @@
+// Test: implied-try-block-witness-dispatch
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	let x as Code
+
+	static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest() returns Code throws DigestError
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function itemDigest() returns Code
+		var result = 0 as Code
+
+		try 'work'
+			result = self.item.digest()
+		end 'work' otherwise (e) 'h'
+			match e 'k'
+				tooSmall then result = 55
+			end 'k'
+		end 'h'
+
+		return result
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3))
+	return b.itemDigest()
+end 'main'
+---
+ExitCode: 55
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+}
+
+func @Point.digest {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg rdx, rcx
+    x64.andRegReg rdx, rcx, rax
+    x64.cmpRegImm32 rdx, 10
+    x64.jcc greaterEqual, ifcont
+  small:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+  __rc_ok:
+    x64.movRegImm32 rbx, 3
+  __il_cont#3:
+    x64.leaRegRdata rax, [rip + __witness_Point.Digest]
+  __il_body#8:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+  __il_cont#2:
+    x64.leaRegRdata rax, [rip + __witness_Point.Digest]
+  __il_body#9:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.callMem [rax + 48]
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryblkok
+  tryblkerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchdead
+  matcharm:
+    x64.movRegImm32 rbx, 55
+    x64.jmp __il_cont#1
+  matchdead:
+  tryblkok:
+    x64.movRegReg rbx, r8
+  __il_cont#1:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

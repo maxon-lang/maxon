@@ -9,11 +9,11 @@ test 'receiver type: a dotted type argument is never read as its head segment'
 	writeCorpusFile(directory, fileName: DottedArgumentMainFileName, content: dottedArgumentFixture())
 
 	let uri = fileUriOf(directory.join(DottedArgumentMainFileName))
-	let rendering = try hoverRenderingAtUri(uri, source: dottedArgumentFixture(), line: DottedArgumentLine, character: DottedArgumentLocalCharacter)
+	let rendering = hoverRenderingAtUri(uri, source: dottedArgumentFixture(), line: DottedArgumentLine, character: DottedArgumentLocalCharacter)
 
-	try Expect.isFalse(rendering.contains("of type `Counter`."), message: "hovering `counter` rendered its type as `Counter`, the HEAD SEGMENT of `Counter.handle`. `typealias CounterHandleArray = Array with Counter.handle` binds the element to a service HANDLE, which takes messages where the type itself takes calls — so `Counter` here writes code that does not compile. A walk that reads only the first token of a dotted type argument out of the buffer answers exactly this way. It rendered: {rendering}")
+	Expect.isFalse(rendering.contains("of type `Counter`."), message: "hovering `counter` rendered its type as `Counter`, the HEAD SEGMENT of `Counter.handle`. `typealias CounterHandleArray = Array with Counter.handle` binds the element to a service HANDLE, which takes messages where the type itself takes calls — so `Counter` here writes code that does not compile. A walk that reads only the first token of a dotted type argument out of the buffer answers exactly this way. It rendered: {rendering}")
 
-	try Expect.contains(rendering, needle: "of type `Counter.handle`", message: "hovering `counter` did not name its type as `Counter.handle`. The element of `Array with Counter.handle` is the whole dotted type, and the project's own index is what spells it — the open buffer's `with` clause is a run of tokens this walk must not reassemble by hand. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "of type `Counter.handle`", message: "hovering `counter` did not name its type as `Counter.handle`. The element of `Array with Counter.handle` is the whole dotted type, and the project's own index is what spells it — the open buffer's `with` clause is a run of tokens this walk must not reassemble by hand. It rendered: {rendering}")
 end 'receiver type: a dotted type argument is never read as its head segment'
 
 test 'receiver type: a member of a dotted type argument resolves'
@@ -21,13 +21,13 @@ test 'receiver type: a member of a dotted type argument resolves'
 	writeCorpusFile(directory, fileName: DottedArgumentMainFileName, content: dottedArgumentFixture())
 
 	let uri = fileUriOf(directory.join(DottedArgumentMainFileName))
-	let labels = try completionLabelsForAtUri(uri, source: dottedArgumentFixture(), line: DottedArgumentLine, character: DottedArgumentMemberListCharacter, after: "`counter.`, where `counter` is bound out of an `Array with Counter.handle`")
+	let labels = completionLabelsForAtUri(uri, source: dottedArgumentFixture(), line: DottedArgumentLine, character: DottedArgumentMemberListCharacter, after: "`counter.`, where `counter` is bound out of an `Array with Counter.handle`")
 
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `counter.` offered nothing at all. `counter` is an element of `Array with Counter.handle`, and a receiver typed as a name the project declares nothing for offers an empty list.")
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `counter.` offered nothing at all. `counter` is an element of `Array with Counter.handle`, and a receiver typed as a name the project declares nothing for offers an empty list.")
 
-	try Expect.isTrue(completionOffersLabel(labels, label: "shutdown"), message: "completion after `counter.` did not offer `shutdown`, which `Parser.dispatchOnServiceHandle` accepts on every handle and which `type Counter` declares nowhere. It is what tells the two candidate answers apart: a list carrying it is the HANDLE's surface, and the head segment `Counter` has no such member.")
+	Expect.isTrue(completionOffersLabel(labels, label: "shutdown"), message: "completion after `counter.` did not offer `shutdown`, which `Parser.dispatchOnServiceHandle` accepts on every handle and which `type Counter` declares nowhere. It is what tells the two candidate answers apart: a list carrying it is the HANDLE's surface, and the head segment `Counter` has no such member.")
 
-	try Expect.isFalse(completionOffersLabel(labels, label: "count"), message: "completion after `counter.` offered `count`, a field of `Counter` itself. The element of `Array with Counter.handle` is the handle, whose surface is its own, so a list carrying `Counter`'s fields is the head segment answering in the handle's place.")
+	Expect.isFalse(completionOffersLabel(labels, label: "count"), message: "completion after `counter.` offered `count`, a field of `Counter` itself. The element of `Array with Counter.handle` is the handle, whose surface is its own, so a list carrying `Counter`'s fields is the head segment answering in the handle's place.")
 end 'receiver type: a member of a dotted type argument resolves'
 
 function dottedArgumentFixture() returns String

@@ -27,13 +27,13 @@ end 'ClientRootShape'
 test 'definition honours the client root'
 	let probe = clientRootDefinitionProbe(ClientRootShape.rootUriAndFolders)
 
-	try expectDefinitionInFile(probe, fileTail: clientRootHelperTail(), startLine: ClientRootDeclarationLine, note: "a call to an `export`ed declaration in a sibling DIRECTORY of the open document's did not resolve, although the client named their common ancestor as the workspace root. Nothing in the staged tree holds a `project.maxon`, so the marker climb cannot answer this and the document's own directory does not hold the file — the root the client sent is the only thing that can.")
+	expectDefinitionInFile(probe, fileTail: clientRootHelperTail(), startLine: ClientRootDeclarationLine, note: "a call to an `export`ed declaration in a sibling DIRECTORY of the open document's did not resolve, although the client named their common ancestor as the workspace root. Nothing in the staged tree holds a `project.maxon`, so the marker climb cannot answer this and the document's own directory does not hold the file — the root the client sent is the only thing that can.")
 end 'definition honours the client root'
 
 test 'definition honours a workspaceFolders-only client root'
 	let probe = clientRootDefinitionProbe(ClientRootShape.foldersOnly)
 
-	try expectDefinitionInFile(probe, fileTail: clientRootHelperTail(), startLine: ClientRootDeclarationLine, note: "the same tree the `rootUri` case resolves did not resolve when the client sent `rootUri: null` and named the root in `workspaceFolders` alone. That is what every client written against LSP 3.6 or later sends, and `rootUri` has been deprecated the whole time; a server that reads only `rootUri` is rooted at nothing for all of them.")
+	expectDefinitionInFile(probe, fileTail: clientRootHelperTail(), startLine: ClientRootDeclarationLine, note: "the same tree the `rootUri` case resolves did not resolve when the client sent `rootUri: null` and named the root in `workspaceFolders` alone. That is what every client written against LSP 3.6 or later sends, and `rootUri` has been deprecated the whole time; a server that reads only `rootUri` is rooted at nothing for all of them.")
 end 'definition honours a workspaceFolders-only client root'
 
 function clientRootDefinitionProbe(shape ClientRootShape) returns CorpusDefinitionProbe

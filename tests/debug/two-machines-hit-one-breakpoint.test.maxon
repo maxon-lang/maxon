@@ -10,7 +10,7 @@ test 'every green thread that reaches one breakpoint stops on it, with two proce
 	let workers = stagedLinesContaining(staged, needle: SpawnSpelling)
 	let entryLine = anchorLine(staged, anchor: "worker-entry")
 
-	try Expect.notEqual(workers as AssertedInt, expected: 0, message: "no `{SpawnSpelling}` line was found in the staged fixture, so this case would demand nothing of the breakpoint at all.")
+	Expect.notEqual(workers as AssertedInt, expected: 0, message: "no `{SpawnSpelling}` line was found in the staged fixture, so this case would demand nothing of the breakpoint at all.")
 
 	var armings = StringArray.create()
 	armings.push("{BreakCommand} {lineTarget(entryLine)}")
@@ -27,11 +27,11 @@ test 'every green thread that reaches one breakpoint stops on it, with two proce
 		stopsOnTheAnchor = stopsOnTheAnchor + 1 if numberOf(stop, node: stop.root, key: LineKey) == entryLine as EventNumber else stopsOnTheAnchor
 	end 'eachStop'
 
-	try Expect.equal(stopsOnTheAnchor as AssertedInt, expected: workers as AssertedInt, message: "the fixture spawns {workers} green threads and every one runs the anchored line exactly once, so the breakpoint must publish {workers} stops. A breakpoint only one machine sees, or one a second machine steps over while the first is resuming it, MISSES a hit — and a missed hit is the failure a debugger cannot report about itself. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stopsOnTheAnchor as AssertedInt, expected: workers as AssertedInt, message: "the fixture spawns {workers} green threads and every one runs the anchored line exactly once, so the breakpoint must publish {workers} stops. A breakpoint only one machine sees, or one a second machine steps over while the first is resuming it, MISSES a hit — and a missed hit is the failure a debugger cannot report about itself. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end with two processors. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end with two processors. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'every green thread that reaches one breakpoint stops on it, with two processors running'

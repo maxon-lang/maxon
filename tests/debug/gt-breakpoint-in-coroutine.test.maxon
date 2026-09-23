@@ -20,21 +20,21 @@ test 'a breakpoint inside an async function stops on the green thread running it
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "a breakpoint inside an `async` body never stopped. A green thread runs on a borrowed OS stack, so a stop there is the whole of what says the trap is taken on the machine that ran it rather than only on the main stack. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "a breakpoint inside an `async` body never stopped. A green thread runs on a borrowed OS stack, so a stop there is the whole of what says the trap is taken on the machine that ran it rather than only on the main stack. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
-	try Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: WorkerFunctionName, message: "the stop does not name the `async` function it is inside. {said}")
-	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: entryLine as AssertedInt, message: "the stop is not on the anchored line inside the coroutine. {said}")
+	Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: WorkerFunctionName, message: "the stop does not name the `async` function it is inside. {said}")
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: entryLine as AssertedInt, message: "the stop is not on the anchored line inside the coroutine. {said}")
 
 	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
-	try Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` on a green thread's stack printed no `{BacktraceEventName}` event. {said}")
+	Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` on a green thread's stack printed no `{BacktraceEventName}` event. {said}")
 
 	let walked = eventAt(backtraces, index: 0)
-	try Expect.atLeast(childrenOf(walked, node: walked.root, key: FramesKey).count() as AssertedInt, than: 1, message: "the walk of a green thread's stack produced no frame at all — a frame-pointer chain that runs off a borrowed stack answers nothing rather than answering wrongly, and both are failures here. {said}")
+	Expect.atLeast(childrenOf(walked, node: walked.root, key: FramesKey).count() as AssertedInt, than: 1, message: "the walk of a green thread's stack produced no frame at all — a frame-pointer chain that runs off a borrowed stack answers nothing rather than answering wrongly, and both are failures here. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the coroutine program to its end. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the coroutine program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'a breakpoint inside an async function stops on the green thread running it'

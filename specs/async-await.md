@@ -1886,3 +1886,104 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: an-awaited-range-bound-in-a-for-source -->
+A non-throwing `await` is a `for` range's lower bound. It is an ordinary operand: awaited once, and the loop
+counts up from the value it hands back.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function start() returns Integer
+	Scheduler.yield()
+	return 2
+end 'start'
+
+function main() returns ExitCode
+	let p = async start()
+	var total = 0
+
+	for i in await p upto 5 'each'
+		total = total + i
+	end 'each'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: an-awaited-collection-as-a-for-source -->
+The collection twin: the awaited value IS the collection the loop walks.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function items() returns IntArray
+	Scheduler.yield()
+	var found = IntArray.create()
+	found.push(4)
+	found.push(5)
+	return found
+end 'items'
+
+function main() returns ExitCode
+	let q = async items()
+	var total = 0
+
+	for x in await q 'each'
+		total = total + x
+	end 'each'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: an-awaited-range-bound-in-a-for-source-inside-a-try-block -->
+The try-block twin: the loop sits in a block-form `try` body whose own throwing call is routed to the block's
+handler, and the non-throwing `await` in the loop's source stays an ordinary operand.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum CheckError implements Error
+	tooBig
+end 'CheckError'
+
+function start() returns Integer
+	Scheduler.yield()
+	return 2
+end 'start'
+
+function check(n Integer) returns Integer throws CheckError
+	if n > 100 'big'
+		throw CheckError.tooBig
+	end 'big'
+
+	return n
+end 'check'
+
+function main() returns ExitCode
+	let p = async start()
+	var total = 0
+
+	try 'work'
+		for i in await p upto 5 'each'
+			total = total + i
+		end 'each'
+
+		total = check(total)
+	end 'work' otherwise (e) 'h'
+		match e 'k'
+			tooBig then total = 0
+		end 'k'
+	end 'h'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+9
+```

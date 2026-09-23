@@ -14,21 +14,21 @@ test 'a breakpoint cleared while the program is running fires no more, and the n
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 2, message: "arming the line and clearing it are two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 2, message: "arming the line and clearing it are two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(breakpoints, index: 0)
-	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the live arming must succeed first, or the clear below has nothing to undo. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the live arming must succeed first, or the clear below has nothing to undo. {said}")
 
 	let cleared = eventAt(breakpoints, index: 1)
-	try Expect.equal(textOf(cleared, node: cleared.root, key: ActionKey), expected: ClearedAction, message: "⭐ A CLEAR IS SERVICED LIVE TOO, AND IT IS THE HALF THAT PUTS THE ORIGINAL BYTE BACK. A driver that can arm a running program and not disarm one leaves a trap in code nobody owns the moment the session ends. {said}")
+	Expect.equal(textOf(cleared, node: cleared.root, key: ActionKey), expected: ClearedAction, message: "⭐ A CLEAR IS SERVICED LIVE TOO, AND IT IS THE HALF THAT PUTS THE ORIGINAL BYTE BACK. A driver that can arm a running program and not disarm one leaves a trap in code nobody owns the moment the session ends. {said}")
 
 	let firstTimeout = firstIndexOfKind(events, kind: TimeoutEventName)
-	try Expect.notEqual(firstTimeout as AssertedInt, expected: AbsentEventIndex as AssertedInt, message: "the first `{RunCommand}` must answer a `{TimeoutEventName}` and leave the program running, which is the state this case arms and clears a breakpoint in. It printed: {renderedRows(eventKinds(events))}. {said}")
-	try Expect.lessThan(firstTimeout as AssertedInt, than: firstIndexOfKind(events, kind: BreakpointEventName) as AssertedInt, message: "the arming must come AFTER the timeout, or the breakpoint was placed into a program that had not started running. {said}")
+	Expect.notEqual(firstTimeout as AssertedInt, expected: AbsentEventIndex as AssertedInt, message: "the first `{RunCommand}` must answer a `{TimeoutEventName}` and leave the program running, which is the state this case arms and clears a breakpoint in. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.lessThan(firstTimeout as AssertedInt, than: firstIndexOfKind(events, kind: BreakpointEventName) as AssertedInt, message: "the arming must come AFTER the timeout, or the breakpoint was placed into a program that had not started running. {said}")
 
 	let clearedAt = lastIndexOfKind(events, kind: BreakpointEventName)
-	try Expect.equal(stopsAfterIndex(events, index: clearedAt) as AssertedInt, expected: 0, message: "⛔ THE CLAIM IS ABOUT WHAT HAPPENS AFTER THE CLEAR, NOT ABOUT WHAT HAPPENED BEFORE IT. The loop reaches the anchored line many times over the `{ContinueCommand}` that follows, and a byte that was acknowledged as cleared and left in place stops on every one of them. {said}")
-	try Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, than: 2, message: "with nothing armed the `{ContinueCommand}` after the clear has nothing to wait for, so it must answer a second `{TimeoutEventName}` — the positive statement that the program ran on and never stopped. It printed: {renderedRows(eventKinds(events))}. {said}")
-	try Expect.equal(eventsOfKind(events, kind: CrashEventName).count() as AssertedInt, expected: 0, message: "⛔ THE ORIGINAL BYTE IS PUT BACK UNDER A MACHINE THAT IS EXECUTING IT. A program that faulted after its breakpoint was cleared is one whose instruction stream was cut. {said}")
-	try Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "the session timed out, so it is a failed one. {said}")
+	Expect.equal(stopsAfterIndex(events, index: clearedAt) as AssertedInt, expected: 0, message: "⛔ THE CLAIM IS ABOUT WHAT HAPPENS AFTER THE CLEAR, NOT ABOUT WHAT HAPPENED BEFORE IT. The loop reaches the anchored line many times over the `{ContinueCommand}` that follows, and a byte that was acknowledged as cleared and left in place stops on every one of them. {said}")
+	Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, than: 2, message: "with nothing armed the `{ContinueCommand}` after the clear has nothing to wait for, so it must answer a second `{TimeoutEventName}` — the positive statement that the program ran on and never stopped. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(eventsOfKind(events, kind: CrashEventName).count() as AssertedInt, expected: 0, message: "⛔ THE ORIGINAL BYTE IS PUT BACK UNDER A MACHINE THAT IS EXECUTING IT. A program that faulted after its breakpoint was cleared is one whose instruction stream was cut. {said}")
+	Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "the session timed out, so it is a failed one. {said}")
 end 'a breakpoint cleared while the program is running fires no more, and the next continue times out instead'

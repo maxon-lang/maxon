@@ -11,8 +11,8 @@ test 'a plain break over a line already carrying a condition drops the condition
 	let hitLine = anchorLine(staged, anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
-	try Expect.atLeast(iterations as AssertedInt, than: 2, message: "the fixture must run the anchored line more than once, or `every hit` and `the one the condition names` would be the same count. It ran it {iterations} times.")
-	try Expect.lessThan(iterations as AssertedInt, than: ContinuesPastEveryHit, message: "the session issues {ContinuesPastEveryHit} continues and the line runs {iterations} times, so the count below would be capped by the script rather than by the breakpoint.")
+	Expect.atLeast(iterations as AssertedInt, than: 2, message: "the fixture must run the anchored line more than once, or `every hit` and `the one the condition names` would be the same count. It ran it {iterations} times.")
+	Expect.lessThan(iterations as AssertedInt, than: ContinuesPastEveryHit, message: "the session issues {ContinuesPastEveryHit} continues and the line runs {iterations} times, so the count below would be capped by the script rather than by the breakpoint.")
 
 	var armings = StringArray.create()
 	armings.push(conditionalBreak(lineTarget(hitLine), condition: ConditionText))
@@ -25,19 +25,19 @@ test 'a plain break over a line already carrying a condition drops the condition
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 2, message: "arming the line twice is two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 2, message: "arming the line twice is two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let conditioned = eventAt(breakpoints, index: 0)
-	try Expect.equal(textOf(conditioned, node: conditioned.root, key: ActionKey), expected: SetAction, message: "the conditional arming must succeed first, or the replacement below has nothing to replace. {said}")
+	Expect.equal(textOf(conditioned, node: conditioned.root, key: ActionKey), expected: SetAction, message: "the conditional arming must succeed first, or the replacement below has nothing to replace. {said}")
 
 	let replaced = eventAt(breakpoints, index: 1)
-	try Expect.equal(textOf(replaced, node: replaced.root, key: ActionKey), expected: SetAction, message: "a plain `{BreakCommand}` over a line that already carries a conditional breakpoint REPLACES it and reports `{SetAction}`; anything else leaves the reader believing the condition is gone while it is still filtering hits. {said}")
+	Expect.equal(textOf(replaced, node: replaced.root, key: ActionKey), expected: SetAction, message: "a plain `{BreakCommand}` over a line that already carries a conditional breakpoint REPLACES it and reports `{SetAction}`; anything else leaves the reader believing the condition is gone while it is still filtering hits. {said}")
 
-	try Expect.atLeast(stopsAtLine(events, line: hitLine) as AssertedInt, than: iterations as AssertedInt, message: "⭐ THE CONDITION MUST BE GONE, NOT MERELY OVERWRITTEN IN THE DRIVER. The line runs {iterations} times and every one of those runs must be reported, so an unconditional breakpoint over it stops at least {iterations} times; a stale condition record left in the agent's breakpoint entry stops once and reads as a debugger that simply missed the rest. It is `at least` rather than `exactly` because one source line may be armed at more than one offset, which the `offsets` the arming printed say. {said}")
+	Expect.atLeast(stopsAtLine(events, line: hitLine) as AssertedInt, than: iterations as AssertedInt, message: "⭐ THE CONDITION MUST BE GONE, NOT MERELY OVERWRITTEN IN THE DRIVER. The line runs {iterations} times and every one of those runs must be reported, so an unconditional breakpoint over it stops at least {iterations} times; a stale condition record left in the agent's breakpoint entry stops once and reads as a debugger that simply missed the rest. It is `at least` rather than `exactly` because one source line may be armed at more than one offset, which the `offsets` the arming printed say. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'a plain break over a line already carrying a condition drops the condition and stops on every hit'

@@ -24,28 +24,28 @@ test 'gt-backtrace walks the stack of a worker that is parked on another green t
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	try Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count() as AssertedInt, expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
-	try Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus) as AssertedInt, than: 1, message: "⛔ THE CASE NAMES ITS THREAD BY A SELECTOR AND THIS IS THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheRoster}rd stop at least one of them is parked on a timer. The roster held: {renderedThreads(roster)}. {said}")
+	Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus) as AssertedInt, than: 1, message: "⛔ THE CASE NAMES ITS THREAD BY A SELECTOR AND THIS IS THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheRoster}rd stop at least one of them is parked on a timer. The roster held: {renderedThreads(roster)}. {said}")
 
 	let walks = eventsOfKind(events, kind: GtBacktraceEventName)
-	try Expect.equal(walks.count() as AssertedInt, expected: 1, message: "`{selectorCommand(GtBacktraceCommand, selector: parked)}` printed no `{GtBacktraceEventName}` event. {said}")
+	Expect.equal(walks.count() as AssertedInt, expected: 1, message: "`{selectorCommand(GtBacktraceCommand, selector: parked)}` printed no `{GtBacktraceEventName}` event. {said}")
 
 	let walked = eventAt(walks, index: 0)
 	let chosen = reportedThreadId(walked)
-	try Expect.isFalse(reportsNoThreadId(walked), message: "⛔ THE SELECTOR RESOLVED TO NOTHING. `{parked}` names the lowest-numbered `{WaitingThreadStatus}` thread inside `{WorkerFunctionName}`, and the walk must name the thread it picked so a reader knows whose stack this is. The roster held: {renderedThreads(roster)}. {said}")
+	Expect.isFalse(reportsNoThreadId(walked), message: "⛔ THE SELECTOR RESOLVED TO NOTHING. `{parked}` names the lowest-numbered `{WaitingThreadStatus}` thread inside `{WorkerFunctionName}`, and the walk must name the thread it picked so a reader knows whose stack this is. The roster held: {renderedThreads(roster)}. {said}")
 
-	try Expect.equal(threadFieldOfId(roster, id: chosen, key: StatusKey), expected: WaitingThreadStatus, message: "⭐ THE EVENT SAYS WHICH THREAD IT ANSWERED ABOUT AND THIS IS WHERE THAT IS CHECKED, IN THE SAME SESSION AND AT THE SAME STOP. #{chosen} is not a `{WaitingThreadStatus}` thread on the roster the selector was resolved against. The roster held: {renderedThreads(roster)}. {said}")
-	try Expect.equal(threadFieldOfId(roster, id: chosen, key: FunctionKey), expected: WorkerFunctionName, message: "#{chosen} is not inside `{WorkerFunctionName}`, so the selector picked a thread this case is not about. The roster held: {renderedThreads(roster)}. {said}")
+	Expect.equal(threadFieldOfId(roster, id: chosen, key: StatusKey), expected: WaitingThreadStatus, message: "⭐ THE EVENT SAYS WHICH THREAD IT ANSWERED ABOUT AND THIS IS WHERE THAT IS CHECKED, IN THE SAME SESSION AND AT THE SAME STOP. #{chosen} is not a `{WaitingThreadStatus}` thread on the roster the selector was resolved against. The roster held: {renderedThreads(roster)}. {said}")
+	Expect.equal(threadFieldOfId(roster, id: chosen, key: FunctionKey), expected: WorkerFunctionName, message: "#{chosen} is not inside `{WorkerFunctionName}`, so the selector picked a thread this case is not about. The roster held: {renderedThreads(roster)}. {said}")
 
 	let frames = childrenOf(walked, node: walked.root, key: FramesKey)
-	try Expect.atLeast(frames.count() as AssertedInt, than: 1, message: "⭐ A PARKED GREEN THREAD'S REGISTERS ARE SAVED IN ITS OWN RECORD AND NOWHERE ELSE. The walk is seeded from that record's saved frame pointer, so a walk that produced no frame at all is one seeded from the stopping machine — which answers the stopping thread's stack or nothing, and both are failures here. {said}")
-	try Expect.equal(innermostPhysicalFrameFunction(walked, key: FramesKey), expected: WorkerFunctionName, message: "the innermost frame of a parked worker is inside `{WorkerFunctionName}`; anything else is a walk of somebody else's stack. ⚠ It is the innermost frame WITH A FRAME OF ITS OWN, because the worker parks inside the `sleep` the compiler spliced into it and a spliced body is reported as an inlined frame ahead of the one it was spliced into. {said}")
+	Expect.atLeast(frames.count() as AssertedInt, than: 1, message: "⭐ A PARKED GREEN THREAD'S REGISTERS ARE SAVED IN ITS OWN RECORD AND NOWHERE ELSE. The walk is seeded from that record's saved frame pointer, so a walk that produced no frame at all is one seeded from the stopping machine — which answers the stopping thread's stack or nothing, and both are failures here. {said}")
+	Expect.equal(innermostPhysicalFrameFunction(walked, key: FramesKey), expected: WorkerFunctionName, message: "the innermost frame of a parked worker is inside `{WorkerFunctionName}`; anything else is a walk of somebody else's stack. ⚠ It is the innermost frame WITH A FRAME OF ITS OWN, because the worker parks inside the `sleep` the compiler spliced into it and a spliced body is reported as an inlined frame ahead of the one it was spliced into. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'gt-backtrace walks the stack of a worker that is parked on another green thread'

@@ -304,4 +304,6 @@ end 'main'
 ```
 
 A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
-keep at least one element (`(_, _) = pure()` is **E3064**).
+keep at least one element (`(_, _) = pure()` is **E3064**). A throwing call is judged the same way: a pure
+one discarded as a bare statement inside a [`try` block](/docs/language/error-handling/#try-blocks) or a
+[`test` body](/docs/language/testing/#uncaught-errors-in-tests), where it needs no `try`, is **E3064**.

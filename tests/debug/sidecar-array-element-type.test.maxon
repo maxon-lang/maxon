@@ -10,7 +10,7 @@ test 'an Array local is described as an array, under a type row that names its e
 	let staged = builtFixture(ArrayElementCaseLabel, fixture: ValuesFixtureName)
 	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
 
-	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+	Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	let typeRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpTypesHeading)
@@ -23,11 +23,11 @@ test 'an Array local is described as an array, under a type row that names its e
 		end 'thisLocal'
 	end 'eachLocal'
 
-	try Expect.notEqual(describedAs, expected: AbsentEventText, message: "`{RenderFunctionName}` describes no local named `{ArrayLocalName}` under any type, so this case would ask nothing of the type table. Its locals were: {renderedRows(locals)}")
+	Expect.notEqual(describedAs, expected: AbsentEventText, message: "`{RenderFunctionName}` describes no local named `{ArrayLocalName}` under any type, so this case would ask nothing of the type table. Its locals were: {renderedRows(locals)}")
 
 	let described = typeRowOf(typeRows, name: describedAs)
-	try Expect.notEqual(described, expected: AbsentEventText, message: "`{ArrayLocalName}` is described under the type `{describedAs}`, which the type table does not hold — so a debugger asked to render it has nothing to render it AS. The types section held: {renderedRows(typeRows)}")
-	try Expect.equal(typeKindIn(described), expected: ArrayTypeKindName, message: "an Array is not a struct with one field; rendering it as one prints a pointer where the reader asked for elements. Its type row is: {described}")
+	Expect.notEqual(described, expected: AbsentEventText, message: "`{ArrayLocalName}` is described under the type `{describedAs}`, which the type table does not hold — so a debugger asked to render it has nothing to render it AS. The types section held: {renderedRows(typeRows)}")
+	Expect.equal(typeKindIn(described), expected: ArrayTypeKindName, message: "an Array is not a struct with one field; rendering it as one prints a pointer where the reader asked for elements. Its type row is: {described}")
 
 	var namedElements = StringArray.create()
 
@@ -36,5 +36,5 @@ test 'an Array local is described as an array, under a type row that names its e
 	end 'eachField'
 
 	let elements = renderedRows(namedElements)
-	try Expect.isTrue(elements.contains(ElementTypeName) or elements.contains(ElementUnderlyingName), message: "an array type record carries its ELEMENT's type id, because the element type is the only thing that says how far apart two elements are and how to render one. Either the declared alias `{ElementTypeName}` or the type it names, `{ElementUnderlyingName}`, is an honest answer; naming nothing is not. `{describedAs}`'s rows named: {elements}")
+	Expect.isTrue(elements.contains(ElementTypeName) or elements.contains(ElementUnderlyingName), message: "an array type record carries its ELEMENT's type id, because the element type is the only thing that says how far apart two elements are and how to render one. Either the declared alias `{ElementTypeName}` or the type it names, `{ElementUnderlyingName}`, is an honest answer; naming nothing is not. `{describedAs}`'s rows named: {elements}")
 end 'an Array local is described as an array, under a type row that names its element'

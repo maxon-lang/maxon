@@ -32,7 +32,7 @@ let NotesText = "range [a-c] noted\nplain line\ncost is 12 dollars\n"
 let BinaryText = "apple\0seed\n"
 
 test 'maxgrep searches a fixture tree the way grep documents'
-	try requireExampleBuild(MaxgrepExample)
+	requireExampleBuild(MaxgrepExample)
 
 	_ = stageExampleFile(MaxgrepExample, relativePath: "data/Zeta.txt", content: ZetaText)
 	_ = stageExampleFile(MaxgrepExample, relativePath: "data/alpha.txt", content: AlphaText)
@@ -54,44 +54,44 @@ test 'maxgrep searches a fixture tree the way grep documents'
 	// `elderberry` all fail at `le`, and `APPLE CRUMBLE` fails the class without `-i`. A directory PATH
 	// makes `grep` name each file, and `-n` puts the line number after the name.
 	let numbered = "{zeta}:1:apple pie\n{alpha}:1:apple core\n{gamma}:1:apple tart\n"
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-n", "^[abc]p*le", "data"]), stdout: numbered, exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-n", "^[abc]p*le", "data"]), stdout: numbered, exitCode: 0)
 
 	// `--jobs=N` is how many workers split the files; it is not part of the answer, so one worker prints
 	// exactly what the default run above printed.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["--jobs=1", "-n", "^[abc]p*le", "data"]), stdout: numbered, exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["--jobs=1", "-n", "^[abc]p*le", "data"]), stdout: numbered, exitCode: 0)
 
 	// `-c` prints a count per searched file, zero included; `-i` folds ASCII case, which is what adds
 	// `APPLE CRUMBLE` to `alpha.txt`'s `apple core`. `secret.txt` is missing because `.git` is skipped.
 	let counts = "{zeta}:1\n{alpha}:2\n{beta}:0\n{gamma}:1\n"
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-c", "-i", "apple", "data"]), stdout: counts, exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-c", "-i", "apple", "data"]), stdout: counts, exitCode: 0)
 
 	// `-l` prints the name of each file with a selected line and nothing else. `banana` is in `Zeta.txt`'s
 	// second line and `beta.txt`'s first.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-l", "banana", "data"]), stdout: "{zeta}\n{beta}\n", exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-l", "banana", "data"]), stdout: "{zeta}\n{beta}\n", exitCode: 0)
 
 	// `-v` selects the lines that do NOT match, so `alpha.txt` gives up its other two. A single file PATH
 	// is not named, which is also what keeps this expectation free of a separator.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-v", "apple", "data/alpha.txt"]), stdout: "cherry tart\nAPPLE CRUMBLE\n", exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-v", "apple", "data/alpha.txt"]), stdout: "cherry tart\nAPPLE CRUMBLE\n", exitCode: 0)
 
 	// `-F` takes PATTERN as plain text: `[a-c]` selects the one line that spells it. As a regular
 	// expression the same pattern would select all three lines of `notes.txt`.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-F", "[a-c]", "notes.txt"]), stdout: "range [a-c] noted\n", exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-F", "[a-c]", "notes.txt"]), stdout: "range [a-c] noted\n", exitCode: 0)
 
 	// Nothing selected is exit 1, and a bad PATTERN is exit 2; both report on stderr and print nothing.
 	// `a*+` repeats a repeat, so there is no atom for `+` to apply to.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["zzz", "notes.txt"]), stdout: "", exitCode: 1)
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["a*+", "notes.txt"]), stdout: "", exitCode: 2)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["zzz", "notes.txt"]), stdout: "", exitCode: 1)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["a*+", "notes.txt"]), stdout: "", exitCode: 2)
 
 	// Each PATH is searched in the order it was given, so `data/inner` comes first and `gamma.txt` is
 	// reported twice — once for itself and once as part of `data`.
 	let ordered = "{gamma}:1\n{zeta}:1\n{alpha}:1\n{beta}:0\n{gamma}:1\nnotes.txt:0\n"
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-c", "apple", "data/inner", "data", "notes.txt"]), stdout: ordered, exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["-c", "apple", "data/inner", "data", "notes.txt"]), stdout: ordered, exitCode: 0)
 
 	// A file holding a NUL is named rather than printed, because its bytes are not lines to show.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["apple", "binary.bin"]), stdout: "Binary file binary.bin matches\n", exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["apple", "binary.bin"]), stdout: "Binary file binary.bin matches\n", exitCode: 0)
 
 	// `.git` is skipped when a directory is walked — `gitonly` is in no other file, so the walk selects
 	// nothing. Naming the file itself proves the skip is the directory rule and not an unreadable file.
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["gitonly", "data"]), stdout: "", exitCode: 1)
-	try requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["gitonly", secret]), stdout: "gitonly apple\n", exitCode: 0)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["gitonly", "data"]), stdout: "", exitCode: 1)
+	requireAnswer(runBuiltExample(MaxgrepExample, arguments: ["gitonly", secret]), stdout: "gitonly apple\n", exitCode: 0)
 end 'maxgrep searches a fixture tree the way grep documents'

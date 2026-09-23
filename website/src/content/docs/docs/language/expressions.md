@@ -50,7 +50,9 @@ Dividing by zero is not undefined behaviour and does not crash: `/` and `mod` wh
 - **The divisor is provably non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0
   — and the divide compiles as-is, with no check.
 - **The divisor might be zero** — the divide throws, and must be written `try (a / b) otherwise …` (or
-  propagated from a function that `throws`). A bare divide is **E3057** (`throwing division requires try`).
+  propagated from a function that `throws`), unless a [`try` block](/docs/language/error-handling/#try-blocks) or a
+  [`test` body](/docs/language/testing/#uncaught-errors-in-tests) handles it. A bare divide anywhere else is **E3057**
+  (`throwing division requires try`).
 - **The divisor is always zero** — a literal `0`, `0.0`, or a constant bound to one — is **E3103**
   (`division by zero: the divisor of '/' is always 0`).
 

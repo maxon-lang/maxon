@@ -342,10 +342,10 @@ These rules cover the mistakes code generators make most often when writing Maxo
 
 12. **Use `clone()` for an independent copy.** Assigning a record shares it.
 
-13. **Keep tests in `*.test.maxon` files** and call every assertion with `try`:
+13. **Keep tests in `*.test.maxon` files.** A test body calls assertions without `try`:
 
     ```maxon
     test 'adds two numbers'
-    	try Expect.equal(2 + 2, expected: 4)
+    	Expect.equal(2 + 2, expected: 4)
     end 'adds two numbers'
     ```

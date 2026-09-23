@@ -1,0 +1,26 @@
+// Test: error.pure-throwing-call-statement-in-a-test-body
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum ParseError implements Error
+	invalidFormat
+end 'ParseError'
+
+function parseNum(s String) returns Integer throws ParseError
+	if s.byteLength() == 0 'empty'
+		throw ParseError.invalidFormat
+	end 'empty'
+	return s.byteLength()
+end 'parseNum'
+
+test 'discards a pure result'
+	parseNum("abc")
+end 'discards a pure result'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3064: <fragment>:17:2: result of pure function 'parseNum' must be used

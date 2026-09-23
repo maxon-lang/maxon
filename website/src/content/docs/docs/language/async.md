@@ -99,7 +99,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Plain `await` on a throwing promise is **E3057**; `try await` on a promise that cannot throw is **E3055**.
+Plain `await` on a throwing promise is **E3057**, unless a [`try` block](/docs/language/error-handling/#try-blocks) or a
+[`test` body](/docs/language/testing/#uncaught-errors-in-tests) handles it; `try await` on a promise that cannot throw is **E3055**.
+The awaited form may be parenthesized: `try (await p) otherwise …` is `try await p otherwise …`.
 
 ## Promises in Collections and Fields
 
@@ -150,9 +152,11 @@ caller owns it outright. Reading a promise out of a temporary — `try make().ge
 alive to the end of the enclosing scope, so the promise outlives the expression it came from.
 
 **Consuming a promise.** `await`, `.cancel()`, a `push` or `set` into another container, a store into a field
-or a union case, and passing it to a call by value all consume it: each empties the slot the promise was read
-out of, and hands the thread either back to the runtime or to its new owner. A store into a promise field also
-releases the thread that field was holding, exactly once. Three refusals follow:
+or a union case, and passing it to a parameter the callee takes all consume it: each empties the slot the
+promise was read out of, and hands the thread either back to the runtime or to its new owner. A callee takes
+a promise parameter it awaits, cancels, stores or returns; a promise passed to a parameter the callee only
+reads stays with the caller. A store into a promise field also releases the thread that field was holding,
+exactly once. Three refusals follow:
 
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
   hold one promise, so only one of them may be consumed; where the compiler cannot see that both name one slot,
@@ -160,6 +164,13 @@ releases the thread that field was holding, exactly once. Three refusals follow:
 - **E3102** — a promise already moved into storage is used again afterwards.
 - **E2015** — a promise read outside a loop is given away inside it, or inside a `while` condition. Read it
   inside the loop instead.
+
+**Returning a promise.** A function may return a promise it owns — a spawn, a bound spawn, one taken with
+`pop`/`remove`, or a promise parameter — and the caller then owns it, to await, cancel or drop. A `return` of
+a promise no frame owns is **E3141**: one read out of a container that still holds it, a merge of two
+promises (`p if c else q`), or a second name for a parameter. Because the whole program's ownership facts are
+recorded per function name, an overload set with a promise parameter is refused (**E2015**) when one of its
+members takes ownership of a parameter or returns one; give those overloads distinct names.
 
 ## Cancellation and Dropped Promises
 
@@ -231,7 +242,8 @@ end 'main'
   ordinary calls, so a service's logic is unit-testable without threads.
 - **Messages.** A method that returns nothing and throws nothing is sent and forgotten. A method that returns
   a value, or throws, is awaited: `try await h.method(…)`. The reply can always fail with
-  `ServiceError.stopped`, so plain `await` is **E3057**; the method's own error type merges with it in the
+  `ServiceError.stopped`, so plain `await` outside a `try` block or a test body is **E3057**; the method's
+  own error type merges with it in the
   handler's `match`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
   **E3136**. A service cannot send to itself.

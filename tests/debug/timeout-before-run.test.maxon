@@ -10,9 +10,9 @@ test 'a run with no breakpoint times out, and the debuggee is not left running b
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 1, message: "a program that never stops and never ends must be reported as a `{TimeoutEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
-	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a timeout is not an exit — a session that gave up must not claim the program ended. {said}")
-	try Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "a timed-out session is a failed one, so the driver must exit {TimedOutSessionExitCode}. {said}")
+	Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count() as AssertedInt, expected: 1, message: "a program that never stops and never ends must be reported as a `{TimeoutEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 0, message: "a timeout is not an exit — a session that gave up must not claim the program ended. {said}")
+	Expect.equal(session.exitCode() as AssertedInt, expected: TimedOutSessionExitCode, message: "a timed-out session is a failed one, so the driver must exit {TimedOutSessionExitCode}. {said}")
 
 	var reaped = true
 
@@ -20,5 +20,5 @@ test 'a run with no breakpoint times out, and the debuggee is not left running b
 		reaped = false
 	end 'stillHeld'
 
-	try Expect.isTrue(reaped, message: "the debuggee's image could not be deleted after the session gave up, so a process still holds it: the driver left the program it timed out on running. {said}")
+	Expect.isTrue(reaped, message: "the debuggee's image could not be deleted after the session gave up, so a process still holds it: the driver left the program it timed out on running. {said}")
 end 'a run with no breakpoint times out, and the debuggee is not left running behind it'

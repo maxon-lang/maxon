@@ -10,9 +10,9 @@ test 'a batch session that ran the program to completion exits 0 and reports the
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let exits = eventsOfKind(events, kind: ExitEventName)
 
-	try Expect.equal(session.exitCode() as AssertedInt, expected: CompletedSessionExitCode, message: "a session that completed is the DRIVER exiting {CompletedSessionExitCode}; the program's own code is DATA in the `{ExitEventName}` event and never the driver's verdict. {said}")
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "`{DebugBatchOption} {DebugCommandsOptionPrefix}{RunCommand}` printed {exits.count()} `{ExitEventName}` events for one program that ran to completion. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(session.exitCode() as AssertedInt, expected: CompletedSessionExitCode, message: "a session that completed is the DRIVER exiting {CompletedSessionExitCode}; the program's own code is DATA in the `{ExitEventName}` event and never the driver's verdict. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "`{DebugBatchOption} {DebugCommandsOptionPrefix}{RunCommand}` printed {exits.count()} `{ExitEventName}` events for one program that ran to completion. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: HeaplessProgramExitCode, message: "the `{ExitEventName}` event does not carry the program's own exit code under `{CodeKey}`. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: HeaplessProgramExitCode, message: "the `{ExitEventName}` event does not carry the program's own exit code under `{CodeKey}`. {said}")
 end 'a batch session that ran the program to completion exits 0 and reports the program code as data'

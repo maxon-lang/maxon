@@ -30,7 +30,7 @@ test 'every local of a two-file program names the type its own file declared it 
 	end 'didNotBuild'
 
 	let dumpRun = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
-	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dumpRun.stderr}")
+	Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dumpRun.stderr}")
 
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dumpRun.stdout), heading: DumpFunctionsHeading)
 	var asked = 0
@@ -54,8 +54,8 @@ test 'every local of a two-file program names the type its own file declared it 
 		end 'describedAsAnotherType'
 	end 'eachSourceLine'
 
-	try Expect.notEqual(asked as AssertedInt, expected: 0, message: "sidecar-local-types.test: no `{BindingPrefix}<name>{BindingInitializer}<Type>{FactoryCall}` binding was found in the staged fixture, so this case would assert nothing at all.")
-	try Expect.isEmpty(renderedRows(wrong), message: "these locals are described under a type their declaration does not name — a debugger would print one type's fields over another's bytes. The functions section held: {renderedRows(functionRows)}")
+	Expect.notEqual(asked as AssertedInt, expected: 0, message: "sidecar-local-types.test: no `{BindingPrefix}<name>{BindingInitializer}<Type>{FactoryCall}` binding was found in the staged fixture, so this case would assert nothing at all.")
+	Expect.isEmpty(renderedRows(wrong), message: "these locals are described under a type their declaration does not name — a debugger would print one type's fields over another's bytes. The functions section held: {renderedRows(functionRows)}")
 end 'every local of a two-file program names the type its own file declared it with'
 
 // The type a local row names: its last word, which follows a lone `:`. EMPTY when no local row carries the

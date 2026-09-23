@@ -159,34 +159,34 @@ end 'flatFixture'
 test 'formatting indents nested code correctly'
 	// Code with no indentation - formatter should add proper indentation
 	let source = nestedFixture()
-	let text = try formattedDocumentText(source, insertSpaces: false)
+	let text = formattedDocumentText(source, insertSpaces: false)
 
 	// Check that var x is indented
-	try Expect.contains(text, needle: "\tvar x", message: "a statement in the function body was not indented one tab.")
-	try Expect.contains(text, needle: "\t\tvar y", message: "a statement inside the `if` was not indented two tabs.")
-	try Expect.contains(text, needle: "\tend 'check'", message: "the `if`'s own `end` was not returned to the function's level.")
-	try Expect.contains(text, needle: "\nend 'main'", message: "the function's `end` did not sit at column 0 on its own line.")
+	Expect.contains(text, needle: "\tvar x", message: "a statement in the function body was not indented one tab.")
+	Expect.contains(text, needle: "\t\tvar y", message: "a statement inside the `if` was not indented two tabs.")
+	Expect.contains(text, needle: "\tend 'check'", message: "the `if`'s own `end` was not returned to the function's level.")
+	Expect.contains(text, needle: "\nend 'main'", message: "the function's `end` did not sit at column 0 on its own line.")
 end 'formatting indents nested code correctly'
 
 test 'formatting indents type fields correctly'
 	// Type with no indentation on fields
 	let source = typeFieldsFixture()
-	let text = try formattedDocumentText(source, insertSpaces: false)
+	let text = formattedDocumentText(source, insertSpaces: false)
 
-	try Expect.contains(text, needle: "\tvar x int", message: "a type's field was not indented one tab.")
-	try Expect.contains(text, needle: "\tvar y int", message: "a type's second field was not indented one tab.")
-	try Expect.contains(text, needle: "\nend 'Point'", message: "the type's `end` did not sit at column 0 on its own line.")
+	Expect.contains(text, needle: "\tvar x int", message: "a type's field was not indented one tab.")
+	Expect.contains(text, needle: "\tvar y int", message: "a type's second field was not indented one tab.")
+	Expect.contains(text, needle: "\nend 'Point'", message: "the type's `end` did not sit at column 0 on its own line.")
 end 'formatting indents type fields correctly'
 
 test 'formatting handles else blocks correctly'
 	// Code with else block - uses correct Maxon syntax: end 'label' else 'else_label'
 	let source = elseBlockFixture()
-	let text = try formattedDocumentText(source, insertSpaces: false)
+	let text = formattedDocumentText(source, insertSpaces: false)
 
-	try Expect.contains(text, needle: "\tif true", message: "the `if` was not indented one tab.")
-	try Expect.contains(text, needle: "\t\treturn 1", message: "the `if` body was not indented two tabs.")
-	try Expect.contains(text, needle: "\tend 'check' else 'other'", message: "the `end … else` line did not sit at the `if`'s own level; `else` shares the line with its `end`, so it cannot be indented as if it opened a new level.")
-	try Expect.contains(text, needle: "\tend 'other'", message: "the else block's `end` did not sit at the `if`'s own level.")
+	Expect.contains(text, needle: "\tif true", message: "the `if` was not indented one tab.")
+	Expect.contains(text, needle: "\t\treturn 1", message: "the `if` body was not indented two tabs.")
+	Expect.contains(text, needle: "\tend 'check' else 'other'", message: "the `end … else` line did not sit at the `if`'s own level; `else` shares the line with its `end`, so it cannot be indented as if it opened a new level.")
+	Expect.contains(text, needle: "\tend 'other'", message: "the else block's `end` did not sit at the `if`'s own level.")
 end 'formatting handles else blocks correctly'
 
 test 'formatting uses spaces when insertSpaces is true'
@@ -197,9 +197,9 @@ test 'formatting uses spaces when insertSpaces is true'
 	// preference: `Formatter.format(source String) returns String` takes neither `tabSize` nor
 	// `insertSpaces`, so the handler has to thread both through before this can be answered at all.
 	let source = flatFixture()
-	let text = try formattedDocumentText(source, insertSpaces: true)
+	let text = formattedDocumentText(source, insertSpaces: true)
 
-	try Expect.contains(text, needle: "    var x", message: "a statement was not indented with four spaces even though the client asked for spaces at width 4.")
-	try Expect.contains(text, needle: "    return x", message: "the `return` was not indented with four spaces.")
-	try Expect.isFalse(text.contains("\tvar"), message: "a TAB survived a format the client asked to be done in spaces. An editor configured for spaces gets a file it will re-indent on the next save.")
+	Expect.contains(text, needle: "    var x", message: "a statement was not indented with four spaces even though the client asked for spaces at width 4.")
+	Expect.contains(text, needle: "    return x", message: "the `return` was not indented with four spaces.")
+	Expect.isFalse(text.contains("\tvar"), message: "a TAB survived a format the client asked to be done in spaces. An editor configured for spaces gets a file it will re-indent on the next save.")
 end 'formatting uses spaces when insertSpaces is true'

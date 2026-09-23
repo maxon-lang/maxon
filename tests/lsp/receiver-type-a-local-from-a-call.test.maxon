@@ -22,19 +22,19 @@ let ReceiverCallMemberListCharacter = 12 as LspCoordinate
 let ReceiverCallMemberNameCharacter = 15 as LspCoordinate
 
 test 'receiver type: a local from a call offers its members'
-	let labels = try completionLabelsFor(receiverCallFixture(), line: ReceiverCallLine, character: ReceiverCallMemberListCharacter, after: "`p.`, where `p` is bound by `FilePath.empty()`")
+	let labels = completionLabelsFor(receiverCallFixture(), line: ReceiverCallLine, character: ReceiverCallMemberListCharacter, after: "`p.`, where `p` is bound by `FilePath.empty()`")
 
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `p.` offered nothing at all, where `p` is bound by `FilePath.empty()`. A call is how most locals in this tree get their value.")
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `p.` offered nothing at all, where `p` is bound by `FilePath.empty()`. A call is how most locals in this tree get their value.")
 
-	try Expect.isTrue(completionOffersLabel(labels, label: "toString"), message: "completion after `p.` did not offer `toString`, which `stdlib/FilePath.maxon` declares `public` and which the very next characters of the fixture call.")
+	Expect.isTrue(completionOffersLabel(labels, label: "toString"), message: "completion after `p.` did not offer `toString`, which `stdlib/FilePath.maxon` declares `public` and which the very next characters of the fixture call.")
 end 'receiver type: a local from a call offers its members'
 
 test 'receiver type: a member of a local from a call hovers'
-	let rendering = try hoverRendering(receiverCallFixture(), line: ReceiverCallLine, character: ReceiverCallMemberNameCharacter)
+	let rendering = hoverRendering(receiverCallFixture(), line: ReceiverCallLine, character: ReceiverCallMemberNameCharacter)
 
-	try Expect.contains(rendering, needle: "toString", message: "hovering `toString` in `p.toString()` did not name it. Hover and completion reach `p` through ONE walk, so the case above and this one must agree about what `p` is — a red in only one of them is the two doors come apart.")
+	Expect.contains(rendering, needle: "toString", message: "hovering `toString` in `p.toString()` did not name it. Hover and completion reach `p` through ONE walk, so the case above and this one must agree about what `p` is — a red in only one of them is the two doors come apart.")
 
-	try Expect.contains(rendering, needle: "function toString", message: "the hover did not render the declaration `stdlib/FilePath.maxon` holds for `toString`. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "function toString", message: "the hover did not render the declaration `stdlib/FilePath.maxon` holds for `toString`. It rendered: {rendering}")
 end 'receiver type: a member of a local from a call hovers'
 
 function receiverCallFixture() returns String

@@ -23,8 +23,8 @@ test 'an edited program is rebuilt and the new answer runs'
 
 	let first = runProgram(staged, program: program)
 	let firstExit = first.exitCode() as AssertedInt
-	try Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for an edit to invalidate. It said: {first.stdout}{first.stderr}")
-	try Expect.equal(withoutCarriageReturns(first.stdout), expected: "{HelloGreeting}{LineFeed}", message: "the first run did not print what the program prints")
+	Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for an edit to invalidate. It said: {first.stdout}{first.stderr}")
+	Expect.equal(withoutCarriageReturns(first.stdout), expected: "{HelloGreeting}{LineFeed}", message: "the first run did not print what the program prints")
 
 	let staleName = slotExecutableName(staged)
 
@@ -32,9 +32,9 @@ test 'an edited program is rebuilt and the new answer runs'
 
 	let second = runProgram(staged, program: program)
 	let secondExit = second.exitCode() as AssertedInt
-	try Expect.equal(secondExit, expected: 0, message: "the run after the edit failed. It said: {second.stdout}{second.stderr}")
-	try Expect.equal(withoutCarriageReturns(second.stdout), expected: "{EditedGreeting}{LineFeed}", message: "the run after the edit printed the OLD program's answer, so a cached build was served for a source that had changed")
+	Expect.equal(secondExit, expected: 0, message: "the run after the edit failed. It said: {second.stdout}{second.stderr}")
+	Expect.equal(withoutCarriageReturns(second.stdout), expected: "{EditedGreeting}{LineFeed}", message: "the run after the edit printed the OLD program's answer, so a cached build was served for a source that had changed")
 
 	let freshName = slotExecutableName(staged)
-	try Expect.notEqual(freshName, expected: staleName, message: "the cached build's NAME did not change when the program did. The name is the key, so a name blind to an edit serves a stale build for every later run.")
+	Expect.notEqual(freshName, expected: staleName, message: "the cached build's NAME did not change when the program did. The name is the key, so a name blind to an edit serves a stale build for every later run.")
 end 'an edited program is rebuilt and the new answer runs'

@@ -11,12 +11,12 @@ test 'a break target two functions answer to is ambiguous and lists both, never 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {SharedLeafName}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {SharedLeafName}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let answer = eventAt(breakpoints, index: 0)
 	let candidates = stringsOf(answer, node: answer.root, key: CandidatesKey)
 
-	try Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: AmbiguousAction, message: "two types declare `{SharedLeafName}`, so a leaf-name target reaches both. Picking one silently arms a breakpoint in a function the author did not name. {said}")
-	try Expect.contains(renderedRows(candidates), needle: AccountMethodName, message: "the ambiguity does not list `{AccountMethodName}`, so the reader cannot spell the target that would disambiguate it. It listed: {renderedRows(candidates)}. {said}")
-	try Expect.contains(renderedRows(candidates), needle: LedgerMethodName, message: "the ambiguity does not list `{LedgerMethodName}`. It listed: {renderedRows(candidates)}. {said}")
+	Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: AmbiguousAction, message: "two types declare `{SharedLeafName}`, so a leaf-name target reaches both. Picking one silently arms a breakpoint in a function the author did not name. {said}")
+	Expect.contains(renderedRows(candidates), needle: AccountMethodName, message: "the ambiguity does not list `{AccountMethodName}`, so the reader cannot spell the target that would disambiguate it. It listed: {renderedRows(candidates)}. {said}")
+	Expect.contains(renderedRows(candidates), needle: LedgerMethodName, message: "the ambiguity does not list `{LedgerMethodName}`. It listed: {renderedRows(candidates)}. {said}")
 end 'a break target two functions answer to is ambiguous and lists both, never a silent pick'

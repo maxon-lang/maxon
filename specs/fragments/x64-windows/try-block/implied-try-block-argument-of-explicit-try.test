@@ -1,0 +1,158 @@
+// Test: implied-try-block-argument-of-explicit-try
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+	kaboom
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function inner(fail bool) returns Score throws ErrA
+	if fail 'c'
+		throw ErrA.kaboom
+	end 'c'
+
+	return 5
+end 'inner'
+
+function outer(n Score) returns Score throws ErrB
+	if n > 50 'big'
+		throw ErrB.splat
+	end 'big'
+
+	return n
+end 'outer'
+
+function main() returns ExitCode
+	var sum = 0
+
+	try 'work'
+		let v = try outer(inner(true)) otherwise 0
+		sum = v
+	end 'work' otherwise (e) 'h'
+		match e 'k'
+			kaboom then sum = 42
+		end 'k'
+	end 'h'
+
+	return sum
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __ds_base@40 = i64 0
+  __dbg_ctl@48 = i64 0
+  __mrt_console_probe_stdin@56 = i8 0
+  __mrt_console_probe_stdout@57 = i8 0
+  __mrt_console_probe_stderr@58 = i8 0
+}
+
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  c:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 5
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 50
+    x64.jcc lessEqual, ifcont
+  big:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at implied-try-block-argument-of-explicit-try.test:20: Range check failed: value outside typealias 'Score'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect inner
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryblkok
+  tryblkerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matchdead
+  matcharm:
+    x64.movRegImm32 r8, 42
+    x64.jmp tryblkcont
+  matchdead:
+  tryblkok:
+    x64.movRegReg rcx, r8
+    x64.callDirect outer
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+  trycont:
+    x64.movRegReg r8, rax
+  tryblkcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at implied-try-block-argument-of-explicit-try.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

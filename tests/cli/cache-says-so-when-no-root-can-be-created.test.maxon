@@ -32,15 +32,15 @@ test 'bare cache says so when no candidate root can be created, and names every 
 	let reported = runWithCacheRoots([CacheCommandWord], naming: naming, workingDirectory: dir)
 	let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
 
-	try Expect.equal(reported.exitCode() as AssertedInt, expected: Succeeded, message: "`maxon {CacheCommandWord}` did not succeed with every candidate cache root on this host named at a regular file. The reader asked which directories this host keeps a cache under and every one of them was answered; it is `maxon {ExecuteCommandWord}` that has nowhere to build into, not the report. {said}")
+	Expect.equal(reported.exitCode() as AssertedInt, expected: Succeeded, message: "`maxon {CacheCommandWord}` did not succeed with every candidate cache root on this host named at a regular file. The reader asked which directories this host keeps a cache under and every one of them was answered; it is `maxon {ExecuteCommandWord}` that has nowhere to build into, not the report. {said}")
 
 	for blocked in blockedPaths 'eachBlocked'
-		try Expect.contains(reported.stdout, needle: blocked, message: "`maxon {CacheCommandWord}` left {blocked} out of the roster. A build published while that root was usable is stranded under it, and the report is what tells the reader it is there to clear. {said}")
+		Expect.contains(reported.stdout, needle: blocked, message: "`maxon {CacheCommandWord}` left {blocked} out of the roster. A build published while that root was usable is stranded under it, and the report is what tells the reader it is there to clear. {said}")
 	end 'eachBlocked'
 
-	try Expect.isFalse(reported.stdout.contains(InUseWords), message: "`maxon {CacheCommandWord}` marked a root as the one in use, with every candidate named at a regular file so that no run can create any of them. {said}")
+	Expect.isFalse(reported.stdout.contains(InUseWords), message: "`maxon {CacheCommandWord}` marked a root as the one in use, with every candidate named at a regular file so that no run can create any of them. {said}")
 
 	let unnamed = variablesUnnamedIn(reported.stdout)
 
-	try Expect.isEmpty(unnamed, message: "`maxon {CacheCommandWord}` reported the whole roster without naming {unnamed}, and marked no root in use. The report's job is to say which directory the next run fills, and where the answer is `none` it said nothing at all - while `maxon {ExecuteCommandWord}` on this same host refuses with a sentence naming every variable a caller can set. {said}")
+	Expect.isEmpty(unnamed, message: "`maxon {CacheCommandWord}` reported the whole roster without naming {unnamed}, and marked no root in use. The report's job is to say which directory the next run fills, and where the answer is `none` it said nothing at all - while `maxon {ExecuteCommandWord}` on this same host refuses with a sentence naming every variable a caller can set. {said}")
 end 'bare cache says so when no candidate root can be created, and names every variable it consulted'

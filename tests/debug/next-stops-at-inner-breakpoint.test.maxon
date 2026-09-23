@@ -12,10 +12,10 @@ test 'a next that steps over a call stops at a breakpoint inside it'
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the stop the `{NextCommand}` ran into are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count() as AssertedInt, expected: 2, message: "the breakpoint on the call line and the stop the `{NextCommand}` ran into are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let landed = eventAt(stops, index: 1)
-	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: InnerFunctionName, message: "`{NextCommand}` steps OVER a call, which means it does not report the callee's LINES — but a breakpoint inside the callee is a place the author asked to stop, and running through it is the same defect as never arming it. {said}")
-	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: innerLine as AssertedInt, message: "the `{NextCommand}` did not stop on the breakpoint's line. {said}")
-	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: BreakpointStopReason, message: "a stop inside a stepped-over call is the BREAKPOINT's, never a step's. {said}")
+	Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: InnerFunctionName, message: "`{NextCommand}` steps OVER a call, which means it does not report the callee's LINES — but a breakpoint inside the callee is a place the author asked to stop, and running through it is the same defect as never arming it. {said}")
+	Expect.equal(numberOf(landed, node: landed.root, key: LineKey) as AssertedInt, expected: innerLine as AssertedInt, message: "the `{NextCommand}` did not stop on the breakpoint's line. {said}")
+	Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: BreakpointStopReason, message: "a stop inside a stepped-over call is the BREAKPOINT's, never a step's. {said}")
 end 'a next that steps over a call stops at a breakpoint inside it'

@@ -1,0 +1,30 @@
+// Test: error.overloads-that-hand-back-a-promise-parameter
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function relay(n Integer, p IntPromise) returns IntPromise
+	print("{n}\n")
+	return p
+end 'relay'
+
+function relay(p IntPromise, q IntPromise, flag bool) returns IntPromise
+	if flag and p.inner > 0 'peeked'
+		print("peeked\n")
+	end 'peeked'
+
+	return q
+end 'relay'
+
+function main() returns ExitCode
+	let r = relay(1, p: async work(1))
+	print("{await r}\n")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:10: Unsupported: overloading 'relay' — one of its declarations takes OWNERSHIP of a parameter (moving it into durable storage, or awaiting, cancelling or returning a promise) and one of them takes a parameter whose ownership that decides, and the whole-program declaration sweep publishes a function's ownership facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names

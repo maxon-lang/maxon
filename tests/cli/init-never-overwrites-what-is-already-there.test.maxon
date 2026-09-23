@@ -12,10 +12,10 @@ test 'init writes nothing at all when either file is already there'
 	let refused = runDriver([InitCommandWord, dir.toString()])
 	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
 
-	try Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "`maxon {InitCommandWord}` over a directory already holding a {ManifestFileName} did not refuse. {said}")
-	try Expect.contains(refused.stderr, needle: ManifestFileName, message: "the refusal did not name the file that stopped it. {said}")
+	Expect.equal(refused.exitCode() as AssertedInt, expected: 1, message: "`maxon {InitCommandWord}` over a directory already holding a {ManifestFileName} did not refuse. {said}")
+	Expect.contains(refused.stderr, needle: ManifestFileName, message: "the refusal did not name the file that stopped it. {said}")
 
 	let kept = try File.readText(manifest) otherwise panic("init-never-overwrites-what-is-already-there: the gate could not run - could not read {manifest.toString()} back")
-	try Expect.equal(kept, expected: HandWritten, message: "`maxon {InitCommandWord}` overwrote a file that was already there. {said}")
-	try Expect.isFalse(File.exists(dir.join(EntryFileName)), message: "`maxon {InitCommandWord}` refused and still wrote the other half of the scaffold: nothing is written when either file is there. {said}")
+	Expect.equal(kept, expected: HandWritten, message: "`maxon {InitCommandWord}` overwrote a file that was already there. {said}")
+	Expect.isFalse(File.exists(dir.join(EntryFileName)), message: "`maxon {InitCommandWord}` refused and still wrote the other half of the scaffold: nothing is written when either file is there. {said}")
 end 'init writes nothing at all when either file is already there'

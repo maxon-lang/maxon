@@ -28,41 +28,41 @@ test 'every advertised capability is answered, and every answered method is adve
 
 	let advertised = try client.initialize() otherwise 'initFailed'
 		client.release()
-		try Expect.fail("the session could not be initialized, so the capability agreement could not be checked at all.")
+		Expect.fail("the session could not be initialized, so the capability agreement could not be checked at all.")
 		return
 	end 'initFailed'
 
-	try client.initialized()
-	try client.openDocument(CapabilityProbeUri, content: capabilityProbeDocument())
+	client.initialized()
+	client.openDocument(CapabilityProbeUri, content: capabilityProbeDocument())
 
 	// Every method the server has an area for, asked in the order `LspMethod` declares them.
-	let hover = try client.methodIsServed("textDocument/hover", uri: CapabilityProbeUri)
-	let definition = try client.methodIsServed("textDocument/definition", uri: CapabilityProbeUri)
-	let completion = try client.methodIsServed("textDocument/completion", uri: CapabilityProbeUri)
-	let formatting = try client.methodIsServed("textDocument/formatting", uri: CapabilityProbeUri)
-	let symbols = try client.methodIsServed("textDocument/documentSymbol", uri: CapabilityProbeUri)
-	let folding = try client.methodIsServed("textDocument/foldingRange", uri: CapabilityProbeUri)
-	let linked = try client.methodIsServed("textDocument/linkedEditingRange", uri: CapabilityProbeUri)
-	let rename = try client.methodIsServed("textDocument/rename", uri: CapabilityProbeUri)
-	let action = try client.methodIsServed("textDocument/codeAction", uri: CapabilityProbeUri)
-	let tokens = try client.methodIsServed("textDocument/semanticTokens/full", uri: CapabilityProbeUri)
+	let hover = client.methodIsServed("textDocument/hover", uri: CapabilityProbeUri)
+	let definition = client.methodIsServed("textDocument/definition", uri: CapabilityProbeUri)
+	let completion = client.methodIsServed("textDocument/completion", uri: CapabilityProbeUri)
+	let formatting = client.methodIsServed("textDocument/formatting", uri: CapabilityProbeUri)
+	let symbols = client.methodIsServed("textDocument/documentSymbol", uri: CapabilityProbeUri)
+	let folding = client.methodIsServed("textDocument/foldingRange", uri: CapabilityProbeUri)
+	let linked = client.methodIsServed("textDocument/linkedEditingRange", uri: CapabilityProbeUri)
+	let rename = client.methodIsServed("textDocument/rename", uri: CapabilityProbeUri)
+	let action = client.methodIsServed("textDocument/codeAction", uri: CapabilityProbeUri)
+	let tokens = client.methodIsServed("textDocument/semanticTokens/full", uri: CapabilityProbeUri)
 
 	client.release()
 
-	try capabilityAgrees("hoverProvider", advertised: advertised.hasHoverProvider, served: hover)
-	try capabilityAgrees("definitionProvider", advertised: advertised.hasDefinitionProvider, served: definition)
-	try capabilityAgrees("completionProvider", advertised: advertised.hasCompletionProvider, served: completion)
-	try capabilityAgrees("documentFormattingProvider", advertised: advertised.hasFormattingProvider, served: formatting)
-	try capabilityAgrees("documentSymbolProvider", advertised: advertised.hasDocumentSymbolProvider, served: symbols)
-	try capabilityAgrees("foldingRangeProvider", advertised: advertised.hasFoldingRangeProvider, served: folding)
-	try capabilityAgrees("linkedEditingRangeProvider", advertised: advertised.hasLinkedEditingRangeProvider, served: linked)
-	try capabilityAgrees("renameProvider", advertised: advertised.hasRenameProvider, served: rename)
-	try capabilityAgrees("codeActionProvider", advertised: advertised.hasCodeActionProvider, served: action)
-	try capabilityAgrees("semanticTokensProvider", advertised: advertised.hasSemanticTokensProvider, served: tokens)
+	capabilityAgrees("hoverProvider", advertised: advertised.hasHoverProvider, served: hover)
+	capabilityAgrees("definitionProvider", advertised: advertised.hasDefinitionProvider, served: definition)
+	capabilityAgrees("completionProvider", advertised: advertised.hasCompletionProvider, served: completion)
+	capabilityAgrees("documentFormattingProvider", advertised: advertised.hasFormattingProvider, served: formatting)
+	capabilityAgrees("documentSymbolProvider", advertised: advertised.hasDocumentSymbolProvider, served: symbols)
+	capabilityAgrees("foldingRangeProvider", advertised: advertised.hasFoldingRangeProvider, served: folding)
+	capabilityAgrees("linkedEditingRangeProvider", advertised: advertised.hasLinkedEditingRangeProvider, served: linked)
+	capabilityAgrees("renameProvider", advertised: advertised.hasRenameProvider, served: rename)
+	capabilityAgrees("codeActionProvider", advertised: advertised.hasCodeActionProvider, served: action)
+	capabilityAgrees("semanticTokensProvider", advertised: advertised.hasSemanticTokensProvider, served: tokens)
 
-	try Expect.isTrue(advertised.hasWorkspaceFoldersSupported, message: "`workspace.workspaceFolders.supported` was not advertised, and this server DOES answer out of every folder the client names — `workspace.workspaceFolders` in the `initialize` params is the only thing that carries more than one root, and a client that is not told the server supports them is entitled to send `rootUri` alone. Answered-but-unadvertised is the fail-open this file exists for.")
+	Expect.isTrue(advertised.hasWorkspaceFoldersSupported, message: "`workspace.workspaceFolders.supported` was not advertised, and this server DOES answer out of every folder the client names — `workspace.workspaceFolders` in the `initialize` params is the only thing that carries more than one root, and a client that is not told the server supports them is entitled to send `rootUri` alone. Answered-but-unadvertised is the fail-open this file exists for.")
 
-	try Expect.isTrue(advertised.hasWorkspaceFolderChangeNotifications, message: "`workspace.workspaceFolders.changeNotifications` was not advertised, and this server DOES handle `workspace/didChangeWorkspaceFolders`. Real clients send that notification only when the server advertised this flag — VS Code among them — so without it the add-a-folder and remove-a-folder handling is dead in every editor while the tests, which send the notification unconditionally, stay green.")
+	Expect.isTrue(advertised.hasWorkspaceFolderChangeNotifications, message: "`workspace.workspaceFolders.changeNotifications` was not advertised, and this server DOES handle `workspace/didChangeWorkspaceFolders`. Real clients send that notification only when the server advertised this flag — VS Code among them — so without it the add-a-folder and remove-a-folder handling is dead in every editor while the tests, which send the notification unconditionally, stay green.")
 end 'every advertised capability is answered, and every answered method is advertised'
 
 // ⭐ BOTH DIRECTIONS, because the two failures are different bugs. Advertised-but-refused is a promise an

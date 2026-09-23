@@ -27,27 +27,27 @@ let ChosenDeclEnd = 14 as LspCoordinate
 // request that can ask it: the claim is about the FIXTURE. `position-probe.test.maxon` owns the
 // measurement, and its header owns why it cannot be made from this file.
 test 'the marks are the widths every position in this file is counted against'
-	try expectMarkEncodings()
+	expectMarkEncodings()
 end 'the marks are the widths every position in this file is counted against'
 
 test 'a position after a 2-byte character is read as code units, not bytes'
 	// The mark is 2 bytes and 1 unit, so `chosen` opens at character 33 and at BYTE 34. A server counting
 	// bytes lands on the `:` of `value:` and finds nothing to jump to.
 	let document = markedDocument(TwoByteChar, name: DeclaredName)
-	try expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterOneUnit, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past a 2-byte character did not resolve to `chosen`.")
+	expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterOneUnit, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past a 2-byte character did not resolve to `chosen`.")
 end 'a position after a 2-byte character is read as code units, not bytes'
 
 test 'a position after a 3-byte character is read as code units, not bytes'
 	// 3 bytes, 1 unit: `chosen` opens at character 33 and at BYTE 35, so a byte-counting server lands
 	// inside the argument LABEL `value` and jumps to the parameter instead.
 	let document = markedDocument(ThreeByteChar, name: DeclaredName)
-	try expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterOneUnit, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past a 3-byte character did not resolve to `chosen`.")
+	expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterOneUnit, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past a 3-byte character did not resolve to `chosen`.")
 end 'a position after a 3-byte character is read as code units, not bytes'
 
 test 'a supplementary character costs TWO code units on the way in'
 	// 4 bytes, 1 codepoint, 2 units: `chosen` opens at character 34 and at BYTE 36.
 	let document = markedDocument(FourByteChar, name: DeclaredName)
-	try expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterTwoUnits, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past `😀` did not resolve to `chosen`.")
+	expectDefinitionRangeAt(document, line: MarkedUseLine, character: NameAfterTwoUnits, startLine: ChosenDeclLine, startCharacter: ChosenDeclStart, endCharacter: ChosenDeclEnd, note: "a position past `😀` did not resolve to `chosen`.")
 end 'a supplementary character costs TWO code units on the way in'
 
 // A tab-indented document. `alpha` is declared on line 3 behind ONE tab, so it opens at character 5; the
@@ -70,5 +70,5 @@ let TabbedDeclEnd = 10 as LspCoordinate
 
 test 'a tab counts as ONE character, whatever an editor draws it as'
 	let document = tabIndentedDocument()
-	try expectDefinitionRangeAt(document, line: TabbedUseLine, character: TabbedUseCharacter, startLine: TabbedDeclLine, startCharacter: TabbedDeclStart, endCharacter: TabbedDeclEnd, note: "a position on a tab-indented line did not resolve to the tab-indented declaration.")
+	expectDefinitionRangeAt(document, line: TabbedUseLine, character: TabbedUseCharacter, startLine: TabbedDeclLine, startCharacter: TabbedDeclStart, endCharacter: TabbedDeclEnd, note: "a position on a tab-indented line did not resolve to the tab-indented declaration.")
 end 'a tab counts as ONE character, whatever an editor draws it as'

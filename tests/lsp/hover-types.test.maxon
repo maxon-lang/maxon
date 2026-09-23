@@ -11,35 +11,35 @@
 
 test 'hover shows array of struct type'
 	let document = pointsArrayDocument()
-	let rendering = try hoverRendering(document, line: 6, character: 8)
+	let rendering = hoverRendering(document, line: 6, character: 8)
 
-	try Expect.contains(rendering, needle: "points", message: "the rendering names the variable it resolved.")
+	Expect.contains(rendering, needle: "points", message: "the rendering names the variable it resolved.")
 
 	// ⭐ DIVERGENCE from the recovered `Array of Point`, ruled 2026-09-02 with `Array of int` in
 	// `hover-declarations.test.maxon` and for the reason recorded there: `with` is Maxon's own spelling.
-	try Expect.contains(rendering, needle: "Array with Point", message: "an array of a USER type names that type as its element. Element rendering that only worked for primitives would pass the `Array with int` case and fail here.")
+	Expect.contains(rendering, needle: "Array with Point", message: "an array of a USER type names that type as its element. Element rendering that only worked for primitives would pass the `Array with int` case and fail here.")
 end 'hover shows array of struct type'
 
 test 'hover shows struct definition'
 	let document = pointLiteralDocument()
-	let rendering = try hoverRendering(document, line: 6, character: 12)
+	let rendering = hoverRendering(document, line: 6, character: 12)
 
-	try Expect.contains(rendering, needle: "Point", message: "the TYPE NAME in a struct literal hovers as the type. `definition for struct type` asks this same fixture at this same position and expects a jump, so hover and definition agree about what is under the cursor.")
+	Expect.contains(rendering, needle: "Point", message: "the TYPE NAME in a struct literal hovers as the type. `definition for struct type` asks this same fixture at this same position and expects a jump, so hover and definition agree about what is under the cursor.")
 end 'hover shows struct definition'
 
 test 'hover shows user function signature'
 	let document = multiplyDocument()
-	let rendering = try hoverRendering(document, line: 5, character: 11)
+	let rendering = hoverRendering(document, line: 5, character: 11)
 
-	try Expect.contains(rendering, needle: "function", message: "a call hovers as the function it resolves to.")
+	Expect.contains(rendering, needle: "function", message: "a call hovers as the function it resolves to.")
 
-	try Expect.contains(rendering, needle: "multiply", message: "the rendering names that function.")
+	Expect.contains(rendering, needle: "multiply", message: "the rendering names that function.")
 
 	// ⚠ WEAK, and kept verbatim: single-character needles match almost any rendering — `"y"` matches
 	// inside the word `multiply` itself. Recorded so their passing is never mistaken for coverage.
-	try Expect.contains(rendering, needle: "x", message: "the first parameter's name is in the signature.")
+	Expect.contains(rendering, needle: "x", message: "the first parameter's name is in the signature.")
 
-	try Expect.contains(rendering, needle: "y", message: "the second parameter's name is in the signature.")
+	Expect.contains(rendering, needle: "y", message: "the second parameter's name is in the signature.")
 end 'hover shows user function signature'
 
 test 'hover shows variable type from intrinsic function call'
@@ -53,11 +53,11 @@ test 'hover shows variable type from intrinsic function call'
 	// return — is asked unchanged. Only lines 1 and 2 changed; line 3 is byte-identical to the recovered
 	// one, so the position below is too.
 	let document = calleeReturnDocument()
-	let rendering = try hoverRendering(document, line: 3, character: 34)
+	let rendering = hoverRendering(document, line: 3, character: 34)
 
-	try Expect.contains(rendering, needle: "filename", message: "the rendering names the variable it resolved.")
+	Expect.contains(rendering, needle: "filename", message: "the rendering names the variable it resolved.")
 
-	try Expect.contains(rendering, needle: "cstring", message: "a variable's inferred type is the one flowing OUT of the callee that produced it. Inference that stopped at the call boundary would leave this position untyped.")
+	Expect.contains(rendering, needle: "cstring", message: "a variable's inferred type is the one flowing OUT of the callee that produced it. Inference that stopped at the call boundary would leave this position untyped.")
 end 'hover shows variable type from intrinsic function call'
 
 function pointsArrayDocument() returns String

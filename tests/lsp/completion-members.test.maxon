@@ -18,28 +18,28 @@ let CompletionArrayMemberCount = 45
 
 test 'completion for array methods'
 	// Line 2 = "    arr.push(4)" - after "arr." is column 8
-	let labels = try completionLabelsFor(completionArrayFixture(), line: 2, character: 8, after: "`arr.`")
+	let labels = completionLabelsFor(completionArrayFixture(), line: 2, character: 8, after: "`arr.`")
 
 	// A SHRUNKEN list (a filter that dropped a real method) and a GROWN one (a private helper leaking
 	// through) both land here. Neither reaches an inequality, which is the whole reason the count is exact.
 	let observedCount = labels.count()
 	let expectedCount = CompletionArrayMemberCount
-	try Expect.equal(observedCount, expected: expectedCount, message: "completion after `arr.` offered {observedCount} names where this tree's `Array` surface is {expectedCount}. If the stdlib's public surface genuinely changed, re-measure the constant and re-date it; do not widen this back into `> 0`.")
+	Expect.equal(observedCount, expected: expectedCount, message: "completion after `arr.` offered {observedCount} names where this tree's `Array` surface is {expectedCount}. If the stdlib's public surface genuinely changed, re-measure the constant and re-date it; do not widen this back into `> 0`.")
 
-	try assertCompletionOffersEach(labels, wanted: completionArrayMethodsOfferedToday(), after: "`arr.`")
+	assertCompletionOffersEach(labels, wanted: completionArrayMethodsOfferedToday(), after: "`arr.`")
 
 	// `fillPublished` is declared in `stdlib/Array.maxon` WITHOUT `public`, so the claim is that the server
 	// filters by visibility, not that the method is gone.
-	try Expect.isFalse(completionOffersLabel(labels, label: "fillPublished"), message: "completion after `arr.` offered `fillPublished`, which `stdlib/Array.maxon` declares without `public`. A completion list that ignores visibility teaches a caller to write code that will not compile.")
+	Expect.isFalse(completionOffersLabel(labels, label: "fillPublished"), message: "completion after `arr.` offered `fillPublished`, which `stdlib/Array.maxon` declares without `public`. A completion list that ignores visibility teaches a caller to write code that will not compile.")
 end 'completion for array methods'
 
 test 'completion for string methods'
-	let labels = try completionLabelsFor(completionStringFixture(), line: 2, character: 13, after: "`s.`")
+	let labels = completionLabelsFor(completionStringFixture(), line: 2, character: 13, after: "`s.`")
 
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `s.` offered nothing at all.")
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `s.` offered nothing at all.")
 
 	// `stdlib/String.maxon:221` — `public function cstr() returns cstring`, verified 2026-09-02.
-	try Expect.isTrue(completionOffersLabel(labels, label: "cstr"), message: "completion after `s.` did not offer `cstr`, which the third line of the document actually calls.")
+	Expect.isTrue(completionOffersLabel(labels, label: "cstr"), message: "completion after `s.` did not offer `cstr`, which the third line of the document actually calls.")
 end 'completion for string methods'
 
 // Eight names, each verified as a `public function` in `stdlib/Array.maxon` on 2026-09-02 at the line

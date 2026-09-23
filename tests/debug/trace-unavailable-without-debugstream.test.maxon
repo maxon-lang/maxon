@@ -10,14 +10,14 @@ test 'trace over a program not built with debugstream says so, and answers no li
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.atLeast(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, than: 1, message: "the breakpoint after the await never stopped, so there is no stop to ask for a trace slice at. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, than: 1, message: "the breakpoint after the await never stopped, so there is no stop to ask for a trace slice at. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let slices = eventsOfKind(events, kind: TraceEventName)
-	try Expect.equal(slices.count() as AssertedInt, expected: 1, message: "⛔ AN UNAVAILABLE SLICE IS STILL AN ANSWER. `{TraceCommand}` printed no `{TraceEventName}` event at all. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(slices.count() as AssertedInt, expected: 1, message: "⛔ AN UNAVAILABLE SLICE IS STILL AN ANSWER. `{TraceCommand}` printed no `{TraceEventName}` event at all. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let slice = eventAt(slices, index: 0)
-	try Expect.equal(tracedEventCount(slice) as AssertedInt, expected: 0, message: "the ring never saw an attach, so there is nothing to decode — and a slice that produced rows anyway decoded a page the program never wrote. It held: {tracedEventTexts(slice)}. {said}")
-	try Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: NotBuiltWithDebugStreamReason, message: "⭐ THE SESSION ASKED FOR `{DebugTraceOption}` AND THE RING WAS CREATED; WHAT IS MISSING IS THE PROGRAM'S HALF. `{NotBuiltWithDebugStreamReason}` is a different fault from `{NotTracedReason}` and names the flag the READER has to add — to the BUILD, not to the session. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")
+	Expect.equal(tracedEventCount(slice) as AssertedInt, expected: 0, message: "the ring never saw an attach, so there is nothing to decode — and a slice that produced rows anyway decoded a page the program never wrote. It held: {tracedEventTexts(slice)}. {said}")
+	Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: NotBuiltWithDebugStreamReason, message: "⭐ THE SESSION ASKED FOR `{DebugTraceOption}` AND THE RING WAS CREATED; WHAT IS MISSING IS THE PROGRAM'S HALF. `{NotBuiltWithDebugStreamReason}` is a different fault from `{NotTracedReason}` and names the flag the READER has to add — to the BUILD, not to the session. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")
 
-	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(eventsOfKind(events, kind: ExitEventName).count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
 end 'trace over a program not built with debugstream says so, and answers no list at all'

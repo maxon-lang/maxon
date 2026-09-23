@@ -2731,7 +2731,9 @@ end 'main'
 ```
 
 A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
-keep at least one element (`(_, _) = pure()` is **E3064**).
+keep at least one element (`(_, _) = pure()` is **E3064**). A throwing call is judged the same way: a pure
+one discarded as a bare statement inside a [`try` block](#try-blocks) or a
+[`test` body](#uncaught-errors-in-tests), where it needs no `try`, is **E3064**.
 
 ---
 
@@ -2782,7 +2784,9 @@ Dividing by zero is not undefined behaviour and does not crash: `/` and `mod` wh
 - **The divisor is provably non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0
   — and the divide compiles as-is, with no check.
 - **The divisor might be zero** — the divide throws, and must be written `try (a / b) otherwise …` (or
-  propagated from a function that `throws`). A bare divide is **E3057** (`throwing division requires try`).
+  propagated from a function that `throws`), unless a [`try` block](#try-blocks) or a
+  [`test` body](#uncaught-errors-in-tests) handles it. A bare divide anywhere else is **E3057**
+  (`throwing division requires try`).
 - **The divisor is always zero** — a literal `0`, `0.0`, or a constant bound to one — is **E3103**
   (`division by zero: the divisor of '/' is always 0`).
 
@@ -3466,8 +3470,11 @@ handle.
 
 ### Calling Throwing Functions
 
-Every call to a throwing function is marked with `try`. A call without it is **E3057** (`throwing function
-requires try`). `try` is followed by exactly one of:
+Every call to a throwing function — including a call to a throwing interface method and an `await` of a
+throwing promise — is marked with `try`, except inside a [`try` block](#try-blocks) or a
+[`test` body](#uncaught-errors-in-tests), whose handler takes it. Anywhere else a call without it is
+**E3057** (`throwing function requires try`), naming the function as it was declared
+(`'stdlib.Expect.equal'`). `try` is followed by exactly one of:
 
 - **nothing** — propagate the error to the caller ([Error Propagation](#error-propagation)), or
 - an **`otherwise`** clause that handles it.
@@ -3572,13 +3579,14 @@ end 'doubleDigit'
 - When the callee's error type differs from the function's, it is **E3059** (`try propagates 'E' but
   enclosing function throws 'Other' — add 'otherwise' to convert`); convert with
   `otherwise throw Other.case`.
-- Inside a [test](#testing), a bare `try` on any error type is allowed: an error that reaches
-  it fails the test.
+- Inside a [test](#uncaught-errors-in-tests), a bare `try` on any error type is allowed, and so is
+  leaving the `try` out: an error that reaches it fails the test.
 
 ### Try Blocks
 
 A `try` block runs several statements and sends every error to one handler. Inside the block, calls to
-throwing functions need no `try` of their own:
+throwing functions, calls to throwing interface methods and `await`s of throwing promises need no `try` of
+their own:
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
@@ -3628,7 +3636,7 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- The block must contain at least one call that throws (**E3083**).
+- The block must contain at least one operation that throws (**E3083**).
 - The `otherwise` clause is one of:
   - a **handler block** `otherwise (e) 'label' … end 'label'`, which must `match` on the binding (**E3084**);
   - **`otherwise [(e)] panic("message")`**, which panics if the block throws;
@@ -3647,7 +3655,9 @@ end 'main'
   Statements before the match are fine, and so is one match on each branch of an `if`/`else`. Match `e`
   once and bind what the rest of the handler needs in its arms.
 - A call inside the block with its own `try … otherwise` handles its own error, which does not reach the
-  block's handler. Nested try blocks compose the same way.
+  block's handler. Nested try blocks compose the same way: an error goes to the innermost block around it.
+- An explicit `try` covers only the operation that produces its value. A throwing argument, operand, method
+  receiver or range bound inside it — `h()` in `try g(h()) otherwise 0` — goes to the block's handler.
 
 ### Conditional Try (`if let … = try`)
 
@@ -3707,7 +3717,7 @@ A `test` is a top-level declaration named with a quoted phrase instead of an ide
 
 ```maxon
 test 'adds two numbers'
-	try Expect.equal(2 + 2, expected: 4)
+	Expect.equal(2 + 2, expected: 4)
 end 'adds two numbers'
 ```
 
@@ -3732,8 +3742,11 @@ temperature/
 ### Assertions
 
 Every test implicitly declares `throws TestFailure` (you cannot write the clause yourself). The `Expect`
-assertions throw `TestFailure.assertion` when they fail, so each is called with `try` — a forgotten `try` is
-a compile error (**E3057**), never an assertion whose failure goes unnoticed.
+assertions throw `TestFailure.assertion` when they fail, and a test body calls them without `try`: the test
+handles every error its body raises ([Uncaught Errors in Tests](#uncaught-errors-in-tests)), and a
+`TestFailure` fails it. Outside a test — in a helper function a test calls — an assertion needs `try` like
+any throwing call, and a forgotten one is a compile error (**E3057**), never an assertion whose failure goes
+unnoticed.
 
 `temperature.maxon`:
 
@@ -3759,16 +3772,16 @@ end 'describe'
 
 ```maxon
 test 'boiling point converts'
-	try Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
+	Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
 end 'boiling point converts'
 
 test 'zero is freezing'
-	try Expect.equal(describe(0), expected: "freezing")
-	try Expect.startsWith(describe(5), needle: "above")
+	Expect.equal(describe(0), expected: "freezing")
+	Expect.startsWith(describe(5), needle: "above")
 end 'zero is freezing'
 
 test 'body temperature'
-	try Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
+	Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
 end 'body temperature'
 ```
 
@@ -3813,13 +3826,15 @@ The full assertion reference is on the [Testing](STDLIB_REFERENCE.md#testing) pa
 
 ### Uncaught Errors in Tests
 
-Inside a test body, a bare `try` may propagate **any** error type — not only `TestFailure`. An error that
-reaches the end of the test fails that test and reports the error and the `try` that threw it:
+Inside a test body, a call to a throwing function, a call to a throwing interface method and an `await` of
+a throwing promise need no `try`: the test handles every error its body raises, of **any** error type — not
+only `TestFailure`. Any other error fails that test and reports the error and the line of the operation that
+threw it:
 
 ```maxon
 test 'a missing user throws'
-	let name = try lookup(0)          // lookup throws LookupError
-	try Expect.equal(name, expected: "user")
+	let name = lookup(0)          // lookup throws LookupError
+	Expect.equal(name, expected: "user")
 end 'a missing user throws'
 ```
 
@@ -3829,9 +3844,12 @@ FAIL  users/lookup.test.maxon > a missing user throws
   at lookup.test.maxon:2
 ```
 
-- An `otherwise` clause you write always takes precedence.
-- The relaxation applies to the test body only. The same bare `try` in an ordinary function is still
-  **E3059**, and a closure written inside a test is an ordinary function.
+- A bare `try` means the same thing, and an `otherwise` clause you write always takes precedence. An
+  explicit `try` covers only the operation that produces its value; a throwing argument or operand inside it
+  is handled by the test. A [`try` block](#try-blocks) inside the test handles its own body's errors first.
+- The rule applies to the test body only. In an ordinary function a throwing call without `try` is still
+  **E3057** and a bare `try` on another error type is still **E3059**, and a closure written inside a test
+  is an ordinary function.
 - A `panic` cannot be caught; the test is reported as crashed.
 
 ### Test Diagnostics
@@ -3841,7 +3859,7 @@ FAIL  users/lookup.test.maxon > a missing user throws
 | E2008 | the `end` label does not repeat the test's name |
 | E2058 | a `test` declaration outside a `*.test.maxon` file |
 | E2059 | an empty test name |
-| E3057 | an assertion (or other throwing call) without `try` |
+| E3057 | an assertion (or other throwing call) without `try` outside a test body — in a helper function, or in a closure written inside a test |
 | E3107 | two tests in one file whose names compile to the same symbol — each character outside `A–Z`, `a–z`, `0–9` and `_` becomes `_`, so `'adds two'` and `'adds-two'` collide |
 
 ### Running Tests
@@ -4124,7 +4142,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Plain `await` on a throwing promise is **E3057**; `try await` on a promise that cannot throw is **E3055**.
+Plain `await` on a throwing promise is **E3057**, unless a [`try` block](#try-blocks) or a
+[`test` body](#uncaught-errors-in-tests) handles it; `try await` on a promise that cannot throw is **E3055**.
+The awaited form may be parenthesized: `try (await p) otherwise …` is `try await p otherwise …`.
 
 ### Promises in Collections and Fields
 
@@ -4175,9 +4195,11 @@ caller owns it outright. Reading a promise out of a temporary — `try make().ge
 alive to the end of the enclosing scope, so the promise outlives the expression it came from.
 
 **Consuming a promise.** `await`, `.cancel()`, a `push` or `set` into another container, a store into a field
-or a union case, and passing it to a call by value all consume it: each empties the slot the promise was read
-out of, and hands the thread either back to the runtime or to its new owner. A store into a promise field also
-releases the thread that field was holding, exactly once. Three refusals follow:
+or a union case, and passing it to a parameter the callee takes all consume it: each empties the slot the
+promise was read out of, and hands the thread either back to the runtime or to its new owner. A callee takes
+a promise parameter it awaits, cancels, stores or returns; a promise passed to a parameter the callee only
+reads stays with the caller. A store into a promise field also releases the thread that field was holding,
+exactly once. Three refusals follow:
 
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
   hold one promise, so only one of them may be consumed; where the compiler cannot see that both name one slot,
@@ -4185,6 +4207,13 @@ releases the thread that field was holding, exactly once. Three refusals follow:
 - **E3102** — a promise already moved into storage is used again afterwards.
 - **E2015** — a promise read outside a loop is given away inside it, or inside a `while` condition. Read it
   inside the loop instead.
+
+**Returning a promise.** A function may return a promise it owns — a spawn, a bound spawn, one taken with
+`pop`/`remove`, or a promise parameter — and the caller then owns it, to await, cancel or drop. A `return` of
+a promise no frame owns is **E3141**: one read out of a container that still holds it, a merge of two
+promises (`p if c else q`), or a second name for a parameter. Because the whole program's ownership facts are
+recorded per function name, an overload set with a promise parameter is refused (**E2015**) when one of its
+members takes ownership of a parameter or returns one; give those overloads distinct names.
 
 ### Cancellation and Dropped Promises
 
@@ -4256,7 +4285,8 @@ end 'main'
   ordinary calls, so a service's logic is unit-testable without threads.
 - **Messages.** A method that returns nothing and throws nothing is sent and forgotten. A method that returns
   a value, or throws, is awaited: `try await h.method(…)`. The reply can always fail with
-  `ServiceError.stopped`, so plain `await` is **E3057**; the method's own error type merges with it in the
+  `ServiceError.stopped`, so plain `await` outside a `try` block or a test body is **E3057**; the method's
+  own error type merges with it in the
   handler's `match`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
   **E3136**. A service cannot send to itself.
@@ -5175,11 +5205,11 @@ These rules cover the mistakes code generators make most often when writing Maxo
 
 12. **Use `clone()` for an independent copy.** Assigning a record shares it.
 
-13. **Keep tests in `*.test.maxon` files** and call every assertion with `try`:
+13. **Keep tests in `*.test.maxon` files.** A test body calls assertions without `try`:
 
     ```maxon
     test 'adds two numbers'
-    	try Expect.equal(2 + 2, expected: 4)
+    	Expect.equal(2 + 2, expected: 4)
     end 'adds two numbers'
     ```
 

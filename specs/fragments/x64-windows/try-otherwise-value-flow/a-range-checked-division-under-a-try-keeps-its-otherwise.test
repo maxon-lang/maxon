@@ -1,0 +1,95 @@
+// Test: a-range-checked-division-under-a-try-keeps-its-otherwise
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Wide = int(-1000000000000 to 1000000000000)
+
+function pick() returns Wide
+	let d = IntArray.create().count()
+	return try ((8 / d) as Wide) otherwise 5
+end 'pick'
+
+function main() returns ExitCode
+	return pick() as ExitCode
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+  __il_body:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rax, 8
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rcx
+    x64.orRegReg rbx, rbx, rcx
+    x64.cqo
+    x64.idivReg rbx
+    x64.movRegImm rdx, 18446743073709551616
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, __rc_panic#10
+  __rc_chk#11:
+    x64.movRegImm rdx, 1000000000000
+    x64.cmpRegReg rax, rdx
+    x64.jcc greater, __rc_panic#10
+  __rc_ok#9:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 r8, 5
+    x64.jmp __il_cont
+  tryok:
+    x64.movRegReg r8, rax
+  __il_cont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#2
+  __rc_chk#3:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic#2
+  __rc_ok#1:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#10:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-range-checked-division-under-a-try-keeps-its-otherwise.test:8: Range check failed: value outside typealias 'Wide'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at a-range-checked-division-under-a-try-keeps-its-otherwise.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

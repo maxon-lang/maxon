@@ -4,25 +4,25 @@ let GenericElementMemberListCharacter = 21 as LspCoordinate
 let GenericElementMemberNameCharacter = 22 as LspCoordinate
 
 test 'receiver type: an element from a generic container is not a type parameter'
-	let rendering = try hoverRendering(genericElementFixture(), line: GenericElementLine, character: GenericElementLocalCharacter)
+	let rendering = hoverRendering(genericElementFixture(), line: GenericElementLine, character: GenericElementLocalCharacter)
 
-	try Expect.isFalse(rendering.contains("Element"), message: "hovering `crate` rendered `Element`, which is `Array`'s own TYPE PARAMETER and not a type any author of this buffer wrote or can name. A parameter's name presented as the inferred type of a value is a confident wrong answer a reader cannot tell from a right one, which is worse than answering nothing. It rendered: {rendering}")
+	Expect.isFalse(rendering.contains("Element"), message: "hovering `crate` rendered `Element`, which is `Array`'s own TYPE PARAMETER and not a type any author of this buffer wrote or can name. A parameter's name presented as the inferred type of a value is a confident wrong answer a reader cannot tell from a right one, which is worse than answering nothing. It rendered: {rendering}")
 
-	try Expect.contains(rendering, needle: "of type `Crate`", message: "hovering `crate` did not name its type as `Crate`. `self.crates` is declared `as CrateArray`, `typealias CrateArray = Array with Crate` binds `Array`'s parameter to `Crate`, and `get` answers that parameter — so the element of this container is a `Crate` and nothing else. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "of type `Crate`", message: "hovering `crate` did not name its type as `Crate`. `self.crates` is declared `as CrateArray`, `typealias CrateArray = Array with Crate` binds `Array`'s parameter to `Crate`, and `get` answers that parameter — so the element of this container is a `Crate` and nothing else. It rendered: {rendering}")
 end 'receiver type: an element from a generic container is not a type parameter'
 
 test 'receiver type: a member of a generic element resolves'
-	let labels = try completionLabelsFor(genericElementFixture(), line: GenericElementLine, character: GenericElementMemberListCharacter, after: "`crate.`, where `crate` is bound by `try self.crates.get(0) otherwise …` and `crates` is declared `as CrateArray`")
+	let labels = completionLabelsFor(genericElementFixture(), line: GenericElementLine, character: GenericElementMemberListCharacter, after: "`crate.`, where `crate` is bound by `try self.crates.get(0) otherwise …` and `crates` is declared `as CrateArray`")
 
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `crate.` offered nothing at all. An element taken out of a generic container is how this tree reads every collection, and a receiver typed as a type PARAMETER names no type anything declares, so the member list comes back empty.")
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `crate.` offered nothing at all. An element taken out of a generic container is how this tree reads every collection, and a receiver typed as a type PARAMETER names no type anything declares, so the member list comes back empty.")
 
-	try Expect.isTrue(completionOffersLabel(labels, label: "seal"), message: "completion after `crate.` did not offer `seal`, the one method `type Crate` declares. `CrateArray` binds `Array`'s element to `Crate`, so the members offered here are `Crate`'s.")
+	Expect.isTrue(completionOffersLabel(labels, label: "seal"), message: "completion after `crate.` did not offer `seal`, the one method `type Crate` declares. `CrateArray` binds `Array`'s element to `Crate`, so the members offered here are `Crate`'s.")
 
-	let rendering = try hoverRendering(genericElementFixture(), line: GenericElementLine, character: GenericElementMemberNameCharacter)
+	let rendering = hoverRendering(genericElementFixture(), line: GenericElementLine, character: GenericElementMemberNameCharacter)
 
-	try Expect.contains(rendering, needle: "seal", message: "hovering `seal` in `crate.seal()` did not name it. Hover and completion reach this receiver through ONE walk, so this assertion and the one above must agree about what `crate` is.")
+	Expect.contains(rendering, needle: "seal", message: "hovering `seal` in `crate.seal()` did not name it. Hover and completion reach this receiver through ONE walk, so this assertion and the one above must agree about what `crate` is.")
 
-	try Expect.contains(rendering, needle: "function seal", message: "the hover did not render the declaration `type Crate` holds for `seal`. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "function seal", message: "the hover did not render the declaration `type Crate` holds for `seal`. It rendered: {rendering}")
 end 'receiver type: a member of a generic element resolves'
 
 function genericElementFixture() returns String

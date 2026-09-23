@@ -3213,7 +3213,7 @@ hi
 
 <!-- test: generic-managed-return-routed-through-a-try-block -->
 ⚠ **THE SUBSTITUTED RESULT MEETS THE BLOCK-FORM `try`'s ROUTING, WHICH IS THE ONE ORDERING A5o COULD NOT
-MOVE.** `routeBareThrowingCallToTryBlock` rewrites the call to a `tryCall` and builds the throw edge, and
+MOVE.** `routeToTryBlock` rewrites the call to a `tryCall` and builds the throw edge, and
 it depends on the result's drop obligation being settled before the op is appended — on the error edge the
 result register was never written, so releasing it there faults. A SUBSTITUTED result owes nothing on that
 edge (the callee took no reference for it) and is co-owned only on the OK continuation, after the routing

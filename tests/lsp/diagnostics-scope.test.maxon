@@ -38,19 +38,19 @@ let UnneededCastStart = 17 as LspCoordinate
 let UnneededCastEnd = 19 as LspCoordinate
 
 test 'a library file with no entry point publishes NOTHING'
-	let items = try publishedFor(libraryDocument(), what: "opening a library file")
+	let items = publishedFor(libraryDocument(), what: "opening a library file")
 
-	try Expect.equal(items.count(), expected: 0, message: "this file has nothing wrong with it. `E3001: No 'main' function found` is a claim about a PROGRAM, and this server compiled one buffer plus `stdlib/` — so publishing it puts a red squiggle on line 1 of every library file an author opens.")
+	Expect.equal(items.count(), expected: 0, message: "this file has nothing wrong with it. `E3001: No 'main' function found` is a claim about a PROGRAM, and this server compiled one buffer plus `stdlib/` — so publishing it puts a red squiggle on line 1 of every library file an author opens.")
 end 'a library file with no entry point publishes NOTHING'
 
 test 'a library file with a real error still publishes that error'
-	let reported = try onlyPublishedDiagnostic(libraryWithRealErrorDocument(), what: "opening a library file that has a genuine defect")
+	let reported = onlyPublishedDiagnostic(libraryWithRealErrorDocument(), what: "opening a library file that has a genuine defect")
 
-	try Expect.equal(reported.code, expected: UnneededCastCode, message: "the file has no `main` AND a real problem. Only the whole-program CLAIM is withheld; a diagnostic about this file's own text is exactly what an editor is for. A publish of nothing here would mean the predicate had become `if there is no main, say nothing`, which hides every error in every library file.")
+	Expect.equal(reported.code, expected: UnneededCastCode, message: "the file has no `main` AND a real problem. Only the whole-program CLAIM is withheld; a diagnostic about this file's own text is exactly what an editor is for. A publish of nothing here would mean the predicate had become `if there is no main, say nothing`, which hides every error in every library file.")
 
-	try Expect.equal(reported.range.startLine as AssertedInt, expected: UnneededCastLine as AssertedInt, message: "the cast is on line 3.")
+	Expect.equal(reported.range.startLine as AssertedInt, expected: UnneededCastLine as AssertedInt, message: "the cast is on line 3.")
 
-	try Expect.equal(reported.range.startCharacter as AssertedInt, expected: UnneededCastStart as AssertedInt, message: "`as` opens at character 17.")
+	Expect.equal(reported.range.startCharacter as AssertedInt, expected: UnneededCastStart as AssertedInt, message: "`as` opens at character 17.")
 
-	try Expect.equal(reported.range.endCharacter as AssertedInt, expected: UnneededCastEnd as AssertedInt, message: "`as` is two characters, so the underline ends at 19.")
+	Expect.equal(reported.range.endCharacter as AssertedInt, expected: UnneededCastEnd as AssertedInt, message: "`as` is two characters, so the underline ends at 19.")
 end 'a library file with a real error still publishes that error'

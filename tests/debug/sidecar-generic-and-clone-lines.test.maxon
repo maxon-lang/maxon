@@ -11,12 +11,12 @@ test 'a per-type generic body and a synthesized clone carry the line rows a stop
 	let staged = builtFixture(GenericLinesCaseLabel, fixture: GenericsFixtureName)
 	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
 
-	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+	Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
 	let functionRows = declaredFunctionRows(dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading))
 	let declaredTypes = declaredTypeNamesIn(staged)
 
-	try Expect.notEqual(declaredTypes.count() as AssertedInt, expected: 0, message: "no `{TypeDeclarationPrefix}` declaration was found in the staged fixture, so this case would ask nothing of any body.")
+	Expect.notEqual(declaredTypes.count() as AssertedInt, expected: 0, message: "no `{TypeDeclarationPrefix}` declaration was found in the staged fixture, so this case would ask nothing of any body.")
 
 	var owed = StringArray.create()
 	var methodBodies = 0
@@ -39,9 +39,9 @@ test 'a per-type generic body and a synthesized clone carry the line rows a stop
 		end 'noLineRows'
 	end 'eachFunction'
 
-	try Expect.notEqual(methodBodies as AssertedInt, expected: 0, message: "the sidecar names no method of any type this fixture declares, so nothing here is a statement about a per-type generic body. The functions section held: {renderedRows(functionRows)}")
-	try Expect.notEqual(cloneBodies as AssertedInt, expected: 0, message: "the sidecar names no `{CloneFunctionPrefix}<Type>` body, so nothing here is a statement about a synthesized clone. The functions section held: {renderedRows(functionRows)}")
-	try Expect.isEmpty(renderedRows(owed), message: "a body with no line rows is a body a stop inside cannot be attributed to a source line — the debugger names the function and then has nothing to say about WHERE. These bodies are the program's own, synthesized ones included, and each of them published none: {renderedRows(owed)}")
+	Expect.notEqual(methodBodies as AssertedInt, expected: 0, message: "the sidecar names no method of any type this fixture declares, so nothing here is a statement about a per-type generic body. The functions section held: {renderedRows(functionRows)}")
+	Expect.notEqual(cloneBodies as AssertedInt, expected: 0, message: "the sidecar names no `{CloneFunctionPrefix}<Type>` body, so nothing here is a statement about a synthesized clone. The functions section held: {renderedRows(functionRows)}")
+	Expect.isEmpty(renderedRows(owed), message: "a body with no line rows is a body a stop inside cannot be attributed to a source line — the debugger names the function and then has nothing to say about WHERE. These bodies are the program's own, synthesized ones included, and each of them published none: {renderedRows(owed)}")
 end 'a per-type generic body and a synthesized clone carry the line rows a stop inside them needs'
 
 // The types the staged source declares, read out of the source so a fixture that grows a type grows

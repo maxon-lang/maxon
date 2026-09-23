@@ -12,14 +12,14 @@ test 'init writes a project that builds and runs'
 	let scaffolded = runDriver([InitCommandWord, project.toString()])
 	let said = "It wrote to stdout: {scaffolded.stdout} and to stderr: {scaffolded.stderr}"
 
-	try Expect.equal(scaffolded.exitCode() as AssertedInt, expected: 0, message: "`maxon {InitCommandWord} <directory>` did not succeed. {said}")
-	try Expect.isTrue(File.exists(project.join(ManifestFileName)), message: "`maxon {InitCommandWord}` wrote no {ManifestFileName}. {said}")
-	try Expect.isTrue(File.exists(project.join(EntryFileName)), message: "`maxon {InitCommandWord}` wrote no {EntryFileName}. {said}")
+	Expect.equal(scaffolded.exitCode() as AssertedInt, expected: 0, message: "`maxon {InitCommandWord} <directory>` did not succeed. {said}")
+	Expect.isTrue(File.exists(project.join(ManifestFileName)), message: "`maxon {InitCommandWord}` wrote no {ManifestFileName}. {said}")
+	Expect.isTrue(File.exists(project.join(EntryFileName)), message: "`maxon {InitCommandWord}` wrote no {EntryFileName}. {said}")
 
 	let built = runDriver([BuildCommandWord], workingDirectory: project)
 	let builtSaid = "It wrote to stdout: {built.stdout} and to stderr: {built.stderr}"
-	try Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "the scaffolded project did not build with a bare `maxon {BuildCommandWord}`. {builtSaid}")
+	Expect.equal(built.exitCode() as AssertedInt, expected: 0, message: "the scaffolded project did not build with a bare `maxon {BuildCommandWord}`. {builtSaid}")
 
 	let program = project.join(".maxon").join("{ScaffoldedDirName}{executableSuffix()}")
-	try Expect.isTrue(File.exists(program), message: "the scaffolded build named its output after something other than the directory: {program.toString()} is not there. {builtSaid}")
+	Expect.isTrue(File.exists(program), message: "the scaffolded build named its output after something other than the directory: {program.toString()} is not there. {builtSaid}")
 end 'init writes a project that builds and runs'

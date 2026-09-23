@@ -12,7 +12,7 @@ test 'a spliced leaf is a frame of its own in the backtrace, marked as inlined'
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let backtraces = eventsOfKind(events, kind: BacktraceEventName)
 
-	try Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at a stop inside a spliced body printed no `{BacktraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(backtraces.count() as AssertedInt, expected: 1, message: "`{BacktraceCommand}` at a stop inside a spliced body printed no `{BacktraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let walked = eventAt(backtraces, index: 0)
 	var named = StringArray.create()
@@ -27,7 +27,7 @@ test 'a spliced leaf is a frame of its own in the backtrace, marked as inlined'
 		realFramesMarkedInlined = realFramesMarkedInlined + 1 if frameFunction == SplicingHostName and inlined else realFramesMarkedInlined
 	end 'eachFrame'
 
-	try Expect.equal(inlinedLeaves as AssertedInt, expected: 1, message: "`{SplicedLeafName}` has no machine frame of its own — the inliner copied its body into `{SplicingHostName}` — so the walk must SYNTHESIZE one and mark it `{InlinedKey}`. The walk produced: {renderedRows(named)}. {said}")
-	try Expect.equal(realFramesMarkedInlined as AssertedInt, expected: 0, message: "`{SplicingHostName}` has a real frame, so marking it `{InlinedKey}` would tell a reader its caller is not where the return address points. The walk produced: {renderedRows(named)}. {said}")
-	try Expect.equal(try named.get(0) otherwise AbsentEventText, expected: "{SplicedLeafName} inlined=true", message: "the spliced leaf is the INNERMOST frame, so it is frame 0. The walk produced: {renderedRows(named)}. {said}")
+	Expect.equal(inlinedLeaves as AssertedInt, expected: 1, message: "`{SplicedLeafName}` has no machine frame of its own — the inliner copied its body into `{SplicingHostName}` — so the walk must SYNTHESIZE one and mark it `{InlinedKey}`. The walk produced: {renderedRows(named)}. {said}")
+	Expect.equal(realFramesMarkedInlined as AssertedInt, expected: 0, message: "`{SplicingHostName}` has a real frame, so marking it `{InlinedKey}` would tell a reader its caller is not where the return address points. The walk produced: {renderedRows(named)}. {said}")
+	Expect.equal(try named.get(0) otherwise AbsentEventText, expected: "{SplicedLeafName} inlined=true", message: "the spliced leaf is the INNERMOST frame, so it is frame 0. The walk produced: {renderedRows(named)}. {said}")
 end 'a spliced leaf is a frame of its own in the backtrace, marked as inlined'

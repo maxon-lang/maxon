@@ -1677,3 +1677,69 @@ end 'main'
 ```exitcode
 65
 ```
+
+<!-- test: overloads-that-return-their-parameter -->
+Handing a parameter back with `return` transfers nothing into durable storage, so an overload set whose
+members each return their parameter is legal even when one member takes a managed type. The declaration
+sweep records the hand-back — a returned PROMISE parameter is owned by the callee — and the consuming-overload
+refusal asks only about the parameters a declaration consumes or feeds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function same(value String) returns String
+	return value
+end 'same'
+
+function same(value Integer) returns Integer
+	return value
+end 'same'
+
+function main() returns ExitCode
+	print("{same("ok")} {same(3)}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+ok 3
+```
+```exitcode
+0
+```
+
+<!-- test: error.overloads-that-hand-back-a-promise-parameter -->
+⭐⭐ **A PROMISE PARAMETER'S OWNERSHIP IS READ BY NAME, SO AN OVERLOAD SET WHOSE MEMBERS TAKE A PROMISE CANNOT
+DECIDE IT PER MEMBER.** The declaration sweep files one set of ownership facts per NAME, and the second
+`relay` is the one filed: it hands back its parameter at position 1, which it calls `q`. A call to the first
+`relay` slots its labelled `p:` against those names — position 0, not handed back — so the caller would keep
+its spawn while the callee owns and returns it: two owners of one thread. Refused rather than miscompiled.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function relay(n Integer, p IntPromise) returns IntPromise
+	print("{n}\n")
+	return p
+end 'relay'
+
+function relay(p IntPromise, q IntPromise, flag bool) returns IntPromise
+	if flag and p.inner > 0 'peeked'
+		print("peeked\n")
+	end 'peeked'
+
+	return q
+end 'relay'
+
+function main() returns ExitCode
+	let r = relay(1, p: async work(1))
+	print("{await r}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:10: Unsupported: overloading 'relay' — one of its declarations takes OWNERSHIP of a parameter (moving it into durable storage, or awaiting, cancelling or returning a promise) and one of them takes a parameter whose ownership that decides, and the whole-program declaration sweep publishes a function's ownership facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names
+```

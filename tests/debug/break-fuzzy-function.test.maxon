@@ -12,7 +12,7 @@ test 'a function break target resolves exactly, then by qualified name, then by 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 3, message: "three `{BreakCommand}` commands printed {breakpoints.count()} `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 3, message: "three `{BreakCommand}` commands printed {breakpoints.count()} `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	var resolved = StringArray.create()
 
@@ -20,7 +20,7 @@ test 'a function break target resolves exactly, then by qualified name, then by 
 		resolved.push("{textOf(breakpoint, node: breakpoint.root, key: ActionKey)} -> {textOf(breakpoint, node: breakpoint.root, key: FunctionKey)}")
 	end 'eachBreakpoint'
 
-	try Expect.equal(try resolved.get(0) otherwise AbsentEventText, expected: "{SetAction} -> {UniqueFunctionName}", message: "an EXACT function name is the first rung and must resolve to itself. The three commands resolved: {renderedRows(resolved)}. {said}")
-	try Expect.equal(try resolved.get(1) otherwise AbsentEventText, expected: "{SetAction} -> {QualifiedMethodName}", message: "`{QualifiedMethodName}` names one method of one type, and two types in this fixture declare `deposit` — so a `Type.method` target must reach that one rather than reporting an ambiguity. The three commands resolved: {renderedRows(resolved)}. {said}")
-	try Expect.equal(try resolved.get(2) otherwise AbsentEventText, expected: "{SetAction} -> {UniqueFunctionName}", message: "`{UniquePrefixTyped}` is a PREFIX of exactly one function in this program, which is the last rung of the ladder and must resolve rather than refuse. The three commands resolved: {renderedRows(resolved)}. {said}")
+	Expect.equal(try resolved.get(0) otherwise AbsentEventText, expected: "{SetAction} -> {UniqueFunctionName}", message: "an EXACT function name is the first rung and must resolve to itself. The three commands resolved: {renderedRows(resolved)}. {said}")
+	Expect.equal(try resolved.get(1) otherwise AbsentEventText, expected: "{SetAction} -> {QualifiedMethodName}", message: "`{QualifiedMethodName}` names one method of one type, and two types in this fixture declare `deposit` — so a `Type.method` target must reach that one rather than reporting an ambiguity. The three commands resolved: {renderedRows(resolved)}. {said}")
+	Expect.equal(try resolved.get(2) otherwise AbsentEventText, expected: "{SetAction} -> {UniqueFunctionName}", message: "`{UniquePrefixTyped}` is a PREFIX of exactly one function in this program, which is the last rung of the ladder and must resolve rather than refuse. The three commands resolved: {renderedRows(resolved)}. {said}")
 end 'a function break target resolves exactly, then by qualified name, then by prefix'

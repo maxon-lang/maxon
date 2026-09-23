@@ -14,9 +14,9 @@ test 'hover shows value for immutable variables'
 	// Line 1: "    let PI = 3.14159"
 	//          01234567890
 	let document = piDocument()
-	let rendering = try hoverRendering(document, line: 1, character: 8)
+	let rendering = hoverRendering(document, line: 1, character: 8)
 
-	try Expect.contains(rendering, needle: "3.14159", message: "a `let` binding is immutable, so its hover shows the VALUE and not only the type. That is the whole difference between hovering a `let` and hovering a `var`.")
+	Expect.contains(rendering, needle: "3.14159", message: "a `let` binding is immutable, so its hover shows the VALUE and not only the type. That is the whole difference between hovering a `let` and hovering a `var`.")
 end 'hover shows value for immutable variables'
 
 test 'hover shows type and value for immutable variable at usage site'
@@ -26,36 +26,36 @@ test 'hover shows type and value for immutable variable at usage site'
 	// ⚠ The recovered comment named col 21 while its call passed 23. The call's number is the one kept:
 	// the discrepancy is data about what the server accepted rather than a typo to repair.
 	let document = solarDocument()
-	let rendering = try hoverRendering(document, line: 2, character: 23)
+	let rendering = hoverRendering(document, line: 2, character: 23)
 
 	// The pinned literal is the 9-character PREFIX, not the full `39.478417604357432` — the recovered
 	// test's own comment says the value may be truncated by float formatting.
-	try Expect.contains(rendering, needle: "39.478417", message: "hovering a `let` at its USE shows the value bound at its declaration, not merely that a name is in scope.")
+	Expect.contains(rendering, needle: "39.478417", message: "hovering a `let` at its USE shows the value bound at its declaration, not merely that a name is in scope.")
 
-	try Expect.contains(rendering, needle: "float", message: "the rendering carries the type beside the value.")
+	Expect.contains(rendering, needle: "float", message: "the rendering carries the type beside the value.")
 end 'hover shows type and value for immutable variable at usage site'
 
 test 'hover shows local function signature'
 	// Line 5: "    return add(1, 2)" - 'add' starts at position 11
 	let document = addCalledDocument()
-	let rendering = try hoverRendering(document, line: 5, character: 12)
+	let rendering = hoverRendering(document, line: 5, character: 12)
 
-	try Expect.contains(rendering, needle: "function add", message: "hovering a call names the function it resolves to.")
+	Expect.contains(rendering, needle: "function add", message: "hovering a call names the function it resolves to.")
 
-	try Expect.contains(rendering, needle: "a int", message: "the signature carries each parameter's NAME as well as its type — a rendering of types alone would not tell an editor user which argument is which.")
+	Expect.contains(rendering, needle: "a int", message: "the signature carries each parameter's NAME as well as its type — a rendering of types alone would not tell an editor user which argument is which.")
 end 'hover shows local function signature'
 
 test 'hover shows correct type for function parameter'
 	// Line 1: "    var x = name" - 'name' starts at position 12
 	let document = greetDocument()
-	let rendering = try hoverRendering(document, line: 1, character: 13)
+	let rendering = hoverRendering(document, line: 1, character: 13)
 
 	// `contains` is case-sensitive, and the needle is the fixture's own lowercase spelling: the claim is
 	// that the rendering echoes what was DECLARED, not what the compiler would name the type itself.
-	try Expect.contains(rendering, needle: "string", message: "a parameter's hover shows its DECLARED type.")
+	Expect.contains(rendering, needle: "string", message: "a parameter's hover shows its DECLARED type.")
 
 	let mentionsFloat = rendering.contains("float")
-	try Expect.isFalse(mentionsFloat, message: "the rendering names the parameter's own type and nothing else — a hover that also mentioned `float` would be resolving the position to something other than `name`.")
+	Expect.isFalse(mentionsFloat, message: "the rendering names the parameter's own type and nothing else — a hover that also mentioned `float` would be resolving the position to something other than `name`.")
 end 'hover shows correct type for function parameter'
 
 // ⭐⭐ **NOT A RECOVERED TEST, AND THE 71 WERE STRUCTURALLY BLIND TO WHAT IT ASKS.** `inferredTypeAt` read
@@ -67,9 +67,9 @@ test 'hover does not read a chained expression as its head literal'
 	// Line 1: "    var path = \"out.bin\".toByteArray().managed"
 	//          01234567890
 	let document = chainedInitializerDocument()
-	let rendering = try hoverRendering(document, line: 1, character: 8)
+	let rendering = hoverRendering(document, line: 1, character: 8)
 
-	try Expect.contains(rendering, needle: "could not infer", message: "a literal describes the value only when it IS the whole initializer. `\"out.bin\".toByteArray().managed` opens with a string literal and is NOT a `String`; a hover that reads the head token alone answers `String` here, which is worse than answering nothing because a reader has no way to tell it from a right answer.")
+	Expect.contains(rendering, needle: "could not infer", message: "a literal describes the value only when it IS the whole initializer. `\"out.bin\".toByteArray().managed` opens with a string literal and is NOT a `String`; a hover that reads the head token alone answers `String` here, which is worse than answering nothing because a reader has no way to tell it from a right answer.")
 end 'hover does not read a chained expression as its head literal'
 
 // ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source

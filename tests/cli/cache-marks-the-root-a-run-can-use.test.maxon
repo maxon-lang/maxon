@@ -13,13 +13,13 @@ test 'bare cache names a root it cannot create and marks the one a run can use'
 	let reported = runWithCacheRoots([CacheCommandWord], naming: naming, workingDirectory: dir)
 	let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
 
-	try Expect.equal(reported.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a roster whose first root cannot be created. Reporting where the cache is is a question, not a mistake. {said}")
+	Expect.equal(reported.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a roster whose first root cannot be created. Reporting where the cache is is a question, not a mistake. {said}")
 
 	let strandedState = try reportedStateOf(reported.stdout, directory: blockedRoot) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {blockedRoot.toString()}, the root {HomeDirectoryVariable} names. A root Maxon cannot create under may still hold builds made when it could, and the report is the only thing that shows them. {said}")
 
 	let usableState = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root {rootRankedBelowHomeVariable()} names and the first one on this host's roster that can be created. {said}")
 
-	try Expect.contains(usableState, needle: InUseWords, message: "`maxon {CacheCommandWord}` said `{usableState}` of {owned.toString()} without marking it as the root in use. {HomeDirectoryVariable} names {blocked.toString()}, a path no directory can be made under, so this is the root the next `maxon {ExecuteCommandWord}` fills and the reader has nothing to tell it from the one that cannot be. {said}")
+	Expect.contains(usableState, needle: InUseWords, message: "`maxon {CacheCommandWord}` said `{usableState}` of {owned.toString()} without marking it as the root in use. {HomeDirectoryVariable} names {blocked.toString()}, a path no directory can be made under, so this is the root the next `maxon {ExecuteCommandWord}` fills and the reader has nothing to tell it from the one that cannot be. {said}")
 
-	try Expect.isFalse(strandedState.contains(InUseWords), message: "`maxon {CacheCommandWord}` marked {blockedRoot.toString()} as the root in use, saying `{strandedState}` of it. Nothing can be created under {blocked.toString()}, so no run will ever put a build there. {said}")
+	Expect.isFalse(strandedState.contains(InUseWords), message: "`maxon {CacheCommandWord}` marked {blockedRoot.toString()} as the root in use, saying `{strandedState}` of it. Nothing can be created under {blocked.toString()}, so no run will ever put a build there. {said}")
 end 'bare cache names a root it cannot create and marks the one a run can use'

@@ -10,11 +10,11 @@ test 'a break target naming nothing is a no-match that suggests the nearest func
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {MisspelledTarget}` printed no `{BreakpointEventName}` event. A target that resolves to nothing is still an ANSWER about that target. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {MisspelledTarget}` printed no `{BreakpointEventName}` event. A target that resolves to nothing is still an ANSWER about that target. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let answer = eventAt(breakpoints, index: 0)
 
-	try Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: NoMatchAction, message: "a name no function answers to must be `{NoMatchAction}` rather than a breakpoint the session then never hits. {said}")
-	try Expect.equal(textOf(answer, node: answer.root, key: SuggestionKey), expected: NearestFunctionName, message: "`{MisspelledTarget}` is one character from `{NearestFunctionName}`, and a no-match that names the nearest function is the difference between a typo and a hunt. {said}")
-	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "a refused target still armed something. {said}")
+	Expect.equal(textOf(answer, node: answer.root, key: ActionKey), expected: NoMatchAction, message: "a name no function answers to must be `{NoMatchAction}` rather than a breakpoint the session then never hits. {said}")
+	Expect.equal(textOf(answer, node: answer.root, key: SuggestionKey), expected: NearestFunctionName, message: "`{MisspelledTarget}` is one character from `{NearestFunctionName}`, and a no-match that names the nearest function is the difference between a typo and a hunt. {said}")
+	Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "a refused target still armed something. {said}")
 end 'a break target naming nothing is a no-match that suggests the nearest function'

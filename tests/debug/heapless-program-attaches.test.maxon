@@ -10,13 +10,13 @@ test 'a program that allocates nothing still attaches, stops and resumes'
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(hotLine)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count() as AssertedInt, expected: 1, message: "`{BreakCommand} {lineTarget(hotLine)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(breakpoints, index: 0)
-	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the breakpoint on the anchored line was not `{SetAction}`. {said}")
-	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the agent in a program with no heap at all never stopped. A `{StopEventName}` here is what says the trap, the park loop and the mailbox all work without an allocator. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the breakpoint on the anchored line was not `{SetAction}`. {said}")
+	Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the agent in a program with no heap at all never stopped. A `{StopEventName}` here is what says the trap, the park loop and the mailbox all work without an allocator. {said}")
 
 	let stopped = eventAt(stops, index: 0)
-	try Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: hotLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
-	try Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop does not name a breakpoint as its reason. {said}")
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey) as AssertedInt, expected: hotLine as AssertedInt, message: "the stop is not on the anchored line. {said}")
+	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop does not name a breakpoint as its reason. {said}")
 end 'a program that allocates nothing still attaches, stops and resumes'

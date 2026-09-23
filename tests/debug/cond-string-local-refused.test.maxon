@@ -10,7 +10,7 @@ test 'a condition over a String local is refused by name, and the breakpoint is 
 	let hitLine = anchorLine(staged, anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
-	try Expect.atLeast(iterations as AssertedInt, than: 1, message: "the anchored line must run, or `the breakpoint was not armed` would be indistinguishable from `nothing reached it`. It ran it {iterations} times.")
+	Expect.atLeast(iterations as AssertedInt, than: 1, message: "the anchored line must run, or `the breakpoint was not armed` would be indistinguishable from `nothing reached it`. It ran it {iterations} times.")
 
 	let commands = debugCommandLine([conditionalBreak(lineTarget(hitLine), condition: ConditionText), RunCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
@@ -18,16 +18,16 @@ test 'a condition over a String local is refused by name, and the breakpoint is 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	try Expect.equal(armings.count() as AssertedInt, expected: 1, message: "a refused condition is still an answer and must print one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(armings.count() as AssertedInt, expected: 1, message: "a refused condition is still an answer and must print one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(armings, index: 0)
-	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: ConditionUnsupportedAction, message: "⛔ A String LOCAL IS A HEAP POINTER AND THE AGENT COMPARES WORDS. Comparing one against a literal would compare an ADDRESS against a character, which is a condition that is false for a reason the reader cannot see — so it is refused as `{ConditionUnsupportedAction}` instead. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: ConditionUnsupportedAction, message: "⛔ A String LOCAL IS A HEAP POINTER AND THE AGENT COMPARES WORDS. Comparing one against a literal would compare an ADDRESS against a character, which is a condition that is false for a reason the reader cannot see — so it is refused as `{ConditionUnsupportedAction}` instead. {said}")
 
-	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "⛔ A REFUSED CONDITION MUST LEAVE THE BREAKPOINT UNARMED. A driver that refused the condition and armed the breakpoint anyway would stop on every one of the {iterations} iterations — the loudest possible way to be wrong about a refusal it just printed. {said}")
+	Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "⛔ A REFUSED CONDITION MUST LEAVE THE BREAKPOINT UNARMED. A driver that refused the condition and armed the breakpoint anyway would stop on every one of the {iterations} iterations — the loudest possible way to be wrong about a refusal it just printed. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program did not reach its own end with nothing armed. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program did not reach its own end with nothing armed. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the program answered a different exit code than the same program run with nothing attached. {said}")
 end 'a condition over a String local is refused by name, and the breakpoint is not armed'

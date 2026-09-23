@@ -23,11 +23,11 @@ test 'a wasm build reports the size of the module it wrote'
 
 	let build = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}", WasmTargetOption, CompilerInfoLogOption])
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
-	try Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a one-line program did not build for wasm32-wasi. {said}")
+	Expect.equal(build.exitCode() as AssertedInt, expected: 0, message: "a one-line program did not build for wasm32-wasi. {said}")
 
 	match wroteBytesIn(build.stderr) 'reading'
-		reported(bytes) then try Expect.greaterThan(bytes as AssertedInt, than: 0, message: "a wasm build reported writing {bytes} bytes of code, and it wrote a module. {said}")
-		unreadable(reason) then try Expect.fail("a wasm build's `{WroteWord}N{BytesWord}` line could not be read: {reason}. {said}")
+		reported(bytes) then Expect.greaterThan(bytes as AssertedInt, than: 0, message: "a wasm build reported writing {bytes} bytes of code, and it wrote a module. {said}")
+		unreadable(reason) then Expect.fail("a wasm build's `{WroteWord}N{BytesWord}` line could not be read: {reason}. {said}")
 	end 'reading'
 end 'a wasm build reports the size of the module it wrote'
 

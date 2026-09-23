@@ -3,19 +3,19 @@ let GenericAliasMemberListCharacter = 25 as LspCoordinate
 let GenericAliasMemberNameCharacter = 27 as LspCoordinate
 
 test 'receiver type: a generic alias receiver offers the base types members'
-	let labels = try completionLabelsFor(genericAliasFixture(), line: GenericAliasLine, character: GenericAliasMemberListCharacter, after: "`self.tags.`, where `tags` is declared `as TagArray` and `TagArray` is `typealias TagArray = Array with Tag`")
+	let labels = completionLabelsFor(genericAliasFixture(), line: GenericAliasLine, character: GenericAliasMemberListCharacter, after: "`self.tags.`, where `tags` is declared `as TagArray` and `TagArray` is `typealias TagArray = Array with Tag`")
 
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `self.tags.` offered nothing at all. `TagArray` is a generic-instance typealias, which is how every container in this tree is named — an alias nothing resolves is a nominal type nothing declares, so the member list comes back empty for the commonest field shape there is.")
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `self.tags.` offered nothing at all. `TagArray` is a generic-instance typealias, which is how every container in this tree is named — an alias nothing resolves is a nominal type nothing declares, so the member list comes back empty for the commonest field shape there is.")
 
-	try assertCompletionOffersEach(labels, wanted: ["count", "push"], after: "`self.tags.`, a field whose declared type is `typealias TagArray = Array with Tag`")
+	assertCompletionOffersEach(labels, wanted: ["count", "push"], after: "`self.tags.`, a field whose declared type is `typealias TagArray = Array with Tag`")
 end 'receiver type: a generic alias receiver offers the base types members'
 
 test 'receiver type: a member through a generic alias hovers'
-	let rendering = try hoverRendering(genericAliasFixture(), line: GenericAliasLine, character: GenericAliasMemberNameCharacter)
+	let rendering = hoverRendering(genericAliasFixture(), line: GenericAliasLine, character: GenericAliasMemberNameCharacter)
 
-	try Expect.contains(rendering, needle: "count", message: "hovering `count` in `self.tags.count()` did not name it. Hover and completion resolve `TagArray` through ONE walk, so this case and the one above must agree about what the alias stands for.")
+	Expect.contains(rendering, needle: "count", message: "hovering `count` in `self.tags.count()` did not name it. Hover and completion resolve `TagArray` through ONE walk, so this case and the one above must agree about what the alias stands for.")
 
-	try Expect.contains(rendering, needle: "function count", message: "the hover did not render `Array`'s declaration of `count`, which is what `typealias TagArray = Array with Tag` names. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "function count", message: "the hover did not render `Array`'s declaration of `count`, which is what `typealias TagArray = Array with Tag` names. It rendered: {rendering}")
 end 'receiver type: a member through a generic alias hovers'
 
 function genericAliasFixture() returns String

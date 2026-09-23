@@ -2182,17 +2182,18 @@ Output: `greaterThan 5 equalTo greaterThan 5`.
 ## Testing
 
 `Expect` is the assertion library a `test` declaration uses. Every matcher throws `TestFailure.assertion`
-when it does not hold, so a test stops at its first failed assertion; a missing `try` is a compile error.
+when it does not hold, so a test stops at its first failed assertion. A test body calls matchers without
+`try`; in a helper function a test calls, a matcher needs `try` like any throwing call.
 `maxon test` runs a project's tests — see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 
 ```maxon
 test 'splits on commas'
 	let parts = "a,b,c".split(",")
-	try Expect.equal(parts.count(), expected: 3)
-	try Expect.equal("a,b".replace(",", with: ";"), expected: "a;b")
-	try Expect.close(0.1 + 0.2, expected: 0.3, within: 0.000001)
-	try Expect.isTrue(parts.count() == 3, message: "three parts")
-	try Expect.contains("haystack", needle: "st")
+	Expect.equal(parts.count(), expected: 3)
+	Expect.equal("a,b".replace(",", with: ";"), expected: "a;b")
+	Expect.close(0.1 + 0.2, expected: 0.3, within: 0.000001)
+	Expect.isTrue(parts.count() == 3, message: "three parts")
+	Expect.contains("haystack", needle: "st")
 end 'splits on commas'
 ```
 
@@ -2238,7 +2239,7 @@ Floats have no `equal`: exact float equality can pass on one target and fail on 
 so it fails every float matcher.
 
 For any other `Equatable` and `Stringable` type, `isTrue` is the general form:
-`try Expect.isTrue(a == b, message: "expected {b}, got {a}")`.
+`Expect.isTrue(a == b, message: "expected {b}, got {a}")`.
 
 ```maxon
 enum TestFailure implements Error
@@ -2246,8 +2247,8 @@ enum TestFailure implements Error
 end 'TestFailure'
 ```
 
-A `test` declaration is implicitly `throws TestFailure`. An error of any other type that reaches the end of
-a test body is reported as a failure naming the error and the `try` that threw it.
+A `test` declaration is implicitly `throws TestFailure`. An error of any other type raised in a test body is
+reported as a failure naming the error and the line of the operation that threw it.
 
 ## Build
 

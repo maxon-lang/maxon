@@ -14,7 +14,7 @@ A `test` is a top-level declaration named with a quoted phrase instead of an ide
 
 ```maxon
 test 'adds two numbers'
-	try Expect.equal(2 + 2, expected: 4)
+	Expect.equal(2 + 2, expected: 4)
 end 'adds two numbers'
 ```
 
@@ -39,8 +39,11 @@ temperature/
 ## Assertions
 
 Every test implicitly declares `throws TestFailure` (you cannot write the clause yourself). The `Expect`
-assertions throw `TestFailure.assertion` when they fail, so each is called with `try` — a forgotten `try` is
-a compile error (**E3057**), never an assertion whose failure goes unnoticed.
+assertions throw `TestFailure.assertion` when they fail, and a test body calls them without `try`: the test
+handles every error its body raises ([Uncaught Errors in Tests](#uncaught-errors-in-tests)), and a
+`TestFailure` fails it. Outside a test — in a helper function a test calls — an assertion needs `try` like
+any throwing call, and a forgotten one is a compile error (**E3057**), never an assertion whose failure goes
+unnoticed.
 
 `temperature.maxon`:
 
@@ -66,16 +69,16 @@ end 'describe'
 
 ```maxon
 test 'boiling point converts'
-	try Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
+	Expect.equal(toFahrenheit(100) as AssertedInt, expected: 212)
 end 'boiling point converts'
 
 test 'zero is freezing'
-	try Expect.equal(describe(0), expected: "freezing")
-	try Expect.startsWith(describe(5), needle: "above")
+	Expect.equal(describe(0), expected: "freezing")
+	Expect.startsWith(describe(5), needle: "above")
 end 'zero is freezing'
 
 test 'body temperature'
-	try Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
+	Expect.equal(toFahrenheit(37) as AssertedInt, expected: 98, message: "rounds toward zero")
 end 'body temperature'
 ```
 
@@ -120,13 +123,15 @@ The full assertion reference is on the [Testing](/docs/stdlib/testing/) page of 
 
 ## Uncaught Errors in Tests
 
-Inside a test body, a bare `try` may propagate **any** error type — not only `TestFailure`. An error that
-reaches the end of the test fails that test and reports the error and the `try` that threw it:
+Inside a test body, a call to a throwing function, a call to a throwing interface method and an `await` of
+a throwing promise need no `try`: the test handles every error its body raises, of **any** error type — not
+only `TestFailure`. Any other error fails that test and reports the error and the line of the operation that
+threw it:
 
 ```maxon
 test 'a missing user throws'
-	let name = try lookup(0)          // lookup throws LookupError
-	try Expect.equal(name, expected: "user")
+	let name = lookup(0)          // lookup throws LookupError
+	Expect.equal(name, expected: "user")
 end 'a missing user throws'
 ```
 
@@ -136,9 +141,12 @@ FAIL  users/lookup.test.maxon > a missing user throws
   at lookup.test.maxon:2
 ```
 
-- An `otherwise` clause you write always takes precedence.
-- The relaxation applies to the test body only. The same bare `try` in an ordinary function is still
-  **E3059**, and a closure written inside a test is an ordinary function.
+- A bare `try` means the same thing, and an `otherwise` clause you write always takes precedence. An
+  explicit `try` covers only the operation that produces its value; a throwing argument or operand inside it
+  is handled by the test. A [`try` block](/docs/language/error-handling/#try-blocks) inside the test handles its own body's errors first.
+- The rule applies to the test body only. In an ordinary function a throwing call without `try` is still
+  **E3057** and a bare `try` on another error type is still **E3059**, and a closure written inside a test
+  is an ordinary function.
 - A `panic` cannot be caught; the test is reported as crashed.
 
 ## Test Diagnostics
@@ -148,7 +156,7 @@ FAIL  users/lookup.test.maxon > a missing user throws
 | E2008 | the `end` label does not repeat the test's name |
 | E2058 | a `test` declaration outside a `*.test.maxon` file |
 | E2059 | an empty test name |
-| E3057 | an assertion (or other throwing call) without `try` |
+| E3057 | an assertion (or other throwing call) without `try` outside a test body — in a helper function, or in a closure written inside a test |
 | E3107 | two tests in one file whose names compile to the same symbol — each character outside `A–Z`, `a–z`, `0–9` and `_` becomes `_`, so `'adds two'` and `'adds-two'` collide |
 
 ## Running Tests

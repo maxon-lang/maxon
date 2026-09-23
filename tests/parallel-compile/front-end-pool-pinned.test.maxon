@@ -10,8 +10,8 @@ test 'MAXON_MAX_PROCS=1 makes a front end of one worker'
 	let run = spawnBuild(staged, label: "single-processor", extraArguments: arguments, singleProcessor: true, wholeDirectory: true)
 
 	let observedExit = run.exitCode() as AssertedInt
-	try Expect.equal(observedExit, expected: 0, message: "the front-end program did not compile pinned to one processor. It wrote to stderr: {run.stderr}")
+	Expect.equal(observedExit, expected: 0, message: "the front-end program did not compile pinned to one processor. It wrote to stderr: {run.stderr}")
 
 	let needle = frontEndPoolNeedleSingleProcessor()
-	try Expect.contains(run.stderr, needle: needle, message: "`{CompilerDebugLogFlag}` under MAXON_MAX_PROCS=1 did not report a front end of one worker over one processor. Either the front end does not report its pool, it is sized from the machine or the file count rather than from the scheduler's resolved count, or the marker never reached the child. It wrote to stderr: {run.stderr}")
+	Expect.contains(run.stderr, needle: needle, message: "`{CompilerDebugLogFlag}` under MAXON_MAX_PROCS=1 did not report a front end of one worker over one processor. Either the front end does not report its pool, it is sized from the machine or the file count rather than from the scheduler's resolved count, or the marker never reached the child. It wrote to stderr: {run.stderr}")
 end 'MAXON_MAX_PROCS=1 makes a front end of one worker'

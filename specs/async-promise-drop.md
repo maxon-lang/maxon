@@ -1789,3 +1789,379 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:22:2: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary
 ```
+
+<!-- test: async-promise-drop.a-returned-spawn-is-the-callers-to-await -->
+⭐⭐ **A `return` HANDS THE GREEN THREAD TO THE CALLER, SO THE CALLEE'S EXIT MUST NOT DROP IT.** The spawn is
+the callee's pending temporary until the `return` moves it out, exactly as a returned heap value leaves the
+frame's drop sets; the caller adopts the call's result as the thread's one owner. Without the move the callee
+cancelled the thread it was handing back, and the caller's `await` waited on a thread that would never run:
+**exit 92**, `RuntimeAbort.schedulerDeadlock`, with nothing printed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function start() returns IntPromise
+	return async work(1)
+end 'start'
+
+function main() returns ExitCode
+	let p = start()
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-returned-binding-is-the-callers-to-await -->
+The same hand-over from a BOUND spawn: the binding owes a scope-exit drop, and the `return` moves the thread
+out of the frame's owned bindings rather than dropping it behind the value it returns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function start() returns IntPromise
+	let p = async work(1)
+	return p
+end 'start'
+
+function main() returns ExitCode
+	let p = start()
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-returned-spawn-dropped-by-the-caller -->
+A returned promise the caller never awaits is the CALLER's to drop: its binding's scope exit renounces the
+thread, and `__gt_live_count` balances to zero. With the callee also dropping it the thread was reclaimed
+twice and the run aborted **75**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function start() returns IntPromise
+	return async work(1)
+end 'start'
+
+function run(awaitIt bool) returns Integer
+	let p = start()
+	if awaitIt 'wait'
+		return await p
+	end 'wait'
+
+	return 2
+end 'run'
+
+function main() returns ExitCode
+	print("{run(false)}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-returned-spawn-cancelled-by-the-caller -->
+`cancel` on a returned promise reclaims the thread the caller owns, once.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function start() returns IntPromise
+	return async work(1)
+end 'start'
+
+function run(awaitIt bool) returns Integer
+	let p = start()
+	if awaitIt 'wait'
+		return await p
+	end 'wait'
+
+	p.cancel()
+	return 2
+end 'run'
+
+function main() returns ExitCode
+	print("{run(false)}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-promise-parameter-returned-passes-through -->
+⭐⭐ **A CALLEE THAT RETURNS ITS PROMISE PARAMETER OWNS IT, so the caller MOVES the promise in and adopts it
+back as the call's result.** A `return` is a consume door exactly as `await` and `cancel` are: the frame that
+hands the thread on must be the frame that owns it. Left borrowed, the caller kept its own spawn pending AND
+adopted the result — two owners of one thread — and the drain at the end of the call's statement cancelled
+the thread the caller then awaited: **exit 92**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function pass(q IntPromise) returns IntPromise
+	return q
+end 'pass'
+
+function main() returns ExitCode
+	let p = pass(async work(1))
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-promise-parameter-returned-in-parentheses-passes-through -->
+Parentheses do not change what a `return` hands back: `return (q)` is the same door as `return q`, read with
+the parentheses stripped exactly as a struct-field store's value is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function pass(q IntPromise) returns IntPromise
+	return (q)
+end 'pass'
+
+function main() returns ExitCode
+	let p = pass(async work(1))
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-peeked-promise-argument-stays-with-the-caller -->
+⭐⭐ **A CALLER MOVES A PROMISE ARGUMENT IN EXACTLY WHERE THE CALLEE OWNS IT.** `finish` awaits `q`, so it owns
+`q`; it only peeks `p`, so `p` stays the caller's, and the caller's later `await p` is legal. The caller and the
+callee answer "does the callee take this one?" off one predicate over the swept facts. With the caller moving
+every promise argument of a callee that consumes ANY parameter, this program was refused at `await p` with
+E3102, and its sibling below leaked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise, q IntPromise) returns Integer
+	let alive = 1 if p.inner > 0 else 0
+	return (await q) + alive
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let q = async work(10)
+	let r = finish(p, q: q)
+	print("{r} {await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+12 2
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.a-peeked-promise-argument-is-dropped-by-the-caller -->
+The same peeked argument left to the caller's scope exit: the caller still owns it, so the caller drops it.
+Moved into a callee that did not own it, nobody dropped it and the run aborted **75**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise, q IntPromise) returns Integer
+	let alive = 1 if p.inner > 0 else 0
+	return (await q) + alive
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let q = async work(10)
+	print("{finish(p, q: q)}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```stdout
+12
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.error.a-ternary-of-promise-parameters-is-returned -->
+⭐⭐ **A `return` IS A CONSUME DOOR, SO IT ASKS THE OWNERSHIP QUESTION EVERY OTHER DOOR ASKS.** A ternary over
+two promises is a merge, and a merge has no owner — `await` and `cancel` refuse the same value with this same
+E3141. Handed back, the caller adopted a thread its own spawn still owned: the statement's drain cancelled it
+and the caller's `await` never returned, **exit 92**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function pick(a IntPromise, b IntPromise, c bool) returns IntPromise
+	return a if c else b
+end 'pick'
+
+function main() returns ExitCode
+	let p = pick(async work(1), b: async work(10), c: true)
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:11:2: a promise cannot be borrowed through 'return': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-promise-drop.error.a-ternary-of-owned-promises-is-returned -->
+The same merge over two spawns this frame owns: each binding keeps its own drop, so the merged value has no
+owner to hand back. Returned, the frame's exit dropped both spawns — the returned one included — and the
+caller awaited a cancelled thread, **exit 92**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function pick(c bool) returns IntPromise
+	let a = async work(1)
+	let b = async work(10)
+	return a if c else b
+end 'pick'
+
+function main() returns ExitCode
+	let p = pick(true)
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:13:2: a promise cannot be borrowed through 'return': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-promise-drop.error.an-alias-of-a-promise-parameter-is-returned -->
+A `let` alias of a promise parameter names the parameter's thread without owning it, and the declaration sweep
+reads a hand-back only off the parameter's own name — the rule `await` follows too. Returned, the caller
+adopted a second owner of its own spawn, **exit 92**.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function pass(q IntPromise) returns IntPromise
+	let r = q
+	return r
+end 'pass'
+
+function main() returns ExitCode
+	let p = pass(async work(1))
+	print("{await p}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:12:2: a promise cannot be borrowed through 'return': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
+```
+
+<!-- test: async-promise-drop.an-awaited-parenthesized-parameter-is-owned -->
+Parentheses do not change what an `await` consumes: `await (p)` is the same door as `await p`, and the
+declaration sweep reads its operand with the parentheses stripped, by the one rule the `return` door and a
+struct-field store use. Read without stripping, the parameter was never enrolled as the callee's, and this
+legal program was refused with E3141 at its own `await`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise) returns Integer
+	return await (p)
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(6)
+	return finish(p) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```

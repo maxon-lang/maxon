@@ -378,3 +378,25 @@ end 'main'
 ```exitcode
 55
 ```
+
+<!-- test: a-range-checked-division-under-a-try-keeps-its-otherwise -->
+A checked division narrowed to a ranged alias inside a parenthesized `try` target, in an ordinary function.
+The cast emits no op and records a range site, so the division is the value the `try` claims: dividing by a
+zero count takes the `otherwise`, and the answer is 5.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Wide = int(-1000000000000 to 1000000000000)
+
+function pick() returns Wide
+	let d = IntArray.create().count()
+	return try ((8 / d) as Wide) otherwise 5
+end 'pick'
+
+function main() returns ExitCode
+	return pick() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```

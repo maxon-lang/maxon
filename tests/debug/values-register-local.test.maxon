@@ -12,12 +12,12 @@ test 'a local the allocator kept in a register is read out of the stop register 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)
 
-	try Expect.equal(answers.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {HotLocalName}` printed no `{ValueEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(answers.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {HotLocalName}` printed no `{ValueEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let answered = eventAt(answers, index: 0)
 	let value = memberOf(answered, node: answered.root, key: ValueKey)
 
-	try Expect.equal(value.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
-	try Expect.equal(textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey), expected: HotLocalValue, message: "`{HotLocalName}` is a hot arithmetic local the allocator has no reason to spill, so reading it means reading the STOP's register file, indexed by the allocator's own register numbers. A debugger that can only read frame slots answers `{OptimizedOutReason}` here and is wrong. {said}")
-	try Expect.equal(memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() as AssertedInt, expected: 0, message: "`{HotLocalName}` was reported unavailable at a line where it is live and about to be printed by the program itself. {said}")
+	Expect.equal(value.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
+	Expect.equal(textOf(answered, node: nodeAt(value, index: 0), key: DisplayKey), expected: HotLocalValue, message: "`{HotLocalName}` is a hot arithmetic local the allocator has no reason to spill, so reading it means reading the STOP's register file, indexed by the allocator's own register numbers. A debugger that can only read frame slots answers `{OptimizedOutReason}` here and is wrong. {said}")
+	Expect.equal(memberOf(answered, node: nodeAt(value, index: 0), key: UnavailableKey).count() as AssertedInt, expected: 0, message: "`{HotLocalName}` was reported unavailable at a line where it is live and about to be printed by the program itself. {said}")
 end 'a local the allocator kept in a register is read out of the stop register file'

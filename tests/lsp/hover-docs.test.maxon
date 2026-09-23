@@ -13,15 +13,15 @@
 test 'hover shows doc comment for function'
 	// "add" starts at column 11
 	let document = documentedAddDocument()
-	let rendering = try hoverRendering(document, line: 6, character: 11)
+	let rendering = hoverRendering(document, line: 6, character: 11)
 
-	try Expect.contains(rendering, needle: "function", message: "a call hovers as the function it resolves to.")
+	Expect.contains(rendering, needle: "function", message: "a call hovers as the function it resolves to.")
 
-	try Expect.contains(rendering, needle: "add", message: "the rendering names that function.")
+	Expect.contains(rendering, needle: "add", message: "the rendering names that function.")
 
 	// The doc text comes from the FIXTURE, so this test is independent of `stdlib/` — unlike the `push`
 	// case below, which is the same claim pinned to a live tree.
-	try Expect.contains(rendering, needle: "Adds two numbers together", message: "a `///` doc comment above a declaration reaches the hover, without its `/// ` prefix. That is the only reason to write one.")
+	Expect.contains(rendering, needle: "Adds two numbers together", message: "a `///` doc comment above a declaration reaches the hover, without its `/// ` prefix. That is the only reason to write one.")
 end 'hover shows doc comment for function'
 
 test 'hover shows doc comment for method'
@@ -30,11 +30,11 @@ test 'hover shows doc comment for method'
 	// ⚠ The fixture carries TWO blank lines — after `var count int` and after `end 'Counter'`. Line 11 is
 	// `    c.increment()` only if both survive byte-exact.
 	let document = documentedCounterDocument()
-	let rendering = try hoverRendering(document, line: 11, character: 6)
+	let rendering = hoverRendering(document, line: 11, character: 6)
 
-	try Expect.contains(rendering, needle: "increment", message: "a method call hovers as the method it resolves to.")
+	Expect.contains(rendering, needle: "increment", message: "a method call hovers as the method it resolves to.")
 
-	try Expect.contains(rendering, needle: "Increments the counter by one", message: "a `///` doc comment on a METHOD reaches the hover too. A doc-comment scanner that only walked top-level declarations would pass the function case and fail here.")
+	Expect.contains(rendering, needle: "Increments the counter by one", message: "a `///` doc comment on a METHOD reaches the hover too. A doc-comment scanner that only walked top-level declarations would pass the function case and fail here.")
 end 'hover shows doc comment for method'
 
 test 'hover shows array push method with doc comment'
@@ -43,11 +43,11 @@ test 'hover shows array push method with doc comment'
 	// One of the header's live `stdlib/` pins: `Array.maxon:299` reads `/// Append element to end`,
 	// directly above `public function push(value Element)` at `:305`.
 	let document = arrayDocument()
-	let rendering = try hoverRendering(document, line: 2, character: 8)
+	let rendering = hoverRendering(document, line: 2, character: 8)
 
-	try Expect.contains(rendering, needle: "push", message: "a method call into `stdlib/` hovers as that method.")
+	Expect.contains(rendering, needle: "push", message: "a method call into `stdlib/` hovers as that method.")
 
-	try Expect.contains(rendering, needle: "Append element to end", message: "the doc comment from `stdlib/Array.maxon` reaches the hover. Doc comments that only worked inside the open document would pass every fixture-local case and fail here — and the stdlib is where an editor user reads them most.")
+	Expect.contains(rendering, needle: "Append element to end", message: "the doc comment from `stdlib/Array.maxon` reaches the hover. Doc comments that only worked inside the open document would pass every fixture-local case and fail here — and the stdlib is where an editor user reads them most.")
 end 'hover shows array push method with doc comment'
 
 test 'hover shows static method signature'
@@ -58,9 +58,9 @@ test 'hover shows static method signature'
 	// Another live `stdlib/` pin: `String.fromCString` is declared at `String.maxon:241`. The recovered
 	// ruler stops at 27 while the position is 22; it is still the derivation, so it is reproduced as-is.
 	let document = staticMethodDocument()
-	let rendering = try hoverRendering(document, line: 2, character: 22)
+	let rendering = hoverRendering(document, line: 2, character: 22)
 
-	try Expect.contains(rendering, needle: "fromCString", message: "a STATIC method call hovers as that method. A resolver that only handled instance receivers would answer for `String` here, or for nothing.")
+	Expect.contains(rendering, needle: "fromCString", message: "a STATIC method call hovers as that method. A resolver that only handled instance receivers would answer for `String` here, or for nothing.")
 end 'hover shows static method signature'
 
 // ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source

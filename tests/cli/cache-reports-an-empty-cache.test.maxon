@@ -19,16 +19,16 @@ test 'bare cache over a cache holding nothing names the root and says it is empt
 	let cacheRoot = cacheRootIn(dir)
 
 	let owned = cacheRoot.join(CacheVendorDirName)
-	try Expect.isFalse(Directory.exists(owned), message: "the gate could not run - {owned.toString()} is there before anything cached into it, so this case is not about an empty cache")
+	Expect.isFalse(Directory.exists(owned), message: "the gate could not run - {owned.toString()} is there before anything cached into it, so this case is not about an empty cache")
 
 	let reported = runWithCacheRoot([CacheCommandWord], cacheRoot: cacheRoot, workingDirectory: dir)
 	let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
 
-	try Expect.equal(reported.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over roots holding nothing. Nothing cached is the ordinary state, not a failure. {said}")
-	try Expect.isFalse(reported.stdout.trim().isEmpty(), message: "`maxon {CacheCommandWord}` said nothing at all over roots holding nothing. A caller cannot tell a silent answer from a command that did not run. {said}")
-	try Expect.isEmpty(reported.stderr.trim(), message: "`maxon {CacheCommandWord}` wrote to stderr while succeeding. {said}")
+	Expect.equal(reported.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over roots holding nothing. Nothing cached is the ordinary state, not a failure. {said}")
+	Expect.isFalse(reported.stdout.trim().isEmpty(), message: "`maxon {CacheCommandWord}` said nothing at all over roots holding nothing. A caller cannot tell a silent answer from a command that did not run. {said}")
+	Expect.isEmpty(reported.stderr.trim(), message: "`maxon {CacheCommandWord}` wrote to stderr while succeeding. {said}")
 
 	let state = try reportedStateOf(reported.stdout, directory: owned) otherwise panic("{CaseDirName}: `maxon {CacheCommandWord}` named no line for {owned.toString()}, the root {CacheRootVariable} names and the one the next run will fill. A root holding nothing is still where the cache is. {said}")
 
-	try Expect.contains(state, needle: EmptyWord, message: "`maxon {CacheCommandWord}` said `{state}` of {owned.toString()}, which holds nothing, rather than saying it is empty. {said}")
+	Expect.contains(state, needle: EmptyWord, message: "`maxon {CacheCommandWord}` said `{state}` of {owned.toString()}, which holds nothing, rather than saying it is empty. {said}")
 end 'bare cache over a cache holding nothing names the root and says it is empty'

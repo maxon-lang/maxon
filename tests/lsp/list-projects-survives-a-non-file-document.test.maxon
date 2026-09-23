@@ -6,8 +6,8 @@ test 'non-file document: maxon/listProjects answers while a path-less document i
 	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(NonFileProjectsUri, content: NonFileProjectsSource))
 
 	match probe 'probe'
-		answered(result) then try requireNoProjectIsSpelledFromTheUri(result, scheme: NonFileProjectsUriScheme)
-		unanswered(reason) then try Expect.fail("`maxon/listProjects` did not answer with one document open at `{NonFileProjectsUri}`: {reason}. ⭐ THIS IS A SECOND DOOR ONTO THE SAME CRASH, NOT THE SAME ONE TWICE: a document is filed in the open-document map BEFORE its diagnostics are published, so a path-less document is already in the map by the time anything walks it — and the walk behind this poll reaches every entry with no guard in front of it. `maxon/listProjects` is a second, AUTOMATIC door: a client that polls it takes the session down without the author ever asking for hover, definition or completion.")
+		answered(result) then requireNoProjectIsSpelledFromTheUri(result, scheme: NonFileProjectsUriScheme)
+		unanswered(reason) then Expect.fail("`maxon/listProjects` did not answer with one document open at `{NonFileProjectsUri}`: {reason}. ⭐ THIS IS A SECOND DOOR ONTO THE SAME CRASH, NOT THE SAME ONE TWICE: a document is filed in the open-document map BEFORE its diagnostics are published, so a path-less document is already in the map by the time anything walks it — and the walk behind this poll reaches every entry with no guard in front of it. `maxon/listProjects` is a second, AUTOMATIC door: a client that polls it takes the session down without the author ever asking for hover, definition or completion.")
 	end 'probe'
 end 'non-file document: maxon/listProjects answers while a path-less document is open'
 

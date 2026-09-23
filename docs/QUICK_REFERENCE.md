@@ -933,7 +933,7 @@ end 'each'
 - A green thread that has held its processor for 10 ms is preempted at its next function entry and may resume on another OS thread
 - Reference counting is plain, not atomic — a green thread and its coroutines are one strand, and at most one machine runs a strand's members at a time
 - Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)
-- Throwing async functions require `try await` (not plain `await`)
+- Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body
 - `async` target must yield (contain I/O or `await` points)
 - An unawaited promise is DROPPED at scope exit — an unstarted coroutine never runs and a parked one's wait is cancelled
 
@@ -1135,11 +1135,11 @@ maxon mcp-server             # Start the MCP server for AI coding agents
 
 ### Unit tests
 A `test` is a top-level declaration, legal only in a `*.test.maxon` file. It implicitly
-`throws TestFailure`, which is why the assertion needs `try` — omitting it is a compile error.
+`throws TestFailure`, and its body needs no `try`: a throwing call there fails the test on error.
 
 ```maxon
 test 'ten items take the bulk discount'
-	try Expect.equal(totalCost(250, quantity: 10), expected: 2250)
+	Expect.equal(totalCost(250, quantity: 10), expected: 2250)
 end 'ten items take the bulk discount'
 ```
 

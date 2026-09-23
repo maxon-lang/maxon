@@ -23,7 +23,7 @@ test 'upgrade --dry-run names every variable the run would set for the child'
 	let run = runDriver([UpgradeCommandWord, DryRunFlag], binary: staged)
 
 	let observedExit = run.exitCode() as AssertedInt
-	try Expect.equal(observedExit, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from a script install did not succeed. It said: {run.stdout}{run.stderr}")
+	Expect.equal(observedExit, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from a script install did not succeed. It said: {run.stdout}{run.stderr}")
 
 	var commandLine = ""
 
@@ -33,12 +33,12 @@ test 'upgrade --dry-run names every variable the run would set for the child'
 		end 'theCommandLine'
 	end 'eachLine'
 
-	try Expect.isFalse(commandLine.isEmpty(), message: "`maxon {UpgradeCommandWord} {DryRunFlag}` printed no `{CommandLabel}` line. It said: {run.stdout}")
+	Expect.isFalse(commandLine.isEmpty(), message: "`maxon {UpgradeCommandWord} {DryRunFlag}` printed no `{CommandLabel}` line. It said: {run.stdout}")
 
 	#if os(Windows)
-		try Expect.contains(commandLine, needle: "{ModulePathVariableName}=", message: "the command sets no {ModulePathVariableName} for the Windows PowerShell it starts, so that child inherits the caller's. From pwsh, the caller's names another edition's modules first and `Get-FileHash` cannot autoload. It said: {commandLine}")
-		try Expect.contains(commandLine, needle: ModulesDirTail, message: "the {ModulePathVariableName} the command sets does not name this Windows PowerShell's own module directory ({ModulesDirTail}), so another edition's could still come first. It said: {commandLine}")
+		Expect.contains(commandLine, needle: "{ModulePathVariableName}=", message: "the command sets no {ModulePathVariableName} for the Windows PowerShell it starts, so that child inherits the caller's. From pwsh, the caller's names another edition's modules first and `Get-FileHash` cannot autoload. It said: {commandLine}")
+		Expect.contains(commandLine, needle: ModulesDirTail, message: "the {ModulePathVariableName} the command sets does not name this Windows PowerShell's own module directory ({ModulesDirTail}), so another edition's could still come first. It said: {commandLine}")
 	#else
-		try Expect.isFalse(commandLine.contains(ModulePathVariableName), message: "the command sets {ModulePathVariableName}, which only Windows PowerShell reads. It said: {commandLine}")
+		Expect.isFalse(commandLine.contains(ModulePathVariableName), message: "the command sets {ModulePathVariableName}, which only Windows PowerShell reads. It said: {commandLine}")
 	#endif
 end 'upgrade --dry-run names every variable the run would set for the child'

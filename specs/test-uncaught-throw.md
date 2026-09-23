@@ -11,27 +11,31 @@ category: infrastructure
 
 ### The rule
 
-Outside a `test`, a bare `try` — one with no `otherwise` — propagates, so the callee's `throws`
-type must be the enclosing function's own. A call that throws something else is E3059, and the
-fix is to write an `otherwise` that converts it.
+Outside a `test`, a throwing call, a throwing interface call and an `await` of a throwing promise
+must each be written with `try`, and a bare `try` — one with no `otherwise` — propagates, so the
+callee's `throws` type must be the enclosing function's own. A call that throws something else is
+E3059, and the fix is to write an `otherwise` that converts it.
 
-Inside a **`test` body** that requirement is dropped. A bare `try` on **any** error type compiles,
-and an error that reaches it **fails that test**:
+Inside a **`test` body** both requirements are dropped. Such an operation needs no `try` at all:
+the body behaves as if wrapped in an implied bare `try`, and each throwing operation gets exactly
+the handler an explicit bare `try` gets there. A bare `try` on **any** error type compiles too.
+Either way, an error that reaches the handler **fails that test**:
 
 ```text
 test 'returns 404 when the user is missing'
-	let response = try Api.lookup("nobody")     // throws ApiError — uncaught, FAILS the test
-	try Expect.equal(response.status(), expected: 404)
+	let response = Api.lookup("nobody")     // throws ApiError — uncaught, FAILS the test
+	Expect.equal(response.status(), expected: 404)
 end 'returns 404 when the user is missing'
 ```
 
-The test author writes `try` and nothing else. No `otherwise`, no conversion to `TestFailure`, no
-error type repeated in a place it adds nothing — a test that meets an unexpected error has exactly
-one correct outcome, and the language supplies it.
+The test author writes neither `try` nor `otherwise`, no conversion to `TestFailure`, and no error
+type repeated in a place it adds nothing — a test that meets an unexpected error has exactly one
+correct outcome, and the language supplies it. An explicit `try` stays legal and means the same.
 
 ### What it compiles to
 
-The compiler substitutes the handler the author would otherwise have had to write:
+For each throwing operation, the compiler substitutes the handler the author would otherwise have
+had to write:
 
 ```text
 try Api.lookup("nobody") otherwise (e) 'uncaught throw in test'
@@ -46,8 +50,9 @@ Three things follow from that shape, and they are the reasons for it:
   the test's own error type ever leaves the test, so the runner has one type to handle.
 - **The report reaches the runner before the failure does**, so a test that fails on an unexpected
   error says which error, rather than only that an assertion failed.
-- **`file` and `line` locate the `try` that threw** — the line a reader has to open — not the
-  test's first line and not anything inside the callee.
+- **`file` and `line` locate the operation that threw** — the call, interface call or `await`
+  itself, or the explicit `try` — the line a reader has to open, not the test's first line and not
+  anything inside the callee.
 
 `"{e}"` renders the error by the language's own interpolation rule, which is the same rule a reader
 gets by writing `otherwise (e) … print("{e}")` themselves: the live **case name** for a union and
@@ -56,19 +61,18 @@ second way to spell an error value.
 
 ### It applies to a `test` body and to nothing else
 
-The relaxation is a narrowing of the propagation-type check, not a rule of its own, so there is no
-second place where it could be reached. An ordinary `function` in the same file, holding the
-identical `try`, still gets E3059.
+An ordinary `function` in the same file is unchanged: a throwing call there without `try` is E3057,
+and a bare `try` on a foreign error is E3059.
 
 A **closure** written inside a test body is likewise not a test body. It is a separate function,
 its errors go to whoever calls it — which may be nobody, and may be long after the test finished —
-so there is nothing for the test to fail on its behalf. A function type cannot express `throws` at
-all (E3101), so a closure has no error channel to relax: a bare `try` inside one is refused for
-that reason, unchanged.
+so there is nothing for the test to fail on its behalf. A throwing call inside one still needs a
+`try` (E3057), and since a function type cannot express `throws` at all (E3101), a bare `try` inside
+one is refused as well.
 
 Every construct that *is* part of the test's own body — a loop, an `if`, a `match` arm — is covered,
-because the rule is about which function is being parsed and not about how deeply nested the `try` is.
-So is `try await`: an awaited thunk's `throws` type is the type of that `try`'s error exactly as a
+because the rule is about which function is being parsed and not about how deeply nested the
+operation is. So is `await`: an awaited thunk's `throws` type is the type of the error exactly as a
 call's is, and one check reads both.
 
 > The `line` in the reports below counts from the top of the file the report NAMES — here
@@ -78,11 +82,18 @@ call's is, and one check reads both.
 
 ### An explicit `otherwise` wins
 
-Nothing here is reached when the author wrote an `otherwise`: the substitution lives on the
-no-`otherwise` path. Every `otherwise` form keeps working exactly as it does in a `function`,
-including one that swallows the error and lets the test go on to pass.
+Nothing here is reached for an operation an explicit `try` with an `otherwise` covers. Every
+`otherwise` form keeps working exactly as it does in a `function`, including one that swallows the
+error and lets the test go on to pass. An enclosing block-form `try` likewise takes its body's
+throwing operations before the implied handler does.
 
-Likewise a `try` on a call that throws `TestFailure` itself — an assertion — is not foreign, so it
+An explicit `try` covers only the operation that produces its value. A throwing call among its
+arguments or operands, a throwing receiver of its chain, or a throwing bound of a range it builds
+goes to the enclosing handler — in a test body, the implied one. So does a `for` loop's source
+expression, with one exception: a call that produces the loop's cursor and throws `IterationError`
+is absorbed by the loop, so an empty collection runs zero trips rather than failing the test.
+
+Likewise an operation that throws `TestFailure` itself — an assertion — is not foreign, so it
 propagates plainly, with no report. That is what makes a report mean *"something unexpected"*.
 
 ### What this does not cover
@@ -273,4 +284,802 @@ end 'main'
 ```
 ```maxoncstderr
 error E2001: specs/fragments/test-uncaught-throw/error.closure-in-a-test-is-not-a-test.test:19:36: try without otherwise requires the enclosing function to have 'throws'
+```
+
+<!-- test: implied-try-foreign-error -->
+The no-`try` twin of `bare-try-on-a-foreign-error-compiles`: the test body is an implied `try`, so a
+bare throwing call compiles to the same handler. The golden must show the same `__TestReport.threw`
+report and `TestFailure` throw as the `try` form.
+```maxon
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup() throws ApiError
+	throw ApiError.notFound
+end 'lookup'
+
+test 'tolerates a foreign error'
+	lookup()
+end 'tolerates a foreign error'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-boxed-foreign-error -->
+The no-`try` twin of `bare-try-on-a-boxed-foreign-error-compiles`: a payload-carrying union reaches the
+implied handler as a box the handler owns, releases, and un-enrols on the terminated error edge.
+```maxon
+// --- file: suite.test.maxon
+union ApiError implements Error
+	notFound(detail String)
+end 'ApiError'
+
+function lookup(hit bool) throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound("nobody")
+	end 'miss'
+end 'lookup'
+
+test 'tolerates a boxed foreign error'
+	lookup(true)
+	print("reached the end of the test\n")
+end 'tolerates a boxed foreign error'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-value-position -->
+A bare throwing call in value position: the implied handler guards the binding's initializer, and the
+ok edge binds the returned value.
+```maxon
+// --- file: suite.test.maxon
+typealias Tally = int(0 to 100)
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup(hit bool) returns Tally throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 7
+end 'lookup'
+
+test 'binds a value from a throwing call'
+	let got = lookup(true)
+	print("got {got}\n")
+end 'binds a value from a throwing call'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-managed-temporary -->
+The throwing call is an ARGUMENT evaluated after a managed `String` temporary already exists in the same
+statement, so the implied handler's error edge must release that temporary before it reports.
+```maxon
+// --- file: suite.test.maxon
+typealias Tally = int(0 to 100)
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup(hit bool) returns Tally throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 7
+end 'lookup'
+
+function prefix(word String) returns String
+	return "{word}: "
+end 'prefix'
+
+function describe(label String, n Tally) returns String
+	return "{label}{n}"
+end 'describe'
+
+test 'owns a temporary when the call throws'
+	print(describe(prefix("value"), n: lookup(true)))
+end 'owns a temporary when the call throws'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-runtime-callee -->
+A throwing compiler-owned callee, the array accessor, written bare in a test body takes the implied
+handler exactly as a user function does.
+```maxon
+// --- file: suite.test.maxon
+test 'reads an element bare'
+	let a = [10, 20, 30]
+	let x = a.get(1)
+	print("{x}\n")
+end 'reads an element bare'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-witness-dispatch -->
+A throwing interface requirement dispatched through an existential in a test body, with no `try`: the
+witness dispatch takes the implied handler exactly as a direct call does.
+```maxon
+// --- file: suite.test.maxon
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	let x as Code
+
+	static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest() returns Code throws DigestError
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+
+		return self.x
+	end 'digest'
+end 'Point'
+
+function make(x Code) returns Digest
+	return Point.create(x)
+end 'make'
+
+test 'dispatches a throwing requirement'
+	let d = make(42)
+	let v = d.digest()
+	print("digest {v}\n")
+end 'dispatches a throwing requirement'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-await -->
+An `await` of a throwing promise written without `try` in a test body takes the implied handler, as a
+`try await` does.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function mayFail(succeed bool) returns Integer throws WorkError
+	Scheduler.yield()
+
+	if succeed 'ok'
+		return 10
+	end 'ok'
+
+	throw WorkError.failed
+end 'mayFail'
+
+test 'awaits a throwing promise'
+	let p = async mayFail(false)
+	let r = await p
+	print("awaited {r}\n")
+end 'awaits a throwing promise'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-argument-of-explicit-try -->
+An explicit `try` covers its own target call only. A throwing call in that target's ARGUMENT list is a
+separate call, so its foreign error goes to the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function count(hit bool) returns AssertedInt throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 3
+end 'count'
+
+test 'asserts on a counted value'
+	try Expect.equal(count(true), expected: 3)
+end 'asserts on a counted value'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-operand-of-a-parenthesized-target -->
+A parenthesized `try` target claims the operation that produces the group's value, which here is the
+division. The throwing call that is an OPERAND of that division is a separate call, so its foreign
+error goes to the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function count(hit bool) returns AssertedInt throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 12
+end 'count'
+
+function divisor() returns AssertedInt
+	return 4
+end 'divisor'
+
+test 'divides a counted value'
+	let share = try (count(true) / divisor()) otherwise 0
+	Expect.equal(share, expected: 3)
+end 'divides a counted value'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-iteration-error-in-a-for-range-bound -->
+A `for` loop absorbs the `IterationError` of the call that hands it its cursor, and nothing else. Here the
+source is a RANGE whose lower bound is `peek`, which throws `IterationError` but hands the loop no cursor, so
+the loop has nothing to absorb and the call takes the test body's implied handler like any other.
+```maxon
+// --- file: suite.test.maxon
+test 'counts up from a peeked bound'
+	let steps = [1, 2, 3]
+	let it = steps.cursor()
+	var total = 0
+
+	for i in it.peek(1) upto 4 'each'
+		total = total + i
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 5)
+end 'counts up from a peeked bound'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-await-as-a-for-range-bound -->
+An `await` that is a range's lower bound hands the loop no cursor, so the loop absorbs nothing and the
+awaited error takes the test body's implied handler, as a bare `await` does anywhere else in the body.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function start(succeed bool) returns Integer throws WorkError
+	Scheduler.yield()
+
+	if succeed 'ok'
+		return 2
+	end 'ok'
+
+	throw WorkError.failed
+end 'start'
+
+test 'counts up from an awaited bound'
+	let p = async start(true)
+	var total = 0
+
+	for i in await p upto 5 'each'
+		total = total + i
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 9)
+end 'counts up from an awaited bound'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-await-receiver-of-an-explicit-try -->
+An explicit `try` on `(await p).check()` covers the chain's last call. The awaited promise is the
+RECEIVER, a separate throwing operation, so its error goes to the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+typealias Tally = int(0 to 100)
+
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+type Holder
+	let total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+
+	function check() throws TestFailure
+		if self.total != 3 'wrong'
+			throw TestFailure.assertion
+		end 'wrong'
+	end 'check'
+end 'Holder'
+
+function make(succeed bool) returns Holder throws WorkError
+	Scheduler.yield()
+
+	if succeed 'ok'
+		return Holder.create(3)
+	end 'ok'
+
+	throw WorkError.failed
+end 'make'
+
+test 'checks an awaited holder'
+	let p = async make(true)
+	try (await p).check()
+end 'checks an awaited holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-true-arm-of-a-for-source-ternary -->
+A ternary `for` source hands the loop the value of whichever arm ran. Neither arm's call is the loop's
+cursor, so the TRUE arm's throwing call takes the test body's implied handler exactly as the false arm's does.
+```maxon
+// --- file: suite.test.maxon
+typealias Tally = int(0 to 100)
+typealias TallyArray = Array with Tally
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function items(hit bool) returns TallyArray throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	var found = TallyArray.create()
+	found.push(1)
+	found.push(2)
+	return found
+end 'items'
+
+test 'walks the chosen items'
+	let useFirst = true
+	var total = 0
+
+	for x in items(true) if useFirst else items(true) 'each'
+		total = total + x
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 3)
+end 'walks the chosen items'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-bounds-of-a-parenthesized-range-target -->
+An explicit `try` on `(a upto b).createIterator()` covers the chain's last call. The range's BOUNDS are
+operands of the range operator, so a throwing call in either takes the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function first(hit bool) returns RangeBound throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 2
+end 'first'
+
+function last(hit bool) returns RangeBound throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 5
+end 'last'
+
+test 'iterates a range built from throwing bounds'
+	let it = try (first(true) upto last(true)).createIterator()
+	Expect.equal(it.current() as AssertedInt, expected: 2)
+end 'iterates a range built from throwing bounds'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-reinterpreted-element-as-a-for-range-bound -->
+A narrow signed enum element is read back through a sign extension the accessor appends after its call.
+That extension is part of the call's result, so when the element read is the receiver of `.rawValue` in a
+range's lower bound, the receiver is still the throwing call and it takes the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+enum Level
+	low = -1
+	high = 2
+end 'Level'
+
+typealias LevelArray = Array with Level
+
+test 'counts up from a stored level'
+	var levels = LevelArray.create()
+	levels.push(Level.high)
+	var total = 0
+
+	for i in levels.get(0).rawValue upto 4 'each'
+		total = total + i
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 5)
+end 'counts up from a stored level'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-for-source-iteration-error-is-absorbed -->
+The call that hands a `for` loop its cursor throws `IterationError` for an EMPTY collection, and the loop
+absorbs it: the loop runs zero trips and the test goes on. The implied handler must not claim that call.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+test 'an empty traversal runs no trips'
+	var total = 0
+
+	for (_, value) in IntArray.create().withIterator() 'each'
+		total = total + value
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 0)
+end 'an empty traversal runs no trips'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-for-source-iteration-error-is-absorbed-parenthesized -->
+The same loop with its source written in parentheses. A group is transparent, so the loop still absorbs
+the empty collection's `IterationError` and runs zero trips.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+test 'an empty parenthesized traversal runs no trips'
+	var total = 0
+
+	for (_, value) in (IntArray.create().withIterator()) 'each'
+		total = total + value
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 0)
+end 'an empty parenthesized traversal runs no trips'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-cast-operand-as-a-for-range-bound -->
+A cast that emits an op makes its operand an operand like any other. The throwing call under the cast is a
+range's lower bound, so it takes the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 100)
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function first(hit bool) returns Integer throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return 2
+end 'first'
+
+test 'counts up from a cast bound'
+	var total = 0
+
+	for i in first(true) as Small upto 5 'each'
+		total = total + i
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 9)
+end 'counts up from a cast bound'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-chain-receiver -->
+An explicit `try` on a postfix chain covers the chain's last call. The RECEIVER is a separate throwing
+call, so its foreign error goes to the test body's implied handler.
+```maxon
+// --- file: suite.test.maxon
+typealias Tally = int(0 to 100)
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+type Holder
+	let total as Tally
+
+	static function create(total Tally) returns Self
+		return Self{total: total}
+	end 'create'
+
+	function check() throws TestFailure
+		if self.total != 3 'wrong'
+			throw TestFailure.assertion
+		end 'wrong'
+	end 'check'
+end 'Holder'
+
+function make(hit bool) returns Holder throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	return Holder.create(3)
+end 'make'
+
+test 'checks a made holder'
+	try make(true).check()
+end 'checks a made holder'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.implied-try-closure-still-needs-try -->
+The implied `try` belongs to the test body alone. A closure inside it is a separate function with no
+error channel, so a bare throwing call there is still E3057.
+```maxon
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup() returns Tally throws ApiError
+	throw ApiError.notFound
+end 'lookup'
+
+typealias Tally = int(0 to 100)
+typealias Producer = function() returns Tally
+
+function callIt(produce Producer) returns Tally
+	return produce()
+end 'callIt'
+
+test 'runs a closure'
+	let got = callIt(function() gives lookup())
+	print("got {got}\n")
+end 'runs a closure'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/test-uncaught-throw/error.implied-try-closure-still-needs-try.test:19:36: throwing function requires try: 'lookup'
+```
+<!-- test: implied-try-explicit-try-of-a-rebranded-call -->
+An explicit `try` on a parenthesized call renamed to another brand of the same instance claims the call:
+the rebrand emits no op, so the call IS the value the group produces, and the author's `otherwise` owns its
+error.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Scores = Array with Integer
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function items(hit bool) returns IntArray throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	var found = IntArray.create()
+	found.push(4)
+	found.push(5)
+	return found
+end 'items'
+
+test 'rebrands the fetched items'
+	let s = try (items(true) as Scores) otherwise Scores.create()
+	Expect.equal(s.count() as AssertedInt, expected: 2)
+end 'rebrands the fetched items'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-explicit-try-of-a-range-checked-division -->
+An explicit `try` on a parenthesized checked division narrowed to a ranged alias whose representation is
+the division's own: the cast emits no op and only records its range site, so the division IS the value the
+group produces and the author's `otherwise` owns its divide-by-zero.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Wide = int(-1000000000000 to 1000000000000)
+
+test 'divides by a counted value'
+	let d = IntArray.create().count()
+	let n = try ((8 / d) as Wide) otherwise 5
+	Expect.equal(n as AssertedInt, expected: 5)
+end 'divides by a counted value'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: implied-try-for-source-rebranded-cursor-is-absorbed -->
+A cursor-producing call renamed to another brand of the same instance is still the call that hands the loop
+its cursor: the rebrand emits no op, so the loop absorbs the empty collection's `IterationError`.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Walk = ArrayIterator with Integer
+
+test 'an empty rebranded traversal runs no trips'
+	var total = 0
+
+	for x in IntArray.create().cursor() as Walk 'each'
+		total = total + x
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 0)
+end 'an empty rebranded traversal runs no trips'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```

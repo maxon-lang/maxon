@@ -1043,3 +1043,99 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.pure-throwing-call-statement-in-a-test-body -->
+A bare call to a pure throwing function, written as a statement in a `test` body, takes the test's implied
+handler and still discards the value it produced. The discard is refused exactly as it is outside a test.
+```maxon
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum ParseError implements Error
+	invalidFormat
+end 'ParseError'
+
+function parseNum(s String) returns Integer throws ParseError
+	if s.byteLength() == 0 'empty'
+		throw ParseError.invalidFormat
+	end 'empty'
+	return s.byteLength()
+end 'parseNum'
+
+test 'discards a pure result'
+	parseNum("abc")
+end 'discards a pure result'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/error.pure-throwing-call-statement-in-a-test-body.test:17:2: result of pure function 'parseNum' must be used
+```
+
+<!-- test: try-pure-propagating-discard -->
+The propagating twin of `try-pure-let-discard`: `_ = try parseNum("abc")` with no `otherwise`, inside a
+function that throws the same error, still discards a pure result.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum ParseError implements Error
+	invalidFormat
+end 'ParseError'
+
+function parseNum(s String) returns Integer throws ParseError
+	if s.byteLength() == 0 'empty'
+		throw ParseError.invalidFormat
+	end 'empty'
+	return s.byteLength()
+end 'parseNum'
+
+function check() returns Integer throws ParseError
+	_ = try parseNum("abc")
+	return 0
+end 'check'
+
+function main() returns ExitCode
+	let n = try check() otherwise 1
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/try-pure-propagating-discard.test:17:2: result of pure function 'parseNum' must be used
+```
+
+<!-- test: try-block-pure-discard -->
+The try-block twin: a pure throwing call routed to a block-form `try`'s handler and discarded with `_ =`.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum ParseError implements Error
+	invalidFormat
+end 'ParseError'
+
+function parseNum(s String) returns Integer throws ParseError
+	if s.byteLength() == 0 'empty'
+		throw ParseError.invalidFormat
+	end 'empty'
+	return s.byteLength()
+end 'parseNum'
+
+function main() returns ExitCode
+	try 'work'
+		_ = parseNum("abc")
+	end 'work' otherwise (e) 'h'
+		match e 'why'
+			invalidFormat then print("failed\n")
+		end 'why'
+	end 'h'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/fragments/discarded-results/try-block-pure-discard.test:18:3: result of pure function 'parseNum' must be used
+```

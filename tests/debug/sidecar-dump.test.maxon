@@ -82,7 +82,7 @@ test 'the sidecar names this build, this source and every function the fixture d
 
 	let noSections = StringArray.create()
 	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: noSections)
-	try Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
+	Expect.equal(dumpRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. A sidecar nothing can read back is the same as no sidecar. It printed: {dumpRun.stdout} — and wrote to stderr: {dumpRun.stderr}")
 
 	let dump = withoutCarriageReturns(dumpRun.stdout)
 
@@ -91,20 +91,20 @@ test 'the sidecar names this build, this source and every function the fixture d
 	// build of every binary.
 	let reportedTarget = keyedDumpValue(dump, key: DumpTargetKey)
 	let hostTarget = hostTargetTriple()
-	try Expect.equal(reportedTarget, expected: hostTarget, message: "the dump does not name the target this host builds for on a `{DumpTargetKey}` line. A sidecar that does not say which target it describes cannot be refused when it is handed to the wrong one. The dump was: {dump}")
+	Expect.equal(reportedTarget, expected: hostTarget, message: "the dump does not name the target this host builds for on a `{DumpTargetKey}` line. A sidecar that does not say which target it describes cannot be refused when it is handed to the wrong one. The dump was: {dump}")
 
 	let buildId = keyedDumpValue(dump, key: DumpBuildIdKey)
-	try Expect.isTrue(hasNonZeroHexDigit(buildId), message: "the dump's `{DumpBuildIdKey}` is '{buildId}', which carries no non-zero digit. The build-id is what lets a driver refuse a sidecar describing a DIFFERENT build of the same binary; an all-zero one refuses nothing.")
+	Expect.isTrue(hasNonZeroHexDigit(buildId), message: "the dump's `{DumpBuildIdKey}` is '{buildId}', which carries no non-zero digit. The build-id is what lets a driver refuse a sidecar describing a DIFFERENT build of the same binary; an all-zero one refuses nothing.")
 
 	// The fixture's own source file, listed as a file this sidecar knows about.
 	let listedSources = dumpSectionRows(dump, heading: DumpFilesHeading)
-	try Expect.isTrue(anyRowNames(listedSources, name: StagedProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{StagedProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {renderedRows(listedSources)}")
+	Expect.isTrue(anyRowNames(listedSources, name: StagedProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{StagedProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {renderedRows(listedSources)}")
 
 	// Every function the FIXTURE declares — read out of the staged source, so a fixture that grows a
 	// function grows this roster with it — listed with a code range that is not empty.
 	let functionRows = dumpSectionRows(dump, heading: DumpFunctionsHeading)
 	let declared = declaredFunctionNames(staged)
-	try Expect.notEqual(declared.count() as AssertedInt, expected: 0, message: "sidecar-dump.test: no `{FunctionDeclarationPrefix}` line was found in the staged fixture, so this case would assert nothing at all about the function table.")
+	Expect.notEqual(declared.count() as AssertedInt, expected: 0, message: "sidecar-dump.test: no `{FunctionDeclarationPrefix}` line was found in the staged fixture, so this case would assert nothing at all about the function table.")
 
 	var missing = StringArray.create()
 	var degenerate = StringArray.create()
@@ -122,14 +122,14 @@ test 'the sidecar names this build, this source and every function the fixture d
 		end 'emptyRange'
 	end 'eachDeclaredFunction'
 
-	try Expect.isEmpty(renderedRows(missing), message: "the dump's `{DumpFunctionsHeading}…)` section lists no row for these functions, which the staged fixture DECLARES. A debugger cannot stop inside a function the sidecar does not know exists. The section held: {renderedRows(functionRows)}")
-	try Expect.isEmpty(renderedRows(degenerate), message: "these functions are listed with a code range whose end does not exceed its start, so the sidecar says they occupy no code and no offset can ever fall inside one.")
+	Expect.isEmpty(renderedRows(missing), message: "the dump's `{DumpFunctionsHeading}…)` section lists no row for these functions, which the staged fixture DECLARES. A debugger cannot stop inside a function the sidecar does not know exists. The section held: {renderedRows(functionRows)}")
+	Expect.isEmpty(renderedRows(degenerate), message: "these functions are listed with a code range whose end does not exceed its start, so the sidecar says they occupy no code and no offset can ever fall inside one.")
 
 	// ⭐ THE JOIN — an offset the dump published INSIDE one named function, asked of the other table.
 	let probeName = try declared.get(0) otherwise panic("sidecar-dump.test: a roster asserted non-empty has a first element")
 	let probeRow = functionRowNamed(functionRows, name: probeName)
 	let probeOffset = firstLineRowTokenWithin(dump, atLeast: codeRangeBound(probeRow, upper: false), below: codeRangeBound(probeRow, upper: true))
-	try Expect.notEqual(probeOffset, expected: "", message: "the dump's `{DumpLineTableHeading}…)` section holds no row inside `{probeName}`'s code range — its row reads `{probeRow}`. A function with a code range and no line rows is one a debugger can name and never stop in.")
+	Expect.notEqual(probeOffset, expected: "", message: "the dump's `{DumpLineTableHeading}…)` section holds no row inside `{probeName}`'s code range — its row reads `{probeRow}`. A function with a code range and no line rows is one a debugger can name and never stop in.")
 
 	var symbolizeArguments = StringArray.create()
 	symbolizeArguments.push(DebugSubcommandName)
@@ -137,16 +137,16 @@ test 'the sidecar names this build, this source and every function the fixture d
 	symbolizeArguments.push(executable.toString())
 	symbolizeArguments.push(probeOffset)
 	let symbolizeRun = spawnCompiler(symbolizeArguments, staged: staged, what: "the symbolize lookup")
-	try Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
+	Expect.equal(symbolizeRun.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {DebugSubcommandName} {SymbolizeOption} <exe> {probeOffset}` failed on an offset the dump itself published. It printed: {symbolizeRun.stdout} — and wrote to stderr: {symbolizeRun.stderr}")
 
 	let symbolized = withoutCarriageReturns(symbolizeRun.stdout)
-	try Expect.contains(symbolized, needle: StagedProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{StagedProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
+	Expect.contains(symbolized, needle: StagedProgramFileName, message: "`{SymbolizeOption}` resolved {probeOffset} — a row of this binary's own line table, inside `{probeName}` — without naming `{StagedProgramFileName}`. The offset came out of the sidecar being asked, so an answer naming another file, or none, is the two tables disagreeing.")
 
 	let resolvedLine = lineNumberAfter(symbolized, marker: StagedProgramFileName)
 	let bodyStart = sourceLineStartingWith(staged, prefix: "{FunctionDeclarationPrefix}{probeName}{DeclarationNameEnd}", what: "the declaration of `{probeName}`")
 	let bodyEnd = sourceLineStartingWith(staged, prefix: "{FunctionEndPrefix}{probeName}{FunctionEndSuffix}", what: "the `{FunctionEndPrefix}{probeName}{FunctionEndSuffix}` closing `{probeName}`")
-	try Expect.atLeast(resolvedLine as AssertedInt, than: bodyStart as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
-	try Expect.atMost(resolvedLine as AssertedInt, than: bodyEnd as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
+	Expect.atLeast(resolvedLine as AssertedInt, than: bodyStart as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
+	Expect.atMost(resolvedLine as AssertedInt, than: bodyEnd as AssertedInt, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
 end 'the sidecar names this build, this source and every function the fixture declares'
 
 // ============================================================================================

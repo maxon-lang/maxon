@@ -55,39 +55,39 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 	pinned.push("{TargetEnvFlagPrefix}{PinnedProcessorCount}")
 
 	let run = runProfiler(staged, extraArguments: pinned)
-	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {TargetEnvFlagPrefix}{PinnedProcessorCount}` did not complete a measurement of the green-thread fixture. `{TargetEnvFlagPrefix}` is the only way to pin the scheduler's worker count, and without it this profile measures the host as much as the program. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {TargetEnvFlagPrefix}{PinnedProcessorCount}` did not complete a measurement of the green-thread fixture. `{TargetEnvFlagPrefix}` is the only way to pin the scheduler's worker count, and without it this profile measures the host as much as the program. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
 	let lines = outputLines(run.stdout)
-	try Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything, so the ordering of the two green threads below would be a coin flip. It printed:{LineFeed}{run.stdout}")
-	try Expect.isTrue(reportHasLine(lines, wanted: HotFunctionsHeader), message: "the report carries no '{HotFunctionsHeader}' section, so nothing in it says which green thread ran. It printed:{LineFeed}{run.stdout}")
-	try Expect.isTrue(reportHasLine(lines, wanted: CallTreeHeader), message: "the report carries no '{CallTreeHeader}' section. It printed:{LineFeed}{run.stdout}")
-	try Expect.isTrue(reportHasLine(lines, wanted: StacksHeader), message: "the report carries no '{StacksHeader}' section, which is the only place the count of stacks that ran is stated. It printed:{LineFeed}{run.stdout}")
+	Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything, so the ordering of the two green threads below would be a coin flip. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLine(lines, wanted: HotFunctionsHeader), message: "the report carries no '{HotFunctionsHeader}' section, so nothing in it says which green thread ran. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLine(lines, wanted: CallTreeHeader), message: "the report carries no '{CallTreeHeader}' section. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLine(lines, wanted: StacksHeader), message: "the report carries no '{StacksHeader}' section, which is the only place the count of stacks that ran is stated. It printed:{LineFeed}{run.stdout}")
 
 	let samples = totalSamples(run.stdout, profilerLabel: TestedCompilerStem)
 
 	// ⭐ CLAIM 1 — the two tasks as themselves, ranked by the work the fixture gives them.
 	let selfTimeNames = rowNames(significantRows(sectionRows(lines, header: HotFunctionsHeader), totalSamples: samples))
-	try requireBothTasksRanked(selfTimeNames, section: HotFunctionsHeader, report: run.stdout)
+	requireBothTasksRanked(selfTimeNames, section: HotFunctionsHeader, report: run.stdout)
 
 	// The same two in the tree, where they are SIBLINGS: each hangs off the trampoline that started it, which
 	// is what a green thread's stack genuinely looks like from the outside.
 	let treeRows = significantRows(sectionRows(lines, header: CallTreeHeader), totalSamples: samples)
 	let treeNames = rowNames(treeRows)
-	try requireBothTasksRanked(treeNames, section: CallTreeHeader, report: run.stdout)
+	requireBothTasksRanked(treeNames, section: CallTreeHeader, report: run.stdout)
 
 	let busierColumn = nameColumn(treeRowFor(treeRows, names: treeNames, wanted: BusierTaskName))
 	let quieterColumn = nameColumn(treeRowFor(treeRows, names: treeNames, wanted: QuieterTaskName))
-	try Expect.equal(busierColumn as AssertedInt, expected: quieterColumn as AssertedInt, message: "the call tree indents `{BusierTaskName}` and `{QuieterTaskName}` differently, though neither called the other: two green threads are siblings under the frame that spawned them. A difference here means one task's stack was walked into the other's. It printed:{LineFeed}{renderedRows(treeRows)}")
+	Expect.equal(busierColumn as AssertedInt, expected: quieterColumn as AssertedInt, message: "the call tree indents `{BusierTaskName}` and `{QuieterTaskName}` differently, though neither called the other: two green threads are siblings under the frame that spawned them. A difference here means one task's stack was walked into the other's. It printed:{LineFeed}{renderedRows(treeRows)}")
 
 	// ⭐ CLAIM 2 — two stacks, because two green threads ran. Nothing enumerated them; their stack allocations
 	// did.
 	let stackNames = rowNames(significantRows(sectionRows(lines, header: StacksHeader), totalSamples: samples))
-	try Expect.equal(stackNames.count() as AssertedInt, expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{renderedRows(stackNames)}")
+	Expect.equal(stackNames.count() as AssertedInt, expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{renderedRows(stackNames)}")
 
 	// ⭐⭐ CLAIM 3 — and the scheduler is nowhere, at any floor, in any section. Asserted over the WHOLE report
 	// rather than over the rows above a floor: a scheduler summarized into a "not shown" count is still a
 	// scheduler that was sampled.
-	try Expect.isFalse(withoutCarriageReturns(run.stdout).contains(SchedulerWorkerLoopName), message: "`{SchedulerWorkerLoopName}` appears in the profile. It is the loop a worker runs BETWEEN green threads, and a sampler that attributed a task's samples to it would report every Maxon program as spending its life in the scheduler — burying the work under the machinery that dispatched it. The symbol is in this fixture's own sidecar, so naming it is something the profiler can do and must not. It printed:{LineFeed}{run.stdout}")
+	Expect.isFalse(withoutCarriageReturns(run.stdout).contains(SchedulerWorkerLoopName), message: "`{SchedulerWorkerLoopName}` appears in the profile. It is the loop a worker runs BETWEEN green threads, and a sampler that attributed a task's samples to it would report every Maxon program as spending its life in the scheduler — burying the work under the machinery that dispatched it. The symbol is in this fixture's own sidecar, so naming it is something the profiler can do and must not. It printed:{LineFeed}{run.stdout}")
 end 'two green threads are profiled as themselves and the scheduler is not'
 
 // Both tasks present, and the busier one first — asked of two sections, so it is written once.

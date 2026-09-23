@@ -4,15 +4,15 @@ let UnterminatedMethodLocalLine = 4 as LspCoordinate
 let UnterminatedMethodLocalCharacter = 14 as LspCoordinate
 
 test 'receiver type: a local in an unterminated method is not a field'
-	let control = try hoverRendering(unterminatedMethodFixture(), line: UnterminatedMethodFieldLine, character: UnterminatedMethodFieldCharacter)
+	let control = hoverRendering(unterminatedMethodFixture(), line: UnterminatedMethodFieldLine, character: UnterminatedMethodFieldCharacter)
 
-	try Expect.contains(control, needle: "Field of `Point`", message: "hovering the real field `total` on line 2 did not call it a field of `Point`. This buffer CANNOT COMPILE — `scale()` has no `end` — so the build guard every other fixture leans on is unavailable here, and this control is the only thing saying the server lexed the document at all. Without it the absence asserted below would pass on a buffer nothing read. It rendered: {control}")
+	Expect.contains(control, needle: "Field of `Point`", message: "hovering the real field `total` on line 2 did not call it a field of `Point`. This buffer CANNOT COMPILE — `scale()` has no `end` — so the build guard every other fixture leans on is unavailable here, and this control is the only thing saying the server lexed the document at all. Without it the absence asserted below would pass on a buffer nothing read. It rendered: {control}")
 
-	let rendering = try hoverRendering(unterminatedMethodFixture(), line: UnterminatedMethodLocalLine, character: UnterminatedMethodLocalCharacter)
+	let rendering = hoverRendering(unterminatedMethodFixture(), line: UnterminatedMethodLocalLine, character: UnterminatedMethodLocalCharacter)
 
-	try Expect.contains(rendering, needle: "Local variable", message: "hovering `factor` did not call it a local variable. It is declared inside `scale()`, which has not been given its `end` yet — the state a method is in for as long as it takes to write one. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "Local variable", message: "hovering `factor` did not call it a local variable. It is declared inside `scale()`, which has not been given its `end` yet — the state a method is in for as long as it takes to write one. It rendered: {rendering}")
 
-	try Expect.isFalse(rendering.contains("Field of"), message: "hovering `factor` called it a FIELD of the enclosing type. Nothing makes it look like one but the missing `end`: with no block covering the method's body, the type appears to hold the method's lines directly. It rendered: {rendering}")
+	Expect.isFalse(rendering.contains("Field of"), message: "hovering `factor` called it a FIELD of the enclosing type. Nothing makes it look like one but the missing `end`: with no block covering the method's body, the type appears to hold the method's lines directly. It rendered: {rendering}")
 end 'receiver type: a local in an unterminated method is not a field'
 
 function unterminatedMethodFixture() returns String

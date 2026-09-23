@@ -25,21 +25,21 @@ test 'a self-rebuild that fails to compile leaves the running image in the slot,
 	try File.writeText(broken, content: BrokenSource) otherwise panic("could not write {broken.path}")
 
 	let failed = rebuildOwnImage(dir, compiler: compiler, program: broken)
-	try Expect.equal(failed.exitCode() as AssertedInt, expected: CompileErrorExit, message: "`{BuildCommandName} {BrokenFileName} {OutputOptionPrefix}{imageName}` names an undeclared value and should fail to compile. It exited {failed.exitCode()} and said: {failed.stderr}")
+	Expect.equal(failed.exitCode() as AssertedInt, expected: CompileErrorExit, message: "`{BuildCommandName} {BrokenFileName} {OutputOptionPrefix}{imageName}` names an undeclared value and should fail to compile. It exited {failed.exitCode()} and said: {failed.stderr}")
 
-	try Expect.isTrue(File.exists(compiler), message: "a self-rebuild that failed to compile left no {imageName} in the slot, so nothing is left to build the fix. It said: {failed.stderr}")
+	Expect.isTrue(File.exists(compiler), message: "a self-rebuild that failed to compile left no {imageName} in the slot, so nothing is left to build the fix. It said: {failed.stderr}")
 	let keptBytes = try File.readBinary(compiler) otherwise panic("could not read back {compiler.path}")
-	try Expect.isTrue(keptBytes.equals(originalBytes), message: "{imageName} should still be the running compiler ({originalBytes.count()} bytes) after a failed self-rebuild; it holds {keptBytes.count()} bytes that differ.")
+	Expect.isTrue(keptBytes.equals(originalBytes), message: "{imageName} should still be the running compiler ({originalBytes.count()} bytes) after a failed self-rebuild; it holds {keptBytes.count()} bytes that differ.")
 
 	let previous = dir.join("{CompilerStem}{PreviousInfix}{executableSuffix()}")
-	try Expect.isFalse(File.exists(previous), message: "a self-rebuild that failed to compile moved its image to {previous.path}; nothing should be vacated before the compile succeeds.")
+	Expect.isFalse(File.exists(previous), message: "a self-rebuild that failed to compile moved its image to {previous.path}; nothing should be vacated before the compile succeeds.")
 
 	let fixed = dir.join(FixedFileName)
 	try File.writeText(fixed, content: printingProgramSource(KnownLine)) otherwise panic("could not write {fixed.path}")
 
 	let rebuilt = rebuildOwnImage(dir, compiler: compiler, program: fixed)
-	try Expect.equal(rebuilt.exitCode() as AssertedInt, expected: 0, message: "the compiler a failed self-rebuild left in the slot could not build again. It exited {rebuilt.exitCode()} and said: {rebuilt.stderr}")
+	Expect.equal(rebuilt.exitCode() as AssertedInt, expected: 0, message: "the compiler a failed self-rebuild left in the slot could not build again. It exited {rebuilt.exitCode()} and said: {rebuilt.stderr}")
 
 	let built = runIn(dir, binary: compiler, arguments: StringArray.create())
-	try Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the second build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
+	Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the second build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
 end 'a self-rebuild that fails to compile leaves the running image in the slot, and it can build again'

@@ -67,22 +67,22 @@ test 'collapsed stacks carry every path the fixture runs, whatever floor the too
 	arguments.push("{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}")
 
 	let run = spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FoldedFlag}`")
-	try Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} … {FoldedFlag}` did not complete a measurement. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode() as AssertedInt, expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} … {FoldedFlag}` did not complete a measurement. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
-	let paths = try foldedPathsAboveFloor(run.stdout)
+	let paths = foldedPathsAboveFloor(run.stdout)
 
 	// ⭐ THE HEADLINE, and its own positive control: a `--folded` that honoured `--min-percent` would leave
 	// exactly one of these, and a run that measured nothing would leave none.
-	try Expect.equal(paths.count() as AssertedInt, expected: FoldedPathCount, message: "`{FoldedFlag}` printed {paths.count()} path(s) worth at least {FoldedSampleFloor} samples, and the fixture runs exactly {FoldedPathCount}: `{InteriorFrameName}` calls two leaves and nothing else in the program does work. ONE path would mean the format honoured the `{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}` it was handed, which it must not — a flamegraph tool wants every path and thresholds for itself. It printed:{LineFeed}{run.stdout}")
+	Expect.equal(paths.count() as AssertedInt, expected: FoldedPathCount, message: "`{FoldedFlag}` printed {paths.count()} path(s) worth at least {FoldedSampleFloor} samples, and the fixture runs exactly {FoldedPathCount}: `{InteriorFrameName}` calls two leaves and nothing else in the program does work. ONE path would mean the format honoured the `{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}` it was handed, which it must not — a flamegraph tool wants every path and thresholds for itself. It printed:{LineFeed}{run.stdout}")
 
-	try requirePathEndsWith(paths, position: HottestPathPosition, leaf: HotFunctionName)
-	try requirePathEndsWith(paths, position: SecondPathPosition, leaf: WarmFunctionName)
+	requirePathEndsWith(paths, position: HottestPathPosition, leaf: HotFunctionName)
+	requirePathEndsWith(paths, position: SecondPathPosition, leaf: WarmFunctionName)
 
 	// ⛔ AND THAT SOMETHING LIES BELOW `main`. A collapsed stack is a whole path from the outermost frame in,
 	// so a format that started at the program's own entry point would be dropping frames it walked.
 	let hottest = try paths.get(HottestPathPosition) otherwise panic("profile-folded.test: a list whose count was just asserted has a first element")
 	let root = try hottest.split(FoldedFrameSeparator).get(0) otherwise panic("profile-folded.test: a split always has a first element")
-	try Expect.notEqual(root, expected: ProgramEntryFrameName, message: "the collapsed path `{hottest}` opens at `{ProgramEntryFrameName}`, the program's own entry point. Every stack bottoms out in runtime code below it, so a path that starts there has lost the frames the walker had to cross to reach it.")
+	Expect.notEqual(root, expected: ProgramEntryFrameName, message: "the collapsed path `{hottest}` opens at `{ProgramEntryFrameName}`, the program's own entry point. Every stack bottoms out in runtime code below it, so a path that starts there has lost the frames the walker had to cross to reach it.")
 end 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
 
 // One path's tail, which is the part of it the FIXTURE decides: `…;main;work;<leaf>`.

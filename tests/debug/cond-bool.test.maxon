@@ -13,7 +13,7 @@ test 'a breakpoint conditioned on a bool local stops only where the fixture make
 	let hitLine = anchorLine(staged, anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
-	try Expect.atLeast(iterations as AssertedInt, than: 2, message: "the fixture must run the anchored line more than once, or a bool condition says nothing. It ran it {iterations} times.")
+	Expect.atLeast(iterations as AssertedInt, than: 2, message: "the fixture must run the anchored line more than once, or a bool condition says nothing. It ran it {iterations} times.")
 
 	var armings = StringArray.create()
 	armings.push(conditionalBreak(lineTarget(hitLine), condition: ConditionText))
@@ -26,27 +26,27 @@ test 'a breakpoint conditioned on a bool local stops only where the fixture make
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	try Expect.equal(armings.count() as AssertedInt, expected: 1, message: "`{conditionalBreak(lineTarget(hitLine), condition: ConditionText)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(armings.count() as AssertedInt, expected: 1, message: "`{conditionalBreak(lineTarget(hitLine), condition: ConditionText)}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(armings, index: 0)
-	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "a bool local compared against a literal is a condition the agent can evaluate, so the breakpoint must be ARMED. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "a bool local compared against a literal is a condition the agent can evaluate, so the breakpoint must be ARMED. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the fixture sets the bool local on one of its {iterations} iterations, so the session must stop. It printed: {renderedRows(eventKinds(events))}. {said}")
-	try Expect.lessThan(stops.count() as AssertedInt, than: iterations as AssertedInt, message: "the bool is true on ONE of the {iterations} iterations, so the rest must be resumed silently. It stopped {stops.count()} times. {said}")
-	try Expect.equal(stopsAtLine(events, line: hitLine) as AssertedInt, expected: stops.count() as AssertedInt, message: "every stop of this session must be on the anchored line. {said}")
+	Expect.atLeast(stops.count() as AssertedInt, than: 1, message: "the fixture sets the bool local on one of its {iterations} iterations, so the session must stop. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.lessThan(stops.count() as AssertedInt, than: iterations as AssertedInt, message: "the bool is true on ONE of the {iterations} iterations, so the rest must be resumed silently. It stopped {stops.count()} times. {said}")
+	Expect.equal(stopsAtLine(events, line: hitLine) as AssertedInt, expected: stops.count() as AssertedInt, message: "every stop of this session must be on the anchored line. {said}")
 
 	let printed = eventsOfKind(events, kind: ValueEventName)
-	try Expect.equal(printed.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {LoopLocalName}` at the stop printed no `{ValueEventName}` event. {said}")
+	Expect.equal(printed.count() as AssertedInt, expected: 1, message: "`{PrintCommand} {LoopLocalName}` at the stop printed no `{ValueEventName}` event. {said}")
 
 	let value = eventAt(printed, index: 0)
 	let read = memberOf(value, node: value.root, key: ValueKey)
-	try Expect.equal(read.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
-	try Expect.equal(textOf(value, node: nodeAt(read, index: 0), key: DisplayKey), expected: FlagTrueIteration, message: "⭐ A BOOL IS ONE BYTE WIDE AND EVERY OTHER ITERATION LEAVES A NONZERO BYTE IN THAT SLOT'S NEIGHBOURHOOD. The stop must be on the iteration the fixture sets the flag on, which is the one this local reads {FlagTrueIteration} at. {said}")
+	Expect.equal(read.count() as AssertedInt, expected: 1, message: "the `{ValueEventName}` event carries no `{ValueKey}`. {said}")
+	Expect.equal(textOf(value, node: nodeAt(read, index: 0), key: DisplayKey), expected: FlagTrueIteration, message: "⭐ A BOOL IS ONE BYTE WIDE AND EVERY OTHER ITERATION LEAVES A NONZERO BYTE IN THAT SLOT'S NEIGHBOURHOOD. The stop must be on the iteration the fixture sets the flag on, which is the one this local reads {FlagTrueIteration} at. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the conditionally debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the conditionally debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'a breakpoint conditioned on a bool local stops only where the fixture makes that local true'

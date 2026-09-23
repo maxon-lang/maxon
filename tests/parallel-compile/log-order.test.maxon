@@ -45,7 +45,7 @@ test 'the per-function log lines come out in declaration order at one processor 
 
 	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: arguments, singleProcessor: true)
 	let pinnedExit = pinnedRun.exitCode() as AssertedInt
-	try Expect.equal(pinnedExit, expected: 0, message: "the log program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
+	Expect.equal(pinnedExit, expected: 0, message: "the log program did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
 
 	// Moved aside so the second build is handed the same output path with nothing at it, exactly as the
 	// first was: the processor count is then the only difference between the two runs compared.
@@ -53,13 +53,13 @@ test 'the per-function log lines come out in declaration order at one processor 
 
 	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: arguments, singleProcessor: false)
 	let defaultExit = defaultRun.exitCode() as AssertedInt
-	try Expect.equal(defaultExit, expected: 0, message: "the log program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
+	Expect.equal(defaultExit, expected: 0, message: "the log program did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
 
 	let pinnedStderr = normalizedStderr(pinnedRun, staged: staged)
 	let defaultStderr = normalizedStderr(defaultRun, staged: staged)
 
-	try requireDeclarationOrder(pinnedStderr, declared: declaredFunctionNames(staged))
-	try Expect.equal(defaultStderr, expected: pinnedStderr, message: "`{IrTraceLogFlag}` reads differently at the default processor count than pinned to one. The per-function passes must log each function's lines in function-index order whichever worker ran it and in whatever order the pool finished; a difference here is the pool's order reaching the log.")
+	requireDeclarationOrder(pinnedStderr, declared: declaredFunctionNames(staged))
+	Expect.equal(defaultStderr, expected: pinnedStderr, message: "`{IrTraceLogFlag}` reads differently at the default processor count than pinned to one. The per-function passes must log each function's lines in function-index order whichever worker ran it and in whatever order the pool finished; a difference here is the pool's order reaching the log.")
 end 'the per-function log lines come out in declaration order at one processor and at the default'
 
 // The passes whose per-function lines name EVERY function of the fixture, by construction of the fixture:

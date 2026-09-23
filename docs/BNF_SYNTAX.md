@@ -225,7 +225,8 @@ the same two tokens, and only the declaration position separates them.
 
 Every test implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`); the
 clause is never written and cannot be. A `test_decl` is legal only in a file whose
-name ends in `.test.maxon`.
+name ends in `.test.maxon`. Inside a test body a throwing call, interface call or `await`
+needs no `try`: the test handles the error.
 
 ### 3.1 Function Declaration
 
@@ -706,7 +707,7 @@ panic_stmt    = 'panic' '(' ( STRING | STRING_INTERP ) ')'
 
 ```
 try_stmt      = 'try' expression 'otherwise' otherwise_clause
-              | 'try' expression                                (* propagation — only in throwing functions *)
+              | 'try' expression                                (* propagation — only in throwing functions and tests *)
               | try_block
 
 otherwise_clause
@@ -718,8 +719,8 @@ otherwise_clause
                 body
                 'end' LABEL
 
-(* try block wraps multiple throwing calls under a shared handler. Inside the body,
-   bare calls to throwing functions do not require the `try` keyword. The block-handler
+(* try block wraps multiple throwing operations under a shared handler. Inside the body,
+   bare throwing calls, interface calls and awaits do not require the `try` keyword. The block-handler
    form must contain a match on the error binding; the terminal forms either panic or
    re-throw, and may bind `(e)` for use in the panic message or throw expression. *)
 try_block     = 'try' LABEL NEWLINE
@@ -919,7 +920,7 @@ cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a coroutine
 **Restrictions:**
 - `async` can only be applied to direct function calls (not closures or indirect calls)
 - `async` target function must yield (contain I/O operations or `await` points)
-- Throwing async functions require `try await` (not plain `await`)
+- Throwing async functions require `try await` (not plain `await`), except inside a try block or a test body
 
 
 ### 6.7 Spawn Expressions

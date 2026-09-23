@@ -15,16 +15,16 @@ test 'a command the short list hides is still accepted by the parser'
 
 	// It refused for want of an argument, which is the point: it got as far as the COMMAND.
 	let observedExit = run.exitCode() as AssertedInt
-	try Expect.equal(observedExit, expected: 1, message: "`maxon {HiddenCheapCommand}` with no argument should refuse, naming what it wanted. It said: {run.stdout}{run.stderr}")
+	Expect.equal(observedExit, expected: 1, message: "`maxon {HiddenCheapCommand}` with no argument should refuse, naming what it wanted. It said: {run.stdout}{run.stderr}")
 
-	try Expect.contains(run.stderr, needle: HiddenCheapCommand, message: "`maxon {HiddenCheapCommand}` did not answer as itself. It said: {run.stderr}")
+	Expect.contains(run.stderr, needle: HiddenCheapCommand, message: "`maxon {HiddenCheapCommand}` did not answer as itself. It said: {run.stderr}")
 
 	// ⛔ The failure this case exists to catch, spelled out: the word reaching the parser as a stranger.
 	let refusedAsUnknown = run.stderr.contains(UnknownCommandPhrase)
-	try Expect.isFalse(refusedAsUnknown, message: "`maxon {HiddenCheapCommand}` was refused as an unknown command. It is left out of the short LIST on purpose; leaving it out of the PARSER withdraws it. It said: {run.stderr}")
+	Expect.isFalse(refusedAsUnknown, message: "`maxon {HiddenCheapCommand}` was refused as an unknown command. It is left out of the short LIST on purpose; leaving it out of the PARSER withdraws it. It said: {run.stderr}")
 
 	// And the short list really does leave it out — otherwise this case is about an ordinary command.
 	let advertised = labelledWordsIn(runWithNoArguments().stdout)
 	let advertisedAfterAll = advertised.contains(HiddenCheapCommand)
-	try Expect.isFalse(advertisedAfterAll, message: "`{HiddenCheapCommand}` is advertised by the short list, so this case is no longer about a hidden command. Name a hidden one that refuses instantly, or drop the case.")
+	Expect.isFalse(advertisedAfterAll, message: "`{HiddenCheapCommand}` is advertised by the short list, so this case is no longer about a hidden command. Name a hidden one that refuses instantly, or drop the case.")
 end 'a command the short list hides is still accepted by the parser'

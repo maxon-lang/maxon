@@ -9,20 +9,20 @@ test 'threads asked after the program has exited says the program is gone, not t
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program must run to its end before this case asks anything, or the answer below would be about a live program. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program must run to its end before this case asks anything, or the answer below would be about a live program. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
 
-	try Expect.equal(eventsOfKind(events, kind: ThreadsEventName).count() as AssertedInt, expected: 0, message: "there is no process to hold a roster, so `{ThreadsCommand}` must not answer one. {said}")
+	Expect.equal(eventsOfKind(events, kind: ThreadsEventName).count() as AssertedInt, expected: 0, message: "there is no process to hold a roster, so `{ThreadsCommand}` must not answer one. {said}")
 
 	let errors = eventsOfKind(events, kind: ErrorEventName)
-	try Expect.equal(errors.count() as AssertedInt, expected: 1, message: "a command issued after the program has exited is answered with one `{ErrorEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(errors.count() as AssertedInt, expected: 1, message: "a command issued after the program has exited is answered with one `{ErrorEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let answered = eventAt(errors, index: 0)
 	let message = textOf(answered, node: answered.root, key: MessageKey)
 
-	try Expect.contains(message, needle: ProgramGoneText, message: "the refusal must say that the program is no longer running, which is the fact a reader can act on. It said '{message}'. {said}")
-	try Expect.isFalse(message.contains(GreenThreadPlaceholderText), message: "⛔ THE STAGE-1 PLACEHOLDER IS THE ONE WRONG ANSWER THAT READS AS A RIGHT ONE. `{ThreadsCommand}` arrived with green-thread support, so a driver still answering that it is coming is one whose new command never reached the dispatch table — and the reader is told to wait for something that is already here. It said '{message}'. {said}")
-	try Expect.equal(session.exitCode() as AssertedInt, expected: 0, message: "a command answered after the program ended does not change the driver's exit code; the session completed. {said}")
+	Expect.contains(message, needle: ProgramGoneText, message: "the refusal must say that the program is no longer running, which is the fact a reader can act on. It said '{message}'. {said}")
+	Expect.isFalse(message.contains(GreenThreadPlaceholderText), message: "⛔ THE STAGE-1 PLACEHOLDER IS THE ONE WRONG ANSWER THAT READS AS A RIGHT ONE. `{ThreadsCommand}` arrived with green-thread support, so a driver still answering that it is coming is one whose new command never reached the dispatch table — and the reader is told to wait for something that is already here. It said '{message}'. {said}")
+	Expect.equal(session.exitCode() as AssertedInt, expected: 0, message: "a command answered after the program ended does not change the driver's exit code; the session completed. {said}")
 end 'threads asked after the program has exited says the program is gone, not that the feature is coming'

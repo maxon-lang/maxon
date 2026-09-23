@@ -174,7 +174,7 @@ test 'every fixture case is invoked by name'
 	end 'eachCase'
 
 	let listed = listedLines(uninvoked)
-	try Expect.isEmpty(listed, message: "these case directories under {FixturesDirName} are never invoked from {SharedHelperFileName}. Each one needs a `test` that calls `checkFixture(\"<case>\")`; a fixture nothing runs proves nothing and reads exactly like one that passed.")
+	Expect.isEmpty(listed, message: "these case directories under {FixturesDirName} are never invoked from {SharedHelperFileName}. Each one needs a `test` that calls `checkFixture(\"<case>\")`; a fixture nothing runs proves nothing and reads exactly like one that passed.")
 end 'every fixture case is invoked by name'
 
 // ⛔⛔ **NOTHING STORED IN THIS CORPUS MAY BE A LIVE `.maxon`, AND THE HAZARD IS THE TOOL UNDER TEST
@@ -194,7 +194,7 @@ end 'every fixture case is invoked by name'
 // compilers' build walks drop them, so they are the one live thing that may sit here.
 test 'no fixture is stored as a source maxon fmt would rewrite'
 	let live = listedLines(liveSourcesUnder(readableDir(ProjectDirName)))
-	try Expect.isEmpty(live, message: "these files under {ProjectDirName} are LIVE Maxon sources, so `maxon fmt` over this checkout would rewrite them — and under {FixturesDirName} that means the tool under test editing its own oracle. Store a fixture source as `<name>{StoredFixtureSuffix}`; do NOT add a `.maxonignore`, which would hide the corpus from the command it exists to gate and break the two `maxonignore` cases outright.")
+	Expect.isEmpty(live, message: "these files under {ProjectDirName} are LIVE Maxon sources, so `maxon fmt` over this checkout would rewrite them — and under {FixturesDirName} that means the tool under test editing its own oracle. Store a fixture source as `<name>{StoredFixtureSuffix}`; do NOT add a `.maxonignore`, which would hide the corpus from the command it exists to gate and break the two `maxonignore` cases outright.")
 end 'no fixture is stored as a source maxon fmt would rewrite'
 
 // ⛔⛔ **AN OPTION TYPED AHEAD OF THE WORD `fmt` MUST STILL BE REFUSED — AND THIS IS THE ONLY CASE
@@ -226,10 +226,10 @@ test 'an option ahead of the command word is still refused'
 	arguments.push(TestedCommandName)
 	let run = spawnCompiler(arguments, workingDirectory: staged, what: "the option-ahead-of-command probe")
 
-	try Expect.notEqual(run.exitCode() as AssertedInt, expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
+	Expect.notEqual(run.exitCode() as AssertedInt, expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
 
 	let after = fileBody(staged.join("Ugly.maxon"))
-	try Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
+	Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
 end 'an option ahead of the command word is still refused'
 
 // ⭐⭐ **A LIBRARY TIER HOLDS NO MANIFEST, SO `stdlib/Build.maxon` IS FORMATTED.** The manifest name is
@@ -261,10 +261,10 @@ test 'a library tier formats its Build.maxon and a project still skips its manif
 	end 'spawnFailed'
 
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
-	try Expect.equal(run.exitCode() as AssertedInt, expected: SuccessExitCode, message: "`{TestedCommandName}` over a tree holding a library tier did not succeed. {said}")
-	try Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(1, unchanged: 0), message: "`{TestedCommandName}` did not visit exactly one file: the library tier's `Build.maxon` must be formatted and the project's `project.maxon` never reached. {said}")
-	try Expect.notEqual(fileBody(librarySource), expected: unformatted, message: "`stdlib/Build.maxon` was left unformatted: the walk read library source as a build manifest. {said}")
-	try Expect.equal(fileBody(manifest), expected: unformatted, message: "the project's `project.maxon` was rewritten: a manifest outside a library tier must not be walked. {said}")
+	Expect.equal(run.exitCode() as AssertedInt, expected: SuccessExitCode, message: "`{TestedCommandName}` over a tree holding a library tier did not succeed. {said}")
+	Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(1, unchanged: 0), message: "`{TestedCommandName}` did not visit exactly one file: the library tier's `Build.maxon` must be formatted and the project's `project.maxon` never reached. {said}")
+	Expect.notEqual(fileBody(librarySource), expected: unformatted, message: "`stdlib/Build.maxon` was left unformatted: the walk read library source as a build manifest. {said}")
+	Expect.equal(fileBody(manifest), expected: unformatted, message: "the project's `project.maxon` was rewritten: a manifest outside a library tier must not be walked. {said}")
 end 'a library tier formats its Build.maxon and a project still skips its manifest'
 
 // ============================================================================================
@@ -859,7 +859,7 @@ end 'listing'
 // found the file and decided against it, which is a different fact from never having found it.
 //
 test 'an already-formatted source is found and left alone'
-	try checkFixture("already-formatted")
+	checkFixture("already-formatted")
 end 'an already-formatted source is found and left alone'
 
 // build-manifest-case-folded.test.maxon — the build manifest is recognised WITHOUT REGARD TO
@@ -870,7 +870,7 @@ end 'an already-formatted source is found and left alone'
 // which is a different implementation passing the same stdout check.
 //
 test 'a manifest named PROJECT.maxon is skipped like project.maxon'
-	try checkFixture("build-manifest-case-folded")
+	checkFixture("build-manifest-case-folded")
 end 'a manifest named PROJECT.maxon is skipped like project.maxon'
 
 // build-manifest-skipped.test.maxon — a directory walk formats the sources and never reaches the
@@ -881,7 +881,7 @@ end 'a manifest named PROJECT.maxon is skipped like project.maxon'
 // and declined, it would be counted as unchanged.
 //
 test 'a directory walk formats the sources and never visits project.maxon'
-	try checkFixture("build-manifest-skipped")
+	checkFixture("build-manifest-skipped")
 end 'a directory walk formats the sources and never visits project.maxon'
 
 // command-word-as-path — ⛔⛔ **A DIRECTORY WHOSE NAME SPELLS A COMMAND IS STILL A PATH, AND THE
@@ -897,7 +897,7 @@ end 'a directory walk formats the sources and never visits project.maxon'
 // a run that named nothing and wrote nothing would read the same as this one.
 //
 test 'a directory whose name spells a command is still a path'
-	try checkFixture("command-word-as-path")
+	checkFixture("command-word-as-path")
 end 'a directory whose name spells a command is still a path'
 
 // directory-walk.test.maxon — a directory argument reaches every `.maxon` beneath it at every
@@ -905,7 +905,7 @@ end 'a directory whose name spells a command is still a path'
 // depends on the filesystem's listing order cannot be diffed between two compilers at all.
 //
 test 'a directory argument formats every source beneath it, at any depth'
-	try checkFixture("directory-walk")
+	checkFixture("directory-walk")
 end 'a directory argument formats every source beneath it, at any depth'
 
 // empty-directory.test.maxon — a tree holding no Maxon source at all is not an error and not a
@@ -913,7 +913,7 @@ end 'a directory argument formats every source beneath it, at any depth'
 // non-source file must be neither formatted nor counted.
 //
 test 'a tree with no Maxon source reports nothing found and succeeds'
-	try checkFixture("empty-directory")
+	checkFixture("empty-directory")
 end 'a tree with no Maxon source reports nothing found and succeeds'
 
 // flag-refused-implemented-option.test.maxon — ⛔⛔ **THE DANGEROUS HALF OF THE FLAG REFUSAL, AND THE
@@ -929,7 +929,7 @@ end 'a tree with no Maxon source reports nothing found and succeeds'
 // for the ORDERING half — the two together are what close it.
 //
 test 'an option this driver implements is still refused rather than swallowed'
-	try checkFixture("flag-refused-implemented-option")
+	checkFixture("flag-refused-implemented-option")
 end 'an option this driver implements is still refused rather than swallowed'
 
 // flag-refused-no-path.test.maxon — the same refusal with NO path beside the option, which is the
@@ -939,7 +939,7 @@ end 'an option this driver implements is still refused rather than swallowed'
 // rewrite.
 //
 test 'an option with no path is refused rather than falling back to the working directory'
-	try checkFixture("flag-refused-no-path")
+	checkFixture("flag-refused-no-path")
 end 'an option with no path is refused rather than falling back to the working directory'
 
 // flag-refused.test.maxon — ⛔ **THE FIXTURE THAT GATES A DESTRUCTIVE REGRESSION.** `fmt` takes no
@@ -952,7 +952,7 @@ end 'an option with no path is refused rather than falling back to the working d
 // Run from the checkout root, this fixture would reproduce the incident instead of gating it.
 //
 test 'an unrecognized option is refused on stderr and nothing is written'
-	try checkFixture("flag-refused")
+	checkFixture("flag-refused")
 end 'an unrecognized option is refused on stderr and nothing is written'
 
 // git-at-root-not-pruned.test.maxon — ⭐⭐ **ONE HALF OF A PAIR THAT FAILS IN OPPOSITE DIRECTIONS,
@@ -966,7 +966,7 @@ end 'an unrecognized option is refused on stderr and nothing is written'
 // passes its partner and fails this one. Only the two together say where the boundary is.
 //
 test 'a .git at the traversal root does not prune the walk'
-	try checkFixture("git-at-root-not-pruned")
+	checkFixture("git-at-root-not-pruned")
 end 'a .git at the traversal root does not prune the walk'
 
 // maxonignore-above-root.test.maxon — a `.maxonignore` excludes a directory the walk DISCOVERS, and
@@ -978,7 +978,7 @@ end 'a .git at the traversal root does not prune the walk'
 // for the same reason. Naming a path is an instruction, whether it names a file or a directory.
 //
 test 'a .maxonignore above the named directory does not exclude it'
-	try checkFixture("maxonignore-above-root")
+	checkFixture("maxonignore-above-root")
 end 'a .maxonignore above the named directory does not exclude it'
 
 // maxonignore-pruned.test.maxon — a `.maxonignore` prunes its whole subtree from a directory walk,
@@ -986,7 +986,7 @@ end 'a .maxonignore above the named directory does not exclude it'
 // directory is formatted and the two inside it are never counted at all.
 //
 test 'a .maxonignore prunes its entire subtree from a walk'
-	try checkFixture("maxonignore-pruned")
+	checkFixture("maxonignore-pruned")
 end 'a .maxonignore prunes its entire subtree from a walk'
 
 // named-path-escapes-ignore.test.maxon — a file named ON THE COMMAND LINE is formatted even though
@@ -997,7 +997,7 @@ end 'a .maxonignore prunes its entire subtree from a walk'
 // nothing.
 //
 test 'a file named on the command line is formatted despite a .maxonignore'
-	try checkFixture("named-path-escapes-ignore")
+	checkFixture("named-path-escapes-ignore")
 end 'a file named on the command line is formatted despite a .maxonignore'
 
 // named-path-escapes-manifest.test.maxon — the build manifest is skipped by the WALK, not exempted
@@ -1006,7 +1006,7 @@ end 'a file named on the command line is formatted despite a .maxonignore'
 // is the half that would go red if they were.
 //
 test 'a build manifest named on the command line is formatted'
-	try checkFixture("named-path-escapes-manifest")
+	checkFixture("named-path-escapes-manifest")
 end 'a build manifest named on the command line is formatted'
 
 // nested-git-pruned.test.maxon — ⭐⭐ **ONE HALF OF A PAIR THAT FAILS IN OPPOSITE DIRECTIONS, AND
@@ -1021,7 +1021,7 @@ end 'a build manifest named on the command line is formatted'
 // the boundary is.
 //
 test 'a .git below the traversal root prunes its subtree, as a directory and as a file'
-	try checkFixture("nested-git-pruned")
+	checkFixture("nested-git-pruned")
 end 'a .git below the traversal root prunes its subtree, as a directory and as a file'
 
 // no-argument-defaults-to-cwd.test.maxon — `fmt` with no path formats the WORKING DIRECTORY. That
@@ -1034,7 +1034,7 @@ end 'a .git below the traversal root prunes its subtree, as a directory and as a
 // substitutions their `normalized` / `normalize` must agree on.
 //
 test 'no argument formats the working directory'
-	try checkFixture("no-argument-defaults-to-cwd")
+	checkFixture("no-argument-defaults-to-cwd")
 end 'no argument formats the working directory'
 
 // path-not-found.test.maxon — a path that is not there is a refusal on stderr with exit 1, NOT a
@@ -1043,7 +1043,7 @@ end 'no argument formats the working directory'
 // different door.
 //
 test 'a path that does not exist is refused, and the real source beside it is untouched'
-	try checkFixture("path-not-found")
+	checkFixture("path-not-found")
 end 'a path that does not exist is refused, and the real source beside it is untouched'
 
 // section-separator-file.test.maxon — a spec fragment named on the command line is formatted even
@@ -1052,7 +1052,7 @@ end 'a path that does not exist is refused, and the real source beside it is unt
 // decides.
 //
 test 'a named file is formatted whatever its extension'
-	try checkFixture("section-separator-file")
+	checkFixture("section-separator-file")
 end 'a named file is formatted whatever its extension'
 
 // section-separator-not-walked.test.maxon — the other half of `section-separator-file`: the same
@@ -1061,7 +1061,7 @@ end 'a named file is formatted whatever its extension'
 // opens it.
 //
 test 'a walk selects on the extension and never finds a fragment beside a source'
-	try checkFixture("section-separator-not-walked")
+	checkFixture("section-separator-not-walked")
 end 'a walk selects on the extension and never finds a fragment beside a source'
 
 // single-file.test.maxon — a file argument formats THAT FILE and nothing else. The sibling source
@@ -1070,7 +1070,7 @@ end 'a walk selects on the extension and never finds a fragment beside a source'
 // way.
 //
 test 'a file argument formats only that file, leaving its sibling untouched'
-	try checkFixture("single-file")
+	checkFixture("single-file")
 end 'a file argument formats only that file, leaving its sibling untouched'
 
 // raw-pattern-alias — `bits(n)` is a TYPE spelled with an ordinary identifier and a parenthesised
@@ -1079,7 +1079,7 @@ end 'a file argument formats only that file, leaving its sibling untouched'
 // and this is what says so: the width, the spacing and the alias name all come out as written.
 //
 test 'a raw bit-pattern alias round-trips through the formatter'
-	try checkFixture("raw-pattern-alias")
+	checkFixture("raw-pattern-alias")
 end 'a raw bit-pattern alias round-trips through the formatter'
 
 // shebang-preserved — a `#!` at byte 0 is skipped by the lexer, so no token carries it and only the
@@ -1087,7 +1087,7 @@ end 'a raw bit-pattern alias round-trips through the formatter'
 // separates preservation from the tool having declined to touch the file at all.
 //
 test 'a shebang line survives the file around it being reformatted'
-	try checkFixture("shebang-preserved")
+	checkFixture("shebang-preserved")
 end 'a shebang line survives the file around it being reformatted'
 
 // two-paths-refused.test.maxon — `fmt` takes AT MOST ONE path, and two is refused with both of
@@ -1095,7 +1095,7 @@ end 'a shebang line survives the file around it being reformatted'
 // first and ignoring the second reads, on stdout, exactly like a successful run.
 //
 test 'a second path is refused rather than silently ignored'
-	try checkFixture("two-paths-refused")
+	checkFixture("two-paths-refused")
 end 'a second path is refused rather than silently ignored'
 
 // unlexable-file-left-alone.test.maxon — a source the lexer rejects is left BYTE-IDENTICAL and
@@ -1108,7 +1108,7 @@ end 'a second path is refused rather than silently ignored'
 // pins it for one file; nothing says it is happening to two hundred.
 //
 test 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
-	try checkFixture("unlexable-file-left-alone")
+	checkFixture("unlexable-file-left-alone")
 end 'a file the lexer rejects is left byte-identical while its neighbour is formatted'
 
 // ============================================================================================
@@ -1251,10 +1251,10 @@ test 'formatting real sources keeps every comment, every doc comment and every l
 	let sources = stageEveryCensusSource()
 
 	let firstRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
-	try requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: CensusTreeDescription)
+	requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: CensusTreeDescription)
 
 	for source in sources 'eachSource'
-		try source.requireNothingWasLost()
+		source.requireNothingWasLost()
 	end 'eachSource'
 
 	// ⭐ Idempotence over real sources is a different claim from idempotence over a fixture: a rule that
@@ -1265,8 +1265,8 @@ test 'formatting real sources keeps every comment, every doc comment and every l
 	// run with and predicts their second run with — rather than a substring: what the second run must
 	// say is exactly `0 changed` over every file the walk found, and the walk found what was staged.
 	let secondRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
-	try requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: CensusTreeDescription)
-	try requireSecondRunFoundNothingToDo(secondRun, stagedCount: sources.count(), over: CensusTreeDescription)
+	requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: CensusTreeDescription)
+	requireSecondRunFoundNothingToDo(secondRun, stagedCount: sources.count(), over: CensusTreeDescription)
 end 'formatting real sources keeps every comment, every doc comment and every line of code'
 
 // ⛔ **AN EMPTY ROSTER IS A PANIC, NOT A PASS.** A test that formatted nothing reports exactly what a

@@ -21,26 +21,26 @@ end 'main'")
 end 'bareIntOnLineOneDocument'
 
 test 'opening a document with a compile error publishes it with its code, severity and source'
-	let reported = try onlyPublishedDiagnostic(bareIntOnLineOneDocument(), what: "opening a document that does not compile")
+	let reported = onlyPublishedDiagnostic(bareIntOnLineOneDocument(), what: "opening a document that does not compile")
 
-	try Expect.equal(reported.code, expected: BareIntErrorCode, message: "the CODE is the field a Maxon author acts on — `E3005` is greppable against `docs/error-codes.txt`, where the sentence alone is not.")
+	Expect.equal(reported.code, expected: BareIntErrorCode, message: "the CODE is the field a Maxon author acts on — `E3005` is greppable against `docs/error-codes.txt`, where the sentence alone is not.")
 
-	try Expect.equal(reported.severity as AssertedInt, expected: PublishedErrorSeverity as AssertedInt, message: "every diagnostic this compiler produces fails the build, so every published one is an Error.")
+	Expect.equal(reported.severity as AssertedInt, expected: PublishedErrorSeverity as AssertedInt, message: "every diagnostic this compiler produces fails the build, so every published one is an Error.")
 
-	try Expect.equal(reported.source, expected: MaxonDiagnosticSource, message: "an editor showing several servers groups its list by `source`.")
+	Expect.equal(reported.source, expected: MaxonDiagnosticSource, message: "an editor showing several servers groups its list by `source`.")
 
-	try Expect.contains(reported.message, needle: "bare 'int'", message: "the published sentence is the compiler's own, not a summary written for the editor.")
+	Expect.contains(reported.message, needle: "bare 'int'", message: "the published sentence is the compiler's own, not a summary written for the editor.")
 
-	try Expect.equal(reported.range.startLine as AssertedInt, expected: 0, message: "the compiler anchors this on its line 1, and LSP counts lines from 0.")
+	Expect.equal(reported.range.startLine as AssertedInt, expected: 0, message: "the compiler anchors this on its line 1, and LSP counts lines from 0.")
 end 'opening a document with a compile error publishes it with its code, severity and source'
 
 test 'a document that compiles publishes an empty array rather than nothing'
 	let script = [SessionStep.open(compilingDocument()), SessionStep.takePublish]
-	let published = try publishAt(try observedPublishes(runSession(script), what: "opening a document with no problems"), index: 0)
+	let published = publishAt(observedPublishes(runSession(script), what: "opening a document with no problems"), index: 0)
 
-	try Expect.equal(published.uri, expected: DiagnosticsUri, message: "a publish names the document it is about; an editor keys its squiggles by that uri.")
+	Expect.equal(published.uri, expected: DiagnosticsUri, message: "a publish names the document it is about; an editor keys its squiggles by that uri.")
 
-	try Expect.equal(published.items.count(), expected: 0, message: "this document compiles, so the publish must be EMPTY — and empty is an answer. Silence is not: it leaves whatever the editor last showed standing on screen.")
+	Expect.equal(published.items.count(), expected: 0, message: "this document compiles, so the publish must be EMPTY — and empty is an answer. Silence is not: it leaves whatever the editor last showed standing on screen.")
 end 'a document that compiles publishes an empty array rather than nothing'
 
 // ⭐⭐ **THE CLIENT PATH THAT WAS "IMPLEMENTED BUT DEAD" UNTIL THIS FEATURE LANDED.** `awaitReply`
@@ -54,8 +54,8 @@ test 'a request answered behind a publish gets its own reply, and the publish su
 	let script = [SessionStep.open(compilingDocument()), SessionStep.takeSymbolCount, SessionStep.takePublish]
 
 	match runSession(script) 'session'
-		broke(detail) then try Expect.fail("the session did not complete: {detail}")
-		observed(symbolCount, publishes) then try expectAnsweredBehindPublish(symbolCount, publishes: publishes)
+		broke(detail) then Expect.fail("the session did not complete: {detail}")
+		observed(symbolCount, publishes) then expectAnsweredBehindPublish(symbolCount, publishes: publishes)
 	end 'session'
 end 'a request answered behind a publish gets its own reply, and the publish survives'
 

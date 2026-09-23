@@ -73,16 +73,16 @@ end 'ArmLookup'
 test 'every branch arm is counted, including the implicit else and the case no run reached'
 	let staged = stagedProgram(BranchArmsCaseLabel, fixture: StatesFixtureName)
 	let executable = builtExecutable(staged, stem: CoveredOutputStem)
-	try requireCoverageBuild(staged, output: executable)
+	requireCoverageBuild(staged, output: executable)
 
-	let report = try requireCoverageRunReport(staged, executable: executable)
+	let report = requireCoverageRunReport(staged, executable: executable)
 
 	let rows = branchSectionRows(report)
-	try Expect.notEqual(rows.count() as AssertedInt, expected: 0, message: "the report has no `{BranchesSectionHeading}` section, or an empty one, over a fixture holding two `if`s and a three-way `match`. Line coverage over branching code without branch coverage is a number that cannot see the arm nobody took. The report reads:{LineFeed}{report}")
+	Expect.notEqual(rows.count() as AssertedInt, expected: 0, message: "the report has no `{BranchesSectionHeading}` section, or an empty one, over a fixture holding two `if`s and a three-way `match`. Line coverage over branching code without branch coverage is a number that cannot see the arm nobody took. The report reads:{LineFeed}{report}")
 
-	try requireSummaryCountsArms(report)
-	try requireImplicitElseCounted(rows, staged: staged, report: report)
-	try requireDispatchArmsCounted(rows, staged: staged, report: report)
+	requireSummaryCountsArms(report)
+	requireImplicitElseCounted(rows, staged: staged, report: report)
+	requireDispatchArmsCounted(rows, staged: staged, report: report)
 end 'every branch arm is counted, including the implicit else and the case no run reached'
 
 // ============================================================================================

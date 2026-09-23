@@ -157,6 +157,9 @@ let content = readFile(path)
 let content = try readFile(path) otherwise ""
 ```
 
+The exceptions are a block-form `try 'label' … end 'label'`, whose body sends every throwing call to its
+handler, and a `test` body, where a throwing call needs no `try` and an error fails the test.
+
 ### 10. Match arms MUST use bare case names
 
 ```maxon

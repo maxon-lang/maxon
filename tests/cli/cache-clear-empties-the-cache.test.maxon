@@ -17,13 +17,13 @@ test 'cache clear leaves nothing Maxon put in the cache'
 	publishCachedBuild(dir, cacheRoot: cacheRoot)
 
 	let owned = cacheRoot.join(CacheVendorDirName)
-	try Expect.isTrue(Directory.isDirectory(owned), message: "the gate could not run - a cached build did not land under {owned.toString()}, so there is nothing for a clear to remove")
+	Expect.isTrue(Directory.isDirectory(owned), message: "the gate could not run - a cached build did not land under {owned.toString()}, so there is nothing for a clear to remove")
 
 	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
 	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
-	try Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding one build. {said}")
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding one build. {said}")
 
-	try Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing. Removing the builds and keeping the directories that held them grows a tree of empty slots for the life of the install. {said}")
+	Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing. Removing the builds and keeping the directories that held them grows a tree of empty slots for the life of the install. {said}")
 
-	try Expect.isTrue(Directory.isDirectory(cacheRoot), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {cacheRoot.toString()}, which the CALLER named through {CacheRootVariable} and Maxon did not create. {said}")
+	Expect.isTrue(Directory.isDirectory(cacheRoot), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {cacheRoot.toString()}, which the CALLER named through {CacheRootVariable} and Maxon did not create. {said}")
 end 'cache clear leaves nothing Maxon put in the cache'

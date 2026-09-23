@@ -18,9 +18,9 @@ test 'a typo on a local whose name a sibling file also declares is still reporte
 
 	discardOutsideCheckoutDir(root)
 
-	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
 
-	let reported = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` typed `.trm()` onto a LOCAL named `projectLocalTypoFormat`, which is also the name of a function the sibling `helpers.maxon` declares. A `maxon build` of the staged tree holding the edited text reports exactly one `E2015` about the member and nothing else.")
+	let reported = onlyProjectDiagnostic(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` typed `.trm()` onto a LOCAL named `projectLocalTypoFormat`, which is also the name of a function the sibling `helpers.maxon` declares. A `maxon build` of the staged tree holding the edited text reports exactly one `E2015` about the member and nothing else.")
 
-	try Expect.equal(reported.code, expected: ProjectLocalTypoCode, message: "the diagnostic is anchored at the MEMBER, so the subject taken from the token stream is the RECEIVER — the local. A name oracle that asks only whether the project's TOP-LEVEL index declares that name answers `no` for every local, parameter and field there is, and the sibling's function of the same name then silences a typo the author has this second finished typing.")
+	Expect.equal(reported.code, expected: ProjectLocalTypoCode, message: "the diagnostic is anchored at the MEMBER, so the subject taken from the token stream is the RECEIVER — the local. A name oracle that asks only whether the project's TOP-LEVEL index declares that name answers `no` for every local, parameter and field there is, and the sibling's function of the same name then silences a typo the author has this second finished typing.")
 end 'a typo on a local whose name a sibling file also declares is still reported'

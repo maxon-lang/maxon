@@ -194,3 +194,42 @@ end 'main'
 ```exitcode
 41
 ```
+
+<!-- test: error.same-name-methods.throwing-static-names-its-callee -->
+A static that shares its name with an instance method is registered under a key of its own, but a
+diagnostic names it the way the source does: `Box.getValue`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum BoxError implements Error
+	empty
+end 'BoxError'
+
+type Box
+	export var value as Integer
+
+	static function create(v Integer) returns Box
+		return Box{value: v}
+	end 'create'
+
+	static function getValue() returns Integer throws BoxError
+		throw BoxError.empty
+	end 'getValue'
+
+	function getValue() returns Integer
+		return value
+	end 'getValue'
+end 'Box'
+
+function read() returns Integer
+	return Box.getValue()
+end 'read'
+
+function main() returns ExitCode
+	let b = Box.create(4)
+	return b.getValue() + read()
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/same-name-methods/error.same-name-methods.throwing-static-names-its-callee.test:25:13: throwing function requires try: 'Box.getValue'
+```

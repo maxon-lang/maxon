@@ -6,14 +6,14 @@ test 'a local row is scoped to the code it is live over, not to the whole functi
 	let staged = builtFixture(LiveRangeCaseLabel, fixture: ValuesFixtureName)
 	let dump = spawnDumpInfo(builtExecutable(staged), staged: staged, sections: StringArray.create())
 
-	try Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
+	Expect.equal(dump.exitCode() as AssertedInt, expected: 0, message: "`{DebugSubcommandName} {DumpInfoOptionName} <exe>` did not print the sidecar. It wrote to stderr: {dump.stderr}")
 
 	let functionRows = dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpFunctionsHeading)
 	let owner = functionRowOf(functionRows, name: RenderFunctionName)
 	let locals = localRowsOf(functionRows, name: RenderFunctionName)
 
-	try Expect.notEqual(owner, expected: AbsentEventText, message: "the sidecar holds no function row for `{RenderFunctionName}`, so this case would ask nothing of any local. The functions section held: {renderedRows(functionRows)}")
-	try Expect.notEqual(locals.count() as AssertedInt, expected: 0, message: "`{RenderFunctionName}` describes no locals at all. The functions section held: {renderedRows(functionRows)}")
+	Expect.notEqual(owner, expected: AbsentEventText, message: "the sidecar holds no function row for `{RenderFunctionName}`, so this case would ask nothing of any local. The functions section held: {renderedRows(functionRows)}")
+	Expect.notEqual(locals.count() as AssertedInt, expected: 0, message: "`{RenderFunctionName}` describes no locals at all. The functions section held: {renderedRows(functionRows)}")
 
 	let (functionStart, functionLimit) = requiredCodeRange(owner, what: "`{RenderFunctionName}`'s function row")
 	var unscoped = StringArray.create()
@@ -26,6 +26,6 @@ test 'a local row is scoped to the code it is live over, not to the whole functi
 		end 'localRange'
 	end 'eachLocal'
 
-	try Expect.isEmpty(renderedRows(unscoped), message: "every local record carries one row PER LIVE RANGE, so every row published is scoped to the code that range covers. A row with no range is a name the debugger will read at any offset inside the function — including the offsets where its register belongs to something else. `{RenderFunctionName}`'s locals were: {renderedRows(locals)}")
-	try Expect.notEqual(narrower as AssertedInt, expected: 0, message: "not one of `{RenderFunctionName}`'s locals is scoped NARROWER than [0x{functionStart:x}, 0x{functionLimit:x}), the whole function. This fixture holds a local dead long before the end and a hot one born long after the start, so a sidecar claiming whole-function scope for all of them is the scope that was never computed. `{RenderFunctionName}`'s locals were: {renderedRows(locals)}")
+	Expect.isEmpty(renderedRows(unscoped), message: "every local record carries one row PER LIVE RANGE, so every row published is scoped to the code that range covers. A row with no range is a name the debugger will read at any offset inside the function — including the offsets where its register belongs to something else. `{RenderFunctionName}`'s locals were: {renderedRows(locals)}")
+	Expect.notEqual(narrower as AssertedInt, expected: 0, message: "not one of `{RenderFunctionName}`'s locals is scoped NARROWER than [0x{functionStart:x}, 0x{functionLimit:x}), the whole function. This fixture holds a local dead long before the end and a hot one born long after the start, so a sidecar claiming whole-function scope for all of them is the scope that was never computed. `{RenderFunctionName}`'s locals were: {renderedRows(locals)}")
 end 'a local row is scoped to the code it is live over, not to the whole function'

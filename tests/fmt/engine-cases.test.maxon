@@ -80,12 +80,12 @@ test 'every engine case has both its source and its oracle'
 		end 'noSource'
 	end 'eachExpectation'
 
-	try Expect.isEmpty(listedLines(halfStored), message: "these engine cases under {EngineCasesDirName} are half-stored. A source with no oracle is compared against nothing and reads exactly like a case that passed: mint its oracle with `python tests/fmt/generate-expectations.py`. An oracle with no source judges a case that has left the corpus: remove it, or restore the source it judges.")
+	Expect.isEmpty(listedLines(halfStored), message: "these engine cases under {EngineCasesDirName} are half-stored. A source with no oracle is compared against nothing and reads exactly like a case that passed: mint its oracle with `python tests/fmt/generate-expectations.py`. An oracle with no source judges a case that has left the corpus: remove it, or restore the source it judges.")
 end 'every engine case has both its source and its oracle'
 
 test 'the engine corpus holds a paired case'
 	let corpus = EngineCorpus.read()
-	try Expect.isFalse(corpus.pairedCases().isEmpty(), message: "{EngineCasesDirName} holds no paired case, so not one formatter answer is compared against an oracle. Each case is a `<Name>{CaseSourceExtension}` and the `<Name>{CaseExpectedExtension}` the formatter must produce for it.")
+	Expect.isFalse(corpus.pairedCases().isEmpty(), message: "{EngineCasesDirName} holds no paired case, so not one formatter answer is compared against an oracle. Each case is a `<Name>{CaseSourceExtension}` and the `<Name>{CaseExpectedExtension}` the formatter must produce for it.")
 end 'the engine corpus holds a paired case'
 
 test 'the engine corpus keeps its three negative controls'
@@ -98,7 +98,7 @@ test 'the engine corpus keeps its three negative controls'
 		end 'missing'
 	end 'eachControl'
 
-	try Expect.isEmpty(listedLines(absent), message: "these NEGATIVE CONTROLS are no longer in {EngineCasesDirName}. Each is the case beside a real defect that passed throughout that defect's whole lifetime; without it nothing tells a reader that the neighbouring green is not evidence.")
+	Expect.isEmpty(listedLines(absent), message: "these NEGATIVE CONTROLS are no longer in {EngineCasesDirName}. Each is the case beside a real defect that passed throughout that defect's whole lifetime; without it nothing tells a reader that the neighbouring green is not evidence.")
 end 'the engine corpus keeps its three negative controls'
 
 test 'an unlexable engine case is its own oracle'
@@ -118,8 +118,8 @@ test 'an unlexable engine case is its own oracle'
 		end 'oracleRewrites'
 	end 'eachCase'
 
-	try Expect.isFalse(unlexable.isEmpty(), message: "{EngineCasesDirName} holds no paired `{UnlexableCasePrefix}*` case. This rule is keyed on that name prefix, so a corpus without one checks nothing about a source the lexer rejects.")
-	try Expect.isEmpty(listedLines(rewritten), message: "these cases are sources the lexer REJECTS, so each {CaseExpectedExtension} must be byte-identical to its {CaseSourceExtension}: `fmt` leaves such a source untouched, and the alternative is writing the lexer's error text into somebody's file. These oracles say the formatter should CHANGE them.")
+	Expect.isFalse(unlexable.isEmpty(), message: "{EngineCasesDirName} holds no paired `{UnlexableCasePrefix}*` case. This rule is keyed on that name prefix, so a corpus without one checks nothing about a source the lexer rejects.")
+	Expect.isEmpty(listedLines(rewritten), message: "these cases are sources the lexer REJECTS, so each {CaseExpectedExtension} must be byte-identical to its {CaseSourceExtension}: `fmt` leaves such a source untouched, and the alternative is writing the lexer's error text into somebody's file. These oracles say the formatter should CHANGE them.")
 end 'an unlexable engine case is its own oracle'
 
 // One test, because every property here reads the same two `fmt` runs, and the file's 5 s deadline
@@ -129,7 +129,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	let staged = stageEngineCases(corpus)
 
 	let firstRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
-	try requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: EngineTreeDescription)
+	requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: EngineTreeDescription)
 
 	var firstPass = FormattedTextMap.create()
 	var diverged = StringArray.create()
@@ -158,7 +158,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	end 'eachCase'
 
 	let secondRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
-	try requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: EngineTreeDescription)
+	requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: EngineTreeDescription)
 
 	var movedAgain = StringArray.create()
 
@@ -176,8 +176,8 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	report.append(listedUnder(miscounted, heading: "COMMENT MULTIPLICITY (a comment or shebang occurs a different number of times)"))
 	report.append(listedUnder(movedAgain, heading: "IDEMPOTENCE (a second run changed it again)"))
 
-	try Expect.isEmpty(report, message: "`fmt` over {EngineTreeDescription} broke the engine corpus. PARITY compares against the committed oracle; COMMENT MULTIPLICITY counts every `//`-bearing text and a line-1 shebang, so a DUPLICATED comment is as red as a lost one; IDEMPOTENCE holds whoever re-mints an oracle.")
-	try requireSecondRunFoundNothingToDo(secondRun, stagedCount: staged.count(), over: EngineTreeDescription)
+	Expect.isEmpty(report, message: "`fmt` over {EngineTreeDescription} broke the engine corpus. PARITY compares against the committed oracle; COMMENT MULTIPLICITY counts every `//`-bearing text and a line-1 shebang, so a DUPLICATED comment is as red as a lost one; IDEMPOTENCE holds whoever re-mints an oracle.")
+	requireSecondRunFoundNothingToDo(secondRun, stagedCount: staged.count(), over: EngineTreeDescription)
 end 'formatting the engine corpus reproduces every oracle, keeps every comment and is a fixed point'
 
 function negativeControlCases() returns StringArray

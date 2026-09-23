@@ -351,3 +351,27 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3142: <fragment>:14:20: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
+
+<!-- test: async-try-await.parenthesized-target -->
+A parenthesized `await` is a `try` target like the bare one: the group's value is the await, so the
+`try` claims it and its `otherwise` catches the error.
+```maxon
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function compute() returns Integer throws WorkError
+	Scheduler.yield()
+	throw WorkError.failed
+end 'compute'
+
+function main() returns ExitCode
+	let p = async compute()
+	let a = try (await p) otherwise 7
+	return a as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+7
+```

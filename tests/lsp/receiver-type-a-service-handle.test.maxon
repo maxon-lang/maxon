@@ -12,27 +12,27 @@ let ServiceHandleElementNameCharacter = 28 as LspCoordinate
 test 'receiver type: a service handle offers its services messages'
 	let uri = stagedServiceHandleProject()
 
-	let declared = try completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterListCharacter, after: "`counter.`, a parameter declared `Counter.handle`, whose service is declared by the sibling file")
-	try assertHandleSurface(declared, shape: "a parameter declared `Counter.handle`")
+	let declared = completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterListCharacter, after: "`counter.`, a parameter declared `Counter.handle`, whose service is declared by the sibling file")
+	assertHandleSurface(declared, shape: "a parameter declared `Counter.handle`")
 
-	let element = try completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementListCharacter, after: "`h.`, where `h` is bound by `try self.handles.get(0) otherwise …` and `handles` is declared `as CounterHandleArray`")
-	try assertHandleSurface(element, shape: "an element of `Array with Counter.handle`, taken out of a container")
+	let element = completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementListCharacter, after: "`h.`, where `h` is bound by `try self.handles.get(0) otherwise …` and `handles` is declared `as CounterHandleArray`")
+	assertHandleSurface(element, shape: "an element of `Array with Counter.handle`, taken out of a container")
 
-	try Expect.isTrue(declared.count() == element.count(), message: "the two receiver shapes offered DIFFERENT numbers of members — {declared.count()} for the parameter and {element.count()} for the container element — and they are the same type. Hover and completion reach a receiver through ONE walk precisely so two spellings of one type cannot answer differently.")
+	Expect.isTrue(declared.count() == element.count(), message: "the two receiver shapes offered DIFFERENT numbers of members — {declared.count()} for the parameter and {element.count()} for the container element — and they are the same type. Hover and completion reach a receiver through ONE walk precisely so two spellings of one type cannot answer differently.")
 
-	let insideTheWord = try completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleInsideReceiverCharacter, after: "a position INSIDE the receiver word `counter`, three characters before its dot")
+	let insideTheWord = completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleInsideReceiverCharacter, after: "a position INSIDE the receiver word `counter`, three characters before its dot")
 
-	try Expect.isTrue(insideTheWord.isEmpty(), message: "completion offered {insideTheWord.count()} member(s) at a position inside the bare word `counter`, before its `.`. This server completes a MEMBER of something and never an identifier prefix in open code, so the only position that offers a surface is the one after the dot — and a reading taken inside the receiver word is a reading of a different question.")
+	Expect.isTrue(insideTheWord.isEmpty(), message: "completion offered {insideTheWord.count()} member(s) at a position inside the bare word `counter`, before its `.`. This server completes a MEMBER of something and never an identifier prefix in open code, so the only position that offers a surface is the one after the dot — and a reading taken inside the receiver word is a reading of a different question.")
 end 'receiver type: a service handle offers its services messages'
 
 test 'receiver type: a message on a service handle hovers'
 	let uri = stagedServiceHandleProject()
 
-	let declared = try hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterNameCharacter)
-	try Expect.contains(declared, needle: "export function bump(by Tally)", message: "hovering `bump` on a parameter declared `Counter.handle` did not render the declaration `helper.maxon` holds for it. The compiler resolves a message to `Counter.bump`, so that is the declaration under the cursor. It rendered: {declared}")
+	let declared = hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterNameCharacter)
+	Expect.contains(declared, needle: "export function bump(by Tally)", message: "hovering `bump` on a parameter declared `Counter.handle` did not render the declaration `helper.maxon` holds for it. The compiler resolves a message to `Counter.bump`, so that is the declaration under the cursor. It rendered: {declared}")
 
-	let element = try hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementNameCharacter)
-	try Expect.contains(element, needle: "export function total() returns Tally", message: "hovering `total` on a handle taken OUT OF A CONTAINER did not render its declaration, though the same message hovers on a handle-typed parameter. A container element and a declared parameter are the same type reached two ways, and a road that answers for one and not the other is the two walks coming apart. It rendered: {element}")
+	let element = hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementNameCharacter)
+	Expect.contains(element, needle: "export function total() returns Tally", message: "hovering `total` on a handle taken OUT OF A CONTAINER did not render its declaration, though the same message hovers on a handle-typed parameter. A container element and a declared parameter are the same type reached two ways, and a road that answers for one and not the other is the two walks coming apart. It rendered: {element}")
 end 'receiver type: a message on a service handle hovers'
 
 function assertHandleSurface(labels StringArray, shape String) throws TestFailure

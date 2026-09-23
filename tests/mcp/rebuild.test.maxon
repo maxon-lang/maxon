@@ -18,11 +18,11 @@ test 'mcp server keeps answering after its executable is replaced on disk'
 
 	var session = StreamingMcpSession.startFrom(staged, devMode: false)
 
-	try session.sendLine(initRequest(1))
-	let initDoc = try session.readResponseDoc()
-	try Expect.isTrue(hasChildKey(initDoc, parent: resultNode(initDoc), key: "serverInfo"), message: "initialize response missing serverInfo")
+	session.sendLine(initRequest(1))
+	let initDoc = session.readResponseDoc()
+	Expect.isTrue(hasChildKey(initDoc, parent: resultNode(initDoc), key: "serverInfo"), message: "initialize response missing serverInfo")
 
-	try session.sendLine(initializedNotification())
+	session.sendLine(initializedNotification())
 
 	// Vacate the running image exactly as a self-rebuild does, then put a fresh one back.
 	let vacated = try FilePath.from("{staged.path}.previous") otherwise panic("vacated path is valid")
@@ -30,16 +30,16 @@ test 'mcp server keeps answering after its executable is replaced on disk'
 	try File.rename(staged, to: vacated) otherwise panic("could not rename the running image out of the way")
 
 	let replacement = stagedCopyOf(testedCompilerPath(), dir: dir, name: StagedCompilerName)
-	try Expect.isTrue(File.exists(replacement), message: "a replacement image should now sit at the vacated path")
+	Expect.isTrue(File.exists(replacement), message: "a replacement image should now sit at the vacated path")
 
 	// The process was started from an image that no longer exists at that path.
-	try session.sendLine(toolCallRequest(2, name: "lookup_error_code", argumentsJson: "\{\"code\":\"E3014\"\}"))
-	let lookupDoc = try session.readResponseDoc()
-	try Expect.isFalse(toolCallIsError(lookupDoc), message: "the server should still answer after its image was replaced: {toolCallText(lookupDoc)}")
-	try Expect.equal(payloadString(lookupDoc, key: "code"), expected: "E3014")
+	session.sendLine(toolCallRequest(2, name: "lookup_error_code", argumentsJson: "\{\"code\":\"E3014\"\}"))
+	let lookupDoc = session.readResponseDoc()
+	Expect.isFalse(toolCallIsError(lookupDoc), message: "the server should still answer after its image was replaced: {toolCallText(lookupDoc)}")
+	Expect.equal(payloadString(lookupDoc, key: "code"), expected: "E3014")
 
-	let exitCode = try session.close()
-	try Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
+	let exitCode = session.close()
+	Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
 
 	try File.delete(vacated) otherwise ignore
 	try File.delete(replacement) otherwise ignore

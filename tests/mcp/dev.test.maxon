@@ -17,24 +17,24 @@ end 'thisCheckout'
 
 test 'dev mcp-server advertises the eight user tools plus the three contributor tools'
 	let names = toolNames(listTools(true))
-	try Expect.equal(names.count() as AssertedInt, expected: 11, message: "dev mode must advertise exactly 11 tools")
+	Expect.equal(names.count() as AssertedInt, expected: 11, message: "dev mode must advertise exactly 11 tools")
 
-	try Expect.isTrue(containsString(names, target: "run_spec_test"), message: "missing run_spec_test")
-	try Expect.isTrue(containsString(names, target: "run_scale_test"), message: "missing run_scale_test")
-	try Expect.isTrue(containsString(names, target: "spec_test_outcome"), message: "missing spec_test_outcome")
-	try Expect.isTrue(containsString(names, target: "build"), message: "missing build")
-	try Expect.isTrue(containsString(names, target: "info"), message: "missing info")
+	Expect.isTrue(containsString(names, target: "run_spec_test"), message: "missing run_spec_test")
+	Expect.isTrue(containsString(names, target: "run_scale_test"), message: "missing run_scale_test")
+	Expect.isTrue(containsString(names, target: "spec_test_outcome"), message: "missing spec_test_outcome")
+	Expect.isTrue(containsString(names, target: "build"), message: "missing build")
+	Expect.isTrue(containsString(names, target: "info"), message: "missing info")
 end 'dev mcp-server advertises the eight user tools plus the three contributor tools'
 
 test 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 	let doc = listTools(true)
 
 	let buildProps = toolPropertyKeys(doc, toolName: "build")
-	try Expect.isTrue(containsString(buildProps, target: "repoRoot"), message: "build must take repoRoot in dev mode")
-	try Expect.isTrue(containsString(buildProps, target: "from"), message: "build must take from in dev mode")
+	Expect.isTrue(containsString(buildProps, target: "repoRoot"), message: "build must take repoRoot in dev mode")
+	Expect.isTrue(containsString(buildProps, target: "from"), message: "build must take from in dev mode")
 
 	for tool in ["run_spec_test", "run_scale_test", "spec_test_outcome", "execute", "test", "fmt"] 'each'
-		try Expect.isTrue(containsString(toolPropertyKeys(doc, toolName: tool), target: "repoRoot"), message: "{tool} must take repoRoot")
+		Expect.isTrue(containsString(toolPropertyKeys(doc, toolName: tool), target: "repoRoot"), message: "{tool} must take repoRoot")
 	end 'each'
 end 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 
@@ -45,19 +45,19 @@ test 'dev mcp-server runs the named tree on run, test and fmt'
 	for tool in ["execute", "test", "fmt"] 'eachHostTool'
 		let refused = callTool(tool, argumentsJson: "\{\"repoRoot\":\"{NonCheckoutDir}\"\}", devMode: true)
 
-		try Expect.isTrue(toolCallIsError(refused), message: "{tool} must refuse a repoRoot that is not a checkout")
-		try Expect.contains(toolCallText(refused), needle: "is not a Maxon checkout")
+		Expect.isTrue(toolCallIsError(refused), message: "{tool} must refuse a repoRoot that is not a checkout")
+		Expect.contains(toolCallText(refused), needle: "is not a Maxon checkout")
 
 		let relative = callTool(tool, argumentsJson: "\{\"repoRoot\":\"relative/path\"\}", devMode: true)
 
-		try Expect.isTrue(toolCallIsError(relative), message: "{tool} must refuse a relative repoRoot")
-		try Expect.contains(toolCallText(relative), needle: "is relative. It must be an absolute path")
+		Expect.isTrue(toolCallIsError(relative), message: "{tool} must refuse a relative repoRoot")
+		Expect.contains(toolCallText(relative), needle: "is relative. It must be an absolute path")
 	end 'eachHostTool'
 
 	let answered = callTool("execute", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
-	try Expect.equal(payloadString(answered, key: "repoRoot"), expected: thisCheckout())
-	try Expect.contains(payloadString(answered, key: "command"), needle: "no-such-source.maxon")
+	Expect.equal(payloadString(answered, key: "repoRoot"), expected: thisCheckout())
+	Expect.contains(payloadString(answered, key: "command"), needle: "no-such-source.maxon")
 end 'dev mcp-server runs the named tree on run, test and fmt'
 
 // ⚠ The default is the HOST's working directory and NOT the server's own checkout, because `run f.maxon`,
@@ -66,29 +66,29 @@ end 'dev mcp-server runs the named tree on run, test and fmt'
 test 'dev mcp-server names no tree on run when no repoRoot is given'
 	let doc = callTool("execute", argumentsJson: "\{\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
-	try Expect.isFalse(payloadHasKey(doc, key: "repoRoot"), message: "an unnamed tree must not be reported as one: {toolCallText(doc)}")
-	try Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
+	Expect.isFalse(payloadHasKey(doc, key: "repoRoot"), message: "an unnamed tree must not be reported as one: {toolCallText(doc)}")
+	Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
 end 'dev mcp-server names no tree on run when no repoRoot is given'
 
 test 'dev mcp-server refuses a relative repoRoot on every tool that takes one'
 	for tool in ["build", "run_spec_test", "run_scale_test"] 'each'
 		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"relative/path\"\}", devMode: true)
 
-		try Expect.isTrue(toolCallIsError(doc), message: "{tool} must refuse a relative repoRoot")
-		try Expect.contains(toolCallText(doc), needle: "is relative. It must be an absolute path")
+		Expect.isTrue(toolCallIsError(doc), message: "{tool} must refuse a relative repoRoot")
+		Expect.contains(toolCallText(doc), needle: "is relative. It must be an absolute path")
 	end 'each'
 
 	// `spec_test_outcome` requires a filter, so its relative-root refusal has to carry one.
 	let outcome = callTool("spec_test_outcome", argumentsJson: "\{\"repoRoot\":\"relative/path\",\"filter\":\"x\"\}", devMode: true)
-	try Expect.isTrue(toolCallIsError(outcome), message: "spec_test_outcome must refuse a relative repoRoot")
-	try Expect.contains(toolCallText(outcome), needle: "is relative. It must be an absolute path")
+	Expect.isTrue(toolCallIsError(outcome), message: "spec_test_outcome must refuse a relative repoRoot")
+	Expect.contains(toolCallText(outcome), needle: "is relative. It must be an absolute path")
 end 'dev mcp-server refuses a relative repoRoot on every tool that takes one'
 
 test 'dev mcp-server refuses a repoRoot that is not a checkout'
 	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":\"{NonCheckoutDir}\"\}", devMode: true)
 
-	try Expect.isTrue(toolCallIsError(doc))
-	try Expect.contains(toolCallText(doc), needle: "is not a Maxon checkout")
+	Expect.isTrue(toolCallIsError(doc))
+	Expect.contains(toolCallText(doc), needle: "is not a Maxon checkout")
 end 'dev mcp-server refuses a repoRoot that is not a checkout'
 
 // ⭐ ONE server process serves every worktree, so "which tree did that act in?" is a question the
@@ -99,23 +99,23 @@ end 'dev mcp-server refuses a repoRoot that is not a checkout'
 test 'dev mcp-server echoes the repoRoot it acted in'
 	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"path\":\"no-such-source.maxon\"\}", devMode: true)
 
-	try Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
-	try Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
+	Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
+	Expect.contains(payloadString(doc, key: "command"), needle: "no-such-source.maxon")
 end 'dev mcp-server echoes the repoRoot it acted in'
 
 test 'dev mcp-server names the tree in a refusal too'
 	let doc = callTool("build", argumentsJson: "\{\"repoRoot\":{Json.quote(thisCheckout())},\"from\":\"nowhere/at/all.exe\"\}", devMode: true)
 
-	try Expect.isTrue(toolCallIsError(doc))
-	try Expect.contains(toolCallText(doc), needle: "does not exist")
-	try Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
+	Expect.isTrue(toolCallIsError(doc))
+	Expect.contains(toolCallText(doc), needle: "does not exist")
+	Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
 end 'dev mcp-server names the tree in a refusal too'
 
 test 'dev mcp-server requires a filter for spec_test_outcome'
 	let doc = callTool("spec_test_outcome", argumentsJson: "\{\}", devMode: true)
 
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
-	try Expect.contains(rpcErrorMessage(doc), needle: "requires the `filter` argument")
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	Expect.contains(rpcErrorMessage(doc), needle: "requires the `filter` argument")
 end 'dev mcp-server requires a filter for spec_test_outcome'
 
 // ⛔ An `mmTrace: true` run that never traced, reported back as a clean success, is
@@ -123,6 +123,6 @@ end 'dev mcp-server requires a filter for spec_test_outcome'
 test 'dev mcp-server refuses a flag the compiler cannot honour'
 	let doc = callTool("run_spec_test", argumentsJson: "\{\"mmTrace\":true\}", devMode: true)
 
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
-	try Expect.contains(rpcErrorMessage(doc), needle: "has no argument `mmTrace`")
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	Expect.contains(rpcErrorMessage(doc), needle: "has no argument `mmTrace`")
 end 'dev mcp-server refuses a flag the compiler cannot honour'

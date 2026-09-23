@@ -18,22 +18,22 @@ test 'trace at a stop shows the scheduler events the program committed before it
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.atLeast(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, than: 1, message: "the breakpoint after the await never stopped, so there is no stop to take a trace slice at. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, than: 1, message: "the breakpoint after the await never stopped, so there is no stop to take a trace slice at. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let slices = eventsOfKind(events, kind: TraceEventName)
-	try Expect.equal(slices.count() as AssertedInt, expected: 1, message: "`{TraceCommand}` printed no `{TraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(slices.count() as AssertedInt, expected: 1, message: "`{TraceCommand}` printed no `{TraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let slice = eventAt(slices, index: 0)
-	try Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: AbsentEventText, message: "the program was built with `{DebugStreamBuildOption}` and the session was run with `{DebugTraceOption}`, so the slice is available and must carry no `{EventsUnavailableKey}`. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")
-	try Expect.atLeast(tracedEventCount(slice) as AssertedInt, than: 1, message: "⛔ A LIST THAT CANNOT BE PRODUCED IS `null` PLUS A REASON, NEVER AN EMPTY ONE. An empty `{EventsKey}` with no reason beside it is a slice that says nothing and looks like an answer. {said}")
+	Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: AbsentEventText, message: "the program was built with `{DebugStreamBuildOption}` and the session was run with `{DebugTraceOption}`, so the slice is available and must carry no `{EventsUnavailableKey}`. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")
+	Expect.atLeast(tracedEventCount(slice) as AssertedInt, than: 1, message: "⛔ A LIST THAT CANNOT BE PRODUCED IS `null` PLUS A REASON, NEVER AN EMPTY ONE. An empty `{EventsKey}` with no reason beside it is a slice that says nothing and looks like an answer. {said}")
 
 	let texts = tracedEventTexts(slice)
-	try Expect.contains(texts, needle: SpawnSchedEventText, message: "⭐ WHAT IS PINNED IS PRESENCE, NEVER A COUNT. The breakpoint is past the `await`, so the spawn of the green thread this program started is committed before the stop and must be in the slice. It held: {texts}. {said}")
-	try Expect.contains(texts, needle: AwaitSchedEventText, message: "the await this program performed is committed before the stop and must be in the slice. It held: {texts}. {said}")
+	Expect.contains(texts, needle: SpawnSchedEventText, message: "⭐ WHAT IS PINNED IS PRESENCE, NEVER A COUNT. The breakpoint is past the `await`, so the spawn of the green thread this program started is committed before the stop and must be in the slice. It held: {texts}. {said}")
+	Expect.contains(texts, needle: AwaitSchedEventText, message: "the await this program performed is committed before the stop and must be in the slice. It held: {texts}. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the traced, debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the traced, debugged program answered a different exit code than the same program run with nothing attached. {said}")
 end 'trace at a stop shows the scheduler events the program committed before it'

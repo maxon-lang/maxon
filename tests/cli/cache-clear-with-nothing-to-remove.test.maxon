@@ -12,12 +12,12 @@ test 'cache clear over a cache that holds nothing succeeds and says so'
 	let cacheRoot = cacheRootIn(dir)
 
 	let owned = cacheRoot.join(CacheVendorDirName)
-	try Expect.isFalse(Directory.exists(owned), message: "the gate could not run - {owned.toString()} is there before anything cached into it, so this case is not about an empty cache")
+	Expect.isFalse(Directory.exists(owned), message: "the gate could not run - {owned.toString()} is there before anything cached into it, so this case is not about an empty cache")
 
 	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
 	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
 
-	try Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding nothing. Nothing to remove is the ordinary state, not a failure. {said}")
-	try Expect.isFalse(cleared.stdout.trim().isEmpty(), message: "`maxon {CacheCommandWord} {CacheClearVerb}` said nothing at all over a cache holding nothing. A caller cannot tell a silent success from a command that did not run. {said}")
-	try Expect.isEmpty(cleared.stderr.trim(), message: "`maxon {CacheCommandWord} {CacheClearVerb}` wrote to stderr while succeeding. {said}")
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding nothing. Nothing to remove is the ordinary state, not a failure. {said}")
+	Expect.isFalse(cleared.stdout.trim().isEmpty(), message: "`maxon {CacheCommandWord} {CacheClearVerb}` said nothing at all over a cache holding nothing. A caller cannot tell a silent success from a command that did not run. {said}")
+	Expect.isEmpty(cleared.stderr.trim(), message: "`maxon {CacheCommandWord} {CacheClearVerb}` wrote to stderr while succeeding. {said}")
 end 'cache clear over a cache that holds nothing succeeds and says so'

@@ -110,8 +110,11 @@ handle.
 
 ## Calling Throwing Functions
 
-Every call to a throwing function is marked with `try`. A call without it is **E3057** (`throwing function
-requires try`). `try` is followed by exactly one of:
+Every call to a throwing function — including a call to a throwing interface method and an `await` of a
+throwing promise — is marked with `try`, except inside a [`try` block](#try-blocks) or a
+[`test` body](/docs/language/testing/#uncaught-errors-in-tests), whose handler takes it. Anywhere else a call without it is
+**E3057** (`throwing function requires try`), naming the function as it was declared
+(`'stdlib.Expect.equal'`). `try` is followed by exactly one of:
 
 - **nothing** — propagate the error to the caller ([Error Propagation](#error-propagation)), or
 - an **`otherwise`** clause that handles it.
@@ -216,13 +219,14 @@ end 'doubleDigit'
 - When the callee's error type differs from the function's, it is **E3059** (`try propagates 'E' but
   enclosing function throws 'Other' — add 'otherwise' to convert`); convert with
   `otherwise throw Other.case`.
-- Inside a [test](/docs/language/testing/), a bare `try` on any error type is allowed: an error that reaches
-  it fails the test.
+- Inside a [test](/docs/language/testing/#uncaught-errors-in-tests), a bare `try` on any error type is allowed, and so is
+  leaving the `try` out: an error that reaches it fails the test.
 
 ## Try Blocks
 
 A `try` block runs several statements and sends every error to one handler. Inside the block, calls to
-throwing functions need no `try` of their own:
+throwing functions, calls to throwing interface methods and `await`s of throwing promises need no `try` of
+their own:
 
 ```maxon
 typealias Amount = int(i64.min to i64.max)
@@ -272,7 +276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- The block must contain at least one call that throws (**E3083**).
+- The block must contain at least one operation that throws (**E3083**).
 - The `otherwise` clause is one of:
   - a **handler block** `otherwise (e) 'label' … end 'label'`, which must `match` on the binding (**E3084**);
   - **`otherwise [(e)] panic("message")`**, which panics if the block throws;
@@ -291,7 +295,9 @@ end 'main'
   Statements before the match are fine, and so is one match on each branch of an `if`/`else`. Match `e`
   once and bind what the rest of the handler needs in its arms.
 - A call inside the block with its own `try … otherwise` handles its own error, which does not reach the
-  block's handler. Nested try blocks compose the same way.
+  block's handler. Nested try blocks compose the same way: an error goes to the innermost block around it.
+- An explicit `try` covers only the operation that produces its value. A throwing argument, operand, method
+  receiver or range bound inside it — `h()` in `try g(h()) otherwise 0` — goes to the block's handler.
 
 ## Conditional Try (`if let … = try`)
 

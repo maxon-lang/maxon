@@ -18,15 +18,15 @@ test 'build opens with the version and the early-preview warning, and keeps them
 	let dir = freshCaseDir(CaseDirName)
 
 	let good = buildSource(dir, stem: GoodStem, source: GoodSource)
-	try Expect.equal(good.exitCode() as AssertedInt, expected: 0, message: "a one-line program did not build. It said: {good.stdout}{good.stderr}")
-	try requireVersionHeader(good.stdout, which: "a successful build")
-	try Expect.contains(good.stdout, needle: CompiledPrefix, message: "a successful build no longer says where it wrote the binary. It printed: {good.stdout}")
+	Expect.equal(good.exitCode() as AssertedInt, expected: 0, message: "a one-line program did not build. It said: {good.stdout}{good.stderr}")
+	requireVersionHeader(good.stdout, which: "a successful build")
+	Expect.contains(good.stdout, needle: CompiledPrefix, message: "a successful build no longer says where it wrote the binary. It printed: {good.stdout}")
 
 	let bad = buildSource(dir, stem: BadStem, source: BadSource)
-	try Expect.equal(bad.exitCode() as AssertedInt, expected: 1, message: "a program naming an undeclared value built. It said: {bad.stdout}{bad.stderr}")
-	try requireVersionHeader(bad.stdout, which: "a failing build")
-	try Expect.isFalse(bad.stderr.isEmpty(), message: "a failing build wrote no diagnostic to stderr, so there is nothing to keep the header apart from")
-	try Expect.isFalse(bad.stderr.contains(EarlyPreviewWords) or bad.stderr.contains(versionLine()), message: "a failing build's stderr carries the header; it must be exactly the diagnostics. It was: {bad.stderr}")
+	Expect.equal(bad.exitCode() as AssertedInt, expected: 1, message: "a program naming an undeclared value built. It said: {bad.stdout}{bad.stderr}")
+	requireVersionHeader(bad.stdout, which: "a failing build")
+	Expect.isFalse(bad.stderr.isEmpty(), message: "a failing build wrote no diagnostic to stderr, so there is nothing to keep the header apart from")
+	Expect.isFalse(bad.stderr.contains(EarlyPreviewWords) or bad.stderr.contains(versionLine()), message: "a failing build's stderr carries the header; it must be exactly the diagnostics. It was: {bad.stderr}")
 end 'build opens with the version and the early-preview warning, and keeps them off stderr'
 
 function buildSource(dir FilePath, stem String, source String) returns CollectedOutput

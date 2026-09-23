@@ -524,7 +524,12 @@ export enum ErrorCode
 	// 'try' is applied to a call that cannot throw.
 	tryRequiresThrowingFunction = "E3055"
 
-	// A throwing call is made without 'try'.
+	// A throwing call, a call to a throwing interface method, or an `await` of a throwing promise is
+	// made without 'try' where nothing catches its error. Inside a block-form `try` or a `test` body
+	// no `try` is needed: the block's handler or the test takes the error. A closure written inside a
+	// test is not the test's body, so it still needs one. Write `try f() otherwise …`, propagate with
+	// a bare `try` from a function that `throws` the same error type, or move the call into a `try`
+	// block.
 	throwingFunctionRequiresTry = "E3057"
 
 	// 'otherwise' is written without a 'try'.
@@ -584,7 +589,9 @@ export enum ErrorCode
 	// The bare-call door covers every CALL-STATEMENT spelling, not only `foo()`: a method
 	// (`arr.count()`), a field chain (`b.ops.count()`), a static member and a
 	// namespace-qualified free call all take none of what they produced. Each is anchored
-	// on the CALLED NAME -- the last name of the chain the `(` follows.
+	// on the CALLED NAME -- the last name of the chain the `(` follows. A throwing pure call written
+	// without `try` inside a `try` block or a `test` body, whose handler takes its error, is discarded
+	// the same way and refused the same way.
 	// The summary CLOSES OVER a witness dispatch rather than reading it as an effect: a
 	// constrained requirement (`key.hash()` inside `Map.get`) has candidates, and they are
 	// every declared member wearing the requirement's name whose body this program reached.
@@ -1696,8 +1703,11 @@ export enum ErrorCode
 	// of a promise no frame owns (read twice from one slot, or merged from two branches).
 	// A struct FIELD is a slot on the same terms as a container element, and every door that spends a
 	// promise asks this -- `await`, `.cancel()`, a store into a container, a store into a field or a union
-	// case, and a by-value argument -- so a read whose slot another read already consumed is refused
-	// wherever it is carried, naming the word the source wrote for that door.
+	// case, an argument at a parameter the callee takes, an `otherwise` fallback merged into a `try`'s
+	// result, and a `return` -- so a read whose slot another read already consumed is refused wherever
+	// it is carried, naming the word the source wrote for that door. A `return` is refused for a
+	// promise no frame owns: a merge of two promises (`p if c else q`) or a second name for a
+	// parameter. Return one this frame owns -- a spawn, a `pop`/`remove`, or the parameter itself.
 	// An array cursor's `current()`/`peek(n)` and a `for (it, p) in a.withIterator()` destructure are NOT
 	// refused: each names the array slot its cursor stands on at the read, so an `await` empties that slot.
 	// The cure is a read that names its slot -- `get(i)`, `first()`, `for ... in`, or an array cursor -- or a

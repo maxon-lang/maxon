@@ -16,7 +16,7 @@ quoted prose name rather than an identifier:
 
 ```text
 test 'adds two numbers'
-	try Expect.equal(add(2, 2), expected: 4)
+	Expect.equal(add(2, 2), expected: 4)
 end 'adds two numbers'
 ```
 
@@ -39,10 +39,11 @@ declaration position tells the two apart.
 Every `test` implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`). Nobody writes the
 clause, and it cannot be written.
 
-This is what makes a forgotten `try` a **compile** error: an assertion is a throwing call, so
-omitting `try` is E3057 at build time rather than an assertion whose failure nothing observes.
-It is also what lets a test body use a bare `try` with no `otherwise` — outside a throwing
-function that is an error.
+This is what lets an assertion's failure leave the test: an assertion throws `TestFailure`, and a
+test body needs no `try` on it — every throwing call, interface call and `await` in a test body
+gets an implied handler that propagates a `TestFailure` and reports any other error before failing
+the test (`specs/test-uncaught-throw.md`). It is also what lets a test body use a bare `try` with
+no `otherwise` — outside a throwing function that is an error.
 
 ### Tests live in `*.test.maxon` files
 
@@ -143,8 +144,9 @@ end 'main'
 0
 ```
 
-<!-- test: error.implied-throws-forgotten-try -->
-A forgotten `try` inside a test body is a compile error, not a test that cannot fail.
+<!-- test: implied-try-bare-assertion-compiles -->
+A bare assertion in a test body compiles, because the test body is an implied `try`. The assertion's
+`TestFailure` is the test's own error, so it propagates plainly, with no report.
 ```maxon
 // --- file: assertions.maxon
 export function assertTrue(ok bool) throws TestFailure
@@ -163,8 +165,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3057: specs/fragments/test-declaration/error.implied-throws-forgotten-try.test:11:2: throwing function requires try: 'assertTrue'
+```exitcode
+0
 ```
 
 <!-- test: error.rejects-parameters -->

@@ -6,15 +6,15 @@
 
 test 'standard mcp-server initialize returns protocol version and server info'
 	let docs = responseDocs(runMcpSingle(initRequest(1)))
-	try Expect.equal(docs.count() as AssertedInt, expected: 1, message: "expected 1 response line")
+	Expect.equal(docs.count() as AssertedInt, expected: 1, message: "expected 1 response line")
 
 	let doc = try docs.get(0) otherwise panic("no response")
 	let resId = resultNode(doc)
 
-	try Expect.equal(try doc.getString(resId, key: "protocolVersion") otherwise "", expected: "2024-11-05")
+	Expect.equal(try doc.getString(resId, key: "protocolVersion") otherwise "", expected: "2024-11-05")
 
 	let serverInfoId = try doc.getChild(resId, key: "serverInfo") otherwise panic("no serverInfo")
-	try Expect.equal(try doc.getString(serverInfoId, key: "name") otherwise "", expected: "maxon")
+	Expect.equal(try doc.getString(serverInfoId, key: "name") otherwise "", expected: "maxon")
 end 'standard mcp-server initialize returns protocol version and server info'
 
 test 'standard mcp-server notifications/initialized produces no response'
@@ -24,70 +24,70 @@ test 'standard mcp-server notifications/initialized produces no response'
 	reqs.push(toolsListRequest(2))
 
 	let docs = responseDocs(runMcp(reqs))
-	try Expect.equal(docs.count() as AssertedInt, expected: 2, message: "a notification must produce no response")
+	Expect.equal(docs.count() as AssertedInt, expected: 2, message: "a notification must produce no response")
 
 	let doc1 = try docs.get(0) otherwise panic("no first response")
 	let doc2 = try docs.get(1) otherwise panic("no second response")
-	try Expect.equal((try doc1.getInt(doc1.root, key: "id") otherwise 0) as AssertedInt, expected: 1)
-	try Expect.equal((try doc2.getInt(doc2.root, key: "id") otherwise 0) as AssertedInt, expected: 2)
+	Expect.equal((try doc1.getInt(doc1.root, key: "id") otherwise 0) as AssertedInt, expected: 1)
+	Expect.equal((try doc2.getInt(doc2.root, key: "id") otherwise 0) as AssertedInt, expected: 2)
 end 'standard mcp-server notifications/initialized produces no response'
 
 test 'standard mcp-server advertises exactly the eight user-facing tools'
 	let names = toolNames(listTools())
-	try Expect.equal(names.count() as AssertedInt, expected: 8, message: "standard mode must advertise exactly 8 tools")
+	Expect.equal(names.count() as AssertedInt, expected: 8, message: "standard mode must advertise exactly 8 tools")
 
-	try Expect.isTrue(containsString(names, target: "build"), message: "missing build")
-	try Expect.isTrue(containsString(names, target: "execute"), message: "missing execute")
-	try Expect.isTrue(containsString(names, target: "test"), message: "missing test")
-	try Expect.isTrue(containsString(names, target: "fmt"), message: "missing fmt")
-	try Expect.isTrue(containsString(names, target: "check"), message: "missing check")
-	try Expect.isTrue(containsString(names, target: "dump_ir"), message: "missing dump_ir")
-	try Expect.isTrue(containsString(names, target: "lookup_error_code"), message: "missing lookup_error_code")
-	try Expect.isTrue(containsString(names, target: "info"), message: "missing info")
+	Expect.isTrue(containsString(names, target: "build"), message: "missing build")
+	Expect.isTrue(containsString(names, target: "execute"), message: "missing execute")
+	Expect.isTrue(containsString(names, target: "test"), message: "missing test")
+	Expect.isTrue(containsString(names, target: "fmt"), message: "missing fmt")
+	Expect.isTrue(containsString(names, target: "check"), message: "missing check")
+	Expect.isTrue(containsString(names, target: "dump_ir"), message: "missing dump_ir")
+	Expect.isTrue(containsString(names, target: "lookup_error_code"), message: "missing lookup_error_code")
+	Expect.isTrue(containsString(names, target: "info"), message: "missing info")
 
-	try Expect.isFalse(containsString(names, target: "run_spec_test"), message: "run_spec_test is contributor-only")
-	try Expect.isFalse(containsString(names, target: "run_scale_test"), message: "run_scale_test is contributor-only")
-	try Expect.isFalse(containsString(names, target: "spec_test_outcome"), message: "spec_test_outcome is contributor-only")
+	Expect.isFalse(containsString(names, target: "run_spec_test"), message: "run_spec_test is contributor-only")
+	Expect.isFalse(containsString(names, target: "run_scale_test"), message: "run_scale_test is contributor-only")
+	Expect.isFalse(containsString(names, target: "spec_test_outcome"), message: "spec_test_outcome is contributor-only")
 end 'standard mcp-server advertises exactly the eight user-facing tools'
 
 test 'standard mcp-server build schema hides the contributor arguments'
 	let props = toolPropertyKeys(listTools(), toolName: "build")
 
-	try Expect.isTrue(containsString(props, target: "path"))
-	try Expect.isTrue(containsString(props, target: "source"))
-	try Expect.isTrue(containsString(props, target: "output"))
-	try Expect.isTrue(containsString(props, target: "target"))
-	try Expect.isTrue(containsString(props, target: "emitIr"))
+	Expect.isTrue(containsString(props, target: "path"))
+	Expect.isTrue(containsString(props, target: "source"))
+	Expect.isTrue(containsString(props, target: "output"))
+	Expect.isTrue(containsString(props, target: "target"))
+	Expect.isTrue(containsString(props, target: "emitIr"))
 
-	try Expect.isFalse(containsString(props, target: "repoRoot"), message: "repoRoot is contributor-only")
-	try Expect.isFalse(containsString(props, target: "from"), message: "from is contributor-only")
+	Expect.isFalse(containsString(props, target: "repoRoot"), message: "repoRoot is contributor-only")
+	Expect.isFalse(containsString(props, target: "from"), message: "from is contributor-only")
 
 	// `run`, `test` and `fmt` take `repoRoot` too, and it is contributor-only on them for the same reason it
 	// is on `build`: it names a CHECKOUT and runs that tree's own compiler, which is not a thing a user of
 	// the language has.
 	for tool in ["execute", "test", "fmt"] 'eachUserFacingTool'
-		try Expect.isFalse(containsString(toolPropertyKeys(listTools(), toolName: tool), target: "repoRoot"), message: "{tool} must not advertise repoRoot in user mode")
+		Expect.isFalse(containsString(toolPropertyKeys(listTools(), toolName: tool), target: "repoRoot"), message: "{tool} must not advertise repoRoot in user mode")
 	end 'eachUserFacingTool'
 end 'standard mcp-server build schema hides the contributor arguments'
 
 test 'standard mcp-server lookup_error_code answers name and stage from the compiled registry'
 	let doc = callTool("lookup_error_code", argumentsJson: "\{\"code\":\"E2001\"\}")
-	try Expect.isFalse(toolCallIsError(doc), message: "a real code should not be an error")
+	Expect.isFalse(toolCallIsError(doc), message: "a real code should not be an error")
 
-	try Expect.equal(payloadString(doc, key: "code"), expected: "E2001")
-	try Expect.equal(payloadString(doc, key: "name"), expected: "parserUnexpectedToken")
-	try Expect.contains(payloadString(doc, key: "stage"), needle: "Parser")
+	Expect.equal(payloadString(doc, key: "code"), expected: "E2001")
+	Expect.equal(payloadString(doc, key: "name"), expected: "parserUnexpectedToken")
+	Expect.contains(payloadString(doc, key: "stage"), needle: "Parser")
 end 'standard mcp-server lookup_error_code answers name and stage from the compiled registry'
 
 test 'standard mcp-server lookup_error_code accepts a bare number and a case name'
 	let bare = callTool("lookup_error_code", argumentsJson: "\{\"code\":\"2001\"\}")
-	try Expect.equal(payloadString(bare, key: "code"), expected: "E2001")
+	Expect.equal(payloadString(bare, key: "code"), expected: "E2001")
 
 	let numeric = callTool("lookup_error_code", argumentsJson: "\{\"code\":2001\}")
-	try Expect.equal(payloadString(numeric, key: "code"), expected: "E2001")
+	Expect.equal(payloadString(numeric, key: "code"), expected: "E2001")
 
 	let named = callTool("lookup_error_code", argumentsJson: "\{\"code\":\"parserUnexpectedToken\"\}")
-	try Expect.equal(payloadString(named, key: "code"), expected: "E2001")
+	Expect.equal(payloadString(named, key: "code"), expected: "E2001")
 end 'standard mcp-server lookup_error_code accepts a bare number and a case name'
 
 // ⛔ The whole point of the tool: an answer about a code that does not exist reads as an answer and
@@ -95,74 +95,74 @@ end 'standard mcp-server lookup_error_code accepts a bare number and a case name
 test 'standard mcp-server lookup_error_code refuses a number no case claims'
 	let doc = callTool("lookup_error_code", argumentsJson: "\{\"code\":\"E7777\"\}")
 
-	try Expect.isTrue(toolCallIsError(doc), message: "a free number must be refused, not answered")
-	try Expect.contains(toolCallText(doc), needle: "The number is FREE")
+	Expect.isTrue(toolCallIsError(doc), message: "a free number must be refused, not answered")
+	Expect.contains(toolCallText(doc), needle: "The number is FREE")
 end 'standard mcp-server lookup_error_code refuses a number no case claims'
 
 test 'standard mcp-server lookup_error_code refuses a name the registry does not declare'
 	let doc = callTool("lookup_error_code", argumentsJson: "\{\"code\":\"noSuchDiagnostic\"\}")
 
-	try Expect.isTrue(toolCallIsError(doc))
-	try Expect.contains(toolCallText(doc), needle: "declares no case named")
+	Expect.isTrue(toolCallIsError(doc))
+	Expect.contains(toolCallText(doc), needle: "declares no case named")
 end 'standard mcp-server lookup_error_code refuses a name the registry does not declare'
 
 test 'standard mcp-server refuses a tools/call missing a required argument'
 	let doc = callTool("lookup_error_code")
 
-	try Expect.isTrue(hasChildKey(doc, parent: doc.root, key: "error"), message: "a missing required argument is a protocol error")
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
-	try Expect.contains(rpcErrorMessage(doc), needle: "requires the `code` argument")
+	Expect.isTrue(hasChildKey(doc, parent: doc.root, key: "error"), message: "a missing required argument is a protocol error")
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	Expect.contains(rpcErrorMessage(doc), needle: "requires the `code` argument")
 end 'standard mcp-server refuses a tools/call missing a required argument'
 
 // ⛔ Silently dropping an argument the caller SET is the worse failure: the run reports clean having
 // never honoured it.
 test 'standard mcp-server refuses an argument no tool declares'
 	let doc = callTool("run_spec_test_typo", argumentsJson: "\{\}")
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32601)
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32601)
 
 	let stray = callTool("fmt", argumentsJson: "\{\"mmTrace\":true\}")
-	try Expect.equal(rpcErrorCode(stray) as AssertedInt, expected: -32602)
-	try Expect.contains(rpcErrorMessage(stray), needle: "has no argument `mmTrace`")
+	Expect.equal(rpcErrorCode(stray) as AssertedInt, expected: -32602)
+	Expect.contains(rpcErrorMessage(stray), needle: "has no argument `mmTrace`")
 end 'standard mcp-server refuses an argument no tool declares'
 
 test 'standard mcp-server refuses a contributor argument in user mode'
 	for tool in ["build", "execute", "test", "fmt"] 'eachToolTakingARepoRoot'
 		let doc = callTool(tool, argumentsJson: "\{\"repoRoot\":\"/somewhere\"\}")
 
-		try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602, message: "{tool} answered a user-mode repoRoot instead of refusing it")
-		try Expect.contains(rpcErrorMessage(doc), needle: "started without --dev")
+		Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602, message: "{tool} answered a user-mode repoRoot instead of refusing it")
+		Expect.contains(rpcErrorMessage(doc), needle: "started without --dev")
 	end 'eachToolTakingARepoRoot'
 end 'standard mcp-server refuses a contributor argument in user mode'
 
 test 'standard mcp-server refuses an argument of the wrong JSON type'
 	let doc = callTool("fmt", argumentsJson: "\{\"path\":42\}")
 
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
-	try Expect.contains(rpcErrorMessage(doc), needle: "must be of type string")
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32602)
+	Expect.contains(rpcErrorMessage(doc), needle: "must be of type string")
 end 'standard mcp-server refuses an argument of the wrong JSON type'
 
 test 'standard mcp-server info reports this compiler'
 	let doc = callTool("info")
-	try Expect.isFalse(toolCallIsError(doc))
+	Expect.isFalse(toolCallIsError(doc))
 
-	try Expect.equal(payloadString(doc, key: "name"), expected: "maxon")
-	try Expect.isFalse(payloadString(doc, key: "version").isEmpty(), message: "version must not be empty")
-	try Expect.isFalse(payloadString(doc, key: "executable").isEmpty(), message: "executable must not be empty")
-	try Expect.contains(payloadString(doc, key: "hostTarget"), needle: "-")
+	Expect.equal(payloadString(doc, key: "name"), expected: "maxon")
+	Expect.isFalse(payloadString(doc, key: "version").isEmpty(), message: "version must not be empty")
+	Expect.isFalse(payloadString(doc, key: "executable").isEmpty(), message: "executable must not be empty")
+	Expect.contains(payloadString(doc, key: "hostTarget"), needle: "-")
 end 'standard mcp-server info reports this compiler'
 
 test 'standard mcp-server refuses the contributor tools by name'
 	let doc = callTool("run_spec_test")
 
-	try Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32601)
-	try Expect.contains(rpcErrorMessage(doc), needle: "Unknown tool: run_spec_test")
+	Expect.equal(rpcErrorCode(doc) as AssertedInt, expected: -32601)
+	Expect.contains(rpcErrorMessage(doc), needle: "Unknown tool: run_spec_test")
 end 'standard mcp-server refuses the contributor tools by name'
 
 test 'standard mcp-server answers unknown methods and malformed input'
 	let unknown = try responseDocs(runMcpSingle(unknownMethodRequest())).get(0) otherwise panic("no response")
-	try Expect.equal(rpcErrorCode(unknown) as AssertedInt, expected: -32601)
-	try Expect.contains(rpcErrorMessage(unknown), needle: "Method not found: unknown/method")
+	Expect.equal(rpcErrorCode(unknown) as AssertedInt, expected: -32601)
+	Expect.contains(rpcErrorMessage(unknown), needle: "Method not found: unknown/method")
 
 	let malformed = try responseDocs(runMcpSingle("not valid json at all")).get(0) otherwise panic("no response")
-	try Expect.equal(rpcErrorCode(malformed) as AssertedInt, expected: -32700)
+	Expect.equal(rpcErrorCode(malformed) as AssertedInt, expected: -32700)
 end 'standard mcp-server answers unknown methods and malformed input'

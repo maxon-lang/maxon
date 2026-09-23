@@ -4,15 +4,15 @@ let LineEndFixtureArgumentLine = 4 as LspCoordinate
 let LineEndFixtureArgumentCharacter = 23 as LspCoordinate
 
 test 'completion on a line of its own offers nothing'
-	let labels = try completionLabelsFor(lineEndFixture(), line: LineEndFixtureBlankLine, character: LineEndFixtureBlankCharacter, after: "a BLANK LINE below `let s = p.toString()`, where the author has typed nothing at all")
+	let labels = completionLabelsFor(lineEndFixture(), line: LineEndFixtureBlankLine, character: LineEndFixtureBlankCharacter, after: "a BLANK LINE below `let s = p.toString()`, where the author has typed nothing at all")
 
-	try Expect.isTrue(labels.isEmpty(), message: "completion offered {labels.count()} member(s) on an empty line. The nearest token carrying source bytes is `toString` on the line ABOVE, and a walk that steps back to it reads a finished statement as an unfinished member access — so an editor firing completion on ordinary typing offers `FilePath`'s members in open code. This server completes a MEMBER of something and never an identifier prefix, so the only position with a surface is the one that follows a `.`.")
+	Expect.isTrue(labels.isEmpty(), message: "completion offered {labels.count()} member(s) on an empty line. The nearest token carrying source bytes is `toString` on the line ABOVE, and a walk that steps back to it reads a finished statement as an unfinished member access — so an editor firing completion on ordinary typing offers `FilePath`'s members in open code. This server completes a MEMBER of something and never an identifier prefix, so the only position with a surface is the one that follows a `.`.")
 end 'completion on a line of its own offers nothing'
 
 test 'completion at an argument position offers nothing'
-	let labels = try completionLabelsFor(lineEndFixture(), line: LineEndFixtureArgumentLine, character: LineEndFixtureArgumentCharacter, after: "the position after the comma in `print(p.toString(),`, where the next ARGUMENT goes")
+	let labels = completionLabelsFor(lineEndFixture(), line: LineEndFixtureArgumentLine, character: LineEndFixtureArgumentCharacter, after: "the position after the comma in `print(p.toString(),`, where the next ARGUMENT goes")
 
-	try Expect.isTrue(labels.isEmpty(), message: "completion offered {labels.count()} member(s) where an argument goes. The last token with source bytes before the cursor is `toString`, whose own preceding token is a `.`, so a backward step lands on `p` and offers its members — three tokens and a comma away from anything the author is writing.")
+	Expect.isTrue(labels.isEmpty(), message: "completion offered {labels.count()} member(s) where an argument goes. The last token with source bytes before the cursor is `toString`, whose own preceding token is a `.`, so a backward step lands on `p` and offers its members — three tokens and a comma away from anything the author is writing.")
 end 'completion at an argument position offers nothing'
 
 function lineEndFixture() returns String

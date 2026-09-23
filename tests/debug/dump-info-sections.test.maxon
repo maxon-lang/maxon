@@ -15,16 +15,16 @@ test 'a word that is not a section is refused by name, and a list of real ones p
 	let refused = spawnDumpInfo(executable, staged: staged, sections: [UnknownSectionName])
 	let refusalSaid = renderedEvents(refused.stdout, stderr: refused.stderr)
 
-	try Expect.equal(refused.exitCode() as AssertedInt, expected: RefusedDumpExitCode, message: "a section name this command does not have is a command line it cannot act on, so it must exit {RefusedDumpExitCode}. {refusalSaid}")
-	try Expect.isEmpty(withoutCarriageReturns(refused.stdout), message: "the refusal printed part of a dump on stdout. A reader piping this command gets a fragment of a sidecar and an exit code they may not be checking. {refusalSaid}")
+	Expect.equal(refused.exitCode() as AssertedInt, expected: RefusedDumpExitCode, message: "a section name this command does not have is a command line it cannot act on, so it must exit {RefusedDumpExitCode}. {refusalSaid}")
+	Expect.isEmpty(withoutCarriageReturns(refused.stdout), message: "the refusal printed part of a dump on stdout. A reader piping this command gets a fragment of a sidecar and an exit code they may not be checking. {refusalSaid}")
 
-	try Expect.equal(withoutCarriageReturns(refused.stderr).trim(), expected: RefusalSentence, message: "⛔ THIS SENTENCE IS A CONTRACT, THE PROGRAM NAME IN IT INCLUDED. It names the command a reader types, the word they got wrong, and the whole valid set — and the valid set is printed from the SAME roster the parser reads, so a section added to that roster appears here by construction. A reworded refusal, a renamed program, or a section that joined the parser without joining this list is what this assertion is for. {refusalSaid}")
+	Expect.equal(withoutCarriageReturns(refused.stderr).trim(), expected: RefusalSentence, message: "⛔ THIS SENTENCE IS A CONTRACT, THE PROGRAM NAME IN IT INCLUDED. It names the command a reader types, the word they got wrong, and the whole valid set — and the valid set is printed from the SAME roster the parser reads, so a section added to that roster appears here by construction. A reworded refusal, a renamed program, or a section that joined the parser without joining this list is what this assertion is for. {refusalSaid}")
 
 	let dumped = spawnDumpInfo(executable, staged: staged, sections: [HeaderSectionName, FilesSectionName])
 	let dumpSaid = renderedEvents(dumped.stdout, stderr: dumped.stderr)
 	let printed = withoutCarriageReturns(dumped.stdout)
 
-	try Expect.equal(dumped.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName}` handed two real section names printed nothing and failed. A refusal that is equally happy to refuse a valid list says nothing about the invalid one above. {dumpSaid}")
-	try Expect.notEqual(dumpSectionRows(printed, heading: DumpFilesHeading).count() as AssertedInt, expected: 0, message: "`{FilesSectionName}` was asked for and its section is empty or absent, so the selection printed nothing a reader asked for. {dumpSaid}")
-	try Expect.equal(dumpSectionRows(printed, heading: DumpFunctionsHeading).count() as AssertedInt, expected: 0, message: "`{DumpFunctionsHeading}…)` was NOT among the sections asked for and its rows were printed anyway. A selection that prints everything is one a reader cannot use to look at one table of a large sidecar, and it would pass any assertion about the sections that WERE asked for. {dumpSaid}")
+	Expect.equal(dumped.exitCode() as AssertedInt, expected: 0, message: "`{DumpInfoOptionName}` handed two real section names printed nothing and failed. A refusal that is equally happy to refuse a valid list says nothing about the invalid one above. {dumpSaid}")
+	Expect.notEqual(dumpSectionRows(printed, heading: DumpFilesHeading).count() as AssertedInt, expected: 0, message: "`{FilesSectionName}` was asked for and its section is empty or absent, so the selection printed nothing a reader asked for. {dumpSaid}")
+	Expect.equal(dumpSectionRows(printed, heading: DumpFunctionsHeading).count() as AssertedInt, expected: 0, message: "`{DumpFunctionsHeading}…)` was NOT among the sections asked for and its rows were printed anyway. A selection that prints everything is one a reader cannot use to look at one table of a large sidecar, and it would pass any assertion about the sections that WERE asked for. {dumpSaid}")
 end 'a word that is not a section is refused by name, and a list of real ones prints those and no others'

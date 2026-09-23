@@ -1,0 +1,133 @@
+// Test: implied-try-for-source-rebranded-cursor-is-absorbed
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Walk = ArrayIterator with Integer
+
+test 'an empty rebranded traversal runs no trips'
+	var total = 0
+
+	for x in IntArray.create().cursor() as Walk 'each'
+		total = total + x
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 0)
+end 'an empty rebranded traversal runs no trips'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __sched_tls_teb_offset@0 = i64 0
+  __sched_allm@8 = i64 0
+  __sched_lock@16 = i64 0
+  __sched_preempt_ext_lock@24 = i64 0
+  __sched_preempt_context@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __ds_base@64 = i64 0
+  __dbg_ctl@72 = i64 0
+  __mrt_console_probe_stdin@80 = i8 0
+  __mrt_console_probe_stdout@81 = i8 0
+  __mrt_console_probe_stderr@82 = i8 0
+}
+
+func @__test_an_empty_rebranded_traversal_runs_no_trips {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect Array.cursor
+    x64.movRegReg r13, r8
+    x64.movRegReg r14, r10
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r14, 0
+    x64.jcc equal, forhdr
+    x64.jmp forjoin
+  each:
+    x64.leaRegRdata r12, [rip + __layout_ArrayIterator_Integer]
+  __il_body#10:
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+  __il_cont#9:
+    x64.leaRegRegReg rbx, rbx, r8
+  forstep:
+    x64.movRegReg rcx, r13
+    x64.callDirect ArrayIterator.advance
+    x64.movRegReg rax, r10
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, each
+  forexit:
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_ArrayIterator_Integer
+  forjoin:
+    x64.movRegImm32 r12, 0
+  __il_body#12:
+    x64.leaRegRdata rcx, [rip + __str_rec_40]  ; ""
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+  __il_cont#11:
+    x64.leaRegRdata r9, [rip + __str_rec_15]  ; "suite.test.maxon"
+    x64.movRegImm32 rsi, 12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Expect.equal
+    x64.movRegReg rbx, r10
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

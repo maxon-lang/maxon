@@ -53,12 +53,12 @@ test 'a breakpoint on each instruction class is hit and resumed, and the program
 		end 'neverHit'
 	end 'eachAnchorHit'
 
-	try Expect.isEmpty(renderedRows(never), message: "a breakpoint is armed by DISPLACING one instruction and resumed by executing it out of line, so an instruction class the driver classifies wrongly is a breakpoint that is armed and never reached — or one that corrupts the resume. The session stopped on lines: {renderedRows(stoppedLines)}. {said}")
+	Expect.isEmpty(renderedRows(never), message: "a breakpoint is armed by DISPLACING one instruction and resumed by executing it out of line, so an instruction class the driver classifies wrongly is a breakpoint that is armed and never reached — or one that corrupts the resume. The session stopped on lines: {renderedRows(stoppedLines)}. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end, so nothing here says the resumes were correct. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the session did not run the program to its end, so nothing here says the resumes were correct. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
-	try Expect.contains(withoutCarriageReturns(session.stderr), needle: withoutCarriageReturns(undebugged.stdout).trim(), message: "the debugged program did not print what the same program prints undebugged. In `{DebugBatchOption}` the debuggee's own streams go to the driver's STDERR, so stdout stays pure JSON. Undebugged it printed: {undebugged.stdout}. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.contains(withoutCarriageReturns(session.stderr), needle: withoutCarriageReturns(undebugged.stdout).trim(), message: "the debugged program did not print what the same program prints undebugged. In `{DebugBatchOption}` the debuggee's own streams go to the driver's STDERR, so stdout stays pure JSON. Undebugged it printed: {undebugged.stdout}. {said}")
 end 'a breakpoint on each instruction class is hit and resumed, and the program answers exactly as it does undebugged'

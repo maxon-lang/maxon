@@ -1,0 +1,237 @@
+// Test: implied-try-true-arm-of-a-for-source-ternary
+// --- file: suite.test.maxon
+typealias Tally = int(0 to 100)
+typealias TallyArray = Array with Tally
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function items(hit bool) returns TallyArray throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	var found = TallyArray.create()
+	found.push(1)
+	found.push(2)
+	return found
+end 'items'
+
+test 'walks the chosen items'
+	let useFirst = true
+	var total = 0
+
+	for x in items(true) if useFirst else items(true) 'each'
+		total = total + x
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 3)
+end 'walks the chosen items'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_wireWrapper@0 = i64 0
+  __data_wireSeparator@8 = i64 0
+  __sched_tls_teb_offset@16 = i64 0
+  __sched_allm@24 = i64 0
+  __sched_lock@32 = i64 0
+  __sched_preempt_ext_lock@40 = i64 0
+  __sched_preempt_context@48 = i64 0
+  __slab_arena_list@56 = i64 0
+  __slab_arena_map_l1@64 = i64 0
+  __slab_state@72 = i64 0
+  __ds_base@80 = i64 0
+  __dbg_ctl@88 = i64 0
+  __mrt_console_probe_stdin@96 = i8 0
+  __mrt_console_probe_stdout@97 = i8 0
+  __mrt_console_probe_stderr@98 = i8 0
+}
+
+func @items {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.xorRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ifcont
+  miss:
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__test_walks_the_chosen_items {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+  ternarytrue:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect items
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, matchcont
+  tryerr#2:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.leaRegRdata rbx, [rip + __str_rec_17]  ; "ApiError"
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+    x64.leaRegRdata rcx, [rip + __str_rec_18]  ; "notFound"
+    x64.imulRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, 18446744073709551613
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rax, [rip + __str_rec_19]  ; "suite.test.maxon"
+    x64.movRegImm32 r9, 23
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __TestReport.threw
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
+    x64.movRegImm32 r10, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+    x64.movRegImm32 rdx, 0
+  __us_test:
+    x64.loadRegBaseDisp.word64 r13, [r12 + 8]
+    x64.loadRegBaseDisp.word64 r14, [r12 + 24]
+    x64.loadRegBaseDisp.word64 r15, [r12 + 0]
+    x64.jmp forhdr
+  each:
+    x64.cmpRegImm32 r14, 8
+    x64.jcc notEqual, __im_stride
+  __im_word:
+    x64.loadRegBaseIndexScale.word64 rax, [r15 + rdx*8 + 0]
+    x64.jmp __im_cont
+  __im_stride:
+    x64.cmpRegImm32 r14, 1
+    x64.jcc notEqual, __im_slow
+  __im_byte:
+    x64.leaRegRegReg rax, r15, rdx
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp __im_cont
+  __im_slow:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_get_unchecked
+    x64.movRegReg rax, r8
+  __im_cont:
+    x64.leaRegRegReg rbx, rbx, rax
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rdx, rax, 1
+  forhdr:
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegReg rdx, r13
+    x64.jcc less, each
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r12, 3
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_44]  ; ""
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+  __il_cont:
+    x64.leaRegRdata r9, [rip + __str_rec_19]  ; "suite.test.maxon"
+    x64.movRegImm32 rsi, 27
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Expect.equal
+    x64.movRegReg rbx, r10
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, tryok
+  tryerr#13:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,114 @@
+typealias Amount = int(0 to i64.max)
+
+union FetchError implements Error
+	missing(key String)
+end 'FetchError'
+
+function fetch(key String) returns Amount throws FetchError
+	if key != "known" 'unknown'
+		throw FetchError.missing(key)
+	end 'unknown'
+
+	return 7
+end 'fetch'
+
+function label(prefix String, amount Amount) returns String
+	return "{prefix}{amount}"
+end 'label'
+
+test 'a bare assertion passes'
+	let total = fetch("known")
+	Expect.equal(total as AssertedInt, expected: 7)
+	Expect.equal(label("total ", amount: total), expected: "total 7")
+end 'a bare assertion passes'
+
+test 'a foreign error mid-statement fails the test'
+	let who = "nobody"
+	let text = label("key {who}: ", amount: fetch(who))
+	Expect.equal(text, expected: "key nobody: 7")
+end 'a foreign error mid-statement fails the test'
+
+interface Source
+	function amount() returns Amount throws FetchError
+end 'Source'
+
+type Vault implements Source
+	let key as String
+
+	static function create(key String) returns Self
+		return Self{key: key}
+	end 'create'
+
+	function amount() returns Amount throws FetchError
+		return try fetch(self.key)
+	end 'amount'
+end 'Vault'
+
+function vaultFor(key String) returns Source
+	return Vault.create(key)
+end 'vaultFor'
+
+test 'a throwing interface method called bare fails the test'
+	let source = vaultFor("nobody")
+	let total = source.amount()
+	Expect.equal(total as AssertedInt, expected: 7)
+end 'a throwing interface method called bare fails the test'
+
+function fetchLater(key String) returns Amount throws FetchError
+	Scheduler.yield()
+	return try fetch(key)
+end 'fetchLater'
+
+test 'a bare await of a throwing promise fails the test'
+	let pending = async fetchLater("nobody")
+	let total = await pending
+	Expect.equal(total as AssertedInt, expected: 7)
+end 'a bare await of a throwing promise fails the test'
+
+function fetchText(key String) returns String throws FetchError
+	if key != "known" 'unknown'
+		throw FetchError.missing(key)
+	end 'unknown'
+
+	return "seven"
+end 'fetchText'
+
+test 'a bound String from a throwing call fails the test'
+	let text = fetchText("nobody")
+	Expect.equal(text, expected: "seven")
+end 'a bound String from a throwing call fails the test'
+
+var textFetches = 0 as Amount
+
+function fetchCountedText(key String) returns String throws FetchError
+	textFetches = textFetches + 1
+	return try fetchText(key)
+end 'fetchCountedText'
+
+test 'a discarded String from a throwing call fails the test'
+	_ = fetchCountedText("nobody")
+end 'a discarded String from a throwing call fails the test'
+
+typealias AmountArray = Array with Amount
+
+test 'an empty parenthesized traversal runs no trips'
+	var total = 0
+
+	for (_, value) in (AmountArray.create().withIterator()) 'each'
+		total = total + value
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 0)
+end 'an empty parenthesized traversal runs no trips'
+
+typealias Walk = ArrayIterator with Amount
+
+test 'an empty rebranded traversal runs no trips'
+	var total = 0
+
+	for x in AmountArray.create().cursor() as Walk 'each'
+		total = total + x
+	end 'each'
+
+	Expect.equal(total as AssertedInt, expected: 0)
+end 'an empty rebranded traversal runs no trips'

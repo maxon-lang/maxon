@@ -16,7 +16,7 @@ test 'two variables naming one cache directory clear it once and count it once'
 
 	let owned = cacheRoot.join(CacheVendorDirName)
 	let planted = filesUnder(owned).count() as AssertedInt
-	try Expect.greaterThan(planted, than: 0, message: "the gate could not run - {owned.toString()} holds no file at all, so a count taken over it says nothing")
+	Expect.greaterThan(planted, than: 0, message: "the gate could not run - {owned.toString()} holds no file at all, so a count taken over it says nothing")
 
 	var naming = EnvMap.create()
 	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
@@ -25,10 +25,10 @@ test 'two variables naming one cache directory clear it once and count it once'
 	let cleared = runWithCacheRoots([CacheCommandWord, CacheClearVerb], naming: naming, workingDirectory: dir)
 	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
 
-	try Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over one directory that {CacheRootVariable} and {HostTempVariable} both name. A second walk over a tree the first one removed is not a removal that failed. {said}")
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over one directory that {CacheRootVariable} and {HostTempVariable} both name. A second walk over a tree the first one removed is not a removal that failed. {said}")
 
-	try Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing. {said}")
+	Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing. {said}")
 
 	let reported = try reportedTally(cleared.stdout) otherwise panic("{CaseDirName}: the gate could not run - `maxon {CacheCommandWord} {CacheClearVerb}` stated no count at all, so there is no number to compare. {said}")
-	try Expect.equal(reported, expected: planted, message: "`maxon {CacheCommandWord} {CacheClearVerb}` reported {reported} files removed where {planted} were on disk. Two variables naming one directory is one cache, not two. {said}")
+	Expect.equal(reported, expected: planted, message: "`maxon {CacheCommandWord} {CacheClearVerb}` reported {reported} files removed where {planted} were on disk. Two variables naming one directory is one cache, not two. {said}")
 end 'two variables naming one cache directory clear it once and count it once'

@@ -62,30 +62,30 @@ end 'ListingRowLookup'
 test 'the four line states are told apart and each marker names its own line'
 	let staged = stagedProgram(LineStatesCaseLabel, fixture: StatesFixtureName)
 	let executable = builtExecutable(staged, stem: CoveredOutputStem)
-	try requireCoverageBuild(staged, output: executable)
+	requireCoverageBuild(staged, output: executable)
 
-	let report = try requireCoverageRunReport(staged, executable: executable)
+	let report = requireCoverageRunReport(staged, executable: executable)
 
 	// ⭐ THE JOIN, for every line this case goes on to make a claim about.
 	for anchor in anchorsUnderTest() 'eachAnchor'
-		try requireRowNamesItsOwnLine(report, staged: staged, anchor: anchor)
+		requireRowNamesItsOwnLine(report, staged: staged, anchor: anchor)
 	end 'eachAnchor'
 
 	// The three states that are spellings.
 	let neverMarker = anchoredMarker(report, staged: staged, anchor: NeverAnchor)
 	let eliminatedMarker = anchoredMarker(report, staged: staged, anchor: EliminatedAnchor)
 	let noCodeMarker = anchoredMarker(report, staged: staged, anchor: NoCodeAnchor)
-	try Expect.equal(neverMarker, expected: NotCoveredMarker, message: "the line the fixture anchors as `{NeverAnchor}` is real emitted code inside a condition that is false for the whole run, and its marker is not `{NotCoveredMarker}`. Finding exactly that line is what a coverage tool is FOR; reported as a count it says the run reached code it never reached, and reported blank it disappears among the comments. The report reads:{LineFeed}{report}")
-	try Expect.equal(eliminatedMarker, expected: EliminatedMarker, message: "the line the fixture anchors as `{EliminatedAnchor}` is the body of a function nothing calls, so the optimizer emitted no code for it, and its marker is not `{EliminatedMarker}`. `{NotCoveredMarker}` there blames the run for not reaching code that does not exist, and a blank hides it among the comments — the fourth state needs its own mark or it is not a state. The report reads:{LineFeed}{report}")
-	try Expect.isEmpty(noCodeMarker, message: "the line the fixture anchors as `{NoCodeAnchor}` is a comment and carries no coverage point, yet the listing marked it. A marker on a line that has no point is a count belonging to some other line, printed where a reader will believe it. The report reads:{LineFeed}{report}")
+	Expect.equal(neverMarker, expected: NotCoveredMarker, message: "the line the fixture anchors as `{NeverAnchor}` is real emitted code inside a condition that is false for the whole run, and its marker is not `{NotCoveredMarker}`. Finding exactly that line is what a coverage tool is FOR; reported as a count it says the run reached code it never reached, and reported blank it disappears among the comments. The report reads:{LineFeed}{report}")
+	Expect.equal(eliminatedMarker, expected: EliminatedMarker, message: "the line the fixture anchors as `{EliminatedAnchor}` is the body of a function nothing calls, so the optimizer emitted no code for it, and its marker is not `{EliminatedMarker}`. `{NotCoveredMarker}` there blames the run for not reaching code that does not exist, and a blank hides it among the comments — the fourth state needs its own mark or it is not a state. The report reads:{LineFeed}{report}")
+	Expect.isEmpty(noCodeMarker, message: "the line the fixture anchors as `{NoCodeAnchor}` is a comment and carries no coverage point, yet the listing marked it. A marker on a line that has no point is a count belonging to some other line, printed where a reader will believe it. The report reads:{LineFeed}{report}")
 
 	// The state that is a number, asked as an ORDER rather than as a value.
 	let hot = decimalValue(anchoredMarker(report, staged: staged, anchor: HotAnchor))
 	let loopHeader = decimalValue(anchoredMarker(report, staged: staged, anchor: LoopHeaderAnchor))
-	try Expect.greaterThan(hot as AssertedInt, than: 0, message: "the line the fixture anchors as `{HotAnchor}` runs on every iteration of a loop the program definitely enters, and the listing gives it no positive count. A line that ran and is reported as not having run is the failure mode that makes a coverage number worth less than none. The report reads:{LineFeed}{report}")
-	try Expect.greaterThan(hot as AssertedInt, than: loopHeader as AssertedInt, message: "the loop BODY (`{HotAnchor}`, counted {hot}) did not outrun the loop HEADER (`{LoopHeaderAnchor}`, counted {loopHeader}). The header is evaluated once per entry and the body once per iteration, so a body that does not exceed it means the counts are not per-execution at all — a point incremented once per line rather than once per pass reads as a plausible listing of ones. The report reads:{LineFeed}{report}")
+	Expect.greaterThan(hot as AssertedInt, than: 0, message: "the line the fixture anchors as `{HotAnchor}` runs on every iteration of a loop the program definitely enters, and the listing gives it no positive count. A line that ran and is reported as not having run is the failure mode that makes a coverage number worth less than none. The report reads:{LineFeed}{report}")
+	Expect.greaterThan(hot as AssertedInt, than: loopHeader as AssertedInt, message: "the loop BODY (`{HotAnchor}`, counted {hot}) did not outrun the loop HEADER (`{LoopHeaderAnchor}`, counted {loopHeader}). The header is evaluated once per entry and the body once per iteration, so a body that does not exceed it means the counts are not per-execution at all — a point incremented once per line rather than once per pass reads as a plausible listing of ones. The report reads:{LineFeed}{report}")
 
-	try requireSummaryAgrees(report)
+	requireSummaryAgrees(report)
 end 'the four line states are told apart and each marker names its own line'
 
 // ============================================================================================

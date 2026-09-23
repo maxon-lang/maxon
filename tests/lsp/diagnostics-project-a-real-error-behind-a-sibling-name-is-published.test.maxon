@@ -15,9 +15,9 @@ test 'a real error behind a sibling name is the one that is published'
 
 	discardOutsideCheckoutDir(root)
 
-	let reported = try onlyProjectDiagnostic(probe, note: "the buffer names the sibling's `ProjectRealErrorBehindSlot` on an EARLY line and the undeclared `ProjectRealErrorBehindNowhere` on a LATER one, and a `maxon build` of this very project reports the later one and nothing else.")
+	let reported = onlyProjectDiagnostic(probe, note: "the buffer names the sibling's `ProjectRealErrorBehindSlot` on an EARLY line and the undeclared `ProjectRealErrorBehindNowhere` on a LATER one, and a `maxon build` of this very project reports the later one and nothing else.")
 
-	try Expect.equal(reported.code, expected: ProjectRealErrorBehindCode, message: "a parse ABORTS at its first refusal, so a server that cannot see the sibling declaration stops on the EARLY line and the author's real typo below it is never reported at all.")
+	Expect.equal(reported.code, expected: ProjectRealErrorBehindCode, message: "a parse ABORTS at its first refusal, so a server that cannot see the sibling declaration stops on the EARLY line and the author's real typo below it is never reported at all.")
 
-	try Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectRealErrorBehindLine as AssertedInt, message: "the anchor is the whole point: line 2 is `ProjectRealErrorBehindNowhere`, which is declared nowhere, and line 1 is `ProjectRealErrorBehindSlot`, which the sibling file exports. A diagnostic on line 1 is the invented one wearing the right code.")
+	Expect.equal(reported.range.startLine as AssertedInt, expected: ProjectRealErrorBehindLine as AssertedInt, message: "the anchor is the whole point: line 2 is `ProjectRealErrorBehindNowhere`, which is declared nowhere, and line 1 is `ProjectRealErrorBehindSlot`, which the sibling file exports. A diagnostic on line 1 is the invented one wearing the right code.")
 end 'a real error behind a sibling name is the one that is published'

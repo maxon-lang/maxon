@@ -10,7 +10,7 @@ test 'a condition over a float local is refused by name, and the breakpoint is n
 	let hitLine = anchorLine(staged, anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
-	try Expect.atLeast(iterations as AssertedInt, than: 1, message: "the anchored line must run, or an unarmed breakpoint would be indistinguishable from an unreached one. It ran it {iterations} times.")
+	Expect.atLeast(iterations as AssertedInt, than: 1, message: "the anchored line must run, or an unarmed breakpoint would be indistinguishable from an unreached one. It ran it {iterations} times.")
 
 	let commands = debugCommandLine([conditionalBreak(lineTarget(hitLine), condition: ConditionText), RunCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
@@ -18,16 +18,16 @@ test 'a condition over a float local is refused by name, and the breakpoint is n
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	try Expect.equal(armings.count() as AssertedInt, expected: 1, message: "a refused condition is still an answer and must print one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(armings.count() as AssertedInt, expected: 1, message: "a refused condition is still an answer and must print one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
 
 	let armed = eventAt(armings, index: 0)
-	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: ConditionUnsupportedAction, message: "⛔ THE AGENT'S COMPARE IS AN INTEGER ONE. A float local compared as a word compares its BIT PATTERN, and `{ConditionText}` over a bit pattern is a test with a plausible answer and no meaning — so the condition is refused as `{ConditionUnsupportedAction}`. {said}")
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: ConditionUnsupportedAction, message: "⛔ THE AGENT'S COMPARE IS AN INTEGER ONE. A float local compared as a word compares its BIT PATTERN, and `{ConditionText}` over a bit pattern is a test with a plausible answer and no meaning — so the condition is refused as `{ConditionUnsupportedAction}`. {said}")
 
-	try Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "a refused condition must leave the breakpoint unarmed; armed anyway it would stop on every one of the {iterations} iterations. {said}")
+	Expect.equal(eventsOfKind(events, kind: StopEventName).count() as AssertedInt, expected: 0, message: "a refused condition must leave the breakpoint unarmed; armed anyway it would stop on every one of the {iterations} iterations. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program did not reach its own end with nothing armed. {said}")
+	Expect.equal(exits.count() as AssertedInt, expected: 1, message: "the program did not reach its own end with nothing armed. {said}")
 
 	let exited = eventAt(exits, index: 0)
-	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the program answered a different exit code than the same program run with nothing attached. {said}")
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey) as AssertedInt, expected: undebugged.exitCode() as AssertedInt, message: "the program answered a different exit code than the same program run with nothing attached. {said}")
 end 'a condition over a float local is refused by name, and the breakpoint is not armed'

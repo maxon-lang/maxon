@@ -415,6 +415,8 @@ let DeclShapeMutable = 13 as HashDigest
 let DeclShapeParamConsume = 24 as HashDigest
 let ConsumeBitSet = 25 as HashDigest
 let ConsumeBitClear = 26 as HashDigest
+let HandedBackBitSet = 124 as HashDigest
+let HandedBackBitClear = 125 as HashDigest
 
 // A function's `throws E` clause discriminator (P1.4b). Its own discriminator for `DeclShapeAlias`'s
 // reason: a callee that GAINS or CHANGES a throws type changes whether each call site needs a `try`
@@ -3915,94 +3917,96 @@ export union TypeParamFeed
 		end 'f'
 	end 'isFeed'
 
-	// Does the fed value land in storage the CALLEE owns and releases (W10)? The one question the callee-side
-	// enrolment (`bindParameters`), the descriptor-need seed (`Queries.foldDescriptorNeeds`) and the
-	// borrowed-argument promotion (`handleEscapingBorrowFeed`) all ask, so the sink is read through ONE door
-	// and the three cannot come to disagree about who frees the value.
-	export function sinkIsCalleeStorage() returns bool
+	export function answers(query FeedSinkQuery) returns bool
 		return match self 'f'
-			feeds(_, sink) gives sink == FeedSink.calleeStorage
+			feeds(_, sink) gives sinkAnswers(sink, query: query)
 			none gives false
 		end 'f'
-	end 'sinkIsCalleeStorage'
+	end 'answers'
 end 'TypeParamFeed'
+
+function sinkAnswers(sink FeedSink, query FeedSinkQuery) returns bool
+	return match query 'query'
+		anySink gives true
+		calleeStorageSink gives sink == FeedSink.calleeStorage
+		constructedValueSink gives sink == FeedSink.constructedValue
+	end 'query'
+end 'sinkAnswers'
 
 export typealias TypeParamFeedArray = Array with TypeParamFeed
 
-// ⭐ **A FUNCTION'S PER-PARAMETER CONSUME FACTS (P1.4a wave 2, P1.6-B2)** — the ordered `paramNames` (so a
-// call site can slot a LABELLED argument `inner: i` to its position without the `FuncSignature`, which is
-// not yet built at parse time), the `bits` (`bits[i]` true iff parameter `i` is CONSUMED — moved into a
-// NON-type-parameter struct field, so the callee owns it whatever the concrete type), and the `feeds`
-// (`feeds[i]` names the type-parameter position parameter `i` fills, for the concrete-site managed consume).
-// The sweep computes them from tokens (the only whole-program input a pure per-file parse may read), one
-// entry per function that consumes OR feeds, and travels by NAME with no interner (names, bools, positions —
-// no ids), exactly like `enumTypes`. `feeds` is EMPTY for a non-generic function (the common case).
+export enum FeedSinkQuery
+	anySink
+
+	// Does the fed value land in storage the callee owns and releases? The callee's enrolment
+	// (`bindParameters`), the caller's move (`transferConsumedArgs`) and the descriptor-need seed
+	// (`ProgramSignatures.functionFeedsCalleeStorage`) all ask it here, so they agree about who frees
+	// the value. It asks the sink and not merely `isFeed()`: only a callee-storage feed is enrolled
+	// owned, so only it can be left live at an exit and dropped through the descriptor. A `Self{item: p}` constructor feed
+	// is settled at the concrete call site, and seeding the descriptor off it would reserve a slot a
+	// generic constructor has no receiver to source (the refusal at `parseFunction`'s
+	// `staticLayoutNeedsSelfReturn`).
+	calleeStorageSink
+
+	// The question for a body that forwards a borrowed opaque `T` into another generic's `create()`
+	// and takes its reference through `retainFunc@64` (`methodNameEverFeedsATypeParameter`). It must
+	// not match the callee-storage sink too: `storesBorrowedOpaqueElement` already seeds that one, and
+	// a second seed reserves a descriptor in a chain that must stay inert — `extension Iterable.map`'s
+	// `result.push(item)` then panics in `bakeFuncAbs64Relocs`
+	// (`interface-extensions.stdlib-map-on-map-with-function`).
+	constructedValueSink
+end 'FeedSinkQuery'
+
+// A function's per-parameter ownership facts: `paramNames` in order, so a call site can slot a
+// labelled argument to its position before the `FuncSignature` is built; `bits[i]`, parameter `i`
+// is consumed (moved into a non-type-parameter field, so the callee owns it whatever the concrete
+// type); `feeds[i]`, the type-parameter position parameter `i` fills, for the concrete-site managed
+// consume; and `handedBack[i]`, a bare `return` of parameter `i`. The sweep computes them from
+// tokens, the only whole-program input a per-file parse may read, records one entry per function
+// with any such fact, and publishes them by name with no interner, like `enumTypes`. `feeds` is
+// empty for a non-generic function.
 export type ParamConsumeInfo
 	export let paramNames as ByteArrayArray
 	export let bits as BoolArray
 	export let feeds as TypeParamFeedArray
+	export let handedBack as BoolArray
 
-	export static function create(paramNames ByteArrayArray, bits BoolArray, feeds TypeParamFeedArray) returns ParamConsumeInfo
-		return Self{paramNames: paramNames, bits: bits, feeds: feeds}
+	export static function create(paramNames ByteArrayArray, bits BoolArray, feeds TypeParamFeedArray, handedBack BoolArray) returns ParamConsumeInfo
+		return Self{paramNames: paramNames, bits: bits, feeds: feeds, handedBack: handedBack}
 	end 'create'
 
 	export function isConsumed(index ParamCount) returns bool
-		if index >= self.bits.count() 'past'
-			return false
-		end 'past'
-
-		return try self.bits.get(index) otherwise panic("ParamConsumeInfo.isConsumed: bits.get OOB at {index} despite index < count")
+		return bitAt(self.bits, index: index)
 	end 'isConsumed'
 
-	// Does ANY parameter feed CALLEE-OWNED storage (P1.7 slice 3b-v, W10)? The whole-`feeds`-column twin of
-	// `typeParamFeedOf`'s single-index read — the descriptor-need seed asks it per method (via
-	// `ProgramSignatures.functionFeedsCalleeStorage`). Empty for a non-generic function, so it answers false.
-	//
-	// ⚠ It asks the SINK, not merely `isFeed()`: only a callee-storage feed is enrolled owned, so only it can be
-	// left live at an exit and dropped through the descriptor. A `Self{item: p}` CONSTRUCTOR feed is settled
-	// entirely at the concrete call site, and seeding the descriptor off it would reserve a slot a generic
-	// constructor has no receiver to source (the refusal at `parseFunction`'s `staticLayoutNeedsSelfReturn`).
-	export function feedsCalleeStorage() returns bool
-		for i in 0 upto self.feeds.count() 'each'
-			if (try self.feeds.get(i) otherwise panic("feedsCalleeStorage: feeds.get OOB at {i} despite i < count")).sinkIsCalleeStorage() 'feed'
+	export function isHandedBack(index ParamCount) returns bool
+		return bitAt(self.handedBack, index: index)
+	end 'isHandedBack'
+
+	// The caller's promise move (`transferConsumedArgs`) and the callee's ownership (`bindParameters`)
+	// both ask this, so a promise argument has exactly one owner; two answers would leak it or free it
+	// twice.
+	export function takesPromiseAt(index ParamCount) returns bool
+		return self.isConsumed(index) or self.isHandedBack(index) or self.typeParamFeedOf(index).isFeed()
+	end 'takesPromiseAt'
+
+	export function handsBackAParameter() returns bool
+		return anyBitSet(self.handedBack)
+	end 'handsBackAParameter'
+
+	export function transfersAParameter() returns bool
+		return anyBitSet(self.bits) or self.anyFeed(FeedSinkQuery.anySink)
+	end 'transfersAParameter'
+
+	export function anyFeed(query FeedSinkQuery) returns bool
+		for feed in self.feeds 'each'
+			if feed.answers(query) 'aMatchingFeed'
 				return true
-			end 'feed'
+			end 'aMatchingFeed'
 		end 'each'
 
 		return false
-	end 'feedsCalleeStorage'
-
-	// ⭐ **Does ANY parameter feed a CONSTRUCTOR — the sink `feedsCalleeStorage` above excludes (BATCH41)?**
-	// The two are exact complements over one column, which is what makes them two functions rather than one
-	// with a flag: that one seeds the descriptor for a body whose feed is ENROLLED OWNED and may be dropped
-	// through it, this one for a body that forwards a borrowed opaque `T` into another generic's `create()`
-	// and takes its reference through `retainFunc@64`.
-	//
-	// ⛔⛔ **IT ASKED `isFeed()` — BOTH SINKS — WHEN IT WAS FIRST WRITTEN, AND THAT BROKE A COMMITTED
-	// PROGRAM.** Read at a `.<name>(` by the token scan, `isFeed()` matches `push`, whose sink is callee
-	// storage — so `stdlib/Interfaces.maxon`'s `extension Iterable.map`, whose body is `result.push(item)`,
-	// began reserving a descriptor it had never reserved. W161's own header states the consequence in
-	// advance (*"`Map.map` reserves nothing … forwarding a real descriptor into half of such a chain"*), and
-	// the MEASURED symptom was one step further out: with a descriptor in hand the chain minted a CONCRETE
-	// `__layout_Array___Tuple2.String.int` whose `copyFunc@32` names `__clone___Tuple2.String.int`, a cloner
-	// `installStructCascades` cannot build because a SUBSTITUTED tuple is in no `project.structTypes` —
-	// `panic at CodeResult.maxon:142: bakeFuncAbs64Relocs`, on `interface-extensions.stdlib-map-on-map-with-
-	// function`.
-	//
-	// ⇒ the callee-storage half is `feedsCalleeStorage`'s and is ALREADY seeded (`storesBorrowedOpaqueElement`,
-	// off the container-store token signal). Asking for both here was a second seed for one sink, and the
-	// duplicate is what reached a chain that must stay inert.
-	export function feedsATypeParameterConstructor() returns bool
-		for i in 0 upto self.feeds.count() 'each'
-			let feed = try self.feeds.get(i) otherwise panic("feedsATypeParameterConstructor: feeds.get OOB at {i} despite i < count")
-
-			if feed.isFeed() and not feed.sinkIsCalleeStorage() 'aConstructorFeed'
-				return true
-			end 'aConstructorFeed'
-		end 'each'
-
-		return false
-	end 'feedsATypeParameterConstructor'
+	end 'anyFeed'
 
 	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
 	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
@@ -4277,8 +4281,8 @@ export union DeclCallability
 	methodOf(typeName ByteArray)
 end 'DeclCallability'
 
-// One bool column read at a position that may be past its end — the shared short-column read the two
-// `ParamReassignInfo` columns are asked through, so "recorded nothing here" has one spelling rather than two.
+// The short-column read every per-parameter bit column is asked through, so "recorded nothing here"
+// has one spelling.
 function bitAt(column BoolArray, index ParamCount) returns bool
 	if index >= column.count() 'past'
 		return false
@@ -4777,20 +4781,15 @@ export typealias ParamDefaultMap = Map with (ByteArray, ParamDefaultInfo)
 // whole-program. Like both of them it travels by NAME with no interner ids (names, numbers), so it folds
 // with no remap.
 //
-// ⚠ **IT IS NOT A COLUMN ON `ParamConsumeInfo`, AND THE REASON IS MEASURED RATHER THAN AESTHETIC.** That
-// record's presence is itself read as a fact: `Parser.requireOverloadableName` refuses an overload set the
-// moment `consumeOf` answers `consumes(…)` at all, whatever the bits say. Recording an entry for every
-// generic method that merely HAS an opaque parameter would therefore start refusing overload sets that
-// transfer nothing — a legal program rejected over a record that decides nothing. Widening it would also put
-// this rung inside `publishTransitiveFeeds`' rebuild, the one place a previous rung's review found a SIGSEGV
-// caused by reconstructing that record from partial state (W10).
+// It is not a column on `ParamConsumeInfo`: that record is rebuilt in `publishTransitiveFeeds`,
+// where reconstructing it from partial state is a known crash, and an entry for every generic
+// method that merely has an opaque parameter would put all of them inside that rebuild.
 //
-// ⚠ **ONE ENTRY PER BARE NAME, LAST DECLARATION WINS** — `ProgramSignatures.record`'s discipline for every
-// fact it applies. An OVERLOAD SET therefore publishes one answer for the whole set, which is the boundary
-// `requireOverloadableName`'s header already states in full (*"THE FIX IS NOT A BETTER TEST HERE, IT IS
-// PER-MEMBER FACTS IN THE SWEEP"*). The consequence here is a MISSED check, never a wrong one: an overloaded
-// method whose last declaration takes no opaque parameter records nothing and its call sites are guarded
-// exactly as an unrecorded method's are.
+// One entry per bare name, last declaration wins — `ProgramSignatures.record`'s discipline for
+// every fact it applies — so an overload set publishes one answer for the whole set, the boundary
+// `requireOverloadableName`'s header states. The consequence here is a missed check, never a wrong
+// one: an overloaded method whose last declaration takes no opaque parameter records nothing, and
+// its call sites are guarded exactly as an unrecorded method's are.
 export type OpaqueParamInfo
 	export let paramNames as ByteArrayArray
 
@@ -13530,11 +13529,10 @@ export type ProgramSignatures
 		return self.extensionShadowedMethods.contains(qualified)
 	end 'extensionMethodIsShadowed'
 
-	// Add one function's consume bits to the index AND fold them into the hash. The one write, for
-	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree about what
-	// the index contains. A function with NO consumed parameter is not recorded (its default answer is "not
-	// consumed"), so the common function costs no map entry and no hash movement — the same "absence is the
-	// answer" the sweep's over-approximation rests on.
+	// The one write of a function's ownership facts, for `record`'s reason: the table and the hash
+	// that keys every parse memo on it cannot disagree about what the index contains. A function the
+	// sweep found no consume, feed or hand-back in is not recorded, because its default answer is
+	// "borrows everything", so the common function costs no map entry and no hash movement.
 	function recordParamConsume(name ByteArray, info ParamConsumeInfo)
 		self.funcParamConsumes.upsert(name, value: info)
 		var state = mixBytes(Hasher.combined(self.hash, value: DeclShapeParamConsume), bytes: name)
@@ -13546,6 +13544,7 @@ export type ProgramSignatures
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamConsume: paramNames.get OOB at {i} despite i < count")
 			let bit = info.isConsumed(i)
 			state = Hasher.combined(mixBytes(state, bytes: paramName), value: ConsumeBitSet if bit else ConsumeBitClear)
+			state = Hasher.combined(state, value: HandedBackBitSet if info.isHandedBack(i) else HandedBackBitClear)
 		end 'eachName'
 
 		// The TYPE-PARAMETER FEEDS ride too (P1.6-B2): which position a parameter feeds decides whether a
@@ -13583,6 +13582,13 @@ export type ProgramSignatures
 		end 'c'
 	end 'paramIsConsumed'
 
+	export function calleeTakesPromiseAt(callee ByteArray, index ParamCount) returns bool
+		return match self.consumeOf(callee) 'c'
+			consumes(info) gives info.takesPromiseAt(index)
+			borrowsAll gives false
+		end 'c'
+	end 'calleeTakesPromiseAt'
+
 	// ⭐ **THE TYPE-PARAMETER FEED of `callee`'s parameter at position `index`, or `none`** (P1.7 slice 3b-v).
 	// The callee-entry twin of `paramIsConsumed`: an opaque-`T` FEED parameter (`push(item Element)` whose
 	// `item` moves into `self.items`, or a sibling forwarder the transitive fixpoint marked) is enrolled OWNED
@@ -13603,7 +13609,7 @@ export type ProgramSignatures
 	// entry) feeds nothing, and a CONSTRUCTOR feed enrols nothing, so neither can need a descriptor.
 	export function functionFeedsCalleeStorage(callee ByteArray) returns bool
 		return match self.consumeOf(callee) 'c'
-			consumes(info) gives info.feedsCalleeStorage()
+			consumes(info) gives info.anyFeed(FeedSinkQuery.calleeStorageSink)
 			borrowsAll gives false
 		end 'c'
 	end 'functionFeedsCalleeStorage'
@@ -25990,55 +25996,37 @@ export type ProgramSignatures
 		return self.symbolVisibility(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath)
 	end 'calleeVisibilityFrom'
 
-	// ⭐⭐ **HOW A DIAGNOSTIC SPELLS A CALLEE IT HAS RESOLVED: BY ITS MODULE NAMESPACE (W81).**
-	// `stdlib.Expect.equal`, not `Expect.equal`. `specs/testing-assertions.md`'s `error.forgotten-try` is the
-	// canonical pin and the compiler answered the bare name, which named a function the reader can find but a MODULE
-	// they cannot — the same shortfall E3095's candidate list already refuses to make when two directories
-	// contest a name.
+	// How a diagnostic spells a callee it has resolved: the name the source wrote, qualified by its
+	// module namespace — `stdlib.Expect.equal`, never `Expect.equal` and never an overload member's or
+	// a contested static's registration key (`overloadRegistrationBaseName`).
+	// `specs/testing-assertions.md`'s two `error.forgotten-try` cases pin both halves.
 	//
-	// ⭐ **IT IS NOT A STDLIB SPECIAL CASE.** Every declaration is qualified by its path relative to the
-	// compile root, which is what makes `api.unusedHelper` and `stdlib.helpers.…` one rule rather than two.
-	// Registration names stay BARE — namespace-qualifying them is a resolution decision taken only under
-	// contest — so the qualification is applied HERE, at the render.
+	// Every declaration is qualified by its path relative to the compile root, so this is not a stdlib
+	// special case. Registration names stay bare, because namespace-qualifying them is a resolution
+	// decision taken only under contest, so the qualification is applied here, at the render. A callee
+	// no file declares, and a root-level declaration, come back without a namespace.
 	//
-	// A callee no file declares — a runtime symbol, a builtin, a name the program got wrong — has no
-	// namespace and is returned unchanged; so is a ROOT-level declaration, which is every user function in
-	// every fragment the suite compiles. That is what keeps this confined to the callees whose declaring
-	// directory the author never opened.
+	// Every asker speaks about a declaration the compiler resolved — E3057 once
+	// `throwsMap.contains(callee)` has proven the name, the signature-visibility check and the
+	// unused-export audit — and that is the line: qualify a resolved declaration, never a name it
+	// could not resolve. Applied at `SemanticCheck.callDiagnosticNoun`, the door every call diagnostic
+	// shares, it would also qualify a name that resolved to nothing and name a symbol absent from the
+	// program. E3055, E3008/E3088 and E3036 also speak about a resolved declaration but keep the bare
+	// spelling; qualifying them moves ~50 pinned expectations across a dozen spec files.
 	//
-	// ⛔⛔ **IT HAS EXACTLY ONE ASKER TODAY, AND THAT IS A SCOPE DECISION RATHER THAN THE END OF THE RULE.**
-	// The asker is E3057's sentence, at the line where `throwsMap.contains(callee)` has just PROVEN the name
-	// resolves to a declared throwing function — which is the whole of the line that holds: **qualify a
-	// declaration the compiler RESOLVED; never a name it could not.**
-	//
-	// ⚠ **THE SAME LINE PUTS FOUR MORE DIAGNOSTIC FAMILIES ON THIS SIDE OF IT, AND W81 DID NOT MOVE THEM.**
-	// E3055 (*"does not throw"*), E3008 / E3088 (not exported / module-scoped — where the namespace is the
-	// E3055 (*"does not throw"*), E3008 / E3088 (not exported / module-scoped — where the namespace is the
-	// very fact the sentence is about) and E3036 (arity) all speak about a declaration that resolved.
-	// Qualifying them moves ~50 committed expectations across 12+ spec files, three of which
-	// (`console-stdin.md:58`, `try-postfix-target.md:452`, `void-call-result.md:489`) carry PROSE recording
-	// the bare spelling deliberately. That is a tree-wide diagnostic-naming policy with its own corpus
-	// churn, not a side effect of listing a stdlib module, so it is reported rather than taken here.
-	//
-	// ⛔ **AND THE BLANKET VERSION IS UNSOUND, WHICH IS THE OTHER HALF OF WHY THE ASKER IS ONE.** Applied at
-	// `SemanticCheck.callDiagnosticNoun` — the single door every call diagnostic already shares — it also
-	// qualifies the messages about a name that resolved to NOTHING: `call to undefined function 'helper'`
-	// became `… 'alpha.helper'`, naming a symbol absent from the program. That door's header carries the
-	// measurement.
-	//
-	// ⚠ **AN ALREADY-QUALIFIED REGISTRATION NAME IS LEFT ALONE, and the test is the SET that made it
-	// qualified rather than a re-scan of its bytes.** A contested free function registers as `alpha.pick`
-	// (`freeFunctionRegistrationName`), and joining its namespace again would read `alpha.alpha.pick`.
-	// `namespaceQualifiedFunctions` is exactly "this spelling already carries its directory", so the guard
-	// and the mint cannot come to disagree about which names do.
+	// An already-qualified registration name (a free function contested across directories registers
+	// as `alpha.pick`) is left alone, and the test is `namespaceQualifiedFunctions`, the set that made
+	// it qualified, so the guard and the mint cannot disagree about which names carry their directory.
 	export function diagnosticCalleeSpelling(callee ByteArray) returns ByteArray
-		let site = try self.funcDeclSites.get(callee) otherwise return callee
+		let written = overloadRegistrationBaseName(callee)
+		let declared = callee if self.funcDeclSites.contains(callee) else written
+		let site = try self.funcDeclSites.get(declared) otherwise return written
 
-		if self.namespaceQualifiedFunctions.contains(callee) 'theSpellingAlreadyCarriesItsDirectory'
-			return callee
+		if self.namespaceQualifiedFunctions.contains(declared) 'theSpellingAlreadyCarriesItsDirectory'
+			return written
 		end 'theSpellingAlreadyCarriesItsDirectory'
 
-		return self.diagnosticNameInFile(callee, declFilePath: site.declFilePath)
+		return self.diagnosticNameInFile(written, declFilePath: site.declFilePath)
 	end 'diagnosticCalleeSpelling'
 
 	export function diagnosticNameInFile(name ByteArray, declFilePath FilePath) returns ByteArray
@@ -34193,15 +34181,13 @@ export type ProgramSignatures
 	// and no sibling signal could see that, for the reason `adoptsOpaqueResult`'s arm records: the receiver is
 	// a field, a local or an inner alias the descriptor-need pre-scan cannot resolve.
 	//
-	// ⛔⛔ **IT IS ANSWERED BY NAME, AND `create` IS A NAME EVERYTHING WEARS — SO THE OVER-APPROXIMATION IS
-	// NOT FREE AND IS NARROWED TWICE, NOT HERE BUT AT THE SEED.** Its twin's *"costs one ignored slot"* is
-	// true of a RETURN column and false of this one: a reserved descriptor changes what
-	// `LowerMaxonToStd.emitInstanceDescriptorAddr` does at every nested-instance call in the body, and W161's
-	// header states what that does to a chain meant to stay inert. So the seed also asks whether the method
-	// can hold a borrowed `T` at all (`methodCanForwardABorrowedOpaque`) and whether a static could source a
-	// descriptor (`calleeReturnsItsDeclaringType`); this set answers only the sink question, and the
-	// callee-storage sink is deliberately excluded (`ParamConsumeInfo.feedsATypeParameterConstructor`) because
-	// `storesBorrowedOpaqueElement` already seeds it.
+	// It is answered by name, and `create` is a name everything wears, so the over-approximation is
+	// not free: a reserved descriptor changes what `LowerMaxonToStd.emitInstanceDescriptorAddr` does
+	// at every nested-instance call in the body. The seed therefore also asks whether the method can
+	// hold a borrowed `T` at all (`methodCanForwardABorrowedOpaque`) and whether a static could source
+	// a descriptor (`calleeReturnsItsDeclaringType`). This set answers only the sink question, and it
+	// excludes the callee-storage sink (`FeedSinkQuery.constructedValueSink`) because
+	// `storesBorrowedOpaqueElement` already seeds that one.
 	export function methodNameEverFeedsATypeParameter(name ByteArray) returns bool
 		return self.typeParamFeederNameSet().contains(name)
 	end 'methodNameEverFeedsATypeParameter'
@@ -34228,7 +34214,7 @@ export type ProgramSignatures
 	// One row of the fold above. Split out for `recordIfBareTypeParamReturn`'s reason — a `match` arm may not
 	// hold a statement sequence, and the insert is guarded.
 	function recordIfTypeParamFeeder(member ByteArray, info ParamConsumeInfo)
-		if not info.feedsATypeParameterConstructor() 'noConstructorFeed'
+		if not info.anyFeed(FeedSinkQuery.constructedValueSink) 'noConstructorFeed'
 			return
 		end 'noConstructorFeed'
 

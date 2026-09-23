@@ -16,12 +16,14 @@ told about.
 
 ```text
 test 'adds two numbers'
-	try Expect.equal(add(2, 2), expected: 4)
+	Expect.equal(add(2, 2), expected: 4)
 end 'adds two numbers'
 ```
 
-Because a matcher throws, a forgotten `try` is E3057 at compile time — an assertion whose failure
-nothing observes cannot be written.
+A matcher throws, and a `test` body needs no `try` on it: the body's implied handler propagates the
+`TestFailure` (`specs/test-uncaught-throw.md`). Anywhere else — a helper function a test calls — a
+matcher without `try` is E3057 at compile time, naming it by its source name
+(`'stdlib.Expect.equal'`), so an assertion whose failure nothing observes cannot be written.
 
 ### The message is printed, not carried
 
@@ -72,7 +74,7 @@ documentation: `Expect.equal(1.0, expected: 1.0)` does not compile.
 Floats are compared with an explicit tolerance instead:
 
 ```text
-try Expect.close(measured, expected: 1.5, within: 0.01)
+Expect.close(measured, expected: 1.5, within: 0.01)
 ```
 
 Ordering matchers (`greaterThan`, `lessThan`, `atLeast`, `atMost`) *do* have float overloads.
@@ -110,7 +112,7 @@ carries only the message.
 where the values go:
 
 ```text
-try Expect.isTrue(a == b, message: "expected {b}, got {a}")
+Expect.isTrue(a == b, message: "expected {b}, got {a}")
 ```
 
 That works for any type that is `Equatable` (for `==`) and `Stringable` (for the interpolation),
@@ -530,4 +532,23 @@ end 'main'
 ```
 ```maxoncstderr
 error E3057: specs/fragments/testing-assertions/error.forgotten-try.test:4:9: throwing function requires try: 'stdlib.Expect.equal'
+```
+
+<!-- test: error.forgotten-try-names-an-overload-by-its-source-name -->
+The same refusal on the `String` overload of `Expect.equal` names the callee exactly as the `int`
+overload does. An overload's internal signature key is not something the author wrote.
+```maxon
+// --- file: main.maxon
+function check() throws TestFailure
+	Expect.equal("a", expected: "b")
+end 'check'
+
+function main() returns ExitCode
+	try check() otherwise ignore
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/testing-assertions/error.forgotten-try-names-an-overload-by-its-source-name.test:4:9: throwing function requires try: 'stdlib.Expect.equal'
 ```

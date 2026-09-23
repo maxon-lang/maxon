@@ -25,29 +25,29 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 
 	var session = StreamingMcpSession.startFrom(previous, devMode: false)
 
-	try session.sendLine(initRequest(1))
-	let initDoc = try session.readResponseDoc()
-	try Expect.isTrue(hasChildKey(initDoc, parent: resultNode(initDoc), key: "serverInfo"), message: "initialize response missing serverInfo")
-	try session.sendLine(initializedNotification())
+	session.sendLine(initRequest(1))
+	let initDoc = session.readResponseDoc()
+	Expect.isTrue(hasChildKey(initDoc, parent: resultNode(initDoc), key: "serverInfo"), message: "initialize response missing serverInfo")
+	session.sendLine(initializedNotification())
 
 	let program = dir.join(ProgramFileName)
 	try File.writeText(program, content: printingProgramSource(KnownLine)) otherwise panic("could not write {program.path}")
 
 	let first = rebuildOwnImage(dir, compiler: compiler, program: program)
-	try Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
+	Expect.equal(first.exitCode() as AssertedInt, expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {imageName} itself while an mcp-server runs {previousName}, exited {first.exitCode()}. It must move the held {previousName} aside and vacate its own image. The compiler said: {first.stderr}")
 
 	let vacatedBytes = try File.readBinary(previous) otherwise panic("could not read {previous.path}")
-	try Expect.isTrue(vacatedBytes.equals(originalBytes), message: "{previousName} should hold the compiler image the build vacated ({originalBytes.count()} bytes); it holds {vacatedBytes.count()} bytes that differ.")
+	Expect.isTrue(vacatedBytes.equals(originalBytes), message: "{previousName} should hold the compiler image the build vacated ({originalBytes.count()} bytes); it holds {vacatedBytes.count()} bytes that differ.")
 
 	let built = runIn(dir, binary: compiler, arguments: StringArray.create())
-	try Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
+	Expect.equal(built.stdout.trim(), expected: KnownLine, message: "{imageName} should now be the program the build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
 
-	let exitCode = try session.close()
-	try Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
+	let exitCode = session.close()
+	Expect.equal(exitCode as AssertedInt, expected: 0, message: "mcp-server should exit 0 on stdin EOF")
 
 	let fresh = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
 	let second = rebuildOwnImage(dir, compiler: fresh, program: program)
-	try Expect.equal(second.exitCode() as AssertedInt, expected: 0, message: "the second self-rebuild, with nothing holding any image, exited {second.exitCode()}. The compiler said: {second.stderr}")
+	Expect.equal(second.exitCode() as AssertedInt, expected: 0, message: "the second self-rebuild, with nothing holding any image, exited {second.exitCode()}. The compiler said: {second.stderr}")
 
 	let allowed = [ProgramFileName, imageName, "{imageName}{SidecarExtension}", previousName, "{previousName}{SidecarExtension}"]
 	let entries = try Directory.list(dir) otherwise panic("could not list {dir.path}")
@@ -59,5 +59,5 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 		end 'notAllowed'
 	end 'eachEntry'
 
-	try Expect.isEmpty(leftovers, message: "after a self-rebuild with nothing held, {dir.path} may hold only {ProgramFileName}, {imageName}, {imageName}{SidecarExtension}, {previousName} and {previousName}{SidecarExtension}. A previous image an earlier build moved aside and nothing holds any longer is the rebuild's to delete; it left:{leftovers}")
+	Expect.isEmpty(leftovers, message: "after a self-rebuild with nothing held, {dir.path} may hold only {ProgramFileName}, {imageName}, {imageName}{SidecarExtension}, {previousName} and {previousName}{SidecarExtension}. A previous image an earlier build moved aside and nothing holds any longer is the rebuild's to delete; it left:{leftovers}")
 end 'a self-rebuild succeeds while another process runs the previous image, and the next one clears what it moved aside'

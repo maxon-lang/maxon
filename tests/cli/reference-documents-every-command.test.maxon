@@ -14,16 +14,16 @@ test 'the CLI reference has a section for every command and names every option h
 	let reference = runOneArgument(HelpCommandWord)
 
 	let observedExit = reference.exitCode() as AssertedInt
-	try Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
+	Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
 
 	let commands = sectionedCommandsIn(reference.stdout)
 
 	// ⚠ Both differences below are vacuous over an empty reading, so this comes first.
 	let missingAnchors = anchorsMissingFrom(commands)
-	try Expect.isEmpty(missingAnchors, message: "`maxon {HelpCommandWord}` has no section for these commands: {missingAnchors}. It showed: {listed(commands)}")
+	Expect.isEmpty(missingAnchors, message: "`maxon {HelpCommandWord}` has no section for these commands: {missingAnchors}. It showed: {listed(commands)}")
 
 	let options = optionSpellingsIn(reference.stdout)
-	try Expect.isTrue(options.count() > 0, message: "no option was read off `maxon {HelpCommandWord}`, so the comparison below would be vacuous. It said: {reference.stdout}")
+	Expect.isTrue(options.count() > 0, message: "no option was read off `maxon {HelpCommandWord}`, so the comparison below would be vacuous. It said: {reference.stdout}")
 
 	let document = cliReferenceText()
 	let headings = sectionHeadingsIn(document)
@@ -48,7 +48,7 @@ test 'the CLI reference has a section for every command and names every option h
 		findings.append("these option spellings appear nowhere: {listed(unnamed)}.")
 	end 'missingOptions'
 
-	try Expect.isEmpty(findings, message: "{CliReferenceDocument} does not document everything `maxon {HelpCommandWord}` lists - {findings}")
+	Expect.isEmpty(findings, message: "{CliReferenceDocument} does not document everything `maxon {HelpCommandWord}` lists - {findings}")
 end 'the CLI reference has a section for every command and names every option help lists'
 
 function sectionHeadingsIn(document String) returns ListedWordArray

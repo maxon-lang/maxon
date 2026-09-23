@@ -47,23 +47,23 @@ test 'instrumentation reaches the flagged build and no other, and an ordinary bu
 	let image = builtExecutable(staged, stem: ImageOutputStem)
 	let data = coverageDataPath(image)
 
-	try requirePlainBuild(staged, output: image)
-	try requireNoCounterFile(data, what: "the first ordinary build")
+	requirePlainBuild(staged, output: image)
+	requireNoCounterFile(data, what: "the first ordinary build")
 	let firstOrdinary = retainImage(image, staged: staged, name: FirstOrdinaryImageName)
 
-	try requirePlainBuild(staged, output: image)
-	try requireNoCounterFile(data, what: "the second ordinary build")
+	requirePlainBuild(staged, output: image)
+	requireNoCounterFile(data, what: "the second ordinary build")
 	let secondOrdinary = retainImage(image, staged: staged, name: SecondOrdinaryImageName)
 
 	// ⭐ THE CONTROL. Same source, same output path, same flags: the two images must agree, or a
 	// difference below says nothing about the flag.
-	try requireIdenticalBytes(firstOrdinary, second: secondOrdinary)
+	requireIdenticalBytes(firstOrdinary, second: secondOrdinary)
 
-	try requireCoverageBuild(staged, output: image)
+	requireCoverageBuild(staged, output: image)
 
 	// ⭐ THE HEADLINE. The only thing that changed is the flag, so a difference here IS the
 	// instrumentation — and its absence means the flagged build emitted no counters.
-	try requireDifferentBytes(firstOrdinary, second: image)
+	requireDifferentBytes(firstOrdinary, second: image)
 end 'instrumentation reaches the flagged build and no other, and an ordinary build writes no counters'
 
 // ============================================================================================

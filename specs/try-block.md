@@ -9,7 +9,7 @@ category: error-handling
 
 ## Documentation
 
-The `try { } otherwise (e) { match e { } }` block construct lets you wrap a sequence of statements containing several throwing calls under a single error handler. Within the `try` block, calls to throwing functions do **not** require the `try` keyword; the parser implicitly routes their errors to the shared `otherwise` clause.
+The `try { } otherwise (e) { match e { } }` block construct lets you wrap a sequence of statements containing several throwing operations under a single error handler. Within the `try` block, a call to a throwing function, a call to a throwing interface method and an `await` of a throwing promise do **not** require the `try` keyword; the parser implicitly routes their errors to the shared `otherwise` clause.
 
 The `otherwise (e)` clause receives the synthesized error union of every distinct error type thrown within the block. It must contain a `match` on `e` somewhere in its body; the match arms must exhaustively cover every `(EnumName, case)` pair across the union members.
 
@@ -32,7 +32,9 @@ end 'handler'
 
 If the block contains throwing calls of only one error type, the binding `e` is just that enum type and patterns match it directly (no qualification needed).
 
-Inside the block, an explicit `try expr otherwise ...` form still works for any single call — its error is consumed by its own `otherwise` and does not contribute to the synthesized union.
+Inside the block, an explicit `try expr otherwise ...` form still works for any single call — its error is consumed by its own `otherwise` and does not contribute to the synthesized union. An explicit `try` covers only the operation that produces its value: a throwing argument, operand, chain receiver or range bound inside it is routed to the block's handler like any other bare operation.
+
+Blocks nest, and a throwing operation routes to the innermost block around it. Inside a `test` body, the test's implied handler (`specs/test-uncaught-throw.md`) takes only what no enclosing block catches.
 
 ## Tests
 
@@ -2689,4 +2691,212 @@ end 'main'
 ```
 ```maxoncstderr
 error E3161: <fragment>:38:4: 'e' may hold a boxed error, which only the arm of the match that runs releases, so every path through its handler must match 'e' exactly once: it is matched on some of the paths that join here and not on others. Match 'e' once, and bind in its arms whatever the rest of the handler needs
+```
+
+<!-- test: implied-try-block-witness-dispatch -->
+A bare throwing witness dispatch inside a try block routes to the block's handler, as a bare direct call
+does. A `Point` of 3 throws `tooSmall`, so the handler's 55 is the answer; a dropped error flag would return the
+impl's throw-path primary instead.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	let x as Code
+
+	static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest() returns Code throws DigestError
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function itemDigest() returns Code
+		var result = 0 as Code
+
+		try 'work'
+			result = self.item.digest()
+		end 'work' otherwise (e) 'h'
+			match e 'k'
+				tooSmall then result = 55
+			end 'k'
+		end 'h'
+
+		return result
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3))
+	return b.itemDigest()
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: implied-try-block-await -->
+A bare `await` of a throwing promise inside a try block routes the awaited error to the block's handler.
+The thunk throws, so the handler's 42 is the answer; the success value is 10.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function mayFail(succeed bool) returns Integer throws WorkError
+	Scheduler.yield()
+
+	if succeed 'ok'
+		return 10
+	end 'ok'
+
+	throw WorkError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0 as Integer
+	let p = async mayFail(false)
+
+	try 'work'
+		result = await p
+	end 'work' otherwise (e) 'h'
+		match e 'k'
+			failed then result = 42
+		end 'k'
+	end 'h'
+
+	return result as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: implied-try-block-argument-of-explicit-try -->
+An explicit `try … otherwise` inside a try block covers its own target call only. The throwing call in
+that target's ARGUMENT list routes to the block's handler, so the answer is the handler's 42, not the
+explicit `otherwise`'s 0 and not the success path's 5.
+```maxon
+typealias Score = int(0 to 100)
+
+enum ErrA implements Error
+	kaboom
+end 'ErrA'
+
+enum ErrB implements Error
+	splat
+end 'ErrB'
+
+function inner(fail bool) returns Score throws ErrA
+	if fail 'c'
+		throw ErrA.kaboom
+	end 'c'
+
+	return 5
+end 'inner'
+
+function outer(n Score) returns Score throws ErrB
+	if n > 50 'big'
+		throw ErrB.splat
+	end 'big'
+
+	return n
+end 'outer'
+
+function main() returns ExitCode
+	var sum = 0
+
+	try 'work'
+		let v = try outer(inner(true)) otherwise 0
+		sum = v
+	end 'work' otherwise (e) 'h'
+		match e 'k'
+			kaboom then sum = 42
+		end 'k'
+	end 'h'
+
+	return sum
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: implied-try-block-explicit-try-of-a-rebranded-call -->
+An explicit `try … otherwise` on a parenthesized call renamed to another brand of the same instance, inside
+a try block, keeps its own error: the rebrand emits no op, so the author's `otherwise` owns the call. The
+answer is the fallback's empty count plus 7, not the block handler's 55.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Scores = Array with Integer
+typealias Tally = int(0 to 100)
+
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+enum OtherError implements Error
+	failed
+end 'OtherError'
+
+function items(hit bool) returns IntArray throws ApiError
+	if not hit 'miss'
+		throw ApiError.notFound
+	end 'miss'
+
+	var found = IntArray.create()
+	found.push(4)
+	return found
+end 'items'
+
+function other(fail bool) returns Tally throws OtherError
+	if fail 'boom'
+		throw OtherError.failed
+	end 'boom'
+
+	return 7
+end 'other'
+
+function main() returns ExitCode
+	var result = 0 as Tally
+
+	try 'work'
+		let s = try (items(false) as Scores) otherwise Scores.create()
+		result = (s.count() as Tally) + other(false)
+	end 'work' otherwise (e) 'h'
+		match e 'k'
+			failed then result = 55
+		end 'k'
+	end 'h'
+
+	return result
+end 'main'
+```
+```exitcode
+7
 ```

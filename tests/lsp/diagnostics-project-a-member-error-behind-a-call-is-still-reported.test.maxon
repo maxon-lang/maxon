@@ -21,9 +21,9 @@ test 'a member error behind a call is still reported when a sibling declares the
 
 	discardOutsideCheckoutDir(root)
 
-	try expectNoProjectDiagnostics(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL: a diagnostic here is the unedited answer already wrong, and says nothing about the edit below.")
 
-	let reported = try onlyProjectDiagnostic(try projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` reads a member named after a function the sibling `tally.maxon` declares, off the result of a CALL. A `maxon build` of the staged tree holding the edited text reports exactly one `E3018` about that member and nothing else.")
+	let reported = onlyProjectDiagnostic(projectDiagnosticsPublish(probes, index: ProjectDiagnosticsAfterTheEdit), note: "the `didChange` reads a member named after a function the sibling `tally.maxon` declares, off the result of a CALL. A `maxon build` of the staged tree holding the edited text reports exactly one `E3018` about that member and nothing else.")
 
-	try Expect.equal(reported.code, expected: ProjectMemberBehindCallCode, message: "the token before the member is a `)`, so the access has no identifier base to attribute the diagnostic to. Falling back to the MEMBER's own name hands the oracle a name the sibling declares, and the author's mistake is silenced — whichever road publishes this diagnostic, it must be published.")
+	Expect.equal(reported.code, expected: ProjectMemberBehindCallCode, message: "the token before the member is a `)`, so the access has no identifier base to attribute the diagnostic to. Falling back to the MEMBER's own name hands the oracle a name the sibling declares, and the author's mistake is silenced — whichever road publishes this diagnostic, it must be published.")
 end 'a member error behind a call is still reported when a sibling declares the member name'

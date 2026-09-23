@@ -30,13 +30,13 @@ test 'cache clear empties every cache root this host names'
 	let cleared = runWithCacheRoots([CacheCommandWord, CacheClearVerb], naming: naming, workingDirectory: dir)
 	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
 
-	try Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over two roots that each held a build. {said}")
+	Expect.equal(cleared.exitCode() as AssertedInt, expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over two roots that each held a build. {said}")
 
-	try Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing, which is the root {CacheRootVariable} names and the one the next run would use. {said}")
+	Expect.isFalse(Directory.exists(owned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {owned.toString()} standing, which is the root {CacheRootVariable} names and the one the next run would use. {said}")
 
-	try Expect.isFalse(Directory.exists(homeOwned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {homeOwned.toString()} standing. {CacheRootVariable} outranks {HomeDirectoryVariable}, so a build made before the override was set is stranded there and nothing else will ever look for it. {said}")
+	Expect.isFalse(Directory.exists(homeOwned), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {homeOwned.toString()} standing. {CacheRootVariable} outranks {HomeDirectoryVariable}, so a build made before the override was set is stranded there and nothing else will ever look for it. {said}")
 
-	try Expect.isTrue(Directory.isDirectory(cacheRoot), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {cacheRoot.toString()}, which the CALLER named through {CacheRootVariable} and Maxon did not create. {said}")
+	Expect.isTrue(Directory.isDirectory(cacheRoot), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {cacheRoot.toString()}, which the CALLER named through {CacheRootVariable} and Maxon did not create. {said}")
 
-	try Expect.isTrue(Directory.isDirectory(home.join(MaxonUserDirName)), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {home.join(MaxonUserDirName).toString()}, which is where an install puts `{ScriptInstallBinDirName}/` and `{StdlibDirName}/`. Only the cache under it is the cache. {said}")
+	Expect.isTrue(Directory.isDirectory(home.join(MaxonUserDirName)), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {home.join(MaxonUserDirName).toString()}, which is where an install puts `{ScriptInstallBinDirName}/` and `{StdlibDirName}/`. Only the cache under it is the cache. {said}")
 end 'cache clear empties every cache root this host names'

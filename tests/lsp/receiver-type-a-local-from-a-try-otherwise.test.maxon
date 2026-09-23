@@ -23,19 +23,19 @@ let ReceiverTryMemberListCharacter = 17 as LspCoordinate
 let ReceiverTryMemberNameCharacter = 20 as LspCoordinate
 
 test 'receiver type: a local from a try otherwise offers its members'
-	let labels = try completionLabelsFor(receiverTryFixture(), line: ReceiverTryLine, character: ReceiverTryMemberListCharacter, after: "`w.`, where `w` is bound by `try holder.at(0) otherwise panic(…)`")
+	let labels = completionLabelsFor(receiverTryFixture(), line: ReceiverTryLine, character: ReceiverTryMemberListCharacter, after: "`w.`, where `w` is bound by `try holder.at(0) otherwise panic(…)`")
 
-	try Expect.greaterThan(labels.count(), than: 0, message: "completion after `w.` offered nothing at all. `try … otherwise panic(…)` is how this tree binds a local from any accessor that can fail, and the initializer opening with `try` does not change what the call returns.")
+	Expect.greaterThan(labels.count(), than: 0, message: "completion after `w.` offered nothing at all. `try … otherwise panic(…)` is how this tree binds a local from any accessor that can fail, and the initializer opening with `try` does not change what the call returns.")
 
-	try Expect.isTrue(completionOffersLabel(labels, label: "toUpper"), message: "completion after `w.` did not offer `toUpper`. `at` is declared `returns String` five lines above the cursor, so the member list is `String`'s.")
+	Expect.isTrue(completionOffersLabel(labels, label: "toUpper"), message: "completion after `w.` did not offer `toUpper`. `at` is declared `returns String` five lines above the cursor, so the member list is `String`'s.")
 end 'receiver type: a local from a try otherwise offers its members'
 
 test 'receiver type: a member of a local from a try otherwise hovers'
-	let rendering = try hoverRendering(receiverTryFixture(), line: ReceiverTryLine, character: ReceiverTryMemberNameCharacter)
+	let rendering = hoverRendering(receiverTryFixture(), line: ReceiverTryLine, character: ReceiverTryMemberNameCharacter)
 
-	try Expect.contains(rendering, needle: "toUpper", message: "hovering `toUpper` in `w.toUpper()` did not name it. The member is reachable only through `w`'s type, and `w`'s initializer opens with `try`.")
+	Expect.contains(rendering, needle: "toUpper", message: "hovering `toUpper` in `w.toUpper()` did not name it. The member is reachable only through `w`'s type, and `w`'s initializer opens with `try`.")
 
-	try Expect.contains(rendering, needle: "function toUpper", message: "the hover did not render the declaration `stdlib/String.maxon` holds for `toUpper`. It rendered: {rendering}")
+	Expect.contains(rendering, needle: "function toUpper", message: "the hover did not render the declaration `stdlib/String.maxon` holds for `toUpper`. It rendered: {rendering}")
 end 'receiver type: a member of a local from a try otherwise hovers'
 
 function receiverTryFixture() returns String

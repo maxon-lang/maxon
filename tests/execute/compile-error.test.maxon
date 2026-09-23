@@ -17,13 +17,13 @@ test 'a program that does not compile is refused and leaves no build'
 	let run = runProgram(staged, program: stagedMain(staged))
 
 	let observedExit = run.exitCode() as AssertedInt
-	try Expect.equal(observedExit, expected: 1, message: "`maxon {ExecuteCommandName}` did not fail for a program that does not compile. It said: {run.stdout}{run.stderr}")
+	Expect.equal(observedExit, expected: 1, message: "`maxon {ExecuteCommandName}` did not fail for a program that does not compile. It said: {run.stdout}{run.stderr}")
 
 	let observedStdout = withoutCarriageReturns(run.stdout)
-	try Expect.isEmpty(observedStdout, message: "stdout is the PROGRAM's, and no program ran. A diagnostic printed there is one a caller piping the program's output would receive as the program's own.")
+	Expect.isEmpty(observedStdout, message: "stdout is the PROGRAM's, and no program ran. A diagnostic printed there is one a caller piping the program's output would receive as the program's own.")
 
-	try Expect.contains(withoutCarriageReturns(run.stderr), needle: DiagnosticWord, message: "the refusal said nothing on stderr, so nothing tells the caller why their program did not run")
+	Expect.contains(withoutCarriageReturns(run.stderr), needle: DiagnosticWord, message: "the refusal said nothing on stderr, so nothing tells the caller why their program did not run")
 
 	let leftBehind = slotExecutables(staged).count() as AssertedInt
-	try Expect.equal(leftBehind, expected: 0, message: "a failed compile left a binary under {staged.cache.toString()}. Whatever is there is not a build of this program, and a later run that found it would run it.")
+	Expect.equal(leftBehind, expected: 0, message: "a failed compile left a binary under {staged.cache.toString()}. Whatever is there is not a build of this program, and a later run that found it would run it.")
 end 'a program that does not compile is refused and leaves no build'
