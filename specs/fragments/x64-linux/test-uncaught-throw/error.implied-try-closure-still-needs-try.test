@@ -1,0 +1,29 @@
+// Test: error.implied-try-closure-still-needs-try
+// --- file: suite.test.maxon
+enum ApiError implements Error
+	notFound
+end 'ApiError'
+
+function lookup() returns Tally throws ApiError
+	throw ApiError.notFound
+end 'lookup'
+
+typealias Tally = int(0 to 100)
+typealias Producer = function() returns Tally
+
+function callIt(produce Producer) returns Tally
+	return produce()
+end 'callIt'
+
+test 'runs a closure'
+	let got = callIt(function() gives lookup())
+	print("got {got}\n")
+end 'runs a closure'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3057: <fragment>:19:36: throwing function requires try: 'lookup'

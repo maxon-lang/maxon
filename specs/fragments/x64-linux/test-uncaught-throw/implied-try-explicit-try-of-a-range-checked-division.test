@@ -1,0 +1,119 @@
+// Test: implied-try-explicit-try-of-a-range-checked-division
+// --- file: suite.test.maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Wide = int(-1000000000000 to 1000000000000)
+
+test 'divides by a counted value'
+	let d = IntArray.create().count()
+	let n = try ((8 / d) as Wide) otherwise 5
+	Expect.equal(n as AssertedInt, expected: 5)
+end 'divides by a counted value'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_arena_list@0 = i64 0
+  __slab_arena_map_l1@8 = i64 0
+  __slab_state@16 = i64 0
+}
+
+func @__test_divides_by_a_counted_value {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
+    x64.movRegImm32 rax, 8
+    x64.cmpRegImm32 rbx, 0
+    x64.setccReg equal, rcx
+    x64.orRegReg rbx, rbx, rcx
+    x64.cqo
+    x64.idivReg rbx
+    x64.movRegImm rdx, 18446743073709551616
+    x64.cmpRegReg rax, rdx
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm rdx, 1000000000000
+    x64.cmpRegReg rax, rdx
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, tryok#1
+  tryerr#2:
+    x64.movRegImm32 rbx, 5
+    x64.jmp trycont
+  tryok#1:
+    x64.movRegReg rbx, rax
+  trycont:
+    x64.movRegImm32 r12, 5
+  __il_body:
+    x64.leaRegRdata rcx, [rip + __str_rec_29]  ; ""
+    x64.callDirect __str_retain
+    x64.movRegReg r13, r8
+  __il_cont:
+    x64.leaRegRdata r9, [rip + __str_rec_15]  ; "suite.test.maxon"
+    x64.movRegImm32 rsi, 8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Expect.equal
+    x64.movRegReg rbx, r10
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc equal, tryok#4
+  tryerr#5:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#4:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_42]  ; "panic at suite.test.maxon:7: Range check failed: value outside typealias 'Wide'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
