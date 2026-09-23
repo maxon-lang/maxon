@@ -1550,6 +1550,14 @@ it publishes is inside the program's own code.
 spinning loop was on is a fact about a build and a moment; that the interruption landed in the program
 rather than in a runtime body or in the agent is the claim.
 
+⚠ **THE SPIN CALLS NOTHING, WHICH IS WHAT MAKES THAT ANSWER DETERMINISTIC.** A pause lands only where
+`__gt_preempt_safe` admits the pc, and an attempt it refuses leaves a yield request behind. A loop that
+spends its time inside a clock call is refused poll after poll, and a poll that samples the machine
+between green threads is answered by the service thread with no pc at all. So the inner loop is bare
+arithmetic, and the scratch word is read once every `TurnsPerLook` turns: the parent writes `Released`
+there once its `continue` is acknowledged, and the child exits 5 only on seeing it. `LookLimit` bounds a
+child whose parent never writes it.
+
 ⚠ **THE PAUSE IS POSTED ONLY ONCE THE CHILD SAYS IT IS SPINNING.** The child writes `Spinning` into the
 case's scratch word at 0x9F0 on the instruction before it enters its loop, and the parent waits for that
 word rather than for a fixed settling time: a pause that arrives while the child is still starting up is
@@ -1597,8 +1605,10 @@ let NoArgument = 0
 let ChildExitCode = 5
 let NotSpinningYet = 0
 let Spinning = 1
+let Released = 2
 
-let SpinMs = 4000 as Millis
+let TurnsPerLook = 1000000
+let LookLimit = 100000
 let PollIntervalMs = 5 as Millis
 let PollDeadlineMs = 5000 as Millis
 let ChildDeadlineMs = 30000 as Millis
@@ -1632,24 +1642,35 @@ function awaitWord(segment SharedSegment, offset SegmentOffset, atLeast SegmentW
 	return false
 end 'awaitWord'
 
-function spin() returns Spin
-	var total = 0
-	let deadline = (Clock.nowMs() as Millis) + SpinMs
+function spin(segment SharedSegment) returns Spin
+	var looks = 0
 
-	while (Clock.nowMs() as Millis) < deadline 'grind'
-		total = total + 1
-	end 'grind'
+	while looks < LookLimit 'look'
+		let word = try segment.readWord(CaseScratchOffset) otherwise return 0
 
-	return 1 if total > 0 else 0
+		if word == Released 'letGo'
+			return 1
+		end 'letGo'
+
+		var turns = 0
+
+		while turns < TurnsPerLook 'grind'
+			turns = turns + 1
+		end 'grind'
+
+		looks = looks + 1
+	end 'look'
+
+	return 0
 end 'spin'
 
 function runChild() returns Spin
 	var segment = try SharedSegment.create(SegmentName, bytes: SegmentBytes) otherwise return 0
 	try segment.writeWord(CaseScratchOffset, value: Spinning) otherwise ignore
-	let turns = spin()
+	let released = spin(segment)
 	segment.close()
 
-	return turns
+	return released
 end 'runChild'
 
 function main() returns ExitCode
@@ -1688,6 +1709,7 @@ function main() returns ExitCode
 
 	let resumed = awaitWord(segment, offset: AckSeqOffset, atLeast: SecondCommandSequence)
 	let resumeResult = try segment.readWord(CmdResultOffset) otherwise return 20
+	try segment.writeWord(CaseScratchOffset, value: Released) otherwise return 22
 
 	let code = try child.waitWithTimeout(ChildDeadlineMs) otherwise 97
 	child.release()
